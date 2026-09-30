@@ -36,26 +36,33 @@ and `docs/campaigns/Z12.md`.
    signed component catalog…"), and KalVoice Settings carries a standing note about these
    one-time, verified downloads. Removing the speech model, pausing, or turning the preference
    off stops them. Nothing else is downloaded without a click, and audio never leaves the device.
-4. **Immediate.** The microphone starts on key-down, recognition streams while you speak, and
-   a command runs the moment you let go.
+4. **Immediate.** The fallback key starts the microphone on key-down; Fn starts after a 300 ms
+   hold. Recognition streams while you speak, and a command runs the moment you let go.
 
 ## Push to talk
 
-One key, held: **hold `F8`, speak, let go.** No chords. The key is configurable in Settings →
-KalVoice ("Push-to-talk key", Change): F1–F24, Pause, Scroll Lock or Insert, on its own.
+One key, held: **hold `Fn` on macOS, wait for Listening, speak, let go.** `F8` remains the fallback.
+On Windows, use `F8` unless the keyboard reports a standalone `Fn` event to the KalCode window.
+No chords. The fallback key is configurable in Settings →
+KalVoice ("Fallback push-to-talk key", Change): F1–F24, Pause, Scroll Lock or Insert, on its own.
 
 - **F5, F7 and F12 are refused**: KalCode's window uses them (reload, caret browsing, developer
   tools). A key another app has registered globally is refused when saving ("F9 is already used
   by another app. Choose a different key.") and the previous key stays.
-- **Fn is not offered.** On Windows keyboards Fn is handled by the keyboard firmware and never
-  reaches applications, so KalCode can't see it pressed or released. The capture field only
-  accepts keys that actually arrive.
+- **Fn is detected separately from the configured fallback.** macOS uses an in-app local
+  `flagsChanged` monitor without new Accessibility or Input Monitoring permission. Windows accepts
+  only an explicit `Fn` event reported by the focused WebView; most keyboards handle Fn in firmware
+  and report nothing. No scan code is guessed. Keep using the configured fallback when Fn is absent.
+- Fn taps do not open the microphone. Hold Fn on its own for 300 ms and wait for Listening before
+  speaking; other keys suppress or cancel the Fn take without submitting it. macOS Globe actions
+  remain unchanged: choose **Keyboard / Press Globe key to / Do Nothing** to avoid their action on
+  release. The fallback remains registered; Fn cannot replace it in the key capture field.
 - **Caps Lock (and Num Lock) are not offered.** Registering them system-wide needs a low-level
   keyboard hook, and holding them toggles the lock state; KalCode doesn't install keyboard hooks.
 - Modifiers alone and chords are refused ("Push to talk uses one key on its own, without Ctrl,
   Alt or Shift.").
 
-The key is registered through the official Tauri global-shortcut plugin, from Rust only (the
+The fallback key is registered through the official Tauri global-shortcut plugin, from Rust only (the
 WebView has no permission to call the plugin), and **only while a KalCode window has focus**, so
 other apps keep the key. Real press and release events drive the microphone. Key repeat is
 ignored (the OS registration uses no-repeat). If the release can't arrive (the window loses

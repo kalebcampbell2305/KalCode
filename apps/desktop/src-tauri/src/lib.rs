@@ -560,6 +560,7 @@ pub fn run(removed_overrides: Vec<String>) {
             coordinator.observe(app.handle().clone())?;
             // On the main thread, whose message loop delivers OS foreground changes.
             kalvoice_commands::watch_foreground(app.handle());
+            kalvoice_commands::install_fn_monitor(app.handle());
             account_links::start(app.handle(), account, coordinator);
             updater.check_in_background();
             updater.start_periodic_checks();
@@ -661,6 +662,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_status,
                 kalvoice_commands::kalvoice_request,
                 kalvoice_commands::kalvoice_preferences_update,
+                kalvoice_commands::kalvoice_fn_input,
                 kalvoice_commands::kalvoice_listen_start,
                 kalvoice_commands::kalvoice_listen_stop,
                 kalvoice_commands::kalvoice_listen_cancel,
@@ -866,6 +868,7 @@ pub fn run(removed_overrides: Vec<String>) {
                     shutdown_services(handle);
                 }
             }
+            kalvoice_commands::remove_fn_monitor();
         }
     });
 }

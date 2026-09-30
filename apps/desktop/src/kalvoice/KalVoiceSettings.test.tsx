@@ -5,6 +5,12 @@ import { createMemoryKalVoice } from "../ipc/memoryKalVoice.ts";
 import { KalVoiceSettings } from "./KalVoiceSettings.tsx";
 
 const seams = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const platform = vi.hoisted(() => ({ value: "unknown" }));
+vi.mock("../platform/keyboard.ts", () => ({
+  get DESKTOP_PLATFORM() {
+    return platform.value;
+  },
+}));
 vi.mock("./KalVoiceProvider.tsx", () => ({
   useKalVoice: () => seams.value,
   useOptionalKalVoice: () => seams.value,
@@ -23,6 +29,7 @@ const setPaused = vi.fn();
 const updatePreferences = vi.fn();
 
 beforeEach(() => {
+  platform.value = "unknown";
   prepare.mockReset().mockResolvedValue(quote);
   download.mockReset().mockResolvedValue(undefined);
   retry.mockReset().mockResolvedValue(undefined);
@@ -48,6 +55,27 @@ beforeEach(() => {
     refreshStatus: vi.fn(),
     setPanelVisible: vi.fn(),
   };
+});
+
+describe("Fn and configured fallback guidance", () => {
+  it("explains reported-only Windows Fn and keeps the configured fallback", () => {
+    platform.value = "windows";
+    const status = seams.value.status as KalVoiceStatus;
+    seams.value.status = { ...status, preferences: { ...status.preferences, talkKey: "F9" } };
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Fallback push-to-talk key")).toBeInTheDocument();
+    expect(screen.getByText(/most Windows keyboards handle it in firmware/)).toHaveTextContent("keep using F9");
+    expect(updatePreferences).not.toHaveBeenCalled();
+  });
+
+  it("offers a Mac Fn hold with fallback and honest Globe action guidance", () => {
+    platform.value = "macos";
+    render(<KalVoiceSettings />);
+    const hint = screen.getByText(/Hold Fn on its own/);
+    expect(hint).toHaveTextContent("F8 remains your fallback");
+    expect(hint).toHaveTextContent("Globe actions still work");
+    expect(hint).toHaveTextContent("Do Nothing");
+  });
 });
 
 describe("signed local interpreter download consent", () => {

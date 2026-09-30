@@ -70,6 +70,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Network
 # libproc bindings for the KalVoice loopback owner proof (kalvoice_guardian.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSEvent"] }
 
 [dev-dependencies]
 tempfile.workspace = true

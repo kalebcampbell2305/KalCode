@@ -67,7 +67,7 @@ export function isModifierOnly(event: KeyLike): boolean {
  */
 export function talkKeyFromEvent(event: KeyLike, allowed: readonly string[]): KeyCheck {
   if (event.key === "Fn" || event.code === "Fn") {
-    return unsupported("Fn", "macOS and many keyboards handle it specially, so KalCode can't detect it reliably.");
+    return unsupported("Fn", "Fn is detected separately; choose a fallback key that works when Fn isn't reported.");
   }
   if (["CapsLock", "NumLock"].includes(event.code)) {
     return unsupported("A lock key", "it would switch on and off while you hold it.");

@@ -65,6 +65,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "kalvoice_listen_start",
     "kalvoice_listen_stop",
     "kalvoice_listen_cancel",
+    "kalvoice_fn_input",
     "kalvoice_model_download",
     "kalvoice_reasoning_prepare",
     "kalvoice_reasoning_retry",
