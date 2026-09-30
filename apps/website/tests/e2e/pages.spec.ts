@@ -4,6 +4,7 @@ import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
 import { CHANNEL_LABEL, MANIFEST, renderedDescription, SERVED_STABLE, SIGNED_STABLE, WINDOWS_BUILD } from "./helpers";
 
 const STABLE_016 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.6";
+const STABLE_017 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.7";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -122,9 +123,21 @@ test.describe("every page", () => {
   test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
     await page.goto("/updates");
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
-    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 manifest (the page's own rule).
-    await expect(page.locator("article")).toHaveCount(STABLE_016 ? 5 : 4);
-    if (STABLE_016) {
+    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 or 0.1.7 manifest, and the 0.1.7
+    // notes only from a signed Stable 0.1.7 one (the page's own rule).
+    await expect(page.locator("article")).toHaveCount(STABLE_017 ? 6 : STABLE_016 ? 5 : 4);
+    if (STABLE_017) {
+      await expect(page.locator("#release-0-1-7")).toBeVisible();
+      await expect(page.locator("#release-0-1-7")).toContainText(
+        "Windows: 0.1.6 can't update itself. Download the 0.1.7 installer from the download page and run it once — your data is kept.",
+      );
+      await expect(page.locator("#release-0-1-7")).toContainText("macOS: update from 0.1.6 in the app.");
+      await expect(page.locator("#release-0-1-7").getByRole("link", { name: "download page" })).toHaveAttribute(
+        "href",
+        "/download",
+      );
+    } else await expect(page.locator("#release-0-1-7")).toHaveCount(0);
+    if (STABLE_016 || STABLE_017) {
       await expect(page.locator("#release-0-1-6")).toBeVisible();
       await expect(page.locator("#release-0-1-6")).toContainText(
         "Windows: in-app Update and Restore previous version don't work in 0.1.6.",
