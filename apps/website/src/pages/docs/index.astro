@@ -1,6 +1,6 @@
 ---
 import Base from "../../layouts/Base.astro";
-import { RELEASES, servedStableRelease } from "../../lib/releases";
+import { RELEASES, releaseCopy, servedStableRelease } from "../../lib/releases";
 import { DOCS_NAV, PAGES, getPage } from "../../lib/site";
 
 const page = getPage("/docs");
@@ -8,7 +8,7 @@ const page = getPage("/docs");
 const stable = servedStableRelease(RELEASES);
 const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item) => ({
   ...item,
-  description: PAGES.find((candidate) => candidate.path === item.href)?.description ?? "",
+  description: releaseCopy(PAGES.find((candidate) => candidate.path === item.href)?.description ?? "", RELEASES),
 }));
 ---
 <Base title={page.title} description={page.description} path={page.path}>

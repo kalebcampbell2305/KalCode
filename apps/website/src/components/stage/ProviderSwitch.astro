@@ -6,6 +6,7 @@
  */
 import StageStyles from "./parts/StageStyles.astro";
 import { AGENT_PROVIDERS, PROVIDERS, threadById } from "../../data/story";
+import { RELEASES, releaseCopyVersion } from "../../lib/releases";
 import Glyph from "./parts/Glyph.astro";
 import Pane from "./parts/Pane.astro";
 import StageLabel from "./parts/StageLabel.astro";
@@ -19,11 +20,12 @@ interface Props {
 }
 const { id = "providers", width = "contained", class: className } = Astro.props;
 const compact = width === "compact";
+const version = releaseCopyVersion(RELEASES);
 const threadFor = { claude: "claude-checkout", codex: "codex-signup", gemini: "gemini-research" } as const;
 ---
 <StageStyles />
 <div class:list={["kc-ps", compact ? "kc-ps--compact" : `kc-w--${width}`, className]} data-kc-ps data-testid="provider-switch">
-  {!compact && <StageLabel tag="Preview · Gemini CLI unavailable in 0.1.6 · provider panes not in Stable yet" />}
+  {!compact && <StageLabel tag={`Preview · Gemini CLI unavailable in ${version} · provider panes not in Stable yet`} />}
   <div class="kc-ps__tabs" role="tablist" aria-label="Provider">
     {AGENT_PROVIDERS.map((p, i) => (
       <button
@@ -57,7 +59,7 @@ const threadFor = { claude: "claude-checkout", codex: "codex-signup", gemini: "g
       </div>
     ))}
   </div>
-  {compact && <StageLabel class="kc-ps__label" tag="Preview · Gemini CLI unavailable in 0.1.6" />}
+  {compact && <StageLabel class="kc-ps__label" tag={`Preview · Gemini CLI unavailable in ${version}`} />}
   <p class="visually-hidden" aria-live="polite" data-kc-ps-live></p>
 </div>
 

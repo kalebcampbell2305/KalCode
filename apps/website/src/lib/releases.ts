@@ -74,6 +74,20 @@ export function servedStableRelease(manifest: ReleaseManifest): ReleaseManifest[
   return latest?.channel === "stable" && latest.platforms.some((platform) => platform.signed) ? latest : null;
 }
 
+/**
+ * The version that release-scoped copy names ("Gemini CLI is unavailable in 0.1.6", "threads in
+ * 0.1.6 run in Plan, Approve or Auto"): the served Stable release, else 0.1.6, the release that copy
+ * was written for. Both facts are unchanged in 0.1.7.
+ */
+export function releaseCopyVersion(manifest: ReleaseManifest): string {
+  return servedStableRelease(manifest)?.version ?? "0.1.6";
+}
+
+/** Copy written for 0.1.6 (site.ts constants and descriptions), naming the served Stable release. */
+export function releaseCopy(text: string, manifest: ReleaseManifest): string {
+  return text.replaceAll("0.1.6", releaseCopyVersion(manifest));
+}
+
 /** "Stable" or "Preview", from the published release's channel. */
 export function channelLabel(manifest: ReleaseManifest): "Stable" | "Preview" {
   return manifest.latest?.channel === "stable" ? "Stable" : "Preview";
