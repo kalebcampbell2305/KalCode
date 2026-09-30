@@ -1742,6 +1742,11 @@ fn jitter(delay: Duration) -> Duration {
 
 fn api_error(error: ApiError) -> AccountRuntimeError {
     match (error.status(), error.code()) {
+        (None, Some("social_sign_in_unavailable")) => AccountRuntimeError {
+            code: "social_sign_in_unavailable",
+            message: "Social sign-in is unavailable in this build. Sign in with email instead.",
+            retryable: false,
+        },
         (Some(401), _) => authentication_required(),
         (Some(409), Some("account_not_activated")) => AccountRuntimeError {
             code: "account_not_activated",
@@ -1770,6 +1775,14 @@ fn api_error(error: ApiError) -> AccountRuntimeError {
         },
         _ => invalid_response(),
     }
+}
+
+#[test]
+fn unavailable_social_sign_in_reports_the_build_limitation() {
+    let error = api_error(ApiError::Local("social_sign_in_unavailable"));
+    assert_eq!(error.code, "social_sign_in_unavailable");
+    assert!(error.message.contains("Sign in with email"));
+    assert!(!error.retryable);
 }
 
 fn store_error(_: SessionStoreError) -> AccountRuntimeError {

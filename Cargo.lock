@@ -3026,6 +3026,7 @@ dependencies = [
 name = "kalcode-secure-store"
 version = "0.1.6"
 dependencies = [
+ "kalcode-contracts",
  "keyring",
  "thiserror 2.0.21",
  "uuid",

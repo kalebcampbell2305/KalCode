@@ -168,13 +168,15 @@ jobs:
       - name: Frontend placeholder for tauri::generate_context
         shell: bash
         run: mkdir -p apps/desktop/dist && echo '<!doctype html>' > apps/desktop/dist/index.html
+      - name: Select isolated Dev identity for Rust debug gates
+        shell: bash
+        run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_ENV, "TAURI_CONFIG=" + JSON.stringify(JSON.parse(fs.readFileSync("apps/desktop/src-tauri/tauri.dev.conf.json", "utf8"))) + "\n");'
       - name: Build real macOS Tauri sidecars for Rust gates
         if: matrix.os == 'macos-latest'
         shell: bash
-        env:
-          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
         run: |
           set -euo pipefail
+          export TAURI_CONFIG="$(node -e 'const config = JSON.parse(process.env.TAURI_CONFIG); config.bundle = { externalBin: [] }; process.stdout.write(JSON.stringify(config));')"
           host_target="$(rustc -vV | awk '/^host: / { print $2 }')"
           case "$host_target" in
             aarch64-apple-darwin|x86_64-apple-darwin) ;;

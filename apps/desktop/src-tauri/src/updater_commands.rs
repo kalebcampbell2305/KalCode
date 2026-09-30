@@ -31,6 +31,16 @@ use installer::PreparedInstaller;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
 const MAX_FEED_BYTES: u64 = 64 * 1024;
+
+fn require_stable_installer() -> Result<(), UpdateError> {
+    if cfg!(debug_assertions) {
+        return Err(UpdateError::new(
+            "dev_update_unavailable",
+            "KalCode Dev cannot install Stable updates. Rebuild the development app instead.",
+        ));
+    }
+    Ok(())
+}
 /// While KalCode runs, the signed feed is re-checked about this often (the launch check covers
 /// startup), jittered by `PERIODIC_CHECK_JITTER_PERCENT` either way.
 const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -769,6 +779,7 @@ impl DesktopUpdaterState {
     }
 
     fn install(&self) -> Result<(), UpdateError> {
+        require_stable_installer()?;
         run_owned_operation(
             &self.0.runtime,
             Runtime::admit_install,
@@ -842,6 +853,7 @@ impl DesktopUpdaterState {
     }
 
     fn restore_previous(&self) -> Result<(), UpdateError> {
+        require_stable_installer()?;
         let public_key = self.key()?.to_owned();
         run_owned_operation(&self.0.runtime, Runtime::admit_recovery, |token, ()| {
             self.restore_owned(token, &public_key)
@@ -1348,6 +1360,13 @@ pub async fn updater_restore_previous(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_stable_builds_can_launch_update_installers() {
+        assert_eq!(
+            super::require_stable_installer().is_ok(),
+            !cfg!(debug_assertions)
+        );
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 

@@ -235,10 +235,9 @@ fn verify_app_identity(app: &Path, expected_version: &str) -> Result<String, ()>
             .args(["-d", "--verbose=4"])
             .arg(app),
     )?;
-    if !combined_text(&details)?
-        .lines()
-        .any(|line| line.trim() == "Identifier=com.kalcode.desktop")
-    {
+    if !combined_text(&details)?.lines().any(|line| {
+        line.trim().strip_prefix("Identifier=") == Some(kalcode_contracts::identity::IDENTIFIER)
+    }) {
         return Err(());
     }
     let requirement = checked(

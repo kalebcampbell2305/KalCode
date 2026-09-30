@@ -11,6 +11,7 @@ publish = false
 name = "kalcode_secure_store"
 
 [dependencies]
+kalcode-contracts = { path = "../contracts" }
 thiserror.workspace = true
 uuid = { workspace = true, features = ["v4", "v7"] }
 zeroize = "1"

@@ -21,6 +21,7 @@ name = "kalcode-update-helper"
 path = "src/bin/kalcode-update-helper.rs"
 
 [build-dependencies]
+serde_json.workspace = true
 tauri-build = { version = "2.6", features = [] }
 
 [dependencies]

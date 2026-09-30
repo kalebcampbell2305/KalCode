@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use kalcode_contracts::identity::URL_SCHEME as SCHEME;
+
 use crate::account;
 
 use std::collections::{HashMap, VecDeque};
@@ -978,7 +980,7 @@ fn social_callback_is_exact_attempt_bound_and_success_clears_pending_into_keycha
 
     let wrong = runtime
         .handle_social_callback_url(&format!(
-            "kalcode://auth/microsoft?code=oauth-code&state={}",
+            "{SCHEME}://auth/microsoft?code=oauth-code&state={}",
             "s".repeat(43)
         ))
         .expect_err("provider mismatch");
@@ -986,7 +988,7 @@ fn social_callback_is_exact_attempt_bound_and_success_clears_pending_into_keycha
     assert_eq!(runtime.snapshot().phase, AccountPhase::SocialPending);
     let stale = runtime
         .handle_social_callback_url(&format!(
-            "kalcode://auth/google?code=oauth-code&state={}",
+            "{SCHEME}://auth/google?code=oauth-code&state={}",
             "x".repeat(43)
         ))
         .expect_err("state mismatch");
@@ -1011,7 +1013,7 @@ fn social_callback_is_exact_attempt_bound_and_success_clears_pending_into_keycha
         }));
     let signed_in = runtime
         .handle_social_callback_url(&format!(
-            "kalcode://auth/google?code=oauth-code&state={}",
+            "{SCHEME}://auth/google?code=oauth-code&state={}",
             "s".repeat(43)
         ))
         .expect("complete social");
@@ -1026,7 +1028,7 @@ fn social_callback_is_exact_attempt_bound_and_success_clears_pending_into_keycha
 
     let replay = runtime
         .handle_social_callback_url(&format!(
-            "kalcode://auth/google?code=oauth-code&state={}",
+            "{SCHEME}://auth/google?code=oauth-code&state={}",
             "s".repeat(43)
         ))
         .expect_err("replay is rejected");
@@ -1090,7 +1092,7 @@ fn cold_start_restores_persisted_social_pkce_before_completing_the_callback() {
     assert_eq!(
         runtime
             .handle_social_callback_url(&format!(
-                "kalcode://auth/google?code=oauth-code&state={state}"
+                "{SCHEME}://auth/google?code=oauth-code&state={state}"
             ))
             .expect("complete restored attempt")
             .phase,
@@ -1150,7 +1152,7 @@ fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
         }));
 
     let code = "4/0AcvDMr-synthetic+provider-code";
-    let mut callback = url::Url::parse("kalcode://auth/google").expect("callback base");
+    let mut callback = url::Url::parse(&format!("{SCHEME}://auth/google")).expect("callback base");
     callback
         .query_pairs_mut()
         .append_pair("code", code)
@@ -1416,7 +1418,8 @@ fn microsoft_owner_usage_stays_unlimited_when_the_receipt_cache_write_fails() {
         }));
     // Entra authorization codes are long dotted visible-ASCII values.
     let code = format!("1.AXYA{}.synthetic-entra_code~", "x".repeat(1_400));
-    let mut callback = url::Url::parse("kalcode://auth/microsoft").expect("callback base");
+    let mut callback =
+        url::Url::parse(&format!("{SCHEME}://auth/microsoft")).expect("callback base");
     callback
         .query_pairs_mut()
         .append_pair("code", &code)
@@ -1486,7 +1489,7 @@ fn social_cancel_clears_pending_and_wrong_account_response_fails_closed() {
         .expect("start microsoft");
     let canceled = runtime
         .handle_social_callback_url(&format!(
-            "kalcode://auth/microsoft?error=sign_in_canceled&state={}",
+            "{SCHEME}://auth/microsoft?error=sign_in_canceled&state={}",
             "s".repeat(43)
         ))
         .expect("cancel callback");
@@ -1516,7 +1519,7 @@ fn social_cancel_clears_pending_and_wrong_account_response_fails_closed() {
         .push_back(Ok(api_account(false)));
     let mismatch = runtime
         .handle_social_callback_url(&format!(
-            "kalcode://auth/google?code=oauth-code&state={}",
+            "{SCHEME}://auth/google?code=oauth-code&state={}",
             "s".repeat(43)
         ))
         .expect_err("wrong account");
@@ -1554,7 +1557,7 @@ fn cancel_generation_fence_rejects_late_social_completion_without_restoring_sess
         let runtime = runtime.clone();
         std::thread::spawn(move || {
             runtime.handle_social_callback_url(&format!(
-                "kalcode://auth/google?code=oauth-code&state={}",
+                "{SCHEME}://auth/google?code=oauth-code&state={}",
                 "s".repeat(43)
             ))
         })

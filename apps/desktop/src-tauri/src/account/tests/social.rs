@@ -1,4 +1,5 @@
 use crate::account;
+use kalcode_contracts::identity::URL_SCHEME as SCHEME;
 
 use account::api::ApiError;
 use account::social::{
@@ -10,9 +11,21 @@ const NONCE: &str = "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn";
 const CHALLENGE: &str = "ccccccccccccccccccccccccccccccccccccccccccc";
 
 #[test]
+fn callback_from_the_other_lane_is_rejected() {
+    let other = if SCHEME == "kalcode" {
+        "kalcode-dev"
+    } else {
+        "kalcode"
+    };
+    assert!(
+        parse_social_callback(&format!("{other}://auth/google?code=code&state={STATE}")).is_err()
+    );
+}
+
+#[test]
 fn callback_parser_accepts_only_exact_provider_bound_shapes_and_redacts_payloads() {
     let success = parse_social_callback(&format!(
-        "kalcode://auth/google?code=one-use-code&state={STATE}"
+        "{SCHEME}://auth/google?code=one-use-code&state={STATE}"
     ))
     .expect("valid success");
     assert!(matches!(
@@ -27,7 +40,7 @@ fn callback_parser_accepts_only_exact_provider_bound_shapes_and_redacts_payloads
     assert!(!rendered.contains(STATE));
 
     let google = parse_social_callback(&format!(
-        "kalcode://auth/google?code=4%2F0AcvDMr-synthetic&state={STATE}"
+        "{SCHEME}://auth/google?code=4%2F0AcvDMr-synthetic&state={STATE}"
     ))
     .expect("valid percent-encoded Google authorization code");
     assert!(matches!(
@@ -41,7 +54,7 @@ fn callback_parser_accepts_only_exact_provider_bound_shapes_and_redacts_payloads
 
     assert!(matches!(
         parse_social_callback(&format!(
-            "kalcode://auth/microsoft?error=sign_in_canceled&state={STATE}"
+            "{SCHEME}://auth/microsoft?error=sign_in_canceled&state={STATE}"
         )),
         Ok(SocialCallback::Canceled {
             provider: SocialProvider::Microsoft,
@@ -50,7 +63,7 @@ fn callback_parser_accepts_only_exact_provider_bound_shapes_and_redacts_payloads
     ));
     assert!(matches!(
         parse_social_callback(&format!(
-            "kalcode://auth/google?error=sign_in_failed&state={STATE}"
+            "{SCHEME}://auth/google?error=sign_in_failed&state={STATE}"
         )),
         Ok(SocialCallback::Failed { .. })
     ));
@@ -60,20 +73,20 @@ fn callback_parser_accepts_only_exact_provider_bound_shapes_and_redacts_payloads
 fn callback_parser_rejects_unknown_duplicate_credential_and_ambiguous_payloads() {
     for raw in [
         format!("https://auth/google?code=code&state={STATE}"),
-        format!("kalcode://evil/google?code=code&state={STATE}"),
-        format!("kalcode://user@auth/google?code=code&state={STATE}"),
-        format!("kalcode://auth/github?code=code&state={STATE}"),
-        format!("kalcode://auth/google/extra?code=code&state={STATE}"),
-        format!("kalcode://auth/google?code=code&state={STATE}&extra=x"),
-        format!("kalcode://auth/google?code=one&code=two&state={STATE}"),
-        format!("kalcode://auth/google?code=code&state={STATE}&error=sign_in_failed"),
-        format!("kalcode://auth/google?error=access_denied&state={STATE}"),
-        format!("kalcode://auth/google?token=bearer&state={STATE}"),
-        "kalcode://auth/google?code=code&state=short".into(),
-        format!("kalcode://auth/google?code=contains%20space&state={STATE}"),
-        format!("kalcode://auth/google?code=contains%0Anewline&state={STATE}"),
+        format!("{SCHEME}://evil/google?code=code&state={STATE}"),
+        format!("{SCHEME}://user@auth/google?code=code&state={STATE}"),
+        format!("{SCHEME}://auth/github?code=code&state={STATE}"),
+        format!("{SCHEME}://auth/google/extra?code=code&state={STATE}"),
+        format!("{SCHEME}://auth/google?code=code&state={STATE}&extra=x"),
+        format!("{SCHEME}://auth/google?code=one&code=two&state={STATE}"),
+        format!("{SCHEME}://auth/google?code=code&state={STATE}&error=sign_in_failed"),
+        format!("{SCHEME}://auth/google?error=access_denied&state={STATE}"),
+        format!("{SCHEME}://auth/google?token=bearer&state={STATE}"),
+        format!("{SCHEME}://auth/google?code=code&state=short"),
+        format!("{SCHEME}://auth/google?code=contains%20space&state={STATE}"),
+        format!("{SCHEME}://auth/google?code=contains%0Anewline&state={STATE}"),
         format!(
-            "kalcode://auth/google?code={}&state={STATE}",
+            "{SCHEME}://auth/google?code={}&state={STATE}",
             "x".repeat(2_049)
         ),
     ] {
