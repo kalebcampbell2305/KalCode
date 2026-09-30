@@ -1,0 +1,11 @@
+# Generated media: re-create with the steps in README.md
+capture/plates/
+capture/survey/
+capture/*.png
+assets/ui/
+assets/seq/
+render/
+out/
+audio/*.wav
+blender/*.blend1
+__pycache__/
