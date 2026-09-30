@@ -6,7 +6,7 @@ import PageHead from "../components/PageHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import { hasStage } from "../lib/stage";
 import Base from "../layouts/Base.astro";
-import { RELEASES, buildStatus, signedStableRelease } from "../lib/releases";
+import { RELEASES, buildStatus, releaseCopy, signedStableRelease } from "../lib/releases";
 import { GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
 const page = getPage("/product");
@@ -43,7 +43,7 @@ const modes: { name: string; text: string; planned?: boolean }[] = [
 const roadmap: { capability: string; state: State; note: string }[] = [
   { capability: "App shell, search and palette, light and dark themes", state: "built", note: "In the app today" },
   { capability: "Workspaces and real terminals", state: "built", note: "PowerShell, Command Prompt, Git Bash; restore after restart" },
-  { capability: "Claude Code, Codex and Gemini CLI adapters", state: "built", note: "Sign-in per account from KalCode, streamed threads, resume, interrupt. Gemini CLI is unavailable in 0.1.6 after Google ended Sign in with Google for personal accounts" },
+  { capability: "Claude Code, Codex and Gemini CLI adapters", state: "built", note: releaseCopy("Sign-in per account from KalCode, streamed threads, resume, interrupt. Gemini CLI is unavailable in 0.1.6 after Google ended Sign in with Google for personal accounts", RELEASES) },
   { capability: "Dashboard", state: "built", note: "Live thread status from runtime events, with approvals inline" },
   { capability: "Approvals and permission modes", state: "built", note: "Permission engine, the Approvals panel, and Plan, Approve or Auto for every thread. Bypass and Custom are planned" },
   { capability: "KalVoice dictation and commands", state: stableKalVoice ? "built" : "dev", note: stableKalVoice ? "Available in Stable with signed local component setup" : "On-device recognition and command grammar in development" },
@@ -169,7 +169,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
                       <td>{provider.access}</td>
                       <td>{runs[provider.id]}</td>
                       <td>
-                        <span class:list={["chip", provider.state === "built" ? "chip--built" : "chip--dev"]}>{provider.status}</span>
+                        <span class:list={["chip", provider.state === "built" ? "chip--built" : "chip--dev"]}>{releaseCopy(provider.status, RELEASES)}</span>
                       </td>
                     </tr>
                   ))
@@ -177,7 +177,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
               </tbody>
             </table>
           </div>
-          <p>{GEMINI_AVAILABILITY.notice}</p>
+          <p>{releaseCopy(GEMINI_AVAILABILITY.notice, RELEASES)}</p>
           <p>
             KalCode uses documented integration methods only: each provider's own sign-in, run from
             KalCode for your account. It never copies hidden credentials or scrapes browser sessions. Usage is

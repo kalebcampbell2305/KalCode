@@ -1,5 +1,5 @@
 ---
-import { RELEASES, servedStableRelease } from "../lib/releases";
+import { RELEASES, releaseCopy, servedStableRelease } from "../lib/releases";
 import { DOCS_NAV, type PagePath, getPage } from "../lib/site";
 import Base from "./Base.astro";
 
@@ -13,7 +13,7 @@ const page = getPage(path);
 // Once a Stable release is served the docs describe it; before then they describe the design.
 const stable = servedStableRelease(RELEASES);
 ---
-<Base title={page.title} description={page.description} path={page.path}>
+<Base title={page.title} description={releaseCopy(page.description, RELEASES)} path={page.path}>
   <div class="container docs">
     <nav class="docs__nav" aria-label="Documentation">
       <h2>Documentation</h2>

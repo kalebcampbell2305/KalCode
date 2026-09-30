@@ -36,13 +36,18 @@ test.describe("download page", () => {
     await expect(page.locator("#early-access form[data-api-form='signup']")).toHaveCount(1);
   });
 
-  test("0.1.6 tells Windows users to download the next version here, and no other build does", async ({ page }) => {
+  test("0.1.6 and 0.1.7 tell Windows users to install from here, and no other build does", async ({ page }) => {
     await page.goto("/download");
     const note = page.locator("[data-windows-update-note]");
     if (WINDOWS_BUILD && RELEASES.latest?.version === "0.1.6") {
       await expect(note).toHaveCount(1);
       await expect(page.locator("#windows [data-windows-update-note]")).toHaveText(
         "Windows: in-app Update and Restore previous version don't work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.",
+      );
+    } else if (WINDOWS_BUILD && RELEASES.latest?.version === "0.1.7") {
+      await expect(note).toHaveCount(1);
+      await expect(page.locator("#windows [data-windows-update-note]")).toHaveText(
+        "Windows: 0.1.6 can't update itself. If you have 0.1.6, download this installer and run it once — your data is kept. On macOS, 0.1.6 updates in the app.",
       );
     } else {
       await expect(note).toHaveCount(0);
