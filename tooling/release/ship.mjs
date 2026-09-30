@@ -12,6 +12,9 @@
 // Options: --kit <manifest> (default: the one kit in tooling/release/ship/kits that binds this version+commit),
 //          --state <dir> (default <repo>/target/release-pipeline/<version>-<sha12>), --repo <dir> (default: the
 //          main checkout that owns this worktree), --channel stable.
+//
+// Definition of Done: ship.mjs classify --base <ref> --head <ref> [--json]; ship.mjs lifecycle status;
+//                     ship.mjs gate [--base origin/main] [--list] (tooling/release/lifecycle/cli.mjs).
 // See docs/RELEASE-PIPELINE.md.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -96,14 +99,21 @@ export function createPipeline(opts, { log, echo = true } = {}) {
   return new Pipeline({ repo, identity, loadedKit, stateDir, echo, ...(log ? { log } : {}) });
 }
 
+const LIFECYCLE_COMMANDS = new Set(["classify", "lifecycle", "gate"]);
+const USAGE_ERRORS = new Set(["ShipError", "UsageError", "PolicyError", "GitError"]);
+
 export async function main(argv, io = {}) {
+  if (LIFECYCLE_COMMANDS.has(argv[0])) {
+    const { lifecycleMain } = await import("./lifecycle/cli.mjs");
+    return lifecycleMain(argv, io);
+  }
   const log = io.log ?? ((line) => process.stdout.write(`${line}\n`));
   const opts = parseArgs(argv);
   if (opts.help) {
     log(
       readFileSync(fileURLToPath(import.meta.url), "utf8")
         .split("\n")
-        .slice(1, 19)
+        .slice(1, 18)
         .map((l) => l.replace(/^\/\/ ?/, ""))
         .join("\n"),
     );
@@ -170,7 +180,7 @@ if (invoked) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {
-      process.stderr.write(`${e instanceof ShipError ? e.message : e.stack}\n`);
+      process.stderr.write(`${e instanceof ShipError || USAGE_ERRORS.has(e?.name) ? e.message : e.stack}\n`);
       process.exit(1);
     },
   );
