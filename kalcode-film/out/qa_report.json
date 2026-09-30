@@ -1,0 +1,334 @@
+{
+ "files": [
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "seconds": 60.0,
+   "frames": 3600,
+   "video": "1920x1080 h264 High yuv420p 60/1",
+   "audio": "aac 48000 Hz 2ch 331 kbps",
+   "lufs": -14.0,
+   "truePeak": -1.1,
+   "sizeMB": 25.4
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "seconds": 60.0,
+   "frames": 3600,
+   "video": "1080x1920 h264 High yuv420p 60/1",
+   "audio": "aac 48000 Hz 2ch 331 kbps",
+   "lufs": -14.0,
+   "truePeak": -1.1,
+   "sizeMB": 19.7
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "seconds": 30.0,
+   "frames": 1800,
+   "video": "1920x1080 h264 High yuv420p 60/1",
+   "audio": "aac 48000 Hz 2ch 324 kbps",
+   "lufs": -13.8,
+   "truePeak": -1.6,
+   "sizeMB": 11.3
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "seconds": 15.0,
+   "frames": 900,
+   "video": "1920x1080 h264 High yuv420p 60/1",
+   "audio": "aac 48000 Hz 2ch 324 kbps",
+   "lufs": -13.5,
+   "truePeak": -1.8,
+   "sizeMB": 4.9
+  }
+ ],
+ "checks": [
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "H.264 High",
+   "pass": true,
+   "detail": "h264 High"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "yuv420p",
+   "pass": true,
+   "detail": "yuv420p"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "resolution",
+   "pass": true,
+   "detail": "1920x1080"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "60 fps",
+   "pass": true,
+   "detail": "60/1"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "60.00 s \u00b1 1 frame",
+   "pass": true,
+   "detail": "3600 frames, 60.000 s"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "AAC stereo 48 kHz",
+   "pass": true,
+   "detail": "aac 2ch 48000"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "AAC ~320 kbps",
+   "pass": true,
+   "detail": "331919"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "-14 LUFS \u00b1 1",
+   "pass": true,
+   "detail": "-14.0 LUFS"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "true peak \u2264 -1.0 dBTP",
+   "pass": true,
+   "detail": "-1.1 dBTP"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "+faststart",
+   "pass": true,
+   "detail": "moov-before-mdat"
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "decodes cleanly",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "file": "kalcode_launch_60s.mp4",
+   "check": "no blank frames (\u22650.25 s black)",
+   "pass": true,
+   "detail": "[]"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "H.264 High",
+   "pass": true,
+   "detail": "h264 High"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "yuv420p",
+   "pass": true,
+   "detail": "yuv420p"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "resolution",
+   "pass": true,
+   "detail": "1080x1920"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "60 fps",
+   "pass": true,
+   "detail": "60/1"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "60.00 s \u00b1 1 frame",
+   "pass": true,
+   "detail": "3600 frames, 60.000 s"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "AAC stereo 48 kHz",
+   "pass": true,
+   "detail": "aac 2ch 48000"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "AAC ~320 kbps",
+   "pass": true,
+   "detail": "331919"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "-14 LUFS \u00b1 1",
+   "pass": true,
+   "detail": "-14.0 LUFS"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "true peak \u2264 -1.0 dBTP",
+   "pass": true,
+   "detail": "-1.1 dBTP"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "+faststart",
+   "pass": true,
+   "detail": "moov-before-mdat"
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "decodes cleanly",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "file": "kalcode_launch_60s_vertical.mp4",
+   "check": "no blank frames (\u22650.25 s black)",
+   "pass": true,
+   "detail": "[]"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "H.264 High",
+   "pass": true,
+   "detail": "h264 High"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "yuv420p",
+   "pass": true,
+   "detail": "yuv420p"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "resolution",
+   "pass": true,
+   "detail": "1920x1080"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "60 fps",
+   "pass": true,
+   "detail": "60/1"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "30.00 s \u00b1 1 frame",
+   "pass": true,
+   "detail": "1800 frames, 30.000 s"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "AAC stereo 48 kHz",
+   "pass": true,
+   "detail": "aac 2ch 48000"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "AAC ~320 kbps",
+   "pass": true,
+   "detail": "324936"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "-14 LUFS \u00b1 1",
+   "pass": true,
+   "detail": "-13.8 LUFS"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "true peak \u2264 -1.0 dBTP",
+   "pass": true,
+   "detail": "-1.6 dBTP"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "+faststart",
+   "pass": true,
+   "detail": "moov-before-mdat"
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "decodes cleanly",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "file": "kalcode_launch_30s.mp4",
+   "check": "no blank frames (\u22650.25 s black)",
+   "pass": true,
+   "detail": "[]"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "H.264 High",
+   "pass": true,
+   "detail": "h264 High"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "yuv420p",
+   "pass": true,
+   "detail": "yuv420p"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "resolution",
+   "pass": true,
+   "detail": "1920x1080"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "60 fps",
+   "pass": true,
+   "detail": "60/1"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "15.00 s \u00b1 1 frame",
+   "pass": true,
+   "detail": "900 frames, 15.000 s"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "AAC stereo 48 kHz",
+   "pass": true,
+   "detail": "aac 2ch 48000"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "AAC ~320 kbps",
+   "pass": true,
+   "detail": "324054"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "-14 LUFS \u00b1 1",
+   "pass": true,
+   "detail": "-13.5 LUFS"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "true peak \u2264 -1.0 dBTP",
+   "pass": true,
+   "detail": "-1.8 dBTP"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "+faststart",
+   "pass": true,
+   "detail": "moov-before-mdat"
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "decodes cleanly",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "file": "kalcode_launch_15s.mp4",
+   "check": "no blank frames (\u22650.25 s black)",
+   "pass": true,
+   "detail": "[]"
+  }
+ ]
+}
