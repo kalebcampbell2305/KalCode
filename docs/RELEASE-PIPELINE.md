@@ -238,7 +238,7 @@ Everything below runs locally, with no GitHub Actions dependency.
   The agent then finishes the lifecycle, or states that the owner said local-only. The hook:
   - honours `stop_hook_active`;
   - makes no network calls: a stale cache starts a detached `lifecycle status` refresh for the next stop;
-  - stops within about 1.5 s;
+  - stops within about 6 s (inside the 10 s hook timeout);
   - allows the stop on any error of its own.
 
 **Deferred (GitHub-dependent).** Actions is currently unavailable because of an account billing hold. So a

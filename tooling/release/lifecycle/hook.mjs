@@ -16,7 +16,10 @@ import { makeGit } from "./git.mjs";
 import { loadPolicy } from "./policy.mjs";
 import { computeStatus, readJsonFile, stateDir, writeJsonAtomic } from "./status.mjs";
 
-export const HOOK_BUDGET_MS = 1500;
+// Git on the release machine takes 50-800 ms per call (hundreds of worktrees), and the hook needs about seven.
+// The budget stays well inside the 10 s timeout in .claude/settings.json.
+export const HOOK_BUDGET_MS = 6000;
+const GIT_CALL_TIMEOUT_MS = 3000;
 export const CACHE_FRESH_MS = 30 * 60 * 1000;
 export const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const REFRESH_LOCK_MS = 2 * 60 * 1000;
@@ -38,7 +41,7 @@ export function evaluateStop(inputText, deps = {}) {
     if (input.stop_hook_active === true) return allow();
     if (input.hook_event_name && input.hook_event_name !== "Stop") return allow();
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-    const git = (deps.makeGit ?? makeGit)(cwd, { timeoutMs: 700, deadline });
+    const git = (deps.makeGit ?? makeGit)(cwd, { timeoutMs: GIT_CALL_TIMEOUT_MS, deadline });
     let common;
     try {
       common = git.commonDir();
