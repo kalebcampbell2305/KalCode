@@ -28,6 +28,7 @@ const OWNERSHIP_SUFFIX: &str = ".owner";
 const LEASE_SUFFIX: &str = ".owner.lock";
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CLEANUP_CHILD_TIMEOUT: Duration = Duration::from_secs(15);
+const LEASE_SETTLE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_CHILD_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +114,22 @@ impl PreparationLease {
             file,
             identity: expected,
         }))
+    }
+
+    /// Like `acquire_existing`, but rechecks a busy lease for `LEASE_SETTLE_TIMEOUT`. While any
+    /// unrelated process is being spawned, it briefly holds every descriptor (close-on-exec ones
+    /// included) until its exec, so a released lease can look held for a moment.
+    fn acquire_released(path: &Path, expected: FileIdentity) -> Result<Option<Self>, UpdateError> {
+        let started = Instant::now();
+        loop {
+            if let Some(lease) = Self::acquire_existing(path, expected)? {
+                return Ok(Some(lease));
+            }
+            if started.elapsed() >= LEASE_SETTLE_TIMEOUT {
+                return Ok(None);
+            }
+            thread::sleep(CHILD_POLL_INTERVAL);
+        }
     }
 
     const fn identity(&self) -> FileIdentity {
@@ -813,7 +830,7 @@ fn cleanup_recorded_preparation(
     let mount_path = root.join(format!("prepared-{id}.dmg.mount"));
     let lease_path = root.join(format!("prepared-{id}.dmg{LEASE_SUFFIX}"));
     let staged_app = current_parent.join(format!(".KalCode-update-{id}.app"));
-    let Some(cleanup_lease) = PreparationLease::acquire_existing(&lease_path, ownership.lease)?
+    let Some(cleanup_lease) = PreparationLease::acquire_released(&lease_path, ownership.lease)?
     else {
         // The previous parent or one of its inherited native children is still operating on
         // this exact preparation. Never race its copy, mount, verification, or handoff.
@@ -1341,6 +1358,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
     use kalcode_updater::{
@@ -1508,7 +1527,7 @@ mod tests {
         let owner_identity = file_identity(&owner, FileKind::RegularFile)?;
         let lease_identity = lease.identity();
         drop(lease);
-        let cleanup_lease = PreparationLease::acquire_existing(&lease_path, lease_identity)?
+        let cleanup_lease = PreparationLease::acquire_released(&lease_path, lease_identity)?
             .ok_or_else(|| io::Error::other("cleanup lease stayed busy"))?;
 
         cleanup_owned_preparation(
@@ -1564,7 +1583,7 @@ mod tests {
         let owner_identity = file_identity(&owner, FileKind::RegularFile)?;
         let lease_identity = lease.identity();
         drop(lease);
-        let cleanup_lease = PreparationLease::acquire_existing(&lease_path, lease_identity)?
+        let cleanup_lease = PreparationLease::acquire_released(&lease_path, lease_identity)?
             .ok_or_else(|| io::Error::other("cleanup lease stayed busy"))?;
         fs::rename(&staged, &displaced)?;
         fs::create_dir(&staged)?;
@@ -1668,7 +1687,7 @@ mod tests {
         fs::remove_file(&dmg)?;
         fs::remove_dir(&staged)?;
         drop(lease);
-        let cleanup_lease = PreparationLease::acquire_existing(&lease_path, lease_identity)?
+        let cleanup_lease = PreparationLease::acquire_released(&lease_path, lease_identity)?
             .ok_or_else(|| io::Error::other("cleanup lease stayed busy"))?;
 
         cleanup_owned_preparation(
@@ -1881,9 +1900,68 @@ mod tests {
         assert!(PreparationLease::acquire_existing(&path, identity)?.is_none());
         child.kill()?;
         child.wait()?;
-        let cleanup = PreparationLease::acquire_existing(&path, identity)?
+        let cleanup = PreparationLease::acquire_released(&path, identity)?
             .ok_or_else(|| io::Error::other("child did not release inherited lease"))?;
         drop(cleanup);
         Ok(())
+    }
+
+    #[test]
+    fn unrelated_children_never_inherit_the_preparation_lease()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let path = temp.path().join("prepared-owned.dmg.owner.lock");
+        let lease = PreparationLease::create(&path)?;
+        let identity = lease.identity();
+        let other = PreparationLease::create(&temp.path().join("prepared-other.dmg.owner.lock"))?;
+        // One unrelated child through posix_spawn, and one through fork + exec that inherits a
+        // different lease, both alive after this lease's only descriptor closes.
+        let mut spawned = Command::new("/bin/sleep").arg("10").spawn()?;
+        let mut forked = Command::new("/bin/sleep");
+        forked.arg("10");
+        inherit_lease(&mut forked, &other);
+        let mut forked = forked.spawn()?;
+        drop(lease);
+
+        let released = PreparationLease::acquire_released(&path, identity);
+        for child in [&mut spawned, &mut forked] {
+            child.kill()?;
+            child.wait()?;
+        }
+        assert!(released?.is_some(), "an unrelated child kept the lease");
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_unrelated_spawns_never_make_a_released_lease_look_live()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let spawner = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let _ = Command::new("/usr/bin/true").status();
+                }
+            })
+        };
+        let mut result = Ok(());
+        for cycle in 0..200 {
+            let path = temp
+                .path()
+                .join(format!("prepared-cycle{cycle}.dmg.owner.lock"));
+            let lease = PreparationLease::create(&path)?;
+            let identity = lease.identity();
+            drop(lease);
+            if PreparationLease::acquire_released(&path, identity)?.is_none() {
+                result = Err(io::Error::other("a released lease looked live"));
+                break;
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        spawner
+            .join()
+            .map_err(|_| io::Error::other("spawner panicked"))?;
+        Ok(result?)
     }
 }
