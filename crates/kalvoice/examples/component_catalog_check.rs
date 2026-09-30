@@ -76,7 +76,7 @@ fn parse_args() -> Result<Args, String> {
         return Err(fail("usage"));
     }
     let mut map = BTreeMap::new();
-    for pair in raw.chunks_exact(2) {
+    for [key, value] in raw.as_chunks::<2>().0 {
         let allowed = [
             "--public-key-file",
             "--token",
@@ -85,10 +85,10 @@ fn parse_args() -> Result<Args, String> {
             "--platform",
             "--now",
         ];
-        if !allowed.contains(&pair[0].as_str()) || pair[1].starts_with("--") {
+        if !allowed.contains(&key.as_str()) || value.starts_with("--") {
             return Err(fail("usage"));
         }
-        if map.insert(pair[0].clone(), pair[1].clone()).is_some() {
+        if map.insert(key.clone(), value.clone()).is_some() {
             return Err(fail("usage"));
         }
     }
