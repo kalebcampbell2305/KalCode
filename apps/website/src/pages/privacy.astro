@@ -7,6 +7,9 @@ import { CONTACT_EMAIL, EARLY_ACCESS_EMAIL, EMAIL_FROM, getPage } from "../lib/s
 
 const page = getPage("/privacy");
 const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
+// Owner-approved 2026-09-30 (target/recovery-B10-release/CHECKOUT-GO-LIVE.md): shown only when the
+// site is built with paid checkout open (docs/BILLING.md §9); closed, the notice is unchanged.
+const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 const hours = EARLY_ACCESS_EMAIL.linkTtlHours;
 const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
 ---
@@ -15,7 +18,7 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
     title="Privacy"
     lead="This site collects one thing: the email address you give us to join early access."
   >
-    <p class="muted small">Last updated September 28, 2026</p>
+    <p class="muted small">Last updated {checkoutOpen ? "September 30, 2026" : "September 28, 2026"}</p>
   </PageHead>
   <section class="section">
     <div class="container prose">
@@ -39,7 +42,7 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
       <p>
         That is all. We do not store your IP address, your browser's user agent, or any other
         information about your device.
-      </p>
+      </p>{checkoutOpen && <p>Payments are processed by Stripe; KalCode receives your subscription status and billing contact, never your card details.</p>}
 
       <h2>What we use it for</h2>
       <p>

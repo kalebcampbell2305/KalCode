@@ -15,6 +15,13 @@ const previewScope =
 const stableScope =
   "\nThe app is currently offered as Stable releases and preview versions. These terms apply to every version of the app\n        until a version comes with terms of its own.\n";
 const description = stable ? page.description.replace(/ preview app\.$/, " app.") : page.description;
+// Owner-approved 2026-09-30 (target/recovery-B10-release/CHECKOUT-GO-LIVE.md): paid plans open with the same strict build flag as the account page's checkout buttons
+// (docs/BILLING.md §9). Closed, §2 renders byte-identical to before (hence the "\n" endings).
+const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
+const noSale = " Nothing on the site is an offer to sell, and no\n        purchase can be made through it today.\n";
+const paidPlans =
+  " Paid plans (Pro, MAX and MAX 2X) are monthly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically every month until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.\n";
+const updated = checkoutOpen ? "September 30, 2026" : stable ? "September 29, 2026" : "September 24, 2026";
 ---
 <Base title={page.title} description={description} path={page.path}>
   <PageHead
@@ -23,7 +30,7 @@ const description = stable ? page.description.replace(/ preview app\.$/, " app."
       ? "These terms cover kalcoded.com, the KalCode early-access list and the KalCode app."
       : "These terms cover kalcoded.com, the KalCode early-access list and the KalCode preview app."}
   >
-    <p class="muted small">Last updated {stable ? "September 29, 2026" : "September 24, 2026"}</p>
+    <p class="muted small">Last updated {updated}</p>
   </PageHead>
   <section class="section">
     <div class="container prose">
@@ -37,9 +44,7 @@ const description = stable ? page.description.replace(/ preview app\.$/, " app."
       <h2>2. The site</h2>
       <p>
         The site describes KalCode{stable ? "" : ", a product in early preview"}. Descriptions of features, plans and
-        prices reflect current plans and may change. Nothing on the site is an offer to sell, and no
-        purchase can be made through it today.
-      </p>
+        prices reflect current plans and may change.{checkoutOpen ? paidPlans : noSale}</p>
       <p>
         KalCode is designed to work with AI providers through your own accounts. Your use of a
         provider is governed by your agreement with that provider and billed by it; KalCode does

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseManifest } from "../../src/data/releases";
 import { publishedManifest } from "./fixtures/releases";
 
@@ -132,5 +132,24 @@ describe("/terms once Stable is served", () => {
     // Only the six approved sentences and the date differ between the two modes.
     const words = (copy: string) => copy.split(" ").length;
     expect(Math.abs(words(stable) - words(preview))).toBeLessThan(40);
+  });
+});
+
+describe("/terms once paid checkout is open", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("replaces only the no-sale sentence and the date", async () => {
+    selectSignedStable();
+    const closed = text(await renderTerms());
+    vi.stubEnv("PUBLIC_CHECKOUT_ENABLED", "true");
+    const open = text(await renderTerms());
+    const noSale = "Nothing on the site is an offer to sell, and no purchase can be made through it today.";
+    const paid =
+      "Paid plans (Pro, MAX and MAX 2X) are monthly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically every month until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.";
+    expect(closed).toContain(noSale);
+    expect(open).not.toContain(noSale);
+    expect(open).toContain(paid);
+    expect(open).toContain("Last updated September 30, 2026");
+    expect(open.replace(paid, noSale).replace("September 30, 2026", "September 29, 2026")).toBe(closed);
   });
 });
