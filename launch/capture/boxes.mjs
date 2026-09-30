@@ -1,6 +1,7 @@
 // Measure UI element rectangles (CSS px; plates are DPR 2) for Blender overlay alignment.
-import { chromium } from "@playwright/test";
+
 import { writeFileSync } from "node:fs";
+import { chromium } from "@playwright/test";
 
 const base = process.env.KC_URL ?? "http://127.0.0.1:1431";
 const browser = await chromium.launch();
@@ -10,7 +11,9 @@ const rectOf = (sel) =>
   page.evaluate((sel) => {
     const pick = () => {
       if (sel.text) {
-        const all = [...document.querySelectorAll("body *")].filter((e) => e.children.length === 0 && e.textContent?.trim() === sel.text);
+        const all = [...document.querySelectorAll("body *")].filter(
+          (e) => e.children.length === 0 && e.textContent?.trim() === sel.text,
+        );
         const el = all[sel.nth ?? 0];
         return sel.up ? el?.closest(sel.up) : el;
       }
@@ -40,7 +43,8 @@ boxes.composer = await rectOf({ css: "textarea" });
 await page.getByRole("navigation").getByText("Code", { exact: true }).first().click();
 await page.waitForTimeout(900);
 boxes.terminal = await rectOf({ css: ".xterm" });
-boxes.code_canvas = await rectOf({ css: ".xterm" }).then(async () => rectOf({ text: "PowerShell 7", up: "section, [class*=pane], [class*=Pane]" }));
+boxes.code_canvas = await rectOf({ css: ".xterm" }).then(async () =>
+  rectOf({ text: "PowerShell 7", up: "section, [class*=pane], [class*=Pane]" }),
+);
 writeFileSync(process.argv[2], JSON.stringify(boxes, null, 2));
-console.log(JSON.stringify(boxes));
 await browser.close();

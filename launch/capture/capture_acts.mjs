@@ -1,7 +1,8 @@
 // Captures for acts 3-7: live Dashboard, Approvals, Notifications, New thread pickers,
 // workspace switcher, terminal naming + git push, accounts, Browser pane.
-import { chromium } from "@playwright/test";
+
 import { mkdirSync } from "node:fs";
+import { chromium } from "@playwright/test";
 
 const base = process.env.KC_URL ?? "http://127.0.0.1:1431";
 const out = process.argv[2];
@@ -23,7 +24,8 @@ async function hideGemini() {
   await page.evaluate(() => {
     for (const el of document.querySelectorAll("li, tr, [role=row], [role=listitem], section > div, article, div")) {
       const t = el.textContent ?? "";
-      if (t.includes("Gemini CLI") && !t.includes("Claude Code") && !t.includes("Codex") && t.length < 300) el.style.display = "none";
+      if (t.includes("Gemini CLI") && !t.includes("Claude Code") && !t.includes("Codex") && t.length < 300)
+        el.style.display = "none";
     }
   });
 }
@@ -46,13 +48,22 @@ if (want("dashlive")) {
   await open();
   await seq("dashlive", 6, 100, "a");
   const card = page.locator("article, [class*=card], [class*=Card]").filter({ hasText: "Download page copy" }).first();
-  await card.getByRole("button", { name: /^Approve$/ }).first().click().catch((e) => console.log("approve btn", e.message));
+  await card
+    .getByRole("button", { name: /^Approve$/ })
+    .first()
+    .click()
+    .catch((_e) => {});
   await page.waitForTimeout(300);
   await seq("dashlive", 6, 100, "b");
   await shot("dash_approve_menu");
   const once = page.getByRole("button", { name: /Approve once/ }).first();
   if (await once.count()) await once.click();
-  else await page.getByRole("menuitem", { name: /Approve once|Approve/ }).first().click().catch(() => {});
+  else
+    await page
+      .getByRole("menuitem", { name: /Approve once|Approve/ })
+      .first()
+      .click()
+      .catch(() => {});
   await seq("dashlive", 30, 110, "c");
 }
 
@@ -69,18 +80,22 @@ if (want("notifications")) {
 if (want("newthread")) {
   await open();
   await nav("Threads");
-  await page.getByRole("button", { name: /New thread/ }).first().click();
+  await page
+    .getByRole("button", { name: /New thread/ })
+    .first()
+    .click();
   await page.waitForTimeout(900);
   await shot("nt_base");
-  const selects = page.locator("select");
-  console.log("selects:", await selects.count(), await selects.evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") || e.name || e.id)));
-  const combos = page.getByRole("combobox");
-  console.log("combos:", await combos.count(), await combos.allInnerTexts());
+  const _selects = page.locator("select");
+  const _combos = page.getByRole("combobox");
 }
 if (want("switch")) {
   await open();
   await nav("Code");
-  await page.getByRole("button", { name: /Switch workspace/ }).first().click();
+  await page
+    .getByRole("button", { name: /Switch workspace/ })
+    .first()
+    .click();
   await page.waitForTimeout(700);
   await shot("switch_ws");
   await page.keyboard.press("Escape");
@@ -107,4 +122,3 @@ if (want("accounts")) {
   await shot("accounts_scrolled");
 }
 await browser.close();
-console.log("acts captured");

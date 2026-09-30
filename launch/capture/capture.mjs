@@ -1,7 +1,8 @@
 // Capture real KalCode UI plates (ui-test fixture build + capture-only film fixture patch).
 // Run from apps/desktop (needs @playwright/test): node ../../launch/capture/capture.mjs <outDir> [steps]
-import { chromium } from "@playwright/test";
+
 import { mkdirSync, writeFileSync } from "node:fs";
+import { chromium } from "@playwright/test";
 
 const base = process.env.KC_URL ?? "http://127.0.0.1:1431";
 const out = process.argv[2];
@@ -25,7 +26,8 @@ async function hideGemini() {
   await page.evaluate(() => {
     for (const el of document.querySelectorAll("li, tr, [role=row], [role=listitem], section > div, article")) {
       const t = el.textContent ?? "";
-      if (t.includes("Gemini CLI") && !t.includes("Claude Code") && !t.includes("Codex") && t.length < 400) el.style.display = "none";
+      if (t.includes("Gemini CLI") && !t.includes("Claude Code") && !t.includes("Codex") && t.length < 400)
+        el.style.display = "none";
     }
   });
 }
@@ -38,7 +40,10 @@ async function shot(name) {
   await page.screenshot({ path: `${out}/${name}.png` });
 }
 async function box(name, locator) {
-  const b = await locator.first().boundingBox({ timeout: 2000 }).catch(() => null);
+  const b = await locator
+    .first()
+    .boundingBox({ timeout: 2000 })
+    .catch(() => null);
   if (b) boxes[name] = b;
 }
 const want = (s) => !only || only.includes(s);
@@ -121,7 +126,11 @@ if (want("voice")) {
 // 5. Providers › Accounts
 if (want("providers")) {
   await nav("Providers");
-  await page.getByRole("tab", { name: "Accounts" }).first().click().catch(() => page.getByText("Accounts", { exact: true }).first().click());
+  await page
+    .getByRole("tab", { name: "Accounts" })
+    .first()
+    .click()
+    .catch(() => page.getByText("Accounts", { exact: true }).first().click());
   await page.waitForTimeout(900);
   await hideGemini();
   await shot("accounts");
@@ -130,11 +139,13 @@ if (want("providers")) {
 // 6. New thread: provider, account and model pickers
 if (want("newthread")) {
   await nav("Threads");
-  await page.getByRole("button", { name: /New thread/ }).first().click();
+  await page
+    .getByRole("button", { name: /New thread/ })
+    .first()
+    .click();
   await page.waitForTimeout(900);
   await shot("newthread");
 }
 
 writeFileSync(`${out}/boxes.json`, JSON.stringify(boxes, null, 2));
 await browser.close();
-console.log("captured", Object.keys(boxes));

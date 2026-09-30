@@ -1,6 +1,7 @@
 // KalVoice sequences: hold F8, the fixture recognizer "hears" ?transcript=, release, result.
-import { chromium } from "@playwright/test";
+
 import { mkdirSync } from "node:fs";
+import { chromium } from "@playwright/test";
 
 const base = process.env.KC_URL ?? "http://127.0.0.1:1431";
 const out = process.argv[2];
@@ -38,4 +39,3 @@ await run("v_focus", "Threads", "Focus the Browser redesign thread.", "Updater r
 await run("v_tell", "Threads", "Tell it to finish the redesign.", "Browser redesign");
 await run("v_approve", "Dashboard", "What needs my approval?", null);
 await browser.close();
-console.log("voice done");
