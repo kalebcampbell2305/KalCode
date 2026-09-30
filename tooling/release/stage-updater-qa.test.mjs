@@ -601,3 +601,37 @@ test("stage executable has no pointer-write or mutable-feed publication capabili
   assert.match(source, /buildQaVersionClaimStatement/);
   assert.match(source, /Stable pointer changed/);
 });
+
+test("a derived baseline may sit below the live Stable pointer; the candidate must be newer than it", async () => {
+  // B11 shape: Stable points at 0.1.6 (live); the private pair is a derived 0.1.2 baseline and a 0.1.7 candidate.
+  const baseline = release("0.1.2", "2", BASELINE_COMMIT);
+  const candidate = release("0.1.7", "7", CANDIDATE_COMMIT);
+  const pointer = pointerRow("0.1.6", "live-016");
+  const remote = remoteFixture(pointer);
+  const receipt = createQaStageReceipt({ baseline, candidate, pointerRows: [pointer] });
+  const result = await runQaStagePublication({ baseline, candidate, receipt, remote });
+  assert.deepEqual(result.pointerRows, [pointer]);
+  assert.deepEqual(result.versions, ["0.1.2", "0.1.7"]);
+  assert.deepEqual([...remote.versions.keys()].sort(), ["0.1.2", "0.1.7"]);
+
+  // The candidate must be strictly newer than the pointer, and the pointer may never be the baseline itself.
+  for (const [live, why] of [
+    ["0.1.7", "pointer equals the candidate"],
+    ["0.1.8", "pointer is newer than the candidate"],
+    ["0.1.2", "pointer is the baseline"],
+  ]) {
+    const p = pointerRow(live, `live-${live}`);
+    const r = remoteFixture(p);
+    await assert.rejects(
+      runQaStagePublication({
+        baseline,
+        candidate,
+        receipt: createQaStageReceipt({ baseline, candidate, pointerRows: [p] }),
+        remote: r,
+      }),
+      /not an exact older release than the private QA candidate/,
+      why,
+    );
+    assert.equal(r.versions.size, 0, why);
+  }
+});
