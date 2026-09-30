@@ -711,6 +711,7 @@ try {
     }
     downloadedInputs.push({
       ...packet,
+      ...(trialWaiver?.target === packet.target && { updateTrialWaived: true }),
       artifactPath,
       signaturePath,
       artifactKey: objects.updater.artifact,

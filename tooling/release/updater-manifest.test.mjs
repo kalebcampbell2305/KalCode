@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -630,6 +630,21 @@ test("an owner-waived update trial lowers only that artifact to the preliminary 
     }),
     /waiver applies only to a final publication/,
   );
+});
+
+test("publish.mjs carries an update-trial waiver into every platform manifest it builds or re-verifies", () => {
+  // Regression (deputy R1): the final readback re-verification must use the same per-artifact waiver as the
+  // first build, or a waived publication fails in Bootstrap/ConfirmAfterDeploy after the uploads.
+  const source = readFileSync(new URL("./publish.mjs", import.meta.url), "utf8");
+  const builds = source.match(/createPlatformUpdaterManifest\(/g) ?? [];
+  const spreads = source.match(/\.\.\.packet,/g) ?? [];
+  const waived =
+    source.match(
+      /\.\.\.packet,\s+\.\.\.\(trialWaiver\?\.target === packet\.target && \{ updateTrialWaived: true \}\),/g,
+    ) ?? [];
+  assert.equal(builds.length, 2);
+  assert.equal(spreads.length, builds.length);
+  assert.equal(waived.length, builds.length);
 });
 
 test("stable generators reject prerelease versions before artifact I/O", async () => {
