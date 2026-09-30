@@ -191,3 +191,62 @@ Other commands:
 
 The orchestration logic is tested in `tooling/release/ship.test.mjs` (a throwaway git repository with a
 fake kit). The tests never touch production or signing keys.
+
+## Definition of Done enforcement
+
+[AGENTS.md](../AGENTS.md) defines the lifecycle every task finishes. `ship.mjs` makes it machine-checked.
+Everything below runs locally, with no GitHub Actions dependency.
+
+- **Policy.** `tooling/release/lifecycle/policy.json` maps path globs to four lanes and each lane to its
+  ordered steps. The first matching rule wins. An unknown path counts as desktop and website, never internal.
+  - `website`: the `kalcode-website` Worker (`apps/website/**`) and the `kalcode-api` Worker at
+    api.kalcoded.com (`apps/api/**`). Both deploy with `wrangler deploy`.
+  - `desktop`: `apps/desktop/**`, `crates/**`, `third_party/**`, `Cargo.*`, `.cargo/`.
+  - `docs`: only `docs/releases/**`, which `publish.mjs` embeds in the signed updater descriptor. The
+    website does not render `docs/*.md`; its `/docs/*` pages are sources under `apps/website`.
+  - `internal`: tooling, CI, tests, agent files and other docs. These are merged only.
+  - `packages/*` ship with the apps that depend on them.
+  - A `pnpm-lock.yaml` change ships with the importers whose resolved dependency graph changed. If the
+    change cannot be attributed, it counts as desktop and website.
+- **`classify --base <ref> --head <ref> [--json|--markdown]`** lists the lanes and the required lifecycle
+  for `merge-base(base, head)..head`. It handles renames (both sides) and deletions.
+- **`lifecycle status [--json] [--check] [--offline]`** lists the production targets on `origin/main` that
+  have merged changes not yet in production. It uses public read-only GETs only.
+  - Website: `https://kalcoded.com/.well-known/kalcode-build.json`, the build stamp that
+    `apps/website/scripts/build-stamp.mjs` writes on every `astro build`. The stamp holds the commit, a
+    dirty flag and `builtAt`. Until a build with the stamp is deployed, the website reads as "unknown deployed
+    commit". The stamp is itself a website change and ships with the next website deploy.
+  - API: no stamp yet, so it reads as unknown.
+  - Desktop: `version` in `tauri.conf.json` on main, compared with
+    `https://kalcoded.com/releases/updater/stable.json` (`version`, `kalcode.commit`). When the Stable
+    feed serves nothing yet, the comparison uses the catalog `https://kalcoded.com/releases/latest.json`.
+    Desktop changes merged after the published commit also count as unshipped.
+  - Results are cached under `<git common dir>/kalcode-lifecycle/`.
+- **`gate [--base origin/main] [--list] [--only a,b] [--keep-going]`** is the local merge gate. It runs the
+  `ci.yml` equivalents for the lanes the working tree touches: committed, staged, unstaged and untracked
+  changes.
+  - It never skips a failing check. A check this platform cannot run is reported as unavailable, for
+    example the native desktop E2E off Windows.
+  - A required tool that is missing fails the gate.
+  - A clean PASS writes a receipt for `HEAD`. The Stop hook reports that receipt.
+- **Stop hook.** The committed `.claude/settings.json` runs `ship.mjs lifecycle hook` when a Claude Code
+  session stops. `.gitignore` ignores `.claude/*` except `settings.json`. The hook blocks the stop once per
+  session and state, with a short reason, when either of these is true:
+  - the session's branch has commits that are not in `origin/main`;
+  - the cached status shows unshipped production lanes.
+
+  The agent then finishes the lifecycle, or states that the owner said local-only. The hook:
+  - honours `stop_hook_active`;
+  - makes no network calls: a stale cache starts a detached `lifecycle status` refresh for the next stop;
+  - stops within about 1.5 s;
+  - allows the stop on any error of its own.
+
+**Deferred (GitHub-dependent).** Actions is currently unavailable because of an account billing hold. So a
+`lifecycle.yml` workflow (classify on PRs into the job summary; on pushes to main, keep one "Unshipped
+production changes" issue with `GITHUB_TOKEN` `issues: write`) is kept off this branch. It is on the local
+branch `tooling/lifecycle-ci-deferred` until billing is restored.
+
+The repository has no Actions secrets, so CI cannot deploy. A CI deploy of the Workers would need
+`CLOUDFLARE_API_TOKEN` (Workers Scripts and D1 edit, scoped to the account) and `CLOUDFLARE_ACCOUNT_ID`,
+behind a protected environment. Desktop publishing stays local: its signing keys never leave the owner's
+machines.
