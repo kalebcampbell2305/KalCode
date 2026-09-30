@@ -1,5 +1,11 @@
 # KalCode agent policy
 
+## Permanent trusted release infrastructure (owner directive 2026-09-30)
+
+GitHub-hosted Actions minutes or billing must not block KalCode shipping. Use the owner's main Windows PC and Mac as trusted self-hosted release machines, preserving the existing build, signing, notarization, certification, publication, and update infrastructure. Keep each signing credential on the trusted machine that needs it. Never expose these machines or credentials to untrusted branches or pull-request jobs.
+
+After normal gates pass and a feature or fix merges, automatically execute the current-version internal build through Windows and macOS packaging, required signing/notarization, publication to the existing trusted artifact/update hosting, update-feed availability, and live production verification. GitHub may coordinate; paid hosted runner minutes must not be required. Reuse the approved local release path when hosted CI is unavailable, without bypassing any required gate. Use the smallest correct implementation; do not rebuild working release systems or discard valid evidence. This is permanent repository memory for Claude Code and Codex.
+
 ## Completion requires verified delivery (owner reaffirmed 2026-09-30)
 
 **MERGED IS NOT SHIPPED. BUILT IS NOT SHIPPED. DONE means users can receive the validated update and live production has been verified.**
