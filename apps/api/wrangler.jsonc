@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   // KalCode API: accounts and server-authoritative entitlements (docs/BILLING.md).
-  // Production account API. New paid checkout remains held until signed desktop certification.
+  // Production account API. Paid checkout is open (owner decision 2026-09-30, 0.1.6 go-live);
+  // rollback: set CHECKOUT_ENABLED to "false" (portal and webhooks keep working).
   "name": "kalcode-api",
   "main": "worker/index.ts",
   // Latest date supported by the workerd bundled with the pinned wrangler (1.20260921.1).
@@ -32,7 +33,7 @@
   //   ENTITLEMENT_SIGNING_KEY — Ed25519 private JWK; see docs/BILLING.md §6.
   // Local development reads them from .dev.vars (git-ignored; `pnpm keys:dev` creates one).
   "vars": {
-    "CHECKOUT_ENABLED": "false",
+    "CHECKOUT_ENABLED": "true",
     // JSON array of retired public keys ([{"kid":"…","x":"…"}]) still published during rotation.
     "ENTITLEMENT_PREVIOUS_PUBLIC_KEYS": "[]",
     // Verified live monthly USD catalog, provisioned 2026-09-25.
