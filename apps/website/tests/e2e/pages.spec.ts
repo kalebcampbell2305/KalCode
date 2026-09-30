@@ -5,6 +5,9 @@ import { CHANNEL_LABEL, MANIFEST, renderedDescription, SERVED_STABLE, SIGNED_STA
 
 const STABLE_016 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.6";
 const STABLE_017 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.7";
+const GEMINI_UNAVAILABLE_TAG = STABLE_017
+  ? /Gemini CLI unavailable in (KalCode )?0\.1\.7/
+  : /Gemini CLI unavailable in (KalCode )?0.1.6/;
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -53,7 +56,8 @@ test.describe("every page", () => {
         // Gemini CLI thread.
         if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
         // Any other stage that still shows Gemini CLI says it is unavailable.
-        if (/Gemini CLI/.test(text)) expect(text, path).toMatch(/Gemini CLI unavailable in (KalCode )?0.1.6/);
+        // (The stage tags name the served Stable version: 0.1.6, or 0.1.7 once it is selected.)
+        if (/Gemini CLI/.test(text)) expect(text, path).toMatch(GEMINI_UNAVAILABLE_TAG);
       }
     }
   });
