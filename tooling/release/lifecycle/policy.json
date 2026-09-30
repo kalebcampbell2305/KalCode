@@ -1,0 +1,358 @@
+{
+  "schema": "kalcode-lifecycle-policy/v1",
+  "description": "Machine-readable KalCode Definition of Done (AGENTS.md). Paths map to lanes; lanes map to the ordered lifecycle a change must finish. Implemented by `node tooling/release/ship.mjs classify|lifecycle|gate`.",
+  "stages": ["implement", "test", "review", "commit", "merge", "build", "deploy", "verify", "report"],
+  "lanes": {
+    "desktop": {
+      "production": true,
+      "description": "Signed desktop app (Tauri shell, Rust crates, desktop frontend)."
+    },
+    "website": {
+      "production": true,
+      "description": "Cloudflare Workers: kalcode-website (kalcoded.com) and kalcode-api (api.kalcoded.com)."
+    },
+    "docs": {
+      "production": true,
+      "description": "Published docs: docs/releases/<version>.md ships inside the signed updater descriptor."
+    },
+    "internal": { "production": false, "description": "Tooling, CI, tests, agent and dev files. Merge only." }
+  },
+  "targets": {
+    "desktop": { "lane": "desktop" },
+    "website": { "lane": "website" },
+    "api": { "lane": "website" },
+    "release-notes": { "lane": "docs" }
+  },
+  "importers": {
+    ".": { "lanes": ["internal"], "targets": [] },
+    "tooling": { "lanes": ["internal"], "targets": [] },
+    "apps/desktop": { "lanes": ["desktop"], "targets": ["desktop"] },
+    "apps/website": { "lanes": ["website"], "targets": ["website"] },
+    "apps/api": { "lanes": ["website"], "targets": ["api"] }
+  },
+  "rules": [
+    {
+      "id": "test-files",
+      "globs": [
+        "apps/*/tests/**",
+        "apps/desktop/src-tauri/tests/**",
+        "packages/*/tests/**",
+        "crates/*/tests/**",
+        "crates/*/benches/**",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.mjs",
+        "**/*.spec.ts",
+        "apps/*/vitest.config.ts",
+        "apps/*/playwright.config.ts",
+        "packages/*/vitest.config.ts",
+        "packages/*/playwright.config.ts"
+      ],
+      "lanes": ["internal"],
+      "why": "test-only files are never part of a production artifact"
+    },
+    {
+      "id": "release-notes",
+      "globs": ["docs/releases/**"],
+      "lanes": ["docs"],
+      "targets": ["release-notes"],
+      "why": "publish.mjs embeds docs/releases/<version>.md in the signed updater descriptor"
+    },
+    {
+      "id": "internal-files",
+      "globs": [
+        "tooling/**",
+        ".github/**",
+        ".claude/**",
+        ".codex/**",
+        ".agents/**",
+        ".vscode/**",
+        "docs/**",
+        "assets/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "biome.json",
+        "clippy.toml",
+        "rustfmt.toml",
+        "deny.toml",
+        ".gitignore",
+        ".gitattributes",
+        ".editorconfig",
+        ".nvmrc",
+        "package.json"
+      ],
+      "lanes": ["internal"],
+      "why": "tooling, CI, agent/dev files and unpublished docs; the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
+    },
+    {
+      "id": "website",
+      "globs": ["apps/website/**"],
+      "lanes": ["website"],
+      "targets": ["website"],
+      "why": "the kalcode-website Worker and its static build"
+    },
+    {
+      "id": "api",
+      "globs": ["apps/api/**"],
+      "lanes": ["website"],
+      "targets": ["api"],
+      "why": "the kalcode-api Worker (api.kalcoded.com), deployed with wrangler like the website"
+    },
+    {
+      "id": "desktop",
+      "globs": [
+        "apps/desktop/**",
+        "crates/**",
+        "third_party/**",
+        ".cargo/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml"
+      ],
+      "lanes": ["desktop"],
+      "targets": ["desktop"],
+      "why": "every Cargo workspace member (crates/*, apps/desktop/src-tauri) and bundled third-party code ships in the desktop app"
+    },
+    {
+      "id": "workspace-package",
+      "globs": ["packages/*/**"],
+      "resolve": "workspace-package",
+      "why": "a shared package ships wherever the apps that depend on it ship"
+    },
+    {
+      "id": "pnpm-lock",
+      "globs": ["pnpm-lock.yaml"],
+      "resolve": "pnpm-lock",
+      "why": "a lockfile change ships wherever the importers whose dependency graph changed ship"
+    },
+    {
+      "id": "shared-build-config",
+      "globs": ["pnpm-workspace.yaml", "patches/**", "tsconfig.base.json"],
+      "lanes": ["desktop", "website"],
+      "targets": ["desktop", "website", "api"],
+      "why": "changes every JavaScript install or build"
+    }
+  ],
+  "fallback": {
+    "lanes": ["desktop", "website"],
+    "targets": ["desktop", "website", "api"],
+    "why": "unknown path: treated conservatively as both production lanes, never internal"
+  },
+  "steps": {
+    "implement": { "stage": "implement", "text": "Implement the change." },
+    "test": {
+      "stage": "test",
+      "text": "Run the local gate for the touched lanes: node tooling/release/ship.mjs gate --base origin/main (CI runs the same checks when GitHub Actions is available)."
+    },
+    "review": { "stage": "review", "text": "Independent review of the diff; address every finding." },
+    "commit": { "stage": "commit", "text": "Commit on a branch, never on main." },
+    "merge": {
+      "stage": "merge",
+      "text": "Push the branch, open a PR, required checks green, merge. Never push to main."
+    },
+    "desktop.version": {
+      "stage": "commit",
+      "lanes": ["desktop"],
+      "text": "Bump the version (tauri.conf.json, apps/desktop/package.json, Cargo.toml) and write docs/releases/<version>.md."
+    },
+    "desktop.release": {
+      "stage": "build",
+      "lanes": ["desktop"],
+      "text": "Signed release build and automated release gates: node tooling/release/ship.mjs --version X.Y.Z --commit <sha40> (test, build, certify, qa, stage)."
+    },
+    "desktop.publish": {
+      "stage": "deploy",
+      "lanes": ["desktop"],
+      "text": "Publish the update: ship.mjs --phase publish, then the feed phases (website-assemble, website-merge, deploy, confirm)."
+    },
+    "desktop.verify": {
+      "stage": "verify",
+      "lanes": ["desktop"],
+      "text": "Verify https://kalcoded.com/releases/updater/stable.json serves X.Y.Z with kalcode.commit = the release commit, then a production install and update (ship.mjs --phase live-verify, live-human)."
+    },
+    "website.build": {
+      "stage": "build",
+      "targets": ["website"],
+      "text": "pnpm --filter @kalcode/website build (writes dist/.well-known/kalcode-build.json with the commit)."
+    },
+    "website.migrate": {
+      "stage": "deploy",
+      "targets": ["website"],
+      "paths": ["apps/website/migrations/**"],
+      "text": "Apply the expand-only D1 migrations first: wrangler d1 migrations apply kalcode-web --remote (in apps/website)."
+    },
+    "website.deploy": {
+      "stage": "deploy",
+      "targets": ["website"],
+      "text": "Deploy the kalcode-website Worker from merged main: wrangler deploy (in apps/website)."
+    },
+    "website.verify": {
+      "stage": "verify",
+      "targets": ["website"],
+      "text": "Verify https://kalcoded.com/.well-known/kalcode-build.json shows the merged main commit, then check the changed pages live."
+    },
+    "api.migrate": {
+      "stage": "deploy",
+      "targets": ["api"],
+      "paths": ["apps/api/migrations/**"],
+      "text": "Apply the D1 migrations first: wrangler d1 migrations apply kalcode-api --remote (in apps/api)."
+    },
+    "api.deploy": {
+      "stage": "deploy",
+      "targets": ["api"],
+      "text": "Deploy the kalcode-api Worker from merged main: wrangler deploy (in apps/api)."
+    },
+    "api.verify": {
+      "stage": "verify",
+      "targets": ["api"],
+      "text": "Verify https://api.kalcoded.com/v1/entitlement/keys answers, then exercise the changed routes live."
+    },
+    "docs.publish": {
+      "stage": "deploy",
+      "lanes": ["docs"],
+      "text": "Release notes publish with their version: publish.mjs embeds docs/releases/<version>.md in the signed updater descriptor. Notes of an already published version cannot change in place."
+    },
+    "docs.verify": {
+      "stage": "verify",
+      "lanes": ["docs"],
+      "text": "Verify the notes in https://kalcoded.com/releases/updater/stable.json for that version."
+    },
+    "internal.none": {
+      "stage": "merge",
+      "lanes": ["internal"],
+      "onlyLanes": ["internal"],
+      "text": "No customer release: merging is the last step, because no production artifact changed."
+    },
+    "report": {
+      "stage": "report",
+      "text": "Report what shipped, where it is live (version, URL, commit), what was verified and any known issues."
+    }
+  },
+  "production": {
+    "website": {
+      "stampUrl": "https://kalcoded.com/.well-known/kalcode-build.json"
+    },
+    "api": {
+      "stampUrl": null,
+      "note": "api.kalcoded.com exposes no build stamp yet"
+    },
+    "desktop": {
+      "channel": "stable",
+      "versionFile": "apps/desktop/src-tauri/tauri.conf.json",
+      "feedUrl": "https://kalcoded.com/releases/updater/stable.json",
+      "catalogUrl": "https://kalcoded.com/releases/latest.json"
+    }
+  },
+  "gates": [
+    { "id": "biome", "run": ["pnpm exec biome ci ."] },
+    { "id": "branding", "run": ["node tooling/check-branding.mjs"] },
+    { "id": "capabilities", "run": ["node tooling/check-capabilities.mjs"] },
+    { "id": "zero-cost", "run": ["node tooling/check-zero-cost.mjs"] },
+    { "id": "release-manifest", "run": ["node tooling/release/check-manifest.mjs"] },
+    {
+      "id": "tooling-unit",
+      "when": { "paths": ["tooling/**", ".github/**", ".claude/**", "apps/desktop/tests/perf/**"] },
+      "run": ["node tooling/test-suites.mjs --suite tooling-unit"]
+    },
+    {
+      "id": "packages",
+      "when": { "paths": ["packages/**", "pnpm-lock.yaml", "tsconfig.base.json"] },
+      "run": [
+        "pnpm --filter @kalcode/protocol --filter @kalcode/ui --filter @kalcode/testing typecheck",
+        "node tooling/test-suites.mjs --suite protocol-unit",
+        "node tooling/test-suites.mjs --suite ui-unit",
+        "node tooling/test-suites.mjs --suite testing-unit"
+      ]
+    },
+    {
+      "id": "api",
+      "when": { "targets": ["api"] },
+      "run": ["pnpm --filter @kalcode/api typecheck", "node tooling/test-suites.mjs --suite api-unit"]
+    },
+    {
+      "id": "website",
+      "when": { "targets": ["website"] },
+      "run": [
+        "pnpm --filter @kalcode/website typecheck",
+        "pnpm --filter @kalcode/website build",
+        "node tooling/test-suites.mjs --suite website-unit"
+      ]
+    },
+    {
+      "id": "website-e2e",
+      "when": { "targets": ["website"] },
+      "run": ["node tooling/test-suites.mjs --suite website-e2e"]
+    },
+    {
+      "id": "website-checkout-e2e",
+      "when": { "targets": ["website"] },
+      "env": {
+        "CI": "1",
+        "KALCODE_CHECKOUT_ENABLED_GATE": "1",
+        "PUBLIC_CHECKOUT_ENABLED": "true",
+        "KALCODE_E2E_PORT": "8898",
+        "KALCODE_E2E_MAIL_PORT": "8899",
+        "KALCODE_E2E_INSPECTOR_PORT": "8900",
+        "KALCODE_E2E_PERSIST": ".wrangler/checkout-enabled-e2e-state",
+        "KALCODE_E2E_OUT_DIR": ".wrangler/checkout-enabled-e2e-dist"
+      },
+      "unsetEnv": ["STAGE_URL", "KALCODE_E2E_SKIP_BUILD"],
+      "run": ["node tooling/test-suites.mjs --suite website-checkout-enabled-e2e"]
+    },
+    {
+      "id": "desktop-frontend",
+      "when": { "targets": ["desktop"] },
+      "run": ["pnpm --filter @kalcode/desktop typecheck", "node tooling/test-suites.mjs --suite desktop-unit"]
+    },
+    {
+      "id": "rust",
+      "when": { "targets": ["desktop"] },
+      "builtin": "desktop-dist-placeholder",
+      "envByPlatform": { "linux": { "KALCODE_SKIP_OS_KEYCHAIN_TEST": "1" } },
+      "run": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "node tooling/gen-protocol-index.mjs",
+        "git diff --exit-code -- packages/protocol/src/generated"
+      ]
+    },
+    {
+      "id": "cargo-deny",
+      "when": {
+        "paths": ["Cargo.toml", "Cargo.lock", "crates/*/Cargo.toml", "apps/desktop/src-tauri/Cargo.toml", "deny.toml"]
+      },
+      "requires": ["cargo deny --version"],
+      "run": ["cargo deny check bans licenses sources", "cargo deny check advisories"]
+    },
+    {
+      "id": "desktop-ui",
+      "when": { "targets": ["desktop"] },
+      "run": [
+        "pnpm --filter @kalcode/desktop run test:ui:functional",
+        "pnpm --filter @kalcode/desktop test:ui:widgets",
+        "pnpm --filter @kalcode/ui test:ui:primitives",
+        "pnpm --filter @kalcode/desktop run test:ui:visual-ci"
+      ]
+    },
+    {
+      "id": "desktop-native-e2e",
+      "when": { "targets": ["desktop"] },
+      "platforms": ["win32"],
+      "unavailable": "the native desktop E2E harness is Windows-only (WebView2); CI runs it on windows-latest",
+      "run": ["pnpm --filter @kalcode/desktop build:e2e", "pnpm --filter @kalcode/desktop test:e2e"]
+    },
+    {
+      "id": "pnpm-audit",
+      "when": { "paths": ["pnpm-lock.yaml"] },
+      "run": ["pnpm audit --audit-level high"]
+    },
+    {
+      "id": "cargo-audit",
+      "when": { "paths": ["Cargo.lock"] },
+      "requires": ["cargo audit --version"],
+      "run": ["cargo audit --file Cargo.lock"]
+    }
+  ]
+}

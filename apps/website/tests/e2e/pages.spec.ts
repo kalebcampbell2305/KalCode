@@ -248,3 +248,15 @@ test.describe("every page", () => {
     await expect(page.locator('head link[rel="preload"][as="image"]')).toHaveCount(3);
   });
 });
+
+test("the build stamp names the commit this build came from", async ({ request }) => {
+  // Read by `node tooling/release/ship.mjs lifecycle status` to tell whether main is deployed.
+  const response = await request.get("/.well-known/kalcode-build.json");
+  expect(response.status()).toBe(200);
+  expect(response.headers()["content-type"]).toContain("application/json");
+  const stamp = await response.json();
+  expect(stamp).toMatchObject({ schema: "kalcode-build/v1", app: "website" });
+  expect(stamp.commit).toMatch(/^[0-9a-f]{40}$/);
+  expect(typeof stamp.dirty).toBe("boolean");
+  expect(Number.isNaN(Date.parse(stamp.builtAt))).toBe(false);
+});

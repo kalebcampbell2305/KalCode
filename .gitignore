@@ -43,5 +43,7 @@ apps/desktop/qa/
 
 # Parallel development worktrees (see docs/DEVELOPMENT.md)
 .worktrees/
-# Tool-managed agent worktrees and local assistant state
-.claude/
+# Tool-managed agent worktrees and local assistant state. Only the shared project settings (the
+# Definition of Done Stop hook, tooling/release/lifecycle) are committed.
+.claude/*
+!.claude/settings.json
