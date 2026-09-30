@@ -43,7 +43,9 @@ Each production build is identified by an internal build/revision number (for ex
 
 The version number is the story around a meaningful group of improvements, not a counter for every code change.
 
-**Current capability status (keep this line accurate).** As of 0.1.7, the updater compares public semver only, and published versions are immutable. Internal build-revision updates and Owner-first rollout are **not implemented yet**. Until they are, a desktop build reaches users only as a new public version. So desktop changes merge to `main` and wait, unless the owner declares a version or the build-revision update system has shipped. Building that system is tracked work. When a lifecycle hook reports unshipped desktop changes, it means "waiting for build-revision shipping or the owner's next version", not "bump the version".
+**Never hold a completed feature on `main` for the next public version.** Unless the owner explicitly requests a hold, validated features ship immediately to users of the current public version. Do not say "this change waits on main for the next version" or "this will ship with 0.1.8" without that explicit instruction. If internal build/update metadata needs work to deliver same-version updates, complete that required shipping work through the normal gates; do not use a public version bump or a future milestone as the workaround. A technical shipping blocker must be reported truthfully and repaired; it never authorizes calling an unshipped feature complete.
+
+Declaring a milestone does not change or unlock product features. Features A, B, and C can each ship to current 0.1.7 users while KalCode remains publicly 0.1.7. A later owner declaration of 0.1.8 changes the public milestone and its What's New, changelog, release notes, website references, marketing video, and social posts; everything already shipped remains available.
 
 ## Definition of Done
 
@@ -90,7 +92,7 @@ Run `node tooling/release/ship.mjs classify --base <ref> --head <ref>` to get th
 | Change | Lifecycle |
 |---|---|
 | Website only (`apps/website/**`) | test → merge → deploy the website → verify the live site |
-| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. The public version changes only at an owner-declared milestone (see the release and marketing model, including its current capability status) |
+| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. The public version changes only at an owner-declared milestone. Finished features never wait for that milestone. |
 | Website and desktop | both pipelines |
 | Published docs (`docs/**` that the website or release notes publish) | publish the affected docs |
 | Internal (`tooling/**`, `.github/**`, tests, agent/dev files) | test → review → merge. No customer release unless a production artifact changes |
