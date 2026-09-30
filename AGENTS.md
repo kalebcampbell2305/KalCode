@@ -28,6 +28,16 @@ IMPLEMENT → TEST → REVIEW → COMMIT → INTEGRATE/MERGE → BUILD → DEPLO
 - **Questions.** Don't ask what the repo, live state, docs or a safe command can answer, or anything a reasonable reversible decision covers. Ask only when the desired behavior is genuinely ambiguous (two materially different outcomes), when credentials/2FA are needed, or for irreversible, destructive, legal or business decisions.
 - **Communication.** Keep updates short: what's changing, any real blocker, what passed, what's complete. If something is simple, say so.
 
+**This applies to all KalCode work.** That includes new features, products, modules, panes, tools, workflows, provider integrations, AI systems, KalVoice, Browser, agent orchestration, release infrastructure, website, subscriptions, UI redesigns, backend services, APIs and automation. A new product is not permission to build a big architecture around it. For greenfield work:
+
+1. Build exactly the requested product, as the smallest *complete* version that satisfies the request.
+2. Reuse existing KalCode systems wherever they're enough. Add infrastructure only when the product genuinely needs it.
+3. Add no speculative features or hypothetical-future design. Don't redesign adjacent areas just because the new product touches them.
+4. Keep it modular enough to maintain, but don't over-abstract.
+5. Get the real user path working end to end quickly, test that path, then integrate and ship through the normal pipeline.
+
+"Smallest" never means incomplete, fragile, hacked together or low quality. It means no unnecessary architecture, features, abstractions or scope. Build the full thing that was asked for, and nothing that wasn't.
+
 Before any significant design change, check: did the owner ask for this? Is it required for correctness or safety? Is there a smaller correct solution? If there is, use it.
 
 ## Pipeline by change type
