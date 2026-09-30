@@ -273,7 +273,7 @@
   display: none;
 }
 
-/* Fallback hero poster (the KalCode globe) if the orb component is absent. */
+/* Fallback hero poster (the KalCode mascot) if the orb component is absent. */
 .globe {
   position: relative;
   width: 100%;

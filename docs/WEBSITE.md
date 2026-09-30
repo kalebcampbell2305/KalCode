@@ -19,7 +19,7 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 
 | Route | What it is |
 | --- | --- |
-| `/` | Hero (animated KalCode symbol, "KalCode", the positioning line, one supporting line, data-driven call to action) → provider bar with honest adapter status → product sections composed from `src/components/stage/*` → local-first facts → plan strip → closing section with the early-access form. |
+| `/` | Hero (the KalCode mascot on the animated energy stream, "KalCode", the positioning line, one supporting line, data-driven call to action) → provider bar with honest adapter status → product sections composed from `src/components/stage/*` → local-first facts → plan strip → closing section with the early-access form. |
 | `/product` | Reference: the app window preview, then providers, threads, permissions, KalVoice, local-first, and a "what is built today" table. |
 | `/kalvoice` | Dictation and command mode, the KalVoice demo, KalVoice Requests per plan, privacy. |
 | `/pricing` | One comparison table built from `@kalcode/protocol/plans` (never hardcoded), an "every plan includes" line, FAQ accordion. |
@@ -48,14 +48,14 @@ Rules the pages follow:
   labels and truth chips. Content column 80 rem, product stage 105 rem; the root font size steps up
   at 1800 px and 2200 px so ultrawide screens get larger type rather than empty margins.
 - **Themes:** light and dark are both complete. The home header and hero form a night band in
-  both themes (the hero orb is glow art); everything below follows the theme. The theme toggle
+  both themes (the hero mascot is glow art); everything below follows the theme. The theme toggle
   lives in the footer.
 - **Structured data:** home carries JSON-LD (Organization, WebSite, SoftwareApplication with offers
   from the plan catalog, `sameAs` from `SOCIAL`). It is a non-executing data block, so the CSP
   needs no change; the unit test for inline scripts ignores it.
 - **Composition slots:** `StageSlot` renders `src/components/stage/<Name>.astro` when it exists and
   a quiet window frame otherwise; `HeroOrbSlot` renders `src/components/hero/HeroOrb.astro` or the
-  static globe.
+  static mascot.
 
 ## Round 3: the cinematic world (2026-09-24)
 

@@ -14,8 +14,8 @@
  *   --hero-beam-safe-resume   stream intensity below the band, 0..1 (1)
  *
  * Without JavaScript, with reduced motion, and until WebGL has drawn its first frame, this file
- * alone composes the finished still: poster symbol, stream, source haze, aura, contact glow.
- * Geometry: sphere centre x 0.493, entry point (bottom of the sphere) y 0.798 of the square.
+ * alone composes the finished still: poster mascot, stream, source haze, aura, contact glow.
+ * Geometry: mascot feet x 0.493, entry point (under the feet) y 0.762 of the square.
  */
 
 /* Registered so the WebGL renderer can read resolved pixel values (getComputedStyle). */
@@ -101,7 +101,7 @@
   --s: min(100cqi, var(--hero-orb-max, min(680px, 64svh)));
   --top: var(--hero-orb-top, 0px);
   --beam-x: calc(50% - 0.007 * var(--s));
-  --entry-y: calc(var(--top) + 0.798 * var(--s));
+  --entry-y: calc(var(--top) + 0.762 * var(--s));
   /* Text-safe band, in the stream's own coordinates (it starts at the entry point). */
   --band-a: calc(var(--hero-beam-safe-top) - var(--entry-y));
   --band-mask: linear-gradient(
@@ -379,7 +379,7 @@
   --cy: var(--hero-orb-center-y, calc(max(64px, 7cqh) + 0.5211 * var(--s)));
   --top: calc(var(--cy) - 0.5211 * var(--s));
   --py: var(--hero-platform-y, 96cqh);
-  --entry-y: calc(var(--cy) + 0.2765 * var(--s));
+  --entry-y: calc(var(--cy) + 0.2409 * var(--s));
   --beam-x: 50%;
   /* The plate is sized like `cover`, but anchored so its ring centre (0.5, 0.776) lands on --py. */
   --plate-aspect: 1.7768;

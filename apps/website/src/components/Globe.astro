@@ -1,8 +1,9 @@
 ---
 /**
- * The owner's actual brand artwork: square globe crops produced byte-for-byte from the master
- * PNGs by tooling/generate-brand-assets.py (public/assets/brand/, owned by that pipeline).
- * `kalvoice` is the lettering-free globe from the voice artwork (KalVoice's visual identity).
+ * The owner's actual brand artwork: square crops produced from the master PNGs by
+ * tooling/generate-brand-assets.py (public/assets/brand/, owned by that pipeline).
+ * `kalcode` is the mascot (rim-lit for dark grounds); `kalvoice` is the lettering-free globe from
+ * the voice artwork (KalVoice's visual identity).
  * Served as AVIF with a WebP fallback at 1x/2x widths, with explicit dimensions.
  */
 interface Props {
@@ -17,7 +18,7 @@ interface Props {
 const { variant, hero = false, sizes, alt } = Astro.props;
 
 const SOURCES = {
-  kalcode: { base: "/assets/brand/kalcode-globe", widths: [362, 724] },
+  kalcode: { base: "/assets/brand/kalcode-mascot", widths: [362, 724] },
   kalvoice: { base: "/assets/brand/kalvoice-globe", widths: [300, 600] },
 } as const;
 

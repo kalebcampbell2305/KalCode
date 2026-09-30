@@ -2,8 +2,8 @@
 /**
  * The living KalCode orb, and (layout "centered") the world it lives in.
  *
- * The orb is the brand symbol (assets/branding/kalcode-icon, never redrawn), fed by an energy
- * stream and lit from inside along its own orbits and nodes. The world is derived from the owner's
+ * The orb is the KalCode mascot (from the brand pipeline, never redrawn), standing on an energy
+ * stream that climbs its own lit outline and pixels. The world is derived from the owner's
  * KalCode banner by tooling/generate-hero-world.py: deep-space nebula sky, and the orbital platform
  * with its concentric rings, from whose centre the stream rises into the orb; plus a large rim-lit
  * planet partly off the right edge and a small moon on the left (tooling/generate-space-art.py).
@@ -42,11 +42,11 @@
  *   --hero-beam-safe-inset    end of the band, measured UP from the stream's origin
  *   --hero-beam-safe-level    stream intensity inside the band (default 1 = off; try 0.12)
  *   --hero-beam-safe-resume   stream intensity between the band and the origin (default 1)
- *   Geometry of the symbol square: sphere centre (0.493, 0.521), radius 0.281, stream entry at
- *   y 0.798 (the sphere's bottom). So the sphere spans centre-y ± 0.281 × size.
+ *   Geometry of the mascot square: anchor (0.493, 0.521) (the page's --hero-orb-center-y), head top
+ *   y 0.07, feet centred on x 0.493, stream entry under the feet at y 0.762 (anchor + 0.2409 × size).
  *
  * TYPE-SAFE ZONE (centered)
- *   The bright core runs vertically at x = 50% from the sphere's bottom (centre-y + 0.2765 × size)
+ *   The bright core runs vertically at x = 50% from the mascot's feet (centre-y + 0.2409 × size)
  *   down to --hero-platform-y. Body text must not sit on it at full intensity: either keep text
  *   blocks out of that column, or set the band variables over the text block (the stream then
  *   dims to the band level there, in the WebGL and in the CSS still). Display type (the wordmark,

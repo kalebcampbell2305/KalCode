@@ -153,6 +153,11 @@
   mask: radial-gradient(closest-side, #000 82%, transparent 100%);
 }
 
+.mascot {
+  width: 15rem;
+  height: 15rem;
+}
+
 @media (max-width: 1100px) {
   .hero {
     grid-template-columns: minmax(0, 1fr);

@@ -129,12 +129,10 @@
   color: #eef3fb;
 }
 
-.aboutGlobe {
+.aboutMascot {
   flex: none;
   width: 9rem;
   height: 9rem;
-  -webkit-mask: radial-gradient(closest-side, #000 86%, transparent 100%);
-  mask: radial-gradient(closest-side, #000 86%, transparent 100%);
 }
 
 .aboutText {
