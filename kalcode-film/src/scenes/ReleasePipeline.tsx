@@ -7,8 +7,8 @@ import { C, FONT } from "../brand/tokens";
 import { Bloom, cf, cues, Headline, scene, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, prog, shipHit, springIn } from "../motion";
-import { ApprovalCard, BrowserBody, MacWindow, UpdateCard } from "../ui/surfaces";
 import { Symbol, Wordmark } from "../ui/kit";
+import { ApprovalCard, BrowserBody, MacWindow, UpdateCard } from "../ui/surfaces";
 
 const GATES = [
   { stage: "review", cmd: "Codex review" },

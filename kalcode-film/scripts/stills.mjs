@@ -1,10 +1,12 @@
 // Render review stills at given seconds and tile them into one sheet.
 //   node scripts/stills.mjs <comp> <out.png> 6.2 7 8.8 ...
-import { bundle } from "@remotion/bundler";
-import { renderStill, selectComposition } from "@remotion/renderer";
+
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { bundle } from "@remotion/bundler";
+import { renderStill, selectComposition } from "@remotion/renderer";
+
 const [comp, out, ...secs] = process.argv.slice(2);
 const serveUrl = await bundle({ entryPoint: path.resolve("src/index.ts") });
 const composition = await selectComposition({ serveUrl, id: comp });

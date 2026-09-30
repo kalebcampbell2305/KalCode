@@ -2,12 +2,13 @@
 //   node scripts/render.mjs --comp KalCodeLaunch --out out/kalcode_launch_60s.mp4
 //   node scripts/render.mjs --comp KalCodeLaunch --preview --out build/preview.mp4   (half-res, fast)
 //   node scripts/render.mjs --comp KalCodeLaunch --from 0 --to 899 --out build/proto.mp4
-import { bundle } from "@remotion/bundler";
-import { renderMedia, selectComposition } from "@remotion/renderer";
+
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { bundle } from "@remotion/bundler";
+import { renderMedia, selectComposition } from "@remotion/renderer";
 
 const arg = (k, d) => {
   const i = process.argv.indexOf(`--${k}`);

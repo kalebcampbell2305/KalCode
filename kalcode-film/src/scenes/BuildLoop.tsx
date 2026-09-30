@@ -3,7 +3,7 @@
 // BROWSER. A light packet carries the change across; the browser reloads into the new hero.
 import type React from "react";
 import { C, FONT } from "../brand/tokens";
-import { camAt, Camera, LowerThird } from "../components/camera";
+import { Camera, camAt, LowerThird } from "../components/camera";
 import { cf, scene, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { drift, ease, lerp, prog, springIn } from "../motion";

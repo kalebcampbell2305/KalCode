@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import type React from "react";
 import { C } from "../brand/tokens";
 import { springIn } from "../motion";
-import { Button, SurfaceTitle, SURF } from "./Cockpit";
+import { Button, SURF, SurfaceTitle } from "./Cockpit";
 import { Icon, Panel } from "./kit";
 import { Composer, type Thread, ThreadHeader, ThreadRow, type TLine, Transcript } from "./surfaces";
 

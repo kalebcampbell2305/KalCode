@@ -4,11 +4,11 @@
 import { CheckCircle2, Plus } from "lucide-react";
 import type React from "react";
 import { C, FONT, R } from "../brand/tokens";
-import { camAt, Camera, LowerThird } from "../components/camera";
+import { Camera, camAt, LowerThird } from "../components/camera";
 import { cf, scene, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, prog, springIn } from "../motion";
-import { Cockpit, SurfaceTitle, SURF } from "../ui/Cockpit";
+import { Cockpit, SURF, SurfaceTitle } from "../ui/Cockpit";
 import { Icon, Panel, type Tone } from "../ui/kit";
 import { Dialog, Menu, type Thread, type TLine, Toast } from "../ui/surfaces";
 import { ThreadsView } from "../ui/ThreadsView";

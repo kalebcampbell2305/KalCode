@@ -3,7 +3,7 @@
 // and the app's own version ticks from 0.1.6 to 0.1.7.
 import type React from "react";
 import { C, FONT } from "../brand/tokens";
-import { camAt, Camera, LowerThird } from "../components/camera";
+import { Camera, camAt, LowerThird } from "../components/camera";
 import { Bloom, cf, scene, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { clamp01, ease, lerp, prog, springIn } from "../motion";
