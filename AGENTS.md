@@ -43,7 +43,20 @@ Each production build is identified by an internal build/revision number (for ex
 
 The version number is the story around a meaningful group of improvements, not a counter for every code change.
 
-**Current capability status (keep this line accurate).** As of 0.1.7, the updater compares public semver only, and published versions are immutable. Internal build-revision updates and Owner-first rollout are **not implemented yet**. Until they are, a desktop build reaches users only as a new public version. So desktop changes merge to `main` and wait, unless the owner declares a version or the build-revision update system has shipped. Building that system is tracked work. When a lifecycle hook reports unshipped desktop changes, it means "waiting for build-revision shipping or the owner's next version", not "bump the version".
+### Permanent continuous-shipping rule (owner directive)
+
+**A completed KalCode feature never waits for the next public version number.**
+
+If KalCode is publicly 0.1.7, every new feature, fix, UI change and KalCode or KalVoice change goes through build, test, merge, production artifact and ship, and **updates the current 0.1.7 users** as soon as the normal automated gates pass. For example: 0.1.7, then feature A ships, then feature B, then feature C. Users receive all of them, and it is still publicly called 0.1.7.
+
+- The public version number is **not** a feature gate. Never hold finished work for a future public version.
+- Never say "this change waits on main for the next version" or "this ships with 0.1.8" unless the owner explicitly told you to hold that change.
+- Increment whatever internal build/revision/update metadata is technically required so the updater recognizes the newer build, on Windows and macOS.
+- When the owner says "Make KalCode 0.1.8", no product feature changes or unlocks. Everything already shipped stays exactly as it is. Only the public milestone moves, with its What's New, changelog, release notes, website/version references, marketing video and social posts.
+
+**Features ship immediately after validation. Users get them in the current version. Public version numbers are owner-declared marketing milestones only.**
+
+**Current capability status (keep this line accurate).** As of 0.1.7, the updater compares public semver only, and published versions are immutable. Internal build-revision updates are **not implemented yet**. That gap is not a reason to hold work. Shipping a finished desktop change requires the build-revision update path, so building it is part of shipping that change. Never bump the public version to get around it. When a lifecycle hook reports unshipped desktop changes, the fix is to ship them as a new internal build of the current public version.
 
 ## Definition of Done
 
@@ -90,7 +103,7 @@ Run `node tooling/release/ship.mjs classify --base <ref> --head <ref>` to get th
 | Change | Lifecycle |
 |---|---|
 | Website only (`apps/website/**`) | test → merge → deploy the website → verify the live site |
-| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. The public version changes only at an owner-declared milestone (see the release and marketing model, including its current capability status) |
+| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. Ships to current-version users as soon as the gates pass. The public version changes only at an owner-declared milestone (see the continuous-shipping rule) |
 | Website and desktop | both pipelines |
 | Published docs (`docs/**` that the website or release notes publish) | publish the affected docs |
 | Internal (`tooling/**`, `.github/**`, tests, agent/dev files) | test → review → merge. No customer release unless a production artifact changes |
