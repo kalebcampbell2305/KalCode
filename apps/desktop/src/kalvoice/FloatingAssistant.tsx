@@ -44,6 +44,8 @@ const DOCK_CHOICES: PanelAnchor[] = [
 const DRAG_THRESHOLD = 4;
 /** An error collapses back to compact on its own after this long. */
 const ERROR_SETTLE_MS = 12_000;
+/** Keep the UI hold guard aligned with kalcode_kalvoice::audio::MAX_RECORDING. */
+export const MAX_ORB_LISTENING_MS = 120_000;
 
 function useViewport(): Size {
   const [size, setSize] = useState<Size>(() => ({ width: window.innerWidth, height: window.innerHeight }));
@@ -78,6 +80,11 @@ export function FloatingAssistant() {
   const dragStart = useRef<{ pointer: Point; origin: Point; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const holding = useRef(false);
+  const holdTimer = useRef<number | null>(null);
+  const heldPointer = useRef<number | null>(null);
+  const pointerRelease = useRef<((event: PointerEvent) => void) | null>(null);
+  const stopListening = useRef(kv.stopListening);
+  stopListening.current = kv.stopListening;
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -99,6 +106,18 @@ export function FloatingAssistant() {
     const timer = setTimeout(kv.dismiss, ERROR_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [state.phase, kv.dismiss]);
+
+  useEffect(
+    () => () => {
+      if (pointerRelease.current) {
+        window.removeEventListener("pointerup", pointerRelease.current, true);
+        window.removeEventListener("pointercancel", pointerRelease.current, true);
+      }
+      if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
+      if (holding.current) void stopListening.current();
+    },
+    [],
+  );
 
   // Docked to the top or bottom edge, the widget lives in a band the shell reserves for it
   // (Z7-W1), right of the sidebar, so it never covers a page header.
@@ -197,15 +216,38 @@ export function FloatingAssistant() {
   const dragProps = { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };
 
   // Press and hold on the orb: the pointer alternative to the push-to-talk key.
-  const holdStart = () => {
-    if (holding.current || state.phase === "listening") return;
-    holding.current = true;
-    void kv.startListening();
+  const clearHoldGuards = () => {
+    if (pointerRelease.current) {
+      window.removeEventListener("pointerup", pointerRelease.current, true);
+      window.removeEventListener("pointercancel", pointerRelease.current, true);
+      pointerRelease.current = null;
+    }
+    heldPointer.current = null;
+    if (holdTimer.current !== null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
   };
   const holdEnd = () => {
     if (!holding.current) return;
     holding.current = false;
-    void kv.stopListening();
+    clearHoldGuards();
+    void stopListening.current();
+  };
+  const holdStart = (pointerId?: number) => {
+    if (holding.current || state.phase === "listening") return;
+    holding.current = true;
+    if (pointerId !== undefined) {
+      heldPointer.current = pointerId;
+      const release = (event: PointerEvent) => {
+        if (event.pointerId === heldPointer.current) holdEnd();
+      };
+      pointerRelease.current = release;
+      window.addEventListener("pointerup", release, true);
+      window.addEventListener("pointercancel", release, true);
+    }
+    holdTimer.current = window.setTimeout(holdEnd, MAX_ORB_LISTENING_MS);
+    void kv.startListening();
   };
 
   // At the top of the window the widget opens downwards; elsewhere upwards.
@@ -263,7 +305,7 @@ export function FloatingAssistant() {
                 title={`Hold to talk (or hold ${talkKey})`}
                 onPointerDown={(e) => {
                   e.currentTarget.setPointerCapture(e.pointerId);
-                  holdStart();
+                  holdStart(e.pointerId);
                 }}
                 onPointerUp={holdEnd}
                 onPointerCancel={holdEnd}
