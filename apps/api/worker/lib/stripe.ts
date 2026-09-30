@@ -119,7 +119,9 @@ async function stripeJson(
 ): Promise<unknown> {
   const response = await fetcher(`${STRIPE_API}${path}`, {
     ...init,
-    redirect: "error",
+    // Workerd rejects `redirect: "error"` before issuing even a non-redirecting request.
+    // Manual mode exposes a 3xx response without following it; the !response.ok check then rejects it.
+    redirect: "manual",
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     headers: {
       authorization: `Bearer ${secretKey}`,
