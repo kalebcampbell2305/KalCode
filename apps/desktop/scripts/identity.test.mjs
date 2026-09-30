@@ -38,6 +38,7 @@ test("canonical Cargo test and lint commands select Dev while preserving unrelat
 test("Stable identity remains unchanged and release CLI arguments pass through", () => {
   assert.equal(base.identifier, "com.kalcode.desktop");
   assert.equal(base.productName, "KalCode");
+  assert.equal(base.mainBinaryName, "kalcode");
   assert.deepEqual(base.plugins["deep-link"].desktop.schemes, ["kalcode"]);
   const args = ["build", "--no-bundle", "--features", "kalvoice-whisper"];
   assert.deepEqual(laneArguments(args), args);
@@ -58,6 +59,7 @@ test("dev and debug builds select a distinct identity and only the Dev URL handl
   const resolved = { ...base, ...dev };
   assert.equal(resolved.identifier, "com.kalcode.desktop.dev");
   assert.equal(resolved.productName, "KalCode Dev");
+  assert.equal(resolved.mainBinaryName, "kalcode-dev");
   assert.deepEqual(resolved.plugins["deep-link"].desktop.schemes, ["kalcode-dev"]);
   assert.equal(resolved.version, base.version);
 });
