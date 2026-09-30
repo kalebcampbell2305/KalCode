@@ -162,6 +162,29 @@ impl Runtime {
     }
 }
 
+/// Records the previous install's result whatever the preparation sweep reported: a sweep
+/// failure must never hide that result or trigger a rollback of a good update. The sweep only
+/// gates new preparations, and only while an earlier one is still running (`Ok(false)`).
+fn reconcile_after_cleanup(
+    journal: &mut UpdateJournal,
+    cleanup: Result<bool, UpdateError>,
+    target_matches: bool,
+    current_version: &str,
+) -> (bool, Result<Option<InstallOutcome>, UpdateError>) {
+    let preparation_ready = cleanup.unwrap_or_else(|error| {
+        // A preparation re-validates its own storage, so this failure is reported there.
+        tracing::warn!(
+            event = "updater.startup_cleanup_failed",
+            error_code = error.code()
+        );
+        true
+    });
+    let outcome = target_matches
+        .then(|| journal.reconcile_startup(current_version))
+        .transpose();
+    (preparation_ready, outcome)
+}
+
 fn lock_runtime(runtime: &Mutex<Runtime>) -> MutexGuard<'_, Runtime> {
     runtime.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -237,12 +260,10 @@ impl DesktopUpdaterState {
                         .as_ref()
                         .and_then(|attempt| attempt.mac_swap.as_ref()),
                 );
-                preparation_ready = matches!(cleanup, Ok(true));
-                match cleanup.and_then(|_ready| {
-                    target_matches
-                        .then(|| journal.reconcile_startup(current_version))
-                        .transpose()
-                }) {
+                let (ready, outcome) =
+                    reconcile_after_cleanup(&mut journal, cleanup, target_matches, current_version);
+                preparation_ready = ready;
+                match outcome {
                     Ok(None) => {
                         machine.mark_failed("KalCode couldn't verify the previous update target.");
                     }
@@ -1353,6 +1374,45 @@ mod tests {
 
     use super::*;
     use crate::runtime_lifecycle::Phase;
+
+    #[test]
+    fn startup_cleanup_failure_never_skips_reconciling_the_previous_install() {
+        let attempt = || InstallAttempt {
+            kind: InstallKind::Upgrade,
+            from_version: "0.1.5".into(),
+            to_version: "0.1.6".into(),
+            sha256: "a".repeat(64),
+            binding: Some(InstallBinding {
+                target: UpdateTarget::WindowsX86_64,
+                source_sha256: "c".repeat(64),
+                signing_requirement_sha256: "d".repeat(64),
+            }),
+            mac_swap: None,
+            started_at: "2026-09-30T12:00:00Z".into(),
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("updater.json");
+        // A failed sweep (for example an unusable prepared directory) and a live earlier
+        // preparation both still record the previous install's result.
+        for (cleanup, expected_ready) in [
+            (
+                Err(UpdateError::new("update_installer_storage_failed", "x")),
+                true,
+            ),
+            (Ok(false), false),
+            (Ok(true), true),
+        ] {
+            let mut journal = UpdateJournal::load(&path).unwrap();
+            journal.record_install_attempt(attempt()).unwrap();
+
+            let (ready, outcome) = reconcile_after_cleanup(&mut journal, cleanup, true, "0.1.6");
+
+            assert_eq!(ready, expected_ready);
+            assert!(matches!(outcome, Ok(Some(InstallOutcome::Updated))));
+            let reloaded = UpdateJournal::load(&path).unwrap();
+            assert!(reloaded.state().install_attempt.is_none());
+        }
+    }
 
     #[test]
     fn repeated_failed_shutdown_preflight_never_launches_an_installer() {
