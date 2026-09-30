@@ -105,7 +105,7 @@ pub fn parse_social_callback(raw: &str) -> Result<SocialCallback, SocialCallback
         return Err(SocialCallbackError);
     }
     let url = Url::parse(raw).map_err(|_| SocialCallbackError)?;
-    if url.scheme() != "kalcode"
+    if url.scheme() != kalcode_contracts::identity::URL_SCHEME
         || url.host_str() != Some("auth")
         || !url.username().is_empty()
         || url.password().is_some()

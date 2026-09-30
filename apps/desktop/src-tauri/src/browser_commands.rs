@@ -736,7 +736,8 @@ fn browser_profile_dir(
     ensure_plain_directory(&base)?;
     let digest = Sha256::digest(
         [
-            b"com.kalcode.desktop/browser-account/v1\0".as_slice(),
+            kalcode_contracts::identity::IDENTIFIER.as_bytes(),
+            b"/browser-account/v1\0".as_slice(),
             account_id.as_bytes(),
         ]
         .concat(),

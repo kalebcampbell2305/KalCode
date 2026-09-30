@@ -49,6 +49,20 @@ test("the registered Vitest command writes and validates its real JSON report", 
   assert.equal(result.failed, 0);
 });
 
+test("the Rust workspace suite builds the desktop crate with the Dev identity overlay", () => {
+  const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
+  let launched = null;
+  const spawn = (file, args, options) => {
+    launched = { file, args, env: options.env };
+    return { status: 1, signal: null, error: null, stdout: "", stderr: "" };
+  };
+  assert.throws(() => runSuite(rust, { platform: "win32", environment: { KEEP: "yes" }, spawn }));
+  assert.equal(launched.file, "cargo");
+  assert.deepEqual(launched.args, rust.command.slice(1));
+  assert.equal(launched.env.KEEP, "yes");
+  assert.equal(JSON.parse(launched.env.TAURI_CONFIG).identifier, "com.kalcode.desktop.dev");
+});
+
 test("the registered runner launches a real package suite and retains its exit status", () => {
   const root = mkdtempSync(join(tmpdir(), "kalcode gate fixture "));
   const environment = { ...process.env };

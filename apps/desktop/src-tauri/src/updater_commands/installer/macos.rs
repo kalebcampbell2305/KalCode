@@ -21,7 +21,7 @@ use super::{
     reject_reparse, write_all_cancellable,
 };
 
-const BUNDLE_IDENTIFIER: &str = "com.kalcode.desktop";
+const BUNDLE_IDENTIFIER: &str = kalcode_contracts::identity::IDENTIFIER;
 const NOTARIZED_SOURCE: &str = "source=Notarized Developer ID";
 const OWNERSHIP_MAGIC: &str = "kalcode-macos-preparation-v1";
 const OWNERSHIP_SUFFIX: &str = ".owner";

@@ -10,7 +10,7 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 /// Keychain service name for every KalCode secret.
-pub const SERVICE: &str = "com.kalcode.desktop";
+pub const SERVICE: &str = kalcode_contracts::identity::IDENTIFIER;
 
 /// A secret value. `Debug` is redacted, there is no `Display`/`Serialize`, and KalCode-owned
 /// buffers are zeroized on drop. Zeroization cannot cover copies made outside this type: the
@@ -212,6 +212,12 @@ pub fn probe(store: &dyn SecretStore) -> Result<(), SecretStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_service_matches_the_build_identity() {
+        assert_eq!(SERVICE, kalcode_contracts::identity::IDENTIFIER);
+        assert_eq!(SERVICE.ends_with(".dev"), cfg!(debug_assertions));
+    }
 
     #[test]
     fn secret_debug_is_redacted() {

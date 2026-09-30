@@ -181,10 +181,10 @@ fn validate_fixture_directory(
         .and_then(OsStr::to_str)
         .is_some_and(|name| name.starts_with(FIXTURE_DIRECTORY_PREFIX))
         || configured.components().any(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .is_some_and(|value| value.eq_ignore_ascii_case("com.kalcode.desktop"))
+            component.as_os_str().to_str().is_some_and(|value| {
+                value.eq_ignore_ascii_case("com.kalcode.desktop")
+                    || value.eq_ignore_ascii_case("com.kalcode.desktop.dev")
+            })
         })
     {
         return Err(error(

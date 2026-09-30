@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cargoEnvironment } from "../apps/desktop/scripts/cargo.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_INVENTORY_PATH = join(ROOT, "tooling", "test-suites.json");
@@ -379,8 +380,13 @@ function readJsonReport(path, label) {
   }
 }
 
-function commandForSuite(suite, reportPath, platform) {
-  if (suite.runner === "cargo") return { file: suite.command[0], args: suite.command.slice(1), environment: {} };
+function commandForSuite(suite, reportPath, platform, inherited = process.env) {
+  if (suite.runner === "cargo") {
+    // Debug Cargo builds of the desktop crate require the Dev identity overlay (docs/DEV-IDENTITY.md).
+    const args = suite.command.slice(1);
+    const { TAURI_CONFIG } = cargoEnvironment(args, inherited);
+    return { file: suite.command[0], args, environment: TAURI_CONFIG === undefined ? {} : { TAURI_CONFIG } };
+  }
   const args = ["--filter", suite.package, "run", suite.script];
   const environment = {};
   if (suite.runner === "vitest") {
@@ -418,7 +424,7 @@ export function runSuite(
   const temporaryDirectory = mkdtempSync(join(temporaryParent, "kalcode-test-suite-"));
   const reportPath = join(temporaryDirectory, "report.json");
   try {
-    const command = commandForSuite(suite, reportPath, platform);
+    const command = commandForSuite(suite, reportPath, platform, environment);
     const child = spawn(command.file, command.args, {
       cwd: root,
       env: { ...environment, ...command.environment, NO_COLOR: "1" },

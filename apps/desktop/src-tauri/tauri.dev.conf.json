@@ -1,0 +1,10 @@
+{
+  "identifier": "com.kalcode.desktop.dev",
+  "productName": "KalCode Dev",
+  "mainBinaryName": "kalcode-dev",
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["kalcode-dev"] }
+    }
+  }
+}
