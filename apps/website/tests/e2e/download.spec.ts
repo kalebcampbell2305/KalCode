@@ -36,6 +36,19 @@ test.describe("download page", () => {
     await expect(page.locator("#early-access form[data-api-form='signup']")).toHaveCount(1);
   });
 
+  test("0.1.6 tells Windows users to download the next version here, and no other build does", async ({ page }) => {
+    await page.goto("/download");
+    const note = page.locator("[data-windows-update-note]");
+    if (WINDOWS_BUILD && RELEASES.latest?.version === "0.1.6") {
+      await expect(note).toHaveCount(1);
+      await expect(page.locator("#windows [data-windows-update-note]")).toHaveText(
+        "In-app updates don't work in 0.1.6 on Windows. When 0.1.7 is available, download it here and run the installer — your data is kept.",
+      );
+    } else {
+      await expect(note).toHaveCount(0);
+    }
+  });
+
   test("marks the visitor's system", async ({ browser }) => {
     const context = await browser.newContext({
       userAgent:

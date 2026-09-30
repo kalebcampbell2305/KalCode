@@ -100,6 +100,28 @@ describe("download page platforms", () => {
     expect(body).not.toContain("preview terms");
   });
 
+  it("tells Windows users of 0.1.6 to download the next version, only in the Windows row of 0.1.6", async () => {
+    const WINDOWS_NOTE =
+      "In-app updates don't work in 0.1.6 on Windows. When 0.1.7 is available, download it here and run the installer — your data is kept.";
+    const stable016: ReleaseManifest = structuredClone(STABLE_DUAL);
+    if (!stable016.latest) throw new Error("fixture has no release");
+    stable016.latest.version = "0.1.6";
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(DownloadPlatforms, { props: { manifest: stable016 } });
+    const row = (os: string) => html.match(new RegExp(`<li[^>]*id="${os}"[\\s\\S]*?</li>`))?.[0] ?? "";
+    expect(text(row("windows")).replace(/&#39;|&apos;/g, "'")).toContain(WINDOWS_NOTE);
+    expect(row("windows").indexOf("data-windows-update-note")).toBeLessThan(
+      row("windows").indexOf("Download for Windows"),
+    );
+    expect(row("macos")).not.toContain("data-windows-update-note");
+    expect(html.match(/data-windows-update-note/g)).toHaveLength(1);
+
+    for (const manifest of [STABLE_DUAL, publishedManifest]) {
+      const other = await container.renderToString(DownloadPlatforms, { props: { manifest } });
+      expect(other).not.toContain("data-windows-update-note");
+    }
+  });
+
   it("describes an unsigned Mac preview without telling people to bypass Gatekeeper", async () => {
     const manifest: ReleaseManifest = {
       ...STABLE_DUAL,

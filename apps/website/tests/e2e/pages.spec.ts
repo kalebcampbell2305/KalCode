@@ -124,8 +124,14 @@ test.describe("every page", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
     // The 0.1.6 notes render only from a complete signed Stable 0.1.6 manifest (the page's own rule).
     await expect(page.locator("article")).toHaveCount(STABLE_016 ? 5 : 4);
-    if (STABLE_016) await expect(page.locator("#release-0-1-6")).toBeVisible();
-    else await expect(page.locator("#release-0-1-6")).toHaveCount(0);
+    if (STABLE_016) {
+      await expect(page.locator("#release-0-1-6")).toBeVisible();
+      await expect(page.locator("#release-0-1-6")).toContainText("Windows: in-app updates don't work in 0.1.6.");
+      await expect(page.locator("#release-0-1-6").getByRole("link", { name: "download page" })).toHaveAttribute(
+        "href",
+        "/download",
+      );
+    } else await expect(page.locator("#release-0-1-6")).toHaveCount(0);
     await expect(page.locator("#release-0-1-1")).toBeVisible();
     await expect(page.locator("#release-website-2026-09-24")).toBeVisible();
     await expect(page.locator("#release-kalvoice")).toBeVisible();

@@ -94,6 +94,11 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
                 On a standard Mac account, open the DMG and copy <code>KalCode.app</code> to <code>~/Applications</code> before launching it. Create an <code>Applications</code> folder in your home folder if needed. This per-user location supports in-app updates and rollback. The DMG&apos;s <code>Applications</code> shortcut points to the system <code>/Applications</code> folder, which requires administrator access; a standard-user install there requires an administrator to replace the app manually for later versions.
               </p>
             )}
+            {row.os === "windows" && latest.version === "0.1.6" && (
+              <p class="platform__note" data-windows-update-note>
+                In-app updates don&apos;t work in 0.1.6 on Windows. When 0.1.7 is available, download it here and run the installer — your data is kept.
+              </p>
+            )}
             <div class="platform__action button-row">
               <a class="button button--primary button--lg" href={row.build.url} download={row.build.file}>
                 <Icon name="download" />
