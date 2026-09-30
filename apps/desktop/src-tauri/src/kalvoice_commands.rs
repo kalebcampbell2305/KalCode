@@ -759,7 +759,8 @@ pub fn init(
         .map(|s| s.id)
         .collect();
     let session_locator_enabled = feature_enabled(&info.flags, FeatureId::SessionLocator);
-    let Ok(accounting) = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account)
+    let Ok(accounting) =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
     else {
         return KalVoiceState(None, "KalVoice Requests need a verified KalCode account.");
     };
@@ -771,6 +772,7 @@ pub fn init(
             provider_panes_enabled: feature_enabled(&info.flags, FeatureId::ProviderPanes),
             session_locator_enabled,
             core: core.clone(),
+            account: Some(account),
             threads,
             permissions,
             // A gated Session Locator is never read by voice (it still runs for other callers).

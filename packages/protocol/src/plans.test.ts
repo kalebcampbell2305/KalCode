@@ -58,6 +58,16 @@ describe("plans", () => {
     expect(OWNER_LIMITS.advancedMissions).toBe(true);
   });
 
+  it("caps terminals per workspace on Free and Pro only; MAX, MAX 2X and OWNER are uncapped", () => {
+    expect(PLANS.map((plan) => [plan.id, plan.limits.terminalsPerWorkspace])).toEqual([
+      ["free", 12],
+      ["pro", 12],
+      ["max", null],
+      ["max2x", null],
+    ]);
+    expect(OWNER_LIMITS.terminalsPerWorkspace).toBeNull();
+  });
+
   it("never describes model tokens as KalVoice usage", () => {
     expect(JSON.stringify(PLANS).toLowerCase()).not.toMatch(/\btokens?\b/);
   });

@@ -31,8 +31,14 @@ use crate::events::{Correlation, EventEnvelope, EventPayload, EventSource, Event
 use crate::runtime::{Core, display_path};
 use crate::time::now_rfc3339;
 
-/// Upper bound on terminal tabs per workspace, to contain runaway creation.
-pub const MAX_TERMINALS_PER_WORKSPACE: usize = 12;
+/// A plan's cap on terminal tabs per workspace. Callers derive it from the signed-in account's
+/// verified entitlement; `None` (Owner, MAX, MAX 2X) means KalCode imposes no numeric cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalLimit {
+    pub max: usize,
+    /// The plan's display name, for the refusal message ("Free", "Pro").
+    pub plan: &'static str,
+}
 /// Upper bound on a single input write from the WebView.
 pub const MAX_WRITE_BYTES: usize = 64 * 1024;
 /// Longest shell id accepted over IPC (real ids are short words like `pwsh`).
@@ -668,12 +674,14 @@ impl Core {
     }
 
     /// Opens a new terminal tab in `workspace_id` running `shell_id` (or the default shell) in
-    /// the workspace folder. Emits `shell.started`.
+    /// the workspace folder, refusing it when the workspace already holds `limit.max` tabs.
+    /// Existing tabs are never closed. Emits `shell.started`.
     pub fn create_terminal(
         self: &Arc<Self>,
         workspace_id: &str,
         shell_id: Option<&str>,
         size: TerminalSize,
+        limit: Option<TerminalLimit>,
     ) -> Result<TerminalInfo> {
         validate_id(workspace_id)?;
         if let Some(shell_id) = shell_id {
@@ -693,11 +701,13 @@ impl Core {
             [workspace_id],
             |r| r.get(0),
         )?;
-        if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_TERMINALS_PER_WORKSPACE {
+        if let Some(TerminalLimit { max, plan }) = limit
+            && usize::try_from(count).unwrap_or(usize::MAX) >= max
+        {
             return Err(KalError::validation(
                 "too_many_terminals",
                 format!(
-                    "A workspace can have up to {MAX_TERMINALS_PER_WORKSPACE} terminals. Close one to open another."
+                    "The {plan} plan allows up to {max} terminals per workspace. Close one to open another, or upgrade to MAX for unlimited terminals."
                 ),
             ));
         }
@@ -1400,6 +1410,7 @@ mod tests {
                 &workspace.id,
                 Some(shell),
                 TerminalSize::new(80, 24).expect("size"),
+                None,
             )
             .expect("create");
         let first = core

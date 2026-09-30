@@ -28,6 +28,7 @@ use tauri::{Manager, State, Webview, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::AppState;
+use crate::account::runtime::AccountRuntime;
 use crate::environment;
 
 /// Output a view may be behind (sent but not yet acknowledged) before it is dropped.
@@ -244,6 +245,7 @@ pub fn terminals_running(
 pub fn terminal_create(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
+    account: State<'_, Arc<AccountRuntime>>,
     workspace_id: String,
     shell_id: Option<String>,
     cols: u16,
@@ -251,9 +253,10 @@ pub fn terminal_create(
 ) -> Result<TerminalInfo, IpcError> {
     _runtime_access.revalidate()?;
     let size = size(cols, rows)?;
+    let limit = account.snapshot().terminal_limit();
     state
         .core()?
-        .create_terminal(&workspace_id, shell_id.as_deref(), size)
+        .create_terminal(&workspace_id, shell_id.as_deref(), size, limit)
         .map_err(|e| e.log_and_convert("terminal_create"))
 }
 

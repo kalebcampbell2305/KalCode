@@ -5,6 +5,7 @@
  * prints a prompt and understands a handful of commands, so UI tests exercise real flows.
  */
 import type { EventPayload, IpcError, ShellOption, TerminalInfo, TerminalStatus, Workspace } from "@kalcode/protocol";
+import { getPlan } from "@kalcode/protocol";
 
 export type EmitWithWorkspace = (event: EventPayload, workspaceId: string) => void;
 
@@ -29,7 +30,8 @@ export interface MemoryWorkspaces {
   runningProcessCount(): number;
 }
 
-const MAX_TERMINALS_PER_WORKSPACE = 12;
+// The in-memory backend has no verified plan, so it applies the Free cap, as native does.
+const FREE_TERMINALS_PER_WORKSPACE = getPlan("free").limits.terminalsPerWorkspace;
 const MAX_WRITE_BYTES = 64 * 1024;
 const SCROLLBACK_BYTES = 512 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -444,11 +446,11 @@ export function createMemoryWorkspaces({
       }
       const workspace = workspaceOr404(workspaceId);
       if (!workspace.available) fail(folderMissing());
-      if (tabsOf(workspaceId).length >= MAX_TERMINALS_PER_WORKSPACE) {
+      if (FREE_TERMINALS_PER_WORKSPACE !== null && tabsOf(workspaceId).length >= FREE_TERMINALS_PER_WORKSPACE) {
         fail(
           validation(
             "too_many_terminals",
-            `A workspace can have up to ${MAX_TERMINALS_PER_WORKSPACE} terminals. Close one to open another.`,
+            `The Free plan allows up to ${FREE_TERMINALS_PER_WORKSPACE} terminals per workspace. Close one to open another, or upgrade to MAX for unlimited terminals.`,
           ),
         );
       }
