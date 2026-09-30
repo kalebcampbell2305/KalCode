@@ -179,3 +179,44 @@ fn snapshots_expose_only_truthful_authority_phases() {
         AccountAuthority::Bootstrapping
     );
 }
+
+#[test]
+fn terminal_limits_follow_the_verified_plan() {
+    use account::model::{AccountTier, PLAN_TERMINALS_PER_WORKSPACE};
+    let active = |tier| AccountSnapshot {
+        tier: Some(tier),
+        phase: AccountPhase::Ready,
+        ..AccountSnapshot::signed_out()
+    };
+    let capped = |plan| {
+        Some(kalcode_core::workspaces::TerminalLimit {
+            max: PLAN_TERMINALS_PER_WORKSPACE,
+            plan,
+        })
+    };
+    assert_eq!(active(AccountTier::Free).terminal_limit(), capped("Free"));
+    assert_eq!(active(AccountTier::Pro).terminal_limit(), capped("Pro"));
+    for tier in [AccountTier::Max, AccountTier::Max2x, AccountTier::Owner] {
+        assert_eq!(active(tier).terminal_limit(), None, "{tier:?}");
+    }
+    // Offline grace keeps the verified plan.
+    let owner_offline = AccountSnapshot {
+        phase: AccountPhase::OfflineGrace,
+        ..active(AccountTier::Owner)
+    };
+    assert_eq!(owner_offline.terminal_limit(), None);
+    // No active verified plan: the Free cap (fail closed), even with a stale tier.
+    assert_eq!(
+        AccountSnapshot::signed_out().terminal_limit(),
+        capped("Free")
+    );
+    assert_eq!(
+        AccountSnapshot::bootstrapping().terminal_limit(),
+        capped("Free")
+    );
+    let degraded_owner = AccountSnapshot {
+        phase: AccountPhase::Degraded,
+        ..active(AccountTier::Owner)
+    };
+    assert_eq!(degraded_owner.terminal_limit(), capped("Free"));
+}

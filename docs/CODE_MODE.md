@@ -78,7 +78,10 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   `terminal/terminal_busy` (retryable). Input to an ended tab gets `terminal/terminal_not_running`.
 - **Resize.** The view fits the terminal to its panel (ResizeObserver → fit addon) and sends the
   new size, debounced by 80 ms. Sizes must be 2–1000 columns and rows (`validation/invalid_size`).
-- **Limits.** Up to 12 tabs per workspace (`validation/too_many_terminals`).
+- **Limits.** Terminal tabs per workspace follow the verified plan (`terminalsPerWorkspace` in
+  `packages/protocol/src/plans.ts`): 12 on Free and Pro, no KalCode-side cap on MAX, MAX 2X and
+  Owner. Hitting a cap refuses the new tab with a plan-specific `validation/too_many_terminals`
+  message; existing tabs are never closed, including after a downgrade.
 - **Exit.** When a shell exits on its own, its tab stays with its final output and a Restart
   action. Exit code 0 records `shell.completed`; anything else `shell.failed`.
 - **Close tab vs. End terminal (Z7-W1).** Closing a tab or a pane only takes it out of the

@@ -71,6 +71,9 @@ pub struct DesktopExecutor {
     /// off (Stable), voice Search is refused and the locator is never read.
     pub session_locator_enabled: bool,
     pub core: Arc<Core>,
+    /// The signed-in account, whose verified plan caps terminals per workspace. `None` (tests
+    /// only) applies the Free cap.
+    pub account: Option<Arc<crate::account::runtime::AccountRuntime>>,
     /// `None` when the thread runtime didn't start (then thread commands explain why).
     pub threads: Option<Arc<ThreadRuntime>>,
     /// `None` when the permission engine didn't start.
@@ -1496,9 +1499,13 @@ impl Executor for DesktopExecutor {
                 let size = TerminalSize::new(cols, rows).map_err(|_| {
                     ExecError::new("invalid_size", "KalVoice couldn't size the new terminal.")
                 })?;
+                let limit = self.account.as_ref().map_or_else(
+                    || crate::account::model::AccountSnapshot::signed_out().terminal_limit(),
+                    |account| account.snapshot().terminal_limit(),
+                );
                 let terminal = self
                     .core
-                    .create_terminal(&workspace.id, None, size)
+                    .create_terminal(&workspace.id, None, size, limit)
                     .map_err(|e| from_core(&e))?;
                 Ok(Executed {
                     summary: format!("Opened a terminal in {}.", workspace.name),
@@ -1846,6 +1853,7 @@ mod tests {
             provider_panes_enabled: false,
             session_locator_enabled: true,
             core: Arc::new(core),
+            account: None,
             threads: None,
             permissions: None,
             locator: None,

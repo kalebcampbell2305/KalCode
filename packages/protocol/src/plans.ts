@@ -46,6 +46,8 @@ export interface PlanLimits {
   permissionModes: typeof ALL_PERMISSION_MODES;
   /** Maximum threads running at the same time on one device; `null` = unlimited. */
   concurrentThreads: number | null;
+  /** Terminal tabs per workspace; `null` = no KalCode-side cap. Enforced natively. */
+  terminalsPerWorkspace: number | null;
   persistentAgents: boolean;
   multiAgentWorkflows: boolean;
   automations: "none" | "scheduled" | "scheduled_and_event";
@@ -81,6 +83,7 @@ export const PLANS: readonly Plan[] = [
       providerConnections: "unlimited",
       permissionModes: ALL_PERMISSION_MODES,
       concurrentThreads: 2,
+      terminalsPerWorkspace: 12,
       persistentAgents: false,
       multiAgentWorkflows: false,
       automations: "none",
@@ -105,6 +108,7 @@ export const PLANS: readonly Plan[] = [
       providerConnections: "unlimited",
       permissionModes: ALL_PERMISSION_MODES,
       concurrentThreads: 8,
+      terminalsPerWorkspace: 12,
       persistentAgents: true,
       multiAgentWorkflows: true,
       automations: "scheduled",
@@ -129,6 +133,7 @@ export const PLANS: readonly Plan[] = [
       providerConnections: "unlimited",
       permissionModes: ALL_PERMISSION_MODES,
       concurrentThreads: 20,
+      terminalsPerWorkspace: null,
       persistentAgents: true,
       multiAgentWorkflows: true,
       automations: "scheduled_and_event",
@@ -153,6 +158,7 @@ export const PLANS: readonly Plan[] = [
       providerConnections: "unlimited",
       permissionModes: ALL_PERMISSION_MODES,
       concurrentThreads: 20,
+      terminalsPerWorkspace: null,
       persistentAgents: true,
       multiAgentWorkflows: true,
       automations: "scheduled_and_event",
@@ -172,6 +178,7 @@ export const OWNER_LIMITS: PlanLimits = {
   providerConnections: "unlimited",
   permissionModes: ALL_PERMISSION_MODES,
   concurrentThreads: null,
+  terminalsPerWorkspace: null,
   persistentAgents: true,
   multiAgentWorkflows: true,
   automations: "scheduled_and_event",
