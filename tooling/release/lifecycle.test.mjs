@@ -564,6 +564,28 @@ describe("lifecycle status", () => {
     assert.match(renderStatus(after, { markdown: true }), /Unshipped production lanes: desktop/);
   });
 
+  test("release notes: notes for the published or an older version are shipped; newer notes are not", () => {
+    const f = makeFixture({ version: "1.2.0" });
+    const current = obsWith({ feed: { version: "1.2.0", commit: f.base, channel: "stable" } });
+    f.write("docs/releases/1.2.0.md", "# 1.2.0\n\nNotes bound after the release build.\n");
+    f.commit("docs(release): bind 1.2.0 notes");
+    f.write("docs/releases/1.1.0.md", "# 1.1.0\n\nTypo fix.\n");
+    f.setOriginMain(f.commit("docs(release): fix 1.1.0 notes"));
+    const published = computeStatus(policy, f.git, current);
+    assert.equal(published.targets["release-notes"].state, "shipped");
+    assert.ok(!published.unshippedLanes.includes("docs"));
+
+    f.write("docs/releases/1.3.0.md", "# 1.3.0\n");
+    f.setOriginMain(f.commit("docs(release): draft 1.3.0 notes"));
+    const next = computeStatus(policy, f.git, current);
+    assert.equal(next.targets["release-notes"].state, "unshipped");
+    assert.deepEqual(
+      next.targets["release-notes"].commits.map((c) => c.subject),
+      ["docs(release): draft 1.3.0 notes"],
+    );
+    assert.ok(next.unshippedLanes.includes("docs"));
+  });
+
   test("status CLI --offline reads the cache and --check fails while lanes are unshipped", () => {
     const f = makeFixture({ version: "1.2.0" });
     const dir = stateDir(f.git.commonDir());

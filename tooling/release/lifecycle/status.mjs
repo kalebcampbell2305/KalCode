@@ -120,9 +120,20 @@ function rangeImpact(policy, git, from, to, { listCommits = true, maxCommits = 4
   const graphs = [workspaceGraph(git, to)];
   const commits = git.commits(from, to, { max: maxCommits }).map((c) => {
     const r = classifyChanges(policy, git, c.changes, { base: `${c.sha}^`, head: c.sha, graphs });
-    return { sha: c.sha, subject: c.subject, targets: r.targets, lanes: r.lanes };
+    const notes = r.files.filter((x) => x.rule === "release-notes").map((x) => x.path);
+    return { sha: c.sha, subject: c.subject, targets: r.targets, lanes: r.lanes, notes };
   });
   return { range, commits, total: git.count(from, to) };
+}
+
+// Notes for the published version or an older one are in production by definition, so a docs/releases/<version>.md
+// change is unshipped only when <version> is newer than the published release. Any other notes path still counts.
+const RELEASE_NOTE = /^docs\/releases\/(.+)\.md$/;
+export function unpublishedNote(path, publishedVersion) {
+  const m = RELEASE_NOTE.exec(path);
+  if (!m || !publishedVersion) return true;
+  const cmp = compareVersions(m[1], publishedVersion);
+  return cmp === null || cmp > 0;
 }
 
 const pick = (impact, target) => ({
@@ -235,7 +246,13 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
           : `main and production both declare ${pub.version} (published commit unknown locally)`,
       };
     // Release notes publish with the desktop release.
-    const notesChanged = impact?.range.targets.includes("release-notes") ?? false;
+    const notesChanged =
+      impact?.range.files.some((x) => x.rule === "release-notes" && unpublishedNote(x.path, pub.version)) ?? false;
+    const noteCommits = () => ({
+      commits: impact.commits
+        .filter((c) => c.notes.some((p) => unpublishedNote(p, pub.version)))
+        .map(({ sha, subject }) => ({ sha, subject })),
+    });
     const notesPath = `docs/releases/${mainVersion}.md`;
     targets["release-notes"] = {
       lane: "docs",
@@ -248,7 +265,7 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
           : notesChanged
             ? "release notes changed after the published build; they ship with the next desktop release"
             : "no unpublished release-notes changes",
-      ...(impact && (cmp > 0 || notesChanged) ? pick(impact, "release-notes") : {}),
+      ...(impact && cmp > 0 ? pick(impact, "release-notes") : impact && notesChanged ? noteCommits() : {}),
     };
   }
   if (!targets["release-notes"])
