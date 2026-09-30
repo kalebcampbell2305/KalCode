@@ -2,7 +2,7 @@
 // Everything runs against throwaway git repositories and injected observations: no network, no production.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { classifyChanges, classifyRange, dependentsOf, renderClassify, workspaceGraph } from "./lifecycle/classify.mjs";
 import { gateForWorktree, recordGate, runGates, selectGates } from "./lifecycle/gate.mjs";
 import { makeGit, parseNameStatus } from "./lifecycle/git.mjs";
+import { evaluateStop } from "./lifecycle/hook.mjs";
 import { changedImporters, LockfileError, parsePnpmLock } from "./lifecycle/lockfile.mjs";
 import { globToRegExp, loadPolicy, matchGlob, POLICY_PATH, pipelineFor, validatePolicy } from "./lifecycle/policy.mjs";
 import {
@@ -575,6 +576,150 @@ describe("lifecycle status", () => {
     assert.deepEqual(JSON.parse(r.stdout).unshippedLanes, ["desktop", "docs"]);
     assert.equal(run("--offline", "--check").status, 1);
     assert.ok(existsSync(join(dir, "status.json")), "status is cached for the Stop hook");
+  });
+});
+
+// ------------------------------------------------------------------ Stop hook
+
+describe("Stop hook", () => {
+  const input = (f, extra = {}) =>
+    JSON.stringify({
+      session_id: "s1",
+      transcript_path: "/tmp/t.jsonl",
+      cwd: f.repo,
+      hook_event_name: "Stop",
+      stop_hook_active: false,
+      ...extra,
+    });
+  const deps = { refresh: false };
+
+  test("allows when stop_hook_active, on empty or invalid input, other events, and outside KalCode", () => {
+    const f = makeFixture();
+    sh(f.repo, "checkout", "-q", "-b", "feat");
+    f.commit("unmerged");
+    assert.equal(evaluateStop(input(f, { stop_hook_active: true }), deps).stdout, "");
+    assert.equal(evaluateStop("", deps).stdout, "");
+    assert.equal(evaluateStop("{not json", deps).stdout, "");
+    assert.equal(evaluateStop(input(f, { hook_event_name: "SubagentStop" }), deps).stdout, "");
+    const plain = mkdtempSync(join(tmpdir(), "not-git-"));
+    temps.push(plain);
+    assert.equal(evaluateStop(JSON.stringify({ cwd: plain, session_id: "x" }), deps).stdout, "");
+    sh(f.repo, "rm", "-q", "-r", "tooling/release/lifecycle");
+    f.commit("not kalcode");
+    assert.equal(evaluateStop(input(f, { session_id: "other" }), deps).stdout, "", "not the KalCode repo");
+  });
+
+  test("blocks once per session and state for unmerged branch commits, with the Claude Code block schema", () => {
+    const f = makeFixture();
+    assert.equal(evaluateStop(input(f), deps).stdout, "", "HEAD is origin/main: nothing to finish");
+    sh(f.repo, "checkout", "-q", "-b", "feat/x");
+    f.write("apps/website/src/lib/a.ts", "export const a = 2;\n");
+    f.commit("feat(website): a");
+    const r = evaluateStop(input(f), deps);
+    assert.equal(r.code, 0);
+    const out = JSON.parse(r.stdout);
+    assert.deepEqual(Object.keys(out).sort(), ["decision", "reason"]);
+    assert.equal(out.decision, "block");
+    assert.match(out.reason, /Branch feat\/x has 1 commit\(s\) not merged to origin\/main/);
+    assert.match(out.reason, /ship\.mjs gate --base origin\/main/);
+    assert.match(out.reason, /local-only/);
+    assert.equal(evaluateStop(input(f), deps).stdout, "", "same session, same state: already told once");
+    assert.notEqual(evaluateStop(input(f, { session_id: "s2" }), deps).stdout, "", "another session is told");
+    f.commit("more work");
+    assert.notEqual(evaluateStop(input(f), deps).stdout, "", "a new state is told again");
+  });
+
+  test("merged branches are fine; a passing gate receipt for HEAD is acknowledged", () => {
+    const f = makeFixture();
+    sh(f.repo, "checkout", "-q", "-b", "feat");
+    const head = f.commit("work");
+    f.setOriginMain(head);
+    assert.equal(evaluateStop(input(f), deps).stdout, "", "HEAD reached origin/main");
+    const next = f.commit("more");
+    writeJsonAtomic(join(stateDir(f.git.commonDir()), "gates", `${next}.json`), { status: "PASS" });
+    assert.match(JSON.parse(evaluateStop(input(f, { session_id: "g" }), deps).stdout).reason, /passed for HEAD/);
+  });
+
+  test("blocks for unshipped production lanes on origin/main from the cache, without network", () => {
+    const f = makeFixture({ version: "1.2.0" });
+    const dir = stateDir(f.git.commonDir());
+    writeJsonAtomic(join(dir, "observations.json"), obsWith({ feed: { version: "1.1.0", commit: null } }));
+    const out = evaluateStop(input(f), deps);
+    assert.match(JSON.parse(out.stdout).reason, /origin\/main has unshipped production lanes: desktop, docs/);
+    writeJsonAtomic(join(dir, "observations.json"), obsWith({ feed: { version: "1.2.0", commit: f.base } }));
+    assert.equal(evaluateStop(input(f, { session_id: "fresh" }), deps).stdout, "", "production is current");
+    const stale = obsWith({ feed: { version: "1.1.0", commit: null } });
+    stale.checkedAt = new Date(Date.now() - 48 * 3600e3).toISOString();
+    writeJsonAtomic(join(dir, "observations.json"), stale);
+    assert.equal(evaluateStop(input(f, { session_id: "stale" }), deps).stdout, "", "stale observations are ignored");
+  });
+
+  test("a stale cache starts one detached refresh; the lock prevents a storm", () => {
+    const f = makeFixture();
+    let calls = 0;
+    const d = { spawnRefresh: () => calls++ };
+    evaluateStop(input(f), d);
+    evaluateStop(input(f), d);
+    assert.equal(calls, 1);
+    const lock = join(stateDir(f.git.commonDir()), "refresh.lock");
+    const old = (Date.now() - 10 * 60e3) / 1000;
+    utimesSync(lock, old, old);
+    evaluateStop(input(f), d);
+    assert.equal(calls, 2);
+  });
+
+  test("never fails closed: its own errors and an exhausted time budget allow the stop", () => {
+    const f = makeFixture();
+    sh(f.repo, "checkout", "-q", "-b", "feat");
+    f.commit("unmerged");
+    const broken = {
+      refresh: false,
+      makeGit: () => {
+        throw new Error("boom");
+      },
+    };
+    assert.equal(evaluateStop(input(f), broken).stdout, "");
+    assert.equal(evaluateStop(input(f), { refresh: false, budgetMs: -1 }).stdout, "");
+  });
+
+  test("the CLI hook reads stdin, prints only the decision JSON, exits 0 and is fast", () => {
+    const f = makeFixture();
+    sh(f.repo, "checkout", "-q", "-b", "feat");
+    f.commit("unmerged");
+    const env = { ...process.env, KALCODE_LIFECYCLE_HOOK_REFRESH: "0" };
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [SHIP, "lifecycle", "hook"], {
+      input: input(f, { session_id: "cli" }),
+      encoding: "utf8",
+      env,
+    });
+    const ms = Date.now() - t0;
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).decision, "block");
+    assert.ok(ms < 2000, `hook took ${ms} ms`);
+    const active = spawnSync(process.execPath, [SHIP, "lifecycle", "hook"], {
+      input: input(f, { stop_hook_active: true }),
+      encoding: "utf8",
+      env,
+    });
+    assert.equal(active.status, 0);
+    assert.equal(active.stdout, "");
+  });
+
+  test("the committed project settings register the Stop hook, and .gitignore keeps only settings.json", () => {
+    const settings = JSON.parse(readFileSync(join(ROOT, ".claude", "settings.json"), "utf8"));
+    const hooks = settings.hooks.Stop.flatMap((m) => m.hooks);
+    assert.equal(hooks.length, 1);
+    assert.equal(hooks[0].type, "command");
+    assert.match(hooks[0].command, /^node "\$\{CLAUDE_PROJECT_DIR\}\/tooling\/release\/ship\.mjs" lifecycle hook$/);
+    assert.ok(hooks[0].timeout >= 5);
+    const ignore = readFileSync(join(ROOT, ".gitignore"), "utf8").split(/\r?\n/);
+    assert.ok(ignore.includes(".claude/*") && ignore.includes("!.claude/settings.json"));
+    assert.ok(!ignore.includes(".claude/"), "a directory ignore would make the exception impossible");
+    const check = (p) => spawnSync("git", ["-C", ROOT, "check-ignore", "-q", p]).status === 0;
+    assert.equal(check(".claude/settings.json"), false);
+    assert.equal(check(".claude/worktrees/agent-x/file"), true);
+    assert.equal(check(".claude/settings.local.json"), true);
   });
 });
 

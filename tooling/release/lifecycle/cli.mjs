@@ -2,13 +2,16 @@
 //
 //   node tooling/release/ship.mjs classify --base <ref> --head <ref> [--json | --markdown]
 //   node tooling/release/ship.mjs lifecycle status [--main <ref>] [--json | --markdown] [--offline] [--check]
+//   node tooling/release/ship.mjs lifecycle hook          (Claude Code Stop hook; reads the hook JSON on stdin)
 //   node tooling/release/ship.mjs gate [--base origin/main] [--list] [--only a,b] [--keep-going] [--json]
 //
 // Common: --repo <dir> (default: the current directory's checkout). See docs/RELEASE-PIPELINE.md.
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { classifyRange, renderClassify } from "./classify.mjs";
 import { gateForWorktree, recordGate, runGates } from "./gate.mjs";
 import { makeGit } from "./git.mjs";
+import { runHook } from "./hook.mjs";
 import { loadPolicy } from "./policy.mjs";
 import { computeStatus, observeProduction, readJsonFile, renderStatus, stateDir, writeJsonAtomic } from "./status.mjs";
 
@@ -19,6 +22,7 @@ export class UsageError extends Error {
   }
 }
 
+const SHIP = resolve(fileURLToPath(import.meta.url), "..", "..", "ship.mjs");
 const VALUED = new Set(["--base", "--head", "--main", "--repo", "--only"]);
 const FLAGS = new Set(["--json", "--markdown", "--offline", "--check", "--refresh-cache", "--list", "--keep-going"]);
 
@@ -62,6 +66,7 @@ async function status(opts, git, policy, log) {
 export async function lifecycleMain(argv, io = {}) {
   const log = io.log ?? ((line) => process.stdout.write(`${line}\n`));
   const [command, sub, ...rest] = argv;
+  if (command === "lifecycle" && sub === "hook") return runHook({ shipPath: SHIP });
   const opts = parseLifecycleArgs(command === "lifecycle" ? rest : [sub, ...rest].filter((a) => a !== undefined));
   const git = makeGit(resolve(opts.repo ?? process.cwd()));
   const policy = loadPolicy();
@@ -75,7 +80,7 @@ export async function lifecycleMain(argv, io = {}) {
 
   if (command === "lifecycle") {
     if (sub === "status") return (await status(opts, git, policy, log)).code;
-    throw new UsageError(`unknown lifecycle command ${sub ?? "(none)"}: status`);
+    throw new UsageError(`unknown lifecycle command ${sub ?? "(none)"}: status, hook`);
   }
 
   if (command === "gate") {

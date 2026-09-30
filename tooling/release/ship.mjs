@@ -13,7 +13,7 @@
 //          --state <dir> (default <repo>/target/release-pipeline/<version>-<sha12>), --repo <dir> (default: the
 //          main checkout that owns this worktree), --channel stable.
 //
-// Definition of Done: ship.mjs classify --base <ref> --head <ref> [--json]; ship.mjs lifecycle status;
+// Definition of Done: ship.mjs classify --base <ref> --head <ref> [--json]; ship.mjs lifecycle status|hook;
 //                     ship.mjs gate [--base origin/main] [--list] (tooling/release/lifecycle/cli.mjs).
 // See docs/RELEASE-PIPELINE.md.
 import { spawnSync } from "node:child_process";
