@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use kalcode_core::events::{EventEnvelope, EventPayload};
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::workspaces::{MAX_TERMINALS_PER_WORKSPACE, MAX_WRITE_BYTES, TerminalStatus};
+use kalcode_core::workspaces::{MAX_WRITE_BYTES, TerminalLimit, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_pty::TerminalSize;
 
@@ -195,13 +195,13 @@ fn logout_drains_shells_preserves_tabs_and_allows_a_fresh_session() {
     let workspace = core.open_workspace(project.path()).expect("workspace");
     let shell = test_shell(&core);
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("terminal");
     core.drain_terminals_for_logout().expect("drain");
     assert!(core.running_terminals().expect("running").is_empty());
     assert_eq!(core.terminals(&workspace.id).expect("tabs").len(), 1);
     assert_eq!(
-        core.create_terminal(&workspace.id, Some(&shell), size())
+        core.create_terminal(&workspace.id, Some(&shell), size(), None)
             .unwrap_err()
             .code,
         "runtime_draining"
@@ -326,7 +326,7 @@ fn a_moved_folder_is_reported_unavailable() {
     let listed = core.workspaces().expect("list");
     assert!(!listed[0].available);
     let err = core
-        .create_terminal(&workspace.id, None, size())
+        .create_terminal(&workspace.id, None, size(), None)
         .expect_err("no folder");
     assert_eq!(err.code, "folder_not_found");
     core.remove_workspace(&workspace.id)
@@ -356,7 +356,7 @@ fn terminal_identity_is_generation_bound_and_disappears_on_close() {
     let shell = test_shell(&core);
     assert!(core.terminal_session_identity("invalid").is_none());
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("terminal");
     let first = core
         .terminal_session_identity(&terminal.id)
@@ -366,7 +366,7 @@ fn terminal_identity_is_generation_bound_and_disappears_on_close() {
     core.close_terminal(&terminal.id).expect("close");
     assert!(core.terminal_session_identity(&terminal.id).is_none());
     let replacement = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("replacement");
     let next = core
         .terminal_session_identity(&replacement.id)
@@ -388,7 +388,7 @@ fn terminal_runs_in_the_workspace_folder_with_input_and_output() {
 
     let shell = test_shell(&core);
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     assert_eq!(terminal.status, TerminalStatus::Running);
     assert_eq!(terminal.shell_id, shell);
@@ -451,10 +451,10 @@ fn exit_codes_are_recorded_as_completed_or_failed() {
     let shell = test_shell(&core);
 
     let ok = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     let failing = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     assert_eq!(failing.position, 1);
     let _ok_out = Output::attach(&core, &ok.id);
@@ -506,7 +506,7 @@ fn restart_starts_a_fresh_shell_in_the_same_tab() {
     let workspace = core.open_workspace(projects.path()).expect("open");
     let shell = test_shell(&core);
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     let _out = Output::attach(&core, &terminal.id);
     core.write_terminal(&terminal.id, b"exit 5\r")
@@ -558,7 +558,7 @@ fn closing_a_tab_ends_its_shell_and_records_it() {
     let workspace = core.open_workspace(projects.path()).expect("open");
     let shell = test_shell(&core);
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     let events = collect_events(&core);
 
@@ -597,7 +597,7 @@ fn removing_a_workspace_is_refused_while_terminals_run_and_never_touches_files()
     let workspace = core.open_workspace(&site).expect("open");
     let shell = test_shell(&core);
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
 
     let refused = core.remove_workspace(&workspace.id).expect_err("running");
@@ -632,7 +632,7 @@ fn shutdown_ends_shells_and_restores_tabs_as_ended() {
         let workspace = core.open_workspace(projects.path()).expect("open");
         let shell = test_shell(&core);
         let terminal = core
-            .create_terminal(&workspace.id, Some(&shell), size())
+            .create_terminal(&workspace.id, Some(&shell), size(), None)
             .expect("create");
         workspace_id = workspace.id;
         terminal_id = terminal.id;
@@ -680,7 +680,7 @@ fn tabs_left_running_by_a_crash_are_marked_ended_at_startup() {
         let workspace = core.open_workspace(projects.path()).expect("open");
         let shell = test_shell(&core);
         terminal_id = core
-            .create_terminal(&workspace.id, Some(&shell), size())
+            .create_terminal(&workspace.id, Some(&shell), size(), None)
             .expect("create")
             .id;
         workspace_id = workspace.id;
@@ -703,32 +703,32 @@ fn terminal_inputs_are_validated() {
     let shell = test_shell(&core);
 
     assert_eq!(
-        core.create_terminal("x", None, size())
+        core.create_terminal("x", None, size(), None)
             .expect_err("id")
             .code,
         "invalid_id"
     );
     assert_eq!(
-        core.create_terminal(&workspace.id, Some("C:\\evil.exe"), size())
+        core.create_terminal(&workspace.id, Some("C:\\evil.exe"), size(), None)
             .expect_err("path as shell")
             .code,
         "invalid_shell"
     );
     assert_eq!(
-        core.create_terminal(&workspace.id, Some("nosuchshell"), size())
+        core.create_terminal(&workspace.id, Some("nosuchshell"), size(), None)
             .expect_err("unknown shell")
             .code,
         "shell_unavailable"
     );
     assert_eq!(
-        core.create_terminal(&uuid::Uuid::now_v7().to_string(), None, size())
+        core.create_terminal(&uuid::Uuid::now_v7().to_string(), None, size(), None)
             .expect_err("unknown workspace")
             .code,
         "not_found"
     );
 
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     let too_big = vec![b'a'; MAX_WRITE_BYTES + 1];
     assert_eq!(
@@ -763,7 +763,7 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
     let workspace = core.open_workspace(projects.path()).expect("open");
     let shell = test_shell(&core);
     let terminal = core
-        .create_terminal(&workspace.id, Some(&shell), size())
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
         .expect("create");
     // A view that answers the shell's startup cursor request, as xterm.js does.
     let _view = Output::attach(&core, &terminal.id);
@@ -794,36 +794,50 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
 }
 
 #[test]
-fn a_workspace_has_a_bounded_number_of_tabs() {
+fn a_limited_plan_bounds_tabs_and_an_unlimited_one_does_not() {
     let data = tempfile::tempdir().expect("data");
     let projects = tempfile::tempdir().expect("projects");
     let core = open(data.path());
     let workspace = core.open_workspace(projects.path()).expect("open");
     let shell = test_shell(&core);
-    let tabs: Vec<_> = (0..MAX_TERMINALS_PER_WORKSPACE)
+    let limit = Some(TerminalLimit {
+        max: 3,
+        plan: "Free",
+    });
+    let tabs: Vec<_> = (0..3)
         .map(|_| {
-            core.create_terminal(&workspace.id, Some(&shell), size())
+            core.create_terminal(&workspace.id, Some(&shell), size(), limit)
                 .expect("create")
         })
         .collect();
-    assert_eq!(
-        core.create_terminal(&workspace.id, Some(&shell), size())
-            .expect_err("limit")
-            .code,
-        "too_many_terminals"
+    let refused = core
+        .create_terminal(&workspace.id, Some(&shell), size(), limit)
+        .expect_err("limit");
+    assert_eq!(refused.code, "too_many_terminals");
+    assert!(
+        refused
+            .message
+            .starts_with("The Free plan allows up to 3 terminals per workspace."),
+        "{}",
+        refused.message
     );
-    let positions: Vec<i64> = core
-        .terminals(&workspace.id)
-        .expect("list")
-        .iter()
-        .map(|t| t.position)
+    // Hitting the cap never closes anything: every existing tab is still there and running.
+    let listed = core.terminals(&workspace.id).expect("list");
+    assert_eq!(
+        listed.iter().map(|t| t.position).collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    assert!(listed.iter().all(|t| t.status == TerminalStatus::Running));
+    // No KalCode-side cap (Owner, MAX, MAX 2X): past the old fixed 12.
+    let more: Vec<_> = (0..11)
+        .map(|_| {
+            core.create_terminal(&workspace.id, Some(&shell), size(), None)
+                .expect("unlimited")
+        })
         .collect();
-    assert_eq!(
-        positions,
-        (0..MAX_TERMINALS_PER_WORKSPACE as i64).collect::<Vec<_>>()
-    );
+    assert_eq!(core.terminals(&workspace.id).expect("list").len(), 14);
     core.shutdown();
-    drop(tabs);
+    drop((tabs, more));
 }
 
 #[test]
@@ -858,7 +872,7 @@ fn workspace_and_terminal_events_commit_atomically() {
         )
         .expect("trigger");
     assert!(
-        core.create_terminal(&workspace.id, Some(&shell), size())
+        core.create_terminal(&workspace.id, Some(&shell), size(), None)
             .is_err()
     );
     assert!(
@@ -877,7 +891,7 @@ fn desktop_terminal_admission_never_falls_back_without_guardian() {
     let workspace = core.open_workspace(projects.path()).expect("workspace");
     let shell = test_shell(&core);
     assert_eq!(
-        core.create_terminal(&workspace.id, Some(&shell), size())
+        core.create_terminal(&workspace.id, Some(&shell), size(), None)
             .unwrap_err()
             .code,
         "terminal_guardian_unavailable"
@@ -908,7 +922,7 @@ fn guardian_denial_starts_no_shell_and_commits_no_terminal() {
     let workspace = core.open_workspace(projects.path()).expect("workspace");
     let shell = test_shell(&core);
     assert_eq!(
-        core.create_terminal(&workspace.id, Some(&shell), size())
+        core.create_terminal(&workspace.id, Some(&shell), size(), None)
             .unwrap_err()
             .code,
         "terminal_start_failed"

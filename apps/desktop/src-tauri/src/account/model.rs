@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kalcode_core::workspaces::TerminalLimit;
 use serde::Serialize;
 
 use super::social::{SocialProvider, valid_opaque};
@@ -60,6 +61,10 @@ pub struct AccountUsageSnapshot {
     pub resets_at: String,
 }
 
+/// Terminal tabs per workspace on the Free and Pro plans (`terminalsPerWorkspace` in
+/// `packages/protocol/src/plans.ts`). MAX, MAX 2X and Owner have no KalCode-side cap.
+pub const PLAN_TERMINALS_PER_WORKSPACE: usize = 12;
+
 /// `degraded_reason` of a signed-out snapshot whose session expired or was rejected (401).
 pub const SESSION_EXPIRED_REASON: &str = "session_expired";
 
@@ -95,6 +100,24 @@ impl AccountSnapshot {
             degraded_reason: Some(SESSION_EXPIRED_REASON.into()),
             ..Self::signed_out()
         }
+    }
+
+    /// The terminal cap of this account's verified plan. Without an active verified plan
+    /// (signed out, bootstrapping, not yet activated) the Free cap applies.
+    pub fn terminal_limit(&self) -> Option<TerminalLimit> {
+        let tier = match self.authority() {
+            AccountAuthority::Active => self.tier,
+            _ => None,
+        };
+        let plan = match tier.unwrap_or(AccountTier::Free) {
+            AccountTier::Free => "Free",
+            AccountTier::Pro => "Pro",
+            AccountTier::Max | AccountTier::Max2x | AccountTier::Owner => return None,
+        };
+        Some(TerminalLimit {
+            max: PLAN_TERMINALS_PER_WORKSPACE,
+            plan,
+        })
     }
 
     fn for_phase(phase: AccountPhase) -> Self {
