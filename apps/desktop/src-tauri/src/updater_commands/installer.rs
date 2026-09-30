@@ -101,9 +101,11 @@ impl PreparedInstaller {
             // Windows can't start an image while any handle has write access to it
             // (ERROR_SHARING_VIOLATION). Close the writer and verify and launch through a
             // read-only handle that still denies writers, so nothing can change the bytes
-            // between verification and launch.
+            // between verification and launch. The reopened handle must be the file just written,
+            // never one reached through a parent swapped in while no handle was held.
+            let written = file_identity(&writer)?;
             drop(writer);
-            let mut file = open_prepared_for_launch(&path)?;
+            let mut file = open_prepared_for_launch(&path, written)?;
             reject_reparse(root)?;
             verify_download_reader(&mut file, metadata)?;
             cancel()?;
@@ -288,10 +290,35 @@ fn open_prepared_writer(path: &Path) -> Result<File, UpdateError> {
     options.open(path).map_err(|_| installer_storage_failed())
 }
 
-/// Reopens the written installer read-only, denying writers and deletion until launch. The path
-/// itself is opened (never a reparse point's target), and it must be a plain file.
+/// Volume serial number and file index: which file a handle refers to on this machine.
 #[cfg(windows)]
-fn open_prepared_for_launch(path: &Path) -> Result<File, UpdateError> {
+type FileIdentity = (u32, u32, u32);
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn file_identity(file: &File) -> Result<FileIdentity, UpdateError> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the handle is owned by `file`, which outlives the call, and `info` is a valid,
+    // writable structure of the documented type.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) } == 0 {
+        return Err(installer_storage_failed());
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        info.nFileIndexHigh,
+        info.nFileIndexLow,
+    ))
+}
+
+/// Reopens the written installer read-only, denying writers and deletion until launch. The path
+/// itself is opened (never a reparse point's target), it must be a plain file, and it must be the
+/// same file (`written`) that preparation wrote.
+#[cfg(windows)]
+fn open_prepared_for_launch(path: &Path, written: FileIdentity) -> Result<File, UpdateError> {
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     };
@@ -302,7 +329,10 @@ fn open_prepared_for_launch(path: &Path) -> Result<File, UpdateError> {
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path).map_err(|_| installer_storage_failed())?;
     let metadata = file.metadata().map_err(|_| installer_storage_failed())?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    if !metadata.is_file()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || file_identity(&file)? != written
+    {
         return Err(installer_storage_failed());
     }
     Ok(file)
@@ -1161,8 +1191,9 @@ mod tests {
             Some(i32::try_from(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION).unwrap())
         );
 
+        let written = file_identity(&writer).unwrap();
         drop(writer);
-        let held = open_prepared_for_launch(&installer).unwrap();
+        let held = open_prepared_for_launch(&installer, written).unwrap();
         assert!(
             OpenOptions::new().write(true).open(&installer).is_err(),
             "the held installer must deny writers"
@@ -1178,6 +1209,35 @@ mod tests {
             .unwrap();
         assert!(status.code().is_some());
         drop(held);
+    }
+
+    #[test]
+    fn prepared_installer_reopen_refuses_a_file_other_than_the_one_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let prepared = temp.path().join("updates").join("prepared");
+        ensure_prepared_directory(&prepared).unwrap();
+        let installer = prepared.join("prepared-identity.exe");
+
+        let mut writer = open_prepared_writer(&installer).unwrap();
+        writer.write_all(b"MZ verified bytes").unwrap();
+        writer.sync_all().unwrap();
+        let written = file_identity(&writer).unwrap();
+        drop(writer);
+
+        // Between close and reopen nothing is held, so the path may now name another file. A
+        // byte-identical replacement would pass the hash and signature checks; identity must not.
+        let copy = temp.path().join("copy.exe");
+        fs::copy(&installer, &copy).unwrap();
+        fs::remove_file(&installer).unwrap();
+        fs::rename(&copy, &installer).unwrap();
+
+        let refused = open_prepared_for_launch(&installer, written).unwrap_err();
+        assert_eq!(refused.code(), "update_installer_storage_failed");
+        let replacement = File::open(&installer).unwrap();
+        let replaced = file_identity(&replacement).unwrap();
+        drop(replacement);
+        assert_ne!(replaced, written);
+        assert!(open_prepared_for_launch(&installer, replaced).is_ok());
     }
 
     fn quiet_installer_command(path: &Path) -> Command {
