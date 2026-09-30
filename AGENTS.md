@@ -2,6 +2,16 @@
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## Permanent cross-platform rule
+
+Unless the owner explicitly says otherwise, every new KalCode or KalVoice feature, fix, UI behavior, workflow, automation, and product capability must support **both Windows and macOS**. This is a universal engineering rule for all future work.
+
+- Deliver support for both platforms as part of the same task. Never treat the other platform as future work or call a single-platform implementation complete.
+- Keep user-facing behavior and the product experience as consistent as possible across Windows and macOS.
+- Use platform-native implementations where required. Different low-level code is acceptable; the product experience should still match.
+- Account for both platforms during design, implementation, testing, and release verification. Report any unverified platform behavior honestly.
+- Only an explicit owner instruction can narrow a task to one platform.
+
 ## Definition of Done
 
 Writing code is not the end of a task. Unless the owner explicitly says "do not ship", "local only", "prototype only" or equivalent, every completed engineering task continues through its whole lifecycle:
