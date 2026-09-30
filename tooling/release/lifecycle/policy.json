@@ -69,6 +69,7 @@
         ".vscode/**",
         "docs/**",
         "assets/**",
+        "kalcode-film/**",
         "AGENTS.md",
         "CLAUDE.md",
         "README.md",
@@ -83,7 +84,7 @@
         "package.json"
       ],
       "lanes": ["internal"],
-      "why": "tooling, CI, agent/dev files and unpublished docs; the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
+      "why": "tooling, CI, agent/dev files, unpublished docs and the marketing film (kalcode-film/, a standalone npm project outside the pnpm workspace); the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
     },
     {
       "id": "website",
