@@ -80,7 +80,9 @@ export async function exchangeGitHubCode(
   if (!CODE.test(code) || !isPkceVerifier(verifier)) throw new OAuthProviderError();
   const response = await fetcher(TOKEN_URL, {
     method: "POST",
-    redirect: "error",
+    // Workerd rejects `redirect: "error"` before issuing even a non-redirecting request.
+    // Manual mode exposes a 3xx response without following it; the !response.ok check then rejects it.
+    redirect: "manual",
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     headers: { ...githubHeaders(), "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -98,12 +100,14 @@ export async function exchangeGitHubCode(
 }
 
 export async function fetchVerifiedGitHubIdentity(fetcher: typeof fetch, accessToken: string): Promise<GitHubIdentity> {
+  // Workerd rejects `redirect: "error"` before issuing even a non-redirecting request.
+  // Manual mode exposes a 3xx response without following it; the !response.ok check then rejects it.
   const headers = githubHeaders(accessToken);
   const user = (await providerJson(
-    await fetcher(USER_URL, { headers, redirect: "error", signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) }),
+    await fetcher(USER_URL, { headers, redirect: "manual", signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) }),
   )) as { id?: unknown };
   const emails = (await providerJson(
-    await fetcher(EMAILS_URL, { headers, redirect: "error", signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) }),
+    await fetcher(EMAILS_URL, { headers, redirect: "manual", signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) }),
   )) as unknown;
   if (!Number.isSafeInteger(user.id) || (user.id as number) <= 0 || !Array.isArray(emails))
     throw new OAuthProviderError();
@@ -128,7 +132,9 @@ export async function revokeGitHubToken(
 ): Promise<void> {
   const response = await fetcher(`https://api.github.com/applications/${encodeURIComponent(config.clientId)}/token`, {
     method: "DELETE",
-    redirect: "error",
+    // Workerd rejects `redirect: "error"` before issuing even a non-redirecting request.
+    // Manual mode exposes a 3xx response without following it; the !response.ok check then rejects it.
+    redirect: "manual",
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     headers: {
       accept: "application/vnd.github+json",
