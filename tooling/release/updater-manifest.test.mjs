@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -589,6 +589,71 @@ test("preliminary staging and final publication produce byte-identical candidate
     }),
     /completed updater QA/,
   );
+});
+
+test("an owner-waived update trial lowers only that artifact to the preliminary contract", async () => {
+  const input = fixture();
+  input.signaturePath = `${input.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    input.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const pending = { ...input.qa, status: "preliminary-passed", updateTrial: null };
+  const common = { requestedChannel: "stable", publishedAt: "2026-09-25T12:00:00.000Z", notes: "Update." };
+  const final = await createPlatformUpdaterManifest({ ...common, artifacts: [{ ...input, target: "windows-x86_64" }] });
+  const waived = await createPlatformUpdaterManifest({
+    ...common,
+    artifacts: [{ ...input, qa: pending, target: "windows-x86_64", updateTrialWaived: true }],
+  });
+  assert.equal(JSON.stringify(waived), JSON.stringify(final));
+  // The waiver never excuses product checks or safeguards, and is only an explicit boolean on a final publication.
+  const broken = { ...pending, checks: { ...pending.checks, [Object.keys(pending.checks)[0]]: false } };
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      artifacts: [{ ...input, qa: broken, target: "windows-x86_64", updateTrialWaived: true }],
+    }),
+    /product checks are incomplete/,
+  );
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      artifacts: [{ ...input, qa: pending, target: "windows-x86_64", updateTrialWaived: "yes" }],
+    }),
+    /waiver applies only to a final publication/,
+  );
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      qaPhase: "preliminary",
+      artifacts: [{ ...input, qa: pending, target: "windows-x86_64", updateTrialWaived: true }],
+    }),
+    /waiver applies only to a final publication/,
+  );
+});
+
+test("publish.mjs carries an update-trial waiver into every platform manifest it builds or re-verifies", () => {
+  // Regression (deputy R1): the final readback re-verification must use the same per-artifact waiver as the
+  // first build, or a waived publication fails in Bootstrap/ConfirmAfterDeploy after the uploads.
+  const source = readFileSync(new URL("./publish.mjs", import.meta.url), "utf8");
+  const builds = source.match(/createPlatformUpdaterManifest\(/g) ?? [];
+  const spreads = source.match(/\.\.\.packet,/g) ?? [];
+  const waived =
+    source.match(
+      /\.\.\.packet,\s+\.\.\.\(trialWaiver\?\.target === packet\.target && \{ updateTrialWaived: true \}\),/g,
+    ) ?? [];
+  assert.equal(builds.length, 2);
+  assert.equal(spreads.length, builds.length);
+  assert.equal(waived.length, builds.length);
+});
+
+test("publish.mjs builds every updater descriptor in the staging tool's platform order", () => {
+  // Regression: the staged, immutable stable/<version>.json lists windows-x86_64 before darwin-aarch64; an
+  // alphabetical order produces different bytes and the frozen-file check refuses the publication.
+  const source = readFileSync(new URL("./publish.mjs", import.meta.url), "utf8");
+  assert.match(source, /const UPDATER_TARGET_ORDER = \["windows-x86_64", "darwin-aarch64"\];/);
+  assert.equal((source.match(/createPlatformUpdaterManifest\(/g) ?? []).length, 2);
+  assert.equal((source.match(/inUpdaterOrder\((?:packets|downloadedInputs)\)/g) ?? []).length, 2);
 });
 
 test("stable generators reject prerelease versions before artifact I/O", async () => {
