@@ -102,7 +102,7 @@ describe("download page platforms", () => {
 
   it("tells Windows users of 0.1.6 to download the next version, only in the Windows row of 0.1.6", async () => {
     const WINDOWS_NOTE =
-      "In-app updates don't work in 0.1.6 on Windows. When 0.1.7 is available, download it here and run the installer — your data is kept.";
+      "Windows: in-app Update and Restore previous version don't work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.";
     const stable016: ReleaseManifest = structuredClone(STABLE_DUAL);
     if (!stable016.latest) throw new Error("fixture has no release");
     stable016.latest.version = "0.1.6";

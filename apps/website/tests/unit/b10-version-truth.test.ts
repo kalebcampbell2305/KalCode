@@ -106,7 +106,7 @@ describe("the Updates page", () => {
     expect(html).toContain('href="#release-0-1-6"');
     expect(html).toContain("KalCode 0.1.6");
     expect(html).toContain("On macOS, in-app Update and Restore previous version now finish");
-    expect(html).toContain("Windows: in-app updates don't work in 0.1.6.");
+    expect(html).toContain("Windows: in-app Update and Restore previous version don't work in 0.1.6.");
     expect(html).toMatch(
       /download it from the <a class="text-link" href="\/download"[^>]*>download page<\/a> and run the installer/,
     );

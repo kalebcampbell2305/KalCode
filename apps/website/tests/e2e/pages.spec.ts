@@ -126,7 +126,9 @@ test.describe("every page", () => {
     await expect(page.locator("article")).toHaveCount(STABLE_016 ? 5 : 4);
     if (STABLE_016) {
       await expect(page.locator("#release-0-1-6")).toBeVisible();
-      await expect(page.locator("#release-0-1-6")).toContainText("Windows: in-app updates don't work in 0.1.6.");
+      await expect(page.locator("#release-0-1-6")).toContainText(
+        "Windows: in-app Update and Restore previous version don't work in 0.1.6.",
+      );
       await expect(page.locator("#release-0-1-6").getByRole("link", { name: "download page" })).toHaveAttribute(
         "href",
         "/download",
