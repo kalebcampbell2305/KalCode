@@ -1,0 +1,25 @@
+{
+  "name": "kalcode-film",
+  "private": true,
+  "version": "1.0.0",
+  "description": "KalCode launch film (Remotion)",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "node scripts/render.mjs"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.530",
+    "@remotion/cli": "^4.0.530",
+    "@remotion/fonts": "^4.0.530",
+    "@remotion/renderer": "^4.0.530",
+    "lucide-react": "^1.48.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "remotion": "^4.0.530"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}

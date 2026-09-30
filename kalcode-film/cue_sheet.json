@@ -1,0 +1,1112 @@
+{
+  "title": "KalCode launch film",
+  "bpm": 120,
+  "timeSignature": "4/4",
+  "fps": 60,
+  "sampleRate": 48000,
+  "bars": 30,
+  "duration": 60,
+  "note": "Single source of timing truth. Authors edit t (seconds, 16th-note grid); node scripts/cues.mjs fills bar/beat/frame/sample and validates. Visuals (src/components/core.tsx) and audio (src/audio) both read this file.",
+  "scenes": [
+    {
+      "id": "chaos",
+      "start": {
+        "t": 0,
+        "bar": 1,
+        "beat": 1,
+        "frame": 0,
+        "sample": 0
+      },
+      "end": {
+        "t": 6,
+        "bar": 4,
+        "beat": 1,
+        "frame": 360,
+        "sample": 288000
+      }
+    },
+    {
+      "id": "introduce",
+      "start": {
+        "t": 6,
+        "bar": 4,
+        "beat": 1,
+        "frame": 360,
+        "sample": 288000
+      },
+      "end": {
+        "t": 10,
+        "bar": 6,
+        "beat": 1,
+        "frame": 600,
+        "sample": 480000
+      }
+    },
+    {
+      "id": "workspace",
+      "start": {
+        "t": 10,
+        "bar": 6,
+        "beat": 1,
+        "frame": 600,
+        "sample": 480000
+      },
+      "end": {
+        "t": 16,
+        "bar": 9,
+        "beat": 1,
+        "frame": 960,
+        "sample": 768000
+      }
+    },
+    {
+      "id": "providers",
+      "start": {
+        "t": 16,
+        "bar": 9,
+        "beat": 1,
+        "frame": 960,
+        "sample": 768000
+      },
+      "end": {
+        "t": 22,
+        "bar": 12,
+        "beat": 1,
+        "frame": 1320,
+        "sample": 1056000
+      }
+    },
+    {
+      "id": "swarm",
+      "start": {
+        "t": 22,
+        "bar": 12,
+        "beat": 1,
+        "frame": 1320,
+        "sample": 1056000
+      },
+      "end": {
+        "t": 30,
+        "bar": 16,
+        "beat": 1,
+        "frame": 1800,
+        "sample": 1440000
+      }
+    },
+    {
+      "id": "kalvoice",
+      "start": {
+        "t": 30,
+        "bar": 16,
+        "beat": 1,
+        "frame": 1800,
+        "sample": 1440000
+      },
+      "end": {
+        "t": 36,
+        "bar": 19,
+        "beat": 1,
+        "frame": 2160,
+        "sample": 1728000
+      }
+    },
+    {
+      "id": "buildloop",
+      "start": {
+        "t": 36,
+        "bar": 19,
+        "beat": 1,
+        "frame": 2160,
+        "sample": 1728000
+      },
+      "end": {
+        "t": 42,
+        "bar": 22,
+        "beat": 1,
+        "frame": 2520,
+        "sample": 2016000
+      }
+    },
+    {
+      "id": "pipeline",
+      "start": {
+        "t": 42,
+        "bar": 22,
+        "beat": 1,
+        "frame": 2520,
+        "sample": 2016000
+      },
+      "end": {
+        "t": 50,
+        "bar": 26,
+        "beat": 1,
+        "frame": 3000,
+        "sample": 2400000
+      }
+    },
+    {
+      "id": "selfhost",
+      "start": {
+        "t": 50,
+        "bar": 26,
+        "beat": 1,
+        "frame": 3000,
+        "sample": 2400000
+      },
+      "end": {
+        "t": 54,
+        "bar": 28,
+        "beat": 1,
+        "frame": 3240,
+        "sample": 2592000
+      }
+    },
+    {
+      "id": "endcard",
+      "start": {
+        "t": 54,
+        "bar": 28,
+        "beat": 1,
+        "frame": 3240,
+        "sample": 2592000
+      },
+      "end": {
+        "t": 60,
+        "bar": 31,
+        "beat": 1,
+        "frame": 3600,
+        "sample": 2880000
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "chaos.window.00",
+      "t": 0,
+      "bar": 1,
+      "beat": 1,
+      "frame": 0,
+      "sample": 0
+    },
+    {
+      "id": "chaos.window.01",
+      "t": 0.5,
+      "bar": 1,
+      "beat": 2,
+      "frame": 30,
+      "sample": 24000
+    },
+    {
+      "id": "chaos.window.02",
+      "t": 1,
+      "bar": 1,
+      "beat": 3,
+      "frame": 60,
+      "sample": 48000
+    },
+    {
+      "id": "chaos.window.03",
+      "t": 1.5,
+      "bar": 1,
+      "beat": 4,
+      "frame": 90,
+      "sample": 72000
+    },
+    {
+      "id": "chaos.window.04",
+      "t": 1.75,
+      "bar": 1,
+      "beat": 4.5,
+      "frame": 105,
+      "sample": 84000
+    },
+    {
+      "id": "copy.too_many",
+      "t": 2,
+      "bar": 2,
+      "beat": 1,
+      "frame": 120,
+      "sample": 96000
+    },
+    {
+      "id": "chaos.window.05",
+      "t": 2.25,
+      "bar": 2,
+      "beat": 1.5,
+      "frame": 135,
+      "sample": 108000
+    },
+    {
+      "id": "chaos.window.06",
+      "t": 2.5,
+      "bar": 2,
+      "beat": 2,
+      "frame": 150,
+      "sample": 120000
+    },
+    {
+      "id": "chaos.window.07",
+      "t": 2.75,
+      "bar": 2,
+      "beat": 2.5,
+      "frame": 165,
+      "sample": 132000
+    },
+    {
+      "id": "chaos.window.08",
+      "t": 3,
+      "bar": 2,
+      "beat": 3,
+      "frame": 180,
+      "sample": 144000
+    },
+    {
+      "id": "chaos.window.09",
+      "t": 3.25,
+      "bar": 2,
+      "beat": 3.5,
+      "frame": 195,
+      "sample": 156000
+    },
+    {
+      "id": "chaos.window.10",
+      "t": 3.5,
+      "bar": 2,
+      "beat": 4,
+      "frame": 210,
+      "sample": 168000
+    },
+    {
+      "id": "copy.switching",
+      "t": 3.5,
+      "bar": 2,
+      "beat": 4,
+      "frame": 210,
+      "sample": 168000
+    },
+    {
+      "id": "chaos.window.11",
+      "t": 3.625,
+      "bar": 2,
+      "beat": 4.25,
+      "frame": 218,
+      "sample": 174000
+    },
+    {
+      "id": "chaos.window.12",
+      "t": 3.75,
+      "bar": 2,
+      "beat": 4.5,
+      "frame": 225,
+      "sample": 180000
+    },
+    {
+      "id": "chaos.window.13",
+      "t": 3.875,
+      "bar": 2,
+      "beat": 4.75,
+      "frame": 233,
+      "sample": 186000
+    },
+    {
+      "id": "chaos.window.14",
+      "t": 4,
+      "bar": 3,
+      "beat": 1,
+      "frame": 240,
+      "sample": 192000
+    },
+    {
+      "id": "chaos.window.15",
+      "t": 4.125,
+      "bar": 3,
+      "beat": 1.25,
+      "frame": 248,
+      "sample": 198000
+    },
+    {
+      "id": "chaos.window.16",
+      "t": 4.25,
+      "bar": 3,
+      "beat": 1.5,
+      "frame": 255,
+      "sample": 204000
+    },
+    {
+      "id": "chaos.window.17",
+      "t": 4.375,
+      "bar": 3,
+      "beat": 1.75,
+      "frame": 263,
+      "sample": 210000
+    },
+    {
+      "id": "collapse.start",
+      "t": 5.25,
+      "sfx": "whoosh",
+      "span": 0.5,
+      "dir": "down",
+      "bar": 3,
+      "beat": 3.5,
+      "frame": 315,
+      "sample": 252000
+    },
+    {
+      "id": "silence",
+      "t": 5.75,
+      "bar": 3,
+      "beat": 4.5,
+      "frame": 345,
+      "sample": 276000
+    },
+    {
+      "id": "hit.product",
+      "t": 6,
+      "bar": 4,
+      "beat": 1,
+      "frame": 360,
+      "sample": 288000
+    },
+    {
+      "id": "copy.introducing",
+      "t": 6.5,
+      "bar": 4,
+      "beat": 2,
+      "frame": 390,
+      "sample": 312000
+    },
+    {
+      "id": "copy.positioning",
+      "t": 8,
+      "bar": 5,
+      "beat": 1,
+      "frame": 480,
+      "sample": 384000
+    },
+    {
+      "id": "intro.push",
+      "t": 9,
+      "sfx": "whoosh",
+      "span": 0.9,
+      "bar": 5,
+      "beat": 3,
+      "frame": 540,
+      "sample": 432000
+    },
+    {
+      "id": "ws.open",
+      "t": 10,
+      "sfx": "pane_snap",
+      "bar": 6,
+      "beat": 1,
+      "frame": 600,
+      "sample": 480000
+    },
+    {
+      "id": "ws.keys",
+      "t": 10.25,
+      "sfx": "key_texture",
+      "count": 16,
+      "span": 1.2,
+      "bar": 6,
+      "beat": 1.5,
+      "frame": 615,
+      "sample": 492000
+    },
+    {
+      "id": "ws.split.browser",
+      "t": 10.5,
+      "sfx": "pane_snap",
+      "pan": 0.4,
+      "bar": 6,
+      "beat": 2,
+      "frame": 630,
+      "sample": 504000
+    },
+    {
+      "id": "copy.your_project",
+      "t": 11,
+      "bar": 6,
+      "beat": 3,
+      "frame": 660,
+      "sample": 528000
+    },
+    {
+      "id": "ws.split.dash",
+      "t": 11.5,
+      "sfx": "pane_snap",
+      "pan": 0.3,
+      "bar": 6,
+      "beat": 4,
+      "frame": 690,
+      "sample": 552000
+    },
+    {
+      "id": "copy.your_terminals",
+      "t": 12,
+      "bar": 7,
+      "beat": 1,
+      "frame": 720,
+      "sample": 576000
+    },
+    {
+      "id": "ws.browser.load",
+      "t": 12.75,
+      "sfx": "air_sweep",
+      "gain": 0.6,
+      "bar": 7,
+      "beat": 2.5,
+      "frame": 765,
+      "sample": 612000
+    },
+    {
+      "id": "copy.your_browser",
+      "t": 13,
+      "bar": 7,
+      "beat": 3,
+      "frame": 780,
+      "sample": 624000
+    },
+    {
+      "id": "copy.your_agents",
+      "t": 14,
+      "bar": 8,
+      "beat": 1,
+      "frame": 840,
+      "sample": 672000
+    },
+    {
+      "id": "ws.threads",
+      "t": 14,
+      "sfx": "whoosh",
+      "span": 0.5,
+      "bar": 8,
+      "beat": 1,
+      "frame": 840,
+      "sample": 672000
+    },
+    {
+      "id": "ws.snap",
+      "t": 15,
+      "sfx": "pane_snap",
+      "bar": 8,
+      "beat": 3,
+      "frame": 900,
+      "sample": 720000
+    },
+    {
+      "id": "prov.card.0",
+      "t": 16,
+      "sfx": "pane_snap",
+      "pan": -0.4,
+      "bar": 9,
+      "beat": 1,
+      "frame": 960,
+      "sample": 768000
+    },
+    {
+      "id": "prov.surface",
+      "t": 16,
+      "sfx": "whoosh",
+      "span": 0.5,
+      "bar": 9,
+      "beat": 1,
+      "frame": 960,
+      "sample": 768000
+    },
+    {
+      "id": "prov.card.1",
+      "t": 16.25,
+      "sfx": "pane_snap",
+      "pan": 0.4,
+      "bar": 9,
+      "beat": 1.5,
+      "frame": 975,
+      "sample": 780000
+    },
+    {
+      "id": "copy.accounts",
+      "t": 17,
+      "bar": 9,
+      "beat": 3,
+      "frame": 1020,
+      "sample": 816000
+    },
+    {
+      "id": "prov.threads",
+      "t": 18,
+      "sfx": "whoosh",
+      "span": 0.4,
+      "bar": 10,
+      "beat": 1,
+      "frame": 1080,
+      "sample": 864000
+    },
+    {
+      "id": "prov.route.0",
+      "t": 18.25,
+      "sfx": "route",
+      "pan": -0.4,
+      "bar": 10,
+      "beat": 1.5,
+      "frame": 1095,
+      "sample": 876000
+    },
+    {
+      "id": "prov.route.1",
+      "t": 18.5,
+      "sfx": "route",
+      "pan": 0.4,
+      "bar": 10,
+      "beat": 2,
+      "frame": 1110,
+      "sample": 888000
+    },
+    {
+      "id": "prov.route.2",
+      "t": 18.75,
+      "sfx": "route",
+      "pan": 0.1,
+      "bar": 10,
+      "beat": 2.5,
+      "frame": 1125,
+      "sample": 900000
+    },
+    {
+      "id": "prov.limit",
+      "t": 19,
+      "sfx": "fail",
+      "bar": 10,
+      "beat": 3,
+      "frame": 1140,
+      "sample": 912000
+    },
+    {
+      "id": "prov.menu",
+      "t": 19.5,
+      "sfx": "pane_snap",
+      "bar": 10,
+      "beat": 4,
+      "frame": 1170,
+      "sample": 936000
+    },
+    {
+      "id": "prov.dialog",
+      "t": 20,
+      "sfx": "pane_snap",
+      "bar": 11,
+      "beat": 1,
+      "frame": 1200,
+      "sample": 960000
+    },
+    {
+      "id": "copy.keep_going",
+      "t": 20.5,
+      "bar": 11,
+      "beat": 2,
+      "frame": 1230,
+      "sample": 984000
+    },
+    {
+      "id": "prov.switch",
+      "t": 20.5,
+      "sfx": "test_pass",
+      "bar": 11,
+      "beat": 2,
+      "frame": 1230,
+      "sample": 984000
+    },
+    {
+      "id": "prov.working",
+      "t": 21,
+      "bar": 11,
+      "beat": 3,
+      "frame": 1260,
+      "sample": 1008000
+    },
+    {
+      "id": "swarm.dash",
+      "t": 22,
+      "sfx": "whoosh",
+      "span": 0.5,
+      "bar": 12,
+      "beat": 1,
+      "frame": 1320,
+      "sample": 1056000
+    },
+    {
+      "id": "swarm.launch.0",
+      "t": 22.5,
+      "bar": 12,
+      "beat": 2,
+      "frame": 1350,
+      "sample": 1080000
+    },
+    {
+      "id": "swarm.launch.1",
+      "t": 23,
+      "bar": 12,
+      "beat": 3,
+      "frame": 1380,
+      "sample": 1104000
+    },
+    {
+      "id": "swarm.launch.2",
+      "t": 23.5,
+      "bar": 12,
+      "beat": 4,
+      "frame": 1410,
+      "sample": 1128000
+    },
+    {
+      "id": "swarm.launch.3",
+      "t": 24,
+      "bar": 13,
+      "beat": 1,
+      "frame": 1440,
+      "sample": 1152000
+    },
+    {
+      "id": "copy.different_tasks",
+      "t": 25,
+      "bar": 13,
+      "beat": 3,
+      "frame": 1500,
+      "sample": 1200000
+    },
+    {
+      "id": "swarm.fail",
+      "t": 25.5,
+      "sfx": "fail",
+      "pan": 0.3,
+      "bar": 13,
+      "beat": 4,
+      "frame": 1530,
+      "sample": 1224000
+    },
+    {
+      "id": "copy.same_project",
+      "t": 26,
+      "bar": 14,
+      "beat": 1,
+      "frame": 1560,
+      "sample": 1248000
+    },
+    {
+      "id": "swarm.pass.0",
+      "t": 26,
+      "sfx": "test_pass",
+      "pan": -0.5,
+      "bar": 14,
+      "beat": 1,
+      "frame": 1560,
+      "sample": 1248000
+    },
+    {
+      "id": "swarm.fix",
+      "t": 26.5,
+      "bar": 14,
+      "beat": 2,
+      "frame": 1590,
+      "sample": 1272000
+    },
+    {
+      "id": "swarm.pass.3",
+      "t": 26.75,
+      "sfx": "test_pass",
+      "pan": 0.5,
+      "bar": 14,
+      "beat": 2.5,
+      "frame": 1605,
+      "sample": 1284000
+    },
+    {
+      "id": "swarm.pass.1",
+      "t": 27,
+      "sfx": "test_pass",
+      "pan": 0.3,
+      "bar": 14,
+      "beat": 3,
+      "frame": 1620,
+      "sample": 1296000
+    },
+    {
+      "id": "swarm.pass.2",
+      "t": 27.5,
+      "sfx": "test_pass",
+      "pan": -0.1,
+      "bar": 14,
+      "beat": 4,
+      "frame": 1650,
+      "sample": 1320000
+    },
+    {
+      "id": "copy.parallel",
+      "t": 28,
+      "bar": 15,
+      "beat": 1,
+      "frame": 1680,
+      "sample": 1344000
+    },
+    {
+      "id": "hit.voice",
+      "t": 30,
+      "bar": 16,
+      "beat": 1,
+      "frame": 1800,
+      "sample": 1440000
+    },
+    {
+      "id": "voice.press",
+      "t": 30.5,
+      "sfx": "mic_on",
+      "bar": 16,
+      "beat": 2,
+      "frame": 1830,
+      "sample": 1464000
+    },
+    {
+      "id": "voice.release",
+      "t": 32,
+      "sfx": "mic_off",
+      "bar": 17,
+      "beat": 1,
+      "frame": 1920,
+      "sample": 1536000
+    },
+    {
+      "id": "voice.type",
+      "t": 32.25,
+      "sfx": "route",
+      "bar": 17,
+      "beat": 1.5,
+      "frame": 1935,
+      "sample": 1548000
+    },
+    {
+      "id": "voice.send.press",
+      "t": 32.75,
+      "sfx": "mic_on",
+      "gain": 0.6,
+      "bar": 17,
+      "beat": 2.5,
+      "frame": 1965,
+      "sample": 1572000
+    },
+    {
+      "id": "voice.send.release",
+      "t": 33.25,
+      "sfx": "mic_off",
+      "gain": 0.6,
+      "bar": 17,
+      "beat": 3.5,
+      "frame": 1995,
+      "sample": 1596000
+    },
+    {
+      "id": "voice.working",
+      "t": 33.5,
+      "sfx": "pane_snap",
+      "bar": 17,
+      "beat": 4,
+      "frame": 2010,
+      "sample": 1608000
+    },
+    {
+      "id": "copy.say",
+      "t": 34,
+      "bar": 18,
+      "beat": 1,
+      "frame": 2040,
+      "sample": 1632000
+    },
+    {
+      "id": "copy.kalvoice",
+      "t": 35,
+      "bar": 18,
+      "beat": 3,
+      "frame": 2100,
+      "sample": 1680000
+    },
+    {
+      "id": "build.open",
+      "t": 36,
+      "sfx": "whoosh",
+      "span": 0.4,
+      "bar": 19,
+      "beat": 1,
+      "frame": 2160,
+      "sample": 1728000
+    },
+    {
+      "id": "build.keys",
+      "t": 36.25,
+      "sfx": "key_texture",
+      "count": 24,
+      "span": 1.7,
+      "bar": 19,
+      "beat": 1.5,
+      "frame": 2175,
+      "sample": 1740000
+    },
+    {
+      "id": "build.refresh",
+      "t": 38.5,
+      "sfx": "air_sweep",
+      "bar": 20,
+      "beat": 2,
+      "frame": 2310,
+      "sample": 1848000
+    },
+    {
+      "id": "build.component",
+      "t": 39,
+      "sfx": "pane_snap",
+      "bar": 20,
+      "beat": 3,
+      "frame": 2340,
+      "sample": 1872000
+    },
+    {
+      "id": "build.done",
+      "t": 40,
+      "sfx": "test_pass",
+      "bar": 21,
+      "beat": 1,
+      "frame": 2400,
+      "sample": 1920000
+    },
+    {
+      "id": "copy.build_it",
+      "t": 40,
+      "bar": 21,
+      "beat": 1,
+      "frame": 2400,
+      "sample": 1920000
+    },
+    {
+      "id": "copy.see_it",
+      "t": 41,
+      "bar": 21,
+      "beat": 3,
+      "frame": 2460,
+      "sample": 1968000
+    },
+    {
+      "id": "pipe.converge",
+      "t": 42,
+      "sfx": "whoosh",
+      "span": 0.5,
+      "bar": 22,
+      "beat": 1,
+      "frame": 2520,
+      "sample": 2016000
+    },
+    {
+      "id": "pipe.stage.0",
+      "t": 42.5,
+      "stage": "review",
+      "bar": 22,
+      "beat": 2,
+      "frame": 2550,
+      "sample": 2040000
+    },
+    {
+      "id": "copy.w_build",
+      "t": 43,
+      "bar": 22,
+      "beat": 3,
+      "frame": 2580,
+      "sample": 2064000
+    },
+    {
+      "id": "pipe.stage.1",
+      "t": 43.25,
+      "stage": "test",
+      "bar": 22,
+      "beat": 3.5,
+      "frame": 2595,
+      "sample": 2076000
+    },
+    {
+      "id": "pipe.stage.2",
+      "t": 44,
+      "stage": "merge",
+      "bar": 23,
+      "beat": 1,
+      "frame": 2640,
+      "sample": 2112000
+    },
+    {
+      "id": "pipe.stage.3",
+      "t": 44.75,
+      "stage": "build",
+      "bar": 23,
+      "beat": 2.5,
+      "frame": 2685,
+      "sample": 2148000
+    },
+    {
+      "id": "copy.w_test",
+      "t": 45,
+      "bar": 23,
+      "beat": 3,
+      "frame": 2700,
+      "sample": 2160000
+    },
+    {
+      "id": "pipe.approval",
+      "t": 45.5,
+      "sfx": "pane_snap",
+      "bar": 23,
+      "beat": 4,
+      "frame": 2730,
+      "sample": 2184000
+    },
+    {
+      "id": "pipe.approve",
+      "t": 46.25,
+      "sfx": "test_pass",
+      "bar": 24,
+      "beat": 1.5,
+      "frame": 2775,
+      "sample": 2220000
+    },
+    {
+      "id": "pipe.stage.4",
+      "t": 46.75,
+      "stage": "publish",
+      "bar": 24,
+      "beat": 2.5,
+      "frame": 2805,
+      "sample": 2244000
+    },
+    {
+      "id": "pipe.stage.5",
+      "t": 47.25,
+      "stage": "deploy",
+      "bar": 24,
+      "beat": 3.5,
+      "frame": 2835,
+      "sample": 2268000
+    },
+    {
+      "id": "pipe.stage.6",
+      "t": 47.75,
+      "stage": "verify",
+      "bar": 24,
+      "beat": 4.5,
+      "frame": 2865,
+      "sample": 2292000
+    },
+    {
+      "id": "copy.w_ship",
+      "t": 48,
+      "bar": 25,
+      "beat": 1,
+      "frame": 2880,
+      "sample": 2304000
+    },
+    {
+      "id": "hit.ship",
+      "t": 48,
+      "bar": 25,
+      "beat": 1,
+      "frame": 2880,
+      "sample": 2304000
+    },
+    {
+      "id": "pipe.site",
+      "t": 48.5,
+      "sfx": "pane_snap",
+      "pan": -0.3,
+      "bar": 25,
+      "beat": 2,
+      "frame": 2910,
+      "sample": 2328000
+    },
+    {
+      "id": "pipe.update",
+      "t": 49,
+      "sfx": "pane_snap",
+      "pan": 0.3,
+      "bar": 25,
+      "beat": 3,
+      "frame": 2940,
+      "sample": 2352000
+    },
+    {
+      "id": "self.pull",
+      "t": 50,
+      "bar": 26,
+      "beat": 1,
+      "frame": 3000,
+      "sample": 2400000
+    },
+    {
+      "id": "copy.build_kalcode",
+      "t": 51,
+      "bar": 26,
+      "beat": 3,
+      "frame": 3060,
+      "sample": 2448000
+    },
+    {
+      "id": "copy.inside",
+      "t": 52,
+      "bar": 27,
+      "beat": 1,
+      "frame": 3120,
+      "sample": 2496000
+    },
+    {
+      "id": "self.update",
+      "t": 52.5,
+      "sfx": "test_pass",
+      "bar": 27,
+      "beat": 2,
+      "frame": 3150,
+      "sample": 2520000
+    },
+    {
+      "id": "end.collapse",
+      "t": 54,
+      "bar": 28,
+      "beat": 1,
+      "frame": 3240,
+      "sample": 2592000
+    },
+    {
+      "id": "end.logo",
+      "t": 55,
+      "bar": 28,
+      "beat": 3,
+      "frame": 3300,
+      "sample": 2640000
+    },
+    {
+      "id": "end.line",
+      "t": 56,
+      "bar": 29,
+      "beat": 1,
+      "frame": 3360,
+      "sample": 2688000
+    },
+    {
+      "id": "end.cta",
+      "t": 57,
+      "bar": 29,
+      "beat": 3,
+      "frame": 3420,
+      "sample": 2736000
+    },
+    {
+      "id": "end.url",
+      "t": 57.5,
+      "bar": 29,
+      "beat": 4,
+      "frame": 3450,
+      "sample": 2760000
+    }
+  ]
+}

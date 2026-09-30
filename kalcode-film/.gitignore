@@ -1,0 +1,8 @@
+# Reproducible outputs: rebuild with the commands in README.md (the render is deterministic).
+node_modules/
+build/
+audio/
+out/*.mp4
+out/*.mov
+out/keyframes/
+WORKLOG.md
