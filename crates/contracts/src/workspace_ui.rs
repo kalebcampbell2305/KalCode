@@ -76,15 +76,15 @@ impl DisplayStatus {
     }
 }
 
-/// Colour semantics for display statuses. Surfaces map tones to design-system tokens; the
-/// approval / waiting accent is neutral grey and amber is reserved for PAUSED.
+/// Colour semantics for display statuses. Surfaces map tones to design-system tokens; amber
+/// means waiting for you (approval, a reply, or PAUSED).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum StatusTone {
     /// Green: WORKING, TESTING, REVIEWING.
     Working,
-    /// Neutral grey, emphasized: WAITING FOR YOU, PERMISSION REQUIRED.
+    /// Amber: WAITING FOR YOU, PERMISSION REQUIRED.
     Waiting,
     /// Muted: IDLE, STARTING, OFFLINE.
     Muted,
@@ -92,7 +92,7 @@ pub enum StatusTone {
     Done,
     /// Red: FAILED.
     Failed,
-    /// Amber: PAUSED (the only amber status).
+    /// Amber: PAUSED.
     Paused,
     /// Blue: RECOVERING.
     Recovering,

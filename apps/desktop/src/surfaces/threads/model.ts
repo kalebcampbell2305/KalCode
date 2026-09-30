@@ -17,7 +17,7 @@ import {
 
 export interface StatusPresentation {
   label: string;
-  /** Contract tone (working green, waiting neutral, paused amber, failed red, ...). */
+  /** Contract tone (working green, waiting amber, paused amber, failed red, ...). */
   tone: DisplayTone;
   /** The normalized display status (drives the status glyph). */
   display: DisplayStatus;
@@ -100,7 +100,7 @@ export function presentThread(thread: ThreadState): StatusPresentation {
 export interface ProblemPresentation {
   /** Short title for the thread's problem notice. */
   title: string;
-  /** Waiting and "didn't start" are not failures: they use the neutral waiting tone. */
+  /** Waiting and "didn't start" are not failures: they use the waiting tone, not failed. */
   tone: "danger" | "waiting";
 }
 

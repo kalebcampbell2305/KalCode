@@ -61,6 +61,36 @@ test.describe("active pane focus", () => {
     });
   }
 
+  test.describe("with motion", () => {
+    test.use({ contextOptions: { reducedMotion: "no-preference" } });
+
+    test("focusing a terminal plays one edge trace; unfocused terminals stay neutral", async ({ page }) => {
+      await openCode(page);
+      await page.keyboard.press("Control+Alt+d");
+      const first = panes(page).nth(0);
+      const second = panes(page).nth(1);
+      const trace = (pane: Locator) =>
+        pane.evaluate((element) => {
+          const after = getComputedStyle(element, "::after");
+          return { content: after.content, name: after.animationName, iterations: after.animationIterationCount };
+        });
+
+      await first.locator(".xterm-screen").click();
+      await expect(first).toHaveAttribute("data-terminal", "true");
+      const lit = await trace(first);
+      expect(lit.content).not.toBe("none");
+      expect(lit.name).toContain("pane-trace");
+      expect(lit.iterations).toBe("1");
+      expect((await trace(second)).content).toBe("none");
+
+      await second.getByRole("button", { name: "New PowerShell 7 terminal" }).click();
+      await expect(second).toHaveAttribute("data-terminal", "true");
+      await expect(second).toHaveAttribute("data-focused", "true");
+      expect((await trace(second)).name).toContain("pane-trace");
+      expect((await trace(first)).content).toBe("none");
+    });
+  });
+
   test("KalVoice keeps the captured pane visibly targeted while focus moves", async ({ page }) => {
     await openCode(page);
     await page.keyboard.press("Control+Alt+d");

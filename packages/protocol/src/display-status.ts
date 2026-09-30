@@ -6,9 +6,8 @@
  * Rust test keeps this table identical to them, row for row.
  *
  * Colour semantics (tones map to design-system tokens; status is never colour alone — always
- * text plus a glyph): working green; waiting / permission required neutral grey; idle, starting
- * and offline muted; done high-contrast neutral; failed red; paused amber (the only amber);
- * recovering blue.
+ * text plus a glyph): working green; waiting / permission required amber; idle, starting and
+ * offline muted; done high-contrast neutral; failed red; paused amber; recovering blue.
  */
 import type { DashboardChip, DisplayQualifier, DisplayStatus, StatusTone, ThreadStatus } from "./generated/index.ts";
 
