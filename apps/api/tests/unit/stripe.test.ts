@@ -114,7 +114,7 @@ describe("Stripe client", () => {
     ).resolves.toEqual({ id: "cs_123", url: "https://checkout.stripe.com/c/pay/cs_123" });
     const [url, init] = fetcher.mock.calls[0] ?? [];
     expect(url).toBe("https://api.stripe.com/v1/checkout/sessions");
-    expect(init).toMatchObject({ method: "POST", redirect: "error" });
+    expect(init).toMatchObject({ method: "POST", redirect: "manual" });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(init?.headers).toMatchObject({ "Idempotency-Key": "checkout-opaque" });
     expect(new Headers(init?.headers).get("stripe-version")).toBe("2025-03-31.basil");
@@ -128,6 +128,20 @@ describe("Stripe client", () => {
     });
   });
 
+  it("rejects a redirect instead of following it", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(null, { status: 302, headers: { location: "https://redirect-target.invalid/never-requested" } }),
+      );
+    const stripe = stripeClient({ secretKey: "sk_test", fetcher });
+    await expect(
+      stripe.createCustomer({ email: "a@example.com", accountId: "acct_1", idempotencyKey: "customer-opaque" }),
+    ).rejects.toThrow("billing provider unavailable");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  });
+
   it("expires only the exact Checkout Session returned by Stripe", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -137,7 +151,7 @@ describe("Stripe client", () => {
     const stripe = stripeClient({ secretKey: "sk_test", fetcher });
     await expect(stripe.expireCheckout("cs_raced123")).resolves.toBeUndefined();
     expect(fetcher.mock.calls[0]?.[0]).toBe("https://api.stripe.com/v1/checkout/sessions/cs_raced123/expire");
-    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ method: "POST", redirect: "error" });
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ method: "POST", redirect: "manual" });
     await expect(stripe.expireCheckout("sub_wrong_kind")).rejects.toThrow("invalid checkout session");
   });
 

@@ -112,7 +112,7 @@ describe("zero company AI cost", () => {
     expect(oauth).toContain('redirect: "error"');
     const stripe = read(join(API_DIR, "worker", "lib", "stripe.ts"));
     expect(stripe).toContain('"https://api.stripe.com/v1"');
-    expect(stripe).toContain('redirect: "error"');
+    expect(stripe).toContain('redirect: "manual"');
     expect(oauth).toContain("AbortSignal.timeout");
     const openid = read(join(API_DIR, "worker", "lib", "openid-connect.ts"));
     expect(openid).toContain('"https://accounts.google.com/.well-known/openid-configuration"');
