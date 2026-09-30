@@ -504,12 +504,16 @@ export async function preflightQaStagePublication({ baseline, candidate, receipt
     } catch {
       throw new Error("Stable pointer readback is invalid");
     }
+    // A derived private QA baseline may sit below the live Stable pointer: it is never pointed (the D1
+    // pointer is monotonic) and its compiled endpoint names only the candidate's immutable descriptor.
+    // The candidate must still be strictly newer than the pointer, and the pointer never the baseline.
     if (
       pointer?.channel !== "stable" ||
       pointer?.precedence_key !== precedence ||
-      precedence >= semverPrecedenceKey(baseline.version)
+      precedence >= semverPrecedenceKey(candidate.version) ||
+      pointer?.version === baseline.version
     ) {
-      throw new Error("Stable pointer is not an exact older release than the private QA baseline");
+      throw new Error("Stable pointer is not an exact older release than the private QA candidate");
     }
   }
   // Validate the entire joined pointer/version authority before any object write. The same exact
