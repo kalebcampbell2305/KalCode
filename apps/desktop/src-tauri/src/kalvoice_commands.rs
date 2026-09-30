@@ -2259,7 +2259,11 @@ pub fn kalvoice_listen_start(
 ) -> Result<String, IpcError> {
     _runtime_access.revalidate()?;
     let runtime = state.runtime()?;
-    start_listening(runtime, mode, false).map_err(|e| voice_ipc(&e))
+    let id = start_listening(runtime, mode, false).map_err(|e| voice_ipc(&e))?;
+    // The same backstop as the push-to-talk key: a release the page never reports (a closed or
+    // reloaded widget) still ends at the recording cap.
+    watchdog(runtime.clone(), id.clone());
+    Ok(id)
 }
 
 /// Stops listening and transcribes; the transcript arrives as a signal.

@@ -256,6 +256,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [client, status?.preferences.talkEnabled, toast]);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** The session id of the latest orb start, until a stop consumes it. */
+  const pendingStart = useRef<Promise<string | null> | null>(null);
   const currentRef = useRef(current);
   currentRef.current = current;
   const width = useWindowWidth();
@@ -885,8 +887,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const startListening = useCallback(async () => {
     const capture = dictationSessions.current.captureFocusedTarget();
+    const started = client.kalvoiceListenStart("talk");
+    // A release can arrive before the microphone opens (a quick tap); stopListening waits for it.
+    pendingStart.current = started.catch(() => null);
     try {
-      const sessionId = await client.kalvoiceListenStart("talk");
+      const sessionId = await started;
       const session = dictationSessions.current.open(sessionId, capture);
       setDictationTarget(session ? targetView(session.sessionId, session.target) : null);
     } catch {
@@ -897,7 +902,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [client]);
 
   const stopListening = useCallback(async () => {
-    const id = stateRef.current.sessionId;
+    const pending = pendingStart.current;
+    pendingStart.current = null;
+    const id = stateRef.current.sessionId ?? (pending ? await pending : null);
     if (!id) return;
     try {
       await client.kalvoiceListenStop(id);
