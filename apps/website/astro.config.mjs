@@ -1,6 +1,7 @@
 // @ts-check
 import sitemap from "@astrojs/sitemap";
 import { defineConfig } from "astro/config";
+import { kalcodeBuildStamp } from "./scripts/build-stamp.mjs";
 
 // https://docs.astro.build/en/reference/configuration-reference/
 export default defineConfig({
@@ -20,6 +21,8 @@ export default defineConfig({
     },
   },
   integrations: [
+    // dist/.well-known/kalcode-build.json: the commit production serves (tooling/release/lifecycle).
+    kalcodeBuildStamp(),
     sitemap({
       // The 404 page and the pages opened from email links (noindex) are not public pages.
       filter: (page) => !page.endsWith("/404") && !page.endsWith("/404.html") && !page.includes("/early-access/"),
