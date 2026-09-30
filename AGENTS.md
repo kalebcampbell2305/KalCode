@@ -12,22 +12,38 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Account for both platforms during design, implementation, testing, and release verification. Report any unverified platform behavior honestly.
 - Only an explicit owner instruction can narrow a task to one platform.
 
-## Permanent versioning rule
+## Permanent release and marketing model
 
-**Build continuously. Version deliberately. The owner declares public version milestones.**
+**Features ship continuously. Builds increment internally. Public versions are deliberate, owner-declared milestones.**
 
-- Do not bump KalCode's public, user-facing version for a feature, fix, redesign, refactor, website change, new product or deployment. KalCode can stay on its current version (for example 0.1.7) across many merged changes and builds.
-- To tell builds apart, use internal build numbers, commit hashes, timestamps or other metadata. The public version stays put.
-- Change the public version **only** when the owner explicitly declares one, for example "Make this KalCode 0.1.8", "Cut 0.1.8" or "We are releasing 0.1.8 now". Never infer a version bump, and never bump to satisfy a tool or hook.
-- When the owner declares a new version:
-  1. bump the version consistently everywhere it appears;
-  2. gather everything added since the previous version milestone;
-  3. create or update What's New and the changelog;
-  4. update the relevant website and release references;
-  5. prepare the release notes;
-  6. ship through the normal KalCode release pipeline;
-  7. make the release ready for its marketing/video announcement.
-- Until then, desktop changes merge to `main` and wait there for the next declared version. Merging them completes the work. A lifecycle report of unshipped desktop changes means "waiting for the owner's next version", not "bump the version now".
+There are two separate concepts: continuous product builds, and public version (marketing) milestones.
+
+**1. Continuous product builds.** A finished KalCode change that passes the normal harness (implement, test, review, integrate, build, deploy/publish, verify) ships automatically through the normal KalCode update system:
+- the Owner build updates;
+- users receive the validated production build;
+- the website and product surfaces update where relevant;
+- finished, useful work does not wait for the next marketing version.
+
+Each production build is identified by an internal build/revision number (for example public 0.1.7 with builds 217, 218, 219, or equivalent metadata). The public version does not change per build. The updater must compare that internal build/revision metadata correctly, so a newer build ships while the public version stays the same.
+
+**2. Owner dogfooding.** Where practical, the Owner account/build receives a fully validated production candidate first, before broad rollout. The order is: validated build, then Owner receives it, then production verification, then users receive it. This never bypasses a required safety gate, and normal users are never the first people exposed to an unverified build.
+
+**3. Public version milestones.** The public, user-facing version changes **only** when the owner explicitly declares a new milestone, for example "Make this KalCode 0.1.8", "Release 0.1.8" or "Cut 0.1.8". Until then KalCode keeps shipping validated builds while publicly staying on the current version. Never infer a public version bump, and never bump to satisfy a tool or hook.
+
+**4. A version release is a marketing event.** When the owner declares a new version:
+1. update the public version consistently;
+2. gather everything meaningful added since the previous public version;
+3. write the What's New summary;
+4. update the changelog and release notes;
+5. update the relevant website references;
+6. prepare announcement copy, and screenshots where useful;
+7. prepare the "What's new in KalCode <version&gt;" video;
+8. prepare social-media launch content;
+9. ship and verify the milestone through the normal release pipeline.
+
+The version number is the story around a meaningful group of improvements, not a counter for every code change.
+
+**Current capability status (keep this line accurate).** As of 0.1.7, the updater compares public semver only, and published versions are immutable. Internal build-revision updates and Owner-first rollout are **not implemented yet**. Until they are, a desktop build reaches users only as a new public version. So desktop changes merge to `main` and wait, unless the owner declares a version or the build-revision update system has shipped. Building that system is tracked work. When a lifecycle hook reports unshipped desktop changes, it means "waiting for build-revision shipping or the owner's next version", not "bump the version".
 
 ## Definition of Done
 
@@ -74,7 +90,7 @@ Run `node tooling/release/ship.mjs classify --base <ref> --head <ref>` to get th
 | Change | Lifecycle |
 |---|---|
 | Website only (`apps/website/**`) | test → merge → deploy the website → verify the live site |
-| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge. Then, **only when the owner declares a new version** (see the versioning rule): signed release build → automated release gates → publish the update → verify the update feed and a production install |
+| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. The public version changes only at an owner-declared milestone (see the release and marketing model, including its current capability status) |
 | Website and desktop | both pipelines |
 | Published docs (`docs/**` that the website or release notes publish) | publish the affected docs |
 | Internal (`tooling/**`, `.github/**`, tests, agent/dev files) | test → review → merge. No customer release unless a production artifact changes |
