@@ -312,8 +312,8 @@
       "envByPlatform": { "linux": { "KALCODE_SKIP_OS_KEYCHAIN_TEST": "1" } },
       "run": [
         "cargo fmt --all -- --check",
-        "cargo clippy --workspace --all-targets -- -D warnings",
-        "cargo test --workspace",
+        "node apps/desktop/scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
+        "node apps/desktop/scripts/cargo.mjs test --workspace",
         "node tooling/gen-protocol-index.mjs",
         "git diff --exit-code -- packages/protocol/src/generated"
       ]

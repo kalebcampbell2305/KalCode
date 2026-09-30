@@ -5,7 +5,7 @@
 
 | Lane | Application identifier / credential service | Product | URL scheme |
 | --- | --- | --- | --- |
-| Debug | `com.kalcode.desktop.dev` | KalCode Dev | `kalcode-dev://` |
+| Debug | `com.kalcode.desktop.dev` | KalCode Dev (`kalcode-dev` executable) | `kalcode-dev://` |
 | Release | `com.kalcode.desktop` | KalCode | `kalcode://` |
 
 Tauri derives application-data paths and single-instance identity from the identifier. Browser
@@ -18,6 +18,8 @@ Direct debug Cargo commands must set `TAURI_CONFIG` to the contents of
 instead of silently producing a debug app with Stable's identity. Clear that variable for release
 commands. Custom profiles must retain consistent debug assertions across application crates.
 The normal `pnpm lint`, `pnpm test`, and `pnpm check` commands select the Dev overlay automatically.
+So do `node tooling/test-suites.mjs` and the `ship.mjs gate` rust check. For rust-analyzer, set
+`rust-analyzer.cargo.extraEnv` to `{ "TAURI_CONFIG": "<the Dev overlay JSON>" }`.
 
 Dev cannot install/restore Stable updates. Production social sign-in currently returns Stable
 links, so Dev refuses that flow before opening a browser; enabling Dev social sign-in requires
