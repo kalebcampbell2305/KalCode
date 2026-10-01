@@ -75,9 +75,9 @@ if __name__ == "__main__":
         src = master()
     if "cuts" in what:
         cut("KalCode_Launch_30s_1080p60.mp4",
-            [(0, 660), (1200, 1410), (1710, 1980), (2100, 2400), (2520, 2640), (3360, 3600)], src)
+            [(0, 660), (1018, 1140), (1206, 1500), (1590, 1824), (1940, 2070), (2680, 2800), (3360, 3600)], src)
         cut("KalCode_Launch_15s_1080p60.mp4",
-            [(150, 480), (1710, 1980), (2520, 2640), (3360, 3540)], src)
+            [(150, 480), (1330, 1470), (1620, 1760), (1944, 2054), (3360, 3540)], src)
     if "vertical" in what:
         vertical(src)
         vertical(os.path.join(OUT, "KalCode_Launch_30s_1080p60.mp4"), "KalCode_Launch_30s_vertical_1080x1920.mp4")
