@@ -2,6 +2,35 @@
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## Completion requires verified delivery (owner reaffirmed 2026-09-30)
+
+**MERGED IS NOT SHIPPED. BUILT IS NOT SHIPPED. DONE means users can receive the validated update and live production has been verified.**
+
+After implementation, tests, review, and merge, immediately continue through the current-public-version build, required signing and packaging, publication, update availability, and live production verification. For public 0.1.7, publish a newer internal 0.1.7+N build; never wait for 0.1.8 or describe assignment to a future build as completion.
+
+If another agent or session owns the release lane, actively coordinate the handoff and follow it through publication and production verification. A handoff alone is not completion. If GitHub Actions cannot run, determine whether the approved local release pipeline can safely perform the required gates, build, signing, publication, and verification; use it when permitted. Never bypass a required gate.
+
+Stop only for a real external blocker, such as unavailable credentials, broken signing infrastructure, or a required human action. Report the exact blocker immediately, with the affected step and next action. Do not claim that CI billing prevents shipping unless the approved local path also cannot complete the release. This is permanent repository memory for future Claude Code and Codex sessions.
+
+## Permanent release infrastructure rule: self-hosted release runners (owner directive 2026-09-30)
+
+**GitHub-hosted Actions minutes or billing must never block KalCode from shipping.**
+
+- The owner's main Windows PC is the trusted self-hosted **Windows** release runner. The owner's Mac is the trusted self-hosted **macOS** release runner.
+- Release and signing credentials stay on the trusted machine that needs them. They are never exposed to untrusted branches or pull-request jobs. Release jobs run only for merged `main` or other trusted refs.
+- GitHub may coordinate the workflow, but the heavy build, sign, notarize and package work runs on our own machines.
+- Keep the existing trusted artifact and update hosting (the kalcoded.com release authority and signed update feed) unless something else is clearly a better fit. The updater needs only a trusted published artifact and feed; shipping does not require GitHub-hosted runners.
+- Target flow after a change passes its gates and merges:
+  1. The self-hosted release workflow starts automatically.
+  2. Windows: build, sign, package.
+  3. macOS: build, sign, notarize, package.
+  4. Publish the current-public-version internal build (for example 0.1.7+N).
+  5. Update the feed so users can receive it.
+  6. Verify production.
+- Never wait for a new public version number.
+- If CI billing or minutes are the blocker, replace that dependency with self-hosted execution.
+- Implement this with the smallest technically correct change. Preserve the existing release pipeline (`tooling/release/ship.mjs`), signing infrastructure and valid evidence. Do not rebuild the release system.
+
 ## Permanent cross-platform rule
 
 Unless the owner explicitly says otherwise, every new KalCode or KalVoice feature, fix, UI behavior, workflow, automation, and product capability must support **both Windows and macOS**. This is a universal engineering rule for all future work.
