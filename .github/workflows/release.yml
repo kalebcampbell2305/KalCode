@@ -1,0 +1,44 @@
+name: Release (self-hosted)
+
+# After a merge to main, run the release pipeline's automated phases on the guarded release runner
+# (tooling/runners/README.md). The runner's pre-job hook refuses anything but this workflow from main.
+# The pipeline stops at every approval, attestation, operator step and named production write; after a
+# person records one (`ship.mjs approve|attest ... --state <dir>`), resume with `gh workflow run release.yml`.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  release:
+    name: Release (automated phases)
+    # Off until the release lane hands over (repository variable KALCODE_AUTO_RELEASE=true), so it can
+    # never start a second pipeline beside a release someone is already running by hand.
+    if: github.ref == 'refs/heads/main' && vars.KALCODE_AUTO_RELEASE == 'true'
+    runs-on: [self-hosted, Windows, kalcode-release]
+    timeout-minutes: 380
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: pnpm install --frozen-lockfile
+      - name: Release
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $env:KALCODE_RELEASE_STATE_ROOT = Join-Path $env:LOCALAPPDATA 'KalCode\release-pipeline'
+          node tooling/release/release-on-merge.mjs
+          exit $LASTEXITCODE
