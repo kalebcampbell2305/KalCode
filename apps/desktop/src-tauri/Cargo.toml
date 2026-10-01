@@ -79,6 +79,11 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 tempfile.workspace = true
 ed25519-dalek = "2"
 
+# tests/windows_tao_reentrant_focus.rs drives the patched tao (third_party/tao) directly.
+[target.'cfg(windows)'.dev-dependencies]
+tao = "0.35"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 [lints]
 workspace = true
 
