@@ -245,6 +245,16 @@ describe("identity and templates", () => {
     refused(() => validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.1.7" }), /must be lower/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.2.0" }), /must be lower/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, channel: "beta" }), /channel/);
+    const build = validateIdentity({ version: "0.1.7+779", commit: c, baselineVersion: "0.1.7" });
+    assert.equal(build.version, "0.1.7+779");
+    assert.equal(identityVars(build).fileVersion, "0.1.7_build779");
+    assert.equal(
+      validateIdentity({ version: "0.1.7+1000", commit: c, baselineVersion: "0.1.7+999" }).version,
+      "0.1.7+1000",
+    );
+    refused(() => validateIdentity({ version: "0.1.7+779", commit: c, baselineVersion: "0.1.7+779" }), /must be lower/);
+    refused(() => validateIdentity({ version: "0.1.7+0", commit: c }), /plain x\.y\.z/);
+    refused(() => validateIdentity({ version: "0.1.7+abc", commit: c }), /plain x\.y\.z/);
   });
 
   test("templates resolve nested references strictly and refuse leftovers", () => {
@@ -434,6 +444,28 @@ describe("pipeline", () => {
     const rows = p.describe("all");
     assert.equal(rows.find((x) => x.id === "identity").status, "READY");
     assert.equal(rows.find((x) => x.id === "build").status, "BLOCKED");
+  });
+
+  test("identity accepts a build revision when the manifests declare its public version", async () => {
+    const buildFx = makeRepo("1.2.3");
+    try {
+      const identity = validateIdentity({ version: "1.2.3+7", commit: buildFx.commit });
+      const p = makePipeline(buildFx, makeKit(buildFx.repo), {
+        identity,
+        stateDir: join(buildFx.repo, "state-build"),
+      });
+      const result = await p.run("identity", { execute: true });
+      assert.equal(result.code, 0);
+      const receipt = p.state.receipt("identity").value;
+      assert.equal(receipt.outputs.version, "1.2.3+7");
+      assert.deepEqual(receipt.steps[0].authorities, {
+        "apps/desktop/src-tauri/tauri.conf.json": "1.2.3",
+        "apps/desktop/package.json": "1.2.3",
+        "Cargo.toml": "1.2.3",
+      });
+    } finally {
+      rmSync(buildFx.repo, { recursive: true, force: true });
+    }
   });
 
   test("full run: gates, operator attestation, pins, human QA, approval, production write, poll, resume", async () => {

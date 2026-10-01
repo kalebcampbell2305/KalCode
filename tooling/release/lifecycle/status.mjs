@@ -7,17 +7,26 @@ import { sortLanes } from "./policy.mjs";
 
 export const STATUS_SCHEMA = "kalcode-lifecycle-status/v1";
 const HEX40 = /^[0-9a-f]{40}$/;
-const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
 
+/** The public version of a release: "0.1.7" for the internal build "0.1.7+779". */
+export const publicVersion = (version) => (version ?? "").replace(/\+[0-9A-Za-z.-]+$/, "");
+
+/** Orders versions; a numeric internal build number (`+N`, missing = 0) breaks ties numerically. */
 export function compareVersions(a, b) {
   const x = VERSION.exec(a ?? "");
   const y = VERSION.exec(b ?? "");
   if (!x || !y) return null;
   for (let i = 1; i <= 3; i++) if (Number(x[i]) !== Number(y[i])) return Number(x[i]) < Number(y[i]) ? -1 : 1;
-  if (x[4] === y[4]) return 0;
-  if (!x[4]) return 1;
-  if (!y[4]) return -1;
-  return x[4] < y[4] ? -1 : 1;
+  if (x[4] !== y[4]) {
+    if (!x[4]) return 1;
+    if (!y[4]) return -1;
+    return x[4] < y[4] ? -1 : 1;
+  }
+  const bx = /^\d+$/.test(x[5] ?? "0") ? Number(x[5] ?? 0) : null;
+  const by = /^\d+$/.test(y[5] ?? "0") ? Number(y[5] ?? 0) : null;
+  if (bx === null || by === null) return 0;
+  return bx === by ? 0 : bx < by ? -1 : 1;
 }
 
 async function getJson(fetchImpl, url, timeoutMs) {
@@ -194,7 +203,8 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
   // API (kalcode-api): no build stamp yet.
   targets.api = { lane: "website", state: "unknown", reason: `unknown deployed commit: ${obs.api.error}` };
 
-  // Desktop: main's declared version against the public Stable feed / catalog.
+  // Desktop: main's declared public version against the public Stable feed / catalog. A published
+  // build "X.Y.Z+N" is public version X.Y.Z; within one public version the published commit decides.
   let mainVersion = null;
   try {
     mainVersion = JSON.parse(git.show(main, policy.production.desktop.versionFile) ?? "null")?.version ?? null;
@@ -212,7 +222,7 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
         : `production feed unreachable: ${obs.desktop.feed.error}; catalog: ${obs.desktop.catalog.error}`,
     };
   else {
-    const cmp = pub.version ? compareVersions(mainVersion, pub.version) : 1;
+    const cmp = pub.version ? compareVersions(mainVersion, publicVersion(pub.version)) : 1;
     const { baseline } = baselineOf(pub.commit);
     const impact = baseline ? impactFrom(baseline) : null;
     const base = { lane: "desktop", mainVersion, published: pub };
@@ -234,7 +244,7 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
       targets.desktop = {
         ...base,
         state: "unshipped",
-        reason: `desktop changes merged after the published ${pub.version} build need a new version and release`,
+        reason: `desktop changes merged after the published ${pub.version} build need a new ${mainVersion} build (the public version changes only when the owner declares one)`,
         ...pick(impact, "desktop"),
       };
     else
@@ -243,7 +253,7 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
         state: "shipped",
         reason: impact
           ? `published ${pub.version} includes every desktop change on main`
-          : `main and production both declare ${pub.version} (published commit unknown locally)`,
+          : `main and production both declare ${mainVersion} (published ${pub.version}; its commit is unknown locally)`,
       };
     // Release notes publish with the desktop release.
     const notesChanged =

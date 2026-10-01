@@ -253,12 +253,24 @@ fn verify_app_identity(app: &Path, expected_version: &str) -> Result<String, ()>
         .filter(|value| !value.is_empty() && value.len() <= 16 * 1024)
         .ok_or(())?;
     let plist = app.join("Contents").join("Info.plist");
-    let version = checked(
-        Command::new("/usr/bin/plutil")
-            .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
-            .arg(plist),
-    )?;
-    if std::str::from_utf8(&version.stdout).map_err(|_| ())?.trim() != expected_version {
+    let plist_value = |key: &str| -> Result<String, ()> {
+        let output = checked(
+            Command::new("/usr/bin/plutil")
+                .args(["-extract", key, "raw", "-o", "-"])
+                .arg(&plist),
+        )?;
+        Ok(std::str::from_utf8(&output.stdout)
+            .map_err(|_| ())?
+            .trim()
+            .to_owned())
+    };
+    let short_version = plist_value("CFBundleShortVersionString")?;
+    let bundle_version = plist_value("CFBundleVersion")?;
+    if !kalcode_updater::mac_swap::bundle_version_matches(
+        &short_version,
+        &bundle_version,
+        expected_version,
+    ) {
         return Err(());
     }
     let architectures = checked(
