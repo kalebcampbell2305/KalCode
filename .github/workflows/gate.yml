@@ -1,0 +1,67 @@
+name: Gate (self-hosted)
+
+# The repository's gate (`ship.mjs gate`) on KalCode's own machines, so merging never depends on
+# GitHub-hosted minutes. The runners are the low-privilege gate accounts described in
+# tooling/runners/README.md: they hold no signing, publishing or GitHub credentials.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Dedicated ports, so a gate never collides with an agent session on the same PC.
+  KALCODE_E2E_PORT: "4491"
+  KALCODE_E2E_MAIL_PORT: "4492"
+  KALCODE_E2E_INSPECTOR_PORT: "9501"
+  KALCODE_UI_TEST_PORT: "1591"
+
+jobs:
+  windows:
+    name: Gate (Windows)
+    # Never run code from a fork on our machines.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Windows, kalcode-gate]
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          # Leave no GitHub token in the checkout for the code under test.
+          persist-credentials: false
+      - name: Install
+        shell: powershell
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          pnpm --filter @kalcode/desktop exec playwright install chromium
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          pnpm --filter @kalcode/website exec playwright install chromium
+      - name: Gate
+        shell: powershell
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+        run: node tooling/release/ship.mjs gate --base $env:BASE
+
+  macos:
+    name: Gate (macOS, Rust)
+    # Enabled once the Mac gate runner exists (repository variable KALCODE_MAC_GATE=true).
+    if: vars.KALCODE_MAC_GATE == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, kalcode-gate]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: pnpm install --frozen-lockfile
+      - run: node apps/desktop/scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings
+      - run: node apps/desktop/scripts/cargo.mjs test --workspace
