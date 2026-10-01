@@ -87,7 +87,8 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
 - **Closing ends a terminal (owner decision, 2026-10-01).** Closing a terminal's tab, or a pane
   that holds it (button, shortcut or KalVoice), ends the terminal as described next: the shell and
   everything it started stop, and the tab is forgotten. Nothing keeps running in the background.
-  Docking or collapsing a pane is not closing; agent thread panes keep their own behaviour.
+  Closing an agent pane (Claude Code, Codex, Gemini CLI) stops its agent the same way, with no
+  confirmation. Docking or collapsing a pane is not closing: what it runs keeps running.
 - **End.** Ending a terminal ends the shell by closing its pseudo-terminal — on Windows every
   process attached to that console, including programs started from the shell, receives the
   close; on macOS and Linux the shell's process group gets SIGHUP and, if anything is still

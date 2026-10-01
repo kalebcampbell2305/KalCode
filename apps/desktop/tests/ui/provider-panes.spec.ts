@@ -166,6 +166,49 @@ test.describe("provider panes", () => {
     await expect(region.getByText(/^Ended/)).toBeVisible();
   });
 
+  test("closing an agent pane stops the agent; nothing keeps running in the background", async ({ page }) => {
+    await open(page);
+    await openWorkspace(page);
+    await newPane(page);
+    const threadId = await pane(page).getAttribute("data-provider-pane");
+    expect(threadId).toBeTruthy();
+    const output = () =>
+      page.evaluate(
+        (id) =>
+          (
+            window as unknown as { __kalcodeMemory: { panes: { text: (id: string) => string } } }
+          ).__kalcodeMemory.panes.text(id as string),
+        threadId,
+      );
+    // The pane's tab close control, with no confirmation: the agent stops and its tab goes away.
+    const tab = page.getByRole("tab", { name: /New thread/ }).first();
+    await tab.hover();
+    await tab.locator('[class*="tabClose"]').click();
+    await expect(page.locator(`[data-provider-pane="${threadId}"]`)).toHaveCount(0);
+    await expect.poll(output).toContain("[stopped by KalCode]");
+    await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
+  });
+
+  test("closing the pane that holds an agent stops the agent", async ({ page }) => {
+    await open(page);
+    await openWorkspace(page);
+    await newPane(page);
+    const threadId = await pane(page).getAttribute("data-provider-pane");
+    await page.getByRole("button", { name: "Close pane 1" }).click();
+    await expect(page.locator(`[data-provider-pane="${threadId}"]`)).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (id) =>
+            (
+              window as unknown as { __kalcodeMemory: { panes: { text: (id: string) => string } } }
+            ).__kalcodeMemory.panes.text(id as string),
+          threadId,
+        ),
+      )
+      .toContain("[stopped by KalCode]");
+  });
+
   test("keyboard only: create a pane, type, reach the approval and answer it", async ({ page }) => {
     await open(page);
     await openWorkspace(page);
