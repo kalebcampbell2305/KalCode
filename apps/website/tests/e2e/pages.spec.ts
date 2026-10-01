@@ -5,9 +5,13 @@ import { CHANNEL_LABEL, MANIFEST, renderedDescription, SERVED_STABLE, SIGNED_STA
 
 const STABLE_016 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.6";
 const STABLE_017 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.7";
-const GEMINI_UNAVAILABLE_TAG = STABLE_017
-  ? /Gemini CLI unavailable in (KalCode )?0\.1\.7/
-  : /Gemini CLI unavailable in (KalCode )?0.1.6/;
+// A signed Stable 0.1.8+N build, which MANIFEST presents by its public version (helpers.ts presentedManifest).
+const STABLE_018 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.8";
+const GEMINI_UNAVAILABLE_TAG = STABLE_018
+  ? /Gemini CLI unavailable in (KalCode )?0\.1\.8/
+  : STABLE_017
+    ? /Gemini CLI unavailable in (KalCode )?0\.1\.7/
+    : /Gemini CLI unavailable in (KalCode )?0.1.6/;
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -56,7 +60,7 @@ test.describe("every page", () => {
         // Gemini CLI thread.
         if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
         // Any other stage that still shows Gemini CLI says it is unavailable.
-        // (The stage tags name the served Stable version: 0.1.6, or 0.1.7 once it is selected.)
+        // (The stage tags name the served Stable version: 0.1.6, 0.1.7 or 0.1.8, whichever is selected.)
         if (/Gemini CLI/.test(text)) expect(text, path).toMatch(GEMINI_UNAVAILABLE_TAG);
       }
     }
@@ -127,10 +131,22 @@ test.describe("every page", () => {
   test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
     await page.goto("/updates");
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
-    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 or 0.1.7 manifest, and the 0.1.7
-    // notes only from a signed Stable 0.1.7 one (the page's own rule).
-    await expect(page.locator("article")).toHaveCount(STABLE_017 ? 6 : STABLE_016 ? 5 : 4);
-    if (STABLE_017) {
+    // The 0.1.6 notes render only from a complete signed Stable 0.1.6, 0.1.7 or 0.1.8 manifest, the 0.1.7
+    // notes only from a signed Stable 0.1.7 or 0.1.8 one, and the 0.1.8 notes only from a signed Stable
+    // 0.1.8 build (the page's own rule).
+    await expect(page.locator("article")).toHaveCount(STABLE_018 ? 7 : STABLE_017 ? 6 : STABLE_016 ? 5 : 4);
+    if (STABLE_018) {
+      await expect(page.locator("#release-0-1-8")).toBeVisible();
+      await expect(page.locator("#release-0-1-8")).toContainText(
+        "Windows: 0.1.6 can't update itself. Download the 0.1.8 installer from the download page and run it once — your data is kept.",
+      );
+      await expect(page.locator("#release-0-1-8")).toContainText("macOS: update from 0.1.6 in the app.");
+      await expect(page.locator("#release-0-1-8").getByRole("link", { name: "download page" })).toHaveAttribute(
+        "href",
+        "/download",
+      );
+    } else await expect(page.locator("#release-0-1-8")).toHaveCount(0);
+    if (STABLE_017 || STABLE_018) {
       await expect(page.locator("#release-0-1-7")).toBeVisible();
       await expect(page.locator("#release-0-1-7")).toContainText(
         "Windows: 0.1.6 can't update itself. Download the 0.1.7 installer from the download page and run it once — your data is kept.",
@@ -141,7 +157,7 @@ test.describe("every page", () => {
         "/download",
       );
     } else await expect(page.locator("#release-0-1-7")).toHaveCount(0);
-    if (STABLE_016 || STABLE_017) {
+    if (STABLE_016 || STABLE_017 || STABLE_018) {
       await expect(page.locator("#release-0-1-6")).toBeVisible();
       await expect(page.locator("#release-0-1-6")).toContainText(
         "Windows: in-app Update and Restore previous version don't work in 0.1.6.",
