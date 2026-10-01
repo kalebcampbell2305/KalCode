@@ -2009,7 +2009,7 @@ mod tests {
         );
 
         let (successor_services, _) =
-            detail_relationships(&successor, &[current_service.clone()], &[]);
+            detail_relationships(&successor, std::slice::from_ref(&current_service), &[]);
         assert_eq!(successor_services.len(), 1);
         assert!(successor_services[0].is_current);
         assert_eq!(successor_services[0].service, current_service);
@@ -2099,8 +2099,11 @@ mod tests {
             vec!["https://first.example.com/"]
         );
 
-        let (_, later_deployments) =
-            detail_relationships(&later_deploy, &[], &[current_environment.clone()]);
+        let (_, later_deployments) = detail_relationships(
+            &later_deploy,
+            &[],
+            std::slice::from_ref(&current_environment),
+        );
         assert_eq!(later_deployments.len(), 1);
         assert!(later_deployments[0].is_current);
         assert_eq!(later_deployments[0].environment, current_environment);
@@ -2782,7 +2785,7 @@ mod tests {
             },
         );
 
-        let (files, artifacts, tests) = detail_evidence(&[reported.clone()], &run);
+        let (files, artifacts, tests) = detail_evidence(std::slice::from_ref(&reported), &run);
         assert!(
             files.is_empty(),
             "a report does not prove a file was created"
