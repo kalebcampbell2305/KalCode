@@ -191,6 +191,23 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   });
 
+  test("a widget that needs attention stays in its band and never covers the page", async ({ page }) => {
+    // Ready first, so the band is sized for the compact widget; then a problem opens it up.
+    await open(page);
+    await expectState(page, "Ready");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("switch", { name: "Push to talk" }).click();
+    await expect(widget(page)).toHaveAttribute("data-attention", "true");
+    await expect(widget(page)).toHaveAttribute("data-anchor", /^top/);
+    const overlap = async () => {
+      const w = await widget(page).boundingBox();
+      const main = await page.locator("main").boundingBox();
+      if (!w || !main) throw new Error("no layout");
+      return w.y + w.height - (main.y + 1);
+    };
+    await expect.poll(overlap).toBeLessThanOrEqual(0);
+  });
+
   test("reports a blocked microphone with one click to the privacy settings", async ({ page }) => {
     await open(page, "?scenario=kalvoice-mic-denied");
     await page.keyboard.down("F8");

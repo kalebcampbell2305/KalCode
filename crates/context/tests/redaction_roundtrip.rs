@@ -153,6 +153,17 @@ fn covers_every_log_redaction_vector() {
     );
 }
 
+/// A placeholder shortens the token it lands in. The remnant before it was judged as part of
+/// the whole token on the first pass and must not become a new entropy finding on the second.
+#[test]
+fn a_token_cut_short_by_a_placeholder_is_not_re_detected() {
+    let text = "https://u:ib0c+Ae-1__password=____A=\"api_key\": \"";
+    let once = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+    assert_eq!(twice.text, once.text);
+    assert!(twice.spans.is_empty(), "{:?}", twice.spans);
+}
+
 fn secret_strategy() -> impl Strategy<Value = String> {
     prop_oneof![
         Just("ghp_[A-Za-z0-9]{36}"),

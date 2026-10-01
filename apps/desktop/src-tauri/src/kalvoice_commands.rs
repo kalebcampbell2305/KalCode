@@ -61,6 +61,8 @@ use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
 #[path = "kalvoice_fn_key.rs"]
+// Linux has no Fn adapter, so only the platform-independent gesture tests reach it there.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 mod fn_key;
 #[cfg(target_os = "macos")]
 #[path = "kalvoice_fn_macos.rs"]
@@ -1361,6 +1363,7 @@ fn ptt_capture_allowed(runtime: &KalVoiceRuntime) -> bool {
 
 /// Called by the macOS local monitor and the Windows WebView's exact DOM `Fn` event. The adapter
 /// passes no key identity or content for other keys; it reports only that a chord occurred.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
     let Ok(state) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app) else {
         return false;
@@ -1395,6 +1398,7 @@ pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
     true
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
     let Some(task) = runtime.background.start() else {
         return;
@@ -1419,6 +1423,7 @@ fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
     }
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn fn_hold_elapsed(runtime: &Arc<KalVoiceRuntime>, generation: u64) {
     let mut push_to_talk = runtime
         .push_to_talk
