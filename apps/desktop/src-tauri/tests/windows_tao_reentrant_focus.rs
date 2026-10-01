@@ -28,6 +28,23 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 const FLOOD_FOR: Duration = Duration::from_secs(3);
 const RESPONSIVE_WITHIN_MS: u32 = 2_000;
+/// How long the event loop may take to exit after the flood before the test fails instead of hanging.
+const EXIT_WITHIN: Duration = Duration::from_secs(15);
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
+}
+
+/// Session 0 (a Windows service, such as the self-hosted gate runner) has no interactive input
+/// desktop, so focus and keyboard messages never behave as they do for a person and tao's event loop
+/// does not exit there. The regression is only meaningful in an interactive session; interactive
+/// local and release gates run it.
+fn in_service_session() -> bool {
+    let mut session = u32::MAX;
+    let ok = unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
+    ok != 0 && session == 0
+}
 
 fn post(hwnd: isize, msg: u32, wparam: usize, lparam: isize) {
     // A full queue makes PostMessageW fail; the flood only needs the queue to stay busy.
@@ -53,6 +70,10 @@ fn send_with_timeout(hwnd: isize, msg: u32, wparam: usize, timeout_ms: u32) -> b
 
 #[test]
 fn keyboard_flood_with_cross_thread_focus_changes_keeps_ui_thread_responsive() {
+    if in_service_session() {
+        eprintln!("skipped: session 0 has no interactive desktop; run in an interactive session");
+        return;
+    }
     let (hwnd_tx, hwnd_rx) = mpsc::channel();
     let (proxy_tx, proxy_rx) = mpsc::channel();
     let ui = thread::spawn(move || {
@@ -126,5 +147,13 @@ fn keyboard_flood_with_cross_thread_focus_changes_keeps_ui_thread_responsive() {
          keyboard flood with cross-thread WM_KILLFOCUS/WM_SETFOCUS (reentrant input-lock deadlock)"
     );
     proxy.send_event(()).expect("event loop still running");
+    let exiting = Instant::now();
+    while !ui.is_finished() {
+        assert!(
+            exiting.elapsed() < EXIT_WITHIN,
+            "tao event loop did not exit within {EXIT_WITHIN:?} after the flood"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
     ui.join().expect("tao event loop thread");
 }
