@@ -386,7 +386,7 @@ mod mic {
                 .samples
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            samples.reserve(usize::try_from(rate).unwrap_or(0) * 10);
+            let _ = samples.try_reserve(usize::try_from(rate).unwrap_or(0) * 10);
         }
         let on_error = {
             let shared = shared.clone();
