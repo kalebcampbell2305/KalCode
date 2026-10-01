@@ -2,8 +2,8 @@
 
   blender -b --factory-startup -P blender/film.py [-- <out.blend>]
 
-Acts: 1 chaos -> introducing -> window forms | 2 one workspace | 3 multi-agent | 4 KalVoice |
-5 build loop | 6 cockpit | 7 built in KalCode | 8 end card.
+Acts: 1 chaos -> introducing -> window forms | 2 one workspace + Providers | 3 multi-session coding
+(4 and 6 panes) | 4 multi-agent | 5 KalVoice | 6 cockpit | 7 end card.
 Every UI surface is a real KalCode 0.1.7 Stable capture (see PRODUCTION.md).
 """
 import json
@@ -29,7 +29,7 @@ CUES = {}
 
 
 def cue(name, f):
-    CUES.setdefault(name, []).append(f)
+    CUES.setdefault(name, []).append(f + kc.SHIFT[0])
 
 
 for o in list(bpy.data.objects):
@@ -299,7 +299,7 @@ fstop(540, 2.8)
 fstop(610, 2.2)
 
 
-# =========================================================== window states (acts 2-7)
+# =========================================================== window states (acts 2-6)
 def css(x, y):
     return kc.plate_xy(PLATE, x * 2, y * 2)
 
@@ -336,7 +336,7 @@ for _pm in (p_main[1], p_side[1], p_head[1]):
     STACK.append([_pm, True, False])
 TERM_R = (506, 270, 3182, 1846)
 
-# =========================================================== ACT 2  ONE WORKSPACE (660-1140)
+# =========================================================== ACT 2  ONE WORKSPACE + PROVIDERS (660-1200)
 state("term_seq", os.path.join(SEQ, "term", "0000.png"), 664, 4, TERM_R, seq={"start": 664, "length": 117, "offset": -1})
 for c in range(9):
     cue("key", 676 + 3 * c)
@@ -354,20 +354,124 @@ cue("pane", 784)
 CK(800, at(0.1, 0.0, 3.3), at(0.55, 0.0, 0), at(0.9, 0.0, 0), ease="expo_out")
 CK(880, at(0.55, -0.05, 2.7), at(0.95, 0.0, 0), at(0.95, 0.0, 0))
 
-# -> Threads: Claude Code and Codex in one list
-thA = state("thA_full", os.path.join(PL, "v_focus", "before.png"), 900, 10, slide=0.06)
-CK(890, at(0.2, 0.0, 3.2), at(-0.3, 0.2, 0), at(-0.75, 0.2, 0), ease="expo_out")
-CK(1000, at(-0.65, 0.15, 2.55), at(-0.8, 0.12, 0), at(-0.8, 0.1, 0))
-title("t_claude_codex", "Claude Code + Codex.", at(-0.05, -0.62, 0.55), 0.13, 918, 990, "lexend-deca-600", backing=True)
+# -> Providers, zoomed out: the whole page. Setup shows each provider's own CLI, installed and signed in
+# on this machine; Accounts scrolls through Personal and Work for each.
+PN = os.path.join(PL, "panes")
+prov = state("prov_setup", os.path.join(PN, "prov_setup.png"), 904, 10, slide=0.06)
+CK(892, at(0.7, -0.15, 3.5), at(0.4, 0.0, 0), at(0.3, 0.0, 0), ease="expo_out")
+CK(948, at(0.03, -0.06, 5.45), at(0.04, 0.0, 0), at(0.04, 0.0, 0), ease="cubic")
+CK(1012, at(-0.12, -0.05, 5.3), at(0.04, 0.0, 0), at(0.04, 0.0, 0))
+fstop(892, 11.0)
+title("t_prov1", "Your own Claude Code and Codex.", at(0.04, -0.66, 0.8), 0.09, 924, 998, "lexend-deca-600", backing=True)
+pv = state("prov_scroll", os.path.join(SEQ, "prov", "0000.png"), 1018, 8, MAIN_R, seq={"start": 1018, "length": 124, "offset": -1})
+CK(1150, at(0.12, 0.0, 5.05), at(0.06, -0.02, 0), at(0.06, -0.02, 0), ease="cubic")
+CK(1196, at(0.18, 0.02, 4.9), at(0.08, 0.0, 0), at(0.08, 0.0, 0))
+title("t_accounts", "Multiple accounts.", at(0.2, -0.26, 1.2), 0.1, 1040, 1180, "lexend-deca-600", backing=True)
+title("t_acc_sub", "Personal and Work, each signed in on your machine.", at(0.2, -0.42, 1.2), 0.045, 1062, 1180,
+      "lexend-deca-400", color="#c3cde0", backing=True)
 
-# -> Providers > Accounts: two accounts each, isolated
-acc = state("acc_full", os.path.join(PL, "accounts_scrolled.png"), 1012, 10, slide=0.06)
-CK(1004, at(-0.4, 0.3, 3.4), at(0.25, 0.1, 0), at(0.2, 0.1, 0), ease="expo_out")
-CK(1136, at(0.55, 0.15, 3.0), at(0.4, 0.05, 0), at(0.35, 0.05, 0))
-title("t_accounts", "Multiple accounts.", at(0.3, 0.22, 0.6), 0.12, 1030, 1122, "lexend-deca-600", backing=True)
-title("t_one_ws", "One workspace.", at(0.3, 0.02, 0.6), 0.12, 1052, 1122, "lexend-deca-300", color="#a8b4c9", backing=False)
+# =========================================================== ACT 3  MULTI-SESSION CODING (1200-2122)
+# The real Layout menu: 4 panes (2 x 2), every pane a terminal running Claude Code or Codex.
+lay = state("layout_menu", os.path.join(PN, "layout_menu.png"), 1208, 8, slide=0.05)
+CK(1198, at(1.25, 0.82, 2.2), at(0.8, 0.6, 0), at(0.8, 0.6, 0), ease="expo_out")
+CK(1250, at(1.1, 0.74, 1.95), at(0.76, 0.56, 0), at(0.76, 0.56, 0))
+fstop(1198, 8.0)
+MI = css(1180, 211)  # "4 panes (2 x 2)"
+mi_m = kc.glow_material("menu_item_m", 0.5, 0.042, 0.008, 0.03, color="#4c8dff", strength=4.0)
+mi = kc.plane("menu_item_glow", 0.56, 0.102, mi_m, (MI[0], MI[1], 0.03), WIN)
+kc._pad_uv(mi, 0.5, 0.042, 0.03)
+kc.sock_keys(mi_m, "Opacity", [(1226, 0.0, "expo_out"), (1232, 1.0), (1246, 1.0, "cubic"), (1254, 0.0)])
+cue("key", 1232)
 
-# =========================================================== ACT 3  MULTI-AGENT (1140-1620)
+four = state("four_seq", os.path.join(SEQ, "four", "0000.png"), 1254, 6, MAIN_R, seq={"start": 1254, "length": 220, "offset": -1})
+cue("pane", 1250)
+for k in range(4):
+    cue("enter", 1266 + 3 * k)
+CK(1262, at(0.11, -0.02, 4.4), at(0.11, 0.0, 0), at(0.11, 0.0, 0.04), ease="expo_out")
+fstop(1262, 11.0)
+
+# the four sessions lift out of the window and keep working while the camera moves through them
+FOUR_R = [(249, 101, 916, 508), (924, 101, 1592, 508), (249, 516, 916, 924), (924, 516, 1592, 924)]
+CLAUDE, CODEX = "#e98a5f", "#7fb0ff"
+GRID_C = (0.11, 0.0)
+for k, r in enumerate(FOUR_R):
+    x0, y0 = css((r[0] + r[2]) / 2, (r[1] + r[3]) / 2)
+    col = CLAUDE if k in (0, 2) else CODEX
+    root, ob, m, gm = kc.ui_card("pane4_%d" % k, os.path.join(SEQ, "four_p%d" % k, "0000.png"), (x0, y0, 0.03),
+                                 parent=WIN, glow=col, seq={"start": 1254, "length": 220, "offset": -1})
+    sh = bpy.data.materials[root["shadow_mat"]]
+    dx, dy = x0 - GRID_C[0], y0 - GRID_C[1]
+    tx, ty, tz = GRID_C[0] + dx * 1.3, GRID_C[1] + dy * 1.42, 0.78 + (0.1 if k in (1, 2) else 0.0)
+    rot = (dy * R(16), -dx * R(15), 0)
+    f0 = 1300 + k * 6
+    kc.keys(root, "location", [(f0, (x0, y0, 0.03), "expo_out"), (f0 + 40, (tx, ty, tz), "sine"),
+                               (1462, (tx, ty + 0.02, tz + 0.03), "expo_in"), (1500, (x0, y0, 0.03))])
+    kc.keys(root, "rotation_euler", [(f0, (0, 0, 0), "expo_out"), (f0 + 40, rot, "sine"), (1462, rot, "expo_in"), (1500, (0, 0, 0))])
+    kc.keys(root, "scale", [(f0, (1.0,) * 3, "expo_out"), (f0 + 40, (0.78,) * 3, "sine"), (1462, (0.78,) * 3, "expo_in"), (1500, (1.0,) * 3)])
+    kc.sock_keys(m, "Opacity", [(f0 - 1, 0.0, "const"), (f0, 1.0), (1500, 1.0, "const"), (1501, 0.0)])
+    kc.sock_keys(sh, "Opacity", [(f0, 0.0, "cubic"), (f0 + 24, 0.6), (1470, 0.6, "cubic"), (1496, 0.0)])
+    kc.sock_keys(gm, "Opacity", [(f0 + 8, 0.0, "cubic"), (f0 + 30, 0.75)] +
+                 [(f0 + 40 + 22 * j, 0.5 if j % 2 else 0.85, "sine") for j in range(5)] + [(1462, 0.6, "cubic"), (1490, 0.0)])
+    kc.sock_keys(gm, "Strength", [(f0, 2.2)])
+    cue("card", f0)
+kc.sock_keys(four[1], "Bright", [(1300, 1.0, "cubic"), (1336, 0.17), (1466, 0.17, "cubic"), (1500, 1.0)])
+CK(1300, at(0.11, -0.02, 5.0), at(0.11, 0.0, 0.8), at(0.11, 0.0, 0.84), ease="cubic")
+CK(1340, at(-1.35, 0.3, 5.6), at(0.0, 0.02, 0.8), at(0.11, 0.0, 0.84), ease="sine")
+CK(1460, at(1.45, -0.26, 5.5), at(0.2, -0.02, 0.8), at(0.11, 0.0, 0.84), ease="expo")
+CK(1500, at(0.11, -0.02, 4.4), at(0.11, 0.0, 0), at(0.11, 0.0, 0.04), ease="cubic")
+fstop(1300, 8.0)
+fstop(1496, 11.0)
+title("t_four", "Four agents. At once.", at(0.11, 0.07, 1.3), 0.1, 1346, 1446, "lexend-deca-600", backing=True)
+title("t_four_sub", "Claude Code and Codex, each in its own pane.", at(0.11, -0.12, 1.3), 0.042, 1366, 1446,
+      "lexend-deca-400", color="#c3cde0", backing=True)
+
+# Ctrl Alt 6: six panes (3 x 2), six sessions
+title("t_ctrl6", "Ctrl  Alt  6", at(0.11, 0.0, 1.0), 0.06, 1510, 1536, "lexend-exa-500", tracking=1.4, backing=True, dur_in=16)
+cue("key", 1514)
+cue("key", 1520)
+cue("key", 1526)
+six = state("six_seq", os.path.join(SEQ, "six", "0000.png"), 1546, 6, MAIN_R, seq={"start": 1546, "length": 226, "offset": -1}, slide=0.04)
+cue("pane", 1540)
+for k in range(6):
+    cue("enter", 1556 + 3 * k)
+SIX_X = [(249, 692), (700, 1142), (1149, 1592)]
+SIX_Y = [(101, 508), (516, 924)]
+SIX_R = [(a, b, c, d) for (b, d) in SIX_Y for (a, c) in SIX_X]
+SIX_COL = [CLAUDE, CODEX, CLAUDE, CLAUDE, CODEX, CODEX]
+SIX_DONE = [1700, 1682, 1736, 1736, 1736, 1718]  # the frame each agent's last line lands (prep_panes timing)
+PC = []
+for k, r in enumerate(SIX_R):
+    cx, cy = css((r[0] + r[2]) / 2, (r[1] + r[3]) / 2)
+    w, h = (r[2] - r[0]) * 2 * kc.PX, (r[3] - r[1]) * 2 * kc.PX
+    PC.append((cx, cy))
+    for tag, col, keys_ in (
+        ("work", SIX_COL[k], [(1556, 0.0, "cubic"), (1580, 0.4)] + [(1600 + 20 * j, 0.22 if j % 2 else 0.45, "sine")
+                                                                    for j in range((SIX_DONE[k] - 1600) // 20)] +
+                                [(SIX_DONE[k], 0.4, "cubic"), (SIX_DONE[k] + 8, 0.0)]),
+        ("done", "#35c48d", [(SIX_DONE[k] - 2, 0.0, "expo_out"), (SIX_DONE[k] + 6, 1.0), (SIX_DONE[k] + 50, 0.45, "cubic"),
+                             (2096, 0.45, "cubic"), (2118, 0.0)]),
+    ):
+        gm = kc.glow_material("six_%s%d_m" % (tag, k), w, h, 0.012, 0.035, color=col, strength=3.2)
+        g = kc.plane("six_%s%d" % (tag, k), w + 0.07, h + 0.07, gm, (cx, cy, 0.03), WIN)
+        kc._pad_uv(g, w, h, 0.035)
+        kc.sock_keys(gm, "Opacity", keys_)
+for f in sorted(set(SIX_DONE)):
+    cue("status", f)
+# low, slow dolly across the grid, racking focus pane to pane, then the wide reveal
+CK(1546, at(0.11, -0.02, 4.4), at(0.11, 0.0, 0), at(0.11, 0.0, 0.04), ease="cubic")
+CK(1596, at(-1.55, -0.95, 2.45), at(-0.5, 0.05, 0), at(PC[0][0], PC[0][1], 0.04), ease="sine")
+CK(1676, at(-0.2, -1.05, 2.3), at(0.24, -0.12, 0), at(PC[4][0], PC[4][1], 0.04), ease="sine")
+CK(1756, at(1.55, -0.7, 2.45), at(1.0, 0.05, 0), at(PC[2][0], PC[2][1], 0.04), ease="expo")
+CK(1842, at(0.08, -0.05, 4.65), at(0.11, 0.0, 0), at(0.11, 0.0, 0.04), ease="cubic")
+CK(2116, at(0.1, -0.02, 4.2), at(0.11, 0.0, 0), at(0.11, 0.0, 0.04))
+fstop(1546, 8.0)
+fstop(1830, 11.0)
+title("t_six", "Six agents. One screen.", at(0.11, 0.0, 1.3), 0.13, 1856, 1930, "lexend-deca-600", backing=True)
+title("t_build", "Build.", at(-0.49, 0.0, 1.0), 0.15, 1948, 2056, "lexend-deca-700", backing=True, dur_in=14)
+title("t_test", "Test.", at(0.12, 0.0, 1.0), 0.15, 1962, 2056, "lexend-deca-700", backing=True, dur_in=14)
+title("t_ship", "Ship.", at(0.71, 0.0, 1.0), 0.15, 1976, 2056, "lexend-deca-700", color="#7fb0ff", backing=True, dur_in=14)
+# =========================================================== ACT 4  MULTI-AGENT (written at 1140-1620, plays 2122-2602)
+kc.SHIFT[0] = 2122 - 1140  # acts 4-5 keep their original keys and play right after the coding act
 dash = state("dash_full", os.path.join(PL, "dashlive2", "000.png"), 1146, 10, slide=0.06)
 CK(1140, at(-0.2, 0.2, 3.4), at(-0.1, 0.25, 0), at(-0.4, 0.3, 0), ease="expo_out")
 CK(1190, at(-0.4, 0.1, 3.0), at(-0.25, 0.1, 0), at(-0.3, 0.1, 0), ease="cubic")
@@ -404,7 +508,7 @@ CK(1616, at(-0.65, 0.25, 2.6), at(-0.45, 0.25, 0), at(-0.45, 0.3, 0))
 for f in (1470, 1510, 1556):
     cue("status", f)
 
-# =========================================================== ACT 4  KALVOICE (1620-2100)
+# =========================================================== ACT 5  KALVOICE (written at 1620-2040, plays 2602-3022)
 thA2 = state("thA2_full", os.path.join(PL, "v_focus", "before.png"), 1632, 10, slide=0.06)
 CK(1626, at(-0.2, 0.2, 3.6), at(0.0, 0.3, 0), at(0.1, 0.5, 0), ease="expo_out")
 CK(1690, at(-0.45, 0.2, 3.3), at(-0.1, 0.4, 0), at(0.1, 0.6, 0))
@@ -482,93 +586,37 @@ CK(T0, at(-0.35, 0.25, 3.2), at(0.05, 0.5, 0), at(0.1, 0.6, 0), ease="cubic")
 told = state("thread_tell", os.path.join(SEQ, "thread_tell", "0000.png"), T0 + 66, 4, MAIN_R, seq={"start": T0 + 66, "length": 64, "offset": -1})
 cue("sent", T0 + 64)
 CK(T0 + 70, at(0.2, -0.1, 3.0), at(0.45, -0.1, 0), at(0.45, -0.05, 0), ease="expo_out")
-CK(2096, at(0.35, -0.3, 2.5), at(0.5, -0.25, 0), at(0.5, -0.25, 0))
+CK(2036, at(0.35, -0.3, 2.5), at(0.5, -0.25, 0), at(0.5, -0.25, 0))
 
-# =========================================================== ACT 5  BUILD LOOP (2100-2580)
-STEPS = ["PROMPT", "CODE", "BUILD", "BROWSER", "RESULT"]
-chain = kc.empty("CHAIN", at(0.0, -1.22, 0.9))
-chain_m = kc.flat_material("chain_line_m", "#4c8dff", strength=3.0, opacity=0.0)
-cl = kc.plane("chain_line", 2.6, 0.004, chain_m, (0, 0, -0.01), chain)
-kc.sock_keys(chain_m, "Opacity", [(2104, 0.0, "cubic"), (2124, 0.55), (2560, 0.55, "cubic"), (2580, 0.0)])
-step_frames = [2110, 2200, 2290, 2380, 2470]
-for k, (word, f) in enumerate(zip(STEPS, step_frames)):
-    x = -1.2 + k * 0.6
-    ob, m = kc.text("step_" + word, word, "lexend-exa-500", 0.05, (x, 0.04, 0), tracking=1.4, color="#e6edf8", parent=chain)
-    kc.sock_keys(m, "Wipe", [(2104 + k * 5, 0.0, "cubic_out"), (2130 + k * 5, 1.0)])
-    kc.sock_keys(m, "Opacity", [(2130, 0.35), (f - 4, 0.35, "cubic"), (f + 4, 1.0), (f + 84, 1.0, "cubic"), (f + 96, 0.55),
-                                (2566, 0.55, "cubic"), (2580, 0.0)])
-    kc.sock_keys(m, "Strength", [(f - 4, 1.0, "expo_out"), (f + 2, 2.6), (f + 40, 1.3)])
-    dot_m = kc.glow_material("step_dot_m%d" % k, 0.012, 0.012, 0.006, 0.03, color="#4c8dff", strength=6)
-    dot = kc.plane("step_dot%d" % k, 0.072, 0.072, dot_m, (x, -0.0, 0.0), chain)
-    kc._pad_uv(dot, 0.012, 0.012, 0.03)
-    kc.sock_keys(dot_m, "Opacity", [(2100, 0.0, "cubic"), (2124, 0.3), (f - 4, 0.3, "expo_out"), (f + 2, 1.0), (f + 60, 0.7), (2566, 0.7, "cubic"), (2580, 0.0)])
-    cue("step", f)
-# PROMPT: the message you sent (thread_tell already showing it)
-# CODE: the agent's edit to BrowserPane.tsx
-st_code = state("code_edit", os.path.join(PL, "v_tell", "after_015.png"), 2196, 8)
-# BUILD: tests run green in the real terminal
-st_term = state("build_code", os.path.join(PL, "term", "034.png"), 2286, 8, slide=0.05)
-# BROWSER: the page in KalCode's Browser pane
-st_br = state("build_browser", os.path.join(PL, "code_browser_site.png"), 2376, 8, slide=0.05)
-# RESULT: done, tests pass
-st_res = state("build_result", os.path.join(PL, "v_tell", "after_015.png"), 2466, 8, slide=0.05)
-
-fstop(2100, 11.0)
-tour([
-    (2112, at(0.1, -0.2, 3.1), at(0.4, 0.05, 0.2), at(0.45, 0.25, 0)),      # PROMPT: the message
-    (2202, at(0.05, -0.4, 2.7), at(0.45, -0.3, 0.2), at(0.5, -0.35, 0)),    # CODE: the edit
-    (2292, at(-0.95, 0.05, 2.8), at(-0.4, 0.2, 0.2), at(-0.5, 0.3, 0)),     # BUILD: tests
-    (2382, at(0.55, -0.1, 2.9), at(0.95, 0.0, 0.2), at(0.95, 0.0, 0)),      # BROWSER
-    (2472, at(0.2, -0.55, 2.6), at(0.5, -0.5, 0.2), at(0.5, -0.62, 0)),     # RESULT
-    (2546, at(0.25, -0.58, 2.35), at(0.5, -0.55, 0.2), at(0.5, -0.62, 0)),
-])
-
-# =========================================================== ACT 6  COCKPIT (2580-3060)
-title("t_build", "Build.", at(-0.95, 0.12, 0.9), 0.14, 2548, 2640, "lexend-deca-700", backing=True, dur_in=14)
-title("t_test", "Test.", at(-0.38, 0.12, 0.9), 0.14, 2562, 2640, "lexend-deca-700", backing=True, dur_in=14)
-title("t_ship", "Ship.", at(0.17, 0.12, 0.9), 0.14, 2576, 2640, "lexend-deca-700", color="#7fb0ff", backing=True, dur_in=14)
-t2 = state("t2_full", os.path.join(PL, "term_second.png"), 2596, 8, slide=0.05)
-push = state("push_seq", os.path.join(SEQ, "push", "0000.png"), 2612, 4, TERM_R, seq={"start": 2612, "length": 70, "offset": -1})
-cue("key", 2604)
-cue("push", 2640)
-CK(2590, at(-0.6, 0.35, 3.1), at(-0.3, 0.45, 0), at(-0.5, 0.55, 0), ease="expo")
-CK(2690, at(-0.85, 0.5, 2.5), at(-0.45, 0.6, 0), at(-0.55, 0.62, 0))
-# rapid tour: model + account pickers, a named second terminal, workspaces, dashboard
+# =========================================================== ACT 6  COCKPIT (3022-3352)
+kc.SHIFT[0] = 0
+t2 = state("t2_full", os.path.join(PL, "term_second.png"), 3030, 8, slide=0.05)
+push = state("push_seq", os.path.join(SEQ, "push", "0000.png"), 3046, 4, TERM_R, seq={"start": 3046, "length": 70, "offset": -1})
+cue("key", 3038)
+cue("push", 3074)
+CK(3022, at(-0.6, 0.35, 3.1), at(-0.3, 0.45, 0), at(-0.5, 0.55, 0), ease="expo")
+CK(3118, at(-0.85, 0.5, 2.5), at(-0.45, 0.6, 0), at(-0.55, 0.62, 0))
+fstop(3022, 11.0)
+# rapid tour: workspaces, then the Dashboard
 TOUR = [
-    ("tour_nt0", os.path.join(PL, "nt_0.png"), 2700, "Pick the provider.", (0.0, 0.3)),
-    ("tour_nt1", os.path.join(PL, "nt_1.png"), 2760, "Pick the account.", (0.1, 0.3)),
-    ("tour_nt2", os.path.join(PL, "nt_2.png"), 2810, "Pick the model.", (0.35, 0.3)),
-    ("tour_sw", os.path.join(PL, "switch_ws.png"), 2880, "Switch workspaces.", (1.15, 0.55)),
-    ("tour_dash", os.path.join(PL, "dash.png"), 2950, "See what needs you.", (-0.3, 0.3)),
+    ("tour_sw", os.path.join(PL, "switch_ws.png"), 3134, "Switch workspaces.", (1.15, 0.55)),
+    ("tour_dash", os.path.join(PL, "dash.png"), 3196, "See what needs you.", (-0.3, 0.3)),
 ]
 poses = []
+last = None
 for k, (name, path, f, label, focus_xy) in enumerate(TOUR):
-    state(name, path, f, 8, slide=0.05 if k % 2 == 0 else 0.0)
+    last = state(name, path, f, 8, slide=0.05 if k % 2 == 0 else 0.0)
     fx, fy = focus_xy
     poses.append((f - 2, at(fx - 0.45 + 0.2 * (k % 2), fy - 0.25, 2.9), at(fx, fy - 0.08, 0), at(fx, fy, 0)))
-    title("tl_" + name, label, at(fx, fy - 0.62, 0.8), 0.075, f + 2, f + 50, "lexend-deca-500", backing=True, dur_in=18)
-poses.append((3000, at(0.0, 0.0, 4.6), at(0.0, 0.0, 0), at(0.0, -0.1, 1.3)))
+    title("tl_" + name, label, at(fx, fy - 0.62, 0.8), 0.075, f + 2, f + 48, "lexend-deca-500", backing=True, dur_in=18)
+poses.append((3246, at(0.0, 0.0, 4.6), at(0.0, 0.0, 0), at(0.0, -0.1, 1.3)))
 tour(poses)
-fstop(2690, 11.0)
-nt_type = state("nt_type", os.path.join(SEQ, "nt_type", "0000.png"), 2826, 4, MAIN_R, seq={"start": 2826, "length": 72, "offset": -1}, f_out=2872)
-title("t_wrapper", "Not another terminal wrapper.", at(0.0, -0.1, 1.3), 0.14, 3004, 3050, "lexend-deca-600", backing=True)
-CK(3058, at(0.0, 0.0, 4.9), at(0.0, 0.0, 0), at(0.0, -0.1, 1.3))
-
-# =========================================================== ACT 7  BUILT IN KALCODE (3060-3360)
-self_st = state("self_code", os.path.join(PL, "code.png"), 3066, 8)
-CK(3064, at(-1.25, 0.72, 1.7), at(-0.85, 0.82, 0), at(-0.95, 0.85, 0), ease="cubic")
-CK(3150, at(-0.9, 0.55, 2.0), at(-0.55, 0.6, 0), at(-0.6, 0.62, 0), ease="cubic")
-fstop(3064, 22.0)
-CK(3268, at(0.0, 0.0, 7.5), at(0.0, 0.0, 0), at(0.0, 0.0, 0), ease="expo")
-fstop(3268, 8.0)
-title("t_self1", "Build KalCode.", at(0.0, 0.2, 1.6), 0.2, 3228, 3304, "lexend-deca-700", backing=True)
-title("t_self2", "Inside KalCode.", at(0.0, -0.12, 1.6), 0.2, 3248, 3304, "lexend-deca-300", color="#7fb0ff", backing=False)
-CK(3330, at(0.0, 0.0, 8.0), at(0.0, 0.0, 0), at(0.0, 0.0, 0))
+title("t_wrapper", "Not another terminal wrapper.", at(0.0, -0.1, 1.3), 0.14, 3250, 3300, "lexend-deca-600", backing=True)
+CK(3312, at(0.0, 0.0, 5.2), at(0.0, 0.0, 0), at(0.0, -0.1, 1.3))
 # the window folds away before the end card
-for m in [self_st[1]] + [bpy.data.materials[n] for n in ("win_edge_m", "win_rim_m", "win_shadow_m")]:
+for m in [last[1]] + [bpy.data.materials[n] for n in ("win_edge_m", "win_rim_m", "win_shadow_m")]:
     kc.sock_keys(m, "Opacity", [(3318, m.node_tree.nodes["Opacity"].outputs[0].default_value or 0.6, "cubic"), (3350, 0.0)])
-
-# =========================================================== ACT 8  END CARD (3360-3600)
+# =========================================================== ACT 7  END CARD (3352-3600)
 E = (0, 0, -160)
 
 

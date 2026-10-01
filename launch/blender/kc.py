@@ -144,12 +144,16 @@ def _fcurves(idblock):
         return list(getattr(act, "fcurves", []))
 
 
+SHIFT = [0]  # film time offset added to every key / sequence start (lets a whole act move in time)
+
+
 def key(target, path, frame, value, ease="smooth", back=1.2, owner=None):
     """Keyframe target.path = value at frame; the segment AFTER this key uses `ease`.
 
     target: an ID or struct (object, node socket...). owner: the ID whose action holds the curve
     (defaults to target; node sockets need their node tree).
     """
+    frame = frame + SHIFT[0]
     obj = target
     attr = path
     setattr(obj, attr, value)
@@ -280,7 +284,7 @@ def ui_material(name, img, w, h, radius=0.012, border=0.14, border_color="#8eaad
     tex.extension = "EXTEND"
     if seq:
         u = tex.image_user
-        u.frame_start, u.frame_duration, u.frame_offset = seq["start"], seq["length"], seq.get("offset", 0)
+        u.frame_start, u.frame_duration, u.frame_offset = seq["start"] + SHIFT[0], seq["length"], seq.get("offset", 0)
         u.use_auto_refresh = True
         u.use_cyclic = False
     nt.links.new(tc.outputs["UV"], tex.inputs[0])
