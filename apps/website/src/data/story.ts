@@ -50,7 +50,7 @@ export const AGENT_PROVIDERS = ["claude", "codex", "gemini"] as const satisfies 
 
 /* ------------------------------------------------------------------ status (1:1 with the app) */
 
-/** "waiting" renders neutral grey (waiting for you); "paused" is the only amber tone. */
+/** "waiting" (waiting for you) and "paused" both render amber, as in the app. */
 export type StatusTone = "live" | "waiting" | "paused" | "success" | "danger" | "idle";
 export type ThreadStatus =
   | "starting"

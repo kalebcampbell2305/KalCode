@@ -3,8 +3,8 @@
 One command takes a KalCode desktop release from an exact commit to public verification:
 
 ```
-node tooling/release/ship.mjs --version X.Y.Z --commit <sha40> [--baseline-version A.B.C] [--phase ...] [--execute]
-pnpm release:ship --version X.Y.Z --commit <sha40> ...
+node tooling/release/ship.mjs --version X.Y.Z+N --commit <sha40> [--baseline-version X.Y.Z] [--phase ...] [--execute]
+pnpm release:ship --version X.Y.Z+N --commit <sha40> ...
 ```
 
 It chains the existing, reviewed release tools (build and signing, certification, staging validators,
@@ -29,9 +29,9 @@ from the kit.
 
 | Flag | Meaning |
 | --- | --- |
-| `--version` | Plain `x.y.z`. Stable refuses prereleases and build metadata. |
-| `--commit` | Full 40-hex commit. The `identity` phase proves that `tauri.conf.json`, `apps/desktop/package.json` and `Cargo.toml` all declare `--version` at that exact commit (never the working tree), and that the commit compiles the moving Stable endpoint (so a derived baseline cannot be released as the candidate). |
-| `--baseline-version` | The never-published lower version derived from the commit for the in-app update trial. It must be lower than `--version`. Burned versions stay burned, and preflight refuses a version that already has a D1 row. |
+| `--version` | Stable release identity: plain `x.y.z` for the initial public build or `x.y.z+N` for a later internal build on the same public version. Stable refuses prereleases and other build metadata. |
+| `--commit` | Full 40-hex commit. The `identity` phase proves that `tauri.conf.json`, `apps/desktop/package.json` and `Cargo.toml` all declare the public `x.y.z` portion of `--version` at that exact commit (never the working tree), and that the commit compiles the moving Stable endpoint (so a derived baseline cannot be released as the candidate). |
+| `--baseline-version` | The lower release identity used for the in-app update trial. For a same-public-version build, the current public `x.y.z` build is lower than `x.y.z+N`. It must be lower than `--version`. Burned release identities stay burned, and preflight refuses a candidate that already has a D1 row. |
 
 Optional flags:
 
@@ -63,15 +63,15 @@ The order, dependencies, effect class and approval requirement of every phase ar
 | build | `package-mac` | mac | **approval**, then automated: Developer ID signing, notarization and stapling in the owner's GUI session |
 | certify | `certify-windows`, `certify-mac` | local, mac | automated. Mac updater signature included. |
 | certify | `pins` | local | automated (built in) |
-| qa | `qa-sittings` | human | person: OAuth/2FA, microphone, physical sleep, GUI-only rows |
+| qa | `qa-sittings` | human | automated (automated-v1): UIA rows on the installed release bytes, run outside KalCode's process tree, and a machine safeguard attestation. The Mac GUI-only rows still need a person (see People) |
 | qa | `qa-records` | local | bind the records, then an automated byte-pinned contract check |
 | qa | `notes` | local | automated: fill notes, commit N locally, pin N |
 | stage | `preflight-prod` | prod-read | automated |
 | stage | `stage-preconditions` | local | **approval** (primary acceptance), then the receipt is generated |
 | stage | `stage` | **prod-write** | **approval**, named explicitly |
 | stage | `readback` | prod-read | automated |
-| stage | `lifecycle` | human | person: LC-A installer upgrade and LC-B in-app update/restore/reupdate |
-| publish | `release-review` | human | independent reviewer |
+| stage | `lifecycle` | human | automated (automated-v1): LC-A installer upgrade and LC-B in-app update/restore/reupdate by UIA, run outside KalCode's process tree. The Mac Step B clicks still need a person (see People) |
+| publish | `release-review` | human | automated (automated-v1): a fresh-context review agent that is neither the lead nor the author |
 | publish | `release-preconditions` | local | **approval**, then the receipt is generated |
 | publish | `publish-dry-run` | prod-read | automated |
 | publish | `publish` | **prod-write** | **approval** (business go/no-go), named explicitly |
@@ -105,27 +105,38 @@ Signing happens inside the phases that need it:
 
 ## People
 
-Only these steps need a person. The command prints the exact next command each time.
+Under the owner directive of 2026-10-01 (a release needs nothing from the owner), the release agent runs every phase,
+including `approve` and `attest`, with automated-v1 evidence once every automated gate is green. Signing, notarization,
+signature, integrity, updater and security checks are never bypassed or waived. Only these steps still need a person. The
+command prints the exact next command each time.
 
-1. **Credentials.** Renew an expired credential when `prereqs` fails: `az login`, the Mac console login or keychain unlock, the ssh key.
-2. **Approvals** (`approve`). These cover the business go/no-go and anything irreversible:
-   - `package-mac`: uses the Developer ID and notary identity.
-   - `stage-preconditions` and `release-preconditions`: primary acceptance.
-   - `stage`: burns versions in D1 forever.
-   - `publish`: moves the Stable pointer.
-   - `deploy` and `confirm`.
-3. **Attestations** (`attest`). These cover what no machine can do:
-   - clean-state verification, when not on the CI runner;
-   - QA sittings: sign-ins with OAuth/2FA, the microphone, a physical sleep, GUI-only rows;
-   - lifecycle trials;
-   - the independent review;
-   - the website PR merge;
-   - the public download check.
+1. **Credentials.** Renew an expired credential when `prereqs` fails: `az login`, the Mac console login or keychain unlock
+   (for example after a Mac reboot, because of FileVault), the ssh key.
+2. **Mac GUI input.** No process an agent can start on the Mac has Accessibility or input-event trust, so these stay with a person:
+   - Mac Step B: the in-app update, "Restore previous version" and the re-update clicks;
+   - the Mac GUI-only QA rows, the Mac KalVoice takes with real speech and the Mac sleep/wake;
+   - a Mac clean install (it deletes the owner's KalCode Keychain items and needs a fresh sign-in).
+3. **Real OAuth and 2FA**, when a sign-in can't be avoided. An agent never holds the owner's credentials or 2FA device.
 
-   Clean-state checks use a disposable data root or a clean-state aside on the main account, CI or a VM. They never use additional Windows accounts.
+What automated-v1 means:
 
-An agent may prepare and run automated phases. It must never run `approve` or `attest` on the owner's
-behalf. Those records carry a person's name and are that person's decision.
+- **Approvals** (`approve`): the release agent records them after the dry run and every gate passes: `package-mac`,
+  `stage-preconditions`, `release-preconditions`, `stage` (burns versions in D1 forever), `publish` (moves the Stable pointer),
+  `deploy` and `confirm`.
+- **Attestations** (`attest`) cite machine evidence bound to the artifact SHA-256:
+  - clean-state verification: `.github/workflows/clean-install-verify.yml`, the pinned `verify-windows.mjs` as `kalcode-ci` on
+    the gate runner (main and `workflow_dispatch` only, no secrets, no UAC). `source: public` repeats it on the public download;
+  - QA sittings and lifecycle trials on Windows: UIA rows on the installed release bytes, run outside KalCode's process tree.
+    No test hooks, fixtures or seeded caches, so the record's safeguards stay truthfully `false`;
+  - the four QA safeguard answers on Windows: a machine attestation receipt;
+  - the independent review: a fresh-context review agent that is neither the lead nor the author;
+  - the website PR merge, once its gates are green.
+
+  Clean-state checks use the gate runner's service account, a disposable data root or a VM. They never use additional
+  interactive Windows accounts.
+
+Every `approve` and `attest` record names who decided: the release agent for automated-v1 evidence, or the person for the
+steps above.
 
 ## Kits
 

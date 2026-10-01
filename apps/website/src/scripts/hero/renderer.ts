@@ -3,7 +3,7 @@
  * is split into short steps (background shader compile, off-thread image decode, one texture
  * upload per frame) so it never produces a long task. One canvas, two draws per frame.
  */
-import { BLOOM_URL, ENTRY_Y, FX_URL, SPHERE_R, SPHERE_X, SPHERE_Y } from "./meta";
+import { BLOOM_URL, ENTRY_Y, FIGURE_X, FX_URL, HEAD_Y } from "./meta";
 import { BEAM_FS, BEAM_VS, ORB_FS, ORB_VS } from "./shaders";
 
 export interface OrbOptions {
@@ -132,11 +132,6 @@ const rotY = (a: number): Mat3 => {
   const s = Math.sin(a);
   return [c, 0, -s, 0, 1, 0, s, 0, c];
 };
-const rotZ = (a: number): Mat3 => {
-  const c = Math.cos(a);
-  const s = Math.sin(a);
-  return [c, s, 0, -s, c, 0, 0, 0, 1];
-};
 /** Column-major product a * b. */
 function mul(a: Mat3, b: Mat3): Mat3 {
   const [a0, a1, a2, a3, a4, a5, a6, a7, a8] = a;
@@ -232,11 +227,6 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
     "uBloom",
     "uCyc",
     "uPh",
-    "uR1u",
-    "uR1v",
-    "uR2u",
-    "uR2v",
-    "uRing",
   ]);
 
   const quad = gl.createBuffer();
@@ -310,38 +300,17 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
     geo.s = size * sx;
     geo.cx = (lay.stageX + size / 2) * sx;
     geo.cy = h - (lay.stageY + size / 2) * sy;
-    geo.bx = (lay.stageX + size * SPHERE_X) * sx;
+    geo.bx = (lay.stageX + size * FIGURE_X) * sx;
     geo.by = h - (lay.stageY + size * ENTRY_Y) * sy;
     geo.ox = lay.originX * sx;
     geo.oy = h - lay.originY * sy;
     geo.pr = lay.platformRadius * sx;
-    // Upward continuation (centered world only): from just inside the sphere top to 72 CSS px
+    // Upward continuation (centered world only): from just inside the mascot's head to 72 CSS px
     // below the canvas top, so it has faded out long before the navigation.
-    geo.uy0 = h - (lay.stageY + size * (SPHERE_Y - SPHERE_R * 0.92)) * sy;
+    geo.uy0 = h - (lay.stageY + size * (HEAD_Y + 0.03)) * sy;
     geo.uy1 = h - 72 * sy;
     band = lay.band ? [h - lay.band[0] * sy, h - lay.band[1] * sy, lay.band[2], lay.band[3]] : [0, 0, 1, 1];
     gl?.viewport(0, 0, w, h);
-  }
-
-  /**
-   * A ring: a circle seen at a steep angle whose orientation and opening wobble slowly (never
-   * edge-on), so it reads as an orbit moving in its own depth plane rather than a 2D spinner.
-   */
-  function ringBasis(
-    t: number,
-    radius: number,
-    angle: number,
-    tilt: number,
-    wobble: [number, number, number, number],
-    tiltM: Mat3,
-  ) {
-    const [amp, openAmp, w1, w2] = wobble;
-    const m = mul(tiltM, mul(rotZ(angle + amp * Math.sin(w1 * t)), rotX(tilt + openAmp * Math.sin(w2 * t + 1.7))));
-    const r = radius * geo.s;
-    return {
-      u: [m[0] * r, m[1] * r, m[2] * r],
-      v: [m[3] * r, m[4] * r, m[5] * r],
-    };
   }
 
   function draw(t: number) {
@@ -372,7 +341,6 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
     pointer.y += (pointer.ty - pointer.y) * 0.06;
     const lean = scroll * 0.12;
     const tiltM = mul(rotX(pointer.y * 0.05 + lean), rotY(pointer.x * 0.06));
-    const ringTilt = mul(rotX(pointer.y * 0.1 + lean * 1.5), rotY(pointer.x * 0.12));
 
     const flicker = 1 + 0.035 * Math.sin(t * 1.7) + 0.025 * Math.sin(t * 2.9 + 1.1);
     const beamI = flicker * (1 - scroll * 0.35);
@@ -430,13 +398,6 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
       (t * 0.045) % 4096,
       0.5 + 0.5 * Math.sin((t / 11) * TAU),
     );
-    const r1 = ringBasis(t, 0.5, -0.28, 1.24, [0.22, 0.12, TAU / 53, TAU / 71], ringTilt);
-    const r2 = ringBasis(t, 0.41, 0.42, 1.12, [0.25, 0.14, -TAU / 67, TAU / 83], ringTilt);
-    gl.uniform3fv(orb.u.uR1u ?? null, r1.u);
-    gl.uniform3fv(orb.u.uR1v ?? null, r1.v);
-    gl.uniform3fv(orb.u.uR2u ?? null, r2.u);
-    gl.uniform3fv(orb.u.uR2v ?? null, r2.v);
-    gl.uniform4f(orb.u.uRing ?? null, (t * (TAU / 14)) % TAU, (-t * (TAU / 19) + 2.2) % TAU, 0.2, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 

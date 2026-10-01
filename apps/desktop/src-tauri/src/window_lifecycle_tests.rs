@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     ExitAttempt, ExitEventCleanup, begin_exit_attempt, drain_on_exit_event, finish_exit_attempt,
-    route_main_close,
+    installs_staged_update_on_exit, route_main_close,
     runtime_shutdown::{ExitControl, RuntimeShutdown},
 };
 
@@ -237,4 +237,36 @@ fn exit_event_join_is_bounded_even_if_the_in_flight_drain_overruns() {
     assert!(elapsed < Duration::from_millis(1_500), "{elapsed:?}");
     worker.join().unwrap();
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_staged_build_installs_only_on_a_cleanly_drained_close() {
+    // Closing the window (ExitRequested drained, then Exit) and macOS Cmd+Q (Exit drains).
+    for cleanup in [ExitEventCleanup::AlreadyDrained, ExitEventCleanup::Drained] {
+        assert!(installs_staged_update_on_exit(
+            cleanup,
+            &ExitControl::default()
+        ));
+    }
+    // Work that could not be proven stopped never hands off to an installer.
+    for cleanup in [ExitEventCleanup::Incomplete, ExitEventCleanup::JoinFailed] {
+        assert!(!installs_staged_update_on_exit(
+            cleanup,
+            &ExitControl::default()
+        ));
+    }
+    // The user's own restart-and-install or restore owns this exit.
+    let exit = ExitControl::default();
+    exit.update_quiesced.store(true, Ordering::Release);
+    assert!(!installs_staged_update_on_exit(
+        ExitEventCleanup::AlreadyDrained,
+        &exit
+    ));
+    // A restart ends the process only to start it again.
+    let exit = ExitControl::default();
+    exit.restart_requested.store(true, Ordering::Release);
+    assert!(!installs_staged_update_on_exit(
+        ExitEventCleanup::AlreadyDrained,
+        &exit
+    ));
 }

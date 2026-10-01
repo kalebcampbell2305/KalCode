@@ -3,7 +3,16 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, expect, type Page } from "@playwright/test";
-import { closeGracefully, EXE, launch, PORT, removeDir, test } from "./harness.ts";
+import {
+  closeGracefully,
+  EXE,
+  inServiceSession,
+  launch,
+  PORT,
+  removeDir,
+  SERVICE_SESSION_SKIP,
+  test,
+} from "./harness.ts";
 import { clickOwnedClientPoint } from "./windowsPointer.ts";
 
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
@@ -271,6 +280,8 @@ async function focus(page: Page, browserId: string | null): Promise<boolean> {
 }
 
 test("native Browser is isolated, navigates in split panes and restores safe workspace state", async () => {
+  // Needs a real foreground window and pointer (SetForegroundWindow), which session 0 lacks.
+  test.skip(inServiceSession(), SERVICE_SESSION_SKIP);
   test.setTimeout(300_000);
   const web = await fixture();
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-browser-"));

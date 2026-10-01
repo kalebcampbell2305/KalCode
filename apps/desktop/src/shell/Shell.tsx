@@ -1,4 +1,5 @@
-import { type CSSProperties, useCallback, useLayoutEffect, useRef } from "react";
+import { type CSSProperties, useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { OperationsClient } from "../ipc/operations.ts";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
@@ -14,6 +15,7 @@ import { focusSection } from "../surfaces/dashboard/useNow.ts";
 import { FolderSurface } from "../surfaces/folder/FolderSurface.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
 import { HomeSurface } from "../surfaces/home/HomeSurface.tsx";
+import { OperationsPage } from "../surfaces/operations/OperationsPage.tsx";
 import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
 import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
@@ -76,6 +78,12 @@ export function Shell() {
 function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings, client } = useRuntime();
   const { current, navigate } = useNavigation();
+  const operationsClient = useMemo(
+    () => new OperationsClient((command, args) => client.transport.invoke(command, args)),
+    [client],
+  );
+  const threadOptions = useCallback(() => client.threadOptions(), [client]);
+  const providerAccounts = useCallback(() => client.listProviderAccounts(), [client]);
   // Z7-W2: the palette's open state and query are shared (search can open with a query).
   const { open: paletteOpen, setOpen: setPaletteOpen } = useSearch();
   const rail = useRail();
@@ -137,6 +145,8 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
           <KalVoicePage />
         ) : current === "dashboard" ? (
           <Dashboard />
+        ) : current === "operations" ? (
+          <OperationsPage client={operationsClient} threadOptions={threadOptions} providerAccounts={providerAccounts} />
         ) : current === "code" ? (
           <CodePage />
         ) : current === "settings" ? (

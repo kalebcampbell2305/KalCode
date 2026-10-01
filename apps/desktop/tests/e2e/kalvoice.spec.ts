@@ -116,7 +116,14 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     expect(workspaces).toHaveLength(1);
     const workspaceId = workspaces[0]?.id as string;
     await expect(widget(page)).toBeVisible();
-    await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible();
+    if (MODEL) {
+      await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible();
+    } else {
+      // Without an installed model, zero-setup provisioning asks the signed catalog for this
+      // build's channel. E2E builds compile as Development, which has no published catalog, so
+      // the widget honestly reports speech as unavailable instead of Ready (never Ready early).
+      await expect(shown(page).getByText("Speech unavailable", { exact: true })).toBeVisible();
+    }
     await expect(widget(page).getByRole("textbox")).toHaveCount(0);
 
     // A typed request on the KalVoice page.
@@ -247,7 +254,13 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     if (MODEL) {
       await expect(fastest.getByText("In use")).toBeVisible();
     } else {
-      await expect(fastest.getByRole("button", { name: "Download" })).toBeVisible();
+      // Zero-setup provisioning fetches the default model on its own (no Download button while it
+      // runs or waits to retry). E2E builds compile as Development, which has no published
+      // catalog, so the row honestly reports the automatic attempt and its retry.
+      await expect(fastest.getByRole("status")).toHaveText(
+        /^(Preparing: getting it from KalCode's signed component catalog\.|Couldn't download English \(fastest\): .+ KalCode retries .+\.)$/,
+      );
+      await expect(fastest.getByRole("button", { name: "Download" })).toHaveCount(0);
     }
 
     await widget(page).getByRole("button", { name: "Dock the widget" }).click();

@@ -12,4 +12,9 @@ export interface UpdateStatus {
   totalBytes: number | null;
   lastError: string | null;
   recoveryAvailable: boolean;
+  /**
+   * A newer build of the running public version is verified and staged: it installs, without a
+   * prompt, when KalCode closes.
+   */
+  installOnQuit: boolean;
 }

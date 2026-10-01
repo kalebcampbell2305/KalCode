@@ -32,7 +32,7 @@ export interface WorkspaceValue {
   openFolder: () => Promise<Workspace | null>;
   activate: (workspaceId: string) => Promise<boolean>;
   remove: (workspace: Workspace) => Promise<boolean>;
-  createTerminal: (shellId?: string | null) => Promise<TerminalInfo | null>;
+  createTerminal: (shellId?: string | null, workspaceId?: string) => Promise<TerminalInfo | null>;
   closeTerminal: (terminalId: string) => Promise<void>;
   restartTerminal: (terminalId: string) => Promise<TerminalInfo | null>;
   /**
@@ -304,22 +304,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const createTerminal = useCallback(
-    async (shellId: string | null = null) => {
+    async (shellId: string | null = null, workspaceId: string | undefined = active?.id) => {
       const current = captureLifetime();
-      if (!current() || !active) return null;
+      if (!current() || !workspaceId) return null;
       const intent = ++lifecycle.focusIntent;
-      const mayFocus = () => current() && intent === lifecycle.focusIntent && lifecycle.workspaceId === active.id;
+      const mayFocus = () => current() && intent === lifecycle.focusIntent && lifecycle.workspaceId === workspaceId;
       try {
-        const terminal = await client.createTerminal(active.id, shellId, lastSize.current);
+        const terminal = await client.createTerminal(workspaceId, shellId, lastSize.current);
         if (!current()) return null;
-        const pending = { intent, epoch: lifecycle.epoch, terminalId: terminal.id, workspaceId: active.id };
+        const pending = { intent, epoch: lifecycle.epoch, terminalId: terminal.id, workspaceId };
         if (mayFocus()) lifecycle.pendingFocus = pending;
         // Keep the native session visible in history without overriding a newer
         // workspace or terminal choice while creation/refresh was pending.
         try {
           await refresh();
           if (!mayFocus()) return null;
-          setSelected({ workspaceId: active.id, terminalId: terminal.id });
+          setSelected({ workspaceId, terminalId: terminal.id });
           requestFocus(terminal.id);
           return terminal;
         } finally {
@@ -330,7 +330,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [client, active, refresh, fail, requestFocus, captureLifetime, lifecycle],
+    [client, active?.id, refresh, fail, requestFocus, captureLifetime, lifecycle],
   );
 
   const closeTerminal = useCallback(

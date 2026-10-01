@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use kalcode_updater::{
     ArtifactFormat, Candidate, FeedMetadata, UpdateChannel, UpdateError, UpdateMachine,
-    UpdatePhase, UpdateTarget, validate_candidate, validate_candidate_for_target,
-    validate_retained_candidate, verify_download,
+    UpdatePhase, UpdateTarget, same_public_build, validate_candidate,
+    validate_candidate_for_target, validate_retained_candidate, verify_download,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -242,6 +242,120 @@ fn candidate_requires_exact_channel_https_origin_version_and_metadata() {
         let error = validate_candidate(channel, "0.1.5", version, url, &raw).unwrap_err();
         assert_eq!(error.code(), code);
     }
+}
+
+#[test]
+fn build_numbers_order_numerically_after_the_plain_public_version() {
+    let parse = |value: &str| semver::Version::parse(value).unwrap();
+    for (older, newer) in [
+        ("0.1.7", "0.1.7+1"),
+        ("0.1.7", "0.1.7+779"),
+        ("0.1.7+779", "0.1.7+780"),
+        ("0.1.7+999", "0.1.7+1000"),
+        ("0.1.7+9", "0.1.7+10"),
+        ("0.1.7+9999", "0.1.8"),
+        ("0.1.8-beta.1+5000", "0.1.8"),
+    ] {
+        assert!(parse(older) < parse(newer), "{older} < {newer}");
+    }
+    assert_eq!(parse("0.1.7+779").to_string(), "0.1.7+779");
+}
+
+#[test]
+fn only_a_build_of_the_running_public_version_installs_when_kalcode_closes() {
+    for (current, next) in [
+        ("0.1.8", "0.1.8+1"),
+        ("0.1.8+5", "0.1.8+6"),
+        ("0.1.8+9", "0.1.8+10"),
+        ("0.1.9-beta.1+3", "0.1.9-beta.1+4"),
+        ("v0.1.8", "0.1.8+2"),
+    ] {
+        assert!(same_public_build(current, next), "{current} -> {next}");
+    }
+    // A new public version (or a build without a plain build number) keeps the prompt.
+    for (current, next) in [
+        ("0.1.8+5", "0.1.9"),
+        ("0.1.8+5", "0.1.9+6"),
+        ("0.1.8", "0.2.0+1"),
+        ("0.1.8", "1.1.8+1"),
+        ("0.1.8", "0.1.8"),
+        ("0.1.8-beta.1+3", "0.1.8+4"),
+        ("0.1.8", "0.1.8-beta.1+4"),
+        ("0.1.8", "0.1.8+0"),
+        ("0.1.8", "0.1.8+04"),
+        ("0.1.8", "0.1.8+build.4"),
+        ("0.1.8", "0.1.8+12345678901234567"),
+        ("not-a-version", "0.1.8+1"),
+        ("0.1.8", "not-a-version"),
+    ] {
+        assert!(!same_public_build(current, next), "{current} -> {next}");
+    }
+}
+
+#[test]
+fn update_status_reports_install_on_quit_and_reads_older_status_without_it() {
+    let machine = UpdateMachine::new(UpdateChannel::Stable, "0.1.8");
+    assert!(!machine.status().install_on_quit);
+    let mut value = serde_json::to_value(machine.status()).unwrap();
+    assert_eq!(value["installOnQuit"], json!(false));
+    value.as_object_mut().unwrap().remove("installOnQuit");
+    let parsed: kalcode_updater::UpdateStatus = serde_json::from_value(value).unwrap();
+    assert!(!parsed.install_on_quit);
+}
+
+#[test]
+fn stable_accepts_a_newer_build_of_the_same_public_version_only() {
+    let bytes = b"signed build installer";
+    let url = "https://kalcoded.com/releases/updater/stable/0.1.7+780/KalCode.exe";
+    for (current, announced) in [
+        ("0.1.7", "0.1.7+780"),
+        ("0.1.7+779", "0.1.7+780"),
+        ("0.1.7+999", "0.1.7+1000"),
+        ("0.1.7+9999", "0.1.8"),
+    ] {
+        let candidate = validate_candidate_for_target(
+            UpdateTarget::WindowsX86_64,
+            UpdateChannel::Stable,
+            current,
+            announced,
+            url,
+            &feed("stable", bytes),
+        )
+        .unwrap();
+        assert_eq!(candidate.version, announced);
+    }
+    for (current, announced) in [
+        ("0.1.7+780", "0.1.7+780"),
+        ("0.1.7+780", "0.1.7+779"),
+        ("0.1.7+1000", "0.1.7+999"),
+        ("0.1.7+1", "0.1.7"),
+        ("0.1.8", "0.1.7+9999"),
+    ] {
+        let error = validate_candidate_for_target(
+            UpdateTarget::WindowsX86_64,
+            UpdateChannel::Stable,
+            current,
+            announced,
+            url,
+            &feed("stable", bytes),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "update_not_newer", "{current} -> {announced}");
+    }
+    let retained = validate_retained_candidate(
+        "0.1.7+780",
+        "0.1.7+780",
+        "https://kalcoded.com/releases/updater/stable/0.1.7+780/KalCode.exe",
+        &feed("stable", bytes),
+    )
+    .unwrap();
+    assert_eq!(retained.version, "0.1.7+780");
+    assert_eq!(
+        validate_retained_candidate("0.1.7+780", "0.1.7+779", url, &feed("stable", bytes))
+            .unwrap_err()
+            .code(),
+        "rollback_version_mismatch"
+    );
 }
 
 #[test]

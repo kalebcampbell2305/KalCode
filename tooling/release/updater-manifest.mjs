@@ -10,7 +10,7 @@ import { publicSigningProblems, publicVerificationProblems, updaterSigningEviden
 const CHANNELS = new Set(["stable", "beta", "dev"]);
 const MAX_UPDATE_BYTES = 512 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 16 * 1024;
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[1-9]\d*)?$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;

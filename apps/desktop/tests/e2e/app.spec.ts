@@ -15,9 +15,11 @@ import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
+  inServiceSession,
   killForcibly,
   launch,
   removeDir,
+  SERVICE_SESSION_SKIP,
   test,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -69,6 +71,8 @@ function displayedPath(path: string, home = process.env.USERPROFILE ?? process.e
 }
 
 test("launch, change settings, quit, relaunch: settings and history persist", async () => {
+  // The graceful quit closes the window through UI Automation, which session 0 lacks.
+  test.skip(inServiceSession(), SERVICE_SESSION_SKIP);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   try {
     // First launch: fresh database.
@@ -82,7 +86,7 @@ test("launch, change settings, quit, relaunch: settings and history persist", as
     await expect(activity(app.page).getByText("Credential store verified")).toBeVisible();
 
     // Change settings through the UI.
-    await app.page.getByRole("button", { name: "Settings" }).click();
+    await app.page.getByRole("button", { name: "Settings", exact: true }).click();
     await app.page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
     await app.page.getByRole("radiogroup", { name: "Density" }).getByRole("radio", { name: "Compact" }).click();
     await expect(app.page.locator("html")).toHaveAttribute("data-theme", "light");

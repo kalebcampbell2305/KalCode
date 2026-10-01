@@ -1,14 +1,14 @@
 /**
  * GLSL ES 1.00 (runs on WebGL 1 and 2). Two draws per frame, both premultiplied:
- *   1. BEAM: the energy stream rising from below the hero into the bottom of the sphere.
- *   2. ORB:  the KalCode symbol (base texture), lit from inside by the data layer (orb-fx):
- *            a travelling front along the art's own orbits and nodes, flowing data along the
- *            lines, bloom, the contact glow, and two thin procedural orbit rings in 3D.
+ *   1. BEAM: the energy stream rising from below the hero to the mascot's feet.
+ *   2. ORB:  the KalCode mascot (base texture), lit from inside by the data layer (orb-fx):
+ *            a travelling front climbing the art's own bright pixels from the feet, flowing data
+ *            along them, bloom, and the contact glow where the stream meets the feet.
  * Light is emitted with alpha 0 (pure additive over the page); on light surfaces `uInk` turns
  * off-art light into translucent blue ink so it stays visible without glowing.
  * All time-dependent values arrive as periodic phases computed on the CPU (no float drift).
  */
-import { ENTRY_Y, SPHERE_R, SPHERE_X, SPHERE_Y } from "./meta";
+import { ENTRY_Y, FIGURE_X } from "./meta";
 
 const f = (n: number) => n.toFixed(4);
 
@@ -67,7 +67,7 @@ uniform vec4 uSurge; // position along the beam (0..1), visibility, unused, unus
 uniform vec4 uPh;    // fibre scroll (mod 64), mote scroll (mod 64), unused, unused
 uniform vec4 uBand;  // text-safe band: top y, bottom y (canvas px, y up), level inside, level below
 uniform vec4 uOrigin; // stream origin x, y (canvas px, y up), platform ring radius (0 = none), ripple 0..1
-uniform vec4 uUp;     // upward continuation: start y (behind the sphere top), end y, strength (0 = off), pulse 0..1 (-1 = none)
+uniform vec4 uUp;     // upward continuation: start y (behind the head top), end y, strength (0 = off), pulse 0..1 (-1 = none)
 void main() {
   vec2 fc = gl_FragCoord.xy;
   float s = uBeam.z;
@@ -146,7 +146,7 @@ void main() {
     float rip = exp(-pow((rn - uOrigin.w) / 0.03, 2.0)) * (1.0 - uOrigin.w) * smoothstep(0.0, 0.08, uOrigin.w);
     L += vec3(0.28, 0.55, 1.0) * (pool + rip * 0.35) * uBeam.w * (1.0 - smoothstep(0.9, 1.1, rn));
   }
-  // Upward continuation: a faint thread of the same energy leaving the top of the orb, fading
+  // Upward continuation: a faint thread of the same energy leaving the top of the head, fading
   // to nothing well below the page's navigation; each surge sends a soft echo up it.
   if (uUp.z > 0.0 && fc.y > uUp.x) {
     float tu = (fc.y - uUp.x) / max(1.0, uUp.y - uUp.x);
@@ -188,38 +188,10 @@ uniform sampler2D uBloom;
 uniform vec4 uOrb;
 uniform vec4 uCyc;   // front F, envelope E, arrival A, cycle seed
 uniform vec4 uPh;    // twinkle phase, flow phase, flow gate drift, breath (0..1)
-uniform vec3 uR1u;
-uniform vec3 uR1v;
-uniform vec3 uR2u;
-uniform vec3 uR2v;
-uniform vec4 uRing;  // comet angle 1, comet angle 2, ring strength, unused
 varying vec2 vUv;
 varying vec2 vLocal;
 
 const float TAU = 6.2831853;
-
-float ring(vec2 q, vec3 U, vec3 V, float comet, vec2 sc, float R) {
-  mat2 M = mat2(U.xy, V.xy);
-  float det = M[0][0] * M[1][1] - M[1][0] * M[0][1];
-  if (abs(det) < 1.0) return 0.0;
-  mat2 Mi = mat2(M[1][1], -M[0][1], -M[1][0], M[0][0]) / det;
-  vec2 w = Mi * q;
-  float th = atan(w.y, w.x);
-  vec2 cs = vec2(cos(th), sin(th));
-  float dist = length(q - M * cs);
-  float radius = length(U);
-  float z = dot(vec2(U.z, V.z), cs);
-  float behind = 1.0 - smoothstep(-2.0 * uPx, 2.0 * uPx, z);
-  float onSphere = 1.0 - smoothstep(R * 0.97, R * 1.01, length(q - sc));
-  float occ = 1.0 - behind * onSphere;
-  float depth = 0.5 + 0.5 * z / radius;
-  float pw = uPx * 0.7;
-  float prof = exp(-dist * dist / (pw * pw)) + 0.16 * exp(-dist / (uPx * 3.5));
-  float dth = mod(comet - th, TAU);
-  float head = exp(-pow(min(dth, TAU - dth) / 0.05, 2.0));
-  float tail = exp(-dth * 2.2) * step(0.0, dth);
-  return prof * occ * (uRing.z * (0.25 + 0.75 * depth) + head * 0.9 + tail * 0.45 * depth);
-}
 
 void main() {
   float inside = step(0.0, vUv.x) * step(vUv.x, 1.0) * step(0.0, vUv.y) * step(vUv.y, 1.0);
@@ -252,23 +224,13 @@ void main() {
   float s = uOrb.z;
   vec2 q = vLocal;
   float win = 1.0 - smoothstep(0.5 * s, 0.65 * s, max(abs(q.x), abs(q.y)));
-  vec2 sc = vec2(${f(SPHERE_X - 0.5)} * s, ${f(0.5 - SPHERE_Y)} * s);
-  float R = ${f(SPHERE_R)} * s;
-  float rr = length(q - sc) / R;
-  L += vec3(0.22, 0.48, 1.0) * exp(-abs(rr - 1.0) * 16.0) * (0.05 + 0.08 * E);
-  L += vec3(0.12, 0.30, 0.95) * exp(-max(rr - 1.0, 0.0) * 5.0) * step(1.0, rr) * 0.05 * win;
-
-  vec2 entry = vec2(sc.x, ${f(0.5 - ENTRY_Y)} * s);
+  vec2 entry = vec2(${f(FIGURE_X - 0.5)} * s, ${f(0.5 - ENTRY_Y)} * s);
   vec2 eo = (q - entry) / (s * vec2(0.055, 0.03));
   float ce = dot(eo, eo);
   L += vec3(0.62, 0.8, 1.0) * exp(-ce) * (0.3 + 0.9 * A) + vec3(0.2, 0.45, 1.0) * exp(-sqrt(ce) * 0.9) * (0.08 + 0.2 * A);
 
-  vec3 cRing = vec3(0.5, 0.72, 1.0);
-  L += cRing * ring(q, uR1u, uR1v, uRing.x, sc, R) * (1.0 + 0.3 * E);
-  L += cRing * ring(q, uR2u, uR2v, uRing.y, sc, R) * (1.0 + 0.3 * E);
-
-  // Light surfaces: drop the art's faint outer haze (it reads as fog on paper), keep the lines.
-  base *= mix(1.0, smoothstep(0.1, 0.5, base.a), uInk * smoothstep(0.99, 1.05, rr));
+  // Light surfaces: drop the art's faint outer glow (it reads as fog on paper), keep the figure.
+  base *= mix(1.0, smoothstep(0.1, 0.5, base.a), uInk);
   gl_FragColor = emit(L * win, base.rgb, base.a);
 }
 `;

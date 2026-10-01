@@ -2,7 +2,7 @@
 //! this module touches them; other campaigns read threads through [`crate::ThreadRuntime`].
 
 use kalcode_contracts::agent::{FileChange, ProviderId};
-use kalcode_contracts::ids::new_id;
+use kalcode_contracts::ids::{is_valid_id, new_id};
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::{MessageRole, ThreadMessage, ThreadStatus};
 use kalcode_core::{KalError, Result};
@@ -60,6 +60,37 @@ pub struct ThreadRow {
     pub files_changed: u32,
     pub permission_profile_id: Option<String>,
 }
+
+/// One durable user turn, bounded by the exact event-log sequence numbers that started and
+/// completed it. Old imported messages can legitimately have no matching events; those turns
+/// remain visible with unknown execution evidence instead of being assigned a guessed result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTurnRecord {
+    pub message_id: String,
+    pub thread_id: String,
+    pub workspace_id: String,
+    pub created_at: String,
+    pub started_event_seq: Option<i64>,
+    pub next_started_event_seq: Option<i64>,
+    pub completed_event_seq: Option<i64>,
+    pub completed_at: Option<String>,
+    pub ok: Option<bool>,
+    pub interrupted: Option<bool>,
+    pub has_later_turn: bool,
+    /// The exact durable Operation whose interval covers this turn, if any. Only the first user
+    /// turn in an Operation interval is covered, so later manual turns on the same thread remain
+    /// independently visible in Runs history.
+    pub operation_id: Option<String>,
+}
+
+/// A tool call together with its canonical workspace ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallHistoryRecord {
+    pub workspace_id: String,
+    pub call: ToolCallRecord,
+}
+
+const MAX_OBSERVED_HISTORY_PAGE: u32 = 200;
 
 const THREAD_COLUMNS: &str =
     "t.id, t.name, t.provider_id, t.provider_name, t.model, t.provider_account_id, t.account_label,
@@ -455,6 +486,194 @@ pub fn messages(
     Ok(page)
 }
 
+/// Newest-first durable user turns across open and archived threads. The cursor is the exact
+/// message id at the end of the previous page and is valid only in the same workspace scope.
+pub fn agent_turn_history(
+    conn: &Connection,
+    workspace_id: Option<&str>,
+    before_message_id: Option<&str>,
+    limit: u32,
+) -> Result<(Vec<AgentTurnRecord>, Option<String>)> {
+    validate_observed_history_request(workspace_id, before_message_id, limit)?;
+    let cursor = before_message_id
+        .map(|id| agent_turn_cursor(conn, workspace_id, id))
+        .transpose()?;
+    let fetch = i64::from(limit) + 1;
+    let rows = load_agent_turns(
+        conn,
+        "m.role = 'user'
+         AND (?1 IS NULL OR t.workspace_id = ?1)
+         AND (?2 IS NULL OR m.created_at < ?2 OR (m.created_at = ?2 AND m.id < ?3))",
+        params![
+            workspace_id,
+            cursor.as_ref().map(|item| item.0.as_str()),
+            cursor.as_ref().map(|item| item.1.as_str()),
+            fetch
+        ],
+        "ORDER BY m.created_at DESC, m.id DESC LIMIT ?4",
+    )?;
+    let has_more = rows.len() > limit as usize;
+    let page: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let next = has_more
+        .then(|| page.last().map(|turn| turn.message_id.clone()))
+        .flatten();
+    Ok((page, next))
+}
+
+/// Exact durable user turn in the requested workspace scope.
+pub fn agent_turn(
+    conn: &Connection,
+    message_id: &str,
+    workspace_id: Option<&str>,
+) -> Result<Option<AgentTurnRecord>> {
+    validate_observed_history_request(workspace_id, Some(message_id), 1)?;
+    Ok(load_agent_turns(
+        conn,
+        "m.role = 'user' AND m.id = ?1 AND (?2 IS NULL OR t.workspace_id = ?2)",
+        params![message_id, workspace_id],
+        "LIMIT 1",
+    )?
+    .into_iter()
+    .next())
+}
+
+fn agent_turn_cursor(
+    conn: &Connection,
+    workspace_id: Option<&str>,
+    message_id: &str,
+) -> Result<(String, String)> {
+    conn.query_row(
+        "SELECT m.created_at, m.id FROM thread_messages m
+         JOIN threads t ON t.id = m.thread_id
+         WHERE m.id = ?1 AND m.role = 'user' AND (?2 IS NULL OR t.workspace_id = ?2)",
+        params![message_id, workspace_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?
+    .ok_or_else(invalid_observed_history_cursor)
+}
+
+fn load_agent_turns(
+    conn: &Connection,
+    filter: &str,
+    query_params: impl rusqlite::Params,
+    order_and_limit: &str,
+) -> Result<Vec<AgentTurnRecord>> {
+    let sql = format!(
+        "WITH selected AS (
+           SELECT m.id AS message_id, m.thread_id, t.workspace_id, m.created_at,
+                  m.seq AS message_seq,
+                  (SELECT MIN(e.seq) FROM events e
+                   WHERE e.type = 'agent.message'
+                     AND e.thread_id = m.thread_id
+                     AND json_extract(e.payload, '$.threadId') = m.thread_id
+                     AND json_extract(e.payload, '$.messageId') = m.id
+                     AND json_extract(e.payload, '$.role') = 'user') AS started_event_seq
+           FROM thread_messages m
+           JOIN threads t ON t.id = m.thread_id
+           WHERE {filter}
+           {order_and_limit}
+         ), bounded AS (
+           SELECT s.*,
+                  (SELECT MIN(next.seq) FROM events next
+                   WHERE next.type = 'agent.message'
+                     AND next.thread_id = s.thread_id
+                     AND json_extract(next.payload, '$.threadId') = s.thread_id
+                     AND json_extract(next.payload, '$.role') = 'user'
+                     AND next.seq > s.started_event_seq) AS next_started_event_seq,
+                  (SELECT MIN(done.seq) FROM events done
+                   WHERE done.type = 'agent.turn_completed'
+                     AND done.thread_id = s.thread_id
+                     AND json_extract(done.payload, '$.threadId') = s.thread_id
+                     AND done.seq > s.started_event_seq
+                     AND done.seq < COALESCE((
+                       SELECT MIN(next.seq) FROM events next
+                       WHERE next.type = 'agent.message'
+                         AND next.thread_id = s.thread_id
+                         AND json_extract(next.payload, '$.threadId') = s.thread_id
+                         AND json_extract(next.payload, '$.role') = 'user'
+                         AND next.seq > s.started_event_seq
+                     ), 9223372036854775807)) AS completed_event_seq
+           FROM selected s
+         )
+         SELECT b.message_id, b.thread_id, b.workspace_id, b.created_at,
+                b.started_event_seq, b.next_started_event_seq, b.completed_event_seq,
+                completed.occurred_at,
+                CAST(json_extract(completed.payload, '$.ok') AS INTEGER),
+                CAST(json_extract(completed.payload, '$.interrupted') AS INTEGER),
+                EXISTS(
+                  SELECT 1 FROM thread_messages later
+                  WHERE later.thread_id = b.thread_id AND later.role = 'user'
+                    AND later.seq > b.message_seq
+                ),
+                (SELECT o.id FROM operations o
+                 WHERE o.thread_id = b.thread_id
+                   AND o.started_at IS NOT NULL
+                   AND b.started_event_seq = (
+                     SELECT MIN(covered.seq) FROM events covered
+                     WHERE covered.type = 'agent.message'
+                       AND covered.thread_id = b.thread_id
+                       AND json_extract(covered.payload, '$.threadId') = b.thread_id
+                       AND json_extract(covered.payload, '$.role') = 'user'
+                       AND covered.occurred_at >= o.started_at
+                       AND (o.ended_at IS NULL OR covered.occurred_at <= o.ended_at)
+                   )
+                 ORDER BY o.started_at, o.id LIMIT 1)
+         FROM bounded b
+         LEFT JOIN events completed ON completed.seq = b.completed_event_seq
+         ORDER BY b.created_at DESC, b.message_id DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    Ok(stmt
+        .query_map(query_params, |row| {
+            Ok(AgentTurnRecord {
+                message_id: row.get(0)?,
+                thread_id: row.get(1)?,
+                workspace_id: row.get(2)?,
+                created_at: row.get(3)?,
+                started_event_seq: row.get(4)?,
+                next_started_event_seq: row.get(5)?,
+                completed_event_seq: row.get(6)?,
+                completed_at: row.get(7)?,
+                ok: row.get(8)?,
+                interrupted: row.get(9)?,
+                has_later_turn: row.get(10)?,
+                operation_id: row.get(11)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn validate_observed_history_request(
+    workspace_id: Option<&str>,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<()> {
+    if workspace_id.is_some_and(|id| !is_valid_id(id)) {
+        return Err(KalError::validation(
+            "invalid_workspace_id",
+            "That workspace reference isn't valid.",
+        ));
+    }
+    if cursor.is_some_and(|id| !is_valid_id(id)) {
+        return Err(invalid_observed_history_cursor());
+    }
+    if !(1..=MAX_OBSERVED_HISTORY_PAGE).contains(&limit) {
+        return Err(KalError::validation(
+            "invalid_observed_history_limit",
+            "Observed Runs history pages must contain between 1 and 200 records.",
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_observed_history_cursor() -> KalError {
+    KalError::validation(
+        "invalid_observed_history_cursor",
+        "That observed Runs history cursor is invalid for this workspace.",
+    )
+}
+
 // ---- Undelivered message ----
 //
 // A user message that is in the thread's history but never reached the provider: its launch or
@@ -594,6 +813,111 @@ pub fn tool_calls(conn: &Connection, thread_id: &str, limit: u32) -> Result<Vec<
     Ok(page)
 }
 
+/// Newest-first tool-call history across all threads, with an optional workspace and thread
+/// scope. The cursor must belong to the same scope, preventing cross-workspace cursor probing.
+pub fn tool_call_history(
+    conn: &Connection,
+    workspace_id: Option<&str>,
+    thread_id: Option<&str>,
+    before_tool_id: Option<&str>,
+    limit: u32,
+) -> Result<(Vec<ToolCallHistoryRecord>, Option<String>)> {
+    validate_observed_history_request(workspace_id, before_tool_id, limit)?;
+    if thread_id.is_some_and(|id| !is_valid_id(id)) {
+        return Err(KalError::validation(
+            "invalid_thread_id",
+            "That thread reference isn't valid.",
+        ));
+    }
+    let cursor = before_tool_id
+        .map(|id| tool_call_cursor(conn, workspace_id, thread_id, id))
+        .transpose()?;
+    let fetch = i64::from(limit) + 1;
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
+                c.requested_at, c.started_at, c.completed_at, t.workspace_id
+         FROM tool_calls c
+         JOIN threads t ON t.id = c.thread_id
+         WHERE (?1 IS NULL OR t.workspace_id = ?1)
+           AND (?2 IS NULL OR c.thread_id = ?2)
+           AND (?3 IS NULL OR c.requested_at < ?3 OR (c.requested_at = ?3 AND c.id < ?4))
+         ORDER BY c.requested_at DESC, c.id DESC LIMIT ?5",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![
+                workspace_id,
+                thread_id,
+                cursor.as_ref().map(|item| item.0.as_str()),
+                cursor.as_ref().map(|item| item.1.as_str()),
+                fetch
+            ],
+            tool_call_history_from_row,
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let has_more = rows.len() > limit as usize;
+    let page: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let next = has_more
+        .then(|| page.last().map(|row| row.call.id.clone()))
+        .flatten();
+    Ok((page, next))
+}
+
+/// Exact tool call in the requested canonical workspace scope.
+pub fn tool_call(
+    conn: &Connection,
+    tool_id: &str,
+    workspace_id: Option<&str>,
+) -> Result<Option<ToolCallHistoryRecord>> {
+    validate_observed_history_request(workspace_id, Some(tool_id), 1)?;
+    Ok(conn
+        .query_row(
+            "SELECT c.id, c.thread_id, c.tool, c.summary, c.status, c.result_summary,
+                    c.requested_at, c.started_at, c.completed_at, t.workspace_id
+             FROM tool_calls c
+             JOIN threads t ON t.id = c.thread_id
+             WHERE c.id = ?1 AND (?2 IS NULL OR t.workspace_id = ?2)",
+            params![tool_id, workspace_id],
+            tool_call_history_from_row,
+        )
+        .optional()?)
+}
+
+fn tool_call_cursor(
+    conn: &Connection,
+    workspace_id: Option<&str>,
+    thread_id: Option<&str>,
+    tool_id: &str,
+) -> Result<(String, String)> {
+    conn.query_row(
+        "SELECT c.requested_at, c.id FROM tool_calls c
+         JOIN threads t ON t.id = c.thread_id
+         WHERE c.id = ?1 AND (?2 IS NULL OR t.workspace_id = ?2)
+           AND (?3 IS NULL OR c.thread_id = ?3)",
+        params![tool_id, workspace_id, thread_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?
+    .ok_or_else(invalid_observed_history_cursor)
+}
+
+fn tool_call_history_from_row(row: &Row<'_>) -> rusqlite::Result<ToolCallHistoryRecord> {
+    Ok(ToolCallHistoryRecord {
+        workspace_id: row.get(9)?,
+        call: ToolCallRecord {
+            id: row.get(0)?,
+            thread_id: row.get(1)?,
+            tool: row.get(2)?,
+            summary: row.get(3)?,
+            status: parse_enum(4, &row.get::<_, String>(4)?)?,
+            result_summary: row.get(5)?,
+            requested_at: row.get(6)?,
+            started_at: row.get(7)?,
+            completed_at: row.get(8)?,
+        },
+    })
+}
+
 // ---- Files ----
 
 pub fn record_file(
@@ -624,6 +948,10 @@ mod tests {
     }
 
     fn thread(conn: &Connection, id: &str, now: &str) {
+        thread_in(conn, id, &new_id(), now);
+    }
+
+    fn thread_in(conn: &Connection, id: &str, workspace_id: &str, now: &str) {
         insert_thread(
             conn,
             &NewThreadRow {
@@ -634,7 +962,7 @@ mod tests {
                 model: None,
                 provider_account_id: None,
                 account_label: None,
-                workspace_id: &new_id(),
+                workspace_id,
                 workspace_name: "Repo",
                 cwd: "/repo",
                 permission_mode: PermissionMode::Approve,
@@ -642,6 +970,42 @@ mod tests {
             },
         )
         .expect("insert");
+    }
+
+    fn workspace(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO workspaces (id, name, root_path, created_at, last_opened_at)
+             VALUES (?1, 'Repo', ?2, '2026-09-30T10:00:00.000Z', '2026-09-30T10:00:00.000Z')",
+            params![id, format!("C:/fixture/{id}")],
+        )
+        .expect("workspace");
+    }
+
+    fn event(
+        conn: &Connection,
+        event_type: &str,
+        workspace_id: Option<&str>,
+        thread_id: Option<&str>,
+        payload: serde_json::Value,
+        occurred_at: &str,
+    ) -> (String, i64) {
+        let id = new_id();
+        conn.execute(
+            "INSERT INTO events (
+               id, type, version, occurred_at, source, workspace_id, thread_id, payload
+             ) VALUES (?1, ?2, 1, ?3, 'core', ?4, ?5, ?6)",
+            params![
+                id,
+                event_type,
+                occurred_at,
+                workspace_id,
+                thread_id,
+                payload.to_string()
+            ],
+        )
+        .expect("event");
+        let seq = conn.last_insert_rowid();
+        (id, seq)
     }
 
     #[test]
@@ -867,5 +1231,273 @@ mod tests {
         assert_eq!(calls[0].result_summary.as_deref(), Some("2 tests failed"));
         assert_eq!(calls[1].id, b);
         assert_eq!(calls[1].status, ToolCallStatus::Cancelled);
+    }
+
+    #[test]
+    fn agent_turn_history_pages_every_thread_and_only_suppresses_the_covered_turn() {
+        let conn = conn();
+        let workspace_id = new_id();
+        workspace(&conn, &workspace_id);
+        let mut all_messages = Vec::new();
+        for index in 0..105 {
+            let thread_id = new_id();
+            let at = format!("2026-09-30T10:00:00.{index:03}Z");
+            thread_in(&conn, &thread_id, &workspace_id, &at);
+            let message = insert_message(&conn, &thread_id, MessageRole::User, "run", None, &at)
+                .expect("message");
+            let (_, started_seq) = event(
+                &conn,
+                "agent.message",
+                Some(&workspace_id),
+                Some(&thread_id),
+                serde_json::json!({
+                    "threadId": thread_id,
+                    "messageId": message.id,
+                    "role": "user"
+                }),
+                &at,
+            );
+            let (_, completed_seq) = event(
+                &conn,
+                "agent.turn_completed",
+                Some(&workspace_id),
+                Some(&thread_id),
+                serde_json::json!({
+                    "threadId": thread_id,
+                    "ok": true,
+                    "interrupted": false
+                }),
+                &at,
+            );
+            all_messages.push((message.id, started_seq, completed_seq));
+        }
+
+        let mut cursor = None;
+        let mut paged = Vec::new();
+        loop {
+            let (page, next) =
+                agent_turn_history(&conn, Some(&workspace_id), cursor.as_deref(), 17)
+                    .expect("turn page");
+            paged.extend(page);
+            cursor = next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            paged.len(),
+            105,
+            "history is not capped at the old 100 rows"
+        );
+        let oldest = all_messages.first().expect("oldest");
+        let exact = agent_turn(&conn, &oldest.0, Some(&workspace_id))
+            .expect("exact turn")
+            .expect("oldest survives");
+        assert_eq!(exact.started_event_seq, Some(oldest.1));
+        assert_eq!(exact.completed_event_seq, Some(oldest.2));
+        assert_eq!(exact.ok, Some(true));
+
+        let thread_id = new_id();
+        thread_in(&conn, &thread_id, &workspace_id, "2026-09-30T11:00:00.000Z");
+        let first = insert_message(
+            &conn,
+            &thread_id,
+            MessageRole::User,
+            "first",
+            None,
+            "2026-09-30T11:00:00.010Z",
+        )
+        .expect("first message");
+        let (_, first_started) = event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "messageId": first.id, "role": "user"}),
+            "2026-09-30T11:00:00.010Z",
+        );
+        let (_, first_completed) = event(
+            &conn,
+            "agent.turn_completed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "ok": true, "interrupted": false}),
+            "2026-09-30T11:00:00.020Z",
+        );
+        let second = insert_message(
+            &conn,
+            &thread_id,
+            MessageRole::User,
+            "second",
+            None,
+            "2026-09-30T11:00:00.030Z",
+        )
+        .expect("second message");
+        let (_, second_started) = event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "messageId": second.id, "role": "user"}),
+            "2026-09-30T11:00:00.030Z",
+        );
+        let (_, second_completed) = event(
+            &conn,
+            "agent.turn_completed",
+            Some(&workspace_id),
+            Some(&thread_id),
+            serde_json::json!({"threadId": thread_id, "ok": false, "interrupted": false}),
+            "2026-09-30T11:00:00.040Z",
+        );
+        let operation_id = new_id();
+        conn.execute(
+            "INSERT INTO operations (
+               id, workspace_id, name, kind, prompt, dependencies, priority, lane, environment,
+               urls, env_keys, source, status, thread_id, created_at, started_at, ended_at,
+               position
+             ) VALUES (
+               ?1, ?2, 'First agent turn', 'agent', 'first', '[]', 0, 'next', 'local',
+               '[]', '[]', 'operations', 'succeeded', ?3,
+               '2026-09-30T11:00:00.000Z', '2026-09-30T11:00:00.000Z',
+               '2026-09-30T11:00:00.020Z', 0
+             )",
+            params![operation_id, workspace_id, thread_id],
+        )
+        .expect("linked operation");
+
+        let first_turn = agent_turn(&conn, &first.id, Some(&workspace_id))
+            .expect("first exact")
+            .expect("first turn");
+        assert_eq!(first_turn.started_event_seq, Some(first_started));
+        assert_eq!(first_turn.next_started_event_seq, Some(second_started));
+        assert_eq!(first_turn.completed_event_seq, Some(first_completed));
+        assert_eq!(
+            first_turn.operation_id.as_deref(),
+            Some(operation_id.as_str())
+        );
+        assert!(first_turn.has_later_turn);
+        let second_turn = agent_turn(&conn, &second.id, Some(&workspace_id))
+            .expect("second exact")
+            .expect("second turn");
+        assert_eq!(second_turn.started_event_seq, Some(second_started));
+        assert_eq!(second_turn.next_started_event_seq, None);
+        assert_eq!(second_turn.completed_event_seq, Some(second_completed));
+        assert_eq!(second_turn.operation_id, None, "later turn is not hidden");
+        assert!(!second_turn.has_later_turn);
+        assert_eq!(second_turn.ok, Some(false));
+
+        let unknown_thread = new_id();
+        thread_in(
+            &conn,
+            &unknown_thread,
+            &workspace_id,
+            "2026-09-30T11:30:00.000Z",
+        );
+        let unknown = insert_message(
+            &conn,
+            &unknown_thread,
+            MessageRole::User,
+            "old imported turn",
+            None,
+            "2026-09-30T11:30:00.010Z",
+        )
+        .expect("unknown turn");
+        event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&unknown_thread),
+            serde_json::json!({
+                "threadId": unknown_thread,
+                "messageId": unknown.id,
+                "role": "user"
+            }),
+            "2026-09-30T11:30:00.010Z",
+        );
+        let later = insert_message(
+            &conn,
+            &unknown_thread,
+            MessageRole::User,
+            "later turn",
+            None,
+            "2026-09-30T11:30:00.020Z",
+        )
+        .expect("later turn");
+        let (_, later_started) = event(
+            &conn,
+            "agent.message",
+            Some(&workspace_id),
+            Some(&unknown_thread),
+            serde_json::json!({
+                "threadId": unknown_thread,
+                "messageId": later.id,
+                "role": "user"
+            }),
+            "2026-09-30T11:30:00.020Z",
+        );
+        let unknown_turn = agent_turn(&conn, &unknown.id, Some(&workspace_id))
+            .expect("unknown exact")
+            .expect("unknown turn remains visible");
+        assert_eq!(unknown_turn.completed_event_seq, None);
+        assert_eq!(unknown_turn.next_started_event_seq, Some(later_started));
+        assert!(unknown_turn.has_later_turn);
+    }
+
+    #[test]
+    fn tool_call_history_pages_beyond_twenty_with_exact_workspace_ownership() {
+        let conn = conn();
+        let workspace_id = new_id();
+        let other_workspace = new_id();
+        let thread_id = new_id();
+        thread_in(&conn, &thread_id, &workspace_id, "2026-09-30T12:00:00.000Z");
+        let mut ids = Vec::new();
+        for index in 0..25 {
+            let at = format!("2026-09-30T12:00:00.{index:03}Z");
+            ids.push(
+                insert_tool_call(
+                    &conn,
+                    &thread_id,
+                    &format!("provider-{index}"),
+                    "Read",
+                    "Read a file",
+                    &at,
+                )
+                .expect("tool call"),
+            );
+        }
+
+        let mut cursor = None;
+        let mut paged = Vec::new();
+        loop {
+            let (page, next) = tool_call_history(
+                &conn,
+                Some(&workspace_id),
+                Some(&thread_id),
+                cursor.as_deref(),
+                6,
+            )
+            .expect("tool page");
+            paged.extend(page);
+            cursor = next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(paged.len(), 25, "history is not capped at the old 20 rows");
+        let oldest = tool_call(&conn, &ids[0], Some(&workspace_id))
+            .expect("exact tool")
+            .expect("oldest tool");
+        assert_eq!(oldest.workspace_id, workspace_id);
+        assert_eq!(oldest.call.thread_id, thread_id);
+        assert_eq!(
+            tool_call(&conn, &ids[0], Some(&other_workspace)).expect("wrong scope"),
+            None
+        );
+        assert_eq!(
+            tool_call_history(&conn, Some(&other_workspace), None, Some(&ids[0]), 10)
+                .expect_err("cursor cannot cross workspace")
+                .code,
+            "invalid_observed_history_cursor"
+        );
     }
 }

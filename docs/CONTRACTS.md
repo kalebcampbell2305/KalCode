@@ -72,8 +72,8 @@ crates re-export them so their Rust paths still work.
 - **Display statuses (Z7):** 18 runtime statuses → 12 display statuses, one mapping in Rust
   (`ThreadStatus::display`, `chip`, `DisplayStatus::tone`) and its TypeScript mirror
   (`displayStatusOf`), kept identical by a test. Colours: working green; waiting and permission
-  required neutral grey; idle, starting and offline muted; done high-contrast neutral; failed
-  red; paused amber (the only amber); recovering blue. `interrupted` and `waiting_for_dependency`
+  required amber; idle, starting and offline muted; done high-contrast neutral; failed red;
+  paused amber; recovering blue. `interrupted` and `waiting_for_dependency`
   show as IDLE with a qualifier; FAILED counts under "Waiting for you".
 - **Features:** `SurfaceId::CommandCenter` (gated) and per-feature flags (`FeatureFlags.features`,
   gated until its campaign merges; Available today: pane system, provider health, provider

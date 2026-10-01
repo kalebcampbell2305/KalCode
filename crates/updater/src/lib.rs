@@ -29,6 +29,8 @@ const ROLLBACK_RECEIPT_SCHEMA_VERSION_V1: u8 = 1;
 const ROLLBACK_RECEIPT_SCHEMA_VERSION_V2: u8 = 2;
 const MAX_PUBLIC_KEY_BASE64_BYTES: usize = 4 * 1024;
 const MAX_SIGNATURE_BASE64_BYTES: usize = 16 * 1024;
+const MAX_ATTEMPT_IDENTITY_BYTES: usize = 512;
+const FORWARD_ONLY_MAC_FENCE_SUFFIX: &str = "|forward-only-schema-upgrade";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1116,6 +1118,31 @@ pub struct UpdateStatus {
     pub total_bytes: Option<u64>,
     pub last_error: Option<String>,
     pub recovery_available: bool,
+    /// A newer build of the running public version is verified and staged: it installs, without
+    /// a prompt, when KalCode closes. The machine never sets this; the desktop owner of the
+    /// staged installer does.
+    #[serde(default)]
+    pub install_on_quit: bool,
+}
+
+/// Whether `next` is an internal build of `current`'s public version (`X.Y.Z` or `X.Y.Z+N` to
+/// `X.Y.Z+M`): the same major, minor, patch and pre-release, and a plain numeric build number on
+/// `next`. Callers have already proved `next` is newer. Such builds install silently when KalCode
+/// closes; any other update is a new public version and keeps the in-app prompt. Mirrors
+/// `sameVersionBuild` in the desktop UI.
+#[must_use]
+pub fn same_public_build(current: &str, next: &str) -> bool {
+    let (Ok(current), Ok(next)) = (parse_version(current), parse_version(next)) else {
+        return false;
+    };
+    let build = next.build.as_str();
+    current.major == next.major
+        && current.minor == next.minor
+        && current.patch == next.patch
+        && current.pre == next.pre
+        && (1..=16).contains(&build.len())
+        && !build.starts_with('0')
+        && build.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1141,6 +1168,7 @@ impl UpdateMachine {
                 total_bytes: None,
                 last_error: None,
                 recovery_available: false,
+                install_on_quit: false,
             },
             candidate: None,
         }
@@ -1462,6 +1490,8 @@ pub struct InstallAttempt {
     pub binding: Option<InstallBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_swap: Option<MacSwapAttempt>,
+    /// Opaque durable attempt identity. New attempts begin with their creation time; the
+    /// forward-only schema fence may append a bounded marker before a database migration.
     pub started_at: String,
 }
 
@@ -1680,6 +1710,49 @@ impl UpdateJournal {
             ));
         }
         swap.phase = next;
+        self.save()
+    }
+
+    /// Fences a swapped-in macOS upgrade against rollback by the helper before a forward-only
+    /// schema migration begins. Shipped helpers capture the complete attempt before the swap and
+    /// compare it again immediately before swapping back, so this durable marker makes that
+    /// rollback fail closed without changing the journal schema. Their success path still
+    /// observes normal startup reconciliation and cleans up the verified previous app.
+    ///
+    /// Both helper modes are covered: a restart apply leaves the attempt `Launched`, and a
+    /// no-relaunch apply (KalCode closed) leaves it `Swapped` while it probes the new build, so a
+    /// new build opened during that probe is fenced exactly like a relaunched one.
+    pub fn fence_forward_only_mac_install(
+        &mut self,
+        current_version: &str,
+    ) -> Result<(), UpdateError> {
+        parse_version(current_version)?;
+        let invalid = || {
+            UpdateError::new(
+                "update_install_record_invalid",
+                "KalCode couldn't create a safe update recovery record.",
+            )
+        };
+        let attempt = self.state.install_attempt.as_mut().ok_or_else(invalid)?;
+        let swapped_macos_upgrade = attempt.kind == InstallKind::Upgrade
+            && attempt.to_version == current_version
+            && attempt.binding.as_ref().map(|binding| binding.target)
+                == Some(UpdateTarget::DarwinAarch64)
+            && attempt.mac_swap.as_ref().is_some_and(|swap| {
+                matches!(swap.phase, MacSwapPhase::Swapped | MacSwapPhase::Launched)
+            });
+        if !swapped_macos_upgrade {
+            return Err(invalid());
+        }
+        if attempt.started_at.ends_with(FORWARD_ONLY_MAC_FENCE_SUFFIX) {
+            return Ok(());
+        }
+        if attempt.started_at.len() + FORWARD_ONLY_MAC_FENCE_SUFFIX.len()
+            > MAX_ATTEMPT_IDENTITY_BYTES
+        {
+            return Err(invalid());
+        }
+        attempt.started_at.push_str(FORWARD_ONLY_MAC_FENCE_SUFFIX);
         self.save()
     }
 

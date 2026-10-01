@@ -30,3 +30,13 @@
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro KALCODE_CANONICAL_INSTALL_PATH
 !macroend
+
+; KalCode installs a staged same-version build silently (/S /UPDATE, no /R) after the user closes
+; it. A KalCode launched while that install ran stepped aside and left this marker (see
+; `apply_lease.rs`); open the new build for it now. Any other launch removes a stale marker.
+!macro NSIS_HOOK_POSTINSTALL
+  ${If} ${FileExists} "$INSTDIR\kalcode-reopen-after-update"
+    Delete "$INSTDIR\kalcode-reopen-after-update"
+    nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
+  ${EndIf}
+!macroend

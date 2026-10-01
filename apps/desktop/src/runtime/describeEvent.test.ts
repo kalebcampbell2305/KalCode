@@ -139,6 +139,19 @@ describe("describeEvent", () => {
     expect(d.title).toBe("Event from a newer KalCode");
   });
 
+  it("distinguishes successful, failed and interrupted agent turns", () => {
+    const turn = (ok: boolean, interrupted: boolean) =>
+      describeEvent(
+        envelope({
+          type: "agent.turn_completed",
+          payload: { threadId: "thread-1", ok, interrupted },
+        }),
+      );
+    expect(turn(true, false)).toEqual({ title: "Agent turn completed", detail: null, tone: "success" });
+    expect(turn(false, false)).toEqual({ title: "Agent turn failed", detail: null, tone: "danger" });
+    expect(turn(false, true)).toEqual({ title: "Agent turn interrupted", detail: null, tone: "waiting" });
+  });
+
   it("describes Git, context and resource events without content", () => {
     expect(
       describeEvent(
@@ -189,6 +202,17 @@ describe("describeEvent", () => {
     expect(routed("command")).toEqual({ title: "KalVoice heard a command", detail: null, tone: "idle" });
     expect(routed("dictation").title).toBe("KalVoice heard dictation for the focused box");
     expect(routed("request").title).toBe("KalVoice heard a request");
+  });
+
+  it("describes verified and rejected operation artifact reports without report contents", () => {
+    expect(describeEvent(envelope({ type: "operation.artifact_reported", payload: { path: "dist/app.zip" } }))).toEqual(
+      { title: "Operation artifact reported", detail: "dist/app.zip", tone: "success" },
+    );
+    expect(
+      describeEvent(
+        envelope({ type: "operation.artifact_report_rejected", payload: { code: "artifact_path_rejected" } }),
+      ),
+    ).toEqual({ title: "Operation artifact report rejected", detail: null, tone: "danger" });
   });
 
   it("describes Doctor lifecycle events without finding or environment contents", () => {

@@ -29,6 +29,8 @@ pub const MAX_FACT_CHARS: usize = 160;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeConfirmationKind {
+    /// One exact owner-authored Operations task; never a generic shell grant.
+    OperationsTask,
     /// Turning on Bypass for a thread or as the default mode.
     EnableBypass,
     /// Approving an action whose consequences leave the machine (push, deploy, send, spend).
@@ -59,6 +61,42 @@ pub struct NativeConfirmation {
 }
 
 impl NativeConfirmation {
+    pub fn operations_task(name: &str, workspace: &str, command: &str, production: bool) -> Self {
+        // Unlike short labels, the command is never clipped: the owner sees the complete
+        // operation they authorize. Control characters are visible rather than interpreted.
+        let command: String = crate::redact::redact_log_line(command)
+            .chars()
+            .flat_map(|c| {
+                if (c.is_control() && c != '\n' && c != '\t') || is_invisible(c) {
+                    c.escape_unicode().collect::<Vec<_>>()
+                } else {
+                    vec![c]
+                }
+            })
+            .collect();
+        Self {
+            kind: NativeConfirmationKind::OperationsTask,
+            title: if production {
+                "Authorize a PRODUCTION task?"
+            } else {
+                "Authorize this Operations task?"
+            }
+            .into(),
+            message: format!(
+                "Task: {}\nWorkspace: {}\n\n{}\n\nThis authorizes one execution through Operations. Pausing the queue holds pending work; it does not stop running work.",
+                quoted(name),
+                quoted(workspace),
+                command
+            ),
+            confirm_label: if production {
+                "Authorize production task"
+            } else {
+                "Authorize task"
+            },
+            cancel_label: "Cancel",
+        }
+    }
+
     pub fn kind(&self) -> NativeConfirmationKind {
         self.kind
     }
@@ -423,6 +461,22 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn operations_confirmation_preserves_multiline_commands_and_marks_production() {
+        let command = format!(
+            "Environment: Production\nCommand:\necho start\n{}\necho end",
+            "x".repeat(600)
+        );
+        let confirmation =
+            NativeConfirmation::operations_task("Deploy", "Workspace", &command, true);
+        assert!(confirmation.title().contains("PRODUCTION"));
+        assert!(confirmation.message().contains(&command));
+        assert!(confirmation.confirm_label().contains("production"));
+        let control =
+            NativeConfirmation::operations_task("Task", "Workspace", "echo \u{202e}spoof", false);
+        assert!(!control.message().contains('\u{202e}'));
+    }
 
     struct Scripted {
         answer: DialogAnswer,

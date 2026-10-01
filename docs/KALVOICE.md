@@ -106,6 +106,12 @@ KEY UP   ─▶ tail check: if the last 300 ms are silent the latest
   the model reloads it in the background. The microphone opens on key-down and is not pre-opened:
   measured open time is already inside budget, and a pre-opened microphone would keep the OS
   "microphone in use" indicator on all the time.
+- **One model per take:** before the microphone opens, KalVoice validates and retains the selected
+  recognizer once. Streaming and final transcription share that same signed-component lease;
+  release does not repeat model selection or component-store reads. Changing the selected model
+  during a take affects the next take. Every new take checks readiness again, and cancellation
+  releases the retained recognizer. This removes redundant setup; it is not a guarantee of
+  instantaneous speech recognition on every device.
 - **Decode budget:** the audio context is sized to the audio (not whisper's fixed 30 s window)
   and tokens are capped by duration, which took one pass from about 4 s to 0.1–0.7 s on the
   reference machine.

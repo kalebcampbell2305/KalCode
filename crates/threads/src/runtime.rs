@@ -41,7 +41,7 @@ use kalcode_core::{Core, ErrorCategory, KalError, Result};
 
 use crate::naming;
 use crate::registry::{ProviderEntry, ProviderRegistry, WorkspaceResolver};
-use crate::store::{self, NewThreadRow, ThreadRow};
+use crate::store::{self, AgentTurnRecord, NewThreadRow, ThreadRow, ToolCallHistoryRecord};
 use crate::types::{
     BulkOutcome, CreateIdleThread, CreateThread, ProviderOption, StatusCount, ThreadOptions,
     ThreadsStatusSummary, ToolCallRecord, WorkspaceOption,
@@ -554,6 +554,53 @@ impl ThreadRuntime {
         })
     }
 
+    /// Newest-first durable user turns across open and archived threads.
+    pub fn agent_turn_history(
+        &self,
+        workspace_id: Option<&str>,
+        before_message_id: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<AgentTurnRecord>, Option<String>)> {
+        self.inner
+            .core
+            .read(|conn| store::agent_turn_history(conn, workspace_id, before_message_id, limit))
+    }
+
+    /// Exact durable user turn in the requested workspace scope.
+    pub fn agent_turn(
+        &self,
+        message_id: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Option<AgentTurnRecord>> {
+        self.inner
+            .core
+            .read(|conn| store::agent_turn(conn, message_id, workspace_id))
+    }
+
+    /// Newest-first durable tool-call history across threads.
+    pub fn tool_call_history(
+        &self,
+        workspace_id: Option<&str>,
+        thread_id: Option<&str>,
+        before_tool_id: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<ToolCallHistoryRecord>, Option<String>)> {
+        self.inner.core.read(|conn| {
+            store::tool_call_history(conn, workspace_id, thread_id, before_tool_id, limit)
+        })
+    }
+
+    /// Exact durable tool call in the requested workspace scope.
+    pub fn tool_call(
+        &self,
+        tool_id: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Option<ToolCallHistoryRecord>> {
+        self.inner
+            .core
+            .read(|conn| store::tool_call(conn, tool_id, workspace_id))
+    }
+
     /// Providers, workspaces and permission modes a new thread can use.
     pub fn options(&self) -> Result<ThreadOptions> {
         let providers = self
@@ -652,6 +699,28 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
+        self.create_reviewed_with_id(request, review_id, None)
+    }
+
+    /// Creates a reviewed Operations thread using the scheduler's durable operation id. The
+    /// Operations ledger reserves this exact id before calling the provider, so a restart can
+    /// correlate the two records without replaying work or relying on process memory.
+    pub fn create_reviewed_for_operation(
+        &self,
+        operation_id: &str,
+        request: CreateThread,
+        review_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(operation_id)?;
+        self.create_reviewed_with_id(request, review_id, Some(operation_id))
+    }
+
+    fn create_reviewed_with_id(
+        &self,
+        request: CreateThread,
+        review_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
         let prompt = validate::prompt(&request.prompt)?;
         let target = create_prompt_target(&request)?;
         let admission =
@@ -679,6 +748,7 @@ impl ThreadRuntime {
                 target,
                 admission,
             }),
+            thread_id,
         )
     }
 
@@ -698,6 +768,7 @@ impl ThreadRuntime {
                 permission_mode: request.permission_mode,
                 name,
             },
+            None,
             None,
         )
     }
@@ -1506,6 +1577,7 @@ impl Inner {
         &self,
         request: NewThread<'_>,
         prompt: Option<AdmittedPrompt>,
+        thread_id: Option<&str>,
     ) -> Result<ThreadSummary> {
         let provider_id = validate::provider_id(request.provider_id)?;
         validate::workspace_id(request.workspace_id)?;
@@ -1532,7 +1604,7 @@ impl Inner {
         let workspace = self.workspaces.resolve(request.workspace_id)?;
         let cwd = workspace.root.to_string_lossy().into_owned();
 
-        let id = new_id();
+        let id = thread_id.map(str::to_owned).unwrap_or_else(new_id);
         let now = now_rfc3339();
         let row = NewThreadRow {
             id: &id,
@@ -2259,7 +2331,16 @@ impl Inner {
                 // A failed turn is reported through `Error`; the turn itself is over either way.
                 // An idle thread whose last turn failed says so, so status and error agree.
                 self.flush_buffers(ctx, state)?;
-                state.turn_failed = !ok && !state.halted;
+                let interrupted = state.halted;
+                state.turn_failed = !ok && !interrupted;
+                self.core.emit(ctx.event(
+                    EventSource::Provider,
+                    EventPayload::AgentTurnCompleted {
+                        thread_id: id.to_owned(),
+                        ok,
+                        interrupted,
+                    },
+                ))?;
                 if state.waiting.is_some() {
                     return Ok(());
                 }

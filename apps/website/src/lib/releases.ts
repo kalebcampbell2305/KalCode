@@ -52,8 +52,22 @@ export function assertManifest(value: unknown): ReleaseManifest {
   return manifest as ReleaseManifest;
 }
 
-/** The manifest shipped with this build. */
-export const RELEASES: ReleaseManifest = assertManifest(manifestJson);
+/**
+ * The public version of a release. Production builds are published as "X.Y.Z+N" (public version
+ * plus an internal build number); the site always names them by the public version "X.Y.Z".
+ */
+export function publicVersion(version: string): string {
+  return version.replace(/\+\d+$/, "");
+}
+
+/** The manifest as the site presents it: `latest.version` is the public version. */
+export function displayManifest(manifest: ReleaseManifest): ReleaseManifest {
+  if (!manifest.latest) return manifest;
+  return { ...manifest, latest: { ...manifest.latest, version: publicVersion(manifest.latest.version) } };
+}
+
+/** The manifest shipped with this build, named by its public version. */
+export const RELEASES: ReleaseManifest = displayManifest(assertManifest(manifestJson));
 
 /** A complete signed Stable selection, used by public availability copy. */
 export function signedStableRelease(manifest: ReleaseManifest): ReleaseManifest["latest"] {
@@ -77,7 +91,7 @@ export function servedStableRelease(manifest: ReleaseManifest): ReleaseManifest[
 /**
  * The version that release-scoped copy names ("Gemini CLI is unavailable in 0.1.6", "threads in
  * 0.1.6 run in Plan, Approve or Auto"): the served Stable release, else 0.1.6, the release that copy
- * was written for. Both facts are unchanged in 0.1.7.
+ * was written for. Both facts are unchanged in 0.1.7 and 0.1.8.
  */
 export function releaseCopyVersion(manifest: ReleaseManifest): string {
   return servedStableRelease(manifest)?.version ?? "0.1.6";

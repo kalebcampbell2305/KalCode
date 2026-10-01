@@ -37,6 +37,7 @@ pub struct RuntimeBundle {
     pub resources: Option<Arc<crate::resource_commands::ResourceGovernorState>>,
     pub doctor: Option<Arc<crate::doctor_commands::DoctorState>>,
     pub utilities: Option<Arc<crate::utility_commands::UtilityState>>,
+    pub operations: Option<Arc<crate::operations_commands::OperationsState>>,
 }
 
 impl RuntimeBundle {
@@ -193,6 +194,18 @@ impl RuntimeBundle {
                 voice,
             )));
         }
+        if let Some(git) = &bundle.git {
+            match crate::operations_commands::OperationsState::start(
+                core.clone(),
+                threads.clone(),
+                git.0.clone(),
+                account.clone(),
+                app,
+            ) {
+                Ok(operations) => bundle.operations = Some(operations),
+                Err(error) => tracing::error!(event = "operations.start_failed", code = error.code),
+            }
+        }
         panes.bind(permissions.service().as_ref(), threads.runtime().ok());
         notifications.bind(threads.runtime_handle());
     }
@@ -220,6 +233,9 @@ impl RuntimeBundle {
         // Source-bearing Context previews are the exception: leases are already drained here,
         // so erase them before any cleanup retry and never carry them into another account.
         let mut clean = true;
+        if let Some(operations) = &self.operations {
+            clean &= operations.shutdown_checked();
+        }
         if let Some(context) = &self.context {
             context.clear();
         }
@@ -599,6 +615,19 @@ impl RuntimeCoordinator {
                 return true;
             }
             if Instant::now() >= deadline {
+                // Name what was still outstanding, so an unclean exit says which drain step held.
+                let (building, in_flight) = self.lifecycle.pending();
+                tracing::warn!(
+                    event = "runtime.drain_timed_out",
+                    phase = ?self.lifecycle.phase(),
+                    building,
+                    in_flight,
+                    bundle_retained = self
+                        .bundle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_some(),
+                );
                 self.lifecycle.block_unclean();
                 return false;
             }
@@ -885,6 +914,7 @@ service!(KalVoiceState, voice);
 service!(crate::resource_commands::ResourceGovernorState, resources);
 service!(crate::doctor_commands::DoctorState, doctor);
 service!(crate::utility_commands::UtilityState, utilities);
+service!(crate::operations_commands::OperationsState, operations);
 
 pub struct RuntimeState<T: RuntimeService> {
     service: Arc<T>,

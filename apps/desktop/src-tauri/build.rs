@@ -17,6 +17,21 @@ fn target_has_test_hooks() -> bool {
         || std::env::var_os("CARGO_FEATURE_E2E").is_some()
 }
 
+/// Embeds Tauri's Windows app manifest (Common Controls v6, which the dialog plugin's
+/// `TaskDialogIndirect` needs) through the linker, so the test binaries get it as well as the
+/// app. Tauri's default resource-based manifest reaches only the app binaries, and a unit-test
+/// binary without it cannot start (STATUS_ENTRYPOINT_NOT_FOUND). `/MANIFESTUAC:NO` keeps the
+/// embedded manifest exactly the file's content, as before.
+fn embed_windows_manifest() -> tauri_build::WindowsAttributes {
+    let manifest =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("windows-app-manifest.xml");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFESTUAC:NO");
+    tauri_build::WindowsAttributes::new_without_app_manifest()
+}
+
 fn main() {
     // Fail closed for direct Cargo/CLI invocations that omit the Dev overlay. This also
     // prevents a release binary (and its credential service) using a Dev bundle identity.
@@ -45,6 +60,29 @@ fn main() {
             "app identity/profile mismatch at {path}; use pnpm tauri dev/build, or set TAURI_CONFIG to the Dev overlay for direct debug Cargo commands"
         );
     }
+    // The runtime version (`package_info().version`) comes from the same merged config. A
+    // release build may only add a numeric internal build number: `X.Y.Z` -> `X.Y.Z+N`.
+    let public_version = base
+        .pointer("/version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("the base app config has no version"));
+    let version = overlay.pointer("/version").map_or(public_version, |value| {
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("TAURI_CONFIG version must be a string"))
+    });
+    if version != public_version {
+        let build = version
+            .strip_prefix(public_version)
+            .and_then(|rest| rest.strip_prefix('+'));
+        assert!(
+            build.is_some_and(|build| !build.is_empty()
+                && !build.starts_with('0')
+                && build.bytes().all(|byte| byte.is_ascii_digit())),
+            "TAURI_CONFIG version {version} must be {public_version} or {public_version}+<build number>"
+        );
+    }
+    println!("cargo:rustc-env=KALCODE_APP_VERSION={version}");
     println!("cargo:rerun-if-changed=test-capabilities");
     println!("cargo:rerun-if-env-changed=KALCODE_AUTHENTICODE_IDENTITY_OIDS");
     let mut commands = COMMANDS.to_vec();
@@ -66,8 +104,13 @@ fn main() {
         }
     }
     let commands: &'static [&'static str] = commands.leak();
-    let attributes = tauri_build::Attributes::new()
+    let mut attributes = tauri_build::Attributes::new()
         .app_manifest(tauri_build::AppManifest::new().commands(commands));
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        attributes = attributes.windows_attributes(embed_windows_manifest());
+    }
     if let Err(error) = tauri_build::try_build(attributes) {
         eprintln!("tauri build script failed: {error:#}");
         std::process::exit(1);

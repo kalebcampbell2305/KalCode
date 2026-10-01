@@ -71,6 +71,7 @@
         "assets/**",
         "kalcode-film/**",
         "launch/**",
+        "marketing/**",
         "AGENTS.md",
         "CLAUDE.md",
         "README.md",
@@ -85,7 +86,7 @@
         "package.json"
       ],
       "lanes": ["internal"],
-      "why": "tooling, CI, agent/dev files, unpublished docs and the marketing films (kalcode-film/, a standalone npm project outside the pnpm workspace, and launch/, the Blender launch film); the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
+      "why": "tooling, CI, agent/dev files, unpublished docs and the marketing films (kalcode-film/, a standalone npm project outside the pnpm workspace, and launch/, the Blender launch film) and marketing copy (marketing/); the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
     },
     {
       "id": "website",
@@ -156,12 +157,12 @@
     "desktop.version": {
       "stage": "commit",
       "lanes": ["desktop"],
-      "text": "Bump the version (tauri.conf.json, apps/desktop/package.json, Cargo.toml) and write docs/releases/<version>.md."
+      "text": "Keep the public version unless the owner declared a new one; the release build numbers itself X.Y.Z+N (N = commits on main). Write docs/releases/<X.Y.Z+N>.md for the build."
     },
     "desktop.release": {
       "stage": "build",
       "lanes": ["desktop"],
-      "text": "Signed release build and automated release gates: node tooling/release/ship.mjs --version X.Y.Z --commit <sha40> (test, build, certify, qa, stage)."
+      "text": "Signed release build and automated release gates: node tooling/release/ship.mjs --version X.Y.Z+N --commit <sha40> (test, build, certify, qa, stage)."
     },
     "desktop.publish": {
       "stage": "deploy",
@@ -171,7 +172,7 @@
     "desktop.verify": {
       "stage": "verify",
       "lanes": ["desktop"],
-      "text": "Verify https://kalcoded.com/releases/updater/stable.json serves X.Y.Z with kalcode.commit = the release commit, then a production install and update (ship.mjs --phase live-verify, live-human)."
+      "text": "Verify https://kalcoded.com/releases/updater/stable.json serves X.Y.Z+N with kalcode.commit = the release commit, then a production install and update (ship.mjs --phase live-verify, live-human)."
     },
     "website.build": {
       "stage": "build",

@@ -23,7 +23,6 @@ import {
   guardianSignatureEvidence,
 } from "./guardian-packaging.mjs";
 import {
-  appVersion,
   assertCleanTree,
   capture,
   DESKTOP_DIR,
@@ -34,6 +33,8 @@ import {
   productName,
   ROOT,
   readJson,
+  releaseVersion,
+  releaseVersionOverlay,
   run,
   sha256File,
   stagingDir,
@@ -110,7 +111,7 @@ if (channel.requestedReleaseChannel === "stable" && !kalvoiceLocalSttIncluded) {
 }
 
 assertCleanTree("A release build");
-const version = appVersion();
+const version = releaseVersion();
 const commit = headCommit();
 const product = productName();
 if (product !== "KalCode") fail(`release productName must remain KalCode (found ${product})`);
@@ -144,7 +145,8 @@ try {
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
-const bundled = join(TARGET_DIR, "release", "bundle", "nsis", file);
+// Tauri names the bundle with the full version; the staged copy uses the `+`-free file name.
+const bundled = join(TARGET_DIR, "release", "bundle", "nsis", `${product}_${version}_x64-setup.exe`);
 const builtApp = join(TARGET_DIR, "release", "kalcode.exe");
 const builtGuardian = join(TARGET_DIR, "release", GUARDIAN_FILENAME);
 const startedAt = Date.now();
@@ -235,13 +237,13 @@ try {
     tauriArgs.push("--no-sign");
   }
   guardianSha256 = await sha256File(builtGuardian);
-  writeJson(
-    overlayPath,
-    guardianBundleOverlay({
+  writeJson(overlayPath, {
+    ...guardianBundleOverlay({
       guardianPath: builtGuardian,
       signingOverlay,
     }),
-  );
+    version: releaseVersionOverlay(version).version,
+  });
   tauriArgs.push("--config", overlayPath);
   run("pnpm", tauriArgs, {
     env: {

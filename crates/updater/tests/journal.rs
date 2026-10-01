@@ -202,6 +202,112 @@ fn mac_install_attempt_can_only_be_created_in_prepared_phase() {
 }
 
 #[test]
+fn forward_only_mac_fence_changes_helper_attempt_identity_and_is_restart_idempotent() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("updater.json");
+    let mut mac_attempt = attempt();
+    mac_attempt.binding = Some(InstallBinding {
+        target: UpdateTarget::DarwinAarch64,
+        source_sha256: "c".repeat(64),
+        signing_requirement_sha256: "d".repeat(64),
+    });
+    mac_attempt.mac_swap = Some(MacSwapAttempt {
+        current_app: temp.path().join("KalCode.app"),
+        staged_app: temp.path().join(".KalCode-update-test.app"),
+        parent_pid: 42,
+        parent_identity_sha256: "e".repeat(64),
+        phase: MacSwapPhase::Prepared,
+    });
+    let mut journal = UpdateJournal::load(&path).unwrap();
+    journal.record_install_attempt(mac_attempt).unwrap();
+    journal
+        .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+        .unwrap();
+    journal
+        .mark_mac_swap_phase(MacSwapPhase::Swapped, MacSwapPhase::Launched)
+        .unwrap();
+    let captured_by_helper = journal.state().install_attempt.clone().unwrap();
+
+    journal.fence_forward_only_mac_install("0.1.6").unwrap();
+    let fenced = journal.state().install_attempt.clone().unwrap();
+    assert_ne!(fenced, captured_by_helper);
+    assert!(
+        fenced
+            .started_at
+            .starts_with(&captured_by_helper.started_at)
+    );
+
+    let mut reopened = UpdateJournal::load(&path).unwrap();
+    reopened.fence_forward_only_mac_install("0.1.6").unwrap();
+    assert_eq!(reopened.state().install_attempt.as_ref(), Some(&fenced));
+
+    assert_eq!(
+        reopened.reconcile_startup("0.1.6").unwrap(),
+        InstallOutcome::Updated
+    );
+    assert!(reopened.state().install_attempt.is_none());
+    assert_eq!(
+        reopened.state().last_successful_version.as_deref(),
+        Some("0.1.6")
+    );
+}
+
+/// A no-relaunch apply (a same-version build installed after KalCode closed) leaves the attempt
+/// `Swapped` while the helper probes the new build. It is fenced like a launched one; a swap not
+/// yet made (`Prepared`) is not.
+#[test]
+fn forward_only_mac_fence_covers_a_no_relaunch_swap_but_not_an_unswapped_one() {
+    for (phase, fenced) in [
+        (MacSwapPhase::Prepared, false),
+        (MacSwapPhase::Swapped, true),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut mac_attempt = attempt();
+        mac_attempt.binding = Some(InstallBinding {
+            target: UpdateTarget::DarwinAarch64,
+            source_sha256: "c".repeat(64),
+            signing_requirement_sha256: "d".repeat(64),
+        });
+        mac_attempt.mac_swap = Some(MacSwapAttempt {
+            current_app: temp.path().join("KalCode.app"),
+            staged_app: temp.path().join(".KalCode-update-test.app"),
+            parent_pid: 42,
+            parent_identity_sha256: "e".repeat(64),
+            phase: MacSwapPhase::Prepared,
+        });
+        let mut journal = UpdateJournal::load(temp.path().join("updater.json")).unwrap();
+        journal.record_install_attempt(mac_attempt).unwrap();
+        if phase == MacSwapPhase::Swapped {
+            journal
+                .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+                .unwrap();
+        }
+        let captured = journal.state().install_attempt.clone().unwrap();
+        let result = journal.fence_forward_only_mac_install("0.1.6");
+        assert_eq!(result.is_ok(), fenced, "{phase:?}");
+        assert_eq!(
+            journal.state().install_attempt.as_ref() != Some(&captured),
+            fenced,
+            "{phase:?}"
+        );
+    }
+}
+
+#[test]
+fn forward_only_mac_fence_rejects_the_wrong_target_phase_or_version() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut journal = UpdateJournal::load(temp.path().join("updater.json")).unwrap();
+    journal.record_install_attempt(attempt()).unwrap();
+    assert_eq!(
+        journal
+            .fence_forward_only_mac_install("0.1.6")
+            .unwrap_err()
+            .code(),
+        "update_install_record_invalid"
+    );
+}
+
+#[test]
 fn journal_defaults_to_stable_and_survives_restart() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("updater.json");
@@ -338,4 +444,39 @@ fn interrupted_atomic_replace_recovers_the_last_valid_state() {
     let recovered = UpdateJournal::load(&path).unwrap();
     assert_eq!(recovered.state().channel, UpdateChannel::Dev);
     assert!(path.exists());
+}
+
+#[test]
+fn a_build_upgrade_of_the_same_public_version_reconciles_by_exact_build() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("updater.json");
+    let mut journal = UpdateJournal::load(&path).unwrap();
+    let build = |from: &str, to: &str| InstallAttempt {
+        from_version: from.into(),
+        to_version: to.into(),
+        ..attempt()
+    };
+    for (from, to) in [("0.1.7+780", "0.1.7+780"), ("0.1.7+780", "0.1.7+779")] {
+        assert_eq!(
+            journal
+                .record_install_attempt(build(from, to))
+                .unwrap_err()
+                .code(),
+            "update_install_record_invalid"
+        );
+    }
+    journal
+        .record_install_attempt(build("0.1.7", "0.1.7+780"))
+        .unwrap();
+    assert_eq!(
+        journal.reconcile_startup("0.1.7+780").unwrap(),
+        InstallOutcome::Updated
+    );
+    journal
+        .record_install_attempt(build("0.1.7+780", "0.1.7+1000"))
+        .unwrap();
+    assert_eq!(
+        journal.reconcile_startup("0.1.7+780").unwrap(),
+        InstallOutcome::PreviousVersionPreserved
+    );
 }

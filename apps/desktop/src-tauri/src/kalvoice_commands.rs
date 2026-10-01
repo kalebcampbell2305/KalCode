@@ -60,7 +60,11 @@ use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
+// The reducer also owns shared session reset state; only Windows/macOS have Fn input adapters.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 #[path = "kalvoice_fn_key.rs"]
+// Linux has no Fn adapter, so only the platform-independent gesture tests reach it there.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 mod fn_key;
 #[cfg(target_os = "macos")]
 #[path = "kalvoice_fn_macos.rs"]
@@ -419,10 +423,20 @@ impl KalVoiceRuntime {
         let background_settled = self.background.wait_until(deadline);
         let reasoning_settled =
             background_settled && local_settled && self.reasoning.shutdown_reasoning(deadline);
-        if downloads_settled && background_settled && local_settled && reasoning_settled {
+        let settled = downloads_settled && background_settled && local_settled && reasoning_settled;
+        if settled {
             self.recognizers.shutdown();
+        } else {
+            // Which owner kept KalVoice from stopping in time (an unclean exit names it).
+            tracing::warn!(
+                event = "kalvoice.shutdown_incomplete",
+                downloads_settled,
+                background_settled,
+                local_settled,
+                reasoning_settled,
+            );
         }
-        downloads_settled && background_settled && local_settled && reasoning_settled
+        settled
     }
 }
 
@@ -534,10 +548,14 @@ impl DesktopRecognizers {
 
 impl RecognizerSource for DesktopRecognizers {
     fn ready(&self) -> Result<(), SttError> {
+        self.prepare().map(|_| ())
+    }
+
+    fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
         if !ENGINE_AVAILABLE {
             return Err(SttError::EngineUnavailable);
         }
-        self.load_recognizer().map(|_| ())
+        self.load_recognizer()
     }
 
     fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
@@ -675,6 +693,7 @@ pub(crate) fn surface_label(surface: SurfaceId) -> &'static str {
         SurfaceId::Providers => "Providers",
         SurfaceId::Settings => "Settings",
         SurfaceId::CommandCenter => "the Command Center",
+        SurfaceId::Operations => "Operations",
     }
 }
 
@@ -1357,6 +1376,7 @@ fn ptt_capture_allowed(runtime: &KalVoiceRuntime) -> bool {
 
 /// Called by the macOS local monitor and the Windows WebView's exact DOM `Fn` event. The adapter
 /// passes no key identity or content for other keys; it reports only that a chord occurred.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
     let Ok(state) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app) else {
         return false;
@@ -1391,6 +1411,7 @@ pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
     true
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
     let Some(task) = runtime.background.start() else {
         return;
@@ -1415,6 +1436,7 @@ fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
     }
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn fn_hold_elapsed(runtime: &Arc<KalVoiceRuntime>, generation: u64) {
     let mut push_to_talk = runtime
         .push_to_talk
@@ -2608,12 +2630,17 @@ mod tests {
         }
     }
     struct ReadyModel;
+    impl SpeechRecognizer for ReadyModel {
+        fn transcribe(&self, _audio: &[f32]) -> Result<String, SttError> {
+            Ok(String::new())
+        }
+    }
     impl RecognizerSource for ReadyModel {
         fn ready(&self) -> Result<(), SttError> {
             Ok(())
         }
         fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
-            Err(SttError::ModelNotInstalled)
+            Ok(Arc::new(Self))
         }
     }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-operations-service-action"
+description = "Enables the operations_service_action command without any pre-configured scope."
+commands.allow = ["operations_service_action"]
+
+[[permission]]
+identifier = "deny-operations-service-action"
+description = "Denies the operations_service_action command without any pre-configured scope."
+commands.deny = ["operations_service_action"]

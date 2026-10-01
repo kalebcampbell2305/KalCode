@@ -58,6 +58,159 @@ fn round_trip_is_idempotent_structure_preserving_and_clean() {
 }
 
 #[test]
+fn adjacent_assignment_cannot_expose_a_second_pass_entropy_secret() {
+    let text = [
+        "https://u:",
+        "ib0c+Ae-1__",
+        "password=",
+        "____A=",
+        "\"api_key\": \"",
+    ]
+    .concat();
+
+    let once = redact_text(&text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(!once.text.contains("ib0c+Ae-1__"));
+    assert!(!once.text.contains("____A="));
+    assert!(
+        scan(&once.text).is_empty(),
+        "residual finding in {:?}",
+        once.text
+    );
+    assert_eq!(once.text.matches('\n').count(), text.matches('\n').count());
+}
+
+#[test]
+fn long_assignment_value_cannot_expose_a_second_pass_entropy_secret() {
+    let value = "aB1".repeat(61);
+    let text = format!("https://u:ib0c+Ae-1__password={value}\"api_key\": \"");
+    assert!(
+        text.split(':').nth(2).expect("opaque token").len() > 200,
+        "fixture must exercise the entropy blob exclusion"
+    );
+
+    let once = redact_text(&text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(!once.text.contains("ib0c+Ae-1__"));
+    assert!(!once.text.contains(&value));
+    assert!(scan(&once.text).is_empty());
+}
+
+#[test]
+fn assignment_prefix_does_not_promote_a_rejected_placeholder_value() {
+    let text = "https://u:ib0c+Ae-1__password=xxxxxx\"api_key\": \"";
+    let redacted = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(redacted.text, text);
+    assert!(redacted.spans.is_empty());
+    assert!(scan(text).is_empty());
+}
+
+#[test]
+fn extra_assignment_detector_also_stabilizes_the_entropy_prefix() {
+    let text = "https://u:B0cD/Ef-1_GhI2+pass=aaaaaaaaab\"api_key\": \"";
+    let once = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(
+        !once.text.contains("B0cD/Ef-1_GhI2+pass="),
+        "first pass left an emergent prefix: {:?}; findings: {:?}",
+        once.text,
+        scan(text)
+    );
+    assert!(!once.text.contains("aaaaaaaaab"));
+    assert!(scan(&once.text).is_empty());
+}
+
+#[test]
+fn assignment_value_crossing_a_token_delimiter_stabilizes_the_entropy_prefix() {
+    let text = "https://u:ib0c+Ae-1__password=aaaaaa&bbbbbb\"api_key\": \"";
+    let once = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(!once.text.contains("ib0c+Ae-1__password="));
+    assert!(!once.text.contains("aaaaaa&bbbbbb"));
+    assert!(scan(&once.text).is_empty());
+}
+
+#[test]
+fn fixed_format_suffix_stabilizes_the_entropy_prefix() {
+    let text = "value: Q7Z9/B2c-D3eF4GhJkL=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let once = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(!once.text.contains("Q7Z9/B2c-D3eF4GhJkL="));
+    assert!(
+        !once
+            .text
+            .contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    );
+    assert!(scan(&once.text).is_empty());
+}
+
+#[test]
+fn code_identifier_assignment_does_not_promote_an_entropy_prefix() {
+    let text = "const value = ib0c+Ae-1__password=aaaaaaaaab;";
+    let context = ScanContext {
+        file_name: Some("x.rs"),
+        no_entropy: false,
+    };
+    let redacted = redact_text(text, context, PlaceholderStyle::Labelled);
+
+    assert_eq!(redacted.text, text);
+    assert!(redacted.spans.is_empty());
+    assert!(scan_with(text, context).is_empty());
+}
+
+#[test]
+fn quoted_assignment_prefix_stays_when_the_placeholder_breaks_value_position() {
+    let text = "\"ib0c+Ae-1__password=____A=\"";
+    let once = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(once.text.contains("ib0c+Ae-1__password="));
+    assert!(!once.text.contains("____A="));
+    assert!(scan(&once.text).is_empty());
+}
+
+#[test]
+fn internal_equals_remain_part_of_high_entropy_secret_candidates() {
+    for (text, secret) in [
+        (
+            "\"AbC1dE2fG3hI4jK5lM6n=Op7Qr8St9Uv0WxYzAaBb\"",
+            "AbC1dE2fG3hI4jK5lM6n=Op7Qr8St9Uv0WxYzAaBb",
+        ),
+        (
+            "value: AbC1dE2fG3hI=Jk4Lm5No6Pq7",
+            "AbC1dE2fG3hI=Jk4Lm5No6Pq7",
+        ),
+    ] {
+        let findings = scan(text);
+        let start = text.find(secret).expect("secret start");
+        let end = start + secret.len();
+        assert!(
+            findings.iter().any(|finding| {
+                finding.detector == "high_entropy_string"
+                    && finding.start <= start
+                    && finding.end >= end
+            }),
+            "missing high-entropy finding for {text:?}: {findings:?}"
+        );
+        let redacted = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+        assert!(!redacted.text.contains(secret), "secret survived: {text:?}");
+        assert!(scan(&redacted.text).is_empty());
+    }
+}
+
+#[test]
 fn plain_style_matches_the_log_format() {
     let (text, secret) = &common::samples()[1];
     let out = redact_text(text, ctx(), PlaceholderStyle::Plain);
@@ -151,6 +304,17 @@ fn covers_every_log_redaction_vector() {
         redact_log_line("leaked sk-proj-ABCDEFGHIJKLMNOPQRSTUV here\n"),
         "leaked [REDACTED] here\n"
     );
+}
+
+/// A placeholder shortens the token it lands in. The remnant before it was judged as part of
+/// the whole token on the first pass and must not become a new entropy finding on the second.
+#[test]
+fn a_token_cut_short_by_a_placeholder_is_not_re_detected() {
+    let text = "https://u:ib0c+Ae-1__password=____A=\"api_key\": \"";
+    let once = redact_text(text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+    assert_eq!(twice.text, once.text);
+    assert!(twice.spans.is_empty(), "{:?}", twice.spans);
 }
 
 fn secret_strategy() -> impl Strategy<Value = String> {

@@ -74,7 +74,8 @@ pub fn scan_with(text: &str, context: ScanContext<'_>) -> Vec<Finding> {
     findings.extend(crate::detectors::findings(text, context));
     let entropy_allowed = !context.no_entropy && !context.file_name.is_some_and(is_hash_manifest);
     if entropy_allowed {
-        findings.extend(crate::detectors::entropy_findings(text));
+        let entropy = crate::detectors::entropy_findings(text, &findings);
+        findings.extend(entropy);
     }
     let findings = crate::detectors::whole_tokens(text, findings);
     let placeholders = placeholder_ranges(text);

@@ -680,6 +680,73 @@ test("SQLite enforces immutable archives and monotonic channel movement", () => 
   db.close();
 });
 
+test("build numbers order numerically after the plain public version", () => {
+  const ordered = [
+    "0.1.6",
+    "0.1.7-beta.1",
+    "0.1.7-beta.1+5",
+    "0.1.7-beta.2",
+    "0.1.7",
+    "0.1.7+1",
+    "0.1.7+9",
+    "0.1.7+10",
+    "0.1.7+779",
+    "0.1.7+780",
+    "0.1.7+999",
+    "0.1.7+1000",
+    "0.1.8-alpha",
+    "0.1.8",
+  ];
+  const keys = ordered.map(semverPrecedenceKey);
+  for (let index = 1; index < keys.length; index++) {
+    assert.ok(
+      Buffer.compare(Buffer.from(keys[index - 1]), Buffer.from(keys[index])) < 0,
+      `${ordered[index - 1]} < ${ordered[index]}`,
+    );
+  }
+  // Keys already stored in D1 for plain versions are unchanged.
+  assert.equal(semverPrecedenceKey("0.1.7"), "100!101!107~1");
+  assert.equal(semverPrecedenceKey("0.1.7+779"), "100!101!107~1+1110779");
+  for (const invalid of ["0.1.7+0", "0.1.7+0779", "0.1.7+abc", "0.1.7+1.2", "0.1.7+"]) {
+    assert.throws(() => semverPrecedenceKey(invalid), /SemVer/);
+  }
+});
+
+test("SQLite moves Stable through builds of one public version and never back", () => {
+  const migration = readFileSync(
+    new URL("../../apps/website/migrations/0003_release_publication_pointers.sql", import.meta.url),
+    "utf8",
+  );
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(migration);
+  const release = (version, digit) => ({
+    channel: "stable",
+    version,
+    updaterDescriptorKey: `releases/updater/stable/${version}/${digit.repeat(64)}.json`,
+    downloadDescriptorKey: `releases/${version}/${digit.repeat(64)}.json`,
+    updaterDescriptorSha256: digit.repeat(64),
+    downloadDescriptorSha256: digit.repeat(64),
+    publishedAt: "2026-09-30T12:00:00.000Z",
+  });
+  const publish = (candidate) => [
+    db.prepare(buildVersionClaimStatement(candidate)).all().length,
+    db.prepare(buildPointerAdvanceStatement(candidate)).all().length,
+  ];
+  const pointer = () => db.prepare(buildPointerReadStatement("stable")).get().version;
+  assert.deepEqual(publish(release("0.1.7", "1")), [1, 1]);
+  assert.deepEqual(publish(release("0.1.7+779", "2")), [1, 1]);
+  assert.equal(pointer(), "0.1.7+779");
+  assert.deepEqual(publish(release("0.1.7+1000", "3")), [1, 1]);
+  assert.equal(pointer(), "0.1.7+1000");
+  assert.deepEqual(publish(release("0.1.7+999", "4")), [0, 0]);
+  assert.deepEqual(publish(release("0.1.7", "5")), [0, 0]);
+  assert.equal(pointer(), "0.1.7+1000");
+  assert.deepEqual(publish(release("0.1.8", "6")), [1, 1]);
+  assert.equal(pointer(), "0.1.8");
+  db.close();
+});
+
 test("publication pointer CAS rejects an intervening platform-set release", () => {
   const migration = readFileSync(
     new URL("../../apps/website/migrations/0003_release_publication_pointers.sql", import.meta.url),

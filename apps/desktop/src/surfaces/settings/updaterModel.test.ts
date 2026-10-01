@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../../ipc/updater.ts";
-import { channelOptions, restartAndInstall, updatePresentation } from "./updaterModel.ts";
+import { channelOptions, installsWhenClosed, restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 const base: UpdateStatus = {
   channel: "stable",
@@ -11,6 +11,7 @@ const base: UpdateStatus = {
   totalBytes: null,
   lastError: null,
   recoveryAvailable: false,
+  installOnQuit: false,
 };
 
 describe("updatePresentation", () => {
@@ -20,6 +21,48 @@ describe("updatePresentation", () => {
       detail: "Your work stays open until you choose to restart and install.",
       progress: 100,
     });
+  });
+
+  it("names a new build of the same public version by its build number", () => {
+    const current = { ...base, currentVersion: "0.1.7" };
+    expect(updatePresentation({ ...current, phase: "ready", availableVersion: "0.1.7+780" }).label).toBe(
+      "A new KalCode 0.1.7 build is ready (build 780)",
+    );
+    expect(updatePresentation({ ...current, phase: "ready", availableVersion: "0.1.8+900" }).label).toBe(
+      "KalCode 0.1.8 build 900 is ready",
+    );
+    expect(updatePresentation({ ...current, phase: "downloading", availableVersion: "0.1.7+780" }).label).toBe(
+      "Downloading KalCode 0.1.7 build 780",
+    );
+    expect(updatePresentation({ ...base, phase: "up_to_date", currentVersion: "0.1.7+780" }).detail).toBe(
+      "Version 0.1.7 build 780",
+    );
+    expect(updatePresentation({ ...base, currentVersion: "0.1.7+780" }).label).toBe("KalCode 0.1.7 build 780");
+  });
+
+  it("says a staged build of the running public version installs when KalCode closes", () => {
+    const staged = {
+      ...base,
+      currentVersion: "0.1.8",
+      phase: "ready" as const,
+      availableVersion: "0.1.8+780",
+      installOnQuit: true,
+    };
+    expect(updatePresentation(staged)).toEqual({
+      label: "A new KalCode 0.1.8 build is ready (build 780)",
+      detail: "Installs when you close KalCode.",
+      progress: 100,
+    });
+    expect(installsWhenClosed(staged)).toBe(true);
+    // A build whose silent install failed, and a new public version, keep the prompt.
+    for (const prompt of [
+      { ...staged, installOnQuit: false },
+      { ...staged, availableVersion: "0.1.9+801", installOnQuit: false },
+    ]) {
+      expect(installsWhenClosed(prompt)).toBe(false);
+      expect(updatePresentation(prompt).detail).toBe("Your work stays open until you choose to restart and install.");
+    }
+    expect(installsWhenClosed({ ...staged, phase: "installing" })).toBe(false);
   });
 
   it("bounds download progress and keeps unknown totals indeterminate", () => {

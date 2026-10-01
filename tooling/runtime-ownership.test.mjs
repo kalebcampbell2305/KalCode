@@ -19,7 +19,7 @@ test("reasoning download consent has a native signed-catalog metadata route", ()
 
 test("startup reconciles interrupted context delivery before exposing the core", () => {
   const startup = source("lib");
-  const opened = startup.indexOf("match locator_commands::open_core(config)");
+  const opened = startup.indexOf("locator_commands::open_core(config))");
   const reconciled = startup.indexOf("match reconcile_core_startup(&core)", opened);
   const exposed = startup.indexOf("state.core = Some(core)", opened);
   const recovery = startup.indexOf("context_commands::recover_deliveries(core)");

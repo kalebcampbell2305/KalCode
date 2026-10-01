@@ -343,6 +343,27 @@ describe("route matching", () => {
     expect(matchDownloadRoute("/download/guide/index.html")).toBeNull();
   });
 
+  it("routes numbered builds with a literal + in the version segment", () => {
+    const sha = "a".repeat(64);
+    const file = "KalCode_0.1.7_build779_x64-setup.exe";
+    expect(matchDownloadRoute("/releases/updater/stable/0.1.7+779.json")).toEqual({
+      kind: "updater",
+      key: "releases/updater/stable/0.1.7+779.json",
+      file: "0.1.7+779.json",
+      mutable: false,
+    });
+    expect(matchDownloadRoute(`/releases/updater/stable/0.1.7+779/${sha}/${file}`)).toEqual({
+      kind: "updater",
+      key: `releases/updater/stable/0.1.7+779/${sha}/${file}`,
+      file,
+      mutable: false,
+    });
+    expect(matchDownloadRoute(`/download/0.1.7+779/${file}`)).toEqual({ kind: "pinned", version: "0.1.7+779", file });
+    expect(matchDownloadRoute(`/download/0.1.7%2B779/${file}`)).toEqual({ kind: "pinned", version: "0.1.7+779", file });
+    expect(matchDownloadRoute("/releases/updater/stable/0.1.7+0.json")).toEqual({ kind: "invalid-pinned" });
+    expect(matchDownloadRoute("/releases/updater/stable/0.1.7+x.json")).toEqual({ kind: "invalid-pinned" });
+  });
+
   it("rejects unsafe pinned file names", () => {
     for (const file of ["..%2F..%2Fsecret", "%2E%2E", ".hidden", "a%22b.exe", "a%0Ab.exe", "a..exe"]) {
       expect(matchDownloadRoute(`/download/0.1.0/${file}`)).toEqual({ kind: "invalid-pinned" });
