@@ -181,7 +181,8 @@ describe("the download page for 0.1.7", () => {
 
   it("keeps the 0.1.7 note off every other release", async () => {
     const container = await AstroContainer.create();
-    for (const version of ["0.1.6", "0.1.8"]) {
+    // 0.1.8 carries the same note (release-018-updates.test.ts).
+    for (const version of ["0.1.6", "0.1.9"]) {
       const html = await container.renderToString(DownloadPlatforms, { props: { manifest: signedStable(version) } });
       expect(text(html)).not.toContain("0.1.6 can't update itself");
     }
