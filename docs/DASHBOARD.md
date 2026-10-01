@@ -29,8 +29,8 @@ Dashboard                                             [Last hour ▁▁▂▅█
   narrow windows it moves below the board.
 - **Status is glyph + words + tone**, never colour alone, through the one contract mapping
   (`displayStatusOf`, `StatusChip`): working green (soft breathing hairline), waiting / permission
-  neutral grey (static), idle muted, done high-contrast neutral (one-shot transition when it
-  arrives), failed red (static hairline), paused amber (the only amber), recovering blue. Reduced
+  amber (static), idle muted, done high-contrast neutral (one-shot transition when it arrives),
+  failed red (static hairline), paused amber, recovering blue. Reduced
   motion removes every animation.
 
 ## Cards

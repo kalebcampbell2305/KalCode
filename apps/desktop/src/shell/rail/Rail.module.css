@@ -407,7 +407,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ! needs you: neutral, emphasized (amber is reserved for Paused). */
+/* ! needs you: amber (waiting for you), emphasized. */
 .needsBadge {
   display: inline-flex;
   align-items: center;

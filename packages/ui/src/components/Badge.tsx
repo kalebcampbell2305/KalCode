@@ -3,8 +3,8 @@ import styles from "./Badge.module.css";
 import { cx } from "./cx.ts";
 
 /**
- * neutral · accent · success (green) · waiting (neutral, emphasized: needs you) ·
- * paused (amber: the only amber) · danger (red) · outline (quiet hairline).
+ * neutral · accent · success (green) · waiting (amber: needs you) · paused (amber) ·
+ * danger (red) · outline (quiet hairline).
  */
 export type BadgeTone = "neutral" | "accent" | "success" | "waiting" | "paused" | "danger" | "outline";
 

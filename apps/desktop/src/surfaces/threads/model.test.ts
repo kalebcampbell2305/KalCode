@@ -86,7 +86,7 @@ describe("presentStatus", () => {
       working: false,
     });
     expect(presentStatus("failed").tone).toBe("failed");
-    // Owner palette: working green, waiting neutral, paused amber (the only amber), done neutral.
+    // Owner palette: working green, waiting amber, paused amber, done neutral.
     expect(presentStatus("running_tool").tone).toBe("working");
     expect(presentStatus("paused").tone).toBe("paused");
     expect(presentStatus("completed").tone).toBe("done");

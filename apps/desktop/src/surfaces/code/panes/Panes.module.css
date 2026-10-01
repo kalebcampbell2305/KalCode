@@ -209,15 +209,15 @@
   height: 0.75rem;
 }
 
-/* Tones (ADVANCED.md §16.3): waiting is neutral grey (emphasized), amber only for PAUSED. */
+/* Tones: green running, amber waiting for you (and paused), red failed, neutral done. */
 .chip[data-tone="working"] {
   --chip-fg: var(--color-success);
   --chip-bg: var(--color-success-soft);
 }
 
 .chip[data-tone="waiting"] {
-  --chip-fg: var(--color-text);
-  --chip-bg: var(--color-surface-selected);
+  --chip-fg: var(--status-waiting-text);
+  --chip-bg: var(--status-waiting-soft);
 }
 
 .chip[data-tone="done"] {

@@ -62,6 +62,57 @@
     0 0 32px -8px var(--color-glow);
 }
 
+/*
+ * Focusing a terminal pane runs one electric-blue trace around its edge, then the lit outline
+ * above stays. CSS only: the pseudo-element exists only while the pane is focused, so each new
+ * focus replays it once. It never loops, and reduced motion (0ms durations) skips it.
+ */
+@property --pane-trace-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.frame[data-focused][data-terminal]::after {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  padding: 2px;
+  border-radius: calc(var(--radius-md) - 1px);
+  background: conic-gradient(
+    from var(--pane-trace-angle),
+    transparent 0deg 200deg,
+    color-mix(in srgb, var(--color-accent) 70%, transparent) 300deg,
+    color-mix(in srgb, var(--color-accent) 35%, white) 354deg,
+    transparent 360deg
+  );
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  animation: pane-trace calc(var(--dur-slow) * 2) linear forwards;
+}
+
+@keyframes pane-trace {
+  0% {
+    --pane-trace-angle: 0deg;
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    --pane-trace-angle: 360deg;
+    opacity: 0;
+  }
+}
+
 .frame[data-drop-target] {
   border-color: var(--color-border-lit);
 }
