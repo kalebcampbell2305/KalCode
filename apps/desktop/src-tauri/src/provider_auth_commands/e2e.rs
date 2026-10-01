@@ -1,7 +1,8 @@
 //! Credential-free managed-provider identities for the explicitly attested native E2E app.
 //!
 //! The fixture uses the canonical account and managed-profile authorities. It creates no provider
-//! credential or authentication file and never invokes a real provider login. Codex's synthetic
+//! credential and never invokes a real provider login; Gemini's profile gets only an opaque
+//! stand-in for its encrypted sign-in store, which KalCode checks for presence. Codex's synthetic
 //! consumer-plan observation enters through the same generation-fenced observer as app-server
 //! account truth.
 
@@ -51,10 +52,13 @@ fn seed_attested(runtime: &ProviderRuntimeAuthority) -> Result<(), E2eProviderFi
         ProviderId::GEMINI_CLI,
     ] {
         let account = ensure_default_account(&store, provider)?;
-        runtime
+        let home = runtime
             .managed_profiles()
             .profile_home(provider, &account.id)
             .map_err(|_| failure("provider_e2e_profile_failed"))?;
+        if provider == ProviderId::GEMINI_CLI {
+            mark_gemini_signed_in(&home)?;
+        }
         if provider == ProviderId::CODEX {
             observe_codex_consumer(runtime, &account)?;
         } else {
@@ -69,6 +73,26 @@ fn seed_attested(runtime: &ProviderRuntimeAuthority) -> Result<(), E2eProviderFi
         }
     }
     Ok(())
+}
+
+/// Managed Gemini starts only when the profile holds Gemini's encrypted sign-in store
+/// (`gemini_account_auth::credential_state`), so the fixture places an opaque stand-in there,
+/// exactly as the provider crate's managed-policy tests do. KalCode never reads its contents and
+/// the fake provider ignores it; it holds no credential. Idempotent: an existing file is kept.
+fn mark_gemini_signed_in(home: &Path) -> Result<(), E2eProviderFixtureError> {
+    let directory = home.join(".gemini");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| failure("provider_e2e_gemini_sign_in_failed"))?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join(kalcode_providers::gemini_account_auth::ENCRYPTED_CREDENTIALS_FILE))
+    {
+        Ok(mut file) => std::io::Write::write_all(&mut file, b"kalcode-e2e-opaque\n")
+            .map_err(|_| failure("provider_e2e_gemini_sign_in_failed")),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(_) => Err(failure("provider_e2e_gemini_sign_in_failed")),
+    }
 }
 
 fn ensure_default_account(
@@ -194,6 +218,21 @@ mod tests {
                     .is_dir()
             );
         }
+
+        // Managed Gemini refuses to start without its sign-in store; the seeded account must pass
+        // that same check the thread launch performs.
+        let gemini = store
+            .default_for(ProviderId::GEMINI_CLI)
+            .expect("gemini default")
+            .expect("gemini account");
+        assert_eq!(
+            kalcode_providers::gemini_account_auth::credential_state(
+                &fixture.runtime.managed_profiles(),
+                &gemini.id,
+            )
+            .expect("gemini credential state"),
+            AuthState::Authenticated
+        );
 
         let codex = store
             .default_for(ProviderId::CODEX)
