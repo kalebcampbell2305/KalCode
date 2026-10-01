@@ -8,6 +8,8 @@ name: Clean install verify (self-hosted)
 # source packet: the installer inside the packet (C:\Users\Public\Documents\KalCode-QA\windows\verify-*, readable by the
 #   gate account through NT AUTHORITY\SERVICE). source public: the same check on the bytes downloaded from public_url,
 #   which must equal installer_sha256 (the post-publish clean download check).
+# The gate runner takes one job at a time, so this queues behind PR gates. A KalCode leftover in the kalcode-ci profile fails the
+# job (fail closed): later gate jobs share that profile.
 # Dispatch from main only, after the owner's own KalCode is closed (verify-windows.mjs refuses while any kalcode.exe runs):
 #   gh workflow run clean-install-verify.yml --ref main -f packet=... -f sums_sha256=... -f version=... -f commit=...
 #     -f installer_sha256=... -f verifier_sha256=... [-f source=public -f public_url=https://kalcoded.com/download/...]
@@ -104,6 +106,23 @@ jobs:
           function Note([string]$l) { Write-Host $l; $receipt.checks += $l }
           function Sha([string]$p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
           function Refuse([string]$m) { throw "REFUSED: $m" }
+          # Fail closed (runner owner, kalcode-76): later gate jobs share this profile, so EVERY path (also an error after the
+          # install began) re-checks it for anything KalCode left behind, and any leftover fails the job.
+          function PostCheck {
+            $run = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+            $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+            $me = [Diagnostics.Process]::GetCurrentProcess().SessionId
+            [ordered]@{
+              uninstallEntry = Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode'
+              installFolder = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'KalCode')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'))
+              protocolRegistration = Test-Path -LiteralPath 'HKCU:\Software\Classes\kalcode'
+              productKey = Test-Path -LiteralPath 'HKCU:\Software\KalCode'
+              runValue = [bool]($run -and @($run.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and [string]$_.Value -match '(?i)kalcode' }).Count)
+              appData = (Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.kalcode.desktop')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'com.kalcode.desktop'))
+              shortcuts = (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'KalCode.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'KalCode'))
+              processes = [bool]@(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }).Count
+            }
+          }
           try {
             # 1. this job: main, dispatched, this workflow, the non-elevated kalcode-ci account
             if ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') { Refuse 'dispatch on main only' }
@@ -170,16 +189,8 @@ jobs:
               $v = Get-Content -Raw -LiteralPath $vj | ConvertFrom-Json
               $receipt.verify = [ordered]@{ sha256 = (Sha (Join-Path $out 'verify.json')); status = $v.status; version = $v.version; commit = $v.commit; sha256OfInstaller = $v.sha256 }
             }
-            # 6. nothing left behind in this account
-            $run = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
-            $receipt.postCheck = [ordered]@{
-              uninstallEntry = Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode'
-              installFolder = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'KalCode')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'))
-              protocolRegistration = Test-Path -LiteralPath 'HKCU:\Software\Classes\kalcode'
-              productKey = Test-Path -LiteralPath 'HKCU:\Software\KalCode'
-              runValue = [bool]($run -and @($run.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and [string]$_.Value -match '(?i)kalcode' }).Count)
-              appData = Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.kalcode.desktop')
-            }
+            # 6. nothing left behind in this account (checked again in finally, on every path)
+            $receipt.postCheck = PostCheck
             $left = @($receipt.postCheck.Keys | Where-Object { $receipt.postCheck[$_] })
             if ($receipt.exit -ne 0 -or -not $receipt.verify -or $receipt.verify.status -ne 'passed' -or $receipt.verify.version -ne $env:VERSION -or
                 $receipt.verify.commit -ne $env:COMMIT -or $receipt.verify.sha256OfInstaller -ne $env:INSTALLER_SHA256) {
@@ -193,6 +204,12 @@ jobs:
             Write-Host "::error::$($_.Exception.Message)"
           } finally {
             if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+            try { $receipt.postCheck = PostCheck } catch { $receipt.postCheck = [ordered]@{ postCheckFailed = $true }; $receipt.postCheckError = $_.Exception.Message }
+            $left = @($receipt.postCheck.Keys | Where-Object { $receipt.postCheck[$_] })
+            if ($left.Count) {
+              $receipt.status = 'FAILED'; $receipt.leftBehind = $left
+              Write-Host "::error::KalCode left behind in the kalcode-ci profile ($($left -join ', ')). Later gate jobs share this profile: clean it before the next gate run."
+            }
             $receipt.finishedAt = [DateTime]::UtcNow.ToString('o')
             [IO.File]::WriteAllText((Join-Path $out 'clean-install-receipt.json'), (($receipt | ConvertTo-Json -Depth 6) + "`n"), (New-Object Text.UTF8Encoding($false)))
           }
