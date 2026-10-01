@@ -1,6 +1,6 @@
 # KalCode 0.1.8 social posts
 
-Post from @KalCodeDev (official). The founder account (@CampbellKaleb23) may quote-post the X thread. Attach the media named in each post from `screenshots.md` or the film cuts in `video-script.md`. Lines marked [IF SILENT UPDATES SHIP] go out only if the published 0.1.8 build installs later 0.1.8 builds when KalCode is reopened.
+Post from @KalCodeDev (official). The founder account (@CampbellKaleb23) may quote-post the X thread. Attach the media named in each post from `screenshots.md` or the film cuts in `video-script.md`.
 
 Don't claim: prices, Gemini CLI, speed figures, "instant" speech, deploy health checks, or features listed as not shipped in `video-script.md`.
 
@@ -35,7 +35,7 @@ If memory runs low mid-recording, it stops the recording and tells you. KalCode 
 **5/5** (media: S11 new app icon)
 Also in 0.1.8: a fix for a Windows freeze on focus changes, and the new KalCode logo.
 
-[IF SILENT UPDATES SHIP] Later 0.1.8 builds install when you reopen KalCode.
+Later 0.1.8 builds install by themselves when you close KalCode.
 
 Release notes: kalcoded.com/updates#release-0-1-8
 

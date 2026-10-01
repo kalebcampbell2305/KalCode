@@ -27,7 +27,7 @@ Every super and every visible UI state must match one of these claims. Each clai
 | C13 | Windows no longer freezes on focus changes | PR #31: f9ff0160 |
 | C14 | The mascot is the KalCode logo and app icon | PR #37: 48b1881f |
 | C15 | Version shown as "0.1.8 build N" where detailed | PR #34: b387fc19 (`apps/desktop/src/platform/version.ts`) |
-| C16 | [IF SILENT UPDATES SHIP] Later 0.1.8 builds install when you reopen KalCode; the update prompt is for new versions | `feat/silent-build-updates` (in progress at writing time; drop beat 5b if it isn't in the published build) |
+| C16 | Later 0.1.8 builds install when you close KalCode; the update prompt is for new versions | `feat/silent-build-updates` (in the 0.1.8 release) |
 
 Never show: Agents, Missions, Automations, Command Center, provider panes, workspace rail, Home, effort control, Gemini CLI, prices, or any speed number for KalVoice. Never show a deploy as "healthy" or "live".
 
@@ -85,7 +85,7 @@ Frame numbers at 60 fps. "Super" is on-screen text in Lexend Exa (display) or Le
 | 0:51-0:55 | KalVoice widget: F8 key cap on screen pressed; transcript appears "Open the browser." and the Browser pane opens. | Close on the widget, then pan to the Browser pane. | "KalVoice gets ready once per take." | Key-down click, soft listening tone. No voice. |
 | 0:55-0:59 | S9 low-memory message in the widget; KalCode still running behind it. | Hold on the widget; background stays sharp enough to read. | "Low on memory? KalCode keeps running." | Muted error blip, score continues (no crash sound). |
 | 0:59-1:01 | 5a. S12 Settings > Updates: "KalCode 0.1.8 build N". | Push to the version line. | "Every build, numbered." | Tick. |
-| 1:01-1:03 | 5b [IF SILENT UPDATES SHIP]. S13: KalCode closes, reopens; the version line now reads build N+1 with no prompt. If beat 5b is dropped, hold 5a for these 2 s instead. | Same framing as 5a so the number change reads. | "New builds install when you reopen KalCode." | Close whoosh, open shimmer. |
+| 1:01-1:03 | 5b. S13: KalCode closes, reopens; the version line now reads build N+1 with no prompt. | Same framing as 5a so the number change reads. | "New builds install when you close KalCode." | Close whoosh, open shimmer. |
 
 ### Beat 6. Fixes and the new face (1:03-1:09, f3780-4140) - C13, C14
 
@@ -116,5 +116,5 @@ Super "KalCode 0.1.8" (1 s) -> Operations Queue to run (6 s: queue, confirm, log
 
 - Every visible version string reads 0.1.8 (with "build N" only in Settings > Updates).
 - No emails, tokens, real account names or private paths in any plate.
-- Every super maps to a claim C1-C16 above; beat 5b and its super are removed if C16 didn't ship.
+- Every super maps to a claim C1-C16 above.
 - Run `launch/tools/qa.py` (frame and loudness checks) on the master and each cut.

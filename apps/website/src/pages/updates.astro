@@ -99,8 +99,8 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
                 <section>
                   <h3>Updates and fixes</h3>
                   <ul>
-                    {/* Requires feat/silent-build-updates in the published 0.1.8 build; drop this line if it is not. */}
-                    <li>Later builds of 0.1.8 install when you close and reopen KalCode. The update prompt is for new versions.</li>
+                    <li>Later builds of 0.1.8 install by themselves when you close KalCode, so the next launch runs them. The update prompt is for new versions.</li>
+                    <li>Restore previous version only goes back to a build that can open your data.</li>
                     <li>Fixed on Windows: KalCode could stop responding when keyboard focus moved away from it.</li>
                     <li>The new KalCode logo, now the app icon on Windows and macOS.</li>
                   </ul>

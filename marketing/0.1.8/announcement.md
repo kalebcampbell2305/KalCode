@@ -1,6 +1,6 @@
 # KalCode 0.1.8 announcement copy
 
-Sources: `target/recovery-B12-release/notes/0.1.8.draft.md` (release notes draft) and the claim list in `video-script.md`. Every sentence below maps to a shipped change. Before publishing, check the two conditional lines marked [IF SILENT UPDATES SHIP]: keep them only if the published 0.1.8 build installs later 0.1.8 builds when KalCode is reopened.
+Sources: `target/recovery-B12-release/notes/0.1.8.draft.md` (release notes draft) and the claim list in `video-script.md`. Every sentence below maps to a shipped change.
 
 Do not add: prices, Gemini CLI, Agents, Missions, Automations, provider panes, effort control, "instant" or "real-time" speech claims, or health checks for deployed sites.
 
@@ -43,7 +43,8 @@ KalVoice now checks and prepares your on-device speech model once per take, befo
 - **Windows:** fixed a freeze where KalCode could stop responding when keyboard focus moved away from it.
 - **New logo:** the KalCode mascot is now the app icon on Windows and macOS and the logo inside the app.
 - **Updates:** builds of the same version can now update in place. In Settings > Updates you'll see the version with its build number, for example "0.1.8 build 900".
-- [IF SILENT UPDATES SHIP] **Quiet updates within a version:** later builds of 0.1.8 install when you close and reopen KalCode. You'll only see the update prompt for a new version.
+- **Quiet updates within a version:** later builds of 0.1.8 install by themselves when you close KalCode, so the next launch runs them. You'll only see the update prompt for a new version.
+- **Safer going back:** Restore previous version only goes back to a build that can open your data.
 
 ### How to get it
 
