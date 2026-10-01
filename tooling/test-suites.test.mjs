@@ -281,8 +281,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 262);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 262);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 265);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 265);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -290,9 +290,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 262);
+  assert.equal(functional.size, 265);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 318);
+  assert.equal(established.size, 321);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],
@@ -489,7 +489,7 @@ test("website skip profiles require reviewed counts and runtime reasons", () => 
 test("native E2E is explicitly blocked where no reviewed harness exists", () => {
   const native = inventory.suites.find(({ id }) => id === "desktop-native-e2e");
   assert.throws(() => selectProfile(native, "darwin", {}), /BLOCKED.*native Mac harness/);
-  assert.equal(selectProfile(native, "win32", {}).minimumExecuted, 23);
+  assert.equal(selectProfile(native, "win32", {}).minimumExecuted, 24);
 });
 
 test("suite selection is explicit and cannot silently omit an unknown suite", () => {

@@ -294,7 +294,7 @@ test("publication state and generated descriptors are create-once byte identitie
   );
 });
 
-test("same-version guards compare the complete aggregate, independent of object key order", () => {
+test("same-identity guards compare the complete aggregate, independent of object key order", () => {
   const expectedLatest = manifest();
   const expectedUpdater = {
     version: VERSION,
@@ -315,7 +315,7 @@ test("same-version guards compare the complete aggregate, independent of object 
   assert.deepEqual(publishedUpdaterProblems(structuredClone(expectedUpdater), VERSION, expectedUpdater), []);
   const replaced = structuredClone(expectedUpdater);
   replaced.kalcode.artifacts["darwin-aarch64"].sha256 = "9".repeat(64);
-  assert.match(publishedUpdaterProblems(replaced, VERSION, expectedUpdater)[0], /bump the version/);
+  assert.match(publishedUpdaterProblems(replaced, VERSION, expectedUpdater)[0], /new immutable build identity/);
   assert.deepEqual(
     pointerAdvanceProblems({
       version: VERSION,

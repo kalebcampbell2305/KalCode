@@ -1,4 +1,4 @@
-import type { AppInfo, IpcError } from "@kalcode/protocol";
+import { type AppInfo, formatKalCodeVersion, type IpcError } from "@kalcode/protocol";
 import { Button, ErrorState } from "@kalcode/ui/components";
 import { FolderOpen } from "lucide-react";
 import { useState } from "react";
@@ -43,12 +43,12 @@ export function StartupError({ client, info, error }: StartupErrorProps) {
           }
         >
           <p>{error.message}</p>
-          <p>Nothing was deleted or changed. Close KalCode, resolve the issue, then open KalCode again.</p>
+          <p>Close KalCode, resolve the issue, then open KalCode again.</p>
           {openError ? <p role="alert">{openError}</p> : null}
         </ErrorState>
         {info ? (
           <p className={styles.meta}>
-            KalCode {info.version} ({info.channel})
+            KalCode {formatKalCodeVersion(info.version)} ({info.channel})
           </p>
         ) : null}
       </div>

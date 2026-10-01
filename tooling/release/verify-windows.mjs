@@ -50,6 +50,7 @@ import {
   sameAuthenticodeSigner,
 } from "./signing.mjs";
 import { verifyUpdaterArtifact } from "./updater-signing.mjs";
+import { windowsNativeFileVersion } from "./version.mjs";
 import { canonicalInstallDirectory } from "./windows-install-path.mjs";
 import { windowsProtocolProblems } from "./windows-protocol.mjs";
 
@@ -419,9 +420,13 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
       guardianProblems.join("; "),
     );
     result.exeVersionInfo = powershellJson(
-      `(Get-Item -LiteralPath ${psQuote(exe)}).VersionInfo | Select-Object ProductName, ProductVersion, FileVersion, CompanyName, FileDescription | ConvertTo-Json -Compress`,
+      `$v=(Get-Item -LiteralPath ${psQuote(exe)}).VersionInfo; $v | Select-Object ProductName, ProductVersion, FileVersion, @{Name='FileVersionRaw';Expression={"$($v.FileMajorPart).$($v.FileMinorPart).$($v.FileBuildPart).$($v.FilePrivatePart)"}}, CompanyName, FileDescription | ConvertTo-Json -Compress`,
     );
     check(`${name}: kalcode.exe product version is ${version}`, result.exeVersionInfo?.ProductVersion === version);
+    check(
+      `${name}: kalcode.exe native file version is ${windowsNativeFileVersion(version)}`,
+      result.exeVersionInfo?.FileVersionRaw === windowsNativeFileVersion(version),
+    );
     const reg = registry(UNINSTALL_KEY);
     result.uninstallRegistration = reg;
     check(`${name}: uninstall entry registered under HKCU (per-user)`, reg !== null);

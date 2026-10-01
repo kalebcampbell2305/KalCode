@@ -14,6 +14,7 @@ use kalcode_contracts::agent::{
     ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::context::PromptReview;
+use kalcode_contracts::operations::{OperationKind, OperationSpec};
 use kalcode_contracts::permissions::{PermissionGate, PermissionMode};
 use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountScopes};
 use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
@@ -406,6 +407,55 @@ impl ThreadsState {
         }
     }
 
+    /// Validates an Operations agent task and resolves the exact provider/account/model selection
+    /// that was reviewed. This performs only read-only provider detection and metadata checks; it
+    /// never starts a provider session. The queue persists this returned spec so a later launch
+    /// cannot silently drift to a newly selected default account between confirmation and
+    /// execution.
+    pub(crate) fn canonicalize_operation(
+        &self,
+        core: &Arc<Core>,
+        spec: &OperationSpec,
+    ) -> kalcode_core::Result<OperationSpec> {
+        let request = self.reviewed_operation_request(core, spec)?;
+        Ok(canonical_operation_spec(spec, &request))
+    }
+
+    /// Starts a confirmed Operations agent task through the canonical thread admission path.
+    /// Operations intentionally fixes the permission mode to Approve and cannot silently map
+    /// unsupported scheduler fields onto provider defaults.
+    pub(crate) fn start_operation(
+        &self,
+        core: &Arc<Core>,
+        operation_id: &str,
+        spec: &OperationSpec,
+    ) -> kalcode_core::Result<ThreadSummary> {
+        let request = self.reviewed_operation_request(core, spec)?;
+        self.operation_runtime()?
+            .create_reviewed_for_operation(operation_id, request, None)
+    }
+
+    fn reviewed_operation_request(
+        &self,
+        core: &Arc<Core>,
+        spec: &OperationSpec,
+    ) -> kalcode_core::Result<CreateThread> {
+        self.ensure_providers(Some(core));
+        let runtime = self.operation_runtime()?;
+        let request = operation_request(core, runtime, spec)?;
+        review_operation_prompt(runtime, &request)?;
+        Ok(request)
+    }
+
+    fn operation_runtime(&self) -> kalcode_core::Result<&Arc<ThreadRuntime>> {
+        self.runtime.as_ref().ok_or_else(|| {
+            KalError::internal(
+                "threads_unavailable",
+                "KalCode's thread runtime isn't available. Restart KalCode; if this keeps happening, export diagnostics.",
+            )
+        })
+    }
+
     /// Refuses to forget a workspace while one of its threads may still have a provider
     /// session (anything but completed, failed, interrupted or offline).
     pub fn refuse_if_threads_open(&self, workspace_id: &str) -> Result<(), IpcError> {
@@ -475,6 +525,138 @@ impl ThreadsState {
                 event = "threads_state.shutdown_incomplete",
                 error = %error.diagnostic()
             );
+        }
+    }
+}
+
+fn validate_agent_operation(spec: &OperationSpec) -> kalcode_core::Result<(&str, &str)> {
+    if spec.kind != OperationKind::Agent {
+        return Err(KalError::validation(
+            "operation_kind_unsupported",
+            "Only agent tasks can start through the thread runtime.",
+        ));
+    }
+    if spec.command.is_some() {
+        return Err(KalError::validation(
+            "operation_agent_command_invalid",
+            "Agent tasks use a prompt and cannot also include a shell command.",
+        ));
+    }
+    if spec.effort.is_some() {
+        return Err(KalError::validation(
+            "operation_effort_unsupported",
+            "This KalCode build does not support effort selection for agent tasks.",
+        ));
+    }
+    let provider_id = spec
+        .provider_id
+        .as_deref()
+        .filter(|provider_id| !provider_id.trim().is_empty())
+        .ok_or_else(|| {
+            KalError::validation(
+                "operation_provider_required",
+                "Choose a provider for this agent task.",
+            )
+        })?;
+    let prompt = spec
+        .prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty())
+        .ok_or_else(|| {
+            KalError::validation(
+                "operation_prompt_required",
+                "Enter a prompt for this agent task.",
+            )
+        })?;
+    Ok((provider_id, prompt))
+}
+
+fn operation_request(
+    core: &Arc<Core>,
+    runtime: &ThreadRuntime,
+    spec: &OperationSpec,
+) -> kalcode_core::Result<CreateThread> {
+    let (provider_id, prompt) = validate_agent_operation(spec)?;
+    let provider_id = kalcode_threads::validate::provider_id(provider_id)?;
+    kalcode_threads::validate::workspace_id(&spec.workspace_id)?;
+    let model = kalcode_threads::validate::model(spec.model.as_deref())?;
+    let options = runtime.options()?;
+    let provider = options
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| {
+            KalError::new(
+                ErrorCategory::Provider,
+                "provider_unavailable",
+                format!(
+                    "{} isn't connected to KalCode. Connect it in Providers, then try again.",
+                    provider_id.as_str()
+                ),
+            )
+        })?;
+    if !options
+        .workspaces
+        .iter()
+        .any(|workspace| workspace.id == spec.workspace_id)
+    {
+        return Err(KalError::validation(
+            "workspace_not_found",
+            "That workspace is no longer available in KalCode.",
+        ));
+    }
+    if let Some(model) = &model
+        && !provider.models.is_empty()
+        && !provider
+            .models
+            .iter()
+            .any(|available| &available.id == model)
+    {
+        return Err(KalError::validation(
+            "invalid_model",
+            format!("That model isn't available for {}.", provider.display_name),
+        ));
+    }
+    resolved_create_request(
+        core,
+        provider_id.0,
+        spec.provider_account_id.clone(),
+        spec.workspace_id.clone(),
+        model,
+        PermissionMode::Approve,
+        prompt.to_owned(),
+        Some(spec.name.clone()),
+    )
+}
+
+fn canonical_operation_spec(spec: &OperationSpec, request: &CreateThread) -> OperationSpec {
+    let mut canonical = spec.clone();
+    canonical.provider_id = Some(request.provider_id.clone());
+    canonical.provider_account_id = request.provider_account_id.clone();
+    canonical.model = request.model.clone();
+    canonical
+}
+
+fn review_operation_prompt(
+    runtime: &ThreadRuntime,
+    request: &CreateThread,
+) -> kalcode_core::Result<()> {
+    match runtime.review_create_prompt(request)? {
+        PromptReview::Clean => Ok(()),
+        PromptReview::ConfirmationRequired(warning) => {
+            // Do not leave an Operations-owned confirmation handle available for replay. The
+            // normal Threads flow is the sole owner of prompt confirmations.
+            if let Err(error) = runtime.cancel_prompt_review(&warning.review_id) {
+                tracing::warn!(
+                    event = "operations.agent_prompt_review_cancel_failed",
+                    error_code = error.code
+                );
+            }
+            Err(KalError::new(
+                ErrorCategory::Permission,
+                "operation_prompt_confirmation_required",
+                "This agent task may contain sensitive information. Open it in Threads to review and start it; Operations did not launch it.",
+            ))
         }
     }
 }
@@ -1143,6 +1325,61 @@ mod tests {
             resume_session_id: None,
             secret_ref: None,
         }
+    }
+
+    fn agent_operation_spec() -> OperationSpec {
+        OperationSpec {
+            name: "Review changes".into(),
+            workspace_id: kalcode_contracts::ids::new_id(),
+            kind: OperationKind::Agent,
+            command: None,
+            prompt: Some("Review the current changes".into()),
+            provider_id: Some(ProviderId::CODEX.into()),
+            provider_account_id: None,
+            model: None,
+            effort: None,
+            dependencies: Vec::new(),
+            priority: 0,
+            lane: kalcode_contracts::operations::OperationLane::Next,
+            environment: kalcode_contracts::operations::OperationEnvironmentKind::Local,
+            urls: Vec::new(),
+            env_keys: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn agent_operation_rejects_every_non_null_effort_without_fallback() {
+        for effort in [String::new(), "high".into()] {
+            let mut spec = agent_operation_spec();
+            spec.effort = Some(effort);
+            assert_eq!(
+                validate_agent_operation(&spec)
+                    .expect_err("unsupported effort")
+                    .code,
+                "operation_effort_unsupported"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_operation_requires_an_explicit_provider_and_prompt_only() {
+        let mut spec = agent_operation_spec();
+        spec.provider_id = Some("  ".into());
+        assert_eq!(
+            validate_agent_operation(&spec)
+                .expect_err("provider required")
+                .code,
+            "operation_provider_required"
+        );
+
+        let mut spec = agent_operation_spec();
+        spec.command = Some("cargo test".into());
+        assert_eq!(
+            validate_agent_operation(&spec)
+                .expect_err("agent command rejected")
+                .code,
+            "operation_agent_command_invalid"
+        );
     }
 
     #[test]
@@ -1886,5 +2123,85 @@ mod tests {
         );
         validate_create_controls(PermissionMode::Bypass, Some(true), None)
             .expect("confirmed bypass request");
+    }
+
+    #[test]
+    fn canonical_operation_pins_account_and_never_falls_back_after_removal() {
+        let fixture = AccountFixture::new();
+        let fallback = fixture
+            .store
+            .create("codex", "Fallback")
+            .expect("fallback account");
+        let selected = fixture
+            .store
+            .create("codex", "Selected")
+            .expect("selected account");
+        fixture
+            .store
+            .bind(
+                "codex",
+                ProviderAccountBindingKind::Workspace,
+                &fixture.workspace_id,
+                &selected.id,
+            )
+            .expect("selected workspace binding");
+
+        let reviewed = resolved_create_request(
+            &fixture.core,
+            "codex".into(),
+            None,
+            fixture.workspace_id.clone(),
+            Some("review-model".into()),
+            PermissionMode::Approve,
+            "review this exact prompt".into(),
+            Some("Pinned operation".into()),
+        )
+        .expect("reviewed selection");
+        let canonical = canonical_operation_spec(&agent_operation_spec(), &reviewed);
+        assert_eq!(canonical.provider_id.as_deref(), Some("codex"));
+        assert_eq!(canonical.model.as_deref(), Some("review-model"));
+        assert_eq!(
+            canonical.provider_account_id.as_deref(),
+            Some(selected.id.as_str())
+        );
+
+        fixture
+            .store
+            .archive(&fixture.profiles, &selected.id)
+            .expect("archive selected account");
+        fixture
+            .store
+            .bind(
+                "codex",
+                ProviderAccountBindingKind::Workspace,
+                &fixture.workspace_id,
+                &fallback.id,
+            )
+            .expect("replacement workspace default");
+
+        let launch = |account_id| {
+            resolved_create_request(
+                &fixture.core,
+                "codex".into(),
+                Some(account_id),
+                fixture.workspace_id.clone(),
+                canonical.model.clone(),
+                PermissionMode::Approve,
+                "review this exact prompt".into(),
+                Some("Pinned operation".into()),
+            )
+        };
+        assert_eq!(
+            launch(selected.id)
+                .expect_err("archived account cannot drift")
+                .code,
+            "provider_account_archived"
+        );
+        assert_eq!(
+            launch("0192f3c4-0000-7000-8000-000000000999".into())
+                .expect_err("missing account cannot drift")
+                .code,
+            "provider_account_unknown"
+        );
     }
 }

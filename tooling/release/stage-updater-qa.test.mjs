@@ -112,33 +112,34 @@ test("QA evidence is exact-bound and normal publication requires lower-to-newer 
   }
 });
 
-function sourceSnapshot() {
-  const candidateLock = `[[package]]\nname = "kalcode-desktop"\nversion = "${CANDIDATE_VERSION}"\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "registry"\n`;
-  const baselineLock = candidateLock.replace(`version = "${CANDIDATE_VERSION}"`, `version = "${BASELINE_VERSION}"`);
+function sourceSnapshot(candidateVersion = CANDIDATE_VERSION, baselineVersion = BASELINE_VERSION) {
+  const candidateLock = `[[package]]\nname = "kalcode-desktop"\nversion = "${candidateVersion}"\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "registry"\n`;
+  const baselineLock = candidateLock.replace(`version = "${candidateVersion}"`, `version = "${baselineVersion}"`);
   return {
-    candidateVersion: CANDIDATE_VERSION,
-    baselineVersion: BASELINE_VERSION,
+    candidateVersion,
+    baselineVersion,
     workspacePackages: ["kalcode-desktop"],
     candidateFiles: {
-      "Cargo.toml": `[workspace.package]\nversion = "${CANDIDATE_VERSION}"\n`,
+      "Cargo.toml": `[workspace.package]\nversion = "${candidateVersion}"\n`,
       "Cargo.lock": candidateLock,
-      "apps/desktop/package.json": JSON.stringify({ name: "@kalcode/desktop", version: CANDIDATE_VERSION }),
-      "apps/desktop/src-tauri/tauri.conf.json": JSON.stringify({ version: CANDIDATE_VERSION }),
+      "apps/desktop/package.json": JSON.stringify({ name: "@kalcode/desktop", version: candidateVersion }),
+      "apps/desktop/src-tauri/tauri.conf.json": JSON.stringify({ version: candidateVersion }),
       "crates/updater/src/lib.rs":
         'Self::Stable => "https://kalcoded.com/releases/updater/stable.json",\nSelf::Beta => "https://kalcoded.com/releases/updater/beta.json",',
     },
     baselineFiles: {
-      "Cargo.toml": `[workspace.package]\nversion = "${BASELINE_VERSION}"\n`,
+      "Cargo.toml": `[workspace.package]\nversion = "${baselineVersion}"\n`,
       "Cargo.lock": baselineLock,
-      "apps/desktop/package.json": JSON.stringify({ name: "@kalcode/desktop", version: BASELINE_VERSION }),
-      "apps/desktop/src-tauri/tauri.conf.json": JSON.stringify({ version: BASELINE_VERSION }),
-      "crates/updater/src/lib.rs": `Self::Stable => "https://kalcoded.com/releases/updater/stable/${CANDIDATE_VERSION}.json",\nSelf::Beta => "https://kalcoded.com/releases/updater/beta.json",`,
+      "apps/desktop/package.json": JSON.stringify({ name: "@kalcode/desktop", version: baselineVersion }),
+      "apps/desktop/src-tauri/tauri.conf.json": JSON.stringify({ version: baselineVersion }),
+      "crates/updater/src/lib.rs": `Self::Stable => "https://kalcoded.com/releases/updater/stable/${candidateVersion}.json",\nSelf::Beta => "https://kalcoded.com/releases/updater/beta.json",`,
     },
   };
 }
 
 test("baseline source validator permits only canonical version authorities and the exact candidate selector", () => {
   assert.deepEqual(validateBaselineSourceSnapshot(sourceSnapshot()), []);
+  assert.deepEqual(validateBaselineSourceSnapshot(sourceSnapshot("1.2.3+2", "1.2.3+1")), []);
   for (const mutate of [
     (snapshot) => (snapshot.baselineVersion = CANDIDATE_VERSION),
     (snapshot) => (snapshot.baselineFiles["apps/desktop/package.json"] = JSON.stringify({ version: "1.2.1" })),
@@ -292,6 +293,15 @@ test("upload sink derives exact immutable Wrangler arguments and rejects caller 
       "--cache-control",
       "public, max-age=31536000, immutable",
     ],
+  );
+  const revision = "1.2.3+2";
+  assert.ok(
+    canonicalQaObjectPutArguments({
+      key: `releases/${revision}/${sha256}/KalCode_${revision}_x64-setup.exe`,
+      path,
+      sha256,
+      size: 1,
+    }).includes(`attachment; filename="KalCode_${revision}_x64-setup.exe"`),
   );
   const signatureSha256 = "b".repeat(64);
   const signaturePath = resolve("candidate.exe.windows-x86_64.sig");

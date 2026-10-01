@@ -8,6 +8,8 @@ import {
   platformRows,
   RELEASES,
   type ReleaseManifest,
+  releaseDisplayVersion,
+  releasePublicVersion,
 } from "../../src/lib/releases";
 import { publishedManifest } from "./fixtures/releases";
 
@@ -82,6 +84,23 @@ describe("with a published Stable release", () => {
     expect(downloadCta(manifest).note).toBe("Windows · Stable 0.1.6 · 3.8 MB");
     expect(buildStatus(manifest)).toBe("Stable 0.1.6 for Windows");
   });
+
+  it("keeps the public milestone while identifying a newer same-version build", () => {
+    const manifest = structuredClone(publishedManifest);
+    if (!manifest.latest) throw new Error("fixture has no release");
+    manifest.latest.channel = "stable";
+    manifest.latest.version = "0.1.7+218";
+    manifest.latest.notesUrl = "/updates#release-0-1-7";
+    for (const platform of manifest.latest.platforms) {
+      platform.pinnedUrl = `/download/${manifest.latest.version}/${platform.file}`;
+    }
+
+    expect(assertManifest(manifest)).toBe(manifest);
+    expect(releasePublicVersion(manifest.latest.version)).toBe("0.1.7");
+    expect(releaseDisplayVersion(manifest.latest.version)).toBe("0.1.7 build 218");
+    expect(downloadCta(manifest).note).toBe("Windows · Stable 0.1.7 build 218 · 3.8 MB");
+    expect(buildStatus(manifest)).toBe("Stable 0.1.7 build 218 for Windows");
+  });
 });
 
 describe("manifest guard", () => {
@@ -106,6 +125,23 @@ describe("manifest guard", () => {
     const hash = clone();
     if (hash.latest?.platforms[0]) hash.latest.platforms[0].sha256 = "ABC";
     expect(() => assertManifest(hash)).toThrow(/sha256/);
+  });
+
+  it("requires a canonical version and the public milestone notes anchor", () => {
+    for (const version of ["0.1.7+0", "0.1.7+01", "0.1.7+65536", "0.1.7+build.1", "0.1.7-rc.1"]) {
+      const bad = clone();
+      if (!bad.latest) throw new Error("fixture has no release");
+      bad.latest.channel = "stable";
+      bad.latest.version = version;
+      expect(() => assertManifest(bad)).toThrow(/version/);
+    }
+
+    const badAnchor = clone();
+    if (!badAnchor.latest) throw new Error("fixture has no release");
+    badAnchor.latest.channel = "stable";
+    badAnchor.latest.version = "0.1.7+218";
+    badAnchor.latest.notesUrl = "/updates#release-0-1-7+218";
+    expect(() => assertManifest(badAnchor)).toThrow(/notesUrl/);
   });
 });
 

@@ -166,6 +166,22 @@ describe("updater descriptor validation", () => {
     }
   });
 
+  it("accepts a bounded numeric build revision on stable and preserves it in every binding", () => {
+    const buildVersion = "1.2.3+218";
+    const legacy = syntheticUpdaterDescriptor(buildVersion, FILE, SHA256, 42_000_000, "stable");
+    const value = platformDescriptor(["windows-x86_64"], buildVersion, "stable");
+    const parsed = parseUpdaterDescriptor(value, "stable", buildVersion);
+
+    expect(parseUpdaterDescriptor(legacy, "stable", buildVersion)?.descriptor.version).toBe(buildVersion);
+    expect(parsed?.descriptor.version).toBe(buildVersion);
+    expect(parsed?.artifacts["windows-x86_64"]?.artifactKey).toContain(`/stable/${buildVersion}/`);
+    expect(atob(value.platforms["windows-x86_64"].signature)).toContain(`version:${buildVersion}`);
+  });
+
+  it.each(["1.2.3+0", "1.2.3+01", "1.2.3+65536", "1.2.3+build.1"])("rejects invalid build revision %s", (version) => {
+    expect(parseUpdaterDescriptor(platformDescriptor(["windows-x86_64"], version), "stable", version)).toBeNull();
+  });
+
   it.each([
     `http://kalcoded.com/releases/updater/stable/1.2.3/${SHA256}/${FILE}`,
     `https://www.kalcoded.com/releases/updater/stable/1.2.3/${SHA256}/${FILE}`,

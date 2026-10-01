@@ -125,6 +125,7 @@ fn surface_label(surface: kalcode_contracts::app::SurfaceId) -> &'static str {
         SurfaceId::Providers => "providers",
         SurfaceId::Settings => "settings",
         SurfaceId::CommandCenter => "Command Center",
+        SurfaceId::Operations => "Operations",
     }
 }
 

@@ -2,7 +2,7 @@
 // The one KalCode release command: test -> build+sign -> certify -> pins -> QA -> stage -> publish -> update
 // feed -> public verification, with resumable state, create-once receipts and hard gates. Dry run by default.
 //
-//   node tooling/release/ship.mjs [run] --version X.Y.Z --commit <sha40> [--baseline-version A.B.C]
+//   node tooling/release/ship.mjs [run] --version X.Y.Z[+N] --commit <sha40> [--baseline-version A.B.C[+N]]
 //        [--phase all|<group>|<phase>[,...]] [--execute] [--adopt --evidence key=path ...] [--redo] [--json]
 //   node tooling/release/ship.mjs status  --version ... --commit ...
 //   node tooling/release/ship.mjs approve --version ... --commit ... --phase <p> --by "<name>" --confirm <p>:<version>:<sha7>

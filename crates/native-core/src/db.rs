@@ -72,6 +72,7 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "kalvoice_account_usage",
         sql: include_str!("../migrations/0019_kalvoice_account_usage.sql"),
     },
+    OPERATIONS_MIGRATION,
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -164,6 +165,13 @@ pub const CONTEXT_DELIVERY_MIGRATION: Migration = Migration {
     version: 18,
     name: "context_delivery",
     sql: include_str!("../migrations/0018_context_delivery.sql"),
+};
+
+/// Canonical Operations queue/run identity, scheduler state and transition timeline.
+pub const OPERATIONS_MIGRATION: Migration = Migration {
+    version: 20,
+    name: "operations",
+    sql: include_str!("../migrations/0020_operations.sql"),
 };
 
 /// How many pre-migration backups to keep.

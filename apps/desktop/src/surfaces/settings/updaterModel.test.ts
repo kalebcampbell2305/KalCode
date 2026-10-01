@@ -22,6 +22,15 @@ describe("updatePresentation", () => {
     });
   });
 
+  it("presents internal revisions as builds while keeping the public version readable", () => {
+    expect(updatePresentation({ ...base, phase: "ready", availableVersion: "0.1.7+218" })).toMatchObject({
+      label: "KalCode 0.1.7 build 218 is ready",
+    });
+    expect(updatePresentation({ ...base, phase: "up_to_date", currentVersion: "0.1.7+217" })).toMatchObject({
+      detail: "Version 0.1.7 build 217",
+    });
+  });
+
   it("bounds download progress and keeps unknown totals indeterminate", () => {
     expect(updatePresentation({ ...base, phase: "downloading", downloadedBytes: 75, totalBytes: 100 }).progress).toBe(
       75,

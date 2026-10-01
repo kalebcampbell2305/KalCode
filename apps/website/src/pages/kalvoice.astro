@@ -7,7 +7,7 @@ import Icon from "../components/Icon.astro";
 import SectionHead from "../components/SectionHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
-import { RELEASES, servedStableRelease } from "../lib/releases";
+import { RELEASES, releasePublicVersion, servedStableRelease } from "../lib/releases";
 import { KALVOICE, getPage } from "../lib/site";
 
 const page = getPage("/kalvoice");
@@ -47,7 +47,7 @@ const privacy = [
     <div class="container voice-hero__content">
       {
         stable ? (
-          <p class="chip chip--built">Available in KalCode Stable {stable.version}</p>
+          <p class="chip chip--built">Available in KalCode Stable {releasePublicVersion(stable.version)}</p>
         ) : (
           <p class="chip chip--dev">{KALVOICE.status}</p>
         )

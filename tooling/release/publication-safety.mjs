@@ -1,11 +1,12 @@
 import { Buffer } from "node:buffer";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { validateStableBuildVersion } from "./version.mjs";
 
 const CHANNEL_PATTERN = /^(?:stable|beta|dev)$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
-const SAFE_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const MAX_VERSION_LENGTH = 256;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
@@ -14,7 +15,10 @@ function parseSemver(version) {
   if (typeof version !== "string" || version.length === 0 || version.length > MAX_VERSION_LENGTH) {
     throw new Error("release version is not a bounded canonical SemVer");
   }
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(version);
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(
+      version,
+    );
   if (!match) throw new Error("release version is not a canonical SemVer");
   const prerelease = match[4]?.split(".") ?? [];
   for (const identifier of prerelease) {
@@ -22,7 +26,17 @@ function parseSemver(version) {
       throw new Error("release version has a non-canonical numeric prerelease identifier");
     }
   }
-  return { major: match[1], minor: match[2], patch: match[3], prerelease };
+  if (match[5] !== undefined) {
+    if (prerelease.length > 0) throw new Error("release prerelease versions cannot carry build revisions");
+    validateStableBuildVersion(version);
+  }
+  return { major: match[1], minor: match[2], patch: match[3], prerelease, buildRevision: match[5] ?? null };
+}
+
+function validateChannelVersion(channel, version) {
+  const parsed = parseSemver(version);
+  if (channel === "stable") validateStableBuildVersion(version);
+  return parsed;
 }
 
 function canonicalTimestamp(value, label) {
@@ -44,7 +58,7 @@ function canonicalTimestamp(value, label) {
  * descriptor set for the same build.
  */
 export function resolvePublicationState(existing, build, now) {
-  parseSemver(build?.version);
+  validateChannelVersion(build?.requestedReleaseChannel, build?.version);
   if (!COMMIT_PATTERN.test(build?.commit ?? "")) throw new Error("publication build commit is invalid");
   if (!CHANNEL_PATTERN.test(build?.requestedReleaseChannel ?? "")) {
     throw new Error("publication build channel is invalid");
@@ -99,7 +113,7 @@ const PLATFORM_TARGETS = new Set(["windows-x86_64", "darwin-aarch64"]);
  * local redacted evidence only; the immutable descriptor hashes remain the D1 authority.
  */
 export function resolvePlatformPublicationState(existing, release, now) {
-  parseSemver(release?.version);
+  validateChannelVersion(release?.requestedReleaseChannel, release?.version);
   if (!COMMIT_PATTERN.test(release?.commit ?? "")) throw new Error("publication release commit is invalid");
   if (!CHANNEL_PATTERN.test(release?.requestedReleaseChannel ?? "")) {
     throw new Error("publication release channel is invalid");
@@ -188,7 +202,9 @@ export function writeFrozenPublicationJson(path, value) {
   const bytes = publicationJsonBytes(value);
   if (existsSync(path)) {
     if (!Buffer.from(readFileSync(path)).equals(bytes)) {
-      throw new Error("immutable publication file already exists with different bytes; bump the version");
+      throw new Error(
+        "immutable publication file already exists with different bytes; use a new immutable build identity",
+      );
     }
     return "reused";
   }
@@ -213,7 +229,11 @@ function numericKey(value) {
 export function semverPrecedenceKey(version) {
   const parsed = parseSemver(version);
   const base = [parsed.major, parsed.minor, parsed.patch].map(numericKey).join("!");
-  if (parsed.prerelease.length === 0) return `${base}~1`;
+  if (parsed.prerelease.length === 0) {
+    // Preserve the exact key already stored for public milestones. Numeric revisions sort after
+    // their public base, while the next patch/minor/major still sorts after every prior revision.
+    return parsed.buildRevision === null ? `${base}~1` : `${base}~2${numericKey(parsed.buildRevision)}`;
+  }
   const prerelease = parsed.prerelease
     .map((identifier) => (/^\d+$/.test(identifier) ? `0${numericKey(identifier)}` : `1${identifier}`))
     .join("!");
@@ -223,6 +243,7 @@ export function semverPrecedenceKey(version) {
 function validatePointerCandidate(candidate) {
   if (!candidate || typeof candidate !== "object") throw new Error("release pointer candidate is required");
   if (!CHANNEL_PATTERN.test(candidate.channel)) throw new Error("release channel is invalid");
+  validateChannelVersion(candidate.channel, candidate.version);
   const precedenceKey = semverPrecedenceKey(candidate.version);
   if (!SHA256_PATTERN.test(candidate.updaterDescriptorSha256)) {
     throw new Error("updater descriptor SHA-256 is invalid");
@@ -256,7 +277,7 @@ export function buildPointerReadStatement(channel) {
 
 export function buildVersionReadStatement(channel, version) {
   if (!CHANNEL_PATTERN.test(channel)) throw new Error("release channel is invalid");
-  parseSemver(version);
+  validateChannelVersion(channel, version);
   return `SELECT channel, version, precedence_key, updater_descriptor_key, download_descriptor_key, updater_descriptor_sha256, download_descriptor_sha256, published_at FROM release_publication_versions WHERE channel = ${sqlLiteral(channel)} AND version = ${sqlLiteral(version)};`;
 }
 

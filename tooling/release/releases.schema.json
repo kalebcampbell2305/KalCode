@@ -22,7 +22,7 @@
     "os": { "enum": ["windows", "macos", "linux"] },
     "version": {
       "type": "string",
-      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(\\+([1-9]\\d{0,3}|[1-5]\\d{4}|6[0-4]\\d{3}|65[0-4]\\d{2}|655[0-2]\\d|6553[0-5]))?$"
     },
     "release": {
       "type": "object",
@@ -46,7 +46,7 @@
         "arch": { "enum": ["x64", "arm64", "universal"] },
         "label": { "type": "string", "minLength": 1 },
         "kind": { "enum": ["nsis", "msi", "dmg", "appimage", "deb", "rpm"] },
-        "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$" },
         "url": { "type": "string", "pattern": "^/download/" },
         "pinnedUrl": { "type": "string", "pattern": "^/download/[^/]+/[^/]+$" },
         "size": { "type": "integer", "minimum": 1 },

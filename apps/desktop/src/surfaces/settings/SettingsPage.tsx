@@ -1,4 +1,4 @@
-import type { Density, MotionPreference, ThemePreference } from "@kalcode/protocol";
+import { type Density, formatKalCodeVersion, type MotionPreference, type ThemePreference } from "@kalcode/protocol";
 import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton } from "@kalcode/ui/components";
 import { Activity, ClipboardCopy, FolderOpen, Info, KeyRound, Monitor, Moon, Palette, Sun } from "lucide-react";
 import type { ReactNode } from "react";
@@ -221,7 +221,9 @@ function About() {
             <KalCodeTagline className={styles.aboutTagline} />
           </span>
           <p className={styles.aboutMeta}>
-            {info.channel === "stable" ? `Version ${info.version}` : `Version ${info.version}, ${info.channel} build`}
+            {info.channel === "stable"
+              ? `Version ${formatKalCodeVersion(info.version)}`
+              : `Version ${formatKalCodeVersion(info.version)}, ${info.channel} channel`}
           </p>
         </figcaption>
       </figure>

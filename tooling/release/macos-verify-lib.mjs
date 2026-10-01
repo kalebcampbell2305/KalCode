@@ -15,6 +15,7 @@ import {
   MACOS_MINIMUM_VERSION,
   MACOS_PRODUCT,
   MacReleaseError,
+  macBundleVersion,
   notaryInfoArgs,
   notaryLogArgs,
   validateMacBuildRecord,
@@ -89,6 +90,12 @@ function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs,
   }
   if (plistValue(runner, infoPlist, "CFBundleShortVersionString") !== record.version) {
     throw new MacReleaseError("bundle_version_mismatch", "The mounted app version does not match the build record.");
+  }
+  if (plistValue(runner, infoPlist, "CFBundleVersion") !== macBundleVersion(record.version)) {
+    throw new MacReleaseError(
+      "bundle_build_version_mismatch",
+      "The mounted app bundle build version does not match the build identity.",
+    );
   }
   if (plistValue(runner, infoPlist, "LSMinimumSystemVersion") !== MACOS_MINIMUM_VERSION) {
     throw new MacReleaseError("deployment_target_mismatch", "The app minimum system version is invalid.");

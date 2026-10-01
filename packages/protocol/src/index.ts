@@ -7,3 +7,4 @@ export * from "./plans.ts";
 export * from "./providers.ts";
 export * from "./thread-errors.ts";
 export * from "./usage-receipts.ts";
+export * from "./version.ts";

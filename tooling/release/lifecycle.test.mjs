@@ -208,7 +208,7 @@ describe("policy", () => {
     assert.match(stamp, /STAMP_PATH = "\.well-known\/kalcode-build\.json"/);
     assert.equal(policy.production.website.stampUrl, "https://kalcoded.com/.well-known/kalcode-build.json");
     const conf = JSON.parse(readFileSync(join(ROOT, policy.production.desktop.versionFile), "utf8"));
-    assert.match(conf.version, /^\d+\.\d+\.\d+$/);
+    assert.match(conf.version, /^\d+\.\d+\.\d+(?:\+[1-9]\d*)?$/);
   });
 
   test("the lifecycle is ordered by stage, and internal-only work never deploys", () => {
@@ -255,6 +255,7 @@ describe("classify", () => {
       "third_party/portable-pty/src/lib.rs": "desktop",
       ".cargo/config.toml": "desktop",
       "docs/releases/0.1.6.md": "docs",
+      "docs/builds/0.1.7+218.md": "docs",
       "docs/ARCHITECTURE.md": "internal",
       "tooling/release/ship.mjs": "internal",
       ".github/workflows/ci.yml": "internal",
@@ -274,6 +275,7 @@ describe("classify", () => {
     assert.equal(one("somewhere/new.txt").files[0].rule, "fallback");
     assert.equal(one("docs/ARCHITECTURE.md").production, false);
     assert.equal(one("docs/releases/0.1.6.md").production, true);
+    assert.equal(one("docs/builds/0.1.7+218.md").production, true);
   });
 
   test("renames count both sides and deletions count the deleted path", () => {
@@ -443,7 +445,11 @@ describe("lifecycle status", () => {
     assert.equal(compareVersions("0.1.6", "0.1.1"), 1);
     assert.equal(compareVersions("0.1.10", "0.1.9"), 1);
     assert.equal(compareVersions("1.0.0", "1.0.0"), 0);
-    assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1);
+    assert.equal(compareVersions("1.0.0", "1.0.0+1"), -1);
+    assert.equal(compareVersions("1.0.0+1", "1.0.0+2"), -1);
+    assert.equal(compareVersions("1.0.0+2", "1.0.0+1"), 1);
+    assert.equal(compareVersions("1.0.0+65535", "1.0.1"), -1);
+    assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), null);
     assert.equal(compareVersions("x", "1.0.0"), null);
   });
 
@@ -549,7 +555,7 @@ describe("lifecycle status", () => {
     f.setOriginMain(f.commit("fix(updater): after release"));
     const after = computeStatus(policy, f.git, current);
     assert.equal(after.targets.desktop.state, "unshipped");
-    assert.match(after.targets.desktop.reason, /need a new version/);
+    assert.match(after.targets.desktop.reason, /next internal revision/);
     assert.deepEqual(
       after.targets.desktop.commits.map((c) => c.subject),
       ["fix(updater): after release"],
@@ -564,7 +570,7 @@ describe("lifecycle status", () => {
     assert.match(renderStatus(after, { markdown: true }), /Unshipped production lanes: desktop/);
   });
 
-  test("release notes: notes for the published or an older version are shipped; newer notes are not", () => {
+  test("milestone notes and continuous-build evidence follow the exact published build identity", () => {
     const f = makeFixture({ version: "1.2.0" });
     const current = obsWith({ feed: { version: "1.2.0", commit: f.base, channel: "stable" } });
     f.write("docs/releases/1.2.0.md", "# 1.2.0\n\nNotes bound after the release build.\n");
@@ -575,13 +581,19 @@ describe("lifecycle status", () => {
     assert.equal(published.targets["release-notes"].state, "shipped");
     assert.ok(!published.unshippedLanes.includes("docs"));
 
+    f.write("docs/builds/1.2.0+1.md", "# 1.2.0 build 1\n");
+    f.setOriginMain(f.commit("docs(build): bind 1.2.0+1 evidence"));
+    const build = computeStatus(policy, f.git, current);
+    assert.equal(build.targets["release-notes"].state, "unshipped");
+    assert.ok(build.unshippedLanes.includes("docs"));
+
     f.write("docs/releases/1.3.0.md", "# 1.3.0\n");
     f.setOriginMain(f.commit("docs(release): draft 1.3.0 notes"));
     const next = computeStatus(policy, f.git, current);
     assert.equal(next.targets["release-notes"].state, "unshipped");
     assert.deepEqual(
       next.targets["release-notes"].commits.map((c) => c.subject),
-      ["docs(release): draft 1.3.0 notes"],
+      ["docs(build): bind 1.2.0+1 evidence", "docs(release): draft 1.3.0 notes"],
     );
     assert.ok(next.unshippedLanes.includes("docs"));
   });

@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 
 import { guardianPublicSigningProblems, guardianPublicVerificationProblems } from "./guardian-packaging.mjs";
+import { semverPrecedenceKey } from "./publication-safety.mjs";
 
 export const ARTIFACT_SIGNING = Object.freeze({
   endpoint: "https://eus.codesigning.azure.net/",
@@ -27,10 +28,9 @@ const UPDATER_EVIDENCE_KEYS = [
 ];
 
 export function expectedWindowsInstallerFile(version) {
-  if (
-    typeof version !== "string" ||
-    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version)
-  ) {
+  try {
+    semverPrecedenceKey(version);
+  } catch {
     throw new Error("release version must be canonical SemVer");
   }
   return `KalCode_${version}_x64-setup.exe`;

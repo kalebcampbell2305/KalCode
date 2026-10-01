@@ -100,6 +100,24 @@ describe("download page platforms", () => {
     expect(body).not.toContain("preview terms");
   });
 
+  it("shows the build revision while keeping release notes on the public milestone", async () => {
+    const manifest = structuredClone(STABLE_DUAL);
+    if (!manifest.latest) throw new Error("fixture has no release");
+    manifest.latest.version = "0.1.7+218";
+    manifest.latest.notesUrl = "/updates#release-0-1-7";
+    for (const platform of manifest.latest.platforms) {
+      platform.pinnedUrl = `/download/${manifest.latest.version}/${platform.file}`;
+    }
+
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(DownloadPlatforms, { props: { manifest } });
+    const body = text(html);
+    expect(body.match(/0\.1\.7 build 218/g)).toHaveLength(4);
+    expect(html.match(/href="\/updates#release-0-1-7"/g)).toHaveLength(2);
+    expect(html).not.toContain("release-0-1-7+218");
+    expect(html).toContain("Windows: 0.1.6 can&apos;t update itself.");
+  });
+
   it("tells Windows users of 0.1.6 to download the next version, only in the Windows row of 0.1.6", async () => {
     const WINDOWS_NOTE =
       "Windows: in-app Update and Restore previous version don't work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.";

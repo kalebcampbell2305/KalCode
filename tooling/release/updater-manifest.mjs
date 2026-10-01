@@ -6,14 +6,15 @@ import { validateMacBuildRecord } from "./macos-contract.mjs";
 import { semverPrecedenceKey } from "./publication-safety.mjs";
 import { validateCompiledChannel } from "./release-channel.mjs";
 import { publicSigningProblems, publicVerificationProblems, updaterSigningEvidenceIsExact } from "./signing.mjs";
+import { validateStableBuildVersion } from "./version.mjs";
 
 const CHANNELS = new Set(["stable", "beta", "dev"]);
 const MAX_UPDATE_BYTES = 512 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 16 * 1024;
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[1-9]\d*)?$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
-const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const SIGNING_KEYS = [
   "appTimestamped",
   "applicationVerifiedDuringBundle",
@@ -323,7 +324,14 @@ async function createWindowsManifest(
     fail("build updater signature evidence must be complete and redacted");
   }
   if (!VERSION.test(build?.version ?? "")) fail("build version is invalid");
-  if (requestedChannel === "stable" && build.version.includes("-")) fail("prerelease versions cannot enter stable");
+  if (requestedChannel === "stable") {
+    if (build.version.includes("-")) fail("prerelease versions cannot enter stable");
+    try {
+      validateStableBuildVersion(build.version);
+    } catch (error) {
+      fail(error.message);
+    }
+  }
   if (!COMMIT.test(build?.commit ?? "")) fail("build commit is invalid");
   if (!SHA256.test(build?.sha256 ?? "")) fail("build SHA-256 is invalid");
   const qaProblems = updaterQaProblems(
@@ -420,7 +428,14 @@ export async function createPlatformUpdaterManifest({
   const version = artifacts[0].build?.version;
   const commit = artifacts[0].build?.commit;
   if (!VERSION.test(version ?? "") || !COMMIT.test(commit ?? "")) fail("release version or commit is invalid");
-  if (requestedChannel === "stable" && version.includes("-")) fail("prerelease versions cannot enter stable");
+  if (requestedChannel === "stable") {
+    if (version.includes("-")) fail("prerelease versions cannot enter stable");
+    try {
+      validateStableBuildVersion(version);
+    } catch (error) {
+      fail(error.message);
+    }
+  }
   const platforms = {};
   const metadata = {};
   for (const input of artifacts) {

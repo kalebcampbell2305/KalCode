@@ -46,12 +46,12 @@ const record = {
   })),
 };
 
-function fixtureHash(path) {
-  const helper = record.helpers.find(({ name }) => path.endsWith(name));
-  return helper?.sha256 ?? record.sha256;
+function fixtureHash(path, expectedRecord = record) {
+  const helper = expectedRecord.helpers.find(({ name }) => path.endsWith(name));
+  return helper?.sha256 ?? expectedRecord.sha256;
 }
 
-function fixture() {
+function fixture({ expectedRecord = record, artifactPath = artifact, bundleVersion = expectedRecord.version } = {}) {
   const calls = [];
   const runner = {
     run(command, args) {
@@ -60,7 +60,12 @@ function fixture() {
     capture(command, args, options = {}) {
       calls.push(["capture", command, args, options]);
       if (args[0] === "--build-info")
-        return JSON.stringify({ schemaVersion: 1, version: "1.2.3", channel: "stable", testHooks: false });
+        return JSON.stringify({
+          schemaVersion: 1,
+          version: expectedRecord.version,
+          channel: expectedRecord.compiledChannel,
+          testHooks: false,
+        });
       if (command === "lipo") return "arm64";
       if (command === "codesign" && args.includes("--verbose=4")) {
         const binary = args.at(-1);
@@ -86,7 +91,8 @@ function fixture() {
       if (command === "plutil") {
         const key = args[1];
         if (key === "CFBundleIdentifier") return "com.kalcode.desktop";
-        if (key === "CFBundleShortVersionString") return "1.2.3";
+        if (key === "CFBundleShortVersionString") return expectedRecord.version;
+        if (key === "CFBundleVersion") return bundleVersion;
         if (key === "LSMinimumSystemVersion") return "14.0";
         if (key === "NSMicrophoneUsageDescription")
           return "KalVoice uses the microphone only when you start voice input.";
@@ -101,7 +107,7 @@ function fixture() {
   const temp = resolve("synthetic-mount-workspace");
   const fs = {
     lstat(path) {
-      if (path === artifact)
+      if (path === artifactPath)
         return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, size: 10 };
       if (path.endsWith("KalCode.app"))
         return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false };
@@ -118,6 +124,44 @@ function fixture() {
   };
   return { calls, runner, fs };
 }
+
+test("mounted continuous builds require the derived numeric CFBundleVersion", async () => {
+  const continuousArtifact = resolve("KalCode_1.2.3+1_arm64.dmg");
+  const continuousRecord = {
+    ...record,
+    version: "1.2.3+1",
+    file: "KalCode_1.2.3+1_arm64.dmg",
+    compiledChannelVerification: { ...record.compiledChannelVerification, version: "1.2.3+1" },
+  };
+  const valid = fixture({ expectedRecord: continuousRecord, artifactPath: continuousArtifact, bundleVersion: "1.0.0" });
+  await verifyMacRelease({
+    artifactPath: continuousArtifact,
+    record: continuousRecord,
+    expectedTeamId: team,
+    notaryProfile: "kalcode-notary",
+    runner: valid.runner,
+    fs: valid.fs,
+    hashFile: async (path) => fixtureHash(path, continuousRecord),
+  });
+
+  const substituted = fixture({
+    expectedRecord: continuousRecord,
+    artifactPath: continuousArtifact,
+    bundleVersion: "1.0.1",
+  });
+  await assert.rejects(
+    verifyMacRelease({
+      artifactPath: continuousArtifact,
+      record: continuousRecord,
+      expectedTeamId: team,
+      notaryProfile: "kalcode-notary",
+      runner: substituted.runner,
+      fs: substituted.fs,
+      hashFile: async (path) => fixtureHash(path, continuousRecord),
+    }),
+    /bundle build version/i,
+  );
+});
 
 test("signed candidate verifies real mounted binary and helpers without claiming Apple or Gatekeeper acceptance", async () => {
   const { notarySubmissionId: _id, ...base } = record;

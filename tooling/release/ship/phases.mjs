@@ -245,10 +245,10 @@ export const PHASES = Object.freeze([
     "feed",
     "prod-write",
     ["deploy"],
-    "Post-deploy publisher confirmation from a fresh N checkout (same-version pointer compare-and-set)",
+    "Post-deploy publisher confirmation from a fresh N checkout (same-build pointer compare-and-set)",
     {
       approval: true,
-      approvalReason: "writes the production D1 pointer (same version, compare-and-set)",
+      approvalReason: "writes the production D1 pointer (same build identity, compare-and-set)",
       skippable: true,
     },
   ),

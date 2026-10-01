@@ -1,6 +1,6 @@
 ---
 import Base from "../../layouts/Base.astro";
-import { RELEASES, releaseCopy, servedStableRelease } from "../../lib/releases";
+import { RELEASES, releaseCopy, releasePublicVersion, servedStableRelease } from "../../lib/releases";
 import { DOCS_NAV, PAGES, getPage } from "../../lib/site";
 
 const page = getPage("/docs");
@@ -33,7 +33,7 @@ const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item) => (
         <p class="lead">{stable ? "How KalCode works, one topic at a time." : "How KalCode is designed to work, one topic at a time."}</p>
         {
           stable ? (
-            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span> These pages describe the current release.</p>
+            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {releasePublicVersion(stable.version)}</span> These pages describe the current release.</p>
           ) : (
             <p class="status-line"><span class="chip chip--dev">Describes the design</span> These pages describe KalCode as designed; details may change.</p>
           )

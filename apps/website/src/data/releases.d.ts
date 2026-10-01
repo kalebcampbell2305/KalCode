@@ -42,7 +42,7 @@ export interface ReleasePlatform {
 }
 
 export interface Release {
-  /** Semantic version from apps/desktop/src-tauri/tauri.conf.json. */
+  /** Full update identity, e.g. `0.1.7` or same-milestone build `0.1.7+218`. */
   version: string;
   channel: ReleaseChannel;
   /** ISO 8601 timestamp of the publish. */

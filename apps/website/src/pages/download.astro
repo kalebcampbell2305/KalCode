@@ -4,7 +4,7 @@ import DownloadPlatforms from "../components/DownloadPlatforms.astro";
 import EarlyAccessForm from "../components/EarlyAccessForm.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { RELEASES, formatReleaseDate, releaseCopyVersion } from "../lib/releases";
+import { RELEASES, formatReleaseDate, releaseCopyVersion, releaseDisplayVersion } from "../lib/releases";
 import { getPage } from "../lib/site";
 
 const page = getPage("/download");
@@ -15,7 +15,7 @@ const releaseLabel = latest?.channel === "stable" ? "Stable" : "Preview";
   <PageHead
     backdrop="orbital"
     title="Download KalCode"
-    status={latest ? `${releaseLabel} ${latest.version} · ${formatReleaseDate(latest.publishedAt)}` : "No public build yet"}
+    status={latest ? `${releaseLabel} ${releaseDisplayVersion(latest.version)} · ${formatReleaseDate(latest.publishedAt)}` : "No public build yet"}
     statusKind={latest ? "built" : "dev"}
     lead={
       latest?.channel === "stable"

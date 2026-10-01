@@ -564,6 +564,30 @@ impl ProcessSampler {
         classify(&rows, ctx, me.as_deref(), scope, cpu_ready)
     }
 
+    /// Samples and classifies once, returning display uptime from that same OS snapshot. Process
+    /// `start_time` remains the opaque mutation identity; callers must never derive elapsed time
+    /// from it because Windows uses a kernel FILETIME while Unix uses an epoch timestamp.
+    pub fn list_with_uptime(
+        &mut self,
+        ctx: &ProcessContext,
+        scope: ProcessScope,
+    ) -> (ProcessList, HashMap<u32, u64>) {
+        let me = self.self_user(ctx.self_pid);
+        let (rows, cpu_ready) = self.rows();
+        let uptimes = rows
+            .iter()
+            .filter_map(|row| {
+                self.system
+                    .process(Pid::from_u32(row.pid))
+                    .map(|process| (row.pid, process.run_time()))
+            })
+            .collect();
+        (
+            classify(&rows, ctx, me.as_deref(), scope, cpu_ready),
+            uptimes,
+        )
+    }
+
     /// Re-reads one process and classifies it, if it is still the process that was listed
     /// (same pid **and** start time).
     pub fn identify(

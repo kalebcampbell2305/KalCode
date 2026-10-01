@@ -139,6 +139,19 @@ describe("describeEvent", () => {
     expect(d.title).toBe("Event from a newer KalCode");
   });
 
+  it("distinguishes successful, failed and interrupted agent turns", () => {
+    const turn = (ok: boolean, interrupted: boolean) =>
+      describeEvent(
+        envelope({
+          type: "agent.turn_completed",
+          payload: { threadId: "thread-1", ok, interrupted },
+        }),
+      );
+    expect(turn(true, false)).toEqual({ title: "Agent turn completed", detail: null, tone: "success" });
+    expect(turn(false, false)).toEqual({ title: "Agent turn failed", detail: null, tone: "danger" });
+    expect(turn(false, true)).toEqual({ title: "Agent turn interrupted", detail: null, tone: "waiting" });
+  });
+
   it("describes Git, context and resource events without content", () => {
     expect(
       describeEvent(

@@ -1,6 +1,7 @@
 //! KalCode update policy. Network transport and installer execution live in the desktop shell;
 //! this crate owns the fail-closed channel, manifest, download, lifecycle, and recovery rules.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
@@ -20,6 +21,8 @@ use url::Url;
 pub mod mac_swap;
 
 pub const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_BUILD_REVISION: u16 = u16::MAX;
+pub const MAX_BUILD_INFO_BYTES: usize = 4 * 1024;
 /// Authoritative updater JSON is intentionally tiny. Bound reads before allocating so a damaged
 /// or locally replaced state file cannot exhaust memory during startup.
 pub const MAX_UPDATE_STATE_BYTES: u64 = 64 * 1024;
@@ -29,6 +32,8 @@ const ROLLBACK_RECEIPT_SCHEMA_VERSION_V1: u8 = 1;
 const ROLLBACK_RECEIPT_SCHEMA_VERSION_V2: u8 = 2;
 const MAX_PUBLIC_KEY_BASE64_BYTES: usize = 4 * 1024;
 const MAX_SIGNATURE_BASE64_BYTES: usize = 16 * 1024;
+const MAX_ATTEMPT_IDENTITY_BYTES: usize = 512;
+const FORWARD_ONLY_MAC_FENCE_SUFFIX: &str = "|forward-only-schema-upgrade";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -245,9 +250,153 @@ fn exact_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn parse_version(value: &str) -> Result<Version, UpdateError> {
-    Version::parse(value.trim_start_matches('v'))
-        .map_err(|_| UpdateError::invalid_manifest("version"))
+struct KalCodeVersion {
+    semver: Version,
+    build_revision: u16,
+}
+
+/// Evidence required to bind a macOS app bundle to the exact signed updater version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacBundleVersionEvidence {
+    /// Legacy bundles carry the complete updater version in `CFBundleShortVersionString`.
+    ExactBundleVersion,
+    /// A public-only bundle version must be paired with the executable's compiled build info.
+    CompiledBuildInfo,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompiledBuildInfo {
+    schema_version: u8,
+    version: String,
+    channel: String,
+    test_hooks: bool,
+}
+
+fn parse_version(value: &str) -> Result<KalCodeVersion, UpdateError> {
+    let semver = Version::parse(value.trim_start_matches('v'))
+        .map_err(|_| UpdateError::invalid_manifest("version"))?;
+    let build_revision = if semver.build.is_empty() {
+        0
+    } else {
+        let raw = semver.build.as_str();
+        if raw.starts_with('0') || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(UpdateError::invalid_manifest("build revision"));
+        }
+        raw.parse::<u32>()
+            .ok()
+            .filter(|revision| *revision > 0 && *revision <= u32::from(MAX_BUILD_REVISION))
+            .and_then(|revision| u16::try_from(revision).ok())
+            .ok_or_else(|| UpdateError::invalid_manifest("build revision"))?
+    };
+    Ok(KalCodeVersion {
+        semver,
+        build_revision,
+    })
+}
+
+fn compare_versions(left: &KalCodeVersion, right: &KalCodeVersion) -> Ordering {
+    (
+        left.semver.major,
+        left.semver.minor,
+        left.semver.patch,
+        &left.semver.pre,
+    )
+        .cmp(&(
+            right.semver.major,
+            right.semver.minor,
+            right.semver.patch,
+            &right.semver.pre,
+        ))
+        .then_with(|| left.build_revision.cmp(&right.build_revision))
+}
+
+fn build_identity_invalid() -> UpdateError {
+    UpdateError::new(
+        "update_build_identity_invalid",
+        "The update build identity is invalid.",
+    )
+}
+
+/// Selects the exact macOS version proof without weakening the legacy signed-bundle contract.
+///
+/// Existing bundles remain valid when their short version equals the complete updater identity.
+/// A future bundle may expose only the public `x.y.z` version, but only for a stable, canonical,
+/// bounded `x.y.z+N` build; callers must then validate compiled build info from the already
+/// authenticated app executable.
+pub fn mac_bundle_version_evidence(
+    bundle_short_version: &str,
+    expected_full_version: &str,
+) -> Result<MacBundleVersionEvidence, UpdateError> {
+    let parsed = parse_version(expected_full_version).map_err(|_| build_identity_invalid())?;
+    if !parsed.semver.pre.is_empty() || parsed.semver.to_string() != expected_full_version {
+        return Err(build_identity_invalid());
+    }
+    if bundle_short_version == expected_full_version {
+        return Ok(MacBundleVersionEvidence::ExactBundleVersion);
+    }
+    let public_version = format!(
+        "{}.{}.{}",
+        parsed.semver.major, parsed.semver.minor, parsed.semver.patch
+    );
+    if parsed.build_revision == 0 || bundle_short_version != public_version {
+        return Err(build_identity_invalid());
+    }
+    Ok(MacBundleVersionEvidence::CompiledBuildInfo)
+}
+
+/// Verifies the side-effect-free `--build-info` response from an authenticated KalCode binary.
+/// The exact object shape is shared with the release harness, and production fallback is limited
+/// to stable builds with test hooks disabled.
+pub fn validate_compiled_build_info(
+    output: &[u8],
+    expected_full_version: &str,
+) -> Result<(), UpdateError> {
+    if output.is_empty() || output.len() > MAX_BUILD_INFO_BYTES {
+        return Err(build_identity_invalid());
+    }
+    let expected = parse_version(expected_full_version).map_err(|_| build_identity_invalid())?;
+    if expected.build_revision == 0
+        || !expected.semver.pre.is_empty()
+        || expected.semver.to_string() != expected_full_version
+    {
+        return Err(build_identity_invalid());
+    }
+    let info: CompiledBuildInfo =
+        serde_json::from_slice(output).map_err(|_| build_identity_invalid())?;
+    if info.schema_version != 1
+        || info.version != expected_full_version
+        || info.channel != "stable"
+        || info.test_hooks
+    {
+        return Err(build_identity_invalid());
+    }
+    Ok(())
+}
+
+/// Returns whether `candidate_version` advances either the public SemVer precedence or KalCode's
+/// bounded numeric build revision. SemVer precedence ignores build metadata, while the `semver`
+/// crate total-orders it; KalCode centralizes its narrower cross-platform policy here.
+pub fn is_newer_version(
+    current_version: &str,
+    candidate_version: &str,
+) -> Result<bool, UpdateError> {
+    let current = parse_version(current_version)?;
+    let candidate = parse_version(candidate_version)?;
+    Ok(compare_versions(&candidate, &current).is_gt())
+}
+
+/// Recovery may expose only an older stable build. Invalid, preview, equal, and newer identities
+/// all fail closed as `false` because this is a visibility predicate rather than feed admission.
+#[must_use]
+pub fn is_previous_stable_version(current_version: &str, cached_version: &str) -> bool {
+    let (Ok(current), Ok(cached)) = (
+        parse_version(current_version),
+        parse_version(cached_version),
+    ) else {
+        return false;
+    };
+    cached.semver.pre.is_empty() && compare_versions(&cached, &current).is_lt()
 }
 
 fn validate_download_url(value: &str) -> Result<(), UpdateError> {
@@ -307,13 +456,13 @@ pub fn validate_candidate_for_target(
     validate_download_url(download_url)?;
     let current = parse_version(current_version)?;
     let announced = parse_version(announced_version)?;
-    if announced <= current {
+    if !compare_versions(&announced, &current).is_gt() {
         return Err(UpdateError::new(
             "update_not_newer",
             "The update is not newer than this build.",
         ));
     }
-    if selected_channel == UpdateChannel::Stable && !announced.pre.is_empty() {
+    if selected_channel == UpdateChannel::Stable && !announced.semver.pre.is_empty() {
         return Err(UpdateError::new(
             "prerelease_on_stable",
             "A preview build cannot be installed from Stable.",
@@ -321,7 +470,7 @@ pub fn validate_candidate_for_target(
     }
     let metadata = validate_feed_metadata(target, selected_channel, raw_manifest)?;
     Ok(Candidate {
-        version: announced.to_string(),
+        version: announced.semver.to_string(),
         notes: None,
         metadata,
     })
@@ -354,20 +503,20 @@ pub fn validate_retained_candidate_for_target(
     validate_download_url(download_url)?;
     let expected = parse_version(expected_version)?;
     let announced = parse_version(announced_version)?;
-    if !expected.pre.is_empty() || !announced.pre.is_empty() {
+    if !expected.semver.pre.is_empty() || !announced.semver.pre.is_empty() {
         return Err(UpdateError::new(
             "rollback_not_stable",
             "Only a stable build can be retained for recovery.",
         ));
     }
-    if expected != announced {
+    if expected.semver != announced.semver {
         return Err(UpdateError::new(
             "rollback_version_mismatch",
             "The recovery package does not match this version.",
         ));
     }
     Ok(Candidate {
-        version: announced.to_string(),
+        version: announced.semver.to_string(),
         notes: None,
         metadata: validate_feed_metadata(target, UpdateChannel::Stable, raw_manifest)?,
     })
@@ -839,7 +988,7 @@ impl RollbackCache {
         public_key_base64: &str,
     ) -> Result<RollbackReceipt, UpdateError> {
         let parsed_version = parse_version(version)?;
-        if !parsed_version.pre.is_empty() || parsed_version.to_string() != version {
+        if !parsed_version.semver.pre.is_empty() || parsed_version.semver.to_string() != version {
             return Err(UpdateError::new(
                 "rollback_not_stable",
                 "Only a stable build can be retained for recovery.",
@@ -936,8 +1085,8 @@ impl RollbackCache {
             _ => false,
         };
         if !receipt_shape_valid
-            || !parsed_version.pre.is_empty()
-            || parsed_version.to_string() != receipt.version
+            || !parsed_version.semver.pre.is_empty()
+            || parsed_version.semver.to_string() != receipt.version
             || receipt.size == 0
             || receipt.size > MAX_UPDATE_BYTES
             || !exact_lower_hex(&receipt.sha256, 64)
@@ -1462,6 +1611,8 @@ pub struct InstallAttempt {
     pub binding: Option<InstallBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_swap: Option<MacSwapAttempt>,
+    /// Opaque durable attempt identity. New attempts begin with their creation time; a native
+    /// compatibility guard may append a bounded ownership marker before a schema migration.
     pub started_at: String,
 }
 
@@ -1566,6 +1717,13 @@ fn read_state(path: &Path) -> Result<JournalState, UpdateError> {
     Ok(state)
 }
 
+fn install_record_invalid() -> UpdateError {
+    UpdateError::new(
+        "update_install_record_invalid",
+        "KalCode couldn't create a safe update recovery record.",
+    )
+}
+
 impl UpdateJournal {
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, UpdateError> {
         let path = path.into();
@@ -1623,8 +1781,8 @@ impl UpdateJournal {
         let from = parse_version(&attempt.from_version)?;
         let to = parse_version(&attempt.to_version)?;
         let direction_is_valid = match attempt.kind {
-            InstallKind::Upgrade => to > from,
-            InstallKind::Rollback => to < from,
+            InstallKind::Upgrade => compare_versions(&to, &from).is_gt(),
+            InstallKind::Rollback => compare_versions(&to, &from).is_lt(),
         };
         if !direction_is_valid
             || !exact_lower_hex(&attempt.sha256, 64)
@@ -1680,6 +1838,44 @@ impl UpdateJournal {
             ));
         }
         swap.phase = next;
+        self.save()
+    }
+
+    /// Fences a launched macOS upgrade against rollback by a legacy helper before a forward-only
+    /// schema migration begins. Legacy helpers capture the complete attempt before the swap and
+    /// compare it again immediately before swapping back. This bounded, durable marker changes
+    /// that ownership identity without changing the journal schema; their success path still
+    /// observes normal startup reconciliation and performs verified previous-app cleanup.
+    pub fn fence_forward_only_mac_install(
+        &mut self,
+        current_version: &str,
+    ) -> Result<(), UpdateError> {
+        parse_version(current_version)?;
+        let attempt = self
+            .state
+            .install_attempt
+            .as_mut()
+            .ok_or_else(install_record_invalid)?;
+        let launched_macos_upgrade = attempt.kind == InstallKind::Upgrade
+            && attempt.to_version == current_version
+            && attempt.binding.as_ref().map(|binding| binding.target)
+                == Some(UpdateTarget::DarwinAarch64)
+            && attempt.mac_swap.as_ref().map(|swap| swap.phase) == Some(MacSwapPhase::Launched);
+        if !launched_macos_upgrade {
+            return Err(install_record_invalid());
+        }
+        if attempt.started_at.ends_with(FORWARD_ONLY_MAC_FENCE_SUFFIX) {
+            return Ok(());
+        }
+        if attempt
+            .started_at
+            .len()
+            .checked_add(FORWARD_ONLY_MAC_FENCE_SUFFIX.len())
+            .is_none_or(|length| length > MAX_ATTEMPT_IDENTITY_BYTES)
+        {
+            return Err(install_record_invalid());
+        }
+        attempt.started_at.push_str(FORWARD_ONLY_MAC_FENCE_SUFFIX);
         self.save()
     }
 

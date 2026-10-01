@@ -6,7 +6,14 @@
  * before then the preview-era tag stays.
  */
 import { sampleThreads, type Thread } from "../data/story";
-import { channelLabel, RELEASES, type ReleaseManifest, servedStableRelease } from "./releases";
+import {
+  channelLabel,
+  RELEASES,
+  type ReleaseManifest,
+  releaseDisplayVersion,
+  releasePublicVersion,
+  servedStableRelease,
+} from "./releases";
 
 /** A stage tag, plus the tag used once a Stable release is served ("{version}" is its version). */
 export interface StageTag {
@@ -16,13 +23,15 @@ export interface StageTag {
 
 export function stageTag(item: StageTag, manifest: ReleaseManifest = RELEASES): string {
   const stable = servedStableRelease(manifest);
-  return stable && item.stableTag ? item.stableTag.replace(/\{version\}/g, stable.version) : item.tag;
+  return stable && item.stableTag
+    ? item.stableTag.replace(/\{version\}/g, releasePublicVersion(stable.version))
+    : item.tag;
 }
 
 /** The build line in the sample app window: the served release, or "Development build" before one. */
 export function stageBuildLabel(manifest: ReleaseManifest = RELEASES): string {
   const latest = manifest.latest;
-  return latest ? `${channelLabel(manifest)} ${latest.version}` : "Development build";
+  return latest ? `${channelLabel(manifest)} ${releaseDisplayVersion(latest.version)}` : "Development build";
 }
 
 /** True while /download serves a Stable release, so the sample rail shows Stable's surfaces. */

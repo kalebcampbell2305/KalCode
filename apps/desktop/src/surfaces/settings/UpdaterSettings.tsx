@@ -1,3 +1,4 @@
+import { formatKalCodeVersion } from "@kalcode/protocol";
 import { Button, Panel, SegmentedControl, Skeleton, useToast } from "@kalcode/ui/components";
 import { RefreshCw, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -144,7 +145,7 @@ export function UpdaterSettings() {
               busy={operation === "install"}
               onClick={() => void run("install", () => restartAndInstall(client).then(() => undefined))}
             >
-              Restart and install{status.availableVersion ? ` ${status.availableVersion}` : ""}
+              Restart and install{status.availableVersion ? ` ${formatKalCodeVersion(status.availableVersion)}` : ""}
             </Button>
           ) : null}
         </div>

@@ -4,11 +4,11 @@
 #[cfg(target_os = "macos")]
 use std::fs::File;
 #[cfg(target_os = "macos")]
-use std::io::Read;
+use std::io::{self, Read};
 #[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
-use std::process::{Child, Command, ExitCode, Output};
+use std::process::{Child, Command, ExitCode, Output, Stdio};
 #[cfg(target_os = "macos")]
 use std::thread;
 #[cfg(target_os = "macos")]
@@ -16,8 +16,13 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
 use kalcode_updater::mac_swap::{app_executable, atomic_swap_apps, process_identity_sha256};
+#[cfg(any(target_os = "macos", test))]
+use kalcode_updater::{InstallAttempt, MacSwapAttempt, MacSwapPhase};
 #[cfg(target_os = "macos")]
-use kalcode_updater::{MacSwapAttempt, MacSwapPhase, UpdateJournal, UpdateTarget};
+use kalcode_updater::{
+    MAX_BUILD_INFO_BYTES, MacBundleVersionEvidence, UpdateJournal, UpdateTarget,
+    mac_bundle_version_evidence, validate_compiled_build_info,
+};
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
 
@@ -27,6 +32,8 @@ const PARENT_EXIT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(45);
 #[cfg(target_os = "macos")]
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+#[cfg(target_os = "macos")]
+const BUILD_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(target_os = "macos")]
 fn main() -> ExitCode {
@@ -164,10 +171,18 @@ fn verify_swap_inputs(
     let binding = attempt.binding.as_ref().ok_or(())?;
     if binding.target != UpdateTarget::DarwinAarch64
         || digest_file(&app_executable(&swap.current_app))? != binding.source_sha256
-        || verify_app_identity(&swap.current_app, &attempt.from_version)?
-            != binding.signing_requirement_sha256
-        || verify_app_identity(&swap.staged_app, &attempt.to_version)?
-            != binding.signing_requirement_sha256
+        || verify_app_identity(
+            &swap.current_app,
+            &attempt.from_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
+        || verify_app_identity(
+            &swap.staged_app,
+            &attempt.to_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
     {
         return Err(());
     }
@@ -182,10 +197,18 @@ fn remove_verified_previous_app(
     let binding = attempt.binding.as_ref().ok_or(())?;
     if binding.target != UpdateTarget::DarwinAarch64
         || digest_file(&app_executable(&swap.staged_app))? != binding.source_sha256
-        || verify_app_identity(&swap.staged_app, &attempt.from_version)?
-            != binding.signing_requirement_sha256
-        || verify_app_identity(&swap.current_app, &attempt.to_version)?
-            != binding.signing_requirement_sha256
+        || verify_app_identity(
+            &swap.staged_app,
+            &attempt.from_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
+        || verify_app_identity(
+            &swap.current_app,
+            &attempt.to_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
     {
         return Err(());
     }
@@ -201,10 +224,18 @@ fn remove_verified_failed_app(
     let binding = attempt.binding.as_ref().ok_or(())?;
     if binding.target != UpdateTarget::DarwinAarch64
         || digest_file(&app_executable(&swap.current_app))? != binding.source_sha256
-        || verify_app_identity(&swap.current_app, &attempt.from_version)?
-            != binding.signing_requirement_sha256
-        || verify_app_identity(&swap.staged_app, &attempt.to_version)?
-            != binding.signing_requirement_sha256
+        || verify_app_identity(
+            &swap.current_app,
+            &attempt.from_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
+        || verify_app_identity(
+            &swap.staged_app,
+            &attempt.to_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
     {
         return Err(());
     }
@@ -213,7 +244,11 @@ fn remove_verified_failed_app(
 }
 
 #[cfg(target_os = "macos")]
-fn verify_app_identity(app: &Path, expected_version: &str) -> Result<String, ()> {
+fn verify_app_identity(
+    app: &Path,
+    expected_version: &str,
+    expected_requirement_sha256: &str,
+) -> Result<(), ()> {
     checked(
         Command::new("/usr/bin/codesign")
             .args(["--verify", "--deep", "--strict", "--verbose=2"])
@@ -252,20 +287,11 @@ fn verify_app_identity(app: &Path, expected_version: &str) -> Result<String, ()>
         .map(str::trim)
         .filter(|value| !value.is_empty() && value.len() <= 16 * 1024)
         .ok_or(())?;
-    let plist = app.join("Contents").join("Info.plist");
-    let version = checked(
-        Command::new("/usr/bin/plutil")
-            .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
-            .arg(plist),
-    )?;
-    if std::str::from_utf8(&version.stdout).map_err(|_| ())?.trim() != expected_version {
+    if format!("{:x}", Sha256::digest(requirement.as_bytes())) != expected_requirement_sha256 {
         return Err(());
     }
-    let architectures = checked(
-        Command::new("/usr/bin/lipo")
-            .arg("-archs")
-            .arg(app_executable(app)),
-    )?;
+    let executable = app_executable(app);
+    let architectures = checked(Command::new("/usr/bin/lipo").arg("-archs").arg(&executable))?;
     if std::str::from_utf8(&architectures.stdout)
         .map_err(|_| ())?
         .split_whitespace()
@@ -275,7 +301,26 @@ fn verify_app_identity(app: &Path, expected_version: &str) -> Result<String, ()>
     {
         return Err(());
     }
-    Ok(format!("{:x}", Sha256::digest(requirement.as_bytes())))
+    let plist = app.join("Contents").join("Info.plist");
+    let version = checked(
+        Command::new("/usr/bin/plutil")
+            .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
+            .arg(plist),
+    )?;
+    let bundle_short_version = std::str::from_utf8(&version.stdout).map_err(|_| ())?.trim();
+    if mac_bundle_version_evidence(bundle_short_version, expected_version).map_err(|_| ())?
+        == MacBundleVersionEvidence::CompiledBuildInfo
+    {
+        let build_info = checked_bounded(
+            Command::new(&executable).arg("--build-info"),
+            BUILD_INFO_TIMEOUT,
+        )?;
+        if !build_info.stderr.is_empty() {
+            return Err(());
+        }
+        validate_compiled_build_info(&build_info.stdout, expected_version).map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -307,6 +352,70 @@ fn checked(command: &mut Command) -> Result<Output, ()> {
 }
 
 #[cfg(target_os = "macos")]
+fn checked_bounded(command: &mut Command, timeout: Duration) -> Result<Output, ()> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| ())?;
+    let stdout = child.stdout.take().ok_or(())?;
+    let stderr = child.stderr.take().ok_or(())?;
+    let stdout_reader = thread::spawn(move || read_bounded_output(stdout));
+    let stderr_reader = thread::spawn(move || read_bounded_output(stderr));
+    let started = Instant::now();
+    let status = loop {
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(POLL_INTERVAL),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(());
+            }
+        }
+    };
+    let stdout = stdout_reader.join().map_err(|_| ())?.map_err(|_| ())?;
+    let stderr = stderr_reader.join().map_err(|_| ())?.map_err(|_| ())?;
+    if !status.success()
+        || stdout.len() > MAX_BUILD_INFO_BYTES
+        || stderr.len() > MAX_BUILD_INFO_BYTES
+    {
+        return Err(());
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_bounded_output(mut reader: impl Read) -> io::Result<Vec<u8>> {
+    let mut kept = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(kept);
+        }
+        let remaining = MAX_BUILD_INFO_BYTES
+            .saturating_add(1)
+            .saturating_sub(kept.len());
+        kept.extend_from_slice(&buffer[..read.min(remaining)]);
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn combined_text(output: &Output) -> Result<String, ()> {
     let mut bytes = output.stdout.clone();
     bytes.extend_from_slice(&output.stderr);
@@ -324,6 +433,25 @@ fn finish_health_rollback(
     cleanup_failed()
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn exact_attempt_still_owns_legacy_rollback(
+    captured: &InstallAttempt,
+    observed: &InstallAttempt,
+    observed_swap: &MacSwapAttempt,
+) -> bool {
+    let Some(mut expected_swap) = captured.mac_swap.clone() else {
+        return false;
+    };
+    expected_swap.phase = observed_swap.phase;
+    let mut expected_attempt = captured.clone();
+    expected_attempt.mac_swap = Some(expected_swap.clone());
+    matches!(
+        observed_swap.phase,
+        MacSwapPhase::Swapped | MacSwapPhase::Launched
+    ) && observed_swap == &expected_swap
+        && observed == &expected_attempt
+}
+
 #[cfg(target_os = "macos")]
 fn rollback(
     journal_path: &Path,
@@ -336,42 +464,33 @@ fn rollback(
         let _ = child.wait();
     }
     let observed = UpdateJournal::load(journal_path).map_err(|_| ())?;
+    let binding = attempt.binding.as_ref().ok_or(())?;
     let (observed_attempt, observed_swap) = pending_mac_swap(&observed)?;
-    let mut expected_swap = swap.clone();
-    expected_swap.phase = observed_swap.phase;
-    let mut expected_attempt = attempt.clone();
-    expected_attempt.mac_swap = Some(expected_swap.clone());
-    if !matches!(
-        observed_swap.phase,
-        MacSwapPhase::Swapped | MacSwapPhase::Launched
-    ) || observed_swap != expected_swap
-        || observed_attempt != expected_attempt
-        || digest_file(&app_executable(&swap.staged_app))?
-            != attempt.binding.as_ref().ok_or(())?.source_sha256
-        || verify_app_identity(&swap.staged_app, &attempt.from_version)?
-            != attempt
-                .binding
-                .as_ref()
-                .ok_or(())?
-                .signing_requirement_sha256
-        || verify_app_identity(&swap.current_app, &attempt.to_version)?
-            != attempt
-                .binding
-                .as_ref()
-                .ok_or(())?
-                .signing_requirement_sha256
+    if !exact_attempt_still_owns_legacy_rollback(attempt, &observed_attempt, &observed_swap)
+        || digest_file(&app_executable(&swap.staged_app))? != binding.source_sha256
+        || verify_app_identity(
+            &swap.staged_app,
+            &attempt.from_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
+        || verify_app_identity(
+            &swap.current_app,
+            &attempt.to_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
     {
         return Err(());
     }
     atomic_swap_apps(&swap.current_app, &swap.staged_app).map_err(|_| ())?;
-    if digest_file(&app_executable(&swap.current_app))?
-        != attempt.binding.as_ref().ok_or(())?.source_sha256
-        || verify_app_identity(&swap.current_app, &attempt.from_version)?
-            != attempt
-                .binding
-                .as_ref()
-                .ok_or(())?
-                .signing_requirement_sha256
+    if digest_file(&app_executable(&swap.current_app))? != binding.source_sha256
+        || verify_app_identity(
+            &swap.current_app,
+            &attempt.from_version,
+            &binding.signing_requirement_sha256,
+        )
+        .is_err()
     {
         return Err(());
     }
@@ -395,8 +514,112 @@ fn rollback(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::fs;
 
-    use super::finish_health_rollback;
+    #[cfg(target_os = "macos")]
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    use std::time::{Duration, Instant};
+
+    use kalcode_updater::{
+        InstallAttempt, InstallBinding, InstallKind, MacSwapAttempt, MacSwapPhase, UpdateJournal,
+        UpdateTarget,
+    };
+    use tempfile::tempdir;
+
+    use super::{exact_attempt_still_owns_legacy_rollback, finish_health_rollback};
+
+    #[cfg(target_os = "macos")]
+    use super::checked_bounded;
+
+    #[test]
+    fn forward_only_fence_blocks_legacy_swap_before_new_app_or_user_data_changes() {
+        let temp = tempdir().unwrap();
+        let journal_path = temp.path().join("updater.json");
+        let current_app = temp.path().join("KalCode.app");
+        let staged_app = temp.path().join(".KalCode-update-test.app");
+        let user_data = temp.path().join("owner-data.sqlite");
+        fs::create_dir(&current_app).unwrap();
+        fs::create_dir(&staged_app).unwrap();
+        fs::write(current_app.join("version"), b"schema20-capable").unwrap();
+        fs::write(staged_app.join("version"), b"schema19-only").unwrap();
+        fs::write(&user_data, b"schema20-owner-data").unwrap();
+        let mut journal = UpdateJournal::load(&journal_path).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.7".into(),
+                to_version: "0.1.7+1".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::DarwinAarch64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: Some(MacSwapAttempt {
+                    current_app: current_app.clone(),
+                    staged_app: staged_app.clone(),
+                    parent_pid: 42,
+                    parent_identity_sha256: "e".repeat(64),
+                    phase: MacSwapPhase::Prepared,
+                }),
+                started_at: "2026-09-30T12:00:00Z".into(),
+            })
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(MacSwapPhase::Swapped, MacSwapPhase::Launched)
+            .unwrap();
+        let captured = journal.state().install_attempt.clone().unwrap();
+        journal.fence_forward_only_mac_install("0.1.7+1").unwrap();
+        let observed = journal.state().install_attempt.as_ref().unwrap();
+        let observed_swap = observed.mac_swap.as_ref().unwrap();
+
+        let swap_was_called =
+            exact_attempt_still_owns_legacy_rollback(&captured, observed, observed_swap);
+
+        assert!(!swap_was_called);
+        assert_eq!(
+            fs::read(current_app.join("version")).unwrap(),
+            b"schema20-capable"
+        );
+        assert_eq!(
+            fs::read(staged_app.join("version")).unwrap(),
+            b"schema19-only"
+        );
+        assert_eq!(fs::read(user_data).unwrap(), b"schema20-owner-data");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn compiled_identity_probe_rejects_nonzero_oversized_and_timed_out_processes() {
+        assert!(
+            checked_bounded(
+                Command::new("/bin/sh").args(["-c", "exit 7"]),
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
+        assert!(
+            checked_bounded(
+                Command::new("/bin/sh").args(["-c", "dd if=/dev/zero bs=4097 count=1 2>/dev/null"]),
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
+
+        let started = Instant::now();
+        assert!(
+            checked_bounded(
+                Command::new("/bin/sleep").arg("10"),
+                Duration::from_millis(50),
+            )
+            .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn failed_health_rollback_cleans_only_after_cancel_and_relaunch() {

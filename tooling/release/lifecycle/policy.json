@@ -13,7 +13,7 @@
     },
     "docs": {
       "production": true,
-      "description": "Published docs: docs/releases/<version>.md ships inside the signed updater descriptor."
+      "description": "Published desktop notes: owner-declared milestones use docs/releases/<version>.md; continuous builds use docs/builds/<identity>.md."
     },
     "internal": { "production": false, "description": "Tooling, CI, tests, agent and dev files. Merge only." }
   },
@@ -53,10 +53,10 @@
     },
     {
       "id": "release-notes",
-      "globs": ["docs/releases/**"],
+      "globs": ["docs/releases/**", "docs/builds/**"],
       "lanes": ["docs"],
       "targets": ["release-notes"],
-      "why": "publish.mjs embeds docs/releases/<version>.md in the signed updater descriptor"
+      "why": "publish.mjs embeds the exact milestone release notes or continuous-build evidence in the signed updater descriptor"
     },
     {
       "id": "internal-files",
@@ -155,12 +155,12 @@
     "desktop.version": {
       "stage": "commit",
       "lanes": ["desktop"],
-      "text": "Bump the version (tauri.conf.json, apps/desktop/package.json, Cargo.toml) and write docs/releases/<version>.md."
+      "text": "Keep the owner-declared public version unchanged and increment the numeric +N build revision (1..65535) across tauri.conf.json, apps/desktop/package.json and Cargo.toml; write docs/builds/<x.y.z+N>.md. Only an explicit owner milestone uses plain x.y.z and docs/releases/<x.y.z>.md."
     },
     "desktop.release": {
       "stage": "build",
       "lanes": ["desktop"],
-      "text": "Signed release build and automated release gates: node tooling/release/ship.mjs --version X.Y.Z --commit <sha40> (test, build, certify, qa, stage)."
+      "text": "Signed release build and automated release gates: node tooling/release/ship.mjs --version X.Y.Z+N --commit <sha40> for a continuous build, or plain X.Y.Z only for an owner-declared milestone (test, build, certify, qa, stage)."
     },
     "desktop.publish": {
       "stage": "deploy",
@@ -170,7 +170,7 @@
     "desktop.verify": {
       "stage": "verify",
       "lanes": ["desktop"],
-      "text": "Verify https://kalcoded.com/releases/updater/stable.json serves X.Y.Z with kalcode.commit = the release commit, then a production install and update (ship.mjs --phase live-verify, live-human)."
+      "text": "Verify https://kalcoded.com/releases/updater/stable.json serves the exact X.Y.Z+N build identity with kalcode.commit = the release commit, then production install/update on Windows and macOS (ship.mjs --phase live-verify, live-human)."
     },
     "website.build": {
       "stage": "build",
@@ -212,7 +212,7 @@
     "docs.publish": {
       "stage": "deploy",
       "lanes": ["docs"],
-      "text": "Release notes publish with their version: publish.mjs embeds docs/releases/<version>.md in the signed updater descriptor. Notes of an already published version cannot change in place."
+      "text": "publish.mjs embeds docs/builds/<identity>.md for +N continuous builds and docs/releases/<version>.md for owner-declared milestones. Published notes/evidence are immutable."
     },
     "docs.verify": {
       "stage": "verify",

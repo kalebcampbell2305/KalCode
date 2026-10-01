@@ -5,7 +5,15 @@
  * shown and there is no link. The row matching the visitor's system is marked by
  * scripts/platform.ts (progressive enhancement; nothing depends on it).
  */
-import { type ReleaseManifest, RELEASES, formatBytes, formatReleaseDate, platformRows } from "../lib/releases";
+import {
+  type ReleaseManifest,
+  RELEASES,
+  formatBytes,
+  formatReleaseDate,
+  platformRows,
+  releaseDisplayVersion,
+  releasePublicVersion,
+} from "../lib/releases";
 import Icon from "./Icon.astro";
 
 interface Props {
@@ -14,6 +22,8 @@ interface Props {
 const { manifest = RELEASES } = Astro.props;
 const rows = platformRows(manifest);
 const latest = manifest.latest;
+const displayVersion = latest ? releaseDisplayVersion(latest.version) : null;
+const publicVersion = latest ? releasePublicVersion(latest.version) : null;
 const releaseLabel = latest?.channel === "stable" ? "Stable" : "Preview";
 const releaseNoun = latest?.channel === "stable" ? "stable build" : "preview";
 const terms = latest?.channel === "stable"
@@ -41,7 +51,7 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
           <h3 class="platform__name">{row.name}</h3>
           {row.state === "available" && latest ? (
             <span class="chip chip--built">
-              {releaseLabel} {latest.version}
+              {releaseLabel} {displayVersion}
             </span>
           ) : (
             <span class="chip">Not yet available</span>
@@ -55,7 +65,7 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
               <div>
                 <dt>Version</dt>
                 <dd>
-                  {latest.version} · published <time datetime={latest.publishedAt}>{formatReleaseDate(latest.publishedAt)}</time>
+                  {displayVersion} · published <time datetime={latest.publishedAt}>{formatReleaseDate(latest.publishedAt)}</time>
                 </dd>
               </div>
               <div>
@@ -94,11 +104,11 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
                 On a standard Mac account, open the DMG and copy <code>KalCode.app</code> to <code>~/Applications</code> before launching it. Create an <code>Applications</code> folder in your home folder if needed. This per-user location supports in-app updates and rollback. The DMG&apos;s <code>Applications</code> shortcut points to the system <code>/Applications</code> folder, which requires administrator access; a standard-user install there requires an administrator to replace the app manually for later versions.
               </p>
             )}
-            {row.os === "windows" && latest.version === "0.1.6" && (
+            {row.os === "windows" && publicVersion === "0.1.6" && (
               <p class="platform__note" data-windows-update-note>
                 Windows: in-app Update and Restore previous version don&apos;t work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.
               </p>
-            )}{row.os === "windows" && latest.version === "0.1.7" && (
+            )}{row.os === "windows" && publicVersion === "0.1.7" && (
               <p class="platform__note" data-windows-update-note>
                 Windows: 0.1.6 can&apos;t update itself. If you have 0.1.6, download this installer and run it once — your data is kept. On macOS, 0.1.6 updates in the app.
               </p>

@@ -1,7 +1,7 @@
 ---
 import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import Docs from "../../layouts/Docs.astro";
-import { RELEASES, servedStableRelease } from "../../lib/releases";
+import { RELEASES, releasePublicVersion, servedStableRelease } from "../../lib/releases";
 import { KALVOICE } from "../../lib/site";
 
 // KalVoice is announced as shipped only while /download serves a signed Stable release.
@@ -16,7 +16,7 @@ const stable = servedStableRelease(RELEASES);
     {KALVOICE.summary}
     {
       stable
-        ? `KalVoice ships in KalCode Stable ${stable.version}. Speech recognition and command interpretation run on your computer; KalCode downloads and verifies their signed local components by itself when you first open it, with no separate Python or Ollama installation.`
+        ? `KalVoice ships in KalCode Stable ${releasePublicVersion(stable.version)}. Speech recognition and command interpretation run on your computer; KalCode downloads and verifies their signed local components by itself when you first open it, with no separate Python or Ollama installation.`
         : "KalVoice is in development and not available in a public build yet."
     }
     For the overview, see the <a href="/kalvoice">KalVoice page</a>.

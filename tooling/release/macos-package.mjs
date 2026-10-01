@@ -507,6 +507,7 @@ async function main() {
       buildEnvironment(process.env, options.compiledChannel),
       credentials.signingIdentity,
       updaterPublicKey,
+      version,
     ),
     sdkRoot,
   );

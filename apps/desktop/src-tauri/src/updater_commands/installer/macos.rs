@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use kalcode_updater::mac_swap::{app_executable, process_identity_sha256};
 use kalcode_updater::{
-    ArtifactFormat, FeedMetadata, InstallBinding, MacSwapAttempt, MacSwapPhase, UpdateError,
-    UpdateTarget, verify_download_reader,
+    ArtifactFormat, FeedMetadata, InstallBinding, MacBundleVersionEvidence, MacSwapAttempt,
+    MacSwapPhase, UpdateError, UpdateTarget, mac_bundle_version_evidence,
+    validate_compiled_build_info, verify_download_reader,
 };
 use sha2::{Digest, Sha256};
 
@@ -28,6 +29,7 @@ const OWNERSHIP_SUFFIX: &str = ".owner";
 const LEASE_SUFFIX: &str = ".owner.lock";
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CLEANUP_CHILD_TIMEOUT: Duration = Duration::from_secs(15);
+const BUILD_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 const LEASE_SETTLE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_CHILD_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -269,7 +271,8 @@ impl PreparedMacInstaller {
 
             let current_app = current_app_bundle()?;
             current_app_for_cleanup = Some(current_app.clone());
-            let current_identity = verify_app(&current_app, current_version, active_lease, cancel)?;
+            let current_identity =
+                verify_app(&current_app, current_version, None, active_lease, cancel)?;
             let current_executable = app_executable(&current_app);
             let source_sha256 = digest_file(&current_executable, cancel)?;
             let helper_path = current_app
@@ -304,11 +307,13 @@ impl PreparedMacInstaller {
                 replace_ownership_record(&ownership_path, ownership_identity, &ownership)?;
             ownership_created = Some(ownership_identity);
             let candidate_app = mounted.path().join("KalCode.app");
-            let candidate_identity =
-                verify_app(&candidate_app, expected_version, active_lease, cancel)?;
-            if candidate_identity != current_identity {
-                return Err(identity_mismatch());
-            }
+            verify_app(
+                &candidate_app,
+                expected_version,
+                Some(&current_identity),
+                active_lease,
+                cancel,
+            )?;
 
             let parent = current_app.parent().ok_or_else(installer_invalid)?;
             let staged_app = parent.join(format!(".KalCode-update-{id}.app"));
@@ -344,10 +349,13 @@ impl PreparedMacInstaller {
                 return Err(installer_storage_failed());
             }
             cancel()?;
-            if verify_app(&staged_app, expected_version, active_lease, cancel)? != current_identity
-            {
-                return Err(identity_mismatch());
-            }
+            verify_app(
+                &staged_app,
+                expected_version,
+                Some(&current_identity),
+                active_lease,
+                cancel,
+            )?;
             mounted.detach(active_lease, cancel)?;
             cancel()?;
 
@@ -444,14 +452,23 @@ impl PreparedMacInstaller {
 
     pub(super) fn launch(mut self) -> Result<(), UpdateError> {
         let lease = self.lease.as_ref().ok_or_else(installer_invalid)?;
-        if process_identity_sha256(self.parent_pid)? != self.parent_identity_sha256
-            || verify_app(&self.current_app, &self.from_version, lease, &not_cancelled)?
-                != self.designated_requirement
-            || verify_app(&self.staged_app, &self.to_version, lease, &not_cancelled)?
-                != self.designated_requirement
-        {
+        if process_identity_sha256(self.parent_pid)? != self.parent_identity_sha256 {
             return Err(identity_mismatch());
         }
+        verify_app(
+            &self.current_app,
+            &self.from_version,
+            Some(&self.designated_requirement),
+            lease,
+            &not_cancelled,
+        )?;
+        verify_app(
+            &self.staged_app,
+            &self.to_version,
+            Some(&self.designated_requirement),
+            lease,
+            &not_cancelled,
+        )?;
         let mut command = Command::new(&self.helper_path);
         command.arg("--journal").arg(&self.journal_path);
         let child = command.spawn().map_err(|_| {
@@ -1048,6 +1065,15 @@ fn checked_cancellable(
     lease: &PreparationLease,
     cancel: &dyn Fn() -> Result<(), UpdateError>,
 ) -> Result<Output, UpdateError> {
+    checked_cancellable_with_timeout(command, lease, cancel, None)
+}
+
+fn checked_cancellable_with_timeout(
+    command: &mut Command,
+    lease: &PreparationLease,
+    cancel: &dyn Fn() -> Result<(), UpdateError>,
+    timeout: Option<Duration>,
+) -> Result<Output, UpdateError> {
     cancel()?;
     inherit_lease(command, lease);
     let mut child = command
@@ -1060,6 +1086,7 @@ fn checked_cancellable(
     let stderr = child.stderr.take().ok_or_else(installer_invalid)?;
     let stdout_reader = thread::spawn(move || read_bounded_output(stdout));
     let stderr_reader = thread::spawn(move || read_bounded_output(stderr));
+    let started = Instant::now();
 
     let status = loop {
         if let Err(error) = cancel() {
@@ -1068,6 +1095,13 @@ fn checked_cancellable(
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(error);
+        }
+        if timeout.is_some_and(|limit| started.elapsed() >= limit) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(installer_invalid());
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1152,6 +1186,7 @@ fn verify_dmg(
 fn verify_app(
     path: &Path,
     expected_version: &str,
+    expected_requirement: Option<&str>,
     lease: &PreparationLease,
     cancel: &dyn Fn() -> Result<(), UpdateError>,
 ) -> Result<String, UpdateError> {
@@ -1190,21 +1225,6 @@ fn verify_app(
     if identifier != BUNDLE_IDENTIFIER {
         return Err(identity_mismatch());
     }
-    let version = checked_cancellable(
-        Command::new("/usr/bin/plutil")
-            .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
-            .arg(path.join("Contents").join("Info.plist")),
-        lease,
-        cancel,
-    )?;
-    if std::str::from_utf8(&version.stdout)
-        .map_err(|_| installer_invalid())?
-        .trim()
-        != expected_version
-    {
-        return Err(installer_invalid());
-    }
-
     let requirement = checked_cancellable(
         Command::new("/usr/bin/codesign")
             .args(["-d", "-r-"])
@@ -1219,6 +1239,9 @@ fn verify_app(
         .filter(|value| !value.is_empty() && value.len() <= 16 * 1024)
         .ok_or_else(installer_invalid)?
         .to_owned();
+    if expected_requirement.is_some_and(|expected| requirement != expected) {
+        return Err(identity_mismatch());
+    }
 
     let executable = app_executable(path);
     require_regular_file(&executable)?;
@@ -1233,6 +1256,30 @@ fn verify_app(
         .collect::<Vec<_>>();
     if architectures.as_slice() != ["arm64"] {
         return Err(installer_invalid());
+    }
+    let version = checked_cancellable(
+        Command::new("/usr/bin/plutil")
+            .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
+            .arg(path.join("Contents").join("Info.plist")),
+        lease,
+        cancel,
+    )?;
+    let bundle_short_version = std::str::from_utf8(&version.stdout)
+        .map_err(|_| installer_invalid())?
+        .trim();
+    if mac_bundle_version_evidence(bundle_short_version, expected_version)?
+        == MacBundleVersionEvidence::CompiledBuildInfo
+    {
+        let build_info = checked_cancellable_with_timeout(
+            Command::new(&executable).arg("--build-info"),
+            lease,
+            cancel,
+            Some(BUILD_INFO_TIMEOUT),
+        )?;
+        if !build_info.stderr.is_empty() {
+            return Err(installer_invalid());
+        }
+        validate_compiled_build_info(&build_info.stdout, expected_version)?;
     }
     Ok(requirement)
 }
@@ -1368,9 +1415,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        FileIdentity, FileKind, PreparationLease, PreparationOwnership, cleanup_owned_preparation,
-        create_staged_app, file_identity, inherit_lease, is_protected_staged,
-        read_ownership_record, remove_staged_app, replace_ownership_record, run_cancellable_status,
+        FileIdentity, FileKind, PreparationLease, PreparationOwnership,
+        checked_cancellable_with_timeout, cleanup_owned_preparation, create_staged_app,
+        file_identity, inherit_lease, is_protected_staged, read_ownership_record,
+        remove_staged_app, replace_ownership_record, run_cancellable_status,
         staged_app_create_error, sweep_preparations, write_ownership_record,
     };
 
@@ -1882,6 +1930,27 @@ mod tests {
 
         assert_eq!(error.code(), "update_preparation_cancelled");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn timed_out_captured_child_is_killed_and_reaped() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let lease = PreparationLease::create(&temp.path().join("build-info.lock"))?;
+        let mut command = Command::new("/bin/sleep");
+        command.arg("10");
+        let started = Instant::now();
+
+        let error = checked_cancellable_with_timeout(
+            &mut command,
+            &lease,
+            &super::not_cancelled,
+            Some(Duration::from_millis(50)),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "update_installer_invalid");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        Ok(())
     }
 
     #[test]

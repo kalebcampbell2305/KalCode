@@ -111,6 +111,7 @@ impl FeatureFlags {
         use SurfaceState::*;
         let table = [
             (Dashboard, Available),
+            (Operations, Available),
             // Stable ships KalVoice; bootstrap still requires the compiled speech engine.
             (KalVoice, Available),
             (Code, Available),

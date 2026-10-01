@@ -1,5 +1,5 @@
 ---
-import { RELEASES, releaseCopy, servedStableRelease } from "../lib/releases";
+import { RELEASES, releaseCopy, releasePublicVersion, servedStableRelease } from "../lib/releases";
 import { DOCS_NAV, type PagePath, getPage } from "../lib/site";
 import Base from "./Base.astro";
 
@@ -35,7 +35,7 @@ const stable = servedStableRelease(RELEASES);
         <p class="lead">{lead}</p>
         {
           stable ? (
-            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span></p>
+            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {releasePublicVersion(stable.version)}</span></p>
           ) : (
             <p class="status-line"><span class="chip chip--dev">Describes the design</span> Details may change before release.</p>
           )

@@ -1,15 +1,92 @@
 use std::str::FromStr;
 
 use kalcode_updater::{
-    ArtifactFormat, Candidate, FeedMetadata, UpdateChannel, UpdateError, UpdateMachine,
-    UpdatePhase, UpdateTarget, validate_candidate, validate_candidate_for_target,
-    validate_retained_candidate, verify_download,
+    ArtifactFormat, Candidate, FeedMetadata, MacBundleVersionEvidence, UpdateChannel, UpdateError,
+    UpdateMachine, UpdatePhase, UpdateTarget, mac_bundle_version_evidence, validate_candidate,
+    validate_candidate_for_target, validate_compiled_build_info, validate_retained_candidate,
+    verify_download,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+#[test]
+fn mac_bundle_version_keeps_the_legacy_exact_identity_path() {
+    assert_eq!(
+        mac_bundle_version_evidence("0.1.7+1", "0.1.7+1").unwrap(),
+        MacBundleVersionEvidence::ExactBundleVersion
+    );
+    assert_eq!(
+        mac_bundle_version_evidence("0.1.7", "0.1.7").unwrap(),
+        MacBundleVersionEvidence::ExactBundleVersion
+    );
+}
+
+#[test]
+fn mac_public_bundle_version_requires_compiled_full_identity() {
+    assert_eq!(
+        mac_bundle_version_evidence("0.1.7", "0.1.7+2").unwrap(),
+        MacBundleVersionEvidence::CompiledBuildInfo
+    );
+
+    let exact = br#"{"schemaVersion":1,"version":"0.1.7+2","channel":"stable","testHooks":false}"#;
+    validate_compiled_build_info(exact, "0.1.7+2").unwrap();
+
+    for rejected in [
+        br#"{"schemaVersion":2,"version":"0.1.7+2","channel":"stable","testHooks":false}"#.as_slice(),
+        br#"{"schemaVersion":1,"version":"0.1.7+3","channel":"stable","testHooks":false}"#.as_slice(),
+        br#"{"schemaVersion":1,"version":"0.1.7+2","channel":"beta","testHooks":false}"#.as_slice(),
+        br#"{"schemaVersion":1,"version":"0.1.7+2","channel":"stable","testHooks":true}"#.as_slice(),
+        br#"{"schemaVersion":1,"version":"0.1.7+2","channel":"stable","testHooks":false,"extra":true}"#.as_slice(),
+        b"not-json".as_slice(),
+        b"".as_slice(),
+    ] {
+        assert_eq!(
+            validate_compiled_build_info(rejected, "0.1.7+2")
+                .unwrap_err()
+                .code(),
+            "update_build_identity_invalid"
+        );
+    }
+
+    let oversized = vec![b' '; 4097];
+    assert_eq!(
+        validate_compiled_build_info(&oversized, "0.1.7+2")
+            .unwrap_err()
+            .code(),
+        "update_build_identity_invalid"
+    );
+    for invalid_expected in ["0.1.7", "0.1.7+0", "0.1.7+65536", "0.1.7-beta.1+2"] {
+        assert_eq!(
+            validate_compiled_build_info(exact, invalid_expected)
+                .unwrap_err()
+                .code(),
+            "update_build_identity_invalid"
+        );
+    }
+}
+
+#[test]
+fn mac_public_bundle_version_rejects_ambiguous_build_identities() {
+    for (short_version, full_version) in [
+        ("0.1.6", "0.1.7+1"),
+        ("0.1.7", "0.1.7+0"),
+        ("0.1.7", "0.1.7+01"),
+        ("0.1.7", "0.1.7+65536"),
+        ("0.1.7", "0.1.7+nightly"),
+        ("0.1.7", "0.1.7-beta.1+1"),
+        ("0.1.7", "v0.1.7+1"),
+    ] {
+        assert_eq!(
+            mac_bundle_version_evidence(short_version, full_version)
+                .unwrap_err()
+                .code(),
+            "update_build_identity_invalid"
+        );
+    }
 }
 
 #[test]
@@ -242,6 +319,98 @@ fn candidate_requires_exact_channel_https_origin_version_and_metadata() {
         let error = validate_candidate(channel, "0.1.5", version, url, &raw).unwrap_err();
         assert_eq!(error.code(), code);
     }
+}
+
+#[test]
+fn same_public_version_builds_advance_by_numeric_revision() {
+    let bytes = b"signed updater bytes";
+    let url = "https://kalcoded.com/releases/updater/stable/0.1.7/KalCode.nsis.zip";
+
+    let first = validate_candidate(
+        UpdateChannel::Stable,
+        "0.1.7",
+        "0.1.7+1",
+        url,
+        &feed("stable", bytes),
+    )
+    .unwrap();
+    assert_eq!(first.version, "0.1.7+1");
+
+    let second = validate_candidate(
+        UpdateChannel::Stable,
+        "0.1.7+1",
+        "0.1.7+2",
+        url,
+        &feed("stable", bytes),
+    )
+    .unwrap();
+    assert_eq!(second.version, "0.1.7+2");
+
+    for candidate in ["0.1.7+2", "0.1.7+1", "0.1.7"] {
+        assert_eq!(
+            validate_candidate(
+                UpdateChannel::Stable,
+                "0.1.7+2",
+                candidate,
+                url,
+                &feed("stable", bytes),
+            )
+            .unwrap_err()
+            .code(),
+            "update_not_newer"
+        );
+    }
+}
+
+#[test]
+fn build_revision_is_one_canonical_bounded_numeric_identifier() {
+    let bytes = b"signed updater bytes";
+    let url = "https://kalcoded.com/releases/updater/stable/0.1.7/KalCode.nsis.zip";
+
+    validate_candidate(
+        UpdateChannel::Stable,
+        "0.1.7+65534",
+        "0.1.7+65535",
+        url,
+        &feed("stable", bytes),
+    )
+    .unwrap();
+
+    for version in [
+        "0.1.7+0",
+        "0.1.7+01",
+        "0.1.7+65536",
+        "0.1.7+build",
+        "0.1.7+1.2",
+    ] {
+        assert_eq!(
+            validate_candidate(
+                UpdateChannel::Stable,
+                "0.1.7",
+                version,
+                url,
+                &feed("stable", bytes),
+            )
+            .unwrap_err()
+            .code(),
+            "update_manifest_invalid",
+            "{version} must fail closed"
+        );
+    }
+}
+
+#[test]
+fn stable_channel_rejects_prerelease_build_revisions() {
+    let bytes = b"signed updater bytes";
+    let error = validate_candidate(
+        UpdateChannel::Stable,
+        "0.1.7",
+        "0.1.8-beta.1+1",
+        "https://kalcoded.com/releases/updater/stable/0.1.8/KalCode.nsis.zip",
+        &feed("stable", bytes),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "prerelease_on_stable");
 }
 
 #[test]

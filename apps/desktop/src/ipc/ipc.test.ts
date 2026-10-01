@@ -91,10 +91,12 @@ describe("KalCodeClient with the memory transport", () => {
   });
 
   it("surfaces startup errors from boot and blocks runtime commands", async () => {
-    const c = new KalCodeClient(createMemoryTransport("startup-error"));
+    const transport = createMemoryTransport("startup-error");
+    const c = new KalCodeClient(transport);
     const boot = await c.boot();
     expect(boot.startupError?.code).toBe("schema_too_new");
     await expect(c.getSettings()).rejects.toMatchObject({ code: "schema_too_new" });
+    await expect(transport.invoke("operations_snapshot", {})).rejects.toMatchObject({ code: "schema_too_new" });
   });
 
   it("reports credential store failures with a user-facing message", async () => {

@@ -2,22 +2,27 @@
 // production yet. Production is observed only through public, read-only GETs (policy.production).
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { compareStableBuildVersions, releaseNotesRelativePath, validateStableBuildVersion } from "../version.mjs";
 import { classifyChanges, workspaceGraph } from "./classify.mjs";
 import { sortLanes } from "./policy.mjs";
 
 export const STATUS_SCHEMA = "kalcode-lifecycle-status/v1";
 const HEX40 = /^[0-9a-f]{40}$/;
-const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
-
 export function compareVersions(a, b) {
-  const x = VERSION.exec(a ?? "");
-  const y = VERSION.exec(b ?? "");
-  if (!x || !y) return null;
-  for (let i = 1; i <= 3; i++) if (Number(x[i]) !== Number(y[i])) return Number(x[i]) < Number(y[i]) ? -1 : 1;
-  if (x[4] === y[4]) return 0;
-  if (!x[4]) return 1;
-  if (!y[4]) return -1;
-  return x[4] < y[4] ? -1 : 1;
+  try {
+    return compareStableBuildVersions(a, b);
+  } catch {
+    return null;
+  }
+}
+
+function isStableBuildVersion(version) {
+  try {
+    validateStableBuildVersion(version);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function getJson(fetchImpl, url, timeoutMs) {
@@ -67,7 +72,7 @@ export async function observeProduction(
     });
   const desktopFeed = { url: p.desktop.feedUrl, ok: false, status: feed.status };
   if (!feed.ok) desktopFeed.error = feed.error;
-  else if (!VERSION.test(feed.json?.version ?? "")) desktopFeed.error = "feed has no valid version";
+  else if (!isStableBuildVersion(feed.json?.version)) desktopFeed.error = "feed has no valid stable build version";
   else
     Object.assign(desktopFeed, {
       ok: true,
@@ -78,7 +83,8 @@ export async function observeProduction(
   const desktopCatalog = { url: p.desktop.catalogUrl, ok: false, status: catalog.status };
   if (!catalog.ok) desktopCatalog.error = catalog.error;
   else if (catalog.json?.latest === null) Object.assign(desktopCatalog, { ok: true, version: null });
-  else if (!VERSION.test(catalog.json?.latest?.version ?? "")) desktopCatalog.error = "catalog has no valid version";
+  else if (!isStableBuildVersion(catalog.json?.latest?.version))
+    desktopCatalog.error = "catalog has no valid stable build version";
   else
     Object.assign(desktopCatalog, {
       ok: true,
@@ -126,9 +132,8 @@ function rangeImpact(policy, git, from, to, { listCommits = true, maxCommits = 4
   return { range, commits, total: git.count(from, to) };
 }
 
-// Notes for the published version or an older one are in production by definition, so a docs/releases/<version>.md
-// change is unshipped only when <version> is newer than the published release. Any other notes path still counts.
-const RELEASE_NOTE = /^docs\/releases\/(.+)\.md$/;
+// Milestone notes and per-build evidence at or below the published build are already in production.
+const RELEASE_NOTE = /^docs\/(?:releases|builds)\/(.+)\.md$/;
 export function unpublishedNote(path, publishedVersion) {
   const m = RELEASE_NOTE.exec(path);
   if (!m || !publishedVersion) return true;
@@ -234,7 +239,7 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
       targets.desktop = {
         ...base,
         state: "unshipped",
-        reason: `desktop changes merged after the published ${pub.version} build need a new version and release`,
+        reason: `desktop changes merged after published build ${pub.version} need the next internal revision and release`,
         ...pick(impact, "desktop"),
       };
     else
@@ -253,7 +258,7 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
         .filter((c) => c.notes.some((p) => unpublishedNote(p, pub.version)))
         .map(({ sha, subject }) => ({ sha, subject })),
     });
-    const notesPath = `docs/releases/${mainVersion}.md`;
+    const notesPath = releaseNotesRelativePath(mainVersion);
     targets["release-notes"] = {
       lane: "docs",
       state: cmp > 0 ? "unshipped" : notesChanged ? "unshipped" : "shipped",
@@ -263,8 +268,8 @@ export function computeStatus(policy, git, obs, { mainRef = "origin/main", listC
             ? `${notesPath} publishes with desktop ${mainVersion}`
             : `${notesPath} is not on main yet; it must exist before desktop ${mainVersion} publishes`
           : notesChanged
-            ? "release notes changed after the published build; they ship with the next desktop release"
-            : "no unpublished release-notes changes",
+            ? "release/build notes changed after the published build; they ship with the next desktop build"
+            : "no unpublished release/build-notes changes",
       ...(impact && cmp > 0 ? pick(impact, "release-notes") : impact && notesChanged ? noteCommits() : {}),
     };
   }

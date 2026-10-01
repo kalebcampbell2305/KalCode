@@ -138,6 +138,7 @@ const SURFACE_WORDS: Record<string, SurfaceId> = {
 };
 
 const SURFACE_LABELS: Record<SurfaceId, string> = {
+  operations: "Operations",
   dashboard: "the Dashboard",
   kalvoice: "KalVoice",
   code: "Code",

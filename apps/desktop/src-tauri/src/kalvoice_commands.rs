@@ -675,6 +675,7 @@ pub(crate) fn surface_label(surface: SurfaceId) -> &'static str {
         SurfaceId::Providers => "Providers",
         SurfaceId::Settings => "Settings",
         SurfaceId::CommandCenter => "the Command Center",
+        SurfaceId::Operations => "Operations",
     }
 }
 

@@ -18,9 +18,15 @@ and the site shows "no public build yet".
 
 ## Pipeline
 
-The canonical way to run a release is `node tooling/release/ship.mjs --version X.Y.Z --commit <sha40>`
-([RELEASE-PIPELINE.md](RELEASE-PIPELINE.md)). It chains the steps below with receipts and hard gates and is
-a dry run unless `--execute` is given. This section describes what the individual tools prove.
+Continuous builds use `X.Y.Z+N`; plain `X.Y.Z` is reserved for an owner-declared public milestone.
+`N` is a positive decimal from 1 through 65535. The current maintained path is the direct release
+tool chain below. [`ship.mjs`](RELEASE-PIPELINE.md) can chain it only when a reviewed kit exists for
+the exact build identity and commit; the checked-in B10/0.1.6 kit is historical and cannot run a
+current 0.1.7 build. This section describes what each direct tool proves.
+
+The Operations shipment keeps public `0.1.7`, reserves never-selected `0.1.7+1` as the private QA
+baseline derived from candidate source, and uses `0.1.7+2` as the production candidate. These are
+planned release identities until their signed artifacts and physical-platform gates pass.
 
 ```
 pnpm release:updater-key:status                              prove DPAPI key matches tracked public key
@@ -29,7 +35,8 @@ pnpm release:build --channel stable
 pnpm release:verify       tooling/release/verify-windows.mjs  silent install/uninstall in a temp dir → verify.json
 (E2E on the same commit)  pnpm --filter @kalcode/desktop build:e2e
                           KALCODE_E2E_CDP_PORT=9440 pnpm --filter @kalcode/desktop test:e2e
-docs/releases/<v>.md      release notes with the evidence (must list the installer SHA-256)
+docs/builds/<v+N>.md      continuous-build evidence (must list every artifact SHA-256)
+docs/releases/<v>.md      owner-declared milestone notes and evidence
 pnpm release:publish:dry-run                                   every check, no upload
 pnpm release:publish      tooling/release/publish.mjs          immutable R2 upload + atomic D1 pointer
 commit releases.json, build and deploy the website
@@ -135,17 +142,17 @@ pnpm --filter @kalcode/desktop build:e2e
 KALCODE_E2E_CDP_PORT=9440 pnpm --filter @kalcode/desktop test:e2e
 ```
 
-Record the result in the release notes.
+Record the result in the milestone notes or continuous-build evidence.
 
-### 4. Release notes
+### 4. Release notes and continuous-build evidence
 
-Write `docs/releases/<version>.md`: what is in the build, the artifact table (file, size,
-SHA-256, signed: yes), the verification and E2E results and known
-limitations. `publish` refuses if the notes are missing or do not contain the build's SHA-256, and
-`pnpm check:releases` refuses a published manifest whose version has no notes. The manifest's
-`notesUrl` is `/updates#release-<version with dots as dashes>` (for example
-`/updates#release-0-1-0`), so the Updates page should carry an entry with that `id`. The legacy
-`/changelog` route permanently redirects to `/updates`.
+For a continuous build such as `0.1.7+218`, write `docs/builds/0.1.7+218.md`. For an explicitly
+owner-declared milestone, write `docs/releases/0.1.8.md`. Record what is in the build, the artifact
+table (file, size, SHA-256, signed: yes), verification and E2E results, and known limitations.
+`publish` refuses if the exact notes/evidence file is missing or does not contain every artifact's
+SHA-256, and `pnpm check:releases` applies the same rule. A continuous build retains the public
+milestone anchor: `0.1.7+218` links to `/updates#release-0-1-7`; it does not create a marketing
+milestone. The legacy `/changelog` route permanently redirects to `/updates`.
 
 ### 5. Publish
 
@@ -156,12 +163,13 @@ pnpm release:publish           # the real thing
 
 `publish` refuses unless: the build is Stable, Azure Artifact Signing and trusted timestamp
 evidence are valid, the working tree is clean, HEAD is the build commit (or a later commit
-that only adds `docs/releases/` notes, since the notes carry the SHA-256), `verify.json`
+that only adds the exact `docs/builds/<identity>.md` or `docs/releases/<version>.md` file, since it
+carries the SHA-256), `verify.json`
 says `passed` for this exact build (commit and SHA-256), all three installer passes prove the
 installed executable's signature, the staged file still matches its SHA-256, the release notes exist
 and list the SHA-256, the manifest validates, the deployed release routes identify the D1 release
-authority, and neither the live route nor the authoritative D1 row already selects a newer version
-or this version with different bytes. HTTP probes have strict deadlines and 64 KiB body limits.
+authority, and neither the live route nor the authoritative D1 row already selects a newer build
+identity or this identity with different bytes. HTTP probes have strict deadlines and 64 KiB body limits.
 
 It then uploads digest-qualified immutable objects with `wrangler r2 object put … --remote`:
 
@@ -171,11 +179,12 @@ It then uploads digest-qualified immutable objects with `wrangler r2 object put 
 4. `kalcode-releases/releases/updater/<channel>/<version>/<artifact-sha256>/<signature-sha256>/<file>.sig`
 5. `kalcode-releases/releases/updater/<channel>/<version>/<updater-descriptor-sha256>.json`
 
-Different bytes always have different object keys, so concurrent same-version uploads cannot
+Different bytes always have different object keys, so concurrent same-identity uploads cannot
 replace each other. The script downloads and re-verifies every selected object, atomically claims
 the immutable `(channel, version)` row in D1, and advances the channel with one monotonic D1 UPSERT.
-The compare-and-set rejects stale publishers, equal-precedence build-metadata variants, and
-same-version descriptor changes. Fixed public feed URLs resolve the selected immutable descriptor
+For Stable, the compare-and-set orders `x.y.z` below `x.y.z+1`, orders revisions numerically, and
+orders the next milestone above every prior revision. It rejects stale publishers and same-identity
+descriptor changes. Fixed public feed URLs resolve the selected immutable descriptor
 through D1 and verify its SHA-256 before serving it; there is no production fallback to mutable R2
 pointer objects. The script reads both public feeds back before writing
 `apps/website/src/data/releases.json` and printing the deploy commands:
@@ -189,7 +198,8 @@ curl -sI https://kalcoded.com/download/windows-x64
 
 The first D1 catalog cutover has three explicit source authorities. **B** is the exact clean commit
 that produced the signed artifacts. **N** is the clean publisher commit: B itself or a descendant
-whose only changes are the matching `docs/releases/` notes. **W** is the reviewed final-main state
+whose only change is the matching `docs/builds/<identity>.md` evidence or milestone
+`docs/releases/<version>.md`. **W** is the reviewed final-main state
 that adds the generated `apps/website/src/data/releases.json` and enables
 `RELEASE_CATALOG_ENABLED=true`. Artifact and schema-v2 QA records stay bound to B; the publisher
 runs from N; the public website is deployed from W.
@@ -208,7 +218,7 @@ unrelated work. Resume requires the joined pointer and immutable version row to 
 channel, version, precedence, both descriptor keys, both descriptor SHA-256 values and `publishedAt`;
 it re-verifies every local and remote object and version claim, does not mutate the existing pointer,
 re-reads it exactly, and only then writes the manifest. Any older, newer, malformed or
-same-version-different row fails before publication writes.
+same-identity-different row fails before publication writes.
 
 Pre-cutover physical QA uses only the version-specific immutable routes. It does not claim that the
 mutable Stable routes are live. After W is deployed and the flag is `true`, run the normal
@@ -224,12 +234,25 @@ manifest alone. `pnpm release:smoke:local` then starts
 
 ### Rollback
 
-The normal rollback is a higher-version release that restores the previous application behavior;
-the monotonic channel pointer intentionally rejects silent downgrades and stale replay. The desktop
-updater separately preserves the installed version and rolls back a failed local apply. Emergency
-feed withdrawal or an exceptional downgrade is an owner-authorized database operation with an
-audited exact-current-version precondition; do not overwrite an R2 pointer object or mutate an
-immutable version row.
+The normal rollback is a higher internal `+N` build that restores the previous application behavior;
+the monotonic channel pointer intentionally rejects silent downgrades and stale replay. A
+device-local restore is admitted only when the retained build is schema-compatible. For Operations,
+`0.1.7+1` and `0.1.7+2` both support schema 20, while restore admission rejects the published
+schema-19 `0.1.7`. On macOS the forward-only schema upgrade fence must durably remove rollback
+ownership from the shipped legacy helper before Core opens and migration begins. A private
+derived-baseline update/rollback/re-update trial therefore proves compatible updater mechanics;
+it does not prove that the real published `0.1.7` can reopen the migrated profile.
+
+Rollback never downgrades or restores the active database/profile. Emergency feed withdrawal is
+an owner-authorized operation with an audited exact-current-version precondition; do not overwrite
+an R2 pointer object or mutate an immutable version row. Local policy, journal, and helper
+simulations plus the published-base-to-`0.1.7+2` and failure-path physical Mac probes remain
+release gates; this document does not record them as passed.
+
+The current macOS `CFBundleVersion` mapping is valid and increasing for `0.1.7` continuous
+revisions. Before a later owner-declared public milestone ships, replace it with a durable globally
+monotonic bundle-build counter so the native Mac build version cannot decrease across the
+milestone boundary.
 
 ## One-time setup
 

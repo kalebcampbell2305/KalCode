@@ -1,7 +1,8 @@
 import { basename } from "node:path";
-
+import { semverPrecedenceKey } from "./publication-safety.mjs";
 import { parseReleaseChannelArgs, validateReleaseBuildArgs } from "./release-channel.mjs";
 import { validateUpdaterPublicKey } from "./updater-signing.mjs";
+import { validateStableBuildVersion } from "./version.mjs";
 
 export const MACOS_MINIMUM_VERSION = "14.0";
 export const MACOS_BUNDLE_ID = "com.kalcode.desktop";
@@ -33,7 +34,6 @@ export const MACOS_HELPERS = Object.freeze([
   }),
 ]);
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const TEAM_ID = /^[A-Z0-9]{10}$/;
 const PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SUBMISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -104,7 +104,11 @@ export function parseMacPackageOptions(args) {
 }
 
 export function expectedMacDmgFile(version, arch) {
-  if (!VERSION.test(String(version ?? ""))) reject("invalid_version", "The macOS release version must be SemVer.");
+  try {
+    semverPrecedenceKey(version);
+  } catch {
+    reject("invalid_version", "The macOS release version must be canonical SemVer.");
+  }
   return `KalCode_${version}_${normalizeMacArchitecture(arch)}.dmg`;
 }
 
@@ -142,7 +146,24 @@ export function validateMacReleaseEnvironment(env) {
   };
 }
 
-export function macBuildEnvironment(env, signingIdentity, updaterPublicKey) {
+export function macBundleVersion(version) {
+  // Preserve the bundle version Tauri already emits for existing milestones and prerelease
+  // channels. A continuous Stable identity needs a numeric-only value distinct from its public
+  // version. Encode N in Apple's documented 4/2/2 digit component bounds without tying it to the
+  // owner-declared public version.
+  if (!String(version ?? "").includes("+")) {
+    semverPrecedenceKey(version);
+    return version;
+  }
+  const { revision } = validateStableBuildVersion(version);
+  const ordinal = revision - 1;
+  const major = Math.floor(ordinal / 10_000) + 1;
+  const minor = Math.floor((ordinal % 10_000) / 100);
+  const patch = ordinal % 100;
+  return `${major}.${minor}.${patch}`;
+}
+
+export function macBuildEnvironment(env, signingIdentity, updaterPublicKey, version) {
   const result = { ...env };
   result.KALCODE_UPDATER_PUBLIC_KEY = validateUpdaterPublicKey(updaterPublicKey);
   for (const name of [
@@ -161,6 +182,7 @@ export function macBuildEnvironment(env, signingIdentity, updaterPublicKey) {
   result.CI = "true";
   result.APPLE_SIGNING_IDENTITY = signingIdentity;
   result.MACOSX_DEPLOYMENT_TARGET = MACOS_MINIMUM_VERSION;
+  result.TAURI_CONFIG = JSON.stringify({ bundle: { macOS: { bundleVersion: macBundleVersion(version) } } });
   return result;
 }
 

@@ -9,7 +9,8 @@ import {
   MANIFEST_KEY,
   type ReleaseBucket,
 } from "../../worker/downloads";
-import { releaseCatalog } from "../../worker/release-catalog";
+import { readPublishedDescriptor, releaseCatalog } from "../../worker/release-catalog";
+import { parseUpdaterDescriptor } from "../../worker/updater-descriptor";
 import { syntheticUpdaterDescriptor } from "./fixtures/updater-descriptor";
 
 // Runs the download handler against workerd's local R2 simulation (in memory, never the real
@@ -85,7 +86,8 @@ describe("downloads against local R2", () => {
   it.each(["stable", "beta", "dev"] as const)(
     "serves immutable %s updater claims before pointer rollout without changing the preview",
     async (channel) => {
-      const version = "1.4.0";
+      const version = channel === "stable" ? "1.4.0+14" : "1.4.0";
+      const requestedVersion = encodeURIComponent(version);
       const file = `KalCode_${version}_x64-setup.exe`;
       const digest = "d".repeat(64);
       const body = JSON.stringify(syntheticUpdaterDescriptor(version, file, digest, INSTALLER.byteLength, channel));
@@ -95,6 +97,7 @@ describe("downloads against local R2", () => {
       ).join("");
       const key = `releases/updater/${channel}/${version}/${hash}.json`;
       const artifact = `releases/updater/${channel}/${version}/${digest}/${file}`;
+      const artifactRequest = `releases/updater/${channel}/${requestedVersion}/${digest}/${encodeURIComponent(file)}`;
       await proxy.env.RELEASES.put(key, body);
       await proxy.env.RELEASES.put(artifact, INSTALLER);
       await proxy.env.DB.prepare("INSERT INTO release_publication_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
@@ -109,6 +112,11 @@ describe("downloads against local R2", () => {
           "2026-09-25T12:00:00.000Z",
         )
         .run();
+      expect(await releaseCatalog(proxy.env.DB).get(channel, version)).toMatchObject({ channel, version });
+      expect(await proxy.env.RELEASES.head(key)).not.toBeNull();
+      const stored = await readPublishedDescriptor(proxy.env.RELEASES, key, hash);
+      expect(stored).toBe(body);
+      expect(parseUpdaterDescriptor(JSON.parse(stored), channel, version)).not.toBeNull();
       const preview = {
         ...downloadDepsFromEnv({
           DB: proxy.env.DB,
@@ -128,11 +136,13 @@ describe("downloads against local R2", () => {
       ).all();
       const legacy = JSON.stringify({ version: "0.0.1", notes: "Existing preview feed" });
       await proxy.env.RELEASES.put(`releases/updater/${channel}.json`, legacy);
-      const response = await request(`/releases/updater/${channel}/${version}.json`);
+      const response = await request(`/releases/updater/${channel}/${requestedVersion}.json`);
       expect(response?.status).toBe(200);
       expect(response?.headers.get("X-KalCode-Release-Authority")).toBe("d1-v1");
       expect(await response?.text()).toBe(body);
-      const range = await request(`/${artifact}`, { headers: { range: "bytes=1000-1999" } });
+      const range = await request(`/${artifactRequest}`, {
+        headers: { range: "bytes=1000-1999" },
+      });
       expect(range?.status).toBe(206);
       expect(new Uint8Array(await range.arrayBuffer())).toEqual(INSTALLER.slice(1000, 2000));
       const latest = await request(`/releases/updater/${channel}.json`);
@@ -149,8 +159,8 @@ describe("downloads against local R2", () => {
         await proxy.env.DB.prepare("SELECT channel,version FROM release_publication_pointers ORDER BY channel").all(),
       ).toMatchObject({ results: pointers.results });
       await proxy.env.RELEASES.put(key, "tampered");
-      expect((await request(`/releases/updater/${channel}/${version}.json`))?.status).toBe(503);
-      expect((await request(`/${artifact}`))?.status).toBe(503);
+      expect((await request(`/releases/updater/${channel}/${requestedVersion}.json`))?.status).toBe(503);
+      expect((await request(`/${artifactRequest}`))?.status).toBe(503);
     },
   );
 

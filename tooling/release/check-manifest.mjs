@@ -1,15 +1,16 @@
 // Validates the committed website release manifest (part of `pnpm check`).
-// A published release must also have release notes in docs/releases/<version>.md.
+// A milestone uses docs/releases/<version>.md; a continuous build uses docs/builds/<identity>.md.
 // Usage: node tooling/release/check-manifest.mjs
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
-import { RELEASE_NOTES_DIR, ROOT, readJson, WEBSITE_MANIFEST } from "./lib.mjs";
+import { ROOT, readJson, WEBSITE_MANIFEST } from "./lib.mjs";
 import { validateManifest } from "./manifest.mjs";
+import { releaseNotesRelativePath } from "./version.mjs";
 
 const manifest = readJson(WEBSITE_MANIFEST);
 const errors = validateManifest(manifest);
 if (manifest?.latest?.version) {
-  const notes = join(RELEASE_NOTES_DIR, `${manifest.latest.version}.md`);
+  const notes = join(ROOT, releaseNotesRelativePath(manifest.latest.version));
   if (!existsSync(notes)) errors.push(`missing release notes: ${relative(ROOT, notes)}`);
 }
 

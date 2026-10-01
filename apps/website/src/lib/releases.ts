@@ -7,6 +7,7 @@
  * Kept free of Astro and Worker imports so pages, scripts and unit tests can all use it.
  */
 
+import { formatKalCodeVersion, parseKalCodeVersion } from "@kalcode/protocol/version";
 import type { ReleaseManifest, ReleaseOs, ReleasePlatform, UnavailablePlatform } from "../data/releases";
 import manifestJson from "../data/releases.json";
 
@@ -22,6 +23,23 @@ export const OS_NAMES: Readonly<Record<ReleaseOs, string>> = {
 
 const SHA256 = /^[0-9a-f]{64}$/;
 
+/** A full update identity rendered for people, for example `0.1.7 build 218`. */
+export function releaseDisplayVersion(version: string): string {
+  if (!parseKalCodeVersion(version)) throw new Error(`Invalid KalCode version: ${version}`);
+  return formatKalCodeVersion(version);
+}
+
+/** The owner-declared public milestone, with any internal build revision removed. */
+export function releasePublicVersion(version: string): string {
+  const parsed = parseKalCodeVersion(version);
+  if (!parsed) throw new Error(`Invalid KalCode version: ${version}`);
+  return parsed.publicVersion;
+}
+
+function notesUrlFor(version: string): string {
+  return `/updates#release-${releasePublicVersion(version).replaceAll(".", "-")}`;
+}
+
 /**
  * Checks what the pages depend on and throws otherwise, so a malformed manifest fails the build
  * instead of rendering a dead or unverifiable download link. (The tooling validates the full
@@ -34,6 +52,15 @@ export function assertManifest(value: unknown): ReleaseManifest {
   if (!Array.isArray(manifest.unavailable)) throw new Error("releases.json: unavailable must be an array");
   const platforms = manifest.latest === null ? [] : manifest.latest?.platforms;
   if (!Array.isArray(platforms)) throw new Error("releases.json: latest must be null or a release with platforms");
+  if (manifest.latest) {
+    const parsedVersion = parseKalCodeVersion(manifest.latest.version);
+    if (!parsedVersion || (manifest.latest.channel === "stable" && parsedVersion.prerelease !== null)) {
+      throw new Error("releases.json: version must be canonical and Stable cannot be a prerelease");
+    }
+    if (manifest.latest.notesUrl !== notesUrlFor(manifest.latest.version)) {
+      throw new Error("releases.json: notesUrl must point to the public version milestone");
+    }
+  }
   for (const platform of platforms) {
     if (!platform.url.startsWith("/download/")) {
       throw new Error(`releases.json: ${platform.os} url must be a /download/ path served by the Worker`);
@@ -41,6 +68,9 @@ export function assertManifest(value: unknown): ReleaseManifest {
     if (!SHA256.test(platform.sha256))
       throw new Error(`releases.json: ${platform.os} sha256 must be 64 hex characters`);
     if (!(platform.size > 0)) throw new Error(`releases.json: ${platform.os} size must be positive`);
+    if (manifest.latest && platform.pinnedUrl !== `/download/${manifest.latest.version}/${platform.file}`) {
+      throw new Error(`releases.json: ${platform.os} pinnedUrl must retain the full build version`);
+    }
   }
   for (const os of OS_ORDER) {
     const downloadable = platforms.some((platform) => platform.os === os);
@@ -80,7 +110,8 @@ export function servedStableRelease(manifest: ReleaseManifest): ReleaseManifest[
  * was written for. Both facts are unchanged in 0.1.7.
  */
 export function releaseCopyVersion(manifest: ReleaseManifest): string {
-  return servedStableRelease(manifest)?.version ?? "0.1.6";
+  const version = servedStableRelease(manifest)?.version;
+  return version ? releasePublicVersion(version) : "0.1.6";
 }
 
 /** Copy written for 0.1.6 (site.ts constants and descriptions), naming the served Stable release. */
@@ -149,7 +180,7 @@ export function downloadCta(manifest: ReleaseManifest = RELEASES): DownloadCta {
       label: "Download KalCode",
       href: windows.url,
       os: "windows",
-      note: `Windows · ${channelLabel(manifest)} ${manifest.latest.version} · ${formatBytes(windows.size)}`,
+      note: `Windows · ${channelLabel(manifest)} ${releaseDisplayVersion(manifest.latest.version)} · ${formatBytes(windows.size)}`,
     };
   }
   return {
@@ -169,7 +200,7 @@ export function downloadCta(manifest: ReleaseManifest = RELEASES): DownloadCta {
 export function buildStatus(manifest: ReleaseManifest = RELEASES): string {
   const latest = manifest.latest;
   if (!latest) return "In private development";
-  return `${channelLabel(manifest)} ${latest.version} for ${releaseSystems(manifest)}`;
+  return `${channelLabel(manifest)} ${releaseDisplayVersion(latest.version)} for ${releaseSystems(manifest)}`;
 }
 
 /** "84.2 MB" — decimal units, one decimal place from 1 MB up. */

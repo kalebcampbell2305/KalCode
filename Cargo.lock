@@ -326,7 +326,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex 2.0.1",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2722,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-context"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "globset",
  "ignore",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-contracts"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-desktop"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-doctor"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-git",
@@ -2829,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-entitlements"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -2842,7 +2842,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-git"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "ignore",
  "kalcode-contracts",
@@ -2860,7 +2860,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-hook-bridge"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "getrandom 0.4.3",
  "hex",
@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-kalvoice"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -2909,7 +2909,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-locator"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2924,7 +2924,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-native-core"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-pty",
@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-notifications"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2960,7 +2960,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-permissions"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2976,7 +2976,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-providers"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-hook-bridge",
@@ -3002,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-pty"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "portable-pty",
  "process-wrap",
@@ -3014,7 +3014,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-resources"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "libc",
@@ -3027,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-secure-store"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "keyring",
@@ -3038,7 +3038,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-threads"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-context",
  "kalcode-contracts",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-timeline"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -3065,7 +3065,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-updater"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -3082,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-utilities"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-context",
  "kalcode-contracts",
@@ -3106,7 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-workspace-ui"
-version = "0.1.7"
+version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -7687,9 +7687,9 @@ dependencies = [
 
 [[package]]
 name = "yoke-derive"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33811428bee40dbceb6d545e95754741d17a6aef9a4849f0fd62e2ba4f412a78"
+checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",

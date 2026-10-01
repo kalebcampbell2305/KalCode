@@ -1,5 +1,6 @@
 [
   { "id": "dashboard", "state": "available", "visible": true },
+  { "id": "operations", "state": "available", "visible": true },
   { "id": "kalvoice", "state": "available", "visible": true },
   { "id": "code", "state": "available", "visible": true },
   { "id": "threads", "state": "available", "visible": true },

@@ -43,6 +43,15 @@ afterEach(() => {
 });
 
 describe("UpdateReadyNotice", () => {
+  it("presents same-milestone revisions as builds", async () => {
+    renderNotice(fakeClient(async () => ({ ...ready, availableVersion: "0.1.7+218" })));
+
+    const notice = await findNotice();
+    expect(notice).toHaveTextContent("KalCode 0.1.7 build 218 is ready to install.");
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    expect(screen.getByRole("button", { name: "Restart and install 0.1.7 build 218" })).toBeInTheDocument();
+  });
+
   it.each<UpdatePhase>(["idle", "checking", "downloading", "up_to_date", "installing", "failed"])(
     "stays hidden while the updater is %s",
     async (phase) => {

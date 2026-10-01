@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { cargoEnvironment } from "./cargo.mjs";
+import { cargoEnvironment, guardianBuildArguments, runCargo } from "./cargo.mjs";
 import { laneArguments } from "./tauri.mjs";
 
 const base = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
@@ -33,6 +33,73 @@ test("canonical Cargo test and lint commands select Dev while preserving unrelat
   assert.equal(cargoEnvironment(["build", "--release"], environment), environment);
   assert.equal(cargoEnvironment(["build", "--profile", "release"], environment), environment);
   assert.equal(JSON.parse(cargoEnvironment(["test", "release"], environment).TAURI_CONFIG).identifier, dev.identifier);
+});
+
+test("desktop Cargo tests build the real guardian first with the same output controls", () => {
+  const args = [
+    "test",
+    "--workspace",
+    "--target",
+    "x86_64-pc-windows-msvc",
+    "--target-dir=isolated-target",
+    "--profile",
+    "test-profile",
+    "--locked",
+    "--config",
+    "net.retry=2",
+    "--",
+    "--config",
+    "a libtest argument",
+  ];
+  assert.deepEqual(guardianBuildArguments(args), [
+    "build",
+    "-p",
+    "kalcode-providers",
+    "--bin",
+    "kalcode-provider-guardian",
+    "--target",
+    "x86_64-pc-windows-msvc",
+    "--target-dir=isolated-target",
+    "--profile",
+    "test-profile",
+    "--locked",
+    "--config",
+    "net.retry=2",
+  ]);
+  assert.equal(guardianBuildArguments(["test", "-p", "kalcode-providers"]), null);
+  assert.equal(guardianBuildArguments(["test", "--workspace", "--exclude", "kalcode-desktop"]), null);
+  assert.equal(guardianBuildArguments(["clippy", "--workspace"]), null);
+
+  const calls = [];
+  const environment = { CARGO_TARGET_DIR: "D:/isolated", TAURI_CONFIG: "{}" };
+  const status = runCargo(
+    ["test", "-p", "kalcode-desktop", "--lib", "--no-run"],
+    environment,
+    (file, commandArgs, options) => {
+      calls.push({ file, commandArgs: [...commandArgs], options });
+      return { status: 0 };
+    },
+  );
+  assert.equal(status, 0);
+  assert.deepEqual(
+    calls.map(({ file, commandArgs }) => [file, commandArgs]),
+    [
+      ["cargo", ["build", "-p", "kalcode-providers", "--bin", "kalcode-provider-guardian"]],
+      ["cargo", ["test", "-p", "kalcode-desktop", "--lib", "--no-run"]],
+    ],
+  );
+  assert.equal(calls[0].options.env.CARGO_TARGET_DIR, "D:/isolated");
+  assert.equal(calls[1].options.env.CARGO_TARGET_DIR, "D:/isolated");
+
+  const denied = [];
+  assert.equal(
+    runCargo(["test", "-p", "kalcode-desktop"], environment, (file, commandArgs) => {
+      denied.push([file, [...commandArgs]]);
+      return { status: 17 };
+    }),
+    17,
+  );
+  assert.equal(denied.length, 1, "desktop tests cannot run without the real guardian prerequisite");
 });
 
 test("Stable identity remains unchanged and release CLI arguments pass through", () => {

@@ -15,7 +15,6 @@ import {
   git,
   headCommit,
   R2_BUCKET,
-  RELEASE_NOTES_DIR,
   ROOT,
   readJson,
   run,
@@ -59,6 +58,7 @@ import {
 } from "./signing.mjs";
 import { createPlatformUpdaterManifest } from "./updater-manifest.mjs";
 import { readUpdaterPublicKey } from "./updater-signing.mjs";
+import { releaseNotesRelativePath } from "./version.mjs";
 
 let mode;
 try {
@@ -276,7 +276,8 @@ for (const packet of packets) {
 }
 
 let releaseNotesText = null;
-const notes = join(RELEASE_NOTES_DIR, `${version}.md`);
+const notesRelative = releaseNotesRelativePath(version);
+const notes = join(ROOT, notesRelative);
 if (mode !== "local") {
   const windows = packets.find((packet) => packet.target === "windows-x86_64");
   if (windows) {
@@ -285,7 +286,7 @@ if (mode !== "local") {
     problems.push(...windowsUpdaterV2Problems(windows.build, windows.verify));
   }
   releaseNotesText = existsSync(notes) ? readFileSync(notes, "utf8") : null;
-  if (releaseNotesText === null) problems.push(`release notes missing: ${relative(ROOT, notes)}`);
+  if (releaseNotesText === null) problems.push(`release/build notes missing: ${relative(ROOT, notes)}`);
   else {
     for (const packet of packets) {
       if (!releaseNotesText.includes(packet.build.sha256)) {
@@ -315,10 +316,10 @@ if (mode !== "local") {
           "tooling/release/updater-manifest.test.mjs",
         ]
       : [];
-    const other = changed.filter((file) => !file.startsWith("docs/releases/") && !waiverTooling.includes(file));
+    const other = changed.filter((file) => file !== notesRelative && !waiverTooling.includes(file));
     if (!descendant || other.length > 0) {
       problems.push(
-        `HEAD ${head.slice(0, 12)} is not the shared build commit ${releaseBuild.commit.slice(0, 12)} plus release notes only${other.length ? ` (also changed: ${other.join(", ")})` : ""}; rebuild every platform`,
+        `HEAD ${head.slice(0, 12)} is not the shared build commit ${releaseBuild.commit.slice(0, 12)} plus the exact release/build notes only${other.length ? ` (also changed: ${other.join(", ")})` : ""}; rebuild every platform`,
       );
     }
   }

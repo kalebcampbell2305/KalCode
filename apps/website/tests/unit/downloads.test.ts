@@ -5,6 +5,7 @@ import {
   type DownloadDeps,
   downloadDepsFromEnv,
   handleDownload,
+  isValidVersion,
   LATEST_CACHE,
   MANIFEST_KEY,
   matchDownloadRoute,
@@ -162,11 +163,18 @@ describe("download representation integrity", () => {
   });
 });
 
-async function publishCatalog() {
+async function publishCatalog(publishedVersion = VERSION) {
   const doc = manifest({ channel: "stable" });
-  for (const platform of doc.latest.platforms) platform.signed = true;
+  doc.latest.version = publishedVersion;
+  doc.latest.notesUrl = `/updates#release-${publishedVersion.split("+")[0]?.replaceAll(".", "-")}`;
+  for (const platform of doc.latest.platforms) {
+    platform.pinnedUrl = `/download/${publishedVersion}/${platform.file}`;
+    platform.signed = true;
+  }
   const downloadText = JSON.stringify(doc);
-  const updaterText = JSON.stringify(syntheticUpdaterDescriptor(VERSION, FILE, SHA, INSTALLER.byteLength, "stable"));
+  const updaterText = JSON.stringify(
+    syntheticUpdaterDescriptor(publishedVersion, FILE, SHA, INSTALLER.byteLength, "stable"),
+  );
   const digest = async (text: string) =>
     Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (byte) =>
       byte.toString(16).padStart(2, "0"),
@@ -175,23 +183,46 @@ async function publishCatalog() {
   const updaterHash = await digest(updaterText);
   const row = {
     channel: "stable",
-    version: VERSION,
-    download_descriptor_key: `releases/${VERSION}/${downloadHash}.json`,
-    updater_descriptor_key: `releases/updater/stable/${VERSION}/${updaterHash}.json`,
+    version: publishedVersion,
+    download_descriptor_key: `releases/${publishedVersion}/${downloadHash}.json`,
+    updater_descriptor_key: `releases/updater/stable/${publishedVersion}/${updaterHash}.json`,
     download_descriptor_sha256: downloadHash,
     updater_descriptor_sha256: updaterHash,
   };
   h.objects.set(row.download_descriptor_key, new TextEncoder().encode(downloadText));
   h.objects.set(row.updater_descriptor_key, new TextEncoder().encode(updaterText));
-  h.objects.set(`releases/${VERSION}/${SHA}/${FILE}`, INSTALLER);
+  h.objects.set(`releases/${publishedVersion}/${SHA}/${FILE}`, INSTALLER);
   h.deps.catalog = {
     get: async (channel, version) =>
-      channel === "stable" && (version === undefined || version === VERSION) ? row : null,
+      channel === "stable" && (version === undefined || version === publishedVersion) ? row : null,
   };
   return row;
 }
 
 describe("D1 publication authority", () => {
+  it("serves an encoded same-version build from its exact immutable D1 claim", async () => {
+    const buildVersion = "0.1.7+218";
+    const encodedVersion = encodeURIComponent(buildVersion);
+    const row = await publishCatalog(buildVersion);
+
+    const feed = await download(h, `/releases/updater/stable/${encodedVersion}.json`);
+    expect(feed.status).toBe(200);
+    expect(feed.headers.get("x-kalcode-release-authority")).toBe("d1-v1");
+    expect((await feed.json()).version).toBe(buildVersion);
+
+    h.objects.set(`releases/updater/stable/${buildVersion}/${SHA}/${FILE}`, INSTALLER);
+    const artifact = await download(h, `/releases/updater/stable/${encodedVersion}/${SHA}/${FILE}`);
+    expect(artifact.status).toBe(200);
+    expect(new Uint8Array(await artifact.arrayBuffer())).toEqual(INSTALLER);
+
+    const latest = await download(h, "/download/windows-x64");
+    expect(latest.status).toBe(200);
+    expect(latest.headers.get("x-kalcode-version")).toBe(buildVersion);
+
+    h.objects.set(row.updater_descriptor_key, new TextEncoder().encode('{"version":"0.1.7+219"}'));
+    expect((await download(h, `/releases/updater/stable/${encodedVersion}.json`)).status).toBe(503);
+  });
+
   it("keeps the verified legacy release until the catalog authority is explicitly enabled", async () => {
     publish(h);
     const emptyDb = {
@@ -319,6 +350,47 @@ describe("signed updater object routes", () => {
 });
 
 describe("route matching", () => {
+  it("accepts canonical build revisions and decodes only their URL version segment", () => {
+    const buildVersion = "0.1.7+218";
+    const encodedVersion = encodeURIComponent(buildVersion);
+
+    expect(isValidVersion(buildVersion)).toBe(true);
+    expect(matchDownloadRoute(`/download/${encodedVersion}/${FILE}`)).toEqual({
+      kind: "pinned",
+      version: buildVersion,
+      file: FILE,
+    });
+    expect(matchDownloadRoute(`/releases/updater/stable/${encodedVersion}.json`)).toEqual({
+      kind: "updater",
+      key: `releases/updater/stable/${buildVersion}.json`,
+      file: `${buildVersion}.json`,
+      mutable: false,
+    });
+    expect(matchDownloadRoute(`/releases/updater/stable/${encodedVersion}/${SHA}/${FILE}`)).toEqual({
+      kind: "updater",
+      key: `releases/updater/stable/${buildVersion}/${SHA}/${FILE}`,
+      file: FILE,
+      mutable: false,
+    });
+    const buildFile = "KalCode_0.1.7+218_x64-setup.exe";
+    expect(
+      matchDownloadRoute(`/releases/updater/stable/${encodedVersion}/${SHA}/${encodeURIComponent(buildFile)}`),
+    ).toEqual({
+      kind: "updater",
+      key: `releases/updater/stable/${buildVersion}/${SHA}/${buildFile}`,
+      file: buildFile,
+      mutable: false,
+    });
+  });
+
+  it.each(["0.1.7+0", "0.1.7+01", "0.1.7+65536", "0.1.7+build.1", "0.1.7+"])(
+    "rejects non-canonical build revision %s",
+    (version) => {
+      expect(isValidVersion(version)).toBe(false);
+      expect(matchDownloadRoute(`/download/${encodeURIComponent(version)}/${FILE}`)).toBeNull();
+    },
+  );
+
   it("claims only the download routes and leaves site pages alone", () => {
     expect(matchDownloadRoute("/download/windows-x64")).toEqual({
       kind: "latest-installer",
@@ -541,6 +613,37 @@ describe("GET /releases/latest.json", () => {
 });
 
 describe("manifest validation", () => {
+  it("preserves a stable build revision while binding release notes to the public milestone", () => {
+    const buildVersion = "0.1.7+218";
+    const value = manifest({
+      version: buildVersion,
+      channel: "stable",
+      notesUrl: "/updates#release-0-1-7",
+      platforms: [
+        {
+          ...manifest().latest.platforms[0],
+          pinnedUrl: `/download/${buildVersion}/${FILE}`,
+          signed: true,
+        },
+      ],
+    });
+
+    expect(parseReleaseManifest(value)?.latest?.version).toBe(buildVersion);
+  });
+
+  it("rejects stable prereleases and build-scoped milestone anchors", () => {
+    expect(parseReleaseManifest(manifest({ version: "0.1.7-rc.1", channel: "stable" }))).toBeNull();
+    expect(
+      parseReleaseManifest(
+        manifest({
+          version: "0.1.7+218",
+          channel: "stable",
+          notesUrl: "/updates#release-0-1-7+218",
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("accepts the committed website manifest", () => {
     expect(parseReleaseManifest(committedManifest)).not.toBeNull();
   });

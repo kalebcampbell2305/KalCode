@@ -1,3 +1,4 @@
+import { formatKalCodeVersion } from "@kalcode/protocol";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
 
@@ -36,19 +37,27 @@ export function updatePresentation(status: UpdateStatus): UpdatePresentation {
           ? Math.min(100, Math.round((status.downloadedBytes / status.totalBytes) * 100))
           : null;
       return {
-        label: status.availableVersion ? `Downloading KalCode ${status.availableVersion}` : "Downloading update",
+        label: status.availableVersion
+          ? `Downloading KalCode ${formatKalCodeVersion(status.availableVersion)}`
+          : "Downloading update",
         detail: progress === null ? "Downloading and verifying the signed release." : `${progress}% downloaded`,
         progress,
       };
     }
     case "ready":
       return {
-        label: status.availableVersion ? `KalCode ${status.availableVersion} is ready` : "Update ready",
+        label: status.availableVersion
+          ? `KalCode ${formatKalCodeVersion(status.availableVersion)} is ready`
+          : "Update ready",
         detail: "Your work stays open until you choose to restart and install.",
         progress: 100,
       };
     case "up_to_date":
-      return { label: "KalCode is up to date", detail: `Version ${status.currentVersion}`, progress: null };
+      return {
+        label: "KalCode is up to date",
+        detail: `Version ${formatKalCodeVersion(status.currentVersion)}`,
+        progress: null,
+      };
     case "installing":
       return {
         label: "Restarting to install",
@@ -63,7 +72,7 @@ export function updatePresentation(status: UpdateStatus): UpdatePresentation {
       };
     default:
       return {
-        label: `KalCode ${status.currentVersion}`,
+        label: `KalCode ${formatKalCodeVersion(status.currentVersion)}`,
         detail:
           "Updates download in the background only after their signatures and release metadata pass verification.",
         progress: null,

@@ -77,6 +77,8 @@ test("post-bundle application signing repairs only Tauri's unsigned restore", ()
 test("release installer names are derived from canonical SemVer only", () => {
   assert.equal(expectedWindowsInstallerFile("1.2.3"), "KalCode_1.2.3_x64-setup.exe");
   assert.equal(expectedWindowsInstallerFile("1.2.3-beta.1"), "KalCode_1.2.3-beta.1_x64-setup.exe");
+  assert.equal(expectedWindowsInstallerFile("1.2.3+218"), "KalCode_1.2.3+218_x64-setup.exe");
+  assert.throws(() => expectedWindowsInstallerFile("1.2.3+65536"), /SemVer/);
   assert.throws(() => expectedWindowsInstallerFile("../private"), /SemVer/);
 });
 

@@ -31,10 +31,10 @@ import {
 } from "./publication-safety.mjs";
 import { isMissingR2Object } from "./publish-plan.mjs";
 import { releaseProcessOptions } from "./signing.mjs";
+import { validateStableBuildVersion } from "./version.mjs";
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const SOURCE_FILES = Object.freeze([
   "Cargo.lock",
   "Cargo.toml",
@@ -46,6 +46,15 @@ const MUTABLE_KEYS = new Set(["releases/latest.json", "releases/updater/stable.j
 const D1_DATABASE = "kalcode-web";
 const R2_BUCKET = "kalcode-releases";
 const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+function isStableBuildVersion(version) {
+  try {
+    validateStableBuildVersion(version);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -121,7 +130,7 @@ function jsonVersionOnly(candidateText, baselineText, candidateVersion, baseline
 export function validateBaselineSourceSnapshot(snapshot) {
   const problems = [];
   const { candidateFiles, baselineFiles, candidateVersion, baselineVersion, workspacePackages } = snapshot ?? {};
-  if (!VERSION.test(candidateVersion ?? "") || !VERSION.test(baselineVersion ?? "")) {
+  if (!isStableBuildVersion(candidateVersion) || !isStableBuildVersion(baselineVersion)) {
     return ["baseline source versions are invalid"];
   }
   try {
@@ -316,7 +325,7 @@ function qaObjectKeyIsCanonical(key, sha256) {
       : parts[0] === "releases";
   const version = parts[versionIndex];
   const suffix = parts.slice(versionIndex + 1);
-  const safeFile = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u;
+  const safeFile = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$/u;
   const descriptor = suffix.length === 1 && suffix[0] === `${sha256}.json`;
   const artifact = suffix.length === 2 && suffix[0] === sha256 && safeFile.test(suffix[1]);
   const signature =
@@ -326,11 +335,11 @@ function qaObjectKeyIsCanonical(key, sha256) {
     suffix[1] === sha256 &&
     safeFile.test(suffix[2]) &&
     suffix[2].endsWith(".sig");
-  return canonicalPrefix && VERSION.test(version ?? "") && (descriptor || artifact || signature);
+  return canonicalPrefix && isStableBuildVersion(version) && (descriptor || artifact || signature);
 }
 
 function assertRelease(release, label) {
-  if (!VERSION.test(release?.version ?? "") || !COMMIT.test(release?.commit ?? "")) {
+  if (!isStableBuildVersion(release?.version) || !COMMIT.test(release?.commit ?? "")) {
     throw new Error(`${label} release identity is invalid`);
   }
   if (release.candidate?.channel !== "stable" || release.candidate?.version !== release.version) {
@@ -392,7 +401,7 @@ export function canonicalQaObjectPutArguments(object) {
     "--content-type",
     contentType,
   ];
-  if (/^releases\/[^/]+\/[0-9a-f]{64}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.(?:exe|dmg)$/u.test(object.key)) {
+  if (/^releases\/[^/]+\/[0-9a-f]{64}\/[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\.(?:exe|dmg)$/u.test(object.key)) {
     args.push("--content-disposition", `attachment; filename="${object.key.split("/").at(-1)}"`);
   }
   args.push("--cache-control", IMMUTABLE_CACHE_CONTROL);

@@ -1,6 +1,8 @@
 // Release identity, validation and template resolution for the release orchestrator (ship.mjs).
 // Pure functions only: no file system, no process, no network.
 
+import { compareStableBuildVersions, validateStableBuildVersion } from "../version.mjs";
+
 export class ShipError extends Error {
   constructor(message) {
     super(message);
@@ -12,32 +14,32 @@ export function refuse(message) {
   throw new ShipError(`REFUSED: ${message}`);
 }
 
-export const PLAIN_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const COMMIT40 = /^[0-9a-f]{40}$/;
 export const CHANNELS = Object.freeze(["stable"]);
 
 export function compareSemver(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
-  }
-  return 0;
+  return compareStableBuildVersions(a, b);
 }
 
 // The only inputs a release needs from a person. Everything else is derived or read from receipts.
 export function validateIdentity({ version, commit, baselineVersion = null, channel = "stable" } = {}) {
-  if (typeof version !== "string" || !PLAIN_SEMVER.test(version)) {
+  try {
+    validateStableBuildVersion(version);
+  } catch {
     refuse(
-      `--version must be a plain x.y.z version (Stable refuses prereleases and build metadata), got ${JSON.stringify(version ?? null)}`,
+      `--version must be x.y.z or x.y.z+N (positive numeric N <= 65535); Stable refuses prereleases and other build metadata, got ${JSON.stringify(version ?? null)}`,
     );
   }
   if (typeof commit !== "string" || !COMMIT40.test(commit)) {
     refuse(`--commit must be the full 40-hex lowercase commit id, got ${JSON.stringify(commit ?? null)}`);
   }
   if (baselineVersion !== null && baselineVersion !== undefined) {
-    if (typeof baselineVersion !== "string" || !PLAIN_SEMVER.test(baselineVersion)) {
-      refuse(`--baseline-version must be a plain x.y.z version, got ${JSON.stringify(baselineVersion)}`);
+    try {
+      validateStableBuildVersion(baselineVersion);
+    } catch {
+      refuse(
+        `--baseline-version must be x.y.z or x.y.z+N (positive numeric N <= 65535), got ${JSON.stringify(baselineVersion)}`,
+      );
     }
     if (compareSemver(baselineVersion, version) >= 0) {
       refuse(
@@ -50,9 +52,12 @@ export function validateIdentity({ version, commit, baselineVersion = null, chan
 }
 
 export function identityVars(identity) {
+  const stable = validateStableBuildVersion(identity.version);
   return {
     version: identity.version,
     versionDashed: identity.version.replaceAll(".", "-"),
+    publicVersion: stable.publicVersion,
+    buildRevision: stable.revision ?? undefined,
     commit: identity.commit,
     commit7: identity.commit.slice(0, 7),
     commit12: identity.commit.slice(0, 12),

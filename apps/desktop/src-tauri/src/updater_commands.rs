@@ -14,9 +14,9 @@ use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_updater::{
     ArtifactFormat, Candidate, InstallAttempt, InstallBinding, InstallKind, InstallOutcome,
     MAX_UPDATE_BYTES, MacSwapAttempt, OperationToken, RollbackCache, UpdateChannel, UpdateError,
-    UpdateJournal, UpdateMachine, UpdatePhase, UpdateStatus, UpdateTarget,
-    validate_candidate_for_target, validate_retained_candidate_for_target, verify_download,
-    verify_signature_for_metadata,
+    UpdateJournal, UpdateMachine, UpdatePhase, UpdateStatus, UpdateTarget, is_newer_version,
+    is_previous_stable_version, validate_candidate_for_target,
+    validate_retained_candidate_for_target, verify_download, verify_signature_for_metadata,
 };
 use reqwest::header::ACCEPT;
 use reqwest::redirect::Policy;
@@ -31,6 +31,9 @@ use installer::PreparedInstaller;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
 const MAX_FEED_BYTES: u64 = 64 * 1024;
+/// Migration 20 is the first forward-only Operations store migration. Builds before this exact
+/// identity cannot safely open owner data after a schema-20 build has started.
+const SCHEMA_20_FIRST_BUILD: &str = "0.1.7+1";
 
 fn require_stable_installer() -> Result<(), UpdateError> {
     if cfg!(debug_assertions) {
@@ -179,6 +182,7 @@ fn reconcile_after_cleanup(
     journal: &mut UpdateJournal,
     cleanup: Result<bool, UpdateError>,
     target_matches: bool,
+    startup_healthy: bool,
     current_version: &str,
 ) -> (bool, Result<Option<InstallOutcome>, UpdateError>) {
     let preparation_ready = cleanup.unwrap_or_else(|error| {
@@ -189,7 +193,7 @@ fn reconcile_after_cleanup(
         );
         true
     });
-    let outcome = target_matches
+    let outcome = (target_matches && startup_healthy)
         .then(|| journal.reconcile_startup(current_version))
         .transpose();
     (preparation_ready, outcome)
@@ -244,6 +248,7 @@ impl DesktopUpdaterState {
         app: AppHandle,
         data_dir: &std::path::Path,
         current_version: &str,
+        startup_healthy: bool,
         public_key: Option<&str>,
         before_exit: BeforeUpdaterExit,
     ) -> Self {
@@ -270,10 +275,20 @@ impl DesktopUpdaterState {
                         .as_ref()
                         .and_then(|attempt| attempt.mac_swap.as_ref()),
                 );
-                let (ready, outcome) =
-                    reconcile_after_cleanup(&mut journal, cleanup, target_matches, current_version);
+                let (ready, outcome) = reconcile_after_cleanup(
+                    &mut journal,
+                    cleanup,
+                    target_matches,
+                    startup_healthy,
+                    current_version,
+                );
                 preparation_ready = ready;
                 match outcome {
+                    Ok(None) if !startup_healthy => {
+                        machine.mark_failed(
+                            "KalCode couldn't confirm the previous update because startup did not complete.",
+                        );
+                    }
                     Ok(None) => {
                         machine.mark_failed("KalCode couldn't verify the previous update target.");
                     }
@@ -304,7 +319,7 @@ impl DesktopUpdaterState {
             match rollback.load_verified(key) {
                 Ok(Some(artifact)) => machine.set_recovery_available(
                     target == Some(artifact.receipt().target())
-                        && is_previous_version(current_version, &artifact.receipt().version),
+                        && schema_compatible_recovery(current_version, &artifact.receipt().version),
                 ),
                 Ok(None) => {}
                 Err(_) => {
@@ -568,7 +583,7 @@ impl DesktopUpdaterState {
             if existing.receipt().target() == self.target()?
                 && (existing.receipt().version == self.0.current_version || !current.pre.is_empty())
             {
-                return Ok(is_previous_version(
+                return Ok(schema_compatible_recovery(
                     &self.0.current_version,
                     &existing.receipt().version,
                 ));
@@ -620,11 +635,7 @@ impl DesktopUpdaterState {
         let Some((feed, value, platform)) = parse_feed(&raw, target)? else {
             return Ok(None);
         };
-        let current = Version::parse(&self.0.current_version)
-            .map_err(|_| UpdateError::invalid_manifest("current version"))?;
-        let announced = Version::parse(feed.version.trim_start_matches('v'))
-            .map_err(|_| UpdateError::invalid_manifest("version"))?;
-        if announced <= current {
+        if !is_newer_version(&self.0.current_version, &feed.version)? {
             return Ok(None);
         }
         let mut candidate = validate_candidate_for_target(
@@ -887,14 +898,6 @@ impl DesktopUpdaterState {
 
     /// The admitted restore. Only its owner reaches here; see `run_owned_operation`.
     fn restore_owned(&self, token: OperationToken, public_key: &str) -> Result<(), UpdateError> {
-        let preparation = self.begin_preparation()?;
-        let cancel = || {
-            if preparation.cancelled() {
-                Err(preparation_cancelled())
-            } else {
-                Ok(())
-            }
-        };
         let (artifact, bytes) = self
             .0
             .rollback
@@ -929,6 +932,17 @@ impl DesktopUpdaterState {
             &version,
             &metadata,
         )?;
+        // The signature and target are authenticated before this policy decision, but an
+        // incompatible recovery build must be refused before installer preparation or launch.
+        require_schema_compatible_recovery(&self.0.current_version, &version)?;
+        let preparation = self.begin_preparation()?;
+        let cancel = || {
+            if preparation.cancelled() {
+                Err(preparation_cancelled())
+            } else {
+                Ok(())
+            }
+        };
         let installer = PreparedInstaller::prepare(
             &self.0.prepared_dir,
             &prepared_installer_name(kalcode_contracts::ids::new_id(), metadata.format),
@@ -1250,10 +1264,58 @@ fn prepared_installer_name(id: String, format: ArtifactFormat) -> String {
 }
 
 fn is_previous_version(current: &str, cached: &str) -> bool {
-    let (Ok(current), Ok(cached)) = (Version::parse(current), Version::parse(cached)) else {
-        return false;
+    is_previous_stable_version(current, cached)
+}
+
+fn build_supports_schema_20(version: &str) -> Result<bool, UpdateError> {
+    let parsed =
+        Version::parse(version).map_err(|_| UpdateError::invalid_manifest("recovery version"))?;
+    if !parsed.pre.is_empty() {
+        return Ok(false);
+    }
+    Ok(version == SCHEMA_20_FIRST_BUILD || is_newer_version(SCHEMA_20_FIRST_BUILD, version)?)
+}
+
+fn schema_compatible_recovery(current: &str, cached: &str) -> bool {
+    is_previous_version(current, cached) && build_supports_schema_20(cached).unwrap_or(false)
+}
+
+fn require_schema_compatible_recovery(current: &str, cached: &str) -> Result<(), UpdateError> {
+    if schema_compatible_recovery(current, cached) {
+        return Ok(());
+    }
+    Err(UpdateError::new(
+        "rollback_schema_incompatible",
+        "This previous build can't safely open data created by the current build.",
+    ))
+}
+
+/// Before Core can migrate owner data to schema 20, revoke a shipped macOS helper's ownership of
+/// a rollback to an older schema. The legacy helper captured the complete attempt before launch;
+/// atomically changing its opaque identity makes its exact pre-swap comparison fail closed while
+/// preserving its normal success cleanup after this process later acknowledges healthy startup.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn fence_forward_only_macos_upgrade(
+    data_dir: &std::path::Path,
+    current_version: &str,
+) -> Result<(), UpdateError> {
+    let mut journal = UpdateJournal::load(data_dir.join("updates").join("updater.json"))?;
+    let Some(attempt) = journal.state().install_attempt.as_ref() else {
+        return Ok(());
     };
-    cached.pre.is_empty() && cached < current
+    if attempt.kind != InstallKind::Upgrade || attempt.to_version != current_version {
+        return Ok(());
+    }
+    if build_supports_schema_20(&attempt.from_version)? {
+        return Ok(());
+    }
+    if !build_supports_schema_20(current_version)? {
+        return Err(UpdateError::new(
+            "update_install_record_invalid",
+            "KalCode couldn't create a safe update recovery record.",
+        ));
+    }
+    journal.fence_forward_only_mac_install(current_version)
 }
 
 fn append_bounded(
@@ -1430,13 +1492,174 @@ mod tests {
             let mut journal = UpdateJournal::load(&path).unwrap();
             journal.record_install_attempt(attempt()).unwrap();
 
-            let (ready, outcome) = reconcile_after_cleanup(&mut journal, cleanup, true, "0.1.6");
+            let (ready, outcome) =
+                reconcile_after_cleanup(&mut journal, cleanup, true, true, "0.1.6");
 
             assert_eq!(ready, expected_ready);
             assert!(matches!(outcome, Ok(Some(InstallOutcome::Updated))));
             let reloaded = UpdateJournal::load(&path).unwrap();
             assert!(reloaded.state().install_attempt.is_none());
         }
+    }
+
+    #[test]
+    fn startup_reconciliation_uses_the_compiled_full_build_identity() {
+        let running = Version::parse(crate::BUILD_VERSION).unwrap();
+        let from_version = if running.build.is_empty() {
+            assert!(
+                running.patch > 0,
+                "test package needs a prior stable version"
+            );
+            format!("{}.{}.{}", running.major, running.minor, running.patch - 1)
+        } else {
+            format!("{}.{}.{}", running.major, running.minor, running.patch)
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("updater.json");
+        let mut journal = UpdateJournal::load(&path).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version,
+                to_version: crate::BUILD_VERSION.to_owned(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::WindowsX86_64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: None,
+                started_at: "2026-09-30T12:00:00Z".into(),
+            })
+            .unwrap();
+
+        let (ready, outcome) =
+            reconcile_after_cleanup(&mut journal, Ok(true), true, true, crate::BUILD_VERSION);
+
+        assert!(ready);
+        assert_eq!(outcome.unwrap(), Some(InstallOutcome::Updated));
+        assert_eq!(
+            journal.state().last_successful_version.as_deref(),
+            Some(crate::BUILD_VERSION)
+        );
+    }
+
+    #[test]
+    fn startup_failure_never_acknowledges_a_pending_install_from_version_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("updater.json");
+        let mut journal = UpdateJournal::load(&path).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.7".into(),
+                to_version: "0.1.7+1".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::WindowsX86_64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: None,
+                started_at: "2026-09-30T12:00:00Z".into(),
+            })
+            .unwrap();
+
+        let (ready, outcome) =
+            reconcile_after_cleanup(&mut journal, Ok(true), true, false, "0.1.7+1");
+
+        assert!(ready);
+        assert_eq!(outcome.unwrap(), None);
+        assert!(journal.state().install_attempt.is_some());
+        assert!(journal.state().last_successful_version.is_none());
+    }
+
+    #[test]
+    fn schema_20_floor_is_shared_by_recovery_visibility_and_execution_admission() {
+        assert!(schema_compatible_recovery("0.1.7+2", "0.1.7+1"));
+        assert!(!schema_compatible_recovery("0.1.7+2", "0.1.7"));
+        assert!(!schema_compatible_recovery("0.1.7+1", "0.1.7"));
+        assert!(schema_compatible_recovery("0.1.8+1", "0.1.7+1"));
+
+        let prepare_calls = AtomicUsize::new(0);
+        if require_schema_compatible_recovery("0.1.7+2", "0.1.7").is_ok() {
+            prepare_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            require_schema_compatible_recovery("0.1.7+2", "0.1.7")
+                .unwrap_err()
+                .code(),
+            "rollback_schema_incompatible"
+        );
+    }
+
+    #[test]
+    fn launched_macos_schema_boundary_is_fenced_before_migration_and_healthy_ack_clears_it() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let update_dir = data_dir.path().join("updates");
+        std::fs::create_dir_all(&update_dir).unwrap();
+        let journal_path = update_dir.join("updater.json");
+        let current_app = data_dir.path().join("KalCode.app");
+        let staged_app = data_dir.path().join(".KalCode-update-previous.app");
+        let mut journal = UpdateJournal::load(&journal_path).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.7".into(),
+                to_version: "0.1.7+2".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::DarwinAarch64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: Some(MacSwapAttempt {
+                    current_app,
+                    staged_app,
+                    parent_pid: 42,
+                    parent_identity_sha256: "e".repeat(64),
+                    phase: kalcode_updater::MacSwapPhase::Prepared,
+                }),
+                started_at: "2026-09-30T12:00:00Z".into(),
+            })
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(
+                kalcode_updater::MacSwapPhase::Prepared,
+                kalcode_updater::MacSwapPhase::Swapped,
+            )
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(
+                kalcode_updater::MacSwapPhase::Swapped,
+                kalcode_updater::MacSwapPhase::Launched,
+            )
+            .unwrap();
+        let captured = journal.state().install_attempt.clone().unwrap();
+        drop(journal);
+
+        fence_forward_only_macos_upgrade(data_dir.path(), "0.1.7+2").unwrap();
+        let fenced_once = UpdateJournal::load(&journal_path).unwrap();
+        let fenced_attempt = fenced_once.state().install_attempt.clone().unwrap();
+        assert_ne!(fenced_attempt, captured);
+        drop(fenced_once);
+
+        fence_forward_only_macos_upgrade(data_dir.path(), "0.1.7+2").unwrap();
+        let mut fenced_twice = UpdateJournal::load(&journal_path).unwrap();
+        assert_eq!(
+            fenced_twice.state().install_attempt.as_ref(),
+            Some(&fenced_attempt)
+        );
+
+        let (_, outcome) =
+            reconcile_after_cleanup(&mut fenced_twice, Ok(true), true, true, "0.1.7+2");
+        assert_eq!(outcome.unwrap(), Some(InstallOutcome::Updated));
+        assert!(fenced_twice.state().install_attempt.is_none());
+        assert_eq!(
+            fenced_twice.state().last_successful_version.as_deref(),
+            Some("0.1.7+2")
+        );
     }
 
     #[test]
@@ -1725,6 +1948,9 @@ mod tests {
     fn recovery_is_exposed_only_for_an_older_stable_build() {
         assert!(!is_previous_version("1.2.3", "1.2.3"));
         assert!(is_previous_version("1.2.3", "1.2.2"));
+        assert!(is_previous_version("1.2.3+2", "1.2.3+1"));
+        assert!(is_previous_version("1.2.3+1", "1.2.3"));
+        assert!(!is_previous_version("1.2.3+1", "1.2.3+2"));
         assert!(!is_previous_version("1.2.3", "1.2.4"));
         assert!(!is_previous_version("1.2.3", "1.2.2-beta.1"));
         assert!(!is_previous_version("invalid", "1.2.2"));

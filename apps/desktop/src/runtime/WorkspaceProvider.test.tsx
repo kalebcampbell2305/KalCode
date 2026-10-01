@@ -129,6 +129,31 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true,
 }
 
 describe("WorkspaceProvider lifecycle", () => {
+  it("creates in an explicit workspace after activation even through the previous render callback", async () => {
+    const f = await fixture("old");
+    const next = workspace("service-workspace");
+    mockActions(f.client);
+    vi.spyOn(f.client, "activateWorkspace").mockImplementation(async () => {
+      f.native.active = next;
+      return next;
+    });
+    vi.mocked(f.client.createTerminal).mockResolvedValue({ ...terminal, id: "service-terminal", workspaceId: next.id });
+    const view = await mount(f);
+    const createBeforeActivation = view.result.current.createTerminal;
+
+    await act(async () => {
+      expect(await view.result.current.activate(next.id)).toBe(true);
+    });
+    await waitFor(() => expect(view.result.current.active?.id).toBe(next.id));
+    let created!: TerminalInfo | null;
+    await act(async () => {
+      created = await createBeforeActivation(null, next.id);
+    });
+
+    expect(f.client.createTerminal).toHaveBeenCalledWith(next.id, null, { cols: 120, rows: 30 });
+    expect(created?.id).toBe("service-terminal");
+  });
+
   it.each(["different terminal", "different workspace", "explicit focus"] as const)(
     "never revives pending focus after %s followed by same-target reconciliation",
     async (change) => {

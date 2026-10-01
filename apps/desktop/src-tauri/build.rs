@@ -17,11 +17,45 @@ fn target_has_test_hooks() -> bool {
         || std::env::var_os("CARGO_FEATURE_E2E").is_some()
 }
 
+/// Tauri's Windows dialog runtime imports `TaskDialogIndirect`, which exists only in Common
+/// Controls v6. Packaged app executables receive Tauri's normal Windows resources, but Cargo's
+/// native test harnesses do not. Cargo's test-only linker directive does not reach a library unit
+/// test harness, so debug MSVC targets receive the activation dependency. Release packaging stays
+/// entirely under Tauri's normal resource generation.
+fn configure_windows_debug_manifest(debug: bool) {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if debug && target_os == "windows" && target_env == "msvc" {
+        let output = std::path::PathBuf::from(
+            std::env::var_os("OUT_DIR")
+                .unwrap_or_else(|| panic!("Cargo did not provide OUT_DIR for the test manifest")),
+        )
+        .join("common-controls-v6.manifest");
+        std::fs::write(
+            &output,
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency><dependentAssembly><assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/></dependentAssembly></dependency>
+</assembly>
+"#,
+        )
+        .unwrap_or_else(|error| panic!("could not write {}: {error}", output.display()));
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", output.display());
+        // Tauri links its own compiled manifest resource into application binaries. Suppress
+        // linker-generated manifests there so this unit-harness input cannot duplicate or replace
+        // the packaged identity resource.
+        println!("cargo:rustc-link-arg-bins=/MANIFEST:NO");
+        println!("cargo:rustc-link-arg-bins=/IGNORE:4075");
+    }
+}
+
 fn main() {
     // Fail closed for direct Cargo/CLI invocations that omit the Dev overlay. This also
     // prevents a release binary (and its credential service) using a Dev bundle identity.
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     let debug = std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
+    configure_windows_debug_manifest(debug);
     let base: serde_json::Value = serde_json::from_str(include_str!("tauri.conf.json"))
         .unwrap_or_else(|error| panic!("invalid base app config: {error}"));
     let overlay: serde_json::Value =

@@ -9,6 +9,12 @@ use crate::guardian::{GuardianError, ProcessIdentity};
 #[derive(Debug)]
 pub(crate) struct RecoveryLock;
 
+// Keep the unsupported platform adapter lifecycle-compatible with the native recovery locks.
+// Acquisition always fails closed above, so there is no platform resource to release here.
+impl Drop for RecoveryLock {
+    fn drop(&mut self) {}
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RecoveryLockRole {
     DesktopEpoch,

@@ -16,6 +16,7 @@ import { expectedWindowsInstallerFile } from "./signing.mjs";
 import { validateBaselineSourceSnapshot } from "./stage-updater-qa.mjs";
 import { createPlatformUpdaterManifest } from "./updater-manifest.mjs";
 import { readUpdaterPublicKey } from "./updater-signing.mjs";
+import { releaseNotesRelativePath } from "./version.mjs";
 
 function command(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
@@ -128,8 +129,9 @@ function validateSourceAuthority({ baselineSource, candidateSource, baseline, ca
   const candidateTail = git(candidateSource, ["diff", "--name-only", candidate.commit, candidateHead])
     .split(/\r?\n/u)
     .filter(Boolean);
-  if (candidateTail.some((path) => !path.startsWith("docs/releases/"))) {
-    throw new Error("candidate source changed beyond release notes after the signed build commit");
+  const notesRelative = releaseNotesRelativePath(candidate.version);
+  if (candidateTail.some((path) => path !== notesRelative)) {
+    throw new Error("candidate source changed beyond exact release/build notes after the signed build commit");
   }
   validateBaselineSourceAuthority({ baselineSource, baseline, candidate });
 }
@@ -313,8 +315,8 @@ export async function assembleUpdaterQaStage(options) {
     baseline: { version: baselineVersion, commit: baselineBuild.commit },
     candidate: { version: candidateVersion, commit: candidateBuild.commit },
   });
-  const notesPath = join(options.candidateSource, "docs", "releases", `${candidateVersion}.md`);
-  if (!existsSync(notesPath)) throw new Error("candidate release notes are missing");
+  const notesPath = join(options.candidateSource, releaseNotesRelativePath(candidateVersion));
+  if (!existsSync(notesPath)) throw new Error("candidate release/build notes are missing");
   const candidateNotes = readFileSync(notesPath, "utf8");
   if (candidatePackets.some((packet) => !candidateNotes.includes(packet.build.sha256))) {
     throw new Error("candidate release notes do not bind every target artifact SHA-256");

@@ -265,6 +265,13 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "Thread account switched", detail: event.payload.accountLabel, tone: "idle" };
     case "agent.message":
       return { title: event.payload.role === "user" ? "Message sent" : "Message received", detail: null, tone: "idle" };
+    case "agent.turn_completed":
+      if (event.payload.interrupted) {
+        return { title: "Agent turn interrupted", detail: null, tone: "waiting" };
+      }
+      return event.payload.ok
+        ? { title: "Agent turn completed", detail: null, tone: "success" }
+        : { title: "Agent turn failed", detail: null, tone: "danger" };
     case "tool.requested":
       return { title: "Tool requested", detail: event.payload.summary, tone: "live" };
     case "tool.started":

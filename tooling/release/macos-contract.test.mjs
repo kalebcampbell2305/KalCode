@@ -16,6 +16,7 @@ import {
   MACOS_UPDATE_HELPER,
   MACOS_UPDATE_HELPER_IDENTIFIER,
   macBuildEnvironment,
+  macBundleVersion,
   macHelperBuildArgs,
   macHelperBuildEnvironment,
   macHelperSidecarName,
@@ -46,6 +47,8 @@ test("native architecture is detected and never guessed", () => {
 test("artifact names bind SemVer and native architecture", () => {
   assert.equal(expectedMacDmgFile("1.2.3", "arm64"), "KalCode_1.2.3_arm64.dmg");
   assert.equal(expectedMacDmgFile("1.2.3-beta.1", "x86_64"), "KalCode_1.2.3-beta.1_x64.dmg");
+  assert.equal(expectedMacDmgFile("1.2.3+218", "arm64"), "KalCode_1.2.3+218_arm64.dmg");
+  assert.throws(() => expectedMacDmgFile("1.2.3+65536", "arm64"), /SemVer/);
   assert.throws(() => expectedMacDmgFile("../1", "arm64"), /SemVer/);
 });
 
@@ -82,12 +85,13 @@ test("Tauri receives only signing identity and the explicit deployment target", 
     APPLE_TEAM_ID: "remove",
   };
   const original = { ...inherited };
-  const result = macBuildEnvironment(inherited, identity, readUpdaterPublicKey());
+  const result = macBuildEnvironment(inherited, identity, readUpdaterPublicKey(), "0.1.7");
   assert.equal(result.KEEP, "yes");
   assert.equal(result.CI, "true");
   assert.equal(result.TAURI_BUNDLER_DMG_IGNORE_CI, undefined);
   assert.equal(result.APPLE_SIGNING_IDENTITY, identity);
   assert.equal(result.MACOSX_DEPLOYMENT_TARGET, MACOS_MINIMUM_VERSION);
+  assert.deepEqual(JSON.parse(result.TAURI_CONFIG), { bundle: { macOS: { bundleVersion: "0.1.7" } } });
   assert.deepEqual(inherited, original);
   for (const key of [
     "APPLE_ID",
@@ -105,12 +109,30 @@ test("Mac builds bind the tracked updater key instead of inheriting missing or s
   const trustedKey = readUpdaterPublicKey();
   for (const inherited of [{}, { KALCODE_UPDATER_PUBLIC_KEY: "substituted" }]) {
     const original = { ...inherited };
-    const result = macBuildEnvironment(inherited, identity, trustedKey);
+    const result = macBuildEnvironment(inherited, identity, trustedKey, "0.1.7");
     assert.equal(result.KALCODE_UPDATER_PUBLIC_KEY, trustedKey);
     assert.deepEqual(inherited, original);
   }
-  assert.throws(() => macBuildEnvironment({}, identity), /public key is missing/);
-  assert.throws(() => macBuildEnvironment({}, identity, "invalid"), /public key/);
+  assert.throws(() => macBuildEnvironment({}, identity, undefined, "0.1.7"), /public key is missing/);
+  assert.throws(() => macBuildEnvironment({}, identity, "invalid", "0.1.7"), /public key/);
+});
+
+test("continuous builds receive a bounded monotonic numeric CFBundleVersion overlay", () => {
+  assert.equal(macBundleVersion("0.1.7"), "0.1.7");
+  assert.equal(macBundleVersion("0.1.7+1"), "1.0.0");
+  assert.equal(macBundleVersion("0.1.7+10000"), "1.99.99");
+  assert.equal(macBundleVersion("0.1.7+10001"), "2.0.0");
+  assert.equal(macBundleVersion("0.1.7+65535"), "7.55.34");
+  assert.throws(() => macBundleVersion("0.1.7+0"), /stable build version/);
+  assert.throws(() => macBundleVersion("0.1.7+65536"), /stable build version/);
+
+  const result = macBuildEnvironment(
+    { TAURI_CONFIG: "unsafe-inherited" },
+    identity,
+    readUpdaterPublicKey(),
+    "0.1.7+65535",
+  );
+  assert.deepEqual(JSON.parse(result.TAURI_CONFIG), { bundle: { macOS: { bundleVersion: "7.55.34" } } });
 });
 
 test("the native build is bound to the selected SDK and its libc++ headers", () => {
@@ -319,7 +341,7 @@ test("checked-in macOS configuration is hardened and bootstrap is read-only by d
   assert.match(packager, /parseMacPackageOptions\(process\.argv\.slice\(2\)\)/);
   assert.match(packager, /const features = options\.features;/);
   assert.match(packager, /const updaterPublicKey = readUpdaterPublicKey\(\);/);
-  assert.match(packager, /macBuildEnvironment\([\s\S]*?credentials\.signingIdentity,\s*updaterPublicKey,/);
+  assert.match(packager, /macBuildEnvironment\([\s\S]*?credentials\.signingIdentity,\s*updaterPublicKey,\s*version,/);
 });
 
 test("successful DMG cleanup cannot erase the package evidence authority", () => {

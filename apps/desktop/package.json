@@ -1,6 +1,6 @@
 {
   "name": "@kalcode/desktop",
-  "version": "0.1.7",
+  "version": "0.1.7+2",
   "private": true,
   "type": "module",
   "description": "KalCode desktop application (Tauri + React).",

@@ -35,6 +35,8 @@ mod layout_commands;
 mod locator_commands;
 pub mod native_confirm;
 mod notification_commands;
+mod operations_commands;
+mod operations_observed;
 pub mod permission_commands;
 mod provider_account_commands;
 mod provider_auth_commands;
@@ -64,6 +66,10 @@ use kalcode_core::{AppInfo, Core, CoreConfig, ErrorCategory, IpcError, KalError,
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent};
 use thread_commands::ThreadsState;
+
+/// Exact build identity compiled into the native executable. Runtime update reconciliation must
+/// not derive this from platform presentation metadata, which may expose only the public version.
+pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Shared state for command handlers. `core` is `None` when startup failed; the UI then shows
 /// `startup_error` with recovery options instead of a broken shell.
@@ -179,9 +185,50 @@ fn reconcile_core_startup(core: &Arc<Core>) -> kalcode_core::Result<(usize, u64)
     Ok((recovered, invalidated))
 }
 
+fn open_core_after_update_fence<T>(
+    fence: Result<(), kalcode_updater::UpdateError>,
+    open: impl FnOnce() -> kalcode_core::Result<T>,
+) -> kalcode_core::Result<T> {
+    fence.map_err(|error| {
+        KalError::new(
+            ErrorCategory::Update,
+            "update_rollback_fence_failed",
+            "KalCode couldn't safely finish the previous update. Restart KalCode and try again.",
+        )
+        .with_source(error)
+    })?;
+    open()
+}
+
+#[cfg(test)]
+mod update_fence_startup_tests {
+    use std::cell::Cell;
+
+    use super::open_core_after_update_fence;
+
+    #[test]
+    fn failed_update_fence_prevents_core_open() {
+        let open_calls = Cell::new(0);
+        let error = open_core_after_update_fence(
+            Err(kalcode_updater::UpdateError::new(
+                "update_journal_write_failed",
+                "test fence failure",
+            )),
+            || {
+                open_calls.set(open_calls.get() + 1);
+                Ok(())
+            },
+        )
+        .expect_err("a failed durable fence must block Core::open");
+
+        assert_eq!(open_calls.get(), 0);
+        assert_eq!(error.code, "update_rollback_fence_failed");
+    }
+}
+
 fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
-    let version = app.package_info().version.to_string();
+    let version = BUILD_VERSION.to_owned();
     let mut info = AppInfo::current(&version, channel);
     // KalVoice is available on Stable. Outside development it requires this build to include
     // its on-device speech engine (`kalvoice-whisper`, which needs LLVM/libclang to build):
@@ -221,8 +268,14 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         app_version: version,
         channel,
     };
+    #[cfg(target_os = "macos")]
+    let update_fence =
+        updater_commands::fence_forward_only_macos_upgrade(&state.paths.data_dir, BUILD_VERSION);
+    #[cfg(not(target_os = "macos"))]
+    let update_fence = Ok(());
     // Z7-W2: `open_core` is `Core::open` (plus the provisional v11 for the E2E suite only).
-    match locator_commands::open_core(config) {
+    // The update fence must become durable before that call can run a forward-only migration.
+    match open_core_after_update_fence(update_fence, || locator_commands::open_core(config)) {
         Ok(core) => {
             let core = Arc::new(core);
             match reconcile_core_startup(&core) {
@@ -534,6 +587,7 @@ pub fn run(removed_overrides: Vec<String>) {
             #[cfg(feature = "e2e")]
             let fixture_account = account::e2e::runtime_from_environment(&resolve_data_dir(app)?)?;
             let state = start(app, &removed_overrides);
+            let startup_healthy = state.core.is_some();
             #[cfg(feature = "e2e")]
             let account = fixture_account.unwrap_or_else(|| {
                 Arc::new(account::runtime::AccountRuntime::production(Arc::new(
@@ -552,6 +606,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 app.handle().clone(),
                 &state.paths.data_dir,
                 &state.info.version,
+                startup_healthy,
                 option_env!("KALCODE_UPDATER_PUBLIC_KEY"),
                 Arc::new(move || shutdown_for_update(&updater_app)),
             );
@@ -562,8 +617,10 @@ pub fn run(removed_overrides: Vec<String>) {
             kalvoice_commands::watch_foreground(app.handle());
             kalvoice_commands::install_fn_monitor(app.handle());
             account_links::start(app.handle(), account, coordinator);
-            updater.check_in_background();
-            updater.start_periodic_checks();
+            if startup_healthy {
+                updater.check_in_background();
+                updater.start_periodic_checks();
+            }
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -772,6 +829,18 @@ pub fn run(removed_overrides: Vec<String>) {
                 doctor_commands::doctor_ignore,
                 doctor_commands::doctor_ignored,
                 doctor_commands::doctor_fix_log,
+                operations_commands::operations_snapshot,
+                operations_commands::operations_detail,
+                operations_commands::operations_history,
+                operations_commands::operations_enqueue,
+                operations_commands::operations_update,
+                operations_commands::operations_reorder,
+                operations_commands::operations_pause,
+                operations_commands::operations_hold,
+                operations_commands::operations_cancel,
+                operations_commands::operations_run_now,
+                operations_commands::operations_service_action,
+                operations_commands::operations_open_url,
                 utility_commands::utility_status,
                 utility_commands::utility_http_send,
                 utility_commands::utility_http_history,

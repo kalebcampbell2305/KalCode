@@ -10,3 +10,8 @@ onlyBuiltDependencies:
   - "@tauri-apps/cli"
 patchedDependencies:
   cmdk@1.1.1: patches/cmdk@1.1.1.patch
+
+# Miniflare currently pins 7.29.0 exactly. Keep the pinned Miniflare build while replacing its
+# vulnerable Undici transitive with the API-compatible security patch.
+overrides:
+  undici@7.29.0: 7.29.1

@@ -1,3 +1,4 @@
+import { formatKalCodeVersion } from "@kalcode/protocol";
 import { Button, useToast } from "@kalcode/ui/components";
 import { RefreshCw } from "lucide-react";
 import { AlertDialog } from "radix-ui";
@@ -58,8 +59,9 @@ export function UpdateReadyNotice({
 
   // "Later" hides this version for the session; a newer ready version is announced again.
   const visible = ready !== null && !(dismissed !== null && dismissed.version === ready.version);
-  const name = ready?.version ? `KalCode ${ready.version}` : "A KalCode update";
-  const target = ready?.version ? `KalCode ${ready.version}` : "the new version";
+  const displayVersion = ready?.version ? formatKalCodeVersion(ready.version) : null;
+  const name = displayVersion ? `KalCode ${displayVersion}` : "A KalCode update";
+  const target = displayVersion ? `KalCode ${displayVersion}` : "the new version";
 
   const install = async () => {
     setInstalling(true);
@@ -115,7 +117,7 @@ export function UpdateReadyNotice({
                 </Button>
               </AlertDialog.Cancel>
               <Button variant="primary" busy={installing} onClick={() => void install()}>
-                Restart and install{ready?.version ? ` ${ready.version}` : ""}
+                Restart and install{displayVersion ? ` ${displayVersion}` : ""}
               </Button>
             </div>
           </AlertDialog.Content>

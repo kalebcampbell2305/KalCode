@@ -3,13 +3,14 @@
 // The Worker parses the R2 copy with its own strict parser (apps/website/worker/downloads.ts);
 // tests/unit/release-manifest.test.ts keeps the two in agreement.
 
+import { publicVersion, validateStableBuildVersion } from "./version.mjs";
+
 export const SCHEMA_VERSION = 1;
 export const WINDOWS_LABEL = "Windows 10 (1809) or later, 64-bit";
 export const MACOS_ARM64_LABEL = "macOS 14 or later, Apple silicon";
 export const OS_LIST = ["windows", "macos", "linux"];
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
-const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const KINDS = ["nsis", "msi", "dmg", "appimage", "deb", "rpm"];
@@ -42,7 +43,7 @@ export function emptyManifest() {
 
 /** Updates-page anchor for a version, matching the site's `id="release-0-1-0"` convention. */
 export function notesAnchor(version) {
-  return `release-${version.replaceAll(".", "-")}`;
+  return `release-${publicVersion(version).replaceAll(".", "-")}`;
 }
 
 /**
@@ -52,6 +53,7 @@ export function notesAnchor(version) {
  *   macosArm64?: { file: string, size: number, sha256: string, signed: boolean } }} input
  */
 export function buildManifest({ version, commit, publishedAt, channel = "preview", windows, macosArm64 }) {
+  validateStableBuildVersion(version);
   const platforms = [];
   if (windows) {
     platforms.push({
@@ -125,7 +127,11 @@ export function validateManifest(manifest) {
     if (!isRecord(latest)) {
       errors.push("latest must be null or an object");
     } else {
-      if (!isString(latest.version) || !VERSION.test(latest.version)) errors.push("latest.version must be semver");
+      try {
+        validateStableBuildVersion(latest.version);
+      } catch {
+        errors.push("latest.version must be x.y.z or x.y.z+N with N from 1 through 65535");
+      }
       if (!["preview", "stable"].includes(latest.channel)) errors.push("latest.channel must be preview or stable");
       if (!isString(latest.publishedAt) || Number.isNaN(Date.parse(latest.publishedAt))) {
         errors.push("latest.publishedAt must be an ISO date");

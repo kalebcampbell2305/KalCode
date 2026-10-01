@@ -15,7 +15,7 @@ const TARGETS = Object.freeze({
 function validateArtifact(target, file, artifactSha256, signatureSha256) {
   const policy = TARGETS[target];
   if (!policy) throw new Error("release artifact target is invalid");
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(file) || file.includes("..") || !file.endsWith(policy.extension)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(file) || file.includes("..") || !file.endsWith(policy.extension)) {
     throw new Error("release artifact file is invalid for its target");
   }
   if (!/^[0-9a-f]{64}$/.test(artifactSha256)) throw new Error("artifactSha256 is invalid");
@@ -95,10 +95,12 @@ export function publishedUpdaterProblems(live, expectedVersion, expectedSha256) 
   if (live.version !== expectedVersion) return ["published updater descriptor has an unexpected version"];
   if (typeof expectedSha256 === "object" && expectedSha256 !== null) {
     if (canonicalJson(live) !== canonicalJson(expectedSha256)) {
-      return [`${expectedVersion} already has different immutable updater metadata; bump the version first`];
+      return [
+        `${expectedVersion} already has different immutable updater metadata; use a new immutable build identity`,
+      ];
     }
   } else if (live.kalcode?.sha256 !== expectedSha256) {
-    return [`${expectedVersion} already has different immutable updater metadata; bump the version first`];
+    return [`${expectedVersion} already has different immutable updater metadata; use a new immutable build identity`];
   }
   return [];
 }

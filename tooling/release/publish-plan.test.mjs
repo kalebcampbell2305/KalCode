@@ -251,10 +251,10 @@ test("public upload plan contains only digest-qualified immutable objects", () =
 });
 
 test("publish object keys use the same canonical version grammar as public routes", () => {
-  assert.throws(() => updaterKeys("stable", "1.2.3+build.1", input.installerFile, input), /canonical SemVer/);
+  assert.throws(() => updaterKeys("stable", "1.2.3+build.1", input.installerFile, input), /stable build version/);
   assert.throws(
     () => buildPublishPlan({ ...input, version: "1.2.3+build.1", includeUpdater: true }),
-    /canonical SemVer/,
+    /stable build version/,
   );
 });
 
@@ -312,7 +312,7 @@ test("a remote publish retry reuses the exact publication timestamp and descript
   );
 });
 
-test("different same-version builds cannot target the same immutable R2 keys", () => {
+test("different bytes cannot target one immutable build identity", () => {
   const first = buildPublishPlan({ ...input, includeUpdater: true, includeDownloadDescriptor: true });
   const second = buildPublishPlan({
     ...input,
@@ -334,7 +334,7 @@ test("an immutable updater version can never be replaced with different bytes", 
   assert.deepEqual(publishedUpdaterProblems({ version: "1.2.3", kalcode: { sha256: sha } }, "1.2.3", sha), []);
   assert.match(
     publishedUpdaterProblems({ version: "1.2.3", kalcode: { sha256: "b".repeat(64) } }, "1.2.3", sha)[0],
-    /bump the version/,
+    /new immutable build identity/,
   );
   assert.match(publishedUpdaterProblems({ version: "1.2.4", kalcode: { sha256: sha } }, "1.2.3", sha)[0], /version/);
 });
@@ -481,6 +481,15 @@ test("mutable pointers cannot regress or reuse a version with different bytes", 
 });
 
 test("D1 pointer advance is an atomic monotonic compare-and-set", () => {
+  assert.equal(
+    semverPrecedenceKey("1.2.3"),
+    "101!102!103~1",
+    "existing public-milestone precedence bytes must not change",
+  );
+  assert.ok(semverPrecedenceKey("1.2.3+1") > semverPrecedenceKey("1.2.3"));
+  assert.ok(semverPrecedenceKey("1.2.3+2") > semverPrecedenceKey("1.2.3+1"));
+  assert.equal(semverPrecedenceKey("1.2.3+2"), semverPrecedenceKey("1.2.3+2"));
+  assert.ok(semverPrecedenceKey("1.2.4") > semverPrecedenceKey("1.2.3+65535"));
   assert.ok(semverPrecedenceKey("1.2.4") > semverPrecedenceKey("1.2.3"));
   assert.ok(semverPrecedenceKey("1.2.3") > semverPrecedenceKey("1.2.3-rc.9"));
   assert.ok(semverPrecedenceKey("1.2.3-rc.10") > semverPrecedenceKey("1.2.3-rc.9"));
@@ -489,7 +498,9 @@ test("D1 pointer advance is an atomic monotonic compare-and-set", () => {
     semverPrecedenceKey("123456789012345678901234567890.0.0") >
       semverPrecedenceKey("99999999999999999999999999999.999999999999999999999999.999999999999999999999999"),
   );
-  assert.throws(() => semverPrecedenceKey("1.2.3+build.1"), /canonical SemVer/);
+  assert.throws(() => semverPrecedenceKey("1.2.3+build.1"), /stable build version/);
+  assert.throws(() => semverPrecedenceKey("1.2.3+0"), /stable build version/);
+  assert.throws(() => semverPrecedenceKey("1.2.3+65536"), /stable build version/);
 
   const candidate = {
     channel: "stable",
@@ -595,6 +606,30 @@ test("SQLite enforces immutable archives and monotonic channel movement", () => 
   };
   assert.equal(db.prepare(buildVersionClaimStatement(candidate)).all().length, 1);
   assert.equal(db.prepare(buildPointerAdvanceStatement(candidate)).all().length, 1);
+
+  const buildOne = {
+    ...candidate,
+    version: "1.2.3+1",
+    updaterDescriptorKey: `releases/updater/stable/1.2.3+1/${"3".repeat(64)}.json`,
+    downloadDescriptorKey: `releases/1.2.3+1/${"4".repeat(64)}.json`,
+    updaterDescriptorSha256: "3".repeat(64),
+    downloadDescriptorSha256: "4".repeat(64),
+  };
+  const buildTwo = {
+    ...candidate,
+    version: "1.2.3+2",
+    updaterDescriptorKey: `releases/updater/stable/1.2.3+2/${"5".repeat(64)}.json`,
+    downloadDescriptorKey: `releases/1.2.3+2/${"6".repeat(64)}.json`,
+    updaterDescriptorSha256: "5".repeat(64),
+    downloadDescriptorSha256: "6".repeat(64),
+  };
+  for (const build of [buildOne, buildTwo]) {
+    assert.equal(db.prepare(buildVersionClaimStatement(build)).all().length, 1);
+    assert.equal(db.prepare(buildPointerAdvanceStatement(build)).all().length, 1);
+  }
+  assert.equal(db.prepare(buildPointerReadStatement("stable")).get().version, "1.2.3+2");
+  assert.equal(db.prepare(buildPointerAdvanceStatement(buildOne)).all().length, 0, "rollback cannot regress Stable");
+  assert.equal(db.prepare(buildPointerReadStatement("stable")).get().version, "1.2.3+2");
 
   const newer = {
     ...candidate,

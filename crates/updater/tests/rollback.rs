@@ -172,6 +172,43 @@ fn rollback_cache_reverifies_exact_version_signature_and_digest_after_restart() 
 }
 
 #[test]
+fn build_revision_remains_part_of_the_signed_immutable_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let bytes = b"same milestone signed installer";
+    let version = "0.1.7+217";
+    let (public_key, signature) = signed_package(version, bytes);
+
+    verify_signature_for_metadata(bytes, &signature, &public_key, version, &metadata(bytes))
+        .unwrap();
+    assert_eq!(
+        verify_signature_for_metadata(
+            bytes,
+            &signature,
+            &public_key,
+            "0.1.7+218",
+            &metadata(bytes)
+        )
+        .unwrap_err()
+        .code(),
+        "update_signature_version_mismatch"
+    );
+
+    let cache = RollbackCache::new(temp.path());
+    cache
+        .store_verified(version, bytes, &metadata(bytes), &signature, &public_key)
+        .unwrap();
+    assert_eq!(
+        cache
+            .load_verified(&public_key)
+            .unwrap()
+            .unwrap()
+            .receipt()
+            .version,
+        version
+    );
+}
+
+#[test]
 fn rollback_cache_rejects_bad_signature_version_prerelease_and_tampering() {
     let temp = tempfile::tempdir().unwrap();
     let bytes = b"signed stable installer";

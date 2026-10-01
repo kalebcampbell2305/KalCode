@@ -20,6 +20,7 @@
  *
  * A missing release answers with the site's styled 404 page, never a broken response.
  */
+import { parseKalCodeVersion } from "@kalcode/protocol/version";
 import type { Release, ReleaseManifest, ReleasePlatform } from "../src/data/releases";
 import { apiError, json } from "./lib/http";
 import { canonicalRedirect } from "./lib/router";
@@ -83,9 +84,8 @@ export const LATEST_CACHE = "public, max-age=300, must-revalidate";
 export const MANIFEST_CACHE = "public, max-age=60, must-revalidate";
 const NO_STORE = "no-store";
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
 /** Conservative file-name charset: safe as an R2 key segment and inside a quoted header value. */
-const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const PINNED = /^\/download\/([^/]+)\/([^/]+)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -110,7 +110,38 @@ export function downloadDepsFromEnv(env: DownloadEnv): DownloadDeps {
 }
 
 export function isValidVersion(value: string): boolean {
-  return VERSION.test(value);
+  return parseKalCodeVersion(value) !== null;
+}
+
+function decodeVersionSegment(value: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+  if (!isValidVersion(decoded)) return null;
+  const canonicalEncoded = encodeURIComponent(decoded);
+  if (value !== decoded && value.toUpperCase() !== canonicalEncoded.toUpperCase()) return null;
+  return decoded;
+}
+
+function decodeFileSegment(value: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+  if (!isValidFileName(decoded)) return null;
+  const canonicalEncoded = encodeURIComponent(decoded);
+  if (value !== decoded && value.toUpperCase() !== canonicalEncoded.toUpperCase()) return null;
+  return decoded;
+}
+
+function releaseNotesUrl(version: string): string | null {
+  const parsed = parseKalCodeVersion(version);
+  return parsed ? `/updates#release-${parsed.publicVersion.replaceAll(".", "-")}` : null;
 }
 
 export function isValidFileName(value: string): boolean {
@@ -146,24 +177,38 @@ export function matchDownloadRoute(pathname: string): Route | null {
       return { kind: "updater", key: pathname.slice(1), file: channel, mutable: true };
     }
     if (!/^(stable|beta|dev)$/.test(channel)) return { kind: "invalid-pinned" };
-    const version = parts[1] ?? "";
-    if (parts.length === 2 && version.endsWith(".json") && isValidVersion(version.slice(0, -5))) {
-      return { kind: "updater", key: pathname.slice(1), file: version, mutable: false };
-    }
-    if (isValidVersion(version) && (parts.length === 4 || parts.length === 5)) {
-      const file = parts.at(-1) ?? "";
-      const hashes = parts.slice(2, -1);
-      if (
-        hashes.every((hash) => SHA256.test(hash)) &&
-        isValidFileName(file) &&
-        ((parts.length === 4 && /\.(exe|dmg)$/.test(file)) || (parts.length === 5 && /\.(exe|dmg)\.sig$/.test(file)))
-      ) {
-        return { kind: "updater", key: pathname.slice(1), file, mutable: false };
+    const rawVersion = parts[1] ?? "";
+    if (parts.length === 2 && rawVersion.endsWith(".json")) {
+      const version = decodeVersionSegment(rawVersion.slice(0, -5));
+      if (version) {
+        return {
+          kind: "updater",
+          key: `releases/updater/${channel}/${version}.json`,
+          file: `${version}.json`,
+          mutable: false,
+        };
       }
     }
-    const file = parts[2] ?? "";
-    if (parts.length === 3 && isValidVersion(version) && isValidFileName(file) && /\.exe(\.sig)?$/.test(file)) {
-      return { kind: "updater", key: pathname.slice(1), file, mutable: false };
+    const version = decodeVersionSegment(rawVersion);
+    if (version && (parts.length === 4 || parts.length === 5)) {
+      const file = decodeFileSegment(parts.at(-1) ?? "");
+      const hashes = parts.slice(2, -1);
+      if (
+        file !== null &&
+        hashes.every((hash) => SHA256.test(hash)) &&
+        ((parts.length === 4 && /\.(exe|dmg)$/.test(file)) || (parts.length === 5 && /\.(exe|dmg)\.sig$/.test(file)))
+      ) {
+        return {
+          kind: "updater",
+          key: `releases/updater/${channel}/${version}/${[...hashes, file].join("/")}`,
+          file,
+          mutable: false,
+        };
+      }
+    }
+    const file = decodeFileSegment(parts[2] ?? "");
+    if (parts.length === 3 && version && file && /\.exe(\.sig)?$/.test(file)) {
+      return { kind: "updater", key: `releases/updater/${channel}/${version}/${file}`, file, mutable: false };
     }
     return { kind: "invalid-pinned" };
   }
@@ -176,7 +221,7 @@ export function matchDownloadRoute(pathname: string): Route | null {
     let version: string;
     let file: string;
     try {
-      version = decodeURIComponent(rawVersion);
+      version = decodeVersionSegment(rawVersion) ?? "";
       file = decodeURIComponent(rawFile);
     } catch {
       return { kind: "invalid-pinned" };
@@ -235,11 +280,13 @@ function parsePlatform(value: unknown, version: string): ReleasePlatform | null 
 function parseRelease(value: unknown): Release | null {
   if (!isRecord(value)) return null;
   const { version, channel, publishedAt, commit, notesUrl, platforms } = value;
-  if (!isString(version) || !isValidVersion(version)) return null;
+  if (!isString(version)) return null;
+  const parsedVersion = parseKalCodeVersion(version);
+  if (!parsedVersion || (channel === "stable" && parsedVersion.prerelease !== null)) return null;
   if (channel !== "preview" && channel !== "stable") return null;
   if (!isString(publishedAt) || Number.isNaN(Date.parse(publishedAt))) return null;
   if (!isString(commit) || !/^[0-9a-f]{40}$/.test(commit)) return null;
-  if (!isString(notesUrl) || !isSitePath(notesUrl)) return null;
+  if (!isString(notesUrl) || !isSitePath(notesUrl) || notesUrl !== releaseNotesUrl(version)) return null;
   if (!Array.isArray(platforms) || platforms.length === 0) return null;
   const parsed: ReleasePlatform[] = [];
   for (const platform of platforms) {

@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./plans": "./src/plans.ts",
     "./entitlements": "./src/entitlements.ts",
-    "./usage-receipts": "./src/usage-receipts.ts"
+    "./usage-receipts": "./src/usage-receipts.ts",
+    "./version": "./src/version.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

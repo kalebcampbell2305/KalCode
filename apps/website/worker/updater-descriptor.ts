@@ -1,4 +1,6 @@
 /** Strict public subset emitted by tooling/release/updater-manifest.mjs. */
+import { parseKalCodeVersion } from "@kalcode/protocol/version";
+
 export type UpdaterChannel = "stable" | "beta" | "dev";
 export type UpdaterTarget = "windows-x86_64" | "darwin-aarch64";
 export type UpdaterArtifactFormat = "nsis" | "dmg";
@@ -70,11 +72,9 @@ export interface ValidatedUpdaterDescriptor {
 const CHANNELS: ReadonlySet<string> = new Set(["stable", "beta", "dev"]);
 const MAX_UPDATE_BYTES = 512 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 16 * 1024;
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
-const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const CANONICAL_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const TARGETS = ["windows-x86_64", "darwin-aarch64"] as const satisfies readonly UpdaterTarget[];
 const TARGET_FORMAT: Readonly<Record<UpdaterTarget, UpdaterArtifactFormat>> = {
@@ -182,11 +182,12 @@ export function parseUpdaterDescriptor(
   expectedChannel: UpdaterChannel,
   expectedVersion: string,
 ): ValidatedUpdaterDescriptor | null {
+  const selectedVersion = parseKalCodeVersion(expectedVersion);
   if (
     !CHANNELS.has(expectedChannel) ||
-    !VERSION.test(expectedVersion) ||
+    !selectedVersion ||
     expectedVersion.length > 256 ||
-    (expectedChannel === "stable" && !STABLE_VERSION.test(expectedVersion))
+    (expectedChannel === "stable" && selectedVersion.prerelease !== null)
   ) {
     return null;
   }
@@ -195,7 +196,12 @@ export function parseUpdaterDescriptor(
   }
 
   const { version, notes, pub_date: publishedAt, platforms, kalcode } = value;
-  if (version !== expectedVersion || typeof version !== "string" || !VERSION.test(version) || version.length > 256) {
+  if (
+    version !== expectedVersion ||
+    typeof version !== "string" ||
+    parseKalCodeVersion(version) === null ||
+    version.length > 256
+  ) {
     return null;
   }
   if (typeof notes !== "string" || notes.trim().length === 0 || notes.trim() !== notes || notes.length > 10_000) {

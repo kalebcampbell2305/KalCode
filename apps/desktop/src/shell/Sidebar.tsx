@@ -1,4 +1,4 @@
-import type { SurfaceId } from "@kalcode/protocol";
+import { formatKalCodeVersion, type SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
 import { Bell, BellDot, PanelLeftClose, PanelLeftOpen, Search, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useId } from "react";
@@ -87,8 +87,8 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
           {collapsed ? null : (
             <p className={styles.build}>
               {info.channel === "stable"
-                ? `Version ${info.version}`
-                : `${capitalize(info.channel)} build ${info.version}`}
+                ? `Version ${formatKalCodeVersion(info.version)}`
+                : `${capitalize(info.channel)} · ${formatKalCodeVersion(info.version)}`}
             </p>
           )}
           <Tooltip content={`${collapsed ? "Expand" : "Collapse"} sidebar (${MOD_LABEL} B)`} side="right">

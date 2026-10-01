@@ -19,12 +19,17 @@ test("reasoning download consent has a native signed-catalog metadata route", ()
 
 test("startup reconciles interrupted context delivery before exposing the core", () => {
   const startup = source("lib");
-  const opened = startup.indexOf("match locator_commands::open_core(config)");
+  const fenced = startup.indexOf(
+    "updater_commands::fence_forward_only_macos_upgrade(&state.paths.data_dir, BUILD_VERSION)",
+  );
+  const opened = startup.indexOf(
+    "match open_core_after_update_fence(update_fence, || locator_commands::open_core(config))",
+  );
   const reconciled = startup.indexOf("match reconcile_core_startup(&core)", opened);
   const exposed = startup.indexOf("state.core = Some(core)", opened);
   const recovery = startup.indexOf("context_commands::recover_deliveries(core)");
   const guardian = startup.indexOf("core.require_terminal_guardian()", recovery);
-  assert.ok(opened >= 0 && reconciled > opened && exposed > reconciled);
+  assert.ok(fenced >= 0 && opened > fenced && reconciled > opened && exposed > reconciled);
   assert.ok(recovery >= 0 && guardian > recovery && guardian < opened);
 });
 

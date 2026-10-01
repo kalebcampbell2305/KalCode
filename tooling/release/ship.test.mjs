@@ -238,11 +238,20 @@ describe("identity and templates", () => {
   test("validateIdentity refuses anything Stable cannot carry", () => {
     const c = "a".repeat(40);
     assert.equal(validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.1.2" }).baselineVersion, "0.1.2");
-    refused(() => validateIdentity({ version: "0.1.7-rc.1", commit: c }), /plain x\.y\.z/);
-    refused(() => validateIdentity({ version: "0.1.5.1", commit: c }), /plain x\.y\.z/);
+    assert.equal(
+      validateIdentity({ version: "0.1.7+2", commit: c, baselineVersion: "0.1.7+1" }).baselineVersion,
+      "0.1.7+1",
+    );
+    refused(() => validateIdentity({ version: "0.1.7-rc.1", commit: c }), /x\.y\.z or x\.y\.z\+N/);
+    refused(() => validateIdentity({ version: "0.1.7+build.1", commit: c }), /x\.y\.z or x\.y\.z\+N/);
+    refused(() => validateIdentity({ version: "0.1.7+0", commit: c }), /x\.y\.z or x\.y\.z\+N/);
+    refused(() => validateIdentity({ version: "0.1.7+65536", commit: c }), /x\.y\.z or x\.y\.z\+N/);
+    refused(() => validateIdentity({ version: "0.1.5.1", commit: c }), /x\.y\.z or x\.y\.z\+N/);
     refused(() => validateIdentity({ version: "0.1.7", commit: "abc1234" }), /40-hex/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c.toUpperCase() }), /40-hex/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.1.7" }), /must be lower/);
+    refused(() => validateIdentity({ version: "0.1.7+1", commit: c, baselineVersion: "0.1.7+1" }), /must be lower/);
+    refused(() => validateIdentity({ version: "0.1.7+1", commit: c, baselineVersion: "0.1.7+2" }), /must be lower/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.2.0" }), /must be lower/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, channel: "beta" }), /channel/);
   });

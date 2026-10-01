@@ -45,7 +45,8 @@ describe("native E2E helper inventory", () => {
   it("binds every real-app launch spec to the per-test owned-process fixture", () => {
     const specs = readdirSync(e2eDirectory).filter((name) => name.endsWith(".spec.ts"));
     const launchSpecs = specs.filter((name) => readFileSync(resolve(e2eDirectory, name), "utf8").includes("launch"));
-    expect(launchSpecs).toHaveLength(13);
+    expect(launchSpecs).toHaveLength(14);
+    expect(launchSpecs).toContain("operations.spec.ts");
     for (const name of launchSpecs) {
       const source = readFileSync(resolve(e2eDirectory, name), "utf8");
       expect(source, name).not.toMatch(/import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*"@playwright\/test"/s);
@@ -55,6 +56,17 @@ describe("native E2E helper inventory", () => {
     expect(harnessSource.indexOf("ownedApplications.requireActive(owner)")).toBeLessThan(
       harnessSource.indexOf("const child = spawn(EXE"),
     );
+  });
+
+  it("keeps the Operations lifecycle in the real native run contract", () => {
+    const operations = readFileSync(resolve(e2eDirectory, "operations.spec.ts"), "utf8");
+    expect(operations).toContain("createAccountFixtureDataDir()");
+    expect(operations).toContain('KALCODE_E2E_NATIVE_CONFIRM: "decline"');
+    expect(operations).toContain('KALCODE_E2E_NATIVE_CONFIRM: "accept"');
+    expect(operations).toContain('"operations_run_now"');
+    expect(operations).toContain('"operations_service_action"');
+    expect(operations).toContain('"operations_history"');
+    expect(operations).toContain("await closeGracefully(app)");
   });
 
   it("allows the deterministic resource sample only in the six explicit provider specs", () => {
