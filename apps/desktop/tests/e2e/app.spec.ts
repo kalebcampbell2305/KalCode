@@ -82,7 +82,7 @@ test("launch, change settings, quit, relaunch: settings and history persist", as
     await expect(activity(app.page).getByText("Credential store verified")).toBeVisible();
 
     // Change settings through the UI.
-    await app.page.getByRole("button", { name: "Settings" }).click();
+    await app.page.getByRole("button", { name: "Settings", exact: true }).click();
     await app.page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
     await app.page.getByRole("radiogroup", { name: "Density" }).getByRole("radio", { name: "Compact" }).click();
     await expect(app.page.locator("html")).toHaveAttribute("data-theme", "light");

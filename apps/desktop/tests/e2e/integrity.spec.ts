@@ -106,7 +106,7 @@ test("a v1 database from the released app is upgraded to the latest schema with 
     const upgrade = events.find((e) => e.type === "database.migrated" && e.payload.fromVersion === 1);
     expect(upgrade?.payload).toEqual({ fromVersion: 1, toVersion: LATEST, backupCreated: true });
 
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
 
@@ -316,7 +316,7 @@ test("a v4 database from the installed app is upgraded to the latest schema with
       defaultMode: "plan",
     });
 
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
 
@@ -407,7 +407,7 @@ test("a v5 database (the app after the L-1 update) is upgraded to the latest sch
       request: { requestId: crypto.randomUUID(), text: "Go to settings", input: "text", workspaceId: null },
     });
     expect(typed).toMatchObject({ counted: true, outcome: { kind: "completed" } });
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
 
@@ -498,7 +498,7 @@ test("a v6 database (the owner's installed app) reaches the latest schema in one
     expect(await invoke<{ defaultMode: string }>(page, "permission_settings_get")).toMatchObject({
       defaultMode: "plan",
     });
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
 
