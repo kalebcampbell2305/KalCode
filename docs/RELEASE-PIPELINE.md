@@ -241,8 +241,9 @@ Everything below runs locally, with no GitHub Actions dependency.
   - stops within about 6 s (inside the 10 s hook timeout);
   - allows the stop on any error of its own.
 
-**Deferred (GitHub-dependent).** Actions is currently unavailable because of an account billing hold. So a
-`lifecycle.yml` workflow (classify on PRs into the job summary; on pushes to main, keep one "Unshipped
+**Deferred (GitHub-dependent).** Actions is currently unavailable because of an account billing hold. Until
+it returns, the [trusted local runner](#trusted-local-runner-no-github-hosted-minutes) runs the gate on PRs
+and on main. So a `lifecycle.yml` workflow (classify on PRs into the job summary; on pushes to main, keep one "Unshipped
 production changes" issue with `GITHUB_TOKEN` `issues: write`) is kept off this branch. It is on the local
 branch `tooling/lifecycle-ci-deferred` until billing is restored.
 
@@ -250,3 +251,153 @@ The repository has no Actions secrets, so CI cannot deploy. A CI deploy of the W
 `CLOUDFLARE_API_TOKEN` (Workers Scripts and D1 edit, scoped to the account) and `CLOUDFLARE_ACCOUNT_ID`,
 behind a protected environment. Desktop publishing stays local: its signing keys never leave the owner's
 machines.
+
+## Trusted local runner (no GitHub-hosted minutes)
+
+`tooling/release/trusted-runner.mjs` is KalCode's CI and release trigger when GitHub-hosted Actions cannot
+run (AGENTS.md, "Permanent trusted release infrastructure"). Windows Task Scheduler runs it on the owner's
+PC every 5 minutes. It reuses `ship.mjs gate`, `ship.mjs lifecycle status` and `ship.mjs run`, and it
+reports results as GitHub commit statuses through `gh`. It adds no new build, signing or publish logic.
+
+### Why a local scheduler and not a self-hosted GitHub runner
+
+The two options were:
+
+- **(A)** a self-hosted GitHub Actions runner on the release PC, with "main-only" release workflows;
+- **(B)** a local scheduled poller that runs the existing ship tools.
+
+We chose **B**. Option A cannot isolate the runner on this repository:
+
+- **No runner groups.** `kalebcampbell2305/KalCode` is a private repository on a personal account. Runner
+  groups, the only GitHub control that limits a runner to selected workflows or refs, exist only for
+  organizations. A repository-level runner accepts every job from any workflow on any branch whose
+  `runs-on` labels match.
+- **Labels are not access control.** A branch that adds or edits a workflow (on `push` or `pull_request`)
+  can target `[self-hosted, kalcode-release]`. This was observed on 2026-10-01: the runner
+  `kalcode-win-release` (id 21) ran the job `probe` from
+  `.github/workflows/probe-self-hosted.yml@refs/heads/probe/self-hosted-runner`, a push to a non-main
+  branch (`C:/actions-runner-kalcode/_diag/Worker_20261001-000636-utc.log`).
+- **Environments do not help.** Environment protection only gates jobs that declare the environment. A job
+  that omits it still gets the runner.
+- **Fork PRs are a lesser concern.** Forks of a private repository come only from collaborators, and this
+  repository has one collaborator. But every agent branch is untrusted under AGENTS.md, and agents push
+  branches with the owner's token.
+- **Dispatch stays with GitHub.** Under A, GitHub still decides when jobs reach the release machine, so the
+  release still depends on the Actions service and its account state.
+
+Under B, the decision about what runs is made on the trusted machine by code from `origin/main`:
+
+- release work runs only for commits on `origin/main`;
+- PR checks run only for same-repository PRs by allowlisted authors, in a separate clone;
+- nothing listens for inbound work;
+- the Mac is reached only through the existing `ship.mjs` ssh steps for `origin/main` release phases. PR
+  code never runs on the Mac, which holds the Developer ID and notary credentials.
+
+### What one tick does
+
+`node tooling/release/trusted-runner.mjs tick` runs from the **control checkout**. This is a dedicated
+worktree of the main repository with a detached HEAD, which only ever holds `origin/main`. The runner
+refuses to run from a branch or from a checkout with local changes.
+
+1. **Main.** When `origin/main` moved, the runner:
+   1. checks the new head out in the control checkout;
+   2. runs `pnpm install --frozen-lockfile`, then the full `ship.mjs gate --base <previous head>`;
+   3. posts `kalcode/local-gate` on the merge commit.
+
+   If the gate passes and `ship.mjs lifecycle status` reports unshipped `desktop` or `docs` lanes, the
+   runner runs the release pipeline's automated phases:
+
+   ```
+   node tooling/release/ship.mjs run --version <V> --commit <head> [--baseline-version <published>] --phase all --execute
+   ```
+
+   - `<V>` comes from the release tooling at that commit: `releaseVersion()` (X.Y.Z+N) where it exists,
+     otherwise the checked-in X.Y.Z.
+   - The baseline is the published Stable version, when that is lower than `<V>`.
+   - The pipeline stops by itself at every approval, attestation, operator step and named production
+     write.
+   - The runner posts `kalcode/release` on the merge commit: `pending` with the phase it is waiting on,
+     `failure` with the `ship.mjs` refusal, or `success`.
+   - The runner never runs `ship.mjs approve` or `attest`, and never names a production-write phase.
+     Those remain the owner's decisions.
+   - When the owner records an approval or attestation, the next tick resumes the pipeline to the next
+     gate.
+   - A failure is not retried until the head, the identity or a person's record changes.
+2. **PRs.** For each open PR whose head is in this repository and whose author is allowlisted (by
+   default, the repository owner), the runner runs the local gate on the PR head commit once and posts
+   `kalcode/local-gate` on that commit. The PR runs in `<state-root>/pr-clone`. That clone:
+   - fetches from the local repository's object store, never from GitHub, so it holds no credential;
+   - shares no `.git` (hooks, config) with the control checkout;
+   - is driven with `core.hooksPath` set to an empty directory and `core.fsmonitor=false`;
+   - runs with an environment from which tokens, keys and passwords are removed (`SECRET_ENV`);
+   - points `AZURE_CONFIG_DIR` and `GH_CONFIG_DIR` at empty directories;
+   - uses its own `CARGO_TARGET_DIR`, never shared with a release build.
+
+State, per-run logs and `runner.log` are kept in `%LOCALAPPDATA%\KalCode\trusted-runner\`. Release state
+and evidence stay where `ship.mjs` keeps them: `<main repo>/target/release-pipeline/`.
+
+**Trust boundary.** PR code still runs as the owner's Windows user, so it is not sandboxed. It could read
+anything that user can read. The real boundary is who can open a PR that the runner will check: only
+same-repository branches by allowlisted authors on a private, single-collaborator repository. That is the
+same exposure as the owner or an agent running `ship.mjs gate` by hand today. The scrubbing above removes
+credentials from the PR's default path. It is not a hard sandbox. Hard isolation would need a separate
+low-privilege Windows account for PR checks. That is optional hardening and is not required by policy.
+
+### One-time setup (owner consent)
+
+These steps register software on the owner's machine and change repository settings. An agent prepares
+them. It does not run them without the owner's go-ahead.
+
+1. Create the control checkout:
+
+   ```
+   git -C C:/Users/Kaleb/Downloads/KalCode worktree add --detach C:/kc-trusted origin/main
+   ```
+
+2. Dry-run it. This fetches, lists PRs and prints the plan without changing anything:
+
+   ```
+   node C:/kc-trusted/tooling/release/trusted-runner.mjs tick --dry-run
+   ```
+
+3. Schedule the tick every 5 minutes while the owner is logged on. `/IT` runs it in the owner's session,
+   where `gh`, the Git Credential Manager, `az` and the Mac ssh key are available. No password is stored.
+   `conhost --headless` keeps the console hidden.
+
+   ```
+   schtasks /Create /TN "KalCode\TrustedRunner" /SC MINUTE /MO 5 /IT /RL LIMITED /TR "C:\Windows\System32\conhost.exe --headless node C:\kc-trusted\tooling\release\trusted-runner.mjs tick"
+   ```
+
+4. Remove the self-hosted GitHub runner registered on 2026-10-01. It is offline today. Once online, any
+   branch's workflow could run on it.
+
+   ```
+   C:\actions-runner-kalcode\config.cmd remove --token (gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/remove-token --jq .token)
+   ```
+
+   Run this in PowerShell. If the local folder is already gone, use
+   `gh api -X DELETE repos/kalebcampbell2305/KalCode/actions/runners/21` instead.
+
+### Operating it
+
+- **Pause:** create `%LOCALAPPDATA%\KalCode\trusted-runner\PAUSED`. Delete the file to resume. Pause it
+  before driving a release by hand. `ship.mjs` also holds a per-release lock. A tick that finds the lock
+  reports `pending` and retries.
+- **Look:**
+  - `node C:/kc-trusted/tooling/release/trusted-runner.mjs status`;
+  - `runner.log`;
+  - the commit statuses on GitHub;
+  - `ship.mjs status --version <V> --commit <sha>` for the release itself.
+- **Retry a failed gate or release on the same head:** remove the `main` or `release` entry from
+  `state.json`.
+- **Stop for good:** `schtasks /Delete /TN "KalCode\TrustedRunner" /F`.
+
+### Limits
+
+- **Release kits bind one exact version and commit.** `ship.mjs` refuses a commit that no kit in
+  `tooling/release/ship/kits/` binds. Until the current release line has a kit that binds the new head,
+  the runner reports that refusal as `kalcode/release: failure` on the merge commit. That makes the gap
+  visible; it does not work around it.
+- **Website deploys are not triggered.** The website lane keeps its existing `wrangler deploy` path.
+- **Production writes stay explicit.** `stage`, `publish`, `deploy` and `confirm` run only when a person
+  names them, after their approval.
