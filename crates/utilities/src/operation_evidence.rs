@@ -107,12 +107,10 @@ fn local_defining_runs<'a>(
 }
 
 fn remote_defining_run<'a>(runs: &[&'a OperationRecord]) -> Option<&'a OperationRecord> {
-    let deploys = runs.iter().copied().filter(|run| {
-        matches!(
-            run.spec.kind,
-            OperationKind::Deploy | OperationKind::Release
-        )
-    });
+    let deploys = runs
+        .iter()
+        .copied()
+        .filter(|run| has_deployment_execution_evidence(run));
     let latest_attempt = latest_run(deploys.clone());
     let latest_success = latest_run(deploys.filter(|run| run.status == OperationStatus::Succeeded));
     latest_success.or(latest_attempt)
@@ -262,12 +260,7 @@ fn remote_environment(
     let deploys: Vec<&OperationRecord> = runs
         .iter()
         .copied()
-        .filter(|run| {
-            matches!(
-                run.spec.kind,
-                OperationKind::Deploy | OperationKind::Release
-            )
-        })
+        .filter(|run| has_deployment_execution_evidence(run))
         .collect();
     let latest_attempt = latest_run(deploys.iter().copied());
     let latest_success = latest_run(
@@ -454,10 +447,7 @@ pub fn detail_relationships(
         });
     }
 
-    let deployment_run = matches!(
-        run.spec.kind,
-        OperationKind::Deploy | OperationKind::Release
-    );
+    let deployment_run = has_deployment_execution_evidence(run);
     let mut related_deployments = if deployment_run {
         current_environments
             .iter()
@@ -476,10 +466,7 @@ pub fn detail_relationships(
         Vec::new()
     };
 
-    if related_deployments.is_empty()
-        && deployment_run
-        && (run.started_at.is_some() || run.terminal_id.is_some() || run.thread_id.is_some())
-    {
+    if related_deployments.is_empty() && deployment_run {
         let succeeded = run.status == OperationStatus::Succeeded;
         let mut notes = vec![if succeeded {
             "This run's deployment command completed, but it no longer defines the current environment and endpoint health was not probed."
@@ -545,6 +532,13 @@ fn latest_run<'a>(runs: impl Iterator<Item = &'a OperationRecord>) -> Option<&'a
             .cmp(record_time(right))
             .then_with(|| left.id.cmp(&right.id))
     })
+}
+
+fn has_deployment_execution_evidence(run: &OperationRecord) -> bool {
+    matches!(
+        run.spec.kind,
+        OperationKind::Deploy | OperationKind::Release
+    ) && (run.terminal_id.is_some() || run.thread_id.is_some())
 }
 
 fn record_time(run: &OperationRecord) -> &str {
@@ -1723,6 +1717,7 @@ mod tests {
         succeeded.version = Some("0.1.7".to_owned());
         succeeded.branch = Some("main".to_owned());
         succeeded.spec.provider_id = Some("cloudflare".to_owned());
+        succeeded.terminal_id = Some(succeeded.id.clone());
         succeeded.started_at = Some("2026-09-30T10:00:00Z".to_owned());
         succeeded.ended_at = Some("2026-09-30T10:05:00Z".to_owned());
         succeeded.spec.urls = vec!["https://kalcoded.com/".to_owned()];
@@ -1732,6 +1727,7 @@ mod tests {
             OperationEnvironmentKind::Production,
         );
         failed.status = OperationStatus::Failed;
+        failed.terminal_id = Some(failed.id.clone());
         failed.version = Some("0.1.8".to_owned());
         failed.started_at = Some("2026-09-30T11:00:00Z".to_owned());
         failed.ended_at = Some("2026-09-30T11:01:00Z".to_owned());
@@ -1768,6 +1764,71 @@ mod tests {
     }
 
     #[test]
+    fn claimed_deployment_without_runtime_binding_creates_no_deployment_evidence() {
+        let mut succeeded = run(
+            "deploy-good",
+            OperationKind::Deploy,
+            OperationEnvironmentKind::Production,
+        );
+        succeeded.status = OperationStatus::Succeeded;
+        succeeded.terminal_id = Some(succeeded.id.clone());
+        succeeded.started_at = Some("2026-09-30T10:00:00Z".to_owned());
+        succeeded.ended_at = Some("2026-09-30T10:05:00Z".to_owned());
+        succeeded.spec.urls = vec!["https://stable.example.com/".to_owned()];
+
+        let mut failed_before_launch = run(
+            "deploy-unbound",
+            OperationKind::Deploy,
+            OperationEnvironmentKind::Production,
+        );
+        failed_before_launch.status = OperationStatus::Failed;
+        failed_before_launch.created_at = "2026-09-30T11:00:00Z".to_owned();
+        failed_before_launch.started_at = Some(failed_before_launch.created_at.clone());
+        failed_before_launch.ended_at = Some("2026-09-30T11:01:00Z".to_owned());
+
+        let rows = environments(
+            &[succeeded.clone(), failed_before_launch.clone()],
+            &[],
+            &[workspace()],
+            &[],
+            "2026-09-30T12:00:00Z",
+        );
+        let production = &rows[3];
+        assert_eq!(production.run_id.as_deref(), Some("deploy-good"));
+        assert!(
+            production
+                .notes
+                .iter()
+                .all(|note| !note.contains("latest deployment attempt failed"))
+        );
+        assert!(
+            detail_relationships(&failed_before_launch, &[], &[])
+                .1
+                .is_empty(),
+            "claiming scheduler capacity is not deployment execution evidence"
+        );
+
+        failed_before_launch.terminal_id = Some(failed_before_launch.id.clone());
+        let rows = environments(
+            &[succeeded, failed_before_launch.clone()],
+            &[],
+            &[workspace()],
+            &[],
+            "2026-09-30T12:00:00Z",
+        );
+        assert!(
+            rows[3]
+                .notes
+                .iter()
+                .any(|note| note.contains("latest deployment attempt failed"))
+        );
+        let related = detail_relationships(&failed_before_launch, &[], &[]).1;
+        assert_eq!(related.len(), 1);
+        assert!(!related[0].is_current);
+        assert_eq!(related[0].environment.deployment_status, "failed");
+    }
+
+    #[test]
     fn remote_configuration_comes_only_from_the_current_successful_deployment() {
         let mut old = run(
             "deploy-old",
@@ -1775,6 +1836,7 @@ mod tests {
             OperationEnvironmentKind::Production,
         );
         old.status = OperationStatus::Succeeded;
+        old.terminal_id = Some(old.id.clone());
         old.branch = Some("release/old".to_owned());
         old.version = Some("0.1.6".to_owned());
         old.ended_at = Some("2026-09-30T09:00:00Z".to_owned());
@@ -1787,6 +1849,7 @@ mod tests {
             OperationEnvironmentKind::Production,
         );
         current.status = OperationStatus::Succeeded;
+        current.terminal_id = Some(current.id.clone());
         current.branch = Some("main".to_owned());
         current.version = Some("0.1.7".to_owned());
         current.ended_at = Some("2026-09-30T10:00:00Z".to_owned());
@@ -1833,6 +1896,7 @@ mod tests {
         );
         unknown.status = OperationStatus::Unknown;
         unknown.source = "terminal".to_owned();
+        unknown.terminal_id = Some(unknown.id.clone());
         unknown.started_at = Some("2026-09-30T10:00:00Z".to_owned());
         unknown.ended_at = None;
         unknown.spec.urls = vec!["https://target.example.com/".to_owned()];
@@ -1976,6 +2040,7 @@ mod tests {
             OperationEnvironmentKind::Production,
         );
         first_deploy.status = OperationStatus::Succeeded;
+        first_deploy.terminal_id = Some(first_deploy.id.clone());
         first_deploy.branch = Some("release/first".to_owned());
         first_deploy.version = Some("0.1.7+2".to_owned());
         first_deploy.spec.provider_id = Some("cloudflare".to_owned());
@@ -1985,6 +2050,7 @@ mod tests {
 
         let mut later_deploy = first_deploy.clone();
         later_deploy.id = "deploy-later".to_owned();
+        later_deploy.terminal_id = Some(later_deploy.id.clone());
         later_deploy.branch = Some("release/later".to_owned());
         later_deploy.version = Some("0.1.7+3".to_owned());
         later_deploy.spec.urls = vec!["https://later.example.com/".to_owned()];

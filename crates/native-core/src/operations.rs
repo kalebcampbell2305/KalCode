@@ -1669,14 +1669,19 @@ fn load_snapshot_records(conn: &Connection) -> Result<Vec<OperationRecord>> {
              JOIN workspaces w ON w.id = o.workspace_id
              WHERE o.kind IN ('deploy', 'release')
                AND o.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+               AND (o.terminal_id IS NOT NULL OR o.thread_id IS NOT NULL)
                AND NOT EXISTS (
                  SELECT 1 FROM operations newer
                  WHERE newer.workspace_id = o.workspace_id
                    AND newer.environment = o.environment
-                   AND newer.kind = o.kind
+                   AND newer.kind IN ('deploy', 'release')
                    AND newer.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
-                   AND (newer.created_at > o.created_at
-                        OR (newer.created_at = o.created_at AND newer.id > o.id))
+                   AND (newer.terminal_id IS NOT NULL OR newer.thread_id IS NOT NULL)
+                   AND (COALESCE(newer.ended_at, newer.started_at, newer.created_at)
+                          > COALESCE(o.ended_at, o.started_at, o.created_at)
+                        OR (COALESCE(newer.ended_at, newer.started_at, newer.created_at)
+                              = COALESCE(o.ended_at, o.started_at, o.created_at)
+                            AND newer.id > o.id))
                )"
         ),
         [],
@@ -1688,14 +1693,19 @@ fn load_snapshot_records(conn: &Connection) -> Result<Vec<OperationRecord>> {
              JOIN workspaces w ON w.id = o.workspace_id
              WHERE o.kind IN ('deploy', 'release')
                AND o.status = 'succeeded'
+               AND (o.terminal_id IS NOT NULL OR o.thread_id IS NOT NULL)
                AND NOT EXISTS (
                  SELECT 1 FROM operations newer
                  WHERE newer.workspace_id = o.workspace_id
                    AND newer.environment = o.environment
-                   AND newer.kind = o.kind
+                   AND newer.kind IN ('deploy', 'release')
                    AND newer.status = 'succeeded'
-                   AND (newer.created_at > o.created_at
-                        OR (newer.created_at = o.created_at AND newer.id > o.id))
+                   AND (newer.terminal_id IS NOT NULL OR newer.thread_id IS NOT NULL)
+                   AND (COALESCE(newer.ended_at, newer.started_at, newer.created_at)
+                          > COALESCE(o.ended_at, o.started_at, o.created_at)
+                        OR (COALESCE(newer.ended_at, newer.started_at, newer.created_at)
+                              = COALESCE(o.ended_at, o.started_at, o.created_at)
+                            AND newer.id > o.id))
                )"
         ),
         [],
@@ -1710,6 +1720,7 @@ fn load_snapshot_records(conn: &Connection) -> Result<Vec<OperationRecord>> {
              JOIN workspaces w ON w.id = o.workspace_id
              WHERE o.kind = 'service'
                AND o.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+               AND o.terminal_id IS NOT NULL
                AND NOT EXISTS (
                  SELECT 1 FROM operations newer
                  WHERE newer.workspace_id = o.workspace_id
@@ -1717,8 +1728,12 @@ fn load_snapshot_records(conn: &Connection) -> Result<Vec<OperationRecord>> {
                    AND newer.name = o.name
                    AND newer.command IS o.command
                    AND newer.status IN ('succeeded', 'failed', 'cancelled', 'interrupted')
-                   AND (newer.created_at > o.created_at
-                        OR (newer.created_at = o.created_at AND newer.id > o.id))
+                   AND newer.terminal_id IS NOT NULL
+                   AND (COALESCE(newer.ended_at, newer.started_at, newer.created_at)
+                          > COALESCE(o.ended_at, o.started_at, o.created_at)
+                        OR (COALESCE(newer.ended_at, newer.started_at, newer.created_at)
+                              = COALESCE(o.ended_at, o.started_at, o.created_at)
+                            AND newer.id > o.id))
                )"
         ),
         [],

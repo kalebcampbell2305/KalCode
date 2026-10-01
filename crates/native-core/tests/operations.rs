@@ -1484,6 +1484,9 @@ fn snapshot_is_bounded_without_losing_queue_or_environment_truth_and_history_pag
         .expect("claim api service")
         .expect("api available");
     store
+        .bind(&api.id, Some(&api.id), None, None, None)
+        .expect("bind api service");
+    store
         .finish(&api.id, OperationStatus::Succeeded, "API stopped cleanly.")
         .expect("finish api service");
 
@@ -1495,6 +1498,9 @@ fn snapshot_is_bounded_without_losing_queue_or_environment_truth_and_history_pag
         .claim(Some(&docs.id))
         .expect("claim docs service")
         .expect("docs available");
+    store
+        .bind(&docs.id, Some(&docs.id), None, None, None)
+        .expect("bind docs service");
     store
         .finish(
             &docs.id,
@@ -1524,6 +1530,9 @@ fn snapshot_is_bounded_without_losing_queue_or_environment_truth_and_history_pag
         .claim(Some(&failed_deploy.id))
         .expect("claim failed deploy")
         .expect("failed deploy available");
+    store
+        .bind(&failed_deploy.id, Some(&failed_deploy.id), None, None, None)
+        .expect("bind failed deploy");
     store
         .finish(
             &failed_deploy.id,
@@ -1594,6 +1603,175 @@ fn snapshot_is_bounded_without_losing_queue_or_environment_truth_and_history_pag
         store.history(None, 201).expect_err("oversized page").code,
         "invalid_operations_history_limit"
     );
+}
+
+#[test]
+fn snapshot_truth_retention_uses_execution_recency_after_final_window_eviction() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core.clone());
+
+    let mut first_deploy_spec = spec(&workspace_id, "Environment delivery");
+    first_deploy_spec.kind = OperationKind::Deploy;
+    first_deploy_spec.environment = OperationEnvironmentKind::Preview;
+    let first_deploy = store.enqueue(first_deploy_spec).expect("first deploy");
+    store
+        .claim(Some(&first_deploy.id))
+        .expect("claim first deploy")
+        .expect("first deploy available");
+    store
+        .bind(&first_deploy.id, Some(&first_deploy.id), None, None, None)
+        .expect("bind first deploy");
+    store
+        .finish(
+            &first_deploy.id,
+            OperationStatus::Succeeded,
+            "first deploy complete",
+        )
+        .expect("finish first deploy");
+
+    let mut second_deploy_spec = spec(&workspace_id, "Environment release");
+    second_deploy_spec.kind = OperationKind::Release;
+    second_deploy_spec.environment = OperationEnvironmentKind::Preview;
+    let second_deploy = store.enqueue(second_deploy_spec).expect("second deploy");
+    store
+        .claim(Some(&second_deploy.id))
+        .expect("claim second deploy")
+        .expect("second deploy available");
+    store
+        .bind(&second_deploy.id, Some(&second_deploy.id), None, None, None)
+        .expect("bind second deploy");
+    store
+        .finish(
+            &second_deploy.id,
+            OperationStatus::Succeeded,
+            "second deploy complete",
+        )
+        .expect("finish second deploy");
+
+    let mut first_service_spec = spec(&workspace_id, "Concurrent worker");
+    first_service_spec.kind = OperationKind::Service;
+    first_service_spec.command = Some("pnpm worker".into());
+    let first_service = store
+        .enqueue(first_service_spec.clone())
+        .expect("first service");
+    store
+        .claim(Some(&first_service.id))
+        .expect("claim first service")
+        .expect("first service available");
+    store
+        .bind(&first_service.id, Some(&first_service.id), None, None, None)
+        .expect("bind first service");
+    store
+        .finish(
+            &first_service.id,
+            OperationStatus::Succeeded,
+            "first service complete",
+        )
+        .expect("finish first service");
+
+    let second_service = store
+        .enqueue(first_service_spec.clone())
+        .expect("second service");
+    store
+        .claim(Some(&second_service.id))
+        .expect("claim second service")
+        .expect("second service available");
+    store
+        .bind(
+            &second_service.id,
+            Some(&second_service.id),
+            None,
+            None,
+            None,
+        )
+        .expect("bind second service");
+    store
+        .finish(
+            &second_service.id,
+            OperationStatus::Succeeded,
+            "second service complete",
+        )
+        .expect("finish second service");
+
+    let phantom_service = store
+        .enqueue(first_service_spec)
+        .expect("phantom service claim");
+    store
+        .claim(Some(&phantom_service.id))
+        .expect("claim phantom service")
+        .expect("phantom service available");
+    store
+        .finish(
+            &phantom_service.id,
+            OperationStatus::Failed,
+            "service process was never created",
+        )
+        .expect("fail phantom service before binding");
+
+    core.transact(|tx| {
+        for (id, created, started, ended) in [
+            (
+                first_deploy.id.as_str(),
+                "2000-01-01T08:00:00.000Z",
+                "2000-01-01T12:00:00.000Z",
+                "2000-01-01T14:00:00.000Z",
+            ),
+            (
+                second_deploy.id.as_str(),
+                "2000-01-01T09:00:00.000Z",
+                "2000-01-01T10:00:00.000Z",
+                "2000-01-01T11:00:00.000Z",
+            ),
+            (
+                first_service.id.as_str(),
+                "2000-01-01T08:00:00.000Z",
+                "2000-01-01T12:00:00.000Z",
+                "2000-01-01T14:00:00.000Z",
+            ),
+            (
+                second_service.id.as_str(),
+                "2000-01-01T09:00:00.000Z",
+                "2000-01-01T10:00:00.000Z",
+                "2000-01-01T11:00:00.000Z",
+            ),
+            (
+                phantom_service.id.as_str(),
+                "2000-01-01T09:30:00.000Z",
+                "2000-01-01T15:00:00.000Z",
+                "2000-01-01T15:01:00.000Z",
+            ),
+        ] {
+            tx.execute(
+                "UPDATE operations SET created_at = ?2, started_at = ?3, ended_at = ?4 WHERE id = ?1",
+                params![id, created, started, ended],
+            )?;
+        }
+        Ok(((), Vec::new()))
+    })
+    .expect("set deterministic execution order");
+
+    for index in 0..205 {
+        let filler = store
+            .enqueue(spec(&workspace_id, &format!("Window filler {index:03}")))
+            .expect("enqueue filler");
+        store
+            .claim(Some(&filler.id))
+            .expect("claim filler")
+            .expect("filler available");
+        store
+            .finish(&filler.id, OperationStatus::Succeeded, "filler complete")
+            .expect("finish filler");
+    }
+
+    let (_, _, snapshot) = store.snapshot().expect("snapshot");
+    assert!(snapshot.iter().any(|run| run.id == first_deploy.id));
+    assert!(snapshot.iter().all(|run| run.id != second_deploy.id));
+    assert!(snapshot.iter().any(|run| run.id == first_service.id));
+    assert!(snapshot.iter().all(|run| run.id != second_service.id));
+    assert!(snapshot.iter().all(|run| run.id != phantom_service.id));
 }
 
 #[test]

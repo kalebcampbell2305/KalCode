@@ -327,39 +327,57 @@ fn project(
 }
 
 fn current_service_runs(runs: &[OperationRecord]) -> Vec<&OperationRecord> {
-    let mut current = HashMap::<(&str, &str, Option<&str>), &OperationRecord>::new();
+    let mut active = Vec::new();
+    let mut active_keys = HashSet::<(&str, &str, Option<&str>)>::new();
+    let mut completed = HashMap::<(&str, &str, Option<&str>), &OperationRecord>::new();
     for run in runs.iter().filter(|run| {
         run.spec.kind == OperationKind::Service
             && run.status != OperationStatus::Queued
-            && (run.started_at.is_some() || run.terminal_id.is_some())
+            && run.terminal_id.is_some()
     }) {
         let key = (
             run.spec.workspace_id.as_str(),
             run.spec.name.as_str(),
             run.spec.command.as_deref(),
         );
-        current
-            .entry(key)
-            .and_modify(|selected| {
-                if service_attempt_order(run) > service_attempt_order(selected) {
-                    *selected = run;
-                }
-            })
-            .or_insert(run);
+        if service_is_active(run) {
+            active_keys.insert(key);
+            active.push(run);
+        } else {
+            completed
+                .entry(key)
+                .and_modify(|selected| {
+                    if service_attempt_order(run) > service_attempt_order(selected) {
+                        *selected = run;
+                    }
+                })
+                .or_insert(run);
+        }
     }
-    current.into_values().collect()
+    active.extend(
+        completed
+            .into_iter()
+            .filter_map(|(key, run)| (!active_keys.contains(&key)).then_some(run)),
+    );
+    active
 }
 
-fn service_attempt_order(run: &OperationRecord) -> (bool, &str, &str) {
+fn service_is_active(run: &OperationRecord) -> bool {
+    matches!(
+        run.status,
+        OperationStatus::Starting
+            | OperationStatus::Running
+            | OperationStatus::Paused
+            | OperationStatus::Blocked
+    )
+}
+
+fn service_attempt_order(run: &OperationRecord) -> (&str, &str) {
     (
-        matches!(
-            run.status,
-            OperationStatus::Starting
-                | OperationStatus::Running
-                | OperationStatus::Paused
-                | OperationStatus::Blocked
-        ),
-        run.created_at.as_str(),
+        run.ended_at
+            .as_deref()
+            .or(run.started_at.as_deref())
+            .unwrap_or(&run.created_at),
         run.id.as_str(),
     )
 }
@@ -588,6 +606,86 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_same_spec_services_keep_each_exact_active_terminal_identity() {
+        let first_process = process(20, "node.exe", "ws", Some("service-a"), vec![3_000]);
+        let second_process = process(21, "node.exe", "ws", Some("service-b"), vec![3_001]);
+        let first = run(
+            "service-a",
+            "ws",
+            Some("service-a"),
+            OperationStatus::Running,
+        );
+        let second = run(
+            "service-b",
+            "ws",
+            Some("service-b"),
+            OperationStatus::Running,
+        );
+        let services = project(
+            &[workspace("ws")],
+            &[first_process, second_process],
+            &HashMap::from([(20, 30), (21, 20)]),
+            &[raw(20, 3_000), raw(21, 3_001)],
+            &[first.clone(), second.clone()],
+            &retained(&["service-a", "service-b"]),
+        );
+        assert_eq!(services.len(), 2);
+        assert_eq!(
+            services
+                .iter()
+                .filter_map(|service| service.run_id.as_deref())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["service-a", "service-b"])
+        );
+        for run in [&first, &second] {
+            let (related, deployments) =
+                crate::operation_evidence::detail_relationships(run, &services, &[]);
+            assert!(deployments.is_empty());
+            assert_eq!(related.len(), 1);
+            assert!(related[0].is_current);
+            assert_eq!(related[0].service.run_id.as_deref(), Some(run.id.as_str()));
+            assert!(related[0].service.can_stop);
+            assert!(related[0].service.can_restart);
+        }
+    }
+
+    #[test]
+    fn failed_service_claim_without_runtime_binding_creates_no_service() {
+        let mut failed = run("failed", "ws", None, OperationStatus::Failed);
+        failed.started_at = Some("2026-09-30T10:00:00Z".to_owned());
+        failed.ended_at = Some("2026-09-30T10:01:00Z".to_owned());
+        let services = project(
+            &[workspace("ws")],
+            &[],
+            &HashMap::new(),
+            &[],
+            std::slice::from_ref(&failed),
+            &HashSet::new(),
+        );
+        assert!(services.is_empty());
+        assert!(
+            crate::operation_evidence::detail_relationships(&failed, &services, &[])
+                .0
+                .is_empty()
+        );
+
+        failed.terminal_id = Some(failed.id.clone());
+        let services = project(
+            &[workspace("ws")],
+            &[],
+            &HashMap::new(),
+            &[],
+            std::slice::from_ref(&failed),
+            &HashSet::new(),
+        );
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].status, "failed");
+        let related = crate::operation_evidence::detail_relationships(&failed, &services, &[]).0;
+        assert_eq!(related.len(), 1);
+        assert!(related[0].is_current);
+    }
+
+    #[test]
     fn linked_port_process_without_live_terminal_root_cannot_stop() {
         let mut descendant = process(21, "node.exe", "ws", Some("service"), vec![3_000]);
         descendant.terminal_generation = None;
@@ -641,8 +739,10 @@ mod tests {
     fn service_attempts_collapse_by_workspace_command_and_name_with_active_precedence() {
         let mut old = run("old", "ws", Some("old"), OperationStatus::Succeeded);
         old.created_at = "2026-01-01T00:00:00.000Z".to_owned();
+        old.ended_at = Some(old.created_at.clone());
         let mut newest = run("newest", "ws", Some("newest"), OperationStatus::Failed);
         newest.created_at = "2026-01-03T00:00:00.000Z".to_owned();
+        newest.ended_at = Some(newest.created_at.clone());
         let newest_only = [old.clone(), newest.clone()];
         let current = current_service_runs(&newest_only);
         assert_eq!(current.len(), 1);
