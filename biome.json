@@ -14,7 +14,8 @@
       "!**/.astro",
       "!**/src-tauri/gen",
       "!**/target",
-      "!**/*.astro"
+      "!**/*.astro",
+      "!**/third_party/tao"
     ]
   },
   "formatter": {
