@@ -10,3 +10,6 @@ onlyBuiltDependencies:
   - "@tauri-apps/cli"
 patchedDependencies:
   cmdk@1.1.1: patches/cmdk@1.1.1.patch
+overrides:
+  # miniflare pins undici 7.29.0 (GHSA-rfgv-xxqx-mfg5, GHSA-w293-vg96-wgc3); 7.29.1 is the patch release.
+  "miniflare>undici": 7.29.1

@@ -2,8 +2,8 @@ import type { Density, MotionPreference, ThemePreference } from "@kalcode/protoc
 import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton } from "@kalcode/ui/components";
 import { Activity, ClipboardCopy, FolderOpen, Info, KeyRound, Monitor, Moon, Palette, Sun } from "lucide-react";
 import type { ReactNode } from "react";
-import kalcodeGlobe362 from "../../assets/brand/kalcode-globe-362.webp";
-import kalcodeGlobe724 from "../../assets/brand/kalcode-globe-724.webp";
+import kalcodeMascot362 from "../../assets/brand/kalcode-mascot-362.webp";
+import kalcodeMascot724 from "../../assets/brand/kalcode-mascot-724.webp";
 import { KalVoiceSettings } from "../../kalvoice/KalVoiceSettings.tsx";
 import { formatVersion } from "../../platform/version.ts";
 import { formatAbsolute } from "../../runtime/describeEvent.ts";
@@ -208,13 +208,13 @@ function About() {
     <Panel id="about" title="About KalCode" icon={<Info />} padding="none">
       <figure className={styles.about}>
         <img
-          src={kalcodeGlobe362}
-          srcSet={`${kalcodeGlobe362} 362w, ${kalcodeGlobe724} 724w`}
+          src={kalcodeMascot362}
+          srcSet={`${kalcodeMascot362} 362w, ${kalcodeMascot724} 724w`}
           sizes="10rem"
           width={362}
           height={362}
-          alt="The KalCode globe with a terminal prompt, orbited by connected points of light"
-          className={styles.aboutGlobe}
+          alt="The KalCode mascot, a pixel character holding a laptop marked K"
+          className={styles.aboutMascot}
         />
         <figcaption className={styles.aboutText}>
           <span className={styles.aboutLockup}>

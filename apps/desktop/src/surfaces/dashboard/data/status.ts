@@ -7,8 +7,8 @@ import {
 } from "@kalcode/protocol";
 
 /**
- * The contract tone (ADVANCED.md §16.3): working green, waiting / permission NEUTRAL, muted,
- * done high-contrast neutral, failed red, paused amber (the only amber), recovering blue.
+ * The contract tone: working green, waiting / permission amber, muted, done high-contrast
+ * neutral, failed red, paused amber, recovering blue.
  */
 export type { StatusTone };
 

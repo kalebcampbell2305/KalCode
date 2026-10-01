@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 54235318332f129a4aa47a908d700479cfe2d7d8a9a66a6f49d2feb6cd0e512d # shrinks to parts = ["\"api_key\": \"", "token: ", "token: ", "\"api_key\": \"", "\"api_key\": \""]
+cc bbf8e6f3e9bcb8267b9f34935fd2716540689c9bd05d1da0266c03c4438a66b9 # shrinks to parts = ["https://u:", "ib0c+Ae-1__", "password=", "____A=", "\"api_key\": \""]

@@ -39,7 +39,7 @@ describe("status groups", () => {
     }
   });
 
-  it("uses the contract tones: neutral waiting, green working, amber only for paused", () => {
+  it("uses the contract tones: amber waiting, green working, amber paused", () => {
     expect(STATUS_META.waiting_for_permission.tone).toBe("waiting");
     expect(STATUS_META.waiting_for_user.tone).toBe("waiting");
     expect(STATUS_META.running_command.tone).toBe("working");

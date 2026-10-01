@@ -9,8 +9,8 @@ export type LegacyStatusTone = "live" | "success" | "waiting" | "danger" | "idle
 /**
  * Either a contract tone (`working`, `waiting`, `muted`, `done`, `failed`, `paused`,
  * `recovering`) or a legacy tone. Legacy tones map onto the contract palette:
- * live → recovering blue, success → working green, waiting → neutral waiting (amber is reserved
- * for paused), danger → failed red, idle → muted.
+ * live → recovering blue, success → working green, waiting → amber waiting (waiting for you;
+ * paused shares the amber), danger → failed red, idle → muted.
  */
 export type StatusTone = LegacyStatusTone | DisplayTone;
 

@@ -10,8 +10,9 @@ import voiceMark256Url from "../assets/brand/kalvoice-mark-256.png";
 import styles from "./Brand.module.css";
 
 /*
- * All brand imagery comes from the owner's brand boards (packages/ui/src/brand/masters), derived
- * by tooling/generate-brand-assets.py. Lettering is the artwork's own pixels used as an alpha
+ * All brand imagery comes from the owner's brand artwork (packages/ui/src/brand/masters), derived
+ * by tooling/generate-brand-assets.py. The KalCode mark is the mascot on its app-icon tile, so it
+ * reads the same in light and dark themes. Lettering is the artwork's own pixels used as an alpha
  * mask, so it takes the current text color in light and dark themes.
  */
 
@@ -60,7 +61,7 @@ interface MarkProps {
   className?: string;
 }
 
-/** The KalCode symbol (terminal globe) isolated from the KalCode board. Decorative. */
+/** The KalCode mark: the mascot on its app-icon tile. Decorative. */
 export function Mark({ size = 28, className }: MarkProps) {
   return (
     <img

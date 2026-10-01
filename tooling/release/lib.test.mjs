@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -8,6 +11,8 @@ import {
   releaseVersion,
   releaseVersionOverlay,
   splitReleaseVersion,
+  stagedReleaseVersion,
+  verificationReleaseVersion,
 } from "./lib.mjs";
 
 test("a release version is the public version plus an optional canonical build number", () => {
@@ -80,4 +85,53 @@ test("the build overlay stamps the runtime version and the macOS bundle build nu
   assert.deepEqual(releaseVersionOverlay(version), { version, bundle: { macOS: { bundleVersion: "779" } } });
   assert.deepEqual(releaseVersionOverlay(appVersion()), { version: appVersion() });
   assert.throws(() => releaseVersionOverlay("99.0.0+1"), /checked-in version/);
+});
+
+function stage(builds) {
+  const root = mkdtempSync(join(tmpdir(), "kalcode-staged-"));
+  for (const [dir, record] of Object.entries(builds)) {
+    mkdirSync(join(root, dir), { recursive: true });
+    if (record !== null) writeFileSync(join(root, dir, "build.json"), JSON.stringify(record));
+  }
+  return root;
+}
+
+test("a git-less verification packet reads the one staged build of the checked-in version", () => {
+  const version = `${appVersion()}+779`;
+  const root = stage({ [version]: { version }, "0.0.1+5": { version: "0.0.1+5" }, notes: null });
+  try {
+    assert.equal(stagedReleaseVersion(root), version);
+    const noGit = () => {
+      throw new Error("git rev-parse exited with 128: not a git repository");
+    };
+    assert.equal(verificationReleaseVersion(noGit, root), version);
+    // A checkout still numbers the build from git history and ignores the staging directory.
+    const checkout = fakeGit({
+      head: "build",
+      parents: { build: "p" },
+      changes: { p: ["src/a.ts"] },
+      counts: { build: 812 },
+    });
+    const inside = (args) => (args.join(" ") === "rev-parse --is-inside-work-tree" ? "true" : checkout(args));
+    assert.equal(verificationReleaseVersion(inside, root), `${appVersion()}+812`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a verification packet with no, several or a mislabelled staged build is refused", () => {
+  const version = `${appVersion()}+779`;
+  for (const builds of [
+    {},
+    { [version]: null },
+    { [version]: { version }, [`${appVersion()}+780`]: { version: `${appVersion()}+780` } },
+    { [version]: { version: `${appVersion()}+780` } },
+  ]) {
+    const root = stage(builds);
+    try {
+      assert.throws(() => stagedReleaseVersion(root), /staged/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 });

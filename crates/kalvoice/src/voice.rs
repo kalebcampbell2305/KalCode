@@ -18,8 +18,8 @@ use ts_rs::TS;
 
 use crate::audio::{ActiveCapture, AudioSource, CaptureError, MAX_RECORDING};
 use crate::latency::StageTimings;
-use crate::streaming::{FinalSource, FinalTranscript, PartialSink, Snapshot, Streamer};
-use crate::stt::{SpeechRecognizer, SttError, clean_transcript, heard_speech};
+use crate::streaming::{FinalSource, PartialSink, Snapshot, Streamer};
+use crate::stt::{SpeechRecognizer, SttError};
 
 /// Provides the recognizer for the selected speech model.
 pub trait RecognizerSource: Send + Sync {
@@ -27,6 +27,12 @@ pub trait RecognizerSource: Send + Sync {
     fn ready(&self) -> Result<(), SttError>;
     /// Loads (or reuses) the recognizer. May take a moment the first time.
     fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError>;
+    /// Validate and retain a recognizer for one take. Sources whose readiness check already
+    /// loads the model can override this to avoid repeating that work before capture.
+    fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+        self.ready()?;
+        self.recognizer()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -79,7 +85,8 @@ struct Session {
     capture: Box<dyn ActiveCapture>,
     started: Instant,
     key_down_to_mic: f64,
-    streamer: Option<Streamer>,
+    streamer: Streamer,
+    recognizer: Arc<dyn SpeechRecognizer>,
 }
 
 /// Receives live partial transcripts: `(session_id, text)`.
@@ -136,8 +143,7 @@ impl VoiceController {
 
     /// Loads the speech model ahead of the first key press, so nothing loads on the hot path.
     pub fn warm(&self) -> Result<(), SttError> {
-        self.recognizers.ready()?;
-        self.recognizers.recognizer().map(|_| ())
+        self.recognizers.prepare().map(|_| ())
     }
 
     fn emit(&self, event: EventPayload) {
@@ -192,15 +198,18 @@ impl VoiceController {
             return Err(VoiceError::AlreadyListening);
         }
         let id = new_id();
-        if let Err(e) = self.recognizers.ready() {
-            if mode == KalVoiceMode::Dictation {
-                self.emit(EventPayload::KalVoiceDictationFailed {
-                    session_id: id,
-                    code: e.code().to_owned(),
-                });
+        let recognizer = match self.recognizers.prepare() {
+            Ok(recognizer) => recognizer,
+            Err(e) => {
+                if mode == KalVoiceMode::Dictation {
+                    self.emit(EventPayload::KalVoiceDictationFailed {
+                        session_id: id,
+                        code: e.code().to_owned(),
+                    });
+                }
+                return Err(e.into());
             }
-            return Err(e.into());
-        }
+        };
         let capture = match self.audio.start(self.max) {
             Ok(capture) => capture,
             Err(e) => {
@@ -216,7 +225,7 @@ impl VoiceController {
         let key_down_to_mic = ms(pressed.elapsed());
         // Stream partials while the key is held. The model is kept warm, so this doesn't load
         // anything on the hot path after the first use.
-        let streamer = self.recognizers.recognizer().ok().map(|recognizer| {
+        let streamer = {
             let shared = self.active.clone();
             let snapshot_id = id.clone();
             let snapshot: Snapshot = Arc::new(move || {
@@ -238,8 +247,13 @@ impl VoiceController {
                     notify(&partial_id, text);
                 }
             });
-            Streamer::start(recognizer, snapshot, on_partial, self.stream_interval)
-        });
+            Streamer::start(
+                recognizer.clone(),
+                snapshot,
+                on_partial,
+                self.stream_interval,
+            )
+        };
         *active = Some(Session {
             id: id.clone(),
             mode,
@@ -247,6 +261,7 @@ impl VoiceController {
             started: Instant::now(),
             key_down_to_mic,
             streamer,
+            recognizer,
         });
         drop(active);
         if mode == KalVoiceMode::Dictation {
@@ -320,15 +335,14 @@ impl VoiceController {
             capture,
             key_down_to_mic,
             streamer,
+            recognizer,
             started,
         } = session;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut audio = match capture.finish() {
             Ok(audio) => audio,
             Err(e) => {
-                if let Some(s) = streamer {
-                    s.cancel();
-                }
+                streamer.cancel();
                 return Err(e.into());
             }
         };
@@ -339,26 +353,9 @@ impl VoiceController {
             from = "ptt_up",
             ms = key_up_to_audio_final
         );
-        let outcome = self
-            .recognizers
-            .recognizer()
-            .and_then(|recognizer| match streamer {
-                Some(streamer) => streamer.finish(&audio, recognizer.as_ref()),
-                None if heard_speech(&audio) => {
-                    recognizer.transcribe(&audio).map(|raw| FinalTranscript {
-                        text: clean_transcript(&raw),
-                        source: FinalSource::FinalPass,
-                        first_voice: None,
-                        first_partial: None,
-                    })
-                }
-                None => Ok(FinalTranscript {
-                    text: String::new(),
-                    source: FinalSource::Silence,
-                    first_voice: None,
-                    first_partial: None,
-                }),
-            });
+        // Keep the exact verified model used for partials. Re-selecting it after release adds
+        // trust-store I/O and can mix models if preferences changed while the key was held.
+        let outcome = streamer.finish(&audio, recognizer.as_ref());
         // The recording never outlives recognition.
         audio.fill(0.0);
         drop(audio);
@@ -402,9 +399,7 @@ impl VoiceController {
         let Some(session) = self.take(session_id) else {
             return false;
         };
-        if let Some(streamer) = session.streamer {
-            streamer.cancel();
-        }
+        session.streamer.cancel();
         session.capture.cancel();
         if session.mode == KalVoiceMode::Dictation {
             self.emit(EventPayload::KalVoiceDictationFailed {
@@ -593,6 +588,112 @@ mod tests {
             kalvoice_events(&core)[0]["payload"]["code"],
             "model_not_installed"
         );
+    }
+
+    #[test]
+    fn a_take_keeps_its_recognizer_and_the_next_take_rechecks_the_source() {
+        struct ChangingSource(AtomicUsize);
+        impl RecognizerSource for ChangingSource {
+            fn ready(&self) -> Result<(), SttError> {
+                Ok(())
+            }
+            fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+                let take = self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Arc::new(FakeRecognizer(Ok(format!("model {take}")))))
+            }
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), speech(), None, Ok(()), Ok("unused".into()));
+        let source = Arc::new(ChangingSource(AtomicUsize::new(0)));
+        let voice = VoiceController::new(core, audio, source.clone());
+        for take in 0..2 {
+            let id = voice.begin(KalVoiceMode::Talk).expect("begin");
+            match voice.end(&id).expect("end") {
+                VoiceResult::Transcript { text, .. } => assert_eq!(text, format!("model {take}")),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(source.0.load(Ordering::SeqCst), take + 1);
+        }
+    }
+
+    #[test]
+    fn recognizer_acquisition_failure_does_not_open_the_microphone() {
+        struct UnavailableSource;
+        impl RecognizerSource for UnavailableSource {
+            fn ready(&self) -> Result<(), SttError> {
+                Ok(())
+            }
+            fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+                Err(SttError::ModelNotInstalled)
+            }
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), speech(), None, Ok(()), Ok("unused".into()));
+        let voice = VoiceController::new(core.clone(), audio.clone(), Arc::new(UnavailableSource));
+        assert_eq!(
+            voice.begin(KalVoiceMode::Dictation),
+            Err(VoiceError::Speech(SttError::ModelNotInstalled))
+        );
+        assert_eq!(audio.starts.load(Ordering::SeqCst), 0);
+        assert!(voice.listening().is_none());
+        assert_eq!(
+            kalvoice_events(&core)[0]["payload"]["code"],
+            "model_not_installed"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_take_releases_its_pinned_recognizer() {
+        struct TrackedSource(Mutex<std::sync::Weak<dyn SpeechRecognizer>>);
+        impl RecognizerSource for TrackedSource {
+            fn ready(&self) -> Result<(), SttError> {
+                Ok(())
+            }
+            fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+                let recognizer: Arc<dyn SpeechRecognizer> =
+                    Arc::new(FakeRecognizer(Ok("unused".into())));
+                *self.0.lock().expect("track") = Arc::downgrade(&recognizer);
+                Ok(recognizer)
+            }
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), speech(), None, Ok(()), Ok("unused".into()));
+        let initial: Arc<dyn SpeechRecognizer> = Arc::new(FakeRecognizer(Ok("unused".into())));
+        let source = Arc::new(TrackedSource(Mutex::new(Arc::downgrade(&initial))));
+        drop(initial);
+        let voice = VoiceController::new(core, audio, source.clone());
+        let id = voice.begin(KalVoiceMode::Talk).expect("begin");
+        assert!(source.0.lock().expect("track").upgrade().is_some());
+        assert!(voice.cancel(Some(&id)));
+        assert!(source.0.lock().expect("track").upgrade().is_none());
+        assert!(voice.listening().is_none());
+    }
+
+    #[test]
+    fn warm_and_takes_use_the_sources_single_preparation_path() {
+        struct PreparedSource(AtomicUsize);
+        impl RecognizerSource for PreparedSource {
+            fn ready(&self) -> Result<(), SttError> {
+                panic!("must not repeat legacy readiness")
+            }
+            fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+                panic!("must not repeat legacy model acquisition")
+            }
+            fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Arc::new(FakeRecognizer(Ok("open settings".into()))))
+            }
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), speech(), None, Ok(()), Ok("unused".into()));
+        let source = Arc::new(PreparedSource(AtomicUsize::new(0)));
+        let voice = VoiceController::new(core, audio, source.clone());
+        voice.warm().expect("warm");
+        assert_eq!(source.0.load(Ordering::SeqCst), 1);
+        let id = voice.begin(KalVoiceMode::Talk).expect("begin");
+        assert_eq!(source.0.load(Ordering::SeqCst), 2);
+        voice.end(&id).expect("end");
+        assert_eq!(source.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]
