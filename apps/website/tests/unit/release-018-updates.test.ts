@@ -97,6 +97,9 @@ describe("the Updates page for 0.1.8", () => {
     expect(copy).toContain(
       "When memory is low, KalVoice stops the recording and tells you, instead of closing KalCode.",
     );
+    expect(copy).toContain(
+      "Known issues After updating, KalVoice's on-device intelligence can take a few minutes to become ready while KalCode finishes cleaning up the previous version's worker; it then starts on its own.",
+    );
   });
 
   it("announces no 0.1.8 while the manifest selects 0.1.7 or a 0.1.7 build", async () => {
