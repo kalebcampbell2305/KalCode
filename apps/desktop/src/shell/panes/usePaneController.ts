@@ -58,6 +58,8 @@ export interface PaneControllerOptions {
   initial: () => PaneLayout;
   /** Titles for announcements. */
   titleOf: (content: PaneContent) => string;
+  /** Called for each content of a pane being closed, so the host can end it (a shell terminal ends). */
+  onCloseContent?: (content: PaneContent) => void;
 }
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -112,7 +114,13 @@ export interface PaneController {
 const DIRECTION_WORD: Record<PaneDirection, string> = { left: "left", right: "right", up: "up", down: "down" };
 const PRESET_WORD: Record<BuiltinPreset, string> = { two: "2", three: "3", four: "4", six: "6" };
 
-export function usePaneController({ scope, store, initial, titleOf }: PaneControllerOptions): PaneController {
+export function usePaneController({
+  scope,
+  store,
+  initial,
+  titleOf,
+  onCloseContent,
+}: PaneControllerOptions): PaneController {
   const [layout, setLayout] = useState<PaneLayout>(() => initial());
   const [ready, setReady] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -127,6 +135,8 @@ export function usePaneController({ scope, store, initial, titleOf }: PaneContro
   storeRef.current = store;
   const titleRef = useRef(titleOf);
   titleRef.current = titleOf;
+  const onCloseContentRef = useRef(onCloseContent);
+  onCloseContentRef.current = onCloseContent;
   const initialRef = useRef(initial);
   initialRef.current = initial;
   const lastSaved = useRef<string | null>(null);
@@ -261,11 +271,8 @@ export function usePaneController({ scope, store, initial, titleOf }: PaneContro
       const title = paneTitle(paneId);
       const result = closePane(latest.current, paneId);
       if (result.closed) setClosed((list) => [result.closed as ClosedPane, ...list].slice(0, CLOSED_KEPT));
-      const running = result.closed?.pane.tabs.length ?? 0;
-      apply(
-        result.layout,
-        running > 0 ? `Closed the ${title} pane. It keeps running; reopen it with Ctrl Alt R.` : "Closed the pane.",
-      );
+      for (const content of result.closed?.pane.tabs ?? []) onCloseContentRef.current?.(content);
+      apply(result.layout, result.closed?.pane.tabs.length ? `Closed the ${title} pane.` : "Closed the pane.");
       const remaining = leaves(result.layout.root);
       const next = remaining.find((l) => l.paneId === paneId) ?? remaining[0];
       if (next) focusPane(next.paneId);

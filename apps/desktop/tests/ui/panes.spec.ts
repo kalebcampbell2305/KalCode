@@ -189,26 +189,20 @@ test.describe("maximize, collapse, close and reopen never stop a process", () =>
     await expect(terminalText(pane(page, 0))).toContainText("First release");
   });
 
-  test("closing a pane keeps its shells running; reopen puts the pane back where it was", async ({ page }) => {
+  test("closing a pane ends its shells; nothing keeps running in the background", async ({ page }) => {
     await openCode(page);
     await page.keyboard.press("Control+Alt+d");
     await page.getByRole("button", { name: "New terminal" }).click();
     await expect(pane(page, 1).getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toBeVisible();
-    await page.keyboard.type("echo keep-me");
+    await page.keyboard.type("echo end-me");
     await page.keyboard.press("Enter");
     const running = await memory(page, (m) => m.runningProcessCount());
 
     await page.getByRole("button", { name: "Close pane 2" }).click();
     await expect(panes(page)).toHaveCount(1);
-    expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
-    await expect(page.getByRole("status").filter({ hasText: /keeps running/ })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "1 in background" })).toBeVisible();
-
-    await page.keyboard.press("Control+Alt+r");
-    await expect(panes(page)).toHaveCount(2);
-    const reopened = await box(pane(page, 1));
-    expect(reopened.x).toBeGreaterThan((await box(pane(page, 0))).x);
-    await expect(terminalText(pane(page, 1))).toContainText("keep-me");
+    await expect.poll(() => memory(page, (m) => m.runningProcessCount())).toBe(running - 1);
+    await expect(page.getByRole("status").filter({ hasText: /keeps running/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
   });
 });
 

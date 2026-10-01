@@ -235,6 +235,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         initialState.current.panes,
       ),
     titleOf,
+    onCloseContent: (content) => {
+      if (content.kind === "terminal") void closeTerminal(content.terminalId);
+    },
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
@@ -334,9 +337,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           terminal: true,
           running,
           stop: running ? { label: "End terminal", run: () => void closeTerminal(terminal.id) } : undefined,
-          // Closing the tab of a shell that no longer runs tidies it away; a running one keeps
-          // running in the background.
-          onClose: running ? undefined : () => void closeTerminal(terminal.id),
+          // Closing a terminal ends it: the shell and everything it started (owner decision).
+          onClose: () => void closeTerminal(terminal.id),
         };
       }
       if (content.kind === "thread") {

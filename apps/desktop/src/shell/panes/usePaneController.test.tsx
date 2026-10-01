@@ -46,3 +46,20 @@ it("an explicit show still selects the requested terminal and requests keyboard 
   expect(pane?.tabs[pane.activeTab]).toEqual(terminal("late-created"));
   expect(result.current.focusRequest.n).toBeGreaterThan(before);
 });
+
+it("closing a pane hands every content it held to the host to close (a shell terminal ends)", async () => {
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("one"), terminal("two")], "pane", 0),
+    maximizedPaneId: null,
+    dock: [],
+  };
+  const onCloseContent = vi.fn();
+  const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
+  const { result } = renderHook(() =>
+    usePaneController({ scope: "workspace", store, initial: () => initial, titleOf: () => "Terminal", onCloseContent }),
+  );
+  await waitFor(() => expect(result.current.ready).toBe(true));
+  act(() => result.current.close("pane"));
+  expect(onCloseContent.mock.calls.map(([content]) => content)).toEqual([terminal("one"), terminal("two")]);
+});

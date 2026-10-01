@@ -314,7 +314,7 @@ function paneCommand(t: string): Parsed | null {
     return {
       kind: "close",
       high: true,
-      outcome: { kind: "completed", summary: "Closed the pane. What it runs keeps running." },
+      outcome: { kind: "completed", summary: "Closed the pane." },
       directive: { kind: "close_pane", query: null },
     };
   }
@@ -323,7 +323,7 @@ function paneCommand(t: string): Parsed | null {
     return {
       kind: "close",
       high: true,
-      outcome: { kind: "completed", summary: `Closed the ${named[1]} pane. What it runs keeps running.` },
+      outcome: { kind: "completed", summary: `Closed the ${named[1]} pane.` },
       directive: { kind: "close_pane", query: named[1] },
     };
   }

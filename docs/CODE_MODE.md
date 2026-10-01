@@ -84,10 +84,10 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   message; existing tabs are never closed, including after a downgrade.
 - **Exit.** When a shell exits on its own, its tab stays with its final output and a Restart
   action. Exit code 0 records `shell.completed`; anything else `shell.failed`.
-- **Close tab vs. End terminal (Z7-W1).** Closing a tab or a pane only takes it out of the
-  layout: a running shell keeps running "in the background" (header menu and the pane "Add"
-  menu bring it back with its output). The explicit **End terminal** (pane menu) ends it as
-  described next. Closing the tab of a shell that already exited forgets the tab.
+- **Closing ends a terminal (owner decision, 2026-10-01).** Closing a terminal's tab, or a pane
+  that holds it (button, shortcut or KalVoice), ends the terminal as described next: the shell and
+  everything it started stop, and the tab is forgotten. Nothing keeps running in the background.
+  Docking or collapsing a pane is not closing; agent thread panes keep their own behaviour.
 - **End.** Ending a terminal ends the shell by closing its pseudo-terminal — on Windows every
   process attached to that console, including programs started from the shell, receives the
   close; on macOS and Linux the shell's process group gets SIGHUP and, if anything is still

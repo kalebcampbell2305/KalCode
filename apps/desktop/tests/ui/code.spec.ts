@@ -137,32 +137,27 @@ test.describe("terminals", () => {
     await expect(cmd).toHaveAttribute("aria-selected", "true");
     await expect(visibleTerminal(page)).toContainText("in-cmd");
 
-    // Ctrl+Shift+W closes the tab in front; its shell keeps running in the background (Z7-14).
+    // Closing a terminal ends it (owner decision): Ctrl+Shift+W closes the tab in front and its shell.
     await page.keyboard.press("Control+Shift+W");
     await expect(cmd).toHaveCount(0);
     await expect(page.getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toHaveAttribute("aria-selected", "true");
-    expect(await runningProcesses(page)).toBe(3);
-    await expect(page.getByRole("button", { name: "1 in background" })).toBeVisible();
+    await expect.poll(() => runningProcesses(page)).toBe(2);
+    await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
 
-    // The close control on a tab: also only closes the tab.
+    // The close control on a running tab ends it too; nothing keeps running in the background.
     await page.getByRole("tab", { name: /^PowerShell 7$/ }).hover();
     await page
       .getByRole("tab", { name: /^PowerShell 7$/ })
       .locator('[class*="tabClose"]')
       .click();
     await expect(page.getByRole("tab")).toHaveCount(1);
-    expect(await runningProcesses(page)).toBe(3);
+    await expect.poll(() => runningProcesses(page)).toBe(1);
+    await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
 
-    // A background shell comes back with its output.
-    await page.getByRole("button", { name: "2 in background" }).click();
-    await page.getByRole("menuitem", { name: "Show Command Prompt" }).click();
-    await expect(cmd).toHaveAttribute("aria-selected", "true");
-    await expect(visibleTerminal(page)).toContainText("in-cmd");
-
-    // Ending a shell is explicit: the pane menu's "End terminal".
+    // The pane menu's "End terminal" still ends the shell in front.
     await page.getByRole("button", { name: "Actions for pane 1" }).click();
     await page.getByRole("menuitem", { name: "End terminal" }).click();
-    await expect.poll(() => runningProcesses(page)).toBe(2);
+    await expect.poll(() => runningProcesses(page)).toBe(0);
   });
 
   test("an exited shell shows its exit code and restarts in the same tab", async ({ page }) => {
