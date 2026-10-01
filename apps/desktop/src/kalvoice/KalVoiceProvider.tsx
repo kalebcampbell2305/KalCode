@@ -39,6 +39,7 @@ import {
   paneCanvasListening,
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
+import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
 import { useOptionalThreadsIntent } from "../surfaces/threads/intent.tsx";
@@ -52,6 +53,7 @@ import {
   targetIsAlive,
 } from "./dictation.ts";
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
+import { parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import {
   type LocalReasoningState,
@@ -328,9 +330,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   const threadsIntent = useOptionalThreadsIntent();
+  const kalTidy = useKalTidy();
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent });
-  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent };
+  const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy });
+  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy };
 
   const report = useCallback((result: DirectiveReport) => dispatch({ type: "action_result", ...result }), []);
   /** Composer directives act on a thread's own message box, which lives in Threads. */
@@ -551,6 +554,13 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const trimmed = text.trim();
       if (!trimmed) return;
       const requestId = crypto.randomUUID();
+      // KalTidy runs in this window: it has no native intent and uses no KalVoice Request.
+      const tidy = parseKalTidyCommand(trimmed);
+      if (tidy) {
+        dispatch({ type: "submitted", requestId });
+        await runKalTidyCommand(surfaces.current.kalTidy, tidy, report);
+        return;
+      }
       setHistory((items) => [{ requestId, text: trimmed, input, response: null }, ...items].slice(0, 20));
       dispatch({ type: "submitted", requestId });
       try {
@@ -568,7 +578,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "request_error", requestId, message: e.message, code: e.code });
       }
     },
-    [client, applyResponse, workspaces.active?.id],
+    [client, applyResponse, report, workspaces.active?.id],
   );
 
   /** One utterance: native routing decides command, dictation or request. */
@@ -595,6 +605,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             choiceRef.current = null;
             setSessionChoice(null);
           }
+        }
+        // "Close all idle terminals": KalTidy is a UI action with no native intent. Only its exact
+        // phrases count (as sure as a native high-confidence command); anything else routes natively.
+        const tidy = parseKalTidyCommand(text);
+        if (tidy) {
+          await runKalTidyCommand(surfaces.current.kalTidy, tidy, report);
+          recordAction();
+          return;
         }
         const previous = currentRef.current;
         const talked = await client.kalvoiceTalk({
@@ -643,7 +661,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         dictationSessions.current.finish(sessionId);
       }
     },
-    [client, applyResponse, followUp, workspaces.active?.id],
+    [client, applyResponse, followUp, report, workspaces.active?.id],
   );
 
   const onSignal = useCallback(
