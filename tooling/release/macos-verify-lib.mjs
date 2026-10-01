@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
-import { sha256File } from "./lib.mjs";
+import { sha256File, splitReleaseVersion } from "./lib.mjs";
 import {
   acceptedNotaryInfo,
   acceptedNotaryLog,
@@ -89,6 +89,13 @@ function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs,
   }
   if (plistValue(runner, infoPlist, "CFBundleShortVersionString") !== record.version) {
     throw new MacReleaseError("bundle_version_mismatch", "The mounted app version does not match the build record.");
+  }
+  const { build } = splitReleaseVersion(record.version);
+  if (build > 0 && plistValue(runner, infoPlist, "CFBundleVersion") !== String(build)) {
+    throw new MacReleaseError(
+      "bundle_version_mismatch",
+      "The mounted app build number does not match the build record.",
+    );
   }
   if (plistValue(runner, infoPlist, "LSMinimumSystemVersion") !== MACOS_MINIMUM_VERSION) {
     throw new MacReleaseError("deployment_target_mismatch", "The app minimum system version is invalid.");

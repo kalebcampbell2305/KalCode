@@ -3,8 +3,8 @@
 One command takes a KalCode desktop release from an exact commit to public verification:
 
 ```
-node tooling/release/ship.mjs --version X.Y.Z --commit <sha40> [--baseline-version A.B.C] [--phase ...] [--execute]
-pnpm release:ship --version X.Y.Z --commit <sha40> ...
+node tooling/release/ship.mjs --version X.Y.Z+N --commit <sha40> [--baseline-version X.Y.Z] [--phase ...] [--execute]
+pnpm release:ship --version X.Y.Z+N --commit <sha40> ...
 ```
 
 It chains the existing, reviewed release tools (build and signing, certification, staging validators,
@@ -29,9 +29,9 @@ from the kit.
 
 | Flag | Meaning |
 | --- | --- |
-| `--version` | Plain `x.y.z`. Stable refuses prereleases and build metadata. |
-| `--commit` | Full 40-hex commit. The `identity` phase proves that `tauri.conf.json`, `apps/desktop/package.json` and `Cargo.toml` all declare `--version` at that exact commit (never the working tree), and that the commit compiles the moving Stable endpoint (so a derived baseline cannot be released as the candidate). |
-| `--baseline-version` | The never-published lower version derived from the commit for the in-app update trial. It must be lower than `--version`. Burned versions stay burned, and preflight refuses a version that already has a D1 row. |
+| `--version` | Stable release identity: plain `x.y.z` for the initial public build or `x.y.z+N` for a later internal build on the same public version. Stable refuses prereleases and other build metadata. |
+| `--commit` | Full 40-hex commit. The `identity` phase proves that `tauri.conf.json`, `apps/desktop/package.json` and `Cargo.toml` all declare the public `x.y.z` portion of `--version` at that exact commit (never the working tree), and that the commit compiles the moving Stable endpoint (so a derived baseline cannot be released as the candidate). |
+| `--baseline-version` | The lower release identity used for the in-app update trial. For a same-public-version build, the current public `x.y.z` build is lower than `x.y.z+N`. It must be lower than `--version`. Burned release identities stay burned, and preflight refuses a candidate that already has a D1 row. |
 
 Optional flags:
 

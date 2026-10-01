@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { splitReleaseVersion } from "../lib.mjs";
 import { canonicalJson, identityVars, lookup, refuse, resolveDeep, resolveString, ShipError } from "./context.mjs";
 import { verifyScripts } from "./kit.mjs";
 import { PHASES, phaseById, selectPhases } from "./phases.mjs";
@@ -779,13 +780,14 @@ export const BUILTINS = {
   async identity(pipeline, ctx) {
     const { repo, identity } = pipeline;
     const c = identity.commit;
+    const publicVersion = splitReleaseVersion(identity.version).publicVersion;
     if (git(repo, ["cat-file", "-t", c]).trim() !== "commit") refuse(`${c} is not a commit in ${repo}`);
     const authorities = {};
     for (const [file, read] of Object.entries(VERSION_AUTHORITIES)) {
       const v = read(git(repo, ["show", `${c}:${file}`]));
       authorities[file] = v ?? null;
-      if (v !== identity.version)
-        refuse(`${file} at ${c.slice(0, 7)} declares ${JSON.stringify(v ?? null)}, not ${identity.version}`);
+      if (v !== publicVersion)
+        refuse(`${file} at ${c.slice(0, 7)} declares ${JSON.stringify(v ?? null)}, not ${publicVersion}`);
     }
     const endpoint = pipeline.kit.identity?.movingEndpoint;
     if (endpoint) {

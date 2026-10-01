@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 
 import { guardianPublicSigningProblems, guardianPublicVerificationProblems } from "./guardian-packaging.mjs";
+import { releaseFileVersion } from "./lib.mjs";
 
 export const ARTIFACT_SIGNING = Object.freeze({
   endpoint: "https://eus.codesigning.azure.net/",
@@ -27,13 +28,13 @@ const UPDATER_EVIDENCE_KEYS = [
 ];
 
 export function expectedWindowsInstallerFile(version) {
-  if (
-    typeof version !== "string" ||
-    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version)
-  ) {
+  let fileVersion;
+  try {
+    fileVersion = releaseFileVersion(version);
+  } catch {
     throw new Error("release version must be canonical SemVer");
   }
-  return `KalCode_${version}_x64-setup.exe`;
+  return `KalCode_${fileVersion}_x64-setup.exe`;
 }
 
 export function updaterSigningEvidenceIsExact(updater, installerFile) {

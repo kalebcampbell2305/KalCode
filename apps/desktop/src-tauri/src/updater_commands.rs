@@ -1728,6 +1728,21 @@ mod tests {
         assert!(!is_previous_version("1.2.3", "1.2.4"));
         assert!(!is_previous_version("1.2.3", "1.2.2-beta.1"));
         assert!(!is_previous_version("invalid", "1.2.2"));
+        assert!(is_previous_version("0.1.7+780", "0.1.7"));
+        assert!(is_previous_version("0.1.7+780", "0.1.7+779"));
+        assert!(!is_previous_version("0.1.7+780", "0.1.7+780"));
+        assert!(!is_previous_version("0.1.7+999", "0.1.7+1000"));
+    }
+
+    #[test]
+    fn a_build_recovery_endpoint_keeps_its_build_separator() {
+        let endpoint =
+            Url::parse("https://kalcoded.com/releases/updater/stable/0.1.7+780.json").unwrap();
+        assert_eq!(endpoint.path(), "/releases/updater/stable/0.1.7+780.json");
+        assert_eq!(
+            endpoint.as_str(),
+            "https://kalcoded.com/releases/updater/stable/0.1.7+780.json"
+        );
     }
 
     #[test]

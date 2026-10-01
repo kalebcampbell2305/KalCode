@@ -267,6 +267,43 @@ test("the website accepts the exact updater descriptor emitted by the release ge
   assert.equal(parsed.signature, manifest.platforms["windows-x86_64"].signature);
 });
 
+test("a build of the public version publishes as X.Y.Z+N with a plus-free artifact name", async () => {
+  const version = "1.2.3+41";
+  const file = "KalCode_1.2.3_build41_x64-setup.exe";
+  const base = evidence();
+  const build = {
+    ...base.build,
+    version,
+    file,
+    updater: { ...base.build.updater, artifactFile: file, signatureFile: `${file}.sig` },
+    compiledChannelVerification: { ...base.build.compiledChannelVerification, version },
+  };
+  const dir = mkdtempSync(join(tmpdir(), "kalcode-updater-build-"));
+  const artifactPath = join(dir, file);
+  writeFileSync(artifactPath, artifactBytes);
+  writeFileSync(`${artifactPath}.sig`, signature(version, artifactBytes, releaseSigner, [], file));
+  const manifest = await createUpdaterManifest({
+    build,
+    verify: { ...base.verify, version, file },
+    qa: qaEvidence("windows-x86_64", version),
+    artifactPath,
+    artifactKey: `releases/updater/stable/${version}/${artifactSha256}/${file}`,
+    signaturePath: `${artifactPath}.sig`,
+    publicKeyBase64: releaseSigner.publicKeyBase64,
+    publishedAt: "2026-09-30T12:00:00.000Z",
+    notes: "A new build of KalCode 1.2.3.",
+  });
+  assert.equal(manifest.version, version);
+  assert.equal(
+    manifest.platforms["windows-x86_64"].url,
+    `https://kalcoded.com/releases/updater/stable/${version}/${artifactSha256}/${file}`,
+  );
+  const parsed = parseUpdaterDescriptor(manifest, "stable", version);
+  assert.ok(parsed);
+  assert.equal(parsed.artifactKey, `releases/updater/stable/${version}/${artifactSha256}/${file}`);
+  assert.equal(parseUpdaterDescriptor(manifest, "stable", "1.2.3"), null);
+});
+
 test("fails closed for missing updater artifact or detached signature", async () => {
   const missingArtifact = fixture();
   await assert.rejects(
