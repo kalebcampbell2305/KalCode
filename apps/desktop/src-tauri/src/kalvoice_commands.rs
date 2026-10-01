@@ -60,6 +60,8 @@ use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
+// The reducer also owns shared session reset state; only Windows/macOS have Fn input adapters.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 #[path = "kalvoice_fn_key.rs"]
 mod fn_key;
 #[cfg(target_os = "macos")]
@@ -1356,6 +1358,7 @@ fn ptt_capture_allowed(runtime: &KalVoiceRuntime) -> bool {
 
 /// Called by the macOS local monitor and the Windows WebView's exact DOM `Fn` event. The adapter
 /// passes no key identity or content for other keys; it reports only that a chord occurred.
+#[cfg(any(windows, target_os = "macos"))]
 pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
     let Ok(state) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app) else {
         return false;
@@ -1390,6 +1393,7 @@ pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
     true
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
     let Some(task) = runtime.background.start() else {
         return;
@@ -1414,6 +1418,7 @@ fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn fn_hold_elapsed(runtime: &Arc<KalVoiceRuntime>, generation: u64) {
     let mut push_to_talk = runtime
         .push_to_talk
