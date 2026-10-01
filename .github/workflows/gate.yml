@@ -86,5 +86,18 @@ jobs:
           for helper in kalcode-update-helper kalcode-provider-guardian kalcode-hook; do
             install -m 755 "target/$host_target/debug/$helper" "$helper_dir/$helper-$host_target"
           done
+      # The gate account runs without a login session, so it has no login Keychain. Give it its
+      # own Keychain (test entries only, never a real secret) so the OS credential-store test
+      # still exercises the real Keychain.
+      - name: Gate account Keychain
+        shell: bash
+        run: |
+          set -euo pipefail
+          kc="$HOME/Library/Keychains/kalcode-gate.keychain-db"
+          [ -f "$kc" ] || security create-keychain -p kalcode-gate "$kc"
+          security list-keychains -d user -s "$kc"
+          security default-keychain -d user -s "$kc"
+          security unlock-keychain -p kalcode-gate "$kc"
+          security set-keychain-settings "$kc"
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
