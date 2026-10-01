@@ -613,7 +613,9 @@ describe("Stop hook", () => {
       stop_hook_active: false,
       ...extra,
     });
-  const deps = { refresh: false };
+  // The budget's own behaviour has its own test (budgetMs: -1). Elsewhere a loaded machine must
+  // not turn an assertion into a budget-exhausted allow, so these get a generous budget.
+  const deps = { refresh: false, budgetMs: 120_000 };
 
   test("allows when stop_hook_active, on empty or invalid input, other events, and outside KalCode", () => {
     const f = makeFixture();
