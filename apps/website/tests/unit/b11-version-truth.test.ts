@@ -79,8 +79,9 @@ function signedStable(version: string): ReleaseManifest {
 }
 
 /**
- * The only two states releases.json may hold in B11: the committed Stable 0.1.6 manifest exactly, or
- * a valid signed Stable 0.1.7 manifest offering only the two 0.1.7 files. Returns why a state is refused.
+ * The only states releases.json may hold: the committed Stable 0.1.6 manifest exactly, or a valid signed
+ * Stable 0.1.7 (or 0.1.7+N build) manifest offering only the two files of that release. Returns why a
+ * state is refused.
  */
 function refusal(candidate: ReleaseManifest): string | null {
   let manifest: ReleaseManifest;
@@ -106,13 +107,33 @@ function refusal(candidate: ReleaseManifest): string | null {
     }
     return null;
   }
-  if (latest.version !== "0.1.7") return `unexpected version ${latest.version}`;
-  if (JSON.stringify(files) !== JSON.stringify(FILES_017)) return `0.1.7 files are ${files.join(", ")}`;
-  if (latest.notesUrl !== "/updates#release-0-1-7") return "0.1.7 notes do not point at its Updates entry";
+  // Stable 0.1.7, or a later build of it (`0.1.7+N`, PR #34): build artifacts are named `KalCode_0.1.7_buildN_*`,
+  // are pinned under the full release version, and link to the public 0.1.7 Updates entry.
+  const build = /^0\.1\.7(?:\+([1-9]\d*))?$/.exec(latest.version);
+  if (!build) return `unexpected version ${latest.version}`;
+  const fileVersion = build[1] ? `0.1.7_build${build[1]}` : "0.1.7";
+  const expectedFiles = FILES_017.map((file) => file.replace("KalCode_0.1.7_", `KalCode_${fileVersion}_`));
+  if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) return `${latest.version} files are ${files.join(", ")}`;
+  if (latest.notesUrl !== "/updates#release-0-1-7")
+    return `${latest.version} notes do not point at the 0.1.7 Updates entry`;
   for (const p of latest.platforms) {
-    if (p.pinnedUrl !== `/download/0.1.7/${p.file}`) return `${p.file} is not pinned under /download/0.1.7/`;
+    if (p.pinnedUrl !== `/download/${latest.version}/${p.file}`)
+      return `${p.file} is not pinned under /download/${latest.version}/`;
   }
   return null;
+}
+
+/** A signed Stable build of 0.1.7 as publish.mjs generates it (PR #34): `0.1.7+N`, plus-free file names. */
+function signedStableBuild(build: number): ReleaseManifest {
+  const manifest = signedStable("0.1.7");
+  if (!manifest.latest) throw new Error("fixture has no release");
+  const version = `0.1.7+${build}`;
+  manifest.latest.version = version;
+  for (const p of manifest.latest.platforms) {
+    p.file = p.file.replace("KalCode_0.1.7_", `KalCode_0.1.7_build${build}_`);
+    p.pinnedUrl = `/download/${version}/${p.file}`;
+  }
+  return manifest;
 }
 
 function select(manifest: ReleaseManifest) {
@@ -150,6 +171,35 @@ describe("the 0.1.7 release data", () => {
 
   it("accepts only those two states", () => {
     expect(refusal(signedStable("0.1.7"))).toBeNull();
+    // A later build of 0.1.7 (PR #34) is the same public release line.
+    expect(refusal(signedStableBuild(813))).toBeNull();
+    const plusInName = signedStableBuild(813);
+    for (const p of plusInName.latest?.platforms ?? []) p.file = p.file.replace("_build813_", "+813_");
+    expect(refusal(plusInName)).not.toBeNull();
+    const wrongPin = signedStableBuild(813);
+    for (const p of wrongPin.latest?.platforms ?? []) p.pinnedUrl = `/download/0.1.7/${p.file}`;
+    expect(refusal(wrongPin)).not.toBeNull();
+    const otherBuildFiles = signedStableBuild(813);
+    for (const p of otherBuildFiles.latest?.platforms ?? []) {
+      p.file = p.file.replace("_build813_", "_build812_");
+      p.pinnedUrl = `/download/0.1.7+813/${p.file}`;
+    }
+    expect(refusal(otherBuildFiles)).not.toBeNull();
+    const wrongNotes = signedStableBuild(813);
+    if (wrongNotes.latest) wrongNotes.latest.notesUrl = "/updates#release-0-1-7-813";
+    expect(refusal(wrongNotes)).not.toBeNull();
+    const zeroBuild = signedStableBuild(813);
+    if (zeroBuild.latest) zeroBuild.latest.version = "0.1.7+0";
+    expect(refusal(zeroBuild)).not.toBeNull();
+    expect(refusal(signedStable("0.1.8"))).not.toBeNull();
+    // Another public version is refused, with or without a build, and so is the private 0.1.2+K QA baseline.
+    for (const other of ["0.1.8+813", "0.1.6+813", "0.1.2+814"]) {
+      const build = signedStableBuild(813);
+      if (!build.latest) throw new Error("fixture has no release");
+      build.latest.version = other;
+      for (const p of build.latest.platforms) p.pinnedUrl = `/download/${other}/${p.file}`;
+      expect(refusal(build)).not.toBeNull();
+    }
     for (const version of NEVER_PUBLIC) expect(refusal(signedStable(version))).toBe(`never-public ${version}`);
     expect(refusal(structuredClone(publishedManifest))).not.toBeNull();
     // A 0.1.6 that is not the committed one (other identities) is refused.
