@@ -79,6 +79,9 @@ describe("kalcodeIdentity (the hub's name and initials)", () => {
     });
     expect(kalcodeIdentity(null, "owner@example.com")).toEqual({ name: "owner", initials: "O" });
     expect(kalcodeIdentity("Émile Zola Jr", "e@example.com").initials).toBe("ÉJ");
+    // A malformed address keeps every character rather than losing the last one.
+    expect(kalcodeIdentity(null, "localonly")).toEqual({ name: "localonly", initials: "L" });
+    expect(kalcodeIdentity(undefined, "@example.com").name).toBe("@example.com");
   });
 });
 
@@ -102,6 +105,8 @@ describe("Account Hub", () => {
     expect(hub).toHaveTextContent("Ada Lovelace");
     expect(hub).toHaveTextContent("Free plan");
     expect(hub).toHaveAttribute("aria-haspopup", "menu");
+    // The build version lives in the hub menu while an account is shown.
+    expect(within(primary).queryByText(/^Version /)).toBeNull();
     // The hub opens a menu; it never jumps straight to Settings.
     expect(screen.queryByRole("heading", { level: 1, name: "Settings" })).toBeNull();
   });
@@ -200,5 +205,7 @@ describe("Account Hub", () => {
     await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
     await waitFor(() => expect(accountCalls).toContain("account_logout"));
     await waitFor(() => expect(screen.queryByRole("button", { name: /^Account:/ })).toBeNull());
+    // Without the hub, the sidebar footer still shows the build version.
+    expect(within(screen.getByRole("navigation", { name: "Primary" })).getByText(/^Version \d/)).toBeInTheDocument();
   });
 });

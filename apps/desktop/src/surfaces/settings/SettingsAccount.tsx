@@ -81,6 +81,15 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
           <dt>Dictation</dt>
           <dd>Unlimited</dd>
         </div>
+        {account.tier === "free" ? (
+          <div>
+            <dt>Billing</dt>
+            <dd>
+              No subscription. Pro, Max and Max 2X add more KalVoice requests; compare plans at{" "}
+              <span data-selectable>kalcoded.com/pricing</span>.
+            </dd>
+          </div>
+        ) : null}
         {account.tier === "owner" ? (
           <div>
             <dt>Billing</dt>

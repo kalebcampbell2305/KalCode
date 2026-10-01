@@ -32,6 +32,11 @@ import styles from "./AccountHub.module.css";
 import { useNavigation } from "./navigation.tsx";
 import { MOD_LABEL } from "./shortcuts.ts";
 
+/** Whether the hub shows: a signed-in account is loaded. */
+export function useAccountHubShown(): boolean {
+  return Boolean(useOptionalAccount()?.snapshot.account);
+}
+
 /** Settings sections the hub opens directly (their panel ids on the Settings page). */
 export const HUB_SECTIONS = {
   account: "kalcode-account",
@@ -53,7 +58,8 @@ export function kalcodeIdentity(
   name: string;
   initials: string;
 } {
-  const name = displayName?.trim() || email.slice(0, email.lastIndexOf("@")) || email;
+  const at = email.lastIndexOf("@");
+  const name = displayName?.trim() || (at > 0 ? email.slice(0, at) : email);
   const words = name.split(/[\s._+-]+/u).filter((word) => /[\p{L}\p{N}]/u.test(word));
   const first = (word: string | undefined) => word?.match(/[\p{L}\p{N}]/u)?.[0] ?? "";
   const letters = words.length > 1 ? first(words[0]) + first(words[words.length - 1]) : first(words[0]);

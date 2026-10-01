@@ -198,6 +198,18 @@
   gap: var(--space-1);
 }
 
+/* The build version, when no account is loaded to show the hub. */
+.build {
+  flex: 1;
+  min-width: 0;
+  padding-left: var(--space-2);
+  overflow: hidden;
+  color: var(--color-text-faint);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar[data-collapsed] .footerRow {
   flex-direction: column;
   gap: var(--space-1-5);
