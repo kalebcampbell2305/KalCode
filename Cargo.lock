@@ -2722,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-context"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "globset",
  "ignore",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-contracts"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-desktop"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -2808,7 +2808,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-doctor"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-git",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-entitlements"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-git"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ignore",
  "kalcode-contracts",
@@ -2861,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-hook-bridge"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "getrandom 0.4.3",
  "hex",
@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-kalvoice"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-locator"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-native-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-pty",
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-notifications"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-permissions"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2977,7 +2977,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-providers"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-hook-bridge",
@@ -3003,7 +3003,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-pty"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "portable-pty",
  "process-wrap",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-resources"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "libc",
@@ -3028,7 +3028,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-secure-store"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "keyring",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-threads"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-context",
  "kalcode-contracts",
@@ -3054,7 +3054,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-timeline"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -3066,7 +3066,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-updater"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -3083,7 +3083,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-utilities"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-context",
  "kalcode-contracts",
@@ -3107,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-workspace-ui"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
