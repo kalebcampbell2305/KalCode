@@ -39,7 +39,7 @@ jobs:
           # Leave no GitHub token in the checkout for the code under test.
           persist-credentials: false
       - name: Install
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           pnpm install --frozen-lockfile
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -47,7 +47,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           pnpm --filter @kalcode/website exec playwright install chromium
       - name: Gate
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
         run: node tooling/release/ship.mjs gate --base $env:BASE
