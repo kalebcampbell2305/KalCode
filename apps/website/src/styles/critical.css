@@ -614,7 +614,6 @@ a:hover {
 
 .brand-mark {
   flex: none;
-  border-radius: var(--radius-full);
 }
 
 /* Lettering from the brand artwork, drawn as a mask so it takes the current text colour.
@@ -1036,7 +1035,7 @@ body[data-world] {
 
 .hero {
   /* HeroOrb/HeroWorld hooks (see its header comment). The orb square's top sits just under the
-     header; the sphere centre is 0.5211 of the square, its bottom 0.281 below the centre. */
+     header; the square's anchor is 0.5211 of it, the mascot's feet 0.2409 below the anchor. */
   --hero-orb-max: min(44svh, 40vw, 40rem);
   --hero-orb-center-y: calc(var(--site-header-h) + 1svh + 0.5211 * var(--hero-orb-max));
   --hero-text-top: calc(var(--hero-orb-center-y) + 0.22 * var(--hero-orb-max));

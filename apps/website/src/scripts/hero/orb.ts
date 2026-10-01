@@ -12,7 +12,7 @@
  * tier keeps the CSS version. Runs only while intersecting and the tab is visible; reduced
  * motion gets one WebGL still (full tier) or the CSS still. Nothing is exposed globally.
  */
-import { SPHERE_X } from "./meta";
+import { FIGURE_X } from "./meta";
 import { afterFirstPaint } from "./paint";
 import type { Layout } from "./renderer";
 import type { FromWorker, ToWorker } from "./worker";
@@ -101,7 +101,7 @@ function setup(root: HTMLElement): void {
     // The stream starts at the platform's ring centre (centered layout) or the frame's bottom.
     const fr = frame.getBoundingClientRect();
     const or = originEl?.getBoundingClientRect();
-    const originX = or ? or.left - cr.left : sr.left + sr.width * SPHERE_X - cr.left;
+    const originX = or ? or.left - cr.left : sr.left + sr.width * FIGURE_X - cr.left;
     const originY = or ? or.top - cr.top : fr.bottom - cr.top;
     // Outer ring radius: 645 of the plate's 941 source rows (same scale in both crops).
     const platformRadius = worldEl ? worldEl.getBoundingClientRect().height * (645 / 941) : 0;
