@@ -295,6 +295,69 @@ fn one_durable_identity_moves_from_queue_through_run_to_outcome() {
 }
 
 #[test]
+fn activity_moments_follow_one_operation_identity_through_its_lifecycle() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let queued = store
+        .enqueue(spec(&workspace_id, "Activity lifecycle"))
+        .expect("enqueue");
+    store
+        .claim(Some(&queued.id))
+        .expect("claim")
+        .expect("available");
+    store
+        .bind(&queued.id, Some(&queued.id), None, None, None)
+        .expect("bind");
+    store
+        .finish(
+            &queued.id,
+            OperationStatus::Succeeded,
+            "Lifecycle complete.",
+        )
+        .expect("finish");
+
+    let (moments, truncated) = store.activity_moments(10).expect("activity moments");
+    assert!(!truncated);
+    assert_eq!(
+        moments
+            .iter()
+            .map(|entry| entry.moment.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["succeeded", "running", "starting", "queued"]
+    );
+    assert!(moments.iter().all(|entry| {
+        entry.operation_id == queued.id
+            && entry.workspace_id == workspace_id
+            && entry.operation_name == "Activity lifecycle"
+            && entry.operation_kind == OperationKind::Build
+    }));
+    assert_eq!(
+        moments
+            .iter()
+            .map(|entry| entry.moment.id.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        moments.len(),
+        "canonical moment ids remain unique"
+    );
+    let (bounded, truncated) = store.activity_moments(2).expect("bounded activity moments");
+    assert!(truncated);
+    assert_eq!(bounded.len(), 2);
+    assert_eq!(bounded[0].moment.kind, "succeeded");
+    assert_eq!(bounded[1].moment.kind, "running");
+    assert_eq!(
+        store
+            .activity_moments(0)
+            .expect_err("zero is unbounded")
+            .code,
+        "invalid_operations_activity_limit"
+    );
+}
+
+#[test]
 fn reorder_requires_the_full_pending_set_and_a_fresh_revision() {
     let data = tempfile::tempdir().expect("data");
     let project = tempfile::tempdir().expect("project");

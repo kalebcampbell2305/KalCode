@@ -32,6 +32,7 @@ const MAX_FOREGROUND_ACTIVE: i64 = 1;
 const MAX_SERVICE_ACTIVE: i64 = 4;
 const SNAPSHOT_FINAL_LIMIT: i64 = 200;
 const MAX_HISTORY_PAGE: u32 = 200;
+pub const ACTIVITY_MOMENT_LIMIT: u32 = 5_000;
 
 const OPERATION_COLUMNS: &str = "
     o.id AS operation_id,
@@ -69,6 +70,18 @@ const OPERATION_COLUMNS: &str = "
 #[derive(Clone)]
 pub struct OperationsStore {
     core: Arc<Core>,
+}
+
+/// One canonical Operations lifecycle moment with the exact identity needed by Activity.
+/// The joined labels are projection inputs only; the durable authority remains
+/// `operation_moments` and its parent `operations` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationActivityMoment {
+    pub operation_id: String,
+    pub workspace_id: String,
+    pub operation_name: String,
+    pub operation_kind: OperationKind,
+    pub moment: OperationMoment,
 }
 
 /// One durable shell lifecycle reconstructed from the canonical event log. Commands and output
@@ -366,6 +379,64 @@ impl OperationsStore {
                 tests: Vec::new(),
                 notes: Vec::new(),
             })
+        })
+    }
+
+    /// Newest-first canonical lifecycle moments for the bounded Activity projection.
+    /// Fetching one extra row makes omission explicit without ever loading unbounded history.
+    pub fn activity_moments(&self, limit: u32) -> Result<(Vec<OperationActivityMoment>, bool)> {
+        if limit == 0 || limit > ACTIVITY_MOMENT_LIMIT {
+            return Err(KalError::validation(
+                "invalid_operations_activity_limit",
+                "Operations Activity must contain between 1 and 5,000 lifecycle moments.",
+            ));
+        }
+        self.core.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.operation_id, m.at, m.kind, m.message,
+                        o.workspace_id, o.name, o.kind
+                 FROM operation_moments m
+                 JOIN operations o ON o.id = m.operation_id
+                 ORDER BY m.seq DESC
+                 LIMIT ?1",
+            )?;
+            let fetch = i64::from(limit) + 1;
+            let rows = stmt
+                .query_map([fetch], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let truncated = rows.len() > limit as usize;
+            let moments = rows
+                .into_iter()
+                .take(limit as usize)
+                .map(
+                    |(id, operation_id, at, kind, message, workspace_id, name, operation_kind)| {
+                        Ok(OperationActivityMoment {
+                            operation_id,
+                            workspace_id,
+                            operation_name: name,
+                            operation_kind: parse_kind(&operation_kind)?,
+                            moment: OperationMoment {
+                                id,
+                                at,
+                                kind,
+                                message,
+                            },
+                        })
+                    },
+                )
+                .collect::<Result<Vec<_>>>()?;
+            Ok((moments, truncated))
         })
     }
 

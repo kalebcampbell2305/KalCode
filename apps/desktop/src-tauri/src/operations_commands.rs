@@ -15,7 +15,7 @@ use kalcode_contracts::operations::*;
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::confirm::{NativeConfirmation, confirm};
-use kalcode_core::operations::OperationsStore;
+use kalcode_core::operations::{ACTIVITY_MOMENT_LIMIT, OperationsStore};
 use kalcode_core::workspaces::{TerminalInfo, TerminalSize, TerminalStatus};
 use kalcode_core::{Core, IpcError, KalError, Result};
 use kalcode_git::GitCore;
@@ -952,7 +952,12 @@ impl OperationsState {
     fn snapshot(&self) -> Result<OperationsSnapshot> {
         let (events, truncated) = self.events()?;
         let (revision, paused, items) = self.rows(&events)?;
+        let (operation_moments, moments_truncated) =
+            self.store.activity_moments(ACTIVITY_MOMENT_LIMIT)?;
         let mut warnings = vec!["Recent overview: up to 100 agent turns and 100 tool calls. Load older executions in Runs.".into()];
+        if moments_truncated {
+            warnings.push("Activity includes the latest 5,000 Operations lifecycle moments; older moments remain available through individual run details.".into());
+        }
         let services_available;
         let services = {
             let mut cache = self.observations.lock().map_err(|_| poisoned())?;
@@ -999,7 +1004,11 @@ impl OperationsState {
                 &mut environments,
             );
         }
-        let mut activity = kalcode_utilities::operation_evidence::activity(&events, &items);
+        let mut activity = kalcode_utilities::operation_evidence::activity_with_moments(
+            &events,
+            &items,
+            &operation_moments,
+        );
         // Git is sampled read-only at most once per thirty seconds, independent of UI polling.
         let mut commits = self.commits.lock().map_err(|_| poisoned())?;
         if commits
@@ -2067,6 +2076,70 @@ mod tests {
         let redacted = full_safe(&message);
         assert!(!redacted.contains(&secret));
         assert!(redacted.contains("[REDACTED:high_entropy_string]"));
+    }
+
+    #[test]
+    fn snapshot_activity_contains_the_owned_queue_start_run_and_finish_moments() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.7-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let (state, resources) = fixture(core.clone(), data.path());
+        let mut spec = observed_spec(
+            "Activity lifecycle".into(),
+            workspace.id.clone(),
+            OperationKind::Build,
+        );
+        spec.command = Some("cargo check".into());
+        let operation = state.store.enqueue(spec).expect("enqueue");
+        state
+            .store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("available");
+        state
+            .store
+            .bind(&operation.id, Some(&operation.id), None, None, None)
+            .expect("bind");
+        state
+            .store
+            .finish(
+                &operation.id,
+                OperationStatus::Succeeded,
+                "Lifecycle complete.",
+            )
+            .expect("finish");
+
+        let snapshot = state.snapshot().expect("snapshot");
+        let lifecycle = snapshot
+            .activity
+            .iter()
+            .filter(|item| item.run_id.as_deref() == Some(operation.id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(lifecycle.len(), 4);
+        assert!(
+            lifecycle
+                .iter()
+                .all(|item| { item.workspace_id.as_deref() == Some(workspace.id.as_str()) })
+        );
+        assert_eq!(
+            lifecycle
+                .iter()
+                .map(|item| item.kind.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["queued", "running", "starting", "succeeded"])
+        );
+
+        assert!(state.shutdown_checked());
+        assert!(resources.shutdown_checked());
+        core.shutdown();
     }
 
     fn history_record(id: &str, source: &str, created_at: &str) -> OperationRecord {

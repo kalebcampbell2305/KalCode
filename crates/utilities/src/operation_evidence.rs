@@ -5,7 +5,7 @@
 //! deploy command is kept distinct from a current health probe, and file evidence is limited to
 //! safe workspace-relative paths.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use kalcode_contracts::events::{EventEnvelope, EventPayload};
 use kalcode_contracts::operations::{
@@ -14,9 +14,10 @@ use kalcode_contracts::operations::{
     OperationRecord, OperationStatus, OperationTestResult,
 };
 use kalcode_contracts::threads::ThreadStatus;
+use kalcode_core::operations::OperationActivityMoment;
 use kalcode_core::workspaces::Workspace;
 
-const MAX_ACTIVITY_ENTRIES: usize = 2_000;
+const MAX_ACTIVITY_ENTRIES: usize = 5_000;
 const MAX_LABEL_CHARS: usize = 160;
 
 /// Projects all four environment rows for every known workspace.
@@ -411,6 +412,16 @@ fn record_is_later(candidate: &OperationRecord, existing: &OperationRecord) -> b
 
 /// Projects bounded, deduplicated activity from typed events and canonical run records.
 pub fn activity(events: &[EventEnvelope], runs: &[OperationRecord]) -> Vec<OperationActivity> {
+    activity_with_moments(events, runs, &[])
+}
+
+/// Projects bounded Activity with each Operations-owned lifecycle sourced from its persisted
+/// moment ledger. Observed foreign runtimes keep the existing captured-status projection.
+pub fn activity_with_moments(
+    events: &[EventEnvelope],
+    runs: &[OperationRecord],
+    operation_moments: &[OperationActivityMoment],
+) -> Vec<OperationActivity> {
     let mut by_id = BTreeMap::<String, OperationActivity>::new();
     let run_windows = activity_run_windows(runs);
     for event in events {
@@ -434,7 +445,38 @@ pub fn activity(events: &[EventEnvelope], runs: &[OperationRecord]) -> Vec<Opera
             });
     }
 
+    let operations_with_moments: HashSet<&str> = operation_moments
+        .iter()
+        .map(|entry| entry.operation_id.as_str())
+        .collect();
+    for entry in operation_moments {
+        let id = format!("moment:{}", entry.moment.id);
+        let kind = if entry.moment.kind == "failed" {
+            "failure".to_owned()
+        } else {
+            safe_label(&entry.moment.kind, "activity").to_ascii_lowercase()
+        };
+        let operation_name = safe_label(&entry.operation_name, "Run");
+        let moment_name = operation_moment_title(&entry.moment.kind)
+            .map(str::to_owned)
+            .unwrap_or_else(|| safe_label(&entry.moment.message, "Updated"));
+        by_id
+            .entry(id.clone())
+            .or_insert_with(|| OperationActivity {
+                id,
+                at: entry.moment.at.clone(),
+                kind,
+                name: format!("{moment_name} · {operation_name}"),
+                area: operation_area(entry.operation_kind).to_owned(),
+                workspace_id: Some(entry.workspace_id.clone()),
+                run_id: Some(entry.operation_id.clone()),
+            });
+    }
+
     for run in runs {
+        if run.source == "operations" && operations_with_moments.contains(run.id.as_str()) {
+            continue;
+        }
         let status = status_word(run.status);
         let id = format!("run:{}:{status}", run.id);
         by_id
@@ -462,6 +504,21 @@ pub fn activity(events: &[EventEnvelope], runs: &[OperationRecord]) -> Vec<Opera
     projected.sort_by(|left, right| right.at.cmp(&left.at).then_with(|| left.id.cmp(&right.id)));
     projected.truncate(MAX_ACTIVITY_ENTRIES);
     projected
+}
+
+fn operation_moment_title(kind: &str) -> Option<&'static str> {
+    match kind {
+        "queued" => Some("Queued"),
+        "starting" => Some("Starting"),
+        "running" => Some("Running"),
+        "paused" => Some("Paused"),
+        "blocked" => Some("Blocked"),
+        "succeeded" => Some("Succeeded"),
+        "failed" => Some("Failed"),
+        "cancelled" => Some("Cancelled"),
+        "interrupted" => Some("Interrupted"),
+        _ => None,
+    }
 }
 
 /// A run timeline contains only exact run, thread, or terminal correlations. Workspace-wide
@@ -1674,6 +1731,127 @@ mod tests {
         assert!(!json.contains(".env"));
         assert!(!json.contains("ghp_"));
         assert!(!json.contains(&secret));
+        assert!(json.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn activity_uses_canonical_moments_for_owned_runs_and_preserves_observed_runs() {
+        let mut owned = run(
+            "owned-run",
+            OperationKind::Build,
+            OperationEnvironmentKind::Local,
+        );
+        owned.status = OperationStatus::Succeeded;
+        owned.ended_at = Some("2026-09-30T10:03:00Z".to_owned());
+        let moments = [
+            kalcode_core::operations::OperationActivityMoment {
+                operation_id: owned.id.clone(),
+                workspace_id: owned.spec.workspace_id.clone(),
+                operation_name: owned.spec.name.clone(),
+                operation_kind: owned.spec.kind,
+                moment: OperationMoment {
+                    id: "moment-queued".to_owned(),
+                    at: "2026-09-30T10:00:00Z".to_owned(),
+                    kind: "queued".to_owned(),
+                    message: "Added to the Operations queue.".to_owned(),
+                },
+            },
+            kalcode_core::operations::OperationActivityMoment {
+                operation_id: owned.id.clone(),
+                workspace_id: owned.spec.workspace_id.clone(),
+                operation_name: owned.spec.name.clone(),
+                operation_kind: owned.spec.kind,
+                moment: OperationMoment {
+                    id: "moment-starting".to_owned(),
+                    at: "2026-09-30T10:01:00Z".to_owned(),
+                    kind: "starting".to_owned(),
+                    message: "Execution claimed and starting.".to_owned(),
+                },
+            },
+            kalcode_core::operations::OperationActivityMoment {
+                operation_id: owned.id.clone(),
+                workspace_id: owned.spec.workspace_id.clone(),
+                operation_name: owned.spec.name.clone(),
+                operation_kind: owned.spec.kind,
+                moment: OperationMoment {
+                    id: "moment-running".to_owned(),
+                    at: "2026-09-30T10:02:00Z".to_owned(),
+                    kind: "running".to_owned(),
+                    message: "Execution is running.".to_owned(),
+                },
+            },
+            kalcode_core::operations::OperationActivityMoment {
+                operation_id: owned.id.clone(),
+                workspace_id: owned.spec.workspace_id.clone(),
+                operation_name: owned.spec.name.clone(),
+                operation_kind: owned.spec.kind,
+                moment: OperationMoment {
+                    id: "moment-succeeded".to_owned(),
+                    at: "2026-09-30T10:03:00Z".to_owned(),
+                    kind: "succeeded".to_owned(),
+                    message: "Completed successfully.".to_owned(),
+                },
+            },
+        ];
+        let mut observed = run(
+            "observed-run",
+            OperationKind::Script,
+            OperationEnvironmentKind::Local,
+        );
+        observed.source = "terminal".to_owned();
+        observed.status = OperationStatus::Succeeded;
+        observed.ended_at = Some("2026-09-30T10:04:00Z".to_owned());
+
+        let projected = activity_with_moments(&[], &[owned.clone(), observed.clone()], &moments);
+        let owned_rows = projected
+            .iter()
+            .filter(|item| item.run_id.as_deref() == Some(owned.id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(owned_rows.len(), 4);
+        assert!(owned_rows.iter().all(|item| {
+            item.workspace_id.as_deref() == Some(owned.spec.workspace_id.as_str())
+        }));
+        assert_eq!(
+            owned_rows
+                .iter()
+                .map(|item| item.kind.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["queued", "running", "starting", "succeeded"])
+        );
+        assert!(
+            projected
+                .iter()
+                .all(|item| item.id != "run:owned-run:succeeded"),
+            "the persisted ledger replaces the owned run's synthetic latest-only row"
+        );
+        assert!(projected.iter().any(|item| {
+            item.id == "run:observed-run:succeeded"
+                && item.run_id.as_deref() == Some(observed.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn canonical_moment_activity_is_deduplicated_and_redacted() {
+        let secret = format!("{}{}", "ghp_", "0123456789abcdefghijklmnopqrstuvwxyzAB");
+        let entry = kalcode_core::operations::OperationActivityMoment {
+            operation_id: "owned-run".to_owned(),
+            workspace_id: "workspace-1".to_owned(),
+            operation_name: format!("Build {secret}"),
+            operation_kind: OperationKind::Build,
+            moment: OperationMoment {
+                id: "moment-progress".to_owned(),
+                at: "2026-09-30T10:02:00Z".to_owned(),
+                kind: "progress".to_owned(),
+                message: format!("Provider returned {secret}"),
+            },
+        };
+        let projected = activity_with_moments(&[], &[], &[entry.clone(), entry]);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].run_id.as_deref(), Some("owned-run"));
+        assert_eq!(projected[0].workspace_id.as_deref(), Some("workspace-1"));
+        let json = serde_json::to_string(&projected).expect("json");
+        assert!(!json.contains(&secret));
+        assert!(!json.contains("ghp_"));
         assert!(json.contains("[REDACTED]"));
     }
 
