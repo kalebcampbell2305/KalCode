@@ -552,6 +552,8 @@ impl GuardianRuntime {
             &desktop_recovery,
             &prior_helper_drain,
         )?;
+        // Releases the lease on Windows and macOS; the unsupported-platform stub holds nothing.
+        #[allow(clippy::drop_non_drop)]
         drop(prior_helper_drain);
         let supervisor = match GuardianSupervisor::launch(
             helper,

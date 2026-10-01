@@ -254,16 +254,16 @@
   --btn-primary-glow: rgb(76 141 255 / 0.42);
 
   /* Contract status tones (StatusTone). Always paired with a glyph and words.
-     working green · waiting neutral (emphasized) · muted · done high-contrast neutral ·
-     failed red · paused amber (the only amber) · recovering blue. */
+     Owner language: blue = active/focused · green = healthy/running · amber = waiting for you
+     (waiting and paused) · red = error/failure. Muted and done stay neutral; recovering is blue. */
   --status-working: #3ccf8e;
   --status-working-soft: rgb(60 207 142 / 0.12);
   --status-working-text: #62dca4;
   --status-working-line: rgb(60 207 142 / 0.4);
-  --status-waiting: #c7d1e0;
-  --status-waiting-soft: rgb(199 209 224 / 0.1);
-  --status-waiting-text: #e6edf8;
-  --status-waiting-line: rgb(199 209 224 / 0.36);
+  --status-waiting: #f2b544;
+  --status-waiting-soft: rgb(242 181 68 / 0.12);
+  --status-waiting-text: #f6c566;
+  --status-waiting-line: rgb(242 181 68 / 0.4);
   --status-muted: #8593ab;
   --status-muted-soft: rgb(133 147 171 / 0.12);
   --status-muted-text: #a8b4c9;
@@ -364,10 +364,10 @@
   --status-working-soft: rgb(11 122 81 / 0.09);
   --status-working-text: #0a6e49;
   --status-working-line: rgb(11 122 81 / 0.35);
-  --status-waiting: #37445a;
-  --status-waiting-soft: rgb(55 68 90 / 0.08);
-  --status-waiting-text: #0b1424;
-  --status-waiting-line: rgb(55 68 90 / 0.34);
+  --status-waiting: #9a6200;
+  --status-waiting-soft: rgb(214 140 0 / 0.12);
+  --status-waiting-text: #855300;
+  --status-waiting-line: rgb(154 98 0 / 0.38);
   --status-muted: #66728a;
   --status-muted-soft: rgb(102 114 138 / 0.1);
   --status-muted-text: #4f5b72;

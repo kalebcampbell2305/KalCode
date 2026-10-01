@@ -16,7 +16,7 @@ import type { FocusTarget } from "../../runtime/uiIntents.tsx";
 /**
  * Notification kinds as the center shows them: a glyph and a contract tone (never colour alone —
  * the title always says what happened). Tones follow the status palette: done high-contrast
- * neutral, failed red, needs-you neutral grey, recovery blue.
+ * neutral, failed red, needs-you amber, recovery blue.
  */
 export const KIND_META: Record<NotificationKind, { icon: LucideIcon; tone: StatusTone; label: string }> = {
   thread_completed: { icon: CircleCheck, tone: "done", label: "Completed" },

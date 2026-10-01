@@ -50,7 +50,7 @@ test.describe("product moments", () => {
     await card.getByRole("button", { name: "Approve once" }).click();
     await expect(card).toHaveAttribute("data-state", "approved");
     await expect(codex).toContainText(/Running command|Testing|Completed/, { timeout: 6000 });
-    // Paused is the only amber status.
+    // The paused runner carries the paused tone.
     await expect(block.getByTestId("cc-row-claude-runner").locator(".kc-status")).toHaveAttribute(
       "data-tone",
       "paused",

@@ -111,7 +111,7 @@
 .state[data-tone="ok"] {
   color: var(--status-working-text);
 }
-/* Needs the person (outdated, signed out): neutral and emphasized; amber is reserved for PAUSED. */
+/* Needs the person (outdated, signed out): amber (waiting for you) and emphasized. */
 .state[data-tone="warn"] {
   color: var(--status-waiting-text);
   font-weight: 600;

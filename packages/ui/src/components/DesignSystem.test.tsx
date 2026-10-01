@@ -36,7 +36,7 @@ describe("StatusChip", () => {
     expect(chip.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("maps the owner's palette: paused is the only amber tone, waiting is neutral", () => {
+  it("maps the owner's palette: waiting for you and paused have their own tones", () => {
     expect(DISPLAY_STATUS_TONE.paused).toBe("paused");
     expect(DISPLAY_STATUS_TONE.waiting_for_you).toBe("waiting");
     expect(DISPLAY_STATUS_TONE.working).toBe("working");
