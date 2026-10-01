@@ -229,6 +229,8 @@ pub struct OperationsState {
     worker: Mutex<Option<JoinHandle<()>>>,
     observations: Mutex<Option<(Instant, Vec<DevelopmentService>, bool)>>,
     commits: Mutex<Option<(Instant, Vec<OperationActivity>)>>,
+    /// Final artifact handoffs are checked once per process; transient collector errors retry.
+    artifact_checked: Mutex<HashSet<String>>,
 }
 
 impl OperationsState {
@@ -251,6 +253,7 @@ impl OperationsState {
             worker: Mutex::new(None),
             observations: Mutex::new(None),
             commits: Mutex::new(None),
+            artifact_checked: Mutex::new(HashSet::new()),
         });
         let weak = Arc::downgrade(&state);
         let stop = state.stop.clone();
@@ -403,6 +406,29 @@ impl OperationsState {
 
     fn reconcile(&self) -> Result<()> {
         let (_, _, rows) = self.store.snapshot()?;
+        let visible = rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<HashSet<_>>();
+        self.artifact_checked
+            .lock()
+            .map_err(|_| poisoned())?
+            .retain(|id| visible.contains(id.as_str()));
+        // Recovery can settle a terminal before this coordinator starts. Artifact reports remain
+        // at their per-run handoff path until this durable import succeeds.
+        for row in rows.iter().filter(|row| {
+            row.source == "operations"
+                && row.terminal_id.as_deref() == Some(row.id.as_str())
+                && matches!(
+                    row.status,
+                    OperationStatus::Succeeded
+                        | OperationStatus::Failed
+                        | OperationStatus::Cancelled
+                        | OperationStatus::Interrupted
+                )
+        }) {
+            self.capture_artifacts(row);
+        }
         for mut row in rows.into_iter().filter(|r| {
             matches!(
                 r.status,
@@ -455,7 +481,12 @@ impl OperationsState {
                 match self.core.terminal(id) {
                     Ok(terminal) => {
                         if let Some((status, outcome)) = terminal_outcome(&terminal) {
-                            let outcome = self.with_output_evidence(&row, &outcome);
+                            let artifact_note = self.capture_artifacts(&row);
+                            let mut outcome = self.with_output_evidence(&row, &outcome);
+                            if let Some(note) = artifact_note {
+                                outcome.push(' ');
+                                outcome.push_str(note);
+                            }
                             if let Some(ended_at) = terminal.ended_at.as_deref() {
                                 self.store.finish_at(
                                     &row.id,
@@ -624,10 +655,12 @@ impl OperationsState {
                         "Enter a command for this task.",
                     )
                 })?;
-                let terminal = self.core.create_operation_terminal(
+                let artifact_report = crate::operation_artifacts::prepare(&self.core, &row.id)?;
+                let terminal = self.core.create_operation_terminal_with_artifact_report(
                     &row.spec.workspace_id,
                     &row.id,
                     command,
+                    &artifact_report,
                     TerminalSize::new(120, 30).map_err(|_| unavailable())?,
                 )?;
                 if let Err(error) = self.store.bind(
@@ -681,6 +714,33 @@ impl OperationsState {
             self.store.record_output(&row.id, &output)?;
         }
         Ok(())
+    }
+
+    fn capture_artifacts(&self, row: &OperationRecord) -> Option<&'static str> {
+        if row.source != "operations" || row.terminal_id.as_deref() != Some(row.id.as_str()) {
+            return None;
+        }
+        match self.artifact_checked.lock() {
+            Ok(checked) if checked.contains(&row.id) => return None,
+            Ok(_) => {}
+            Err(_) => return Some("Artifact report evidence was unavailable."),
+        }
+        match crate::operation_artifacts::collect(&self.core, row) {
+            Ok(_) => match self.artifact_checked.lock() {
+                Ok(mut checked) => {
+                    checked.insert(row.id.clone());
+                    None
+                }
+                Err(_) => Some("Artifact report evidence was unavailable."),
+            },
+            Err(error) => {
+                tracing::warn!(
+                    event = "operations.artifact_capture_failed",
+                    code = error.code
+                );
+                Some("Artifact report evidence was unavailable.")
+            }
+        }
     }
 
     fn with_output_evidence(&self, row: &OperationRecord, outcome: &str) -> String {
@@ -1222,6 +1282,35 @@ impl OperationsState {
         if let Some(ended) = &run.ended_at {
             events.retain(|event| event.occurred_at <= *ended);
         }
+        if run.source == "operations" {
+            // Artifact reports can be imported by restart recovery after the run's terminal end
+            // boundary. Read only this exact task's typed report evidence outside that lifecycle
+            // window; never admit later workspace-wide events.
+            let (reported, reported_truncated) = self.matching_events(EventQuery {
+                types: vec![
+                    "operation.artifact_reported".into(),
+                    "operation.artifact_report_rejected".into(),
+                ],
+                correlation: CorrelationFilter {
+                    workspace_id: Some(run.spec.workspace_id.clone()),
+                    task_id: Some(run.id.clone()),
+                    ..CorrelationFilter::default()
+                },
+                order: SeqOrder::Asc,
+                limit: 500,
+                ..EventQuery::default()
+            })?;
+            let mut seen = events
+                .iter()
+                .map(|event| event.id.clone())
+                .collect::<HashSet<_>>();
+            events.extend(
+                reported
+                    .into_iter()
+                    .filter(|event| seen.insert(event.id.clone())),
+            );
+            truncated |= reported_truncated;
+        }
         if run.source == "tool" {
             let expected = id.strip_prefix("tool:");
             events.retain(|event| match &event.event {
@@ -1266,6 +1355,17 @@ impl OperationsState {
         if !event_evidence_available {
             detail.notes.push(
                 "This historical turn has no durable event boundary, so its timeline and logs are unavailable."
+                    .into(),
+            );
+        }
+        if events.iter().any(|event| {
+            matches!(
+                &event.event,
+                EventPayload::OperationArtifactReportRejected { .. }
+            )
+        }) {
+            detail.notes.push(
+                "The command reported artifacts, but the bounded native report was rejected; no unverified paths are shown."
                     .into(),
             );
         }
@@ -1458,7 +1558,12 @@ impl OperationsState {
                     .ok_or_else(unavailable)?
                     .stop(thread)?;
             }
-            let outcome = self.with_output_evidence(&row, "Cancelled by you.");
+            let artifact_note = self.capture_artifacts(&row);
+            let mut outcome = self.with_output_evidence(&row, "Cancelled by you.");
+            if let Some(note) = artifact_note {
+                outcome.push(' ');
+                outcome.push_str(note);
+            }
             self.store
                 .finish(id, OperationStatus::Cancelled, outcome.as_str())?;
         } else {
@@ -2050,6 +2155,7 @@ mod tests {
                 worker: Mutex::new(None),
                 observations: Mutex::new(None),
                 commits: Mutex::new(None),
+                artifact_checked: Mutex::new(HashSet::new()),
             },
             resources,
         )
@@ -2096,6 +2202,7 @@ mod tests {
                 worker: Mutex::new(None),
                 observations: Mutex::new(None),
                 commits: Mutex::new(None),
+                artifact_checked: Mutex::new(HashSet::new()),
             },
             resources,
         )
@@ -3008,11 +3115,26 @@ mod tests {
             .collect::<Vec<_>>();
         core.write_with_events(|_| Ok(((), newer_events)))
             .expect("emit newer workspace events");
+        core.emit(kalcode_contracts::events::NewEvent {
+            source: kalcode_contracts::events::EventSource::Core,
+            correlation: kalcode_contracts::events::Correlation {
+                workspace_id: Some(workspace.id.clone()),
+                task_id: Some(operation.id.clone()),
+                ..Default::default()
+            },
+            event: EventPayload::OperationArtifactReported {
+                path: "dist/late.zip".into(),
+            },
+        })
+        .expect("emit late recovery artifact");
 
         let detail = state.detail(&operation.id).expect("historical detail");
         assert_eq!(detail.tests.len(), 1);
         assert_eq!(detail.tests[0].status, "passed");
         assert_eq!(detail.tests[0].detail, "Test command exited with code 0.");
+        assert!(detail.artifacts.iter().any(|artifact| {
+            artifact.location == "dist/late.zip" && artifact.kind == "reported_file"
+        }));
 
         assert!(resources.shutdown_checked());
         core.shutdown();

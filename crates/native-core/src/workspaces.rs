@@ -794,8 +794,15 @@ impl Core {
             "UPDATE workspaces SET active_terminal_id = ?1 WHERE id = ?2",
             params![id, workspace_id],
         )?;
-        let (session, generation, envelope) =
-            self.start_shell(&tx, &id, workspace_id, &workspace.root_path, &shell, size)?;
+        let (session, generation, envelope) = self.start_shell(
+            &tx,
+            &id,
+            workspace_id,
+            &workspace.root_path,
+            &shell,
+            None,
+            size,
+        )?;
         if let Err(error) = tx.commit() {
             let _ = session.kill();
             return Err(error.into());
@@ -819,6 +826,57 @@ impl Core {
         workspace_id: &str,
         operation_id: &str,
         command: &str,
+        size: TerminalSize,
+    ) -> Result<TerminalInfo> {
+        self.create_operation_terminal_inner(workspace_id, operation_id, command, None, size)
+    }
+
+    /// Starts an Operations command with one native-owned artifact-report handoff path.
+    /// Arbitrary environment pairs are deliberately not accepted by this API.
+    pub fn create_operation_terminal_with_artifact_report(
+        self: &Arc<Self>,
+        workspace_id: &str,
+        operation_id: &str,
+        command: &str,
+        artifact_report: &Path,
+        size: TerminalSize,
+    ) -> Result<TerminalInfo> {
+        let expected_name = format!("{operation_id}.json");
+        let expected_directory = self
+            .paths()
+            .data_dir
+            .join("operations")
+            .join("artifact-reports");
+        let report_directory = artifact_report.parent();
+        let valid_directory = report_directory
+            .and_then(|path| std::fs::canonicalize(path).ok())
+            .zip(std::fs::canonicalize(expected_directory).ok())
+            .is_some_and(|(actual, expected)| actual == expected);
+        if !artifact_report.is_absolute()
+            || artifact_report.file_name().and_then(|name| name.to_str())
+                != Some(expected_name.as_str())
+            || !valid_directory
+        {
+            return Err(KalError::validation(
+                "invalid_operation_artifact_report",
+                "The artifact report handoff path is invalid.",
+            ));
+        }
+        self.create_operation_terminal_inner(
+            workspace_id,
+            operation_id,
+            command,
+            Some(artifact_report),
+            size,
+        )
+    }
+
+    fn create_operation_terminal_inner(
+        self: &Arc<Self>,
+        workspace_id: &str,
+        operation_id: &str,
+        command: &str,
+        artifact_report: Option<&Path>,
         size: TerminalSize,
     ) -> Result<TerminalInfo> {
         validate_id(workspace_id)?;
@@ -898,6 +956,7 @@ impl Core {
             workspace_id,
             &workspace.root_path,
             &shell,
+            artifact_report,
             size,
         )?;
         if let Err(error) = tx.commit() {
@@ -949,6 +1008,7 @@ impl Core {
             &terminal.workspace_id,
             &workspace.root_path,
             &shell,
+            None,
             size,
         )?;
         if let Err(error) = tx.commit() {
@@ -977,6 +1037,7 @@ impl Core {
         workspace_id: &str,
         root: &str,
         shell: &ShellInfo,
+        artifact_report: Option<&Path>,
         size: TerminalSize,
     ) -> Result<(PtySession, u64, EventEnvelope)> {
         if self
@@ -1000,16 +1061,29 @@ impl Core {
         }
         let env_remove =
             shell_env_removals(std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()));
+        let mut env = vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("TERM_PROGRAM".into(), "KalCode".into()),
+            ("TERM_PROGRAM_VERSION".into(), self.app_info().version),
+        ];
+        if let Some(path) = artifact_report {
+            let value = path.to_str().ok_or_else(|| {
+                KalError::validation(
+                    "invalid_operation_artifact_report",
+                    "The artifact report handoff path is invalid.",
+                )
+            })?;
+            env.push((
+                kalcode_contracts::operations::OPERATION_ARTIFACT_REPORT_ENV.into(),
+                value.to_owned(),
+            ));
+        }
         let spec = SpawnSpec {
             program: shell.program.clone(),
             args: shell.args.clone(),
             cwd: PathBuf::from(root),
-            env: vec![
-                ("TERM".into(), "xterm-256color".into()),
-                ("COLORTERM".into(), "truecolor".into()),
-                ("TERM_PROGRAM".into(), "KalCode".into()),
-                ("TERM_PROGRAM_VERSION".into(), self.app_info().version),
-            ],
+            env,
             env_remove,
             size,
         };
@@ -1839,6 +1913,7 @@ mod tests {
     fn shells_never_receive_kalcode_or_browser_runtime_variables() {
         let names = [
             "KALCODE_DATA_DIR",
+            kalcode_contracts::operations::OPERATION_ARTIFACT_REPORT_ENV,
             "kalcode_e2e_pick_folder",
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
             "WEBVIEW2_SOME_FUTURE_OVERRIDE",
@@ -1850,7 +1925,7 @@ mod tests {
             "MY_WEBVIEW2_NOTES",
         ];
         let removed = shell_env_removals(names.iter().map(|n| (*n).to_owned()));
-        assert_eq!(removed, &names[..7]);
+        assert_eq!(removed, &names[..8]);
     }
 
     #[test]

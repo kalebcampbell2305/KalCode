@@ -38,6 +38,36 @@ borrows the current account runtime lease, uses atomic store claims and bounded 
 and pauses on unproven cleanup. A restart does not retry work: active durable records are resolved
 from recorded terminal evidence where possible, otherwise interrupted, and the queue is paused.
 
+### Command artifact reports
+
+An Operations command can opt in to artifact evidence through the native-only
+`KALCODE_OPERATION_ARTIFACT_REPORT` environment variable. The command must finish each output
+first, write a sibling temporary report, close it, and atomically rename it to the supplied path
+before the command exits. The version 1 JSON shape is
+`{"version":1,"artifacts":["dist/app.zip"]}`. Reports are limited to 64 KiB and 256 paths.
+Paths must be workspace-relative, must not contain private or secret-shaped components, and must
+resolve without links or reparse points to regular files inside the exact operation workspace.
+Directory bundles such as `.app` and `.dSYM` must be packaged as a regular `.zip` or `.dmg` for
+this version of the contract.
+
+This portable Node pattern works from Windows and macOS build scripts without exposing the native
+data directory anywhere else:
+
+```js
+import { renameSync, writeFileSync } from "node:fs";
+
+const report = process.env.KALCODE_OPERATION_ARTIFACT_REPORT;
+if (report) {
+  const temporary = `${report}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ version: 1, artifacts: ["dist/app.zip"] }));
+  renameSync(temporary, report);
+}
+```
+
+KalCode validates reported files after the terminal exits and persists typed, exact run/workspace
+evidence. Missing reports are valid. KalCode does not scan the workspace or infer artifacts from
+terminal output, and a report proves only that the command declared a verified file as an output.
+
 ## What each view proves
 
 - **Runs** shows durable Operations records plus bounded observations from the thread, tool,

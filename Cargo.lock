@@ -2928,9 +2928,11 @@ version = "0.1.7+2"
 dependencies = [
  "kalcode-contracts",
  "kalcode-pty",
+ "libc",
  "os_info",
  "regex",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.10.9",

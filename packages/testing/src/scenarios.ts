@@ -121,6 +121,14 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "file.created": { type: "file.created", payload: { threadId, path: "src/new.ts" } },
     "file.modified": { type: "file.modified", payload: { threadId, path: "src/settings/store.ts" } },
     "file.deleted": { type: "file.deleted", payload: { threadId, path: "build/cache.json" } },
+    "operation.artifact_reported": {
+      type: "operation.artifact_reported",
+      payload: { path: "dist/app.zip" },
+    },
+    "operation.artifact_report_rejected": {
+      type: "operation.artifact_report_rejected",
+      payload: { code: "artifact_path_rejected" },
+    },
     "approval.requested": {
       type: "approval.requested",
       payload: { requestId, threadId, scopes: ["terminal.execute"], summary: "Run npm install lodash" },

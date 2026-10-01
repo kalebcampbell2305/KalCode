@@ -349,6 +349,15 @@ pub enum EventPayload {
         thread_id: Option<String>,
         path: String,
     },
+    /// An Operations command explicitly reported a workspace-relative output that native code
+    /// verified as a present regular file. This is reported provenance, not a claim that the
+    /// command created or modified the file.
+    #[serde(rename = "operation.artifact_reported")]
+    OperationArtifactReported { path: String },
+    /// A command placed an artifact report at its app-owned handoff path, but native validation
+    /// rejected it. `code` is a bounded stable reason; report contents are never persisted.
+    #[serde(rename = "operation.artifact_report_rejected")]
+    OperationArtifactReportRejected { code: String },
 
     // ---- Permissions (Z4) ----
     #[serde(rename = "approval.requested")]
@@ -660,6 +669,8 @@ impl EventPayload {
             Self::FileCreated { .. } => "file.created",
             Self::FileModified { .. } => "file.modified",
             Self::FileDeleted { .. } => "file.deleted",
+            Self::OperationArtifactReported { .. } => "operation.artifact_reported",
+            Self::OperationArtifactReportRejected { .. } => "operation.artifact_report_rejected",
             Self::ApprovalRequested { .. } => "approval.requested",
             Self::ApprovalApproved { .. } => "approval.approved",
             Self::ApprovalDenied { .. } => "approval.denied",
@@ -914,6 +925,8 @@ mod tests {
                 thread_id: None,
                 path: s(),
             },
+            EventPayload::OperationArtifactReported { path: s() },
+            EventPayload::OperationArtifactReportRejected { code: s() },
             EventPayload::ApprovalRequested {
                 request_id: s(),
                 thread_id: s(),
@@ -1148,7 +1161,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 81);
+        assert_eq!(samples.len(), 83);
     }
 
     #[test]

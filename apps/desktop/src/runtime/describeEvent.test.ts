@@ -204,6 +204,17 @@ describe("describeEvent", () => {
     expect(routed("request").title).toBe("KalVoice heard a request");
   });
 
+  it("describes verified and rejected operation artifact reports without report contents", () => {
+    expect(
+      describeEvent(envelope({ type: "operation.artifact_reported", payload: { path: "dist/app.zip" } })),
+    ).toEqual({ title: "Operation artifact reported", detail: "dist/app.zip", tone: "success" });
+    expect(
+      describeEvent(
+        envelope({ type: "operation.artifact_report_rejected", payload: { code: "artifact_path_rejected" } }),
+      ),
+    ).toEqual({ title: "Operation artifact report rejected", detail: null, tone: "danger" });
+  });
+
   it("describes Doctor lifecycle events without finding or environment contents", () => {
     expect(describeEvent(envelope({ type: "doctor.run_started", payload: { runId: "run-1", checks: 12 } }))).toEqual({
       title: "Environment check started",

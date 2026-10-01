@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Native-only handoff path for an optional bounded Operations artifact report.
+pub const OPERATION_ARTIFACT_REPORT_ENV: &str = "KALCODE_OPERATION_ARTIFACT_REPORT";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

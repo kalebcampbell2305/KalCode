@@ -35,6 +35,7 @@ mod layout_commands;
 mod locator_commands;
 pub mod native_confirm;
 mod notification_commands;
+mod operation_artifacts;
 mod operations_commands;
 mod operations_observed;
 pub mod permission_commands;

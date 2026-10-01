@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use kalcode_contracts::events::{EventEnvelope, EventPayload};
+use kalcode_contracts::events::{EventEnvelope, EventPayload, EventSource};
 use kalcode_contracts::operations::{
     DevelopmentService, EnvironmentVariablePresence, OperationActivity, OperationArtifact,
     OperationDeploymentRelationship, OperationEnvironment, OperationEnvironmentKind, OperationKind,
@@ -581,6 +581,9 @@ pub fn activity_with_moments(
         let workspace_id = event_workspace_id(event)
             .map(str::to_owned)
             .or_else(|| matched_run.map(|run| run.spec.workspace_id.clone()));
+        let run_id = matched_run
+            .map(|run| run.id.clone())
+            .or_else(|| exact_artifact_run_id(event));
         by_id
             .entry(format!("event:{}", event.id))
             .or_insert_with(|| OperationActivity {
@@ -590,7 +593,7 @@ pub fn activity_with_moments(
                 name,
                 area,
                 workspace_id,
-                run_id: matched_run.map(|run| run.id.clone()),
+                run_id,
             });
     }
 
@@ -670,6 +673,29 @@ fn operation_moment_title(kind: &str) -> Option<&'static str> {
     }
 }
 
+fn exact_artifact_run_id(event: &EventEnvelope) -> Option<String> {
+    if event.source != EventSource::Core
+        || !matches!(
+            event.event,
+            EventPayload::OperationArtifactReported { .. }
+                | EventPayload::OperationArtifactReportRejected { .. }
+        )
+        || !event
+            .correlation
+            .workspace_id
+            .as_deref()
+            .is_some_and(kalcode_contracts::ids::is_valid_id)
+    {
+        return None;
+    }
+    event
+        .correlation
+        .task_id
+        .as_deref()
+        .filter(|id| kalcode_contracts::ids::is_valid_id(id))
+        .map(str::to_owned)
+}
+
 /// A run timeline contains only exact run, thread, or terminal correlations. Workspace-wide
 /// events are deliberately excluded because concurrent runs can share a workspace. Lifecycle
 /// timestamps are synthesized only for observed runs, which have no persisted Operations ledger.
@@ -738,6 +764,18 @@ pub fn detail_evidence(
     let mut files = BTreeSet::new();
     let mut artifacts = BTreeMap::<String, OperationArtifact>::new();
     for event in events.iter().filter(|event| event_matches_run(event, run)) {
+        if let EventPayload::OperationArtifactReported { path } = &event.event {
+            let Some(path) = safe_relative_path(path) else {
+                continue;
+            };
+            let name = path.rsplit('/').next().unwrap_or("File").to_owned();
+            artifacts.entry(path.clone()).or_insert(OperationArtifact {
+                name,
+                location: path,
+                kind: "reported_file".to_owned(),
+            });
+            continue;
+        }
         let (path, created) = match &event.event {
             EventPayload::FileCreated { path, .. } => (path, true),
             EventPayload::FileModified { path, .. } | EventPayload::FileDeleted { path, .. } => {
@@ -1079,6 +1117,14 @@ fn event_activity(event: &EventEnvelope) -> Option<(&'static str, String, String
         EventPayload::FileCreated { path, .. } => file_activity("File created", path),
         EventPayload::FileModified { path, .. } => file_activity("File changed", path),
         EventPayload::FileDeleted { path, .. } => file_activity("File deleted", path),
+        EventPayload::OperationArtifactReported { path } => {
+            artifact_activity("Artifact reported", path)
+        }
+        EventPayload::OperationArtifactReportRejected { .. } => (
+            "failure",
+            "Artifact report rejected".to_owned(),
+            "Artifacts".to_owned(),
+        ),
         EventPayload::GitDiffChanged { files, .. } => (
             "file",
             format!("Working tree changed · {files} file(s)"),
@@ -1163,6 +1209,17 @@ fn file_activity(action: &str, path: &str) -> (&'static str, String, String) {
     }
 }
 
+fn artifact_activity(action: &str, path: &str) -> (&'static str, String, String) {
+    match safe_relative_path(path) {
+        Some(path) => ("artifact", format!("{action} · {path}"), file_area(&path)),
+        None => (
+            "artifact",
+            format!("{action} · path withheld"),
+            "Workspace".to_owned(),
+        ),
+    }
+}
+
 fn event_message(event: &EventEnvelope) -> String {
     match &event.event {
         EventPayload::ThreadCreated { .. } => "Agent task created".to_owned(),
@@ -1192,6 +1249,10 @@ fn event_message(event: &EventEnvelope) -> String {
         EventPayload::FileCreated { path, .. } => file_message("File created", path),
         EventPayload::FileModified { path, .. } => file_message("File changed", path),
         EventPayload::FileDeleted { path, .. } => file_message("File deleted", path),
+        EventPayload::OperationArtifactReported { path } => file_message("Artifact reported", path),
+        EventPayload::OperationArtifactReportRejected { .. } => {
+            "Artifact report rejected".to_owned()
+        }
         EventPayload::ShellStarted { .. } => "Terminal process started".to_owned(),
         EventPayload::ShellCompleted { exit_code, .. } => {
             format!("Terminal process exited with code {exit_code}")
@@ -1238,7 +1299,9 @@ fn safe_url(value: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
-fn safe_relative_path(value: &str) -> Option<String> {
+/// Normalizes a workspace-relative path only when it is safe to persist in Operations evidence.
+/// Callers must still prove filesystem containment before opening or reporting the path.
+pub fn safe_relative_path(value: &str) -> Option<String> {
     let path = value.trim();
     if path.is_empty()
         || path.len() > 1_024
@@ -2631,6 +2694,73 @@ mod tests {
         assert!(!json.contains("should-never-appear"));
         assert!(!json.contains("private.txt"));
         assert!(!json.contains("tests passed"));
+    }
+
+    #[test]
+    fn reported_operation_artifact_is_not_fabricated_as_a_created_file() {
+        let run = run(
+            "artifact-run",
+            OperationKind::Build,
+            OperationEnvironmentKind::Local,
+        );
+        let reported = event(
+            "artifact-reported",
+            "2026-09-30T10:01:00Z",
+            Correlation {
+                workspace_id: Some("workspace-1".to_owned()),
+                task_id: Some(run.id.clone()),
+                ..Correlation::default()
+            },
+            EventPayload::OperationArtifactReported {
+                path: "dist/app.zip".to_owned(),
+            },
+        );
+
+        let (files, artifacts, tests) = detail_evidence(&[reported.clone()], &run);
+        assert!(
+            files.is_empty(),
+            "a report does not prove a file was created"
+        );
+        assert!(tests.is_empty());
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].name, "app.zip");
+        assert_eq!(artifacts[0].location, "dist/app.zip");
+        assert_eq!(artifacts[0].kind, "reported_file");
+
+        let projected = activity(&[reported], &[run]);
+        assert_eq!(projected.len(), 2, "run lifecycle plus artifact report");
+        assert!(projected.iter().any(|item| {
+            item.kind == "artifact"
+                && item.name == "Artifact reported · dist/app.zip"
+                && item.area == "dist"
+                && item.run_id.as_deref() == Some("artifact-run")
+        }));
+    }
+
+    #[test]
+    fn reported_artifact_keeps_exact_run_link_after_run_leaves_snapshot() {
+        let workspace_id = kalcode_contracts::ids::new_id();
+        let run_id = kalcode_contracts::ids::new_id();
+        let reported = event(
+            "late-artifact",
+            "2026-09-30T11:00:00Z",
+            Correlation {
+                workspace_id: Some(workspace_id.clone()),
+                task_id: Some(run_id.clone()),
+                ..Correlation::default()
+            },
+            EventPayload::OperationArtifactReported {
+                path: "dist/archive.zip".to_owned(),
+            },
+        );
+
+        let projected = activity(&[reported], &[]);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(
+            projected[0].workspace_id.as_deref(),
+            Some(workspace_id.as_str())
+        );
     }
 
     #[test]

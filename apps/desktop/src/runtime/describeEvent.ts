@@ -286,6 +286,10 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "File changed", detail: event.payload.path, tone: "idle" };
     case "file.deleted":
       return { title: "File deleted", detail: event.payload.path, tone: "waiting" };
+    case "operation.artifact_reported":
+      return { title: "Operation artifact reported", detail: event.payload.path, tone: "success" };
+    case "operation.artifact_report_rejected":
+      return { title: "Operation artifact report rejected", detail: null, tone: "danger" };
     case "approval.requested":
       return { title: "Approval needed", detail: event.payload.summary, tone: "waiting" };
     case "approval.approved":
