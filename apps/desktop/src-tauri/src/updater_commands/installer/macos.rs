@@ -1851,8 +1851,13 @@ mod tests {
             }),
             started_at: "2026-09-30T12:00:00Z".into(),
         })?;
-        let (ready, outcome) =
-            crate::updater_commands::reconcile_after_cleanup(&mut journal, sweep, true, "0.1.6");
+        let (ready, outcome) = crate::updater_commands::reconcile_after_cleanup(
+            &mut journal,
+            sweep,
+            true,
+            true,
+            "0.1.6",
+        );
         assert!(ready);
         assert!(matches!(outcome, Ok(Some(InstallOutcome::Updated))));
         assert!(journal.state().install_attempt.is_none());
