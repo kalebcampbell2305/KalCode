@@ -109,3 +109,15 @@ Integration of this stacked follow-up into #41, conflict resolution against curr
 registered release gates, signed Windows/macOS builds, publication, and production update
 verification remain owned by Claude. No owner credential or manual action was requested by this
 implementation pass. Delivery truth: implemented and locally verified; not published by this pass.
+
+## Broader CI follow-up
+
+PR #46 triggered the registered hosted matrix. Dependency policy and dependency audit passed.
+The first macOS job exposed an inherited updater test still calling the five-argument
+`reconcile_after_cleanup` helper with four arguments. The test-only correction supplies
+`startup_healthy = true`, preserving its existing successful-reconciliation assertions; independent
+review approved this narrow compatibility repair. No updater production behavior changed.
+The Linux job also reported pre-existing KalVoice Fn-key dead-code errors outside Operations.
+Current-main compatibility and any remaining release-lane baseline fixes must be reconciled before
+claiming a green complete matrix or publication. The local results above do not assert that broader
+CI passed.
