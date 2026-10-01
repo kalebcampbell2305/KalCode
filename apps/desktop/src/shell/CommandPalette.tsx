@@ -4,6 +4,7 @@ import { Command } from "cmdk";
 import {
   ArrowRightLeft,
   AudioLines,
+  BroomSparkles,
   ChevronsDownUp,
   ClipboardCopy,
   Columns2,
@@ -16,6 +17,7 @@ import {
   House,
   KeyRound,
   LayoutGrid,
+  ListChecks,
   Maximize2,
   MessageSquare,
   MessageSquarePlus,
@@ -39,6 +41,7 @@ import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
+import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
 import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
@@ -63,6 +66,9 @@ interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
+
+/** What people type when they want KalTidy. */
+const KALTIDY_KEYWORDS = ["tidy", "clean", "cleanup", "idle", "close terminals", "stop terminals", "kill terminals"];
 
 /** How many open threads the palette lists by name. */
 const PALETTE_THREADS = 50;
@@ -104,6 +110,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const diagnostics = useDiagnosticsActions();
   const kalvoice = useOptionalKalVoice();
   const workspaces = useWorkspaces();
+  const kalTidy = useKalTidy();
   const threadsIntent = useThreadsIntent();
   // Z7-W2: typed text also searches the Session Locator (threads, workspaces, terminals, …) when
   // the build shows it; gated features stay unreachable on Stable.
@@ -369,6 +376,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             >
               New terminal
             </Item>
+          ) : null}
+          {kalTidy ? (
+            <>
+              <Item icon={<BroomSparkles />} onSelect={run(kalTidy.stopIdle)} keywords={KALTIDY_KEYWORDS}>
+                KalTidy: Stop idle terminals
+              </Item>
+              <Item icon={<ListChecks />} onSelect={run(kalTidy.openReview)} keywords={KALTIDY_KEYWORDS}>
+                KalTidy: Review terminals before stopping
+              </Item>
+            </>
           ) : null}
           <Item
             icon={<FolderPlus />}

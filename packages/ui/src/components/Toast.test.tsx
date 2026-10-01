@@ -25,6 +25,17 @@ afterEach(() => {
 });
 
 describe("ToastProvider", () => {
+  it("runs its one action and dismisses itself", () => {
+    const onSelect = vi.fn();
+    const { result } = renderHook(useToast, { wrapper });
+    act(() =>
+      result.current.show({ title: "Stopped 2 idle terminals.", action: { label: "Review terminals", onSelect } }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review terminals" }));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Stopped 2 idle terminals.")).not.toBeInTheDocument();
+  });
+
   it("keeps a focused toast alive and resumes only its remaining duration after focus leaves", () => {
     const { result } = renderHook(useToast, { wrapper });
     act(() => result.current.show({ title: "Saved" }));

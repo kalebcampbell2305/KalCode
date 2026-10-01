@@ -72,5 +72,5 @@ export {
 } from "./StatusIndicator.tsx";
 export { RowItem, type RowItemProps, RowList, type RowListProps, Table, type TableProps } from "./Table.tsx";
 export { Tabs, TabsContent, TabsList, type TabsListProps, TabsTrigger } from "./Tabs.tsx";
-export { type ToastInput, ToastProvider, type ToastTone, useToast } from "./Toast.tsx";
+export { type ToastAction, type ToastInput, ToastProvider, type ToastTone, useToast } from "./Toast.tsx";
 export { Tooltip, TooltipProvider } from "./Tooltip.tsx";
