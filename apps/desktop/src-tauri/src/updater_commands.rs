@@ -392,7 +392,8 @@ impl DesktopUpdaterState {
         };
         let silent_record_path = update_dir.join(silent_fallback::RECORD_FILE);
         let loaded = silent_fallback::load(&silent_record_path);
-        let silent_record = silent_fallback::reconcile_at_launch(loaded.clone(), current_version);
+        let silent_record =
+            silent_fallback::reconcile_at_launch(loaded.clone(), current_version, startup_healthy);
         if silent_record != loaded {
             let _ = silent_fallback::save(&silent_record_path, silent_record.as_ref());
         }
@@ -1676,7 +1677,7 @@ fn write_rollback_floor(update_dir: &std::path::Path, version: &str) -> Result<(
 }
 
 /// Runs before Core can apply a forward-only migration. It raises the rollback floor to this
-/// build and, on macOS, fences a just-launched upgrade so the helper can't swap back to a build
+/// build and, on macOS, fences a swapped-in upgrade so the helper can't swap back to a build
 /// that would refuse the migrated data. Both are durable before the migration runs.
 pub(crate) fn guard_forward_only_schema_upgrade(
     data_dir: &std::path::Path,
@@ -1689,29 +1690,33 @@ pub(crate) fn guard_forward_only_schema_upgrade(
     let update_dir = data_dir.join("updates");
     write_rollback_floor(&update_dir, current_version)?;
     if cfg!(target_os = "macos") {
-        fence_launched_macos_upgrade(&update_dir, current_version)?;
+        fence_swapped_macos_upgrade(&update_dir, current_version)?;
     }
     Ok(())
 }
 
-fn fence_launched_macos_upgrade(
+/// Fences the helper's rollback in both of its modes: a restart apply waits for this build's
+/// health with the attempt `Launched`; a no-relaunch apply (a same-version build installed when
+/// KalCode closed) probes it with the attempt `Swapped`, and this build can be opened during
+/// that probe. Either helper compares the whole attempt before it swaps back, so once this build
+/// may migrate the data, neither can restore the build that would refuse it.
+fn fence_swapped_macos_upgrade(
     update_dir: &std::path::Path,
     current_version: &str,
 ) -> Result<(), UpdateError> {
     let mut journal = UpdateJournal::load(update_dir.join("updater.json"))?;
-    let launched_upgrade = journal
+    let swapped_upgrade = journal
         .state()
         .install_attempt
         .as_ref()
         .is_some_and(|attempt| {
             attempt.kind == InstallKind::Upgrade
                 && attempt.to_version == current_version
-                && attempt
-                    .mac_swap
-                    .as_ref()
-                    .is_some_and(|swap| swap.phase == kalcode_updater::MacSwapPhase::Launched)
+                && attempt.mac_swap.as_ref().is_some_and(|swap| {
+                    matches!(swap.phase, MacSwapPhase::Swapped | MacSwapPhase::Launched)
+                })
         });
-    if !launched_upgrade {
+    if !swapped_upgrade {
         return Ok(());
     }
     journal.fence_forward_only_mac_install(current_version)
@@ -2298,7 +2303,7 @@ mod tests {
         let journal_path = update_dir.join("updater.json");
 
         // No pending install: nothing to fence.
-        fence_launched_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
+        fence_swapped_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
 
         let mut journal = UpdateJournal::load(&journal_path).unwrap();
         journal
@@ -2338,7 +2343,7 @@ mod tests {
         let captured = journal.state().install_attempt.clone().unwrap();
         drop(journal);
 
-        fence_launched_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
+        fence_swapped_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
         let fenced = UpdateJournal::load(&journal_path)
             .unwrap()
             .state()
@@ -2347,7 +2352,7 @@ mod tests {
             .unwrap();
         assert_ne!(fenced, captured);
 
-        fence_launched_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
+        fence_swapped_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
         let mut reopened = UpdateJournal::load(&journal_path).unwrap();
         assert_eq!(reopened.state().install_attempt.as_ref(), Some(&fenced));
 
@@ -2359,6 +2364,128 @@ mod tests {
             reopened.state().last_successful_version.as_deref(),
             Some("0.1.8+820")
         );
+    }
+
+    /// A same-version build applied after KalCode closed (macOS `--no-relaunch`) leaves the
+    /// attempt `Swapped` while the helper probes it. If that build is opened during the probe and
+    /// must migrate the database, it raises the rollback floor and fences the attempt before Core
+    /// opens, so the helper's rollback fails closed; its healthy startup then acknowledges the
+    /// install and removes the previous bundle the helper left behind.
+    #[test]
+    fn a_no_relaunch_apply_is_fenced_and_floored_before_its_migration() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let update_dir = data_dir.path().join("updates");
+        let journal_path = update_dir.join("updater.json");
+        let mut journal = UpdateJournal::load(&journal_path).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.8+5".into(),
+                to_version: "0.1.8+6".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::DarwinAarch64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: Some(MacSwapAttempt {
+                    current_app: data_dir.path().join("KalCode.app"),
+                    staged_app: data_dir.path().join(".KalCode-update-previous.app"),
+                    parent_pid: 42,
+                    parent_identity_sha256: "e".repeat(64),
+                    phase: MacSwapPhase::Prepared,
+                }),
+                started_at: "2026-10-01T12:00:00Z".into(),
+            })
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+            .unwrap();
+        let captured = journal.state().install_attempt.clone().unwrap();
+        drop(journal);
+
+        // `guard_forward_only_schema_upgrade` fences only on macOS; run both of its steps here.
+        guard_forward_only_schema_upgrade(data_dir.path(), "0.1.8+6", true).unwrap();
+        fence_swapped_macos_upgrade(&update_dir, "0.1.8+6").unwrap();
+        assert_eq!(read_rollback_floor(&update_dir).as_deref(), Some("0.1.8+6"));
+        let mut reopened = UpdateJournal::load(&journal_path).unwrap();
+        let fenced = reopened.state().install_attempt.clone().unwrap();
+        assert_ne!(
+            fenced, captured,
+            "the helper's rollback must no longer match"
+        );
+        assert_eq!(
+            fenced.mac_swap.as_ref().unwrap().phase,
+            MacSwapPhase::Swapped
+        );
+
+        let superseded = superseded_mac_bundle(reopened.state(), "0.1.8+6");
+        let (_, outcome) = reconcile_after_cleanup(&mut reopened, Ok(true), true, true, "0.1.8+6");
+        assert_eq!(outcome.unwrap(), Some(InstallOutcome::Updated));
+        assert_eq!(superseded, fenced.mac_swap);
+        // The previous build can never be offered back over the migrated data.
+        assert!(!schema_compatible_recovery(
+            "0.1.8+6",
+            "0.1.8+5",
+            read_rollback_floor(&update_dir).as_deref()
+        ));
+    }
+
+    /// The update journal and the silent-install record agree on success: only a healthy startup
+    /// of the new build. An unhealthy one acknowledges nothing and settles nothing; a healthy
+    /// launch that is still the old build settles nothing either, and that build gets the
+    /// restart prompt.
+    #[test]
+    fn the_journal_and_the_silent_record_share_one_definition_of_success() {
+        let silent = silent_fallback::after_exit_attempt(None, "0.1.8+6");
+        let journal_with_attempt = |dir: &std::path::Path| {
+            let mut journal = UpdateJournal::load(dir.join("updater.json")).unwrap();
+            journal
+                .record_install_attempt(InstallAttempt {
+                    kind: InstallKind::Upgrade,
+                    from_version: "0.1.8+5".into(),
+                    to_version: "0.1.8+6".into(),
+                    sha256: "a".repeat(64),
+                    binding: Some(windows_binding()),
+                    mac_swap: None,
+                    started_at: "2026-10-01T12:00:00Z".into(),
+                })
+                .unwrap();
+            journal
+        };
+
+        for (running, healthy, acknowledged, settled) in [
+            ("0.1.8+6", false, None, false),
+            ("0.1.8+6", true, Some(InstallOutcome::Updated), true),
+            ("0.1.8+5", false, None, false),
+            (
+                "0.1.8+5",
+                true,
+                Some(InstallOutcome::PreviousVersionPreserved),
+                false,
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut journal = journal_with_attempt(temp.path());
+            let (_, outcome) =
+                reconcile_after_cleanup(&mut journal, Ok(true), true, healthy, running);
+            let record =
+                silent_fallback::reconcile_at_launch(Some(silent.clone()), running, healthy);
+            let case = format!("{running} healthy={healthy}");
+            assert_eq!(outcome.unwrap(), acknowledged, "{case}");
+            assert_eq!(record.is_none(), settled, "{case}");
+            assert_eq!(
+                journal.state().install_attempt.is_none(),
+                acknowledged.is_some(),
+                "{case}"
+            );
+            if running == "0.1.8+5" {
+                assert!(
+                    silent_fallback::prompt_instead(record.as_ref(), "0.1.8+6"),
+                    "{case}"
+                );
+            }
+        }
     }
 
     #[test]

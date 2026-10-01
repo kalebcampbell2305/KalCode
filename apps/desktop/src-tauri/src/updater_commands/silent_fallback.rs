@@ -43,11 +43,20 @@ pub(super) fn prompt_instead(record: Option<&SilentInstallRecord>, version: &str
 
 /// At launch: a record for the running build, or an older one, is settled and dropped. A record
 /// for a newer build is kept, so that build is offered with the prompt.
+///
+/// Only a healthy startup settles anything. That is the same success the update journal uses
+/// (`reconcile_after_cleanup` acknowledges an install only when startup completed), so the two
+/// never disagree about whether a build installed: a build that reached its own launch but could
+/// not open its data has not yet succeeded, and its record stays until a launch that does.
 pub(super) fn reconcile_at_launch(
     record: Option<SilentInstallRecord>,
     current_version: &str,
+    startup_healthy: bool,
 ) -> Option<SilentInstallRecord> {
     let record = record?;
+    if !startup_healthy {
+        return Some(record);
+    }
     let (Ok(recorded), Ok(current)) = (
         Version::parse(&record.version),
         Version::parse(current_version),
@@ -142,15 +151,33 @@ mod tests {
         assert!(prompt_instead(Some(&record), NEW));
 
         // The next launch is still 0.1.8+5: the record survives and 0.1.8+6 gets the prompt.
-        let kept = reconcile_at_launch(Some(record.clone()), OLD);
+        let kept = reconcile_at_launch(Some(record.clone()), OLD, true);
         assert_eq!(kept.as_ref(), Some(&record));
         assert!(prompt_instead(kept.as_ref(), NEW));
         // A later build gets its own silent chance.
         assert!(!prompt_instead(kept.as_ref(), "0.1.8+7"));
 
         // The next launch runs 0.1.8+6 (or something newer): settled.
-        assert_eq!(reconcile_at_launch(Some(record.clone()), NEW), None);
-        assert_eq!(reconcile_at_launch(Some(record), "0.1.8+7"), None);
+        assert_eq!(reconcile_at_launch(Some(record.clone()), NEW, true), None);
+        assert_eq!(reconcile_at_launch(Some(record), "0.1.8+7", true), None);
+    }
+
+    #[test]
+    fn only_a_healthy_launch_settles_a_silent_install() {
+        let record = after_exit_attempt(None, NEW);
+        // The new build launched but could not open its data: not yet a success, exactly as the
+        // update journal keeps the attempt pending for an unhealthy startup.
+        assert_eq!(
+            reconcile_at_launch(Some(record.clone()), NEW, false).as_ref(),
+            Some(&record)
+        );
+        // An unhealthy launch of the old build keeps it too (nothing to settle either way).
+        assert_eq!(
+            reconcile_at_launch(Some(record.clone()), OLD, false).as_ref(),
+            Some(&record)
+        );
+        // The first healthy launch of that build settles it.
+        assert_eq!(reconcile_at_launch(Some(record), NEW, true), None);
     }
 
     #[test]
@@ -160,7 +187,7 @@ mod tests {
             !prompt_instead(Some(&first), NEW),
             "one failure retries silently"
         );
-        let first = reconcile_at_launch(Some(first), OLD);
+        let first = reconcile_at_launch(Some(first), OLD, true);
         let second = after_staging_failure(first, NEW);
         assert!(prompt_instead(Some(&second), NEW));
         assert!(!prompt_instead(Some(&second), "0.1.8+7"));
@@ -201,7 +228,8 @@ mod tests {
                     exit_attempted: true,
                     staging_failures: 0,
                 }),
-                OLD
+                OLD,
+                true
             ),
             None
         );

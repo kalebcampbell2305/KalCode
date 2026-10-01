@@ -252,6 +252,47 @@ fn forward_only_mac_fence_changes_helper_attempt_identity_and_is_restart_idempot
     );
 }
 
+/// A no-relaunch apply (a same-version build installed after KalCode closed) leaves the attempt
+/// `Swapped` while the helper probes the new build. It is fenced like a launched one; a swap not
+/// yet made (`Prepared`) is not.
+#[test]
+fn forward_only_mac_fence_covers_a_no_relaunch_swap_but_not_an_unswapped_one() {
+    for (phase, fenced) in [
+        (MacSwapPhase::Prepared, false),
+        (MacSwapPhase::Swapped, true),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut mac_attempt = attempt();
+        mac_attempt.binding = Some(InstallBinding {
+            target: UpdateTarget::DarwinAarch64,
+            source_sha256: "c".repeat(64),
+            signing_requirement_sha256: "d".repeat(64),
+        });
+        mac_attempt.mac_swap = Some(MacSwapAttempt {
+            current_app: temp.path().join("KalCode.app"),
+            staged_app: temp.path().join(".KalCode-update-test.app"),
+            parent_pid: 42,
+            parent_identity_sha256: "e".repeat(64),
+            phase: MacSwapPhase::Prepared,
+        });
+        let mut journal = UpdateJournal::load(temp.path().join("updater.json")).unwrap();
+        journal.record_install_attempt(mac_attempt).unwrap();
+        if phase == MacSwapPhase::Swapped {
+            journal
+                .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+                .unwrap();
+        }
+        let captured = journal.state().install_attempt.clone().unwrap();
+        let result = journal.fence_forward_only_mac_install("0.1.6");
+        assert_eq!(result.is_ok(), fenced, "{phase:?}");
+        assert_eq!(
+            journal.state().install_attempt.as_ref() != Some(&captured),
+            fenced,
+            "{phase:?}"
+        );
+    }
+}
+
 #[test]
 fn forward_only_mac_fence_rejects_the_wrong_target_phase_or_version() {
     let temp = tempfile::tempdir().unwrap();

@@ -602,6 +602,12 @@ pub fn run(removed_overrides: Vec<String>) {
             }
         })
         .setup(move |app| {
+            // Update startup order: (1) the apply-lease check below, before any state is touched;
+            // (2) in `start`, the rollback-floor guard (and macOS fence) before Core can migrate;
+            // (3) `DesktopUpdaterState::start` reconciles the journal and the silent-install
+            // record on the same healthy-startup gate; (4) only an acknowledged update removes a
+            // superseded macOS bundle, and never while a helper still holds the lease.
+            //
             // Reopened while this very build is being replaced after the last close: step aside
             // before touching any state. The installer or helper opens the new build when done.
             if let Ok(data_dir) = resolve_data_dir(app)

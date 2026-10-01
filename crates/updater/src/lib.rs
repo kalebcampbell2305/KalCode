@@ -1713,11 +1713,15 @@ impl UpdateJournal {
         self.save()
     }
 
-    /// Fences a launched macOS upgrade against rollback by the helper before a forward-only
+    /// Fences a swapped-in macOS upgrade against rollback by the helper before a forward-only
     /// schema migration begins. Shipped helpers capture the complete attempt before the swap and
     /// compare it again immediately before swapping back, so this durable marker makes that
     /// rollback fail closed without changing the journal schema. Their success path still
     /// observes normal startup reconciliation and cleans up the verified previous app.
+    ///
+    /// Both helper modes are covered: a restart apply leaves the attempt `Launched`, and a
+    /// no-relaunch apply (KalCode closed) leaves it `Swapped` while it probes the new build, so a
+    /// new build opened during that probe is fenced exactly like a relaunched one.
     pub fn fence_forward_only_mac_install(
         &mut self,
         current_version: &str,
@@ -1730,12 +1734,14 @@ impl UpdateJournal {
             )
         };
         let attempt = self.state.install_attempt.as_mut().ok_or_else(invalid)?;
-        let launched_macos_upgrade = attempt.kind == InstallKind::Upgrade
+        let swapped_macos_upgrade = attempt.kind == InstallKind::Upgrade
             && attempt.to_version == current_version
             && attempt.binding.as_ref().map(|binding| binding.target)
                 == Some(UpdateTarget::DarwinAarch64)
-            && attempt.mac_swap.as_ref().map(|swap| swap.phase) == Some(MacSwapPhase::Launched);
-        if !launched_macos_upgrade {
+            && attempt.mac_swap.as_ref().is_some_and(|swap| {
+                matches!(swap.phase, MacSwapPhase::Swapped | MacSwapPhase::Launched)
+            });
+        if !swapped_macos_upgrade {
             return Err(invalid());
         }
         if attempt.started_at.ends_with(FORWARD_ONLY_MAC_FENCE_SUFFIX) {

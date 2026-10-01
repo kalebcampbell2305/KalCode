@@ -25,8 +25,10 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
 use kalcode_updater::mac_swap::{app_executable, atomic_swap_apps, process_identity_sha256};
+#[cfg(any(target_os = "macos", test))]
+use kalcode_updater::{MacSwapAttempt, MacSwapPhase};
 #[cfg(target_os = "macos")]
-use kalcode_updater::{MacSwapAttempt, MacSwapPhase, UpdateJournal, UpdateTarget};
+use kalcode_updater::{UpdateJournal, UpdateTarget};
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
 
@@ -489,6 +491,30 @@ fn finish_health_rollback(
     cleanup_failed()
 }
 
+/// Whether the journal still holds exactly the attempt this helper swapped in, at a phase it may
+/// roll back from. Any other change (the new build acknowledged the install, or fenced it before
+/// a forward-only database migration) means the previous build must not come back. Both helper
+/// modes share it: a restart apply rolls back from `Launched`, a no-relaunch apply from `Swapped`.
+#[cfg(any(target_os = "macos", test))]
+fn rollback_still_owned(
+    observed: &kalcode_updater::InstallAttempt,
+    attempt: &kalcode_updater::InstallAttempt,
+    swap: &MacSwapAttempt,
+) -> bool {
+    let Some(observed_swap) = observed.mac_swap.as_ref() else {
+        return false;
+    };
+    let mut expected_swap = swap.clone();
+    expected_swap.phase = observed_swap.phase;
+    let mut expected_attempt = attempt.clone();
+    expected_attempt.mac_swap = Some(expected_swap.clone());
+    matches!(
+        observed_swap.phase,
+        MacSwapPhase::Swapped | MacSwapPhase::Launched
+    ) && *observed_swap == expected_swap
+        && *observed == expected_attempt
+}
+
 /// Restores the previous build. `relaunch` reopens it (the user chose to restart into the
 /// update); a no-relaunch apply leaves KalCode closed.
 #[cfg(target_os = "macos")]
@@ -504,16 +530,8 @@ fn rollback(
         let _ = child.wait();
     }
     let observed = UpdateJournal::load(journal_path).map_err(|_| ())?;
-    let (observed_attempt, observed_swap) = pending_mac_swap(&observed)?;
-    let mut expected_swap = swap.clone();
-    expected_swap.phase = observed_swap.phase;
-    let mut expected_attempt = attempt.clone();
-    expected_attempt.mac_swap = Some(expected_swap.clone());
-    if !matches!(
-        observed_swap.phase,
-        MacSwapPhase::Swapped | MacSwapPhase::Launched
-    ) || observed_swap != expected_swap
-        || observed_attempt != expected_attempt
+    let (observed_attempt, _) = pending_mac_swap(&observed)?;
+    if !rollback_still_owned(&observed_attempt, attempt, swap)
         || digest_file(&app_executable(&swap.staged_app))?
             != attempt.binding.as_ref().ok_or(())?.source_sha256
         || verify_app_identity(&swap.staged_app, &attempt.from_version)?
@@ -567,10 +585,104 @@ mod tests {
     use std::cell::RefCell;
     use std::ffi::OsString;
 
+    use kalcode_updater::{
+        InstallAttempt, InstallBinding, InstallKind, MacSwapAttempt, MacSwapPhase, UpdateJournal,
+        UpdateTarget,
+    };
+
     use super::{
         HelperArguments, build_info_reports, finish_health_rollback, finish_without_relaunch,
-        parse_arguments,
+        parse_arguments, rollback_still_owned,
     };
+
+    /// A journaled macOS upgrade from 0.1.8+5 to 0.1.8+6, advanced to `phase` the way the helper
+    /// advances it, and the attempt the helper captured before its swap.
+    fn swapped_journal(
+        dir: &std::path::Path,
+        phase: MacSwapPhase,
+    ) -> (UpdateJournal, InstallAttempt) {
+        let mut journal = UpdateJournal::load(dir.join("updater.json")).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.8+5".into(),
+                to_version: "0.1.8+6".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::DarwinAarch64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: Some(MacSwapAttempt {
+                    current_app: dir.join("KalCode.app"),
+                    staged_app: dir.join(".KalCode-update-test.app"),
+                    parent_pid: 42,
+                    parent_identity_sha256: "e".repeat(64),
+                    phase: MacSwapPhase::Prepared,
+                }),
+                started_at: "2026-10-01T12:00:00Z".into(),
+            })
+            .unwrap();
+        let captured = journal.state().install_attempt.clone().unwrap();
+        journal
+            .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+            .unwrap();
+        if phase == MacSwapPhase::Launched {
+            journal
+                .mark_mac_swap_phase(MacSwapPhase::Swapped, MacSwapPhase::Launched)
+                .unwrap();
+        }
+        (journal, captured)
+    }
+
+    /// Rollback protection and silent installs together: whichever mode applied the update
+    /// (`Swapped` for a no-relaunch apply after KalCode closed, `Launched` for a restart apply),
+    /// once the new build fences the attempt before migrating its database, the helper's rollback
+    /// no longer owns it and fails closed instead of restoring a build that can't open the data.
+    #[test]
+    fn a_forward_only_fence_stops_the_rollback_of_both_helper_modes() {
+        for phase in [MacSwapPhase::Swapped, MacSwapPhase::Launched] {
+            let temp = tempfile::tempdir().unwrap();
+            let (mut journal, captured) = swapped_journal(temp.path(), phase);
+            let swap = captured.mac_swap.clone().unwrap();
+            let observed = journal.state().install_attempt.clone().unwrap();
+            assert!(
+                rollback_still_owned(&observed, &captured, &swap),
+                "{phase:?}"
+            );
+
+            journal.fence_forward_only_mac_install("0.1.8+6").unwrap();
+            let fenced = UpdateJournal::load(temp.path().join("updater.json"))
+                .unwrap()
+                .state()
+                .install_attempt
+                .clone()
+                .unwrap();
+            assert!(
+                !rollback_still_owned(&fenced, &captured, &swap),
+                "{phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rollback_is_owned_only_from_a_swapped_phase_of_the_same_attempt() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_journal, captured) = swapped_journal(temp.path(), MacSwapPhase::Swapped);
+        let swap = captured.mac_swap.clone().unwrap();
+        // Not yet swapped: nothing to roll back.
+        assert!(!rollback_still_owned(&captured, &captured, &swap));
+        // Another attempt replaced it.
+        let mut other = captured.clone();
+        other.to_version = "0.1.8+7".into();
+        if let Some(other_swap) = other.mac_swap.as_mut() {
+            other_swap.phase = MacSwapPhase::Swapped;
+        }
+        assert!(!rollback_still_owned(&other, &captured, &swap));
+        let mut no_swap = captured.clone();
+        no_swap.mac_swap = None;
+        assert!(!rollback_still_owned(&no_swap, &captured, &swap));
+    }
 
     fn journal() -> std::path::PathBuf {
         std::env::temp_dir().join("updates").join("updater.json")
