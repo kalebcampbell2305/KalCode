@@ -138,6 +138,38 @@ describe("Operations memory runtime", () => {
     expect(snapshot.activity.at(-1)).toEqual(
       expect.objectContaining({ runId: successor?.id, name: "Frontend dev server restarted" }),
     );
+
+    const originalDetail = invoke("operations_detail", { id: "op-service" }) as OperationDetail;
+    expect(originalDetail.relatedServices).toEqual([
+      expect.objectContaining({
+        isCurrent: false,
+        service: expect.objectContaining({
+          runId: "op-service",
+          status: "stopped",
+          pid: null,
+          ports: [],
+          canStop: false,
+          canRestart: false,
+        }),
+      }),
+    ]);
+    const successorDetail = invoke("operations_detail", { id: successor?.id }) as OperationDetail;
+    expect(successorDetail.relatedServices).toEqual([
+      expect.objectContaining({
+        isCurrent: true,
+        service: expect.objectContaining({ runId: successor?.id, status: "running" }),
+      }),
+    ]);
+    expect((invoke("operations_detail", { id: "op-release" }) as OperationDetail).relatedDeployments).toEqual([
+      expect.objectContaining({
+        isCurrent: true,
+        environment: expect.objectContaining({
+          runId: "op-release",
+          deploymentStatus: "deployed_unverified",
+          health: "not_probed",
+        }),
+      }),
+    ]);
   });
 
   it("moves one identity from Queue to Runs only after the global queue resumes", () => {

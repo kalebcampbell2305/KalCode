@@ -139,6 +139,12 @@ pub struct OperationDetail {
     pub artifacts: Vec<OperationArtifact>,
     pub tests: Vec<OperationTestResult>,
     pub notes: Vec<String>,
+    /// Services created by this run. Historical entries never imply a live process.
+    #[serde(default)]
+    pub related_services: Vec<OperationServiceRelationship>,
+    /// Deployment outcomes created by this run. Health remains separately evidenced.
+    #[serde(default)]
+    pub related_deployments: Vec<OperationDeploymentRelationship>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -187,6 +193,24 @@ pub struct OperationEnvironment {
     pub variables: Vec<EnvironmentVariablePresence>,
     pub observed_at: String,
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationServiceRelationship {
+    pub service: DevelopmentService,
+    /// True only when this service is present in the current Services projection.
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationDeploymentRelationship {
+    pub environment: OperationEnvironment,
+    /// True only when this run currently defines the matching Environment projection.
+    pub is_current: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

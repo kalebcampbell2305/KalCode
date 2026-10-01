@@ -10,8 +10,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use kalcode_contracts::events::{EventEnvelope, EventPayload};
 use kalcode_contracts::operations::{
     DevelopmentService, EnvironmentVariablePresence, OperationActivity, OperationArtifact,
-    OperationEnvironment, OperationEnvironmentKind, OperationKind, OperationMoment,
-    OperationRecord, OperationStatus, OperationTestResult,
+    OperationDeploymentRelationship, OperationEnvironment, OperationEnvironmentKind, OperationKind,
+    OperationMoment, OperationRecord, OperationServiceRelationship, OperationStatus,
+    OperationTestResult,
 };
 use kalcode_contracts::threads::ThreadStatus;
 use kalcode_core::operations::OperationActivityMoment;
@@ -388,6 +389,154 @@ fn status_without_deployment(status: OperationStatus) -> &'static str {
         OperationStatus::Interrupted => "interrupted",
         OperationStatus::Unknown => "unknown",
     }
+}
+
+/// Resolves the Services and Environments created by one run without persisting a second model.
+///
+/// A matching current projection is returned verbatim. Once a restart or later deployment
+/// supersedes the run, conservative historical evidence is rebuilt only from its durable
+/// specification, ownership bindings, and terminal state. Historical evidence never carries a
+/// PID, observed port, process uptime, action authority, or endpoint-health claim.
+pub fn detail_relationships(
+    run: &OperationRecord,
+    current_services: &[DevelopmentService],
+    current_environments: &[OperationEnvironment],
+) -> (
+    Vec<OperationServiceRelationship>,
+    Vec<OperationDeploymentRelationship>,
+) {
+    let mut related_services = current_services
+        .iter()
+        .filter(|service| {
+            service.run_id.as_deref() == Some(run.id.as_str())
+                && service.workspace_id == run.spec.workspace_id
+        })
+        .cloned()
+        .map(|service| OperationServiceRelationship {
+            service,
+            is_current: true,
+        })
+        .collect::<Vec<_>>();
+    related_services.sort_by(|left, right| left.service.id.cmp(&right.service.id));
+
+    if related_services.is_empty()
+        && run.spec.kind == OperationKind::Service
+        && run.source == "operations"
+        && run.terminal_id.is_some()
+    {
+        let status = match run.status {
+            OperationStatus::Succeeded | OperationStatus::Cancelled => "stopped",
+            OperationStatus::Failed | OperationStatus::Interrupted => "failed",
+            _ => "unknown",
+        };
+        related_services.push(OperationServiceRelationship {
+            service: DevelopmentService {
+                id: run.id.clone(),
+                run_id: Some(run.id.clone()),
+                name: run.spec.name.clone(),
+                status: status.to_owned(),
+                pid: None,
+                process_name: "Operation service".to_owned(),
+                uptime_seconds: None,
+                ports: Vec::new(),
+                urls: run.spec.urls.iter().filter_map(|url| safe_url(url)).collect(),
+                workspace_id: run.spec.workspace_id.clone(),
+                workspace_name: run.workspace_name.clone(),
+                terminal_id: run.terminal_id.clone(),
+                can_stop: false,
+                can_restart: false,
+                action_reason: Some(
+                    "Historical service ownership from this run. No current process is linked; declared URLs are not liveness evidence."
+                        .to_owned(),
+                ),
+            },
+            is_current: false,
+        });
+    }
+
+    let deployment_run = matches!(
+        run.spec.kind,
+        OperationKind::Deploy | OperationKind::Release
+    );
+    let mut related_deployments = if deployment_run {
+        current_environments
+            .iter()
+            .filter(|environment| {
+                environment.run_id.as_deref() == Some(run.id.as_str())
+                    && environment.workspace_id == run.spec.workspace_id
+                    && environment.kind == run.spec.environment
+            })
+            .cloned()
+            .map(|environment| OperationDeploymentRelationship {
+                environment,
+                is_current: true,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    if related_deployments.is_empty()
+        && deployment_run
+        && (run.started_at.is_some() || run.terminal_id.is_some() || run.thread_id.is_some())
+    {
+        let succeeded = run.status == OperationStatus::Succeeded;
+        let mut notes = vec![if succeeded {
+            "This run's deployment command completed, but it no longer defines the current environment and endpoint health was not probed."
+                .to_owned()
+        } else if run.status == OperationStatus::Unknown {
+            "This historical deployment has no durable completion or endpoint-health evidence."
+                .to_owned()
+        } else {
+            "This run records a deployment attempt that no longer defines the current environment; endpoint health is unknown."
+                .to_owned()
+        }];
+        let urls = run
+            .spec
+            .urls
+            .iter()
+            .filter_map(|url| safe_url(url))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !urls.is_empty() {
+            notes.push(
+                "URLs are declared targets; they are not current liveness evidence.".to_owned(),
+            );
+        }
+        let variables = run
+            .spec
+            .env_keys
+            .iter()
+            .filter_map(|name| safe_env_name(name))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|name| EnvironmentVariablePresence {
+                name,
+                present: None,
+            })
+            .collect();
+        related_deployments.push(OperationDeploymentRelationship {
+            environment: OperationEnvironment {
+                workspace_id: run.spec.workspace_id.clone(),
+                kind: run.spec.environment,
+                branch: run.branch.clone(),
+                version: run.version.clone(),
+                urls,
+                deployment_status: status_without_deployment(run.status).to_owned(),
+                health: if succeeded { "not_probed" } else { "unknown" }.to_owned(),
+                platform: run.spec.provider_id.clone(),
+                last_deploy: succeeded.then(|| run.ended_at.clone()).flatten(),
+                run_id: Some(run.id.clone()),
+                variables,
+                observed_at: record_time(run).to_owned(),
+                notes,
+            },
+            is_current: false,
+        });
+    }
+
+    (related_services, related_deployments)
 }
 
 fn latest_run<'a>(runs: impl Iterator<Item = &'a OperationRecord>) -> Option<&'a OperationRecord> {
@@ -1658,6 +1807,174 @@ mod tests {
                 .iter()
                 .all(|moment| moment.id != "run:historical-deploy:ended")
         );
+    }
+
+    #[test]
+    fn detail_relationships_preserve_superseded_service_and_deployment_evidence() {
+        let mut first_service = run(
+            "service-first",
+            OperationKind::Service,
+            OperationEnvironmentKind::Local,
+        );
+        first_service.spec.name = "Frontend".to_owned();
+        first_service.spec.command = Some("pnpm dev".to_owned());
+        first_service.spec.urls = vec!["http://localhost:3000/".to_owned()];
+        first_service.status = OperationStatus::Succeeded;
+        first_service.terminal_id = Some(first_service.id.clone());
+        first_service.started_at = Some("2026-09-30T09:00:00Z".to_owned());
+        first_service.ended_at = Some("2026-09-30T09:30:00Z".to_owned());
+
+        let mut successor = first_service.clone();
+        successor.id = "service-successor".to_owned();
+        successor.status = OperationStatus::Running;
+        successor.terminal_id = Some(successor.id.clone());
+        successor.created_at = "2026-09-30T10:00:00Z".to_owned();
+        successor.started_at = Some(successor.created_at.clone());
+        successor.ended_at = None;
+        let current_service = DevelopmentService {
+            id: "service-successor:42:1".to_owned(),
+            run_id: Some(successor.id.clone()),
+            name: "Frontend".to_owned(),
+            status: "running".to_owned(),
+            pid: Some(42),
+            process_name: "node".to_owned(),
+            uptime_seconds: Some(60),
+            ports: vec![3000],
+            urls: vec!["http://localhost:3000/".to_owned()],
+            workspace_id: "workspace-1".to_owned(),
+            workspace_name: "KalCode".to_owned(),
+            terminal_id: Some(successor.id.clone()),
+            can_stop: true,
+            can_restart: true,
+            action_reason: None,
+        };
+        let cross_workspace_collision = DevelopmentService {
+            id: "foreign-service".to_owned(),
+            run_id: Some(first_service.id.clone()),
+            workspace_id: "workspace-2".to_owned(),
+            workspace_name: "Other".to_owned(),
+            ..current_service.clone()
+        };
+
+        let (first_services, first_deployments) = detail_relationships(
+            &first_service,
+            &[current_service.clone(), cross_workspace_collision],
+            &[],
+        );
+        assert!(first_deployments.is_empty());
+        assert_eq!(first_services.len(), 1);
+        assert!(!first_services[0].is_current);
+        assert_eq!(
+            first_services[0].service.run_id.as_deref(),
+            Some("service-first")
+        );
+        assert_eq!(first_services[0].service.status, "stopped");
+        assert_eq!(first_services[0].service.pid, None);
+        assert!(first_services[0].service.ports.is_empty());
+        assert!(!first_services[0].service.can_stop);
+        assert!(!first_services[0].service.can_restart);
+        assert!(
+            first_services[0]
+                .service
+                .action_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Historical service ownership"))
+        );
+
+        let (successor_services, _) =
+            detail_relationships(&successor, &[current_service.clone()], &[]);
+        assert_eq!(successor_services.len(), 1);
+        assert!(successor_services[0].is_current);
+        assert_eq!(successor_services[0].service, current_service);
+
+        let mut failed_launch = first_service.clone();
+        failed_launch.id = "service-launch-failed".to_owned();
+        failed_launch.status = OperationStatus::Failed;
+        failed_launch.terminal_id = None;
+        failed_launch.outcome = Some("The service process could not be created.".to_owned());
+        let (failed_launch_services, _) = detail_relationships(&failed_launch, &[], &[]);
+        assert!(
+            failed_launch_services.is_empty(),
+            "a claimed run without a recorded terminal binding did not create a service"
+        );
+
+        let mut observed_spoof = first_service.clone();
+        observed_spoof.id = "observed-service".to_owned();
+        observed_spoof.source = "terminal".to_owned();
+        let (observed_services, _) = detail_relationships(&observed_spoof, &[], &[]);
+        assert!(
+            observed_services.is_empty(),
+            "observed records cannot manufacture Operations service ownership"
+        );
+
+        let mut first_deploy = run(
+            "deploy-first",
+            OperationKind::Deploy,
+            OperationEnvironmentKind::Production,
+        );
+        first_deploy.status = OperationStatus::Succeeded;
+        first_deploy.branch = Some("release/first".to_owned());
+        first_deploy.version = Some("0.1.7+2".to_owned());
+        first_deploy.spec.provider_id = Some("cloudflare".to_owned());
+        first_deploy.spec.urls = vec!["https://first.example.com/".to_owned()];
+        first_deploy.started_at = Some("2026-09-30T11:00:00Z".to_owned());
+        first_deploy.ended_at = Some("2026-09-30T11:05:00Z".to_owned());
+
+        let mut later_deploy = first_deploy.clone();
+        later_deploy.id = "deploy-later".to_owned();
+        later_deploy.branch = Some("release/later".to_owned());
+        later_deploy.version = Some("0.1.7+3".to_owned());
+        later_deploy.spec.urls = vec!["https://later.example.com/".to_owned()];
+        later_deploy.created_at = "2026-09-30T12:00:00Z".to_owned();
+        later_deploy.started_at = Some(later_deploy.created_at.clone());
+        later_deploy.ended_at = Some("2026-09-30T12:05:00Z".to_owned());
+        let current_environment = OperationEnvironment {
+            workspace_id: "workspace-1".to_owned(),
+            kind: OperationEnvironmentKind::Production,
+            branch: later_deploy.branch.clone(),
+            version: later_deploy.version.clone(),
+            urls: later_deploy.spec.urls.clone(),
+            deployment_status: "deployed_unverified".to_owned(),
+            health: "not_probed".to_owned(),
+            platform: later_deploy.spec.provider_id.clone(),
+            last_deploy: later_deploy.ended_at.clone(),
+            run_id: Some(later_deploy.id.clone()),
+            variables: Vec::new(),
+            observed_at: "2026-09-30T12:06:00Z".to_owned(),
+            notes: vec!["Endpoint health was not probed.".to_owned()],
+        };
+        let cross_workspace_environment = OperationEnvironment {
+            workspace_id: "workspace-2".to_owned(),
+            run_id: Some(first_deploy.id.clone()),
+            ..current_environment.clone()
+        };
+
+        let (_, first_deployments) = detail_relationships(
+            &first_deploy,
+            &[],
+            &[current_environment.clone(), cross_workspace_environment],
+        );
+        assert_eq!(first_deployments.len(), 1);
+        assert!(!first_deployments[0].is_current);
+        assert_eq!(
+            first_deployments[0].environment.deployment_status,
+            "deployed_unverified"
+        );
+        assert_eq!(first_deployments[0].environment.health, "not_probed");
+        assert_eq!(
+            first_deployments[0].environment.run_id.as_deref(),
+            Some("deploy-first")
+        );
+        assert_eq!(
+            first_deployments[0].environment.urls,
+            vec!["https://first.example.com/"]
+        );
+
+        let (_, later_deployments) =
+            detail_relationships(&later_deploy, &[], &[current_environment.clone()]);
+        assert_eq!(later_deployments.len(), 1);
+        assert!(later_deployments[0].is_current);
+        assert_eq!(later_deployments[0].environment, current_environment);
     }
 
     #[test]

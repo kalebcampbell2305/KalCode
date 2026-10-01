@@ -143,7 +143,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
           createdAt: at(-82),
           startedAt: at(-80),
           currentAction: "Serving the local workspace",
-          terminalId: workspace?.activeTerminalId ?? null,
+          terminalId: "op-service",
         }),
         seedRecord(
           "op-release",
@@ -246,7 +246,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
           urls: ["http://localhost:3000"],
           workspaceId,
           workspaceName,
-          terminalId: workspace?.activeTerminalId ?? null,
+          terminalId: "op-service",
           canStop: true,
           canRestart: true,
           actionReason: null,
@@ -396,7 +396,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
         },
       ];
 
-  const details = new Map<string, Omit<OperationDetail, "run">>();
+  const details = new Map<string, Omit<OperationDetail, "run" | "relatedServices" | "relatedDeployments">>();
   if (!empty) {
     details.set("op-service", {
       timeline: [
@@ -438,6 +438,98 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
   const record = (id: string) =>
     [...items, ...historyOnly].find((candidate) => candidate.id === id) ??
     fail("operation_not_found", "That Operation no longer exists.");
+  const detailRelationships = (
+    run: OperationRecord,
+  ): Pick<OperationDetail, "relatedServices" | "relatedDeployments"> => {
+    const currentServices = services
+      .filter((service) => service.runId === run.id && service.workspaceId === run.spec.workspaceId)
+      .map((service) => ({ service, isCurrent: true }));
+    const relatedServices =
+      currentServices.length > 0
+        ? currentServices
+        : run.spec.kind === "service" && run.source === "operations" && run.terminalId !== null
+          ? [
+              {
+                service: {
+                  id: run.id,
+                  runId: run.id,
+                  name: run.spec.name,
+                  status:
+                    run.status === "succeeded" || run.status === "cancelled"
+                      ? "stopped"
+                      : run.status === "failed" || run.status === "interrupted"
+                        ? "failed"
+                        : "unknown",
+                  pid: null,
+                  processName: "Operation service",
+                  uptimeSeconds: null,
+                  ports: [],
+                  urls: [...run.spec.urls],
+                  workspaceId: run.spec.workspaceId,
+                  workspaceName: run.workspaceName,
+                  terminalId: run.terminalId,
+                  canStop: false,
+                  canRestart: false,
+                  actionReason:
+                    "Historical service ownership from this run. No current process is linked; declared URLs are not liveness evidence.",
+                },
+                isCurrent: false,
+              },
+            ]
+          : [];
+
+    const deploymentRun = run.spec.kind === "deploy" || run.spec.kind === "release";
+    const currentDeployments = deploymentRun
+      ? environments
+          .filter(
+            (environment) =>
+              environment.runId === run.id &&
+              environment.workspaceId === run.spec.workspaceId &&
+              environment.kind === run.spec.environment,
+          )
+          .map((environment) => ({ environment, isCurrent: true }))
+      : [];
+    const started = run.startedAt !== null || run.terminalId !== null || run.threadId !== null;
+    const succeeded = run.status === "succeeded";
+    const relatedDeployments =
+      currentDeployments.length > 0
+        ? currentDeployments
+        : deploymentRun && started
+          ? [
+              {
+                environment: {
+                  workspaceId: run.spec.workspaceId,
+                  kind: run.spec.environment,
+                  branch: run.branch,
+                  version: run.version,
+                  urls: [...run.spec.urls],
+                  deploymentStatus:
+                    run.status === "starting" || run.status === "running"
+                      ? "deploying"
+                      : succeeded
+                        ? "deployed_unverified"
+                        : run.status,
+                  health: succeeded ? "not_probed" : "unknown",
+                  platform: run.spec.providerId,
+                  lastDeploy: succeeded ? run.endedAt : null,
+                  runId: run.id,
+                  variables: run.spec.envKeys.map((name) => ({ name, present: null })),
+                  observedAt: run.endedAt ?? run.startedAt ?? run.createdAt,
+                  notes: [
+                    succeeded
+                      ? "This run's deployment command completed, but it no longer defines the current environment and endpoint health was not probed."
+                      : "This run records a deployment attempt that no longer defines the current environment; endpoint health is unknown.",
+                    ...(run.spec.urls.length > 0
+                      ? ["URLs are declared targets; they are not current liveness evidence."]
+                      : []),
+                  ],
+                },
+                isCurrent: false,
+              },
+            ]
+          : [];
+    return { relatedServices, relatedDeployments };
+  };
   const touch = (action: string) => {
     revision += 1;
     lastAction = action;
@@ -564,7 +656,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
         tests: [],
         notes: [],
       };
-      return clone({ run, ...evidence } satisfies OperationDetail);
+      return clone({ run, ...evidence, ...detailRelationships(run) } satisfies OperationDetail);
     },
     operations_history: (args) => {
       requireCore();

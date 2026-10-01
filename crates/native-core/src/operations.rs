@@ -378,6 +378,8 @@ impl OperationsStore {
                 artifacts: Vec::<OperationArtifact>::new(),
                 tests: Vec::new(),
                 notes: Vec::new(),
+                related_services: Vec::new(),
+                related_deployments: Vec::new(),
             })
         })
     }

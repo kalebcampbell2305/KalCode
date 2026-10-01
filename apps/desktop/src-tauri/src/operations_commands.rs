@@ -1260,6 +1260,8 @@ impl OperationsState {
             artifacts: Vec::new(),
             tests: Vec::new(),
             notes: Vec::new(),
+            related_services: Vec::new(),
+            related_deployments: Vec::new(),
         });
         if !event_evidence_available {
             detail.notes.push(
@@ -1314,8 +1316,66 @@ impl OperationsState {
                 .notes
                 .push("Timeline is bounded to 5,000 matching workspace/thread events.".into());
         }
+        let (related_services, related_deployments) = self.detail_relationships(&run)?;
+        detail.related_services = related_services;
+        detail.related_deployments = related_deployments;
         detail.run = run;
         Ok(detail)
+    }
+
+    fn detail_relationships(
+        &self,
+        run: &OperationRecord,
+    ) -> Result<(
+        Vec<kalcode_contracts::operations::OperationServiceRelationship>,
+        Vec<kalcode_contracts::operations::OperationDeploymentRelationship>,
+    )> {
+        if !matches!(
+            run.spec.kind,
+            OperationKind::Service | OperationKind::Deploy | OperationKind::Release
+        ) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let (_, _, current_runs) = self.store.snapshot()?;
+        let (services, services_available) = {
+            let mut cache = self.observations.lock().map_err(|_| poisoned())?;
+            if let Some((at, services, available)) = &*cache
+                && at.elapsed() < OBSERVATION_TTL
+            {
+                (services.clone(), *available)
+            } else {
+                match kalcode_utilities::services::discover_observation(&self.core, &current_runs) {
+                    Ok((services, available)) => {
+                        *cache = Some((Instant::now(), services.clone(), available));
+                        (services, available)
+                    }
+                    Err(_) => (Vec::new(), false),
+                }
+            }
+        };
+        let observed_at = kalcode_core::time::now_rfc3339();
+        let workspaces = self.core.workspaces()?;
+        let names = std::env::vars_os()
+            .filter_map(|(name, _)| name.into_string().ok())
+            .collect::<Vec<_>>();
+        let mut environments = kalcode_utilities::operation_evidence::environments(
+            &current_runs,
+            &services,
+            &workspaces,
+            &names,
+            &observed_at,
+        );
+        if !services_available {
+            kalcode_utilities::operation_evidence::mark_local_port_observation_unavailable(
+                &mut environments,
+            );
+        }
+        Ok(kalcode_utilities::operation_evidence::detail_relationships(
+            run,
+            &services,
+            &environments,
+        ))
     }
 
     fn authorize(&self, app: &AppHandle, spec: &OperationSpec) -> Result<Authorization> {
@@ -2644,11 +2704,105 @@ mod tests {
         );
         let second_detail = state.detail(&second_id).expect("second turn detail");
         assert_eq!(second_detail.run.status, OperationStatus::Unknown);
+        assert!(second_detail.related_services.is_empty());
+        assert!(second_detail.related_deployments.is_empty());
         assert!(
             second_detail
                 .logs
                 .as_deref()
                 .is_some_and(|logs| logs.contains("second-turn-user"))
+        );
+
+        assert!(resources.shutdown_checked());
+        core.shutdown();
+    }
+
+    #[test]
+    fn operation_detail_retains_historical_service_after_a_successor_takes_ownership() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.7-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let (state, resources) = fixture(core.clone(), data.path());
+        let mut spec = observed_spec(
+            "Frontend service".into(),
+            workspace.id.clone(),
+            OperationKind::Service,
+        );
+        spec.command = Some("pnpm dev".into());
+        spec.urls = vec!["http://localhost:3000/".into()];
+
+        let first = state.store.enqueue(spec.clone()).expect("enqueue first");
+        state
+            .store
+            .claim(Some(&first.id))
+            .expect("claim first")
+            .expect("first running");
+        state
+            .store
+            .bind(&first.id, Some(&first.id), None, None, None)
+            .expect("bind first terminal");
+        state
+            .store
+            .finish(
+                &first.id,
+                OperationStatus::Succeeded,
+                "Service command exited.",
+            )
+            .expect("finish first");
+
+        let successor = state.store.enqueue(spec).expect("enqueue successor");
+        state
+            .store
+            .claim(Some(&successor.id))
+            .expect("claim successor")
+            .expect("successor running");
+        state
+            .store
+            .bind(&successor.id, Some(&successor.id), None, None, None)
+            .expect("bind successor terminal");
+        let current_service = DevelopmentService {
+            id: format!("{}:42:1", successor.id),
+            run_id: Some(successor.id.clone()),
+            name: successor.spec.name.clone(),
+            status: "running".into(),
+            pid: Some(42),
+            process_name: "node".into(),
+            uptime_seconds: Some(12),
+            ports: vec![3000],
+            urls: successor.spec.urls.clone(),
+            workspace_id: workspace.id.clone(),
+            workspace_name: workspace.name.clone(),
+            terminal_id: Some(successor.id.clone()),
+            can_stop: true,
+            can_restart: true,
+            action_reason: None,
+        };
+        *state.observations.lock().expect("observations") =
+            Some((Instant::now(), vec![current_service.clone()], true));
+
+        let first_detail = state.detail(&first.id).expect("first detail");
+        assert_eq!(first_detail.related_services.len(), 1);
+        assert!(!first_detail.related_services[0].is_current);
+        assert_eq!(first_detail.related_services[0].service.status, "stopped");
+        assert_eq!(first_detail.related_services[0].service.pid, None);
+        assert!(first_detail.related_services[0].service.ports.is_empty());
+        assert!(!first_detail.related_services[0].service.can_stop);
+        assert!(!first_detail.related_services[0].service.can_restart);
+
+        let successor_detail = state.detail(&successor.id).expect("successor detail");
+        assert_eq!(successor_detail.related_services.len(), 1);
+        assert!(successor_detail.related_services[0].is_current);
+        assert_eq!(
+            successor_detail.related_services[0].service,
+            current_service
         );
 
         assert!(resources.shutdown_checked());
