@@ -1702,9 +1702,9 @@ impl Executor for DesktopExecutor {
                 Ok(Executed {
                     summary: match &query {
                         Some(name) => {
-                            format!("Closed the {name} pane. What it runs keeps running.")
+                            format!("Closed the {name} pane.")
                         }
-                        None => "Closed the pane. What it runs keeps running.".into(),
+                        None => "Closed the pane.".into(),
                     },
                     directive: Some(UiDirective::ClosePane { query }),
                 })
@@ -2051,10 +2051,7 @@ mod tests {
         let close = KalVoiceIntent::Close { query: None };
         assert!(executor.check(&close).is_ok());
         let closed = executor.execute(&close, &ctx()).expect("close");
-        assert_eq!(
-            closed.summary,
-            "Closed the pane. What it runs keeps running."
-        );
+        assert_eq!(closed.summary, "Closed the pane.");
         assert_eq!(
             closed.directive,
             Some(UiDirective::ClosePane { query: None })

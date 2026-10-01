@@ -428,7 +428,7 @@ export function PaneFrame(props: PaneFrameProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Tooltip content={`Close pane — it keeps running (${PANE_SHORTCUT_LABELS.close})`}>
+          <Tooltip content={`Close pane (${PANE_SHORTCUT_LABELS.close})`}>
             <IconButton size="sm" label={`Close pane ${index + 1}`} icon={<X />} onClick={onClose} />
           </Tooltip>
         </div>

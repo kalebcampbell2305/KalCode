@@ -212,6 +212,19 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [terminalById, labels, paneById, accountFor],
   );
 
+  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running.
+  const stopAgent = useCallback(
+    async (threadId: string) => {
+      if (!paneById.get(threadId)?.info.running) return;
+      try {
+        providerPanes.updated(await client.stopThread(threadId));
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn("stop on close failed", error);
+      }
+    },
+    [paneById, providerPanes, client],
+  );
+
   const initialState = useRef({ terminals, activeTerminalId, panes: providerPanes.panes.map((p) => p.thread.id) });
   const store = useMemo(
     () => ({
@@ -235,6 +248,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         initialState.current.panes,
       ),
     titleOf,
+    onCloseContent: (content) => {
+      if (content.kind === "terminal") void closeTerminal(content.terminalId);
+      if (content.kind === "thread") void stopAgent(content.threadId);
+    },
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
@@ -334,9 +351,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           terminal: true,
           running,
           stop: running ? { label: "End terminal", run: () => void closeTerminal(terminal.id) } : undefined,
-          // Closing the tab of a shell that no longer runs tidies it away; a running one keeps
-          // running in the background.
-          onClose: running ? undefined : () => void closeTerminal(terminal.id),
+          // Closing a terminal ends it: the shell and everything it started (owner decision).
+          onClose: () => void closeTerminal(terminal.id),
         };
       }
       if (content.kind === "thread") {
@@ -351,11 +367,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           statusText: `${entry.thread.providerName}${account ? ` · ${paneAccountLabel(account)}` : ""} · ${status.label}`,
           terminal: true,
           running: entry.info.running,
+          // Closing the tab stops the agent and takes the pane thread out of the layout.
+          onClose: () => {
+            void stopAgent(entry.thread.id);
+            controllerRef.current.forget(new Set([contentKey(threadContent(entry.thread.id))]));
+          },
         };
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminal, accountFor],
+    [terminalById, labels, paneById, closeTerminal, accountFor, stopAgent],
   );
 
   const render = useCallback(

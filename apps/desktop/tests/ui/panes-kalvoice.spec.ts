@@ -40,7 +40,7 @@ async function ask(page: Page, text: string) {
 }
 
 test.describe("KalVoice pane intents", () => {
-  test("split, make bigger, split top and bottom, close: layout only, nothing stops", async ({ page }) => {
+  test("split, make bigger, split top and bottom; close ends the shells in the closed pane", async ({ page }) => {
     await openCode(page);
     const processes = await running(page);
 
@@ -62,9 +62,30 @@ test.describe("KalVoice pane intents", () => {
     const below = await box(pane(page, 1));
     expect(below.y).toBeGreaterThan(top.y + 20);
 
+    // Splitting and resizing never stop anything; closing a pane ends the terminals it held.
+    expect(await running(page)).toBe(processes);
+    // Live terminal tabs per pane (an exited shell's tab reads "Ended").
+    const tabsByPane = async () =>
+      new Map(
+        await page
+          .locator("[data-pane-id]")
+          .evaluateAll((els) =>
+            els.map(
+              (el) =>
+                [
+                  el.getAttribute("data-pane-id") ?? "",
+                  [...el.querySelectorAll('[role="tab"]')].filter((t) => !/Ended/.test(t.textContent ?? "")).length,
+                ] as const,
+            ),
+          ),
+      );
+    const before = await tabsByPane();
     await ask(page, "close this pane");
     await expect(panes(page)).toHaveCount(2);
-    expect(await running(page)).toBe(processes);
+    const after = await tabsByPane();
+    const closed = [...before].filter(([id]) => !after.has(id));
+    expect(closed).toHaveLength(1);
+    await expect.poll(() => running(page)).toBe(processes - (closed[0]?.[1] ?? 0));
   });
 
   test("arranging Claude Code and Codex says honestly that Codex has no pane yet", async ({ page }) => {
