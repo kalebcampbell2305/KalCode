@@ -9,6 +9,10 @@ use crate::UpdateError;
 
 pub const MAC_APP_EXECUTABLE: &str = "Contents/MacOS/kalcode";
 
+/// Beside `updater.json`: a KalCode launch stepped aside while the helper applied an update
+/// after KalCode closed, so the helper opens KalCode when it finishes.
+pub const REOPEN_MARKER: &str = "reopen-after-update";
+
 #[must_use]
 pub fn app_executable(app: &Path) -> PathBuf {
     app.join(MAC_APP_EXECUTABLE)

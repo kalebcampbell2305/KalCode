@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../../ipc/updater.ts";
-import { channelOptions, restartAndInstall, updatePresentation } from "./updaterModel.ts";
+import { channelOptions, installsWhenClosed, restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 const base: UpdateStatus = {
   channel: "stable",
@@ -11,6 +11,7 @@ const base: UpdateStatus = {
   totalBytes: null,
   lastError: null,
   recoveryAvailable: false,
+  installOnQuit: false,
 };
 
 describe("updatePresentation", () => {
@@ -37,6 +38,22 @@ describe("updatePresentation", () => {
       "Version 0.1.7 build 780",
     );
     expect(updatePresentation({ ...base, currentVersion: "0.1.7+780" }).label).toBe("KalCode 0.1.7 build 780");
+  });
+
+  it("says a new build of the running public version installs when KalCode closes", () => {
+    const current = { ...base, currentVersion: "0.1.8", phase: "ready" as const, availableVersion: "0.1.8+780" };
+    expect(updatePresentation({ ...current, installOnQuit: true })).toEqual({
+      label: "A new KalCode 0.1.8 build is ready (build 780)",
+      detail: "Installs when you close KalCode.",
+      progress: 100,
+    });
+    expect(updatePresentation(current).detail).toBe("Getting ready to install when you close KalCode.");
+    expect(installsWhenClosed(current)).toBe(true);
+    // A new public version keeps the restart-and-install prompt.
+    const next = { ...current, availableVersion: "0.1.9+801" };
+    expect(installsWhenClosed(next)).toBe(false);
+    expect(updatePresentation(next).detail).toBe("Your work stays open until you choose to restart and install.");
+    expect(installsWhenClosed({ ...base, phase: "ready" })).toBe(false);
   });
 
   it("bounds download progress and keeps unknown totals indeterminate", () => {

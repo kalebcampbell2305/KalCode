@@ -13,6 +13,7 @@ export function createUpdaterMemory(currentVersion: string): { handlers: Dashboa
     totalBytes: null,
     lastError: null,
     recoveryAvailable: false,
+    installOnQuit: false,
   };
 
   const snapshot = () => structuredClone(status);

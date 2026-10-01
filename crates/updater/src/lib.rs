@@ -1116,6 +1116,31 @@ pub struct UpdateStatus {
     pub total_bytes: Option<u64>,
     pub last_error: Option<String>,
     pub recovery_available: bool,
+    /// A newer build of the running public version is verified and staged: it installs, without
+    /// a prompt, when KalCode closes. The machine never sets this; the desktop owner of the
+    /// staged installer does.
+    #[serde(default)]
+    pub install_on_quit: bool,
+}
+
+/// Whether `next` is an internal build of `current`'s public version (`X.Y.Z` or `X.Y.Z+N` to
+/// `X.Y.Z+M`): the same major, minor, patch and pre-release, and a plain numeric build number on
+/// `next`. Callers have already proved `next` is newer. Such builds install silently when KalCode
+/// closes; any other update is a new public version and keeps the in-app prompt. Mirrors
+/// `sameVersionBuild` in the desktop UI.
+#[must_use]
+pub fn same_public_build(current: &str, next: &str) -> bool {
+    let (Ok(current), Ok(next)) = (parse_version(current), parse_version(next)) else {
+        return false;
+    };
+    let build = next.build.as_str();
+    current.major == next.major
+        && current.minor == next.minor
+        && current.patch == next.patch
+        && current.pre == next.pre
+        && (1..=16).contains(&build.len())
+        && !build.starts_with('0')
+        && build.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1141,6 +1166,7 @@ impl UpdateMachine {
                 total_bytes: None,
                 last_error: None,
                 recovery_available: false,
+                install_on_quit: false,
             },
             candidate: None,
         }

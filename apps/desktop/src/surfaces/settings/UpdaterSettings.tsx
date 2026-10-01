@@ -6,7 +6,7 @@ import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
 import { formatVersion } from "../../platform/version.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import styles from "./UpdaterSettings.module.css";
-import { channelOptions, restartAndInstall, updatePresentation } from "./updaterModel.ts";
+import { channelOptions, installsWhenClosed, restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 type Operation = "channel" | "check" | "cancel" | "install" | "restore";
 
@@ -139,7 +139,7 @@ export function UpdaterSettings() {
               Cancel update check
             </Button>
           ) : null}
-          {status.phase === "ready" ? (
+          {status.phase === "ready" && !installsWhenClosed(status) ? (
             <Button
               variant="primary"
               busy={operation === "install"}

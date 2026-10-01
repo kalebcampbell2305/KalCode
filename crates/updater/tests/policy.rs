@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use kalcode_updater::{
     ArtifactFormat, Candidate, FeedMetadata, UpdateChannel, UpdateError, UpdateMachine,
-    UpdatePhase, UpdateTarget, validate_candidate, validate_candidate_for_target,
-    validate_retained_candidate, verify_download,
+    UpdatePhase, UpdateTarget, same_public_build, validate_candidate,
+    validate_candidate_for_target, validate_retained_candidate, verify_download,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -259,6 +259,48 @@ fn build_numbers_order_numerically_after_the_plain_public_version() {
         assert!(parse(older) < parse(newer), "{older} < {newer}");
     }
     assert_eq!(parse("0.1.7+779").to_string(), "0.1.7+779");
+}
+
+#[test]
+fn only_a_build_of_the_running_public_version_installs_when_kalcode_closes() {
+    for (current, next) in [
+        ("0.1.8", "0.1.8+1"),
+        ("0.1.8+5", "0.1.8+6"),
+        ("0.1.8+9", "0.1.8+10"),
+        ("0.1.9-beta.1+3", "0.1.9-beta.1+4"),
+        ("v0.1.8", "0.1.8+2"),
+    ] {
+        assert!(same_public_build(current, next), "{current} -> {next}");
+    }
+    // A new public version (or a build without a plain build number) keeps the prompt.
+    for (current, next) in [
+        ("0.1.8+5", "0.1.9"),
+        ("0.1.8+5", "0.1.9+6"),
+        ("0.1.8", "0.2.0+1"),
+        ("0.1.8", "1.1.8+1"),
+        ("0.1.8", "0.1.8"),
+        ("0.1.8-beta.1+3", "0.1.8+4"),
+        ("0.1.8", "0.1.8-beta.1+4"),
+        ("0.1.8", "0.1.8+0"),
+        ("0.1.8", "0.1.8+04"),
+        ("0.1.8", "0.1.8+build.4"),
+        ("0.1.8", "0.1.8+12345678901234567"),
+        ("not-a-version", "0.1.8+1"),
+        ("0.1.8", "not-a-version"),
+    ] {
+        assert!(!same_public_build(current, next), "{current} -> {next}");
+    }
+}
+
+#[test]
+fn update_status_reports_install_on_quit_and_reads_older_status_without_it() {
+    let machine = UpdateMachine::new(UpdateChannel::Stable, "0.1.8");
+    assert!(!machine.status().install_on_quit);
+    let mut value = serde_json::to_value(machine.status()).unwrap();
+    assert_eq!(value["installOnQuit"], json!(false));
+    value.as_object_mut().unwrap().remove("installOnQuit");
+    let parsed: kalcode_updater::UpdateStatus = serde_json::from_value(value).unwrap();
+    assert!(!parsed.install_on_quit);
 }
 
 #[test]

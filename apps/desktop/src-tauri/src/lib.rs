@@ -398,6 +398,22 @@ fn drain_on_exit_event(
     }
 }
 
+/// A staged same-version build installs on this exit only after a proven clean drain of the
+/// whole runtime, never when the updater already owns the exit (an install or restore the user
+/// chose), and never on a restart.
+fn installs_staged_update_on_exit(
+    cleanup: ExitEventCleanup,
+    exit: &runtime_shutdown::ExitControl,
+) -> bool {
+    use std::sync::atomic::Ordering;
+
+    matches!(
+        cleanup,
+        ExitEventCleanup::AlreadyDrained | ExitEventCleanup::Drained
+    ) && !exit.update_quiesced.load(Ordering::Acquire)
+        && !exit.restart_requested.load(Ordering::Acquire)
+}
+
 #[cfg(feature = "e2e")]
 fn build_e2e_main_webview(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = match environment::data_dir_override() {
@@ -525,6 +541,16 @@ pub fn run(removed_overrides: Vec<String>) {
             }
         })
         .setup(move |app| {
+            // Reopened while this very build is being replaced after the last close: step aside
+            // before touching any state. The installer or helper opens the new build when done.
+            if let Ok(data_dir) = resolve_data_dir(app)
+                && updater_commands::step_aside_for_running_update(
+                    &data_dir,
+                    &app.package_info().version.to_string(),
+                )
+            {
+                std::process::exit(0);
+            }
             #[cfg(feature = "e2e")]
             build_e2e_main_webview(app)?;
             // Test hooks' grant (debug and `e2e` builds only; release builds don't register the
@@ -827,6 +853,10 @@ pub fn run(removed_overrides: Vec<String>) {
     app.run(|handle, event| {
         if let RunEvent::ExitRequested { api, code, .. } = event {
             let exit = handle.state::<runtime_shutdown::ExitControl>();
+            if code == Some(tauri::RESTART_EXIT_CODE) {
+                exit.restart_requested
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
             finish_update_restart(&exit, code);
             match begin_exit_attempt(&exit) {
                 ExitAttempt::Ready => {}
@@ -853,7 +883,8 @@ pub fn run(removed_overrides: Vec<String>) {
             }
         } else if let RunEvent::Exit = event {
             let exit = handle.state::<runtime_shutdown::ExitControl>();
-            match drain_on_exit_event(&exit, EXIT_JOIN_LIMIT, || shutdown_runtime(handle)) {
+            let cleanup = drain_on_exit_event(&exit, EXIT_JOIN_LIMIT, || shutdown_runtime(handle));
+            match cleanup {
                 // The successful drain already stopped the services.
                 ExitEventCleanup::AlreadyDrained | ExitEventCleanup::Drained => {}
                 ExitEventCleanup::Incomplete => {
@@ -869,6 +900,13 @@ pub fn run(removed_overrides: Vec<String>) {
                 }
             }
             kalvoice_commands::remove_fn_monitor();
+            // Closing KalCode (its window, Cmd+Q or the Dock) is when a staged newer build of
+            // this public version installs, silently, to be running on the next launch.
+            if installs_staged_update_on_exit(cleanup, &exit)
+                && let Some(updater) = handle.try_state::<updater_commands::DesktopUpdaterState>()
+            {
+                updater.install_staged_on_exit();
+            }
         }
     });
 }
