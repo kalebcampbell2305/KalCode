@@ -18,8 +18,12 @@ pub(super) const RECORD_FILE: &str = "silent-install.json";
 /// Staging failures, in separate sessions, after which a build is offered with the prompt.
 const STAGING_FAILURE_LIMIT: u8 = 2;
 
+/// Sessions that staged a build but ended without starting its install, after which the build
+/// is offered with the prompt.
+const SKIPPED_EXIT_LIMIT: u8 = 2;
+
 /// What the silent path has done for one same-version build.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SilentInstallRecord {
     pub version: String,
@@ -29,15 +33,40 @@ pub(super) struct SilentInstallRecord {
     /// Sessions in a row whose staging of this build failed.
     #[serde(default)]
     pub staging_failures: u8,
+    /// This session staged the build to install when KalCode closes.
+    #[serde(default)]
+    pub staged_for_exit: bool,
+    /// Sessions that staged the build but ended without starting its install: the exit's
+    /// cleanup did not finish, KalCode restarted, was force quit or crashed, or the OS logged off.
+    #[serde(default)]
+    pub skipped_exits: u8,
 }
 
 /// Whether `version` must be offered through the restart prompt instead of installing silently:
-/// a silent install of it was started and KalCode still isn't running it, or staging it failed
-/// in `STAGING_FAILURE_LIMIT` sessions in a row.
+/// a silent install of it was started and KalCode still isn't running it, staging it failed
+/// in `STAGING_FAILURE_LIMIT` sessions in a row, or `SKIPPED_EXIT_LIMIT` sessions staged it
+/// but never started its install.
 pub(super) fn prompt_instead(record: Option<&SilentInstallRecord>, version: &str) -> bool {
     record.is_some_and(|record| {
         record.version == version
-            && (record.exit_attempted || record.staging_failures >= STAGING_FAILURE_LIMIT)
+            && (record.exit_attempted
+                || record.staging_failures >= STAGING_FAILURE_LIMIT
+                || record.skipped_exits >= SKIPPED_EXIT_LIMIT)
+    })
+}
+
+/// At launch, before `reconcile_at_launch`: the previous session staged a build and ended without
+/// starting its install, however it ended. Counting it here, rather than at exit, also catches the
+/// exits that run no cleanup at all (force quit, crash, a killed leftover process, logoff).
+pub(super) fn count_skipped_exit(
+    record: Option<SilentInstallRecord>,
+) -> Option<SilentInstallRecord> {
+    record.map(|mut record| {
+        if record.staged_for_exit && !record.exit_attempted {
+            record.skipped_exits = record.skipped_exits.saturating_add(1);
+        }
+        record.staged_for_exit = false;
+        record
     })
 }
 
@@ -77,32 +106,44 @@ pub(super) fn after_staging_failure(
         }
         _ => SilentInstallRecord {
             version: version.to_owned(),
-            exit_attempted: false,
             staging_failures: 1,
+            ..SilentInstallRecord::default()
         },
     }
 }
 
+/// The build is staged and waits for KalCode to close. A record for another build is replaced:
+/// a newer build gets its own silent chance.
 pub(super) fn after_staging_success(
     record: Option<SilentInstallRecord>,
     version: &str,
 ) -> Option<SilentInstallRecord> {
-    let mut record = record.filter(|record| record.version == version)?;
+    let mut record = record
+        .filter(|record| record.version == version)
+        .unwrap_or_else(|| SilentInstallRecord {
+            version: version.to_owned(),
+            ..SilentInstallRecord::default()
+        });
     record.staging_failures = 0;
-    record.exit_attempted.then_some(record)
+    record.staged_for_exit = true;
+    Some(record)
 }
 
 pub(super) fn after_exit_attempt(
     record: Option<SilentInstallRecord>,
     version: &str,
 ) -> SilentInstallRecord {
-    let staging_failures = record
+    let (staging_failures, skipped_exits) = record
         .filter(|record| record.version == version)
-        .map_or(0, |record| record.staging_failures);
+        .map_or((0, 0), |record| {
+            (record.staging_failures, record.skipped_exits)
+        });
     SilentInstallRecord {
         version: version.to_owned(),
         exit_attempted: true,
         staging_failures,
+        staged_for_exit: false,
+        skipped_exits,
     }
 }
 
@@ -145,6 +186,42 @@ mod tests {
     const NEW: &str = "0.1.8+6";
 
     #[test]
+    fn sessions_that_staged_a_build_but_never_started_its_install_offer_it_with_the_prompt() {
+        // Session 1 stages 0.1.8+6, then ends without starting its install (its exit cleanup
+        // did not finish, it was force quit or crashed, or the OS logged off).
+        let staged = after_staging_success(None, NEW);
+        assert!(!prompt_instead(staged.as_ref(), NEW));
+        // The next launch counts it once; one skipped exit still installs silently.
+        let first = count_skipped_exit(staged);
+        assert_eq!(first.as_ref().map(|r| r.skipped_exits), Some(1));
+        assert!(!prompt_instead(first.as_ref(), NEW));
+        // A launch after a session that did not stage it counts nothing.
+        assert_eq!(count_skipped_exit(first.clone()), first);
+        // Session 2 stages it again and ends the same way: offered with the prompt.
+        let second = count_skipped_exit(after_staging_success(first, NEW));
+        assert!(prompt_instead(second.as_ref(), NEW));
+        // A newer build gets its own silent chance.
+        assert!(!prompt_instead(second.as_ref(), "0.1.8+7"));
+        let newer = after_staging_success(second, "0.1.8+7").expect("staged");
+        assert_eq!(newer.skipped_exits, 0);
+
+        // A session that started the install is not a skipped exit.
+        let attempted = after_exit_attempt(after_staging_success(None, NEW), NEW);
+        assert!(!attempted.staged_for_exit);
+        let launched = count_skipped_exit(Some(attempted)).expect("kept");
+        assert_eq!(launched.skipped_exits, 0);
+        assert!(launched.exit_attempted);
+
+        // A record written by an earlier 0.1.8 build (no new fields) still reads.
+        let older: SilentInstallRecord = serde_json::from_str(
+            r#"{"version":"0.1.8+6","exitAttempted":false,"stagingFailures":1}"#,
+        )
+        .unwrap();
+        assert_eq!(older.skipped_exits, 0);
+        assert!(!older.staged_for_exit);
+    }
+
+    #[test]
     fn a_silent_install_that_did_not_take_offers_that_build_with_the_prompt() {
         // KalCode 0.1.8+5 closed and started the installer for 0.1.8+6.
         let record = after_exit_attempt(None, NEW);
@@ -178,6 +255,12 @@ mod tests {
         );
         // The first healthy launch of that build settles it.
         assert_eq!(reconcile_at_launch(Some(record), NEW, true), None);
+
+        // A skipped exit is counted at every launch, healthy or not; only settling needs health.
+        let staged = after_staging_success(None, NEW);
+        let unhealthy = reconcile_at_launch(count_skipped_exit(staged), OLD, false);
+        assert_eq!(unhealthy.as_ref().map(|r| r.skipped_exits), Some(1));
+        assert_eq!(reconcile_at_launch(unhealthy, NEW, true), None);
     }
 
     #[test]
@@ -197,9 +280,11 @@ mod tests {
         assert_eq!(other.staging_failures, 1);
         assert!(!prompt_instead(Some(&other), "0.1.8+7"));
 
-        // Staging that succeeds resets the count; with no exit attempt nothing is left to track.
+        // Staging that succeeds resets the count and waits for KalCode to close.
         let once = after_staging_failure(None, NEW);
-        assert_eq!(after_staging_success(Some(once), NEW), None);
+        let staged = after_staging_success(Some(once), NEW).expect("staged");
+        assert_eq!(staged.staging_failures, 0);
+        assert!(staged.staged_for_exit);
         // An exit attempt already recorded stays recorded.
         let attempted = after_exit_attempt(Some(second), NEW);
         assert_eq!(attempted.staging_failures, 2);
@@ -226,7 +311,7 @@ mod tests {
                 Some(SilentInstallRecord {
                     version: "not-a-version".into(),
                     exit_attempted: true,
-                    staging_failures: 0,
+                    ..SilentInstallRecord::default()
                 }),
                 OLD,
                 true

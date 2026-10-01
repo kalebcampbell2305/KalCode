@@ -615,6 +615,19 @@ impl RuntimeCoordinator {
                 return true;
             }
             if Instant::now() >= deadline {
+                // Name what was still outstanding, so an unclean exit says which drain step held.
+                let (building, in_flight) = self.lifecycle.pending();
+                tracing::warn!(
+                    event = "runtime.drain_timed_out",
+                    phase = ?self.lifecycle.phase(),
+                    building,
+                    in_flight,
+                    bundle_retained = self
+                        .bundle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_some(),
+                );
                 self.lifecycle.block_unclean();
                 return false;
             }
