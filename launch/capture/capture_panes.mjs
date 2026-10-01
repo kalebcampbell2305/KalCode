@@ -18,7 +18,9 @@ const STAGE_CSS = `*{caret-color:transparent !important} .xterm-cursor-blink{ani
 
 async function hideGemini() {
   await page.evaluate(() => {
-    for (const el of document.querySelectorAll("li, tr, [role=row], [role=listitem], section, section > div, article")) {
+    for (const el of document.querySelectorAll(
+      "li, tr, [role=row], [role=listitem], section, section > div, article",
+    )) {
       const t = el.textContent ?? "";
       if (t.includes("Gemini CLI") && !t.includes("Claude Code") && !t.includes("Codex") && t.length < 600)
         el.style.display = "none";
@@ -27,7 +29,8 @@ async function hideGemini() {
     for (const el of document.querySelectorAll("*"))
       if (el.children.length === 0 && el.textContent?.trim() === "Gemini CLI") {
         let card = el;
-        while (card.parentElement && !(card.parentElement.textContent ?? "").includes("Codex")) card = card.parentElement;
+        while (card.parentElement && !(card.parentElement.textContent ?? "").includes("Codex"))
+          card = card.parentElement;
         card.style.display = "none";
       }
     // the one sign-in sentence that also names Gemini CLI: keep the Claude Code / Codex half
@@ -58,7 +61,10 @@ const seqShots = async (dir, n, ms) => {
 };
 
 async function preset(label, file) {
-  await page.getByRole("button", { name: /Layout/ }).first().click();
+  await page
+    .getByRole("button", { name: /Layout/ })
+    .first()
+    .click();
   await page.waitForTimeout(500);
   if (file) await shot(file);
   await page.getByText(label, { exact: false }).first().click();
@@ -140,7 +146,11 @@ if (want("six")) {
 if (want("providers")) {
   await open("threads");
   await nav("Providers");
-  await page.getByRole("tab", { name: "Setup" }).first().click().catch(() => {});
+  await page
+    .getByRole("tab", { name: "Setup" })
+    .first()
+    .click()
+    .catch(() => {});
   await page.waitForTimeout(900);
   await hideGemini();
   await shot("prov_setup");
@@ -151,7 +161,10 @@ if (want("providers")) {
   // scroll the page top -> bottom in small steps
   const scroller = await page.evaluateHandle(() => {
     const all = [...document.querySelectorAll("main, main *")];
-    return all.find((e) => e.scrollHeight > e.clientHeight + 40 && getComputedStyle(e).overflowY !== "visible") ?? document.scrollingElement;
+    return (
+      all.find((e) => e.scrollHeight > e.clientHeight + 40 && getComputedStyle(e).overflowY !== "visible") ??
+      document.scrollingElement
+    );
   });
   const max = await scroller.evaluate((e) => e.scrollHeight - e.clientHeight);
   mkdirSync(`${out}/prov_scroll`, { recursive: true });
@@ -163,7 +176,8 @@ if (want("providers")) {
     await page.waitForTimeout(60);
     await page.screenshot({ path: `${out}/prov_scroll/${String(i).padStart(3, "0")}.png` });
   }
-  console.log("providers scroll max", max);
+  process.stdout.write(`providers scroll max ${max}
+`);
 }
 
 await browser.close();
