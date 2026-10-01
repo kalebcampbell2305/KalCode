@@ -3,7 +3,17 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
-import { closeGracefully, closeWindowNamed, EXE, launch, processesMatching, removeDir, test } from "./harness.ts";
+import {
+  closeGracefully,
+  closeWindowNamed,
+  EXE,
+  inServiceSession,
+  launch,
+  processesMatching,
+  removeDir,
+  SERVICE_SESSION_SKIP,
+  test,
+} from "./harness.ts";
 
 /**
  * Z1 end to end against the real app: open a real folder, run real shells in real
@@ -183,6 +193,8 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
 });
 
 test("the native folder picker opens from Rust; cancelling it changes nothing", async () => {
+  // Finds and closes the real system dialog through UI Automation, which session 0 lacks.
+  test.skip(inServiceSession(), SERVICE_SESSION_SKIP);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   try {
     // No KALCODE_E2E_PICK_FOLDER: the real system dialog is shown.

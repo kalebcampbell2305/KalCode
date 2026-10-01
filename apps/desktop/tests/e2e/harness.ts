@@ -472,6 +472,40 @@ export function processesMatching(needle: string): number[] {
  * Finds a window titled `name` belonging to process `pid` with Windows UI Automation and closes
  * it (for a file dialog, the same as Cancel). Returns whether one was found.
  */
+/** The reason specs give when `inServiceSession()` makes them skip. */
+export const SERVICE_SESSION_SKIP = "skipped: session 0 has no interactive desktop; run in an interactive session";
+
+let serviceSession: boolean | undefined;
+
+/**
+ * Whether this run is in Windows session 0 (a service, such as the self-hosted gate runner). It
+ * has no interactive desktop, so UI Automation can't find or close a window and native dialogs and
+ * foreground changes never behave as they do for a person. Specs that need those skip there with
+ * `SERVICE_SESSION_SKIP`; interactive local and release runs still cover them. The same check as
+ * `windows_tao_reentrant_focus.rs` (the process's own session id is 0).
+ */
+export function inServiceSession(): boolean {
+  if (serviceSession === undefined) {
+    serviceSession = false;
+    if (process.platform === "win32") {
+      try {
+        const out = execFileSync(
+          "powershell",
+          ["-NoProfile", "-Command", `(Get-Process -Id ${process.pid}).SessionId`],
+          {
+            encoding: "utf8",
+            windowsHide: true,
+          },
+        );
+        serviceSession = out.trim() === "0";
+      } catch {
+        serviceSession = false;
+      }
+    }
+  }
+  return serviceSession;
+}
+
 export function closeWindowNamed(pid: number, name: string): boolean {
   const script = [
     "$ErrorActionPreference = 'Stop'",

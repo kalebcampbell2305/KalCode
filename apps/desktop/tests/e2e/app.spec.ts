@@ -15,9 +15,11 @@ import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
+  inServiceSession,
   killForcibly,
   launch,
   removeDir,
+  SERVICE_SESSION_SKIP,
   test,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -69,6 +71,8 @@ function displayedPath(path: string, home = process.env.USERPROFILE ?? process.e
 }
 
 test("launch, change settings, quit, relaunch: settings and history persist", async () => {
+  // The graceful quit closes the window through UI Automation, which session 0 lacks.
+  test.skip(inServiceSession(), SERVICE_SESSION_SKIP);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   try {
     // First launch: fresh database.
