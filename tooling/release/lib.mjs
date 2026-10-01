@@ -1,7 +1,7 @@
 // Shared helpers for the release scripts in tooling/release. No dependencies beyond Node.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -181,6 +181,52 @@ export function releaseVersionOverlay(version) {
     throw new Error(`release version ${version} does not match the checked-in version ${appVersion()}`);
   }
   return build === 0 ? { version } : { version, bundle: { macOS: { bundleVersion: String(build) } } };
+}
+
+/**
+ * The release version of the one build staged under `stagingRoot`, for tools that run from a file copy
+ * of the repository without git history (the clean-state verification packet). Exactly one
+ * `dist/release/<version>` directory may hold a build record for the checked-in public version, and
+ * that record must name the same version.
+ */
+export function stagedReleaseVersion(stagingRoot = STAGING_DIR) {
+  const publicVersion = appVersion();
+  const staged = existsSync(stagingRoot)
+    ? readdirSync(stagingRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(stagingRoot, entry.name, "build.json")))
+        .map((entry) => entry.name)
+        .filter((name) => {
+          try {
+            return splitReleaseVersion(name).publicVersion === publicVersion;
+          } catch {
+            return false;
+          }
+        })
+    : [];
+  if (staged.length !== 1) {
+    throw new Error(
+      `expected exactly one staged ${publicVersion} build under ${stagingRoot}, found ${staged.length ? staged.join(", ") : "none"}`,
+    );
+  }
+  const [version] = staged;
+  if (readJson(join(stagingRoot, version, "build.json")).version !== version) {
+    throw new Error(`the staged build record in ${version} names another version`);
+  }
+  return version;
+}
+
+/**
+ * The release version a verification tool checks: numbered from git history in a checkout
+ * (`releaseVersion`), or read from the single staged build in a git-less verification packet.
+ */
+export function verificationReleaseVersion(runGit = git, stagingRoot = STAGING_DIR) {
+  let checkout = false;
+  try {
+    checkout = runGit(["rev-parse", "--is-inside-work-tree"]) === "true";
+  } catch {
+    checkout = false;
+  }
+  return checkout ? releaseVersion(runGit) : stagedReleaseVersion(stagingRoot);
 }
 
 export function productName() {
