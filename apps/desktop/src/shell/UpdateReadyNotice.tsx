@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { KalCodeClient } from "../ipc/client.ts";
 import { toKalCodeError } from "../ipc/errors.ts";
 import { formatVersion, publicVersion, sameVersionBuild } from "../platform/version.ts";
-import { restartAndInstall } from "../surfaces/settings/updaterModel.ts";
+import { installsWhenClosed, restartAndInstall } from "../surfaces/settings/updaterModel.ts";
 import styles from "./UpdateReadyNotice.module.css";
 
 export type UpdateReadyNoticeClient = Pick<KalCodeClient, "updaterStatus" | "updaterInstall">;
@@ -21,10 +21,12 @@ interface ReadyUpdate {
 }
 
 /**
- * Non-modal, app-wide notice for a downloaded and verified update. It never restarts on its own:
- * "Restart to update" asks for confirmation first, then uses the same install path as
- * Settings → Updates. "Later" hides it for this app session. Status read failures stay silent —
- * Settings → Updates is where updater problems are reported.
+ * Non-modal, app-wide notice for a downloaded and verified new public version. It never
+ * restarts on its own: "Restart to update" asks for confirmation first, then uses the same
+ * install path as Settings → Updates. "Later" hides it for this app session. A newer build of
+ * the running public version staged to install silently when KalCode closes is not announced;
+ * one whose silent install failed is offered here, so nobody stays on an old build.
+ * Status read failures stay silent — Settings → Updates is where updater problems are reported.
  */
 export function UpdateReadyNotice({
   client,
@@ -48,7 +50,7 @@ export function UpdateReadyNotice({
         const status = await client.updaterStatus();
         if (active)
           setReady(
-            status.phase === "ready"
+            status.phase === "ready" && !installsWhenClosed(status)
               ? { version: status.availableVersion, currentVersion: status.currentVersion }
               : null,
           );

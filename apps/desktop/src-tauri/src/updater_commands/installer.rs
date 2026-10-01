@@ -17,6 +17,8 @@ use kalcode_updater::{UpdateTarget, verify_download_reader};
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
 
+use super::apply_lease::ApplyLease;
+
 #[cfg(target_os = "macos")]
 mod macos;
 
@@ -206,8 +208,25 @@ impl PreparedInstaller {
     /// Launches the exact held installer. The caller must quiesce application work first and exit
     /// promptly after success. No shell command string or artifact-controlled argument is used.
     #[cfg(windows)]
-    pub fn launch(mut self) -> Result<(), UpdateError> {
-        let child = installer_command(&self.path).spawn().map_err(|_| {
+    pub fn launch(self) -> Result<(), UpdateError> {
+        let command = installer_command(&self.path, InstallerMode::RestartNow);
+        self.spawn_installer(command)
+    }
+
+    /// Launches the exact held installer for a staged same-version build after KalCode's final
+    /// drain on exit: silently, without reopening KalCode, holding `lease` until it finishes.
+    #[cfg(windows)]
+    pub fn launch_after_exit(self, lease: Option<&ApplyLease>) -> Result<(), UpdateError> {
+        let mut command = installer_command(&self.path, InstallerMode::AfterExit);
+        if let Some(lease) = lease {
+            lease.pass_to(&mut command)?;
+        }
+        self.spawn_installer(command)
+    }
+
+    #[cfg(windows)]
+    fn spawn_installer(mut self, mut command: Command) -> Result<(), UpdateError> {
+        let child = command.spawn().map_err(|_| {
             UpdateError::new(
                 "update_launch_failed",
                 "The verified installer couldn't start.",
@@ -229,9 +248,37 @@ impl PreparedInstaller {
         Ok(())
     }
 
+    /// Starts the swap helper for a staged same-version build after KalCode's final drain on
+    /// exit. The helper applies it once KalCode has exited and does not reopen KalCode.
+    #[cfg(target_os = "macos")]
+    pub fn launch_after_exit(mut self, lease: Option<&ApplyLease>) -> Result<(), UpdateError> {
+        let prepared = self.macos.take().ok_or_else(installer_invalid)?;
+        prepared.launch_after_exit(lease)?;
+        std::mem::forget(self);
+        Ok(())
+    }
+
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn launch(self) -> Result<(), UpdateError> {
         Err(installer_invalid())
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub fn launch_after_exit(self, _lease: Option<&ApplyLease>) -> Result<(), UpdateError> {
+        Err(installer_invalid())
+    }
+
+    /// A staged installer with no file behind it, for admission tests. It can never launch.
+    #[cfg(test)]
+    pub fn test_stub(binding: InstallBinding) -> Self {
+        Self {
+            #[cfg(not(target_os = "macos"))]
+            path: PathBuf::new(),
+            file: None,
+            binding,
+            #[cfg(target_os = "macos")]
+            macos: None,
+        }
     }
 }
 
@@ -260,6 +307,21 @@ pub(super) fn cleanup_startup(
     }
 }
 
+/// Removes the previous bundle that a completed macOS swap left beside the installed app, when
+/// the helper could not (for example it was stopped by a logout right after the swap). Runs only
+/// in the build the swap installed.
+pub(super) fn remove_superseded_app(swap: &MacSwapAttempt) -> Result<(), UpdateError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::remove_superseded_app(swap)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = swap;
+        Ok(())
+    }
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn write_all_cancellable(
     writer: &mut File,
@@ -275,11 +337,30 @@ fn write_all_cancellable(
     cancel()
 }
 
+/// How the verified NSIS installer runs.
 #[cfg(windows)]
-fn installer_command(path: &Path) -> Command {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InstallerMode {
+    /// The user chose to restart and install: Tauri's passive progress window, then reopen.
+    RestartNow,
+    /// KalCode closed with a same-version build staged: no window, and KalCode stays closed.
+    AfterExit,
+}
+
+#[cfg(windows)]
+const fn installer_args(mode: InstallerMode) -> &'static [&'static str] {
+    // Tauri's NSIS template: `/UPDATE` keeps the installed app's settings and skips the
+    // uninstall step, `/P` is its passive mode, `/S` its silent mode, and `/R` reopens the app.
+    match mode {
+        InstallerMode::RestartNow => &["/P", "/UPDATE", "/R"],
+        InstallerMode::AfterExit => &["/S", "/UPDATE"],
+    }
+}
+
+#[cfg(windows)]
+fn installer_command(path: &Path, mode: InstallerMode) -> Command {
     let mut command = Command::new(path);
-    // Matches Tauri's documented passive NSIS update mode and restart behavior.
-    command.args(["/P", "/UPDATE", "/R"]);
+    command.args(installer_args(mode));
     command
 }
 
@@ -1242,8 +1323,20 @@ mod tests {
         assert!(open_prepared_for_launch(&installer, replaced).is_ok());
     }
 
+    #[test]
+    fn an_installer_run_after_exit_is_silent_and_never_reopens_kalcode() {
+        assert_eq!(
+            installer_args(InstallerMode::RestartNow),
+            ["/P", "/UPDATE", "/R"]
+        );
+        let after_exit = installer_args(InstallerMode::AfterExit);
+        assert_eq!(after_exit, ["/S", "/UPDATE"]);
+        assert!(!after_exit.contains(&"/R"), "the user closed KalCode");
+        assert!(!after_exit.contains(&"/P"), "no progress window");
+    }
+
     fn quiet_installer_command(path: &Path) -> Command {
-        let mut command = installer_command(path);
+        let mut command = installer_command(path, InstallerMode::RestartNow);
         command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

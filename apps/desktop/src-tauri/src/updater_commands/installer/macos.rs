@@ -464,6 +464,52 @@ impl PreparedMacInstaller {
         self.launched = true;
         Ok(())
     }
+
+    /// Starts the helper for an update applied after KalCode closes. Both bundles are not
+    /// re-verified here, so quitting stays quick: the helper verifies the installed bundle's
+    /// executable digest and both bundles' signing identity and version before it swaps.
+    pub(super) fn launch_after_exit(
+        mut self,
+        lease: Option<&super::ApplyLease>,
+    ) -> Result<(), UpdateError> {
+        if self.lease.is_none()
+            || process_identity_sha256(self.parent_pid)? != self.parent_identity_sha256
+        {
+            return Err(identity_mismatch());
+        }
+        let mut command = Command::new(&self.helper_path);
+        command
+            .arg("--journal")
+            .arg(&self.journal_path)
+            .arg("--no-relaunch");
+        if let Some(lease) = lease {
+            lease.pass_to(&mut command)?;
+        }
+        let child = command.spawn().map_err(|_| {
+            UpdateError::new(
+                "update_launch_failed",
+                "The verified installer couldn't start.",
+            )
+        })?;
+        drop(child);
+        self.launched = true;
+        Ok(())
+    }
+}
+
+/// See `installer::remove_superseded_app`. The running build is the one the swap installed, so
+/// the bundle at the swap's staged path is the build it replaced and nothing still needs it.
+pub(super) fn remove_superseded_app(swap: &MacSwapAttempt) -> Result<(), UpdateError> {
+    if current_app_bundle()? != swap.current_app {
+        return Err(installer_invalid());
+    }
+    match fs::symlink_metadata(&swap.staged_app) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(installer_storage_failed()),
+        Ok(_) => {
+            kalcode_updater::mac_swap::remove_swapped_out_app(&swap.current_app, &swap.staged_app)
+        }
+    }
 }
 
 impl Drop for PreparedMacInstaller {

@@ -14,10 +14,10 @@ use futures_util::future::{AbortHandle, AbortRegistration, Abortable};
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_updater::{
     ArtifactFormat, Candidate, InstallAttempt, InstallBinding, InstallKind, InstallOutcome,
-    MAX_UPDATE_BYTES, MacSwapAttempt, OperationToken, RollbackCache, UpdateChannel, UpdateError,
-    UpdateJournal, UpdateMachine, UpdatePhase, UpdateStatus, UpdateTarget,
-    validate_candidate_for_target, validate_retained_candidate_for_target, verify_download,
-    verify_signature_for_metadata,
+    JournalState, MAX_UPDATE_BYTES, MacSwapAttempt, MacSwapPhase, OperationToken, RollbackCache,
+    UpdateChannel, UpdateError, UpdateJournal, UpdateMachine, UpdatePhase, UpdateStatus,
+    UpdateTarget, same_public_build, validate_candidate_for_target,
+    validate_retained_candidate_for_target, verify_download, verify_signature_for_metadata,
 };
 use reqwest::header::ACCEPT;
 use reqwest::redirect::Policy;
@@ -26,8 +26,12 @@ use serde::Deserialize;
 use tauri::{AppHandle, State, WebviewWindow};
 use url::Url;
 
+mod apply_lease;
 mod installer;
+mod silent_fallback;
+use apply_lease::ApplyLease;
 use installer::PreparedInstaller;
+use silent_fallback::SilentInstallRecord;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
@@ -62,6 +66,9 @@ struct PreparedUpdate {
     candidate: Candidate,
     bytes: Vec<u8>,
     signature: String,
+    /// A newer build of the running public version, already verified and staged. It installs
+    /// when KalCode closes (`install_staged_on_exit`); dropping it removes the staged files.
+    installer: Option<PreparedInstaller>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,7 +114,7 @@ impl Runtime {
         if !allowed(self.machine.status().phase) {
             return Ok(None);
         }
-        self.prepared = None;
+        self.discard_prepared();
         self.begin_cancellable_check().map(Some)
     }
 
@@ -139,13 +146,13 @@ impl Runtime {
 
     fn cancel(&mut self) -> Result<(), UpdateError> {
         self.abort_check();
-        self.prepared = None;
+        self.discard_prepared();
         self.machine.cancel()
     }
 
     fn set_channel(&mut self, channel: UpdateChannel) -> Result<(), UpdateError> {
         self.abort_check();
-        self.prepared = None;
+        self.discard_prepared();
         self.machine.set_channel(channel)
     }
 
@@ -170,10 +177,45 @@ impl Runtime {
         Ok((token, prepared))
     }
 
+    /// Admits the install of a staged same-version build as KalCode closes. Refuses, changing
+    /// nothing, unless an installer is staged for the Ready release.
+    fn admit_exit_install(
+        &mut self,
+    ) -> Result<(OperationToken, Result<PreparedUpdate, UpdateError>), UpdateError> {
+        if !self.staged_for_exit() {
+            return Err(UpdateError::new(
+                "update_not_ready",
+                "No verified update is ready to install.",
+            ));
+        }
+        self.admit_install()
+    }
+
     /// Admits one restore of the verified previous version. `Err` is a refusal and changes
     /// nothing.
     fn admit_recovery(&mut self) -> Result<(OperationToken, ()), UpdateError> {
         self.machine.begin_recovery().map(|token| (token, ()))
+    }
+
+    fn staged_for_exit(&self) -> bool {
+        self.machine.status().phase == UpdatePhase::Ready
+            && self
+                .prepared
+                .as_ref()
+                .is_some_and(|prepared| prepared.installer.is_some())
+    }
+
+    fn status(&self) -> UpdateStatus {
+        let mut status = self.machine.status().clone();
+        status.install_on_quit = self.staged_for_exit();
+        status
+    }
+
+    /// Drops the prepared update and any staged installer (see `discard_staged`).
+    fn discard_prepared(&mut self) {
+        if let Some(installer) = self.prepared.take().and_then(|prepared| prepared.installer) {
+            discard_staged(installer);
+        }
     }
 }
 
@@ -238,10 +280,15 @@ struct Inner {
     rollback: RollbackCache,
     /// See [`ROLLBACK_FLOOR_FILE`]; `None` (missing or unreadable) offers no recovery.
     rollback_floor: Option<String>,
+    update_dir: std::path::PathBuf,
     prepared_dir: std::path::PathBuf,
     before_exit: BeforeUpdaterExit,
     preparation: crate::update_preparation::UpdatePreparation,
     preparation_ready: bool,
+    /// See `silent_fallback`: same-version builds whose silent install failed.
+    silent_record: Mutex<Option<SilentInstallRecord>>,
+    /// A staging failure counts once per session.
+    staging_failure_counted: std::sync::atomic::AtomicBool,
     /// Dropping the sender stops the periodic re-check timer.
     periodic_stop: Mutex<Option<Sender<()>>>,
 }
@@ -282,6 +329,7 @@ impl DesktopUpdaterState {
                         .as_ref()
                         .and_then(|attempt| attempt.mac_swap.as_ref()),
                 );
+                let superseded = superseded_mac_bundle(journal.state(), current_version);
                 let (ready, outcome) = reconcile_after_cleanup(
                     &mut journal,
                     cleanup,
@@ -290,6 +338,25 @@ impl DesktopUpdaterState {
                     current_version,
                 );
                 preparation_ready = ready;
+                if matches!(outcome, Ok(Some(InstallOutcome::Updated)))
+                    && let Some(swap) = superseded
+                    && apply_lease::applying_from(&update_dir.join(apply_lease::LEASE_FILE))
+                        .is_none()
+                {
+                    // The helper removes the previous bundle after an update applied while
+                    // KalCode was closed. If it was stopped first (a logout right after quitting),
+                    // the build it installed removes it here, off the startup path.
+                    let _ = std::thread::Builder::new()
+                        .name("kalcode-updater-superseded".into())
+                        .spawn(move || {
+                            if let Err(error) = installer::remove_superseded_app(&swap) {
+                                tracing::warn!(
+                                    event = "updater.superseded_bundle_kept",
+                                    error_code = error.code()
+                                );
+                            }
+                        });
+                }
                 match outcome {
                     Ok(None) if !startup_healthy => {
                         if journal.state().install_attempt.is_some() {
@@ -323,6 +390,12 @@ impl DesktopUpdaterState {
                 (None, machine)
             }
         };
+        let silent_record_path = update_dir.join(silent_fallback::RECORD_FILE);
+        let loaded = silent_fallback::load(&silent_record_path);
+        let silent_record = silent_fallback::reconcile_at_launch(loaded.clone(), current_version);
+        if silent_record != loaded {
+            let _ = silent_fallback::save(&silent_record_path, silent_record.as_ref());
+        }
         let rollback = RollbackCache::new(update_dir.join("rollback"));
         if let Some(key) = public_key {
             match rollback.load_verified(key) {
@@ -359,9 +432,12 @@ impl DesktopUpdaterState {
             rollback,
             rollback_floor,
             prepared_dir: update_dir.join("prepared"),
+            update_dir,
             before_exit,
             preparation: crate::update_preparation::UpdatePreparation::default(),
             preparation_ready,
+            silent_record: Mutex::new(silent_record),
+            staging_failure_counted: std::sync::atomic::AtomicBool::new(false),
             periodic_stop: Mutex::new(None),
         }))
     }
@@ -477,7 +553,7 @@ impl DesktopUpdaterState {
     }
 
     pub fn status(&self) -> UpdateStatus {
-        self.runtime().machine.status().clone()
+        self.runtime().status()
     }
 
     pub fn set_channel(&self, channel: UpdateChannel) -> Result<UpdateStatus, UpdateError> {
@@ -494,13 +570,13 @@ impl DesktopUpdaterState {
             runtime.machine.mark_failed(error.to_string());
             return Err(error);
         }
-        Ok(runtime.machine.status().clone())
+        Ok(runtime.status())
     }
 
     pub fn cancel(&self) -> Result<UpdateStatus, UpdateError> {
         let mut runtime = self.runtime();
         runtime.cancel()?;
-        Ok(runtime.machine.status().clone())
+        Ok(runtime.status())
     }
 
     async fn check(&self) -> Result<UpdateStatus, UpdateError> {
@@ -518,7 +594,7 @@ impl DesktopUpdaterState {
             let mut runtime = self.runtime();
             match runtime.begin_check_if(allowed)? {
                 Some(begun) => begun,
-                None => return Ok(runtime.machine.status().clone()),
+                None => return Ok(runtime.status()),
             }
         };
         let result =
@@ -526,12 +602,12 @@ impl DesktopUpdaterState {
         let mut runtime = self.runtime();
         runtime.finish_check(token);
         match result {
-            Err(_) => Ok(runtime.machine.status().clone()),
-            Ok(Ok(_)) => Ok(runtime.machine.status().clone()),
+            Err(_) => Ok(runtime.status()),
+            Ok(Ok(_)) => Ok(runtime.status()),
             Ok(Err(error)) => {
-                runtime.prepared = None;
+                runtime.discard_prepared();
                 if runtime.machine.check_token(token).is_err() {
-                    return Ok(runtime.machine.status().clone());
+                    return Ok(runtime.status());
                 }
                 let _ = runtime.machine.fail(token, error.to_string());
                 Err(error)
@@ -551,7 +627,7 @@ impl DesktopUpdaterState {
         else {
             let mut runtime = self.runtime();
             runtime.machine.no_update(token)?;
-            return Ok(runtime.machine.status().clone());
+            return Ok(runtime.status());
         };
         let candidate = release.candidate;
 
@@ -574,14 +650,205 @@ impl DesktopUpdaterState {
                 },
             )
             .await?;
+        // A newer build of the running public version installs when KalCode closes, with no
+        // prompt. Stage it now, while KalCode runs, so closing only has to start it. A build
+        // whose silent install already failed is offered with the restart prompt instead.
+        let silent = same_public_build(&self.0.current_version, &candidate.version)
+            && !silent_fallback::prompt_instead(self.silent_record().as_ref(), &candidate.version);
+        let (bytes, installer) = if silent {
+            match self.stage_for_exit(token, candidate.clone(), bytes).await {
+                Ok((bytes, installer)) => {
+                    self.update_silent_record(|record| {
+                        silent_fallback::after_staging_success(record, &candidate.version)
+                    });
+                    (bytes, Some(installer))
+                }
+                Err(error) => {
+                    if counts_as_staging_failure(&error)
+                        && !self
+                            .0
+                            .staging_failure_counted
+                            .swap(true, std::sync::atomic::Ordering::AcqRel)
+                    {
+                        self.update_silent_record(|record| {
+                            Some(silent_fallback::after_staging_failure(
+                                record,
+                                &candidate.version,
+                            ))
+                        });
+                    }
+                    return Err(error);
+                }
+            }
+        } else {
+            (bytes, None)
+        };
         let mut runtime = self.runtime();
-        runtime.machine.ready(token, candidate.clone())?;
+        if let Err(error) = runtime.machine.ready(token, candidate.clone()) {
+            drop(runtime);
+            if let Some(installer) = installer {
+                discard_staged(installer);
+            }
+            return Err(error);
+        }
         runtime.prepared = Some(PreparedUpdate {
             candidate,
             bytes,
             signature: release.signature,
+            installer,
         });
-        Ok(runtime.machine.status().clone())
+        Ok(runtime.status())
+    }
+
+    /// Stages a verified same-version build for `install_staged_on_exit`, off the async
+    /// executor. Staging holds the preparation gate, so quitting cancels it (and waits for its
+    /// cleanup); a staged build holds nothing, so quitting never waits on it.
+    async fn stage_for_exit(
+        &self,
+        token: OperationToken,
+        candidate: Candidate,
+        bytes: Vec<u8>,
+    ) -> Result<(Vec<u8>, PreparedInstaller), UpdateError> {
+        require_stable_installer()?;
+        let updater = self.clone();
+        run_blocking_update(move || {
+            let installer = updater.stage_blocking(token, &candidate, &bytes)?;
+            Ok((bytes, installer))
+        })
+        .await
+    }
+
+    fn stage_blocking(
+        &self,
+        token: OperationToken,
+        candidate: &Candidate,
+        bytes: &[u8],
+    ) -> Result<PreparedInstaller, UpdateError> {
+        let preparation = self.begin_preparation()?;
+        // A cancelled or replaced check stops staging as promptly as quitting does.
+        let cancel = || {
+            if preparation.cancelled() {
+                return Err(preparation_cancelled());
+            }
+            self.runtime().machine.check_token(token)
+        };
+        PreparedInstaller::prepare(
+            &self.0.prepared_dir,
+            &prepared_installer_name(kalcode_contracts::ids::new_id(), candidate.metadata.format),
+            bytes,
+            &candidate.metadata,
+            &candidate.version,
+            &self.0.current_version,
+            &cancel,
+        )
+    }
+
+    /// Called once from `RunEvent::Exit`, only after a proven clean drain (see `lib.rs`).
+    /// Starts the staged same-version build's installer (Windows) or swap helper (macOS), which
+    /// applies it after KalCode exits, silently, and leaves KalCode closed. Without a staged
+    /// build this does nothing. A failure leaves the current build installed and is logged; the
+    /// update downloads again on the next launch.
+    pub fn install_staged_on_exit(&self) {
+        if session_ending() {
+            // Logoff or shutdown would stop the installer part-way. Install on a later quit.
+            return;
+        }
+        let result = run_owned_operation(
+            &self.0.runtime,
+            Runtime::admit_exit_install,
+            |token, staged| self.install_staged_owned(token, staged?),
+        );
+        if let Err(error) = result
+            && error.code() != "update_not_ready"
+        {
+            tracing::warn!(
+                event = "updater.exit_install_failed",
+                error_code = error.code()
+            );
+        }
+    }
+
+    /// The admitted exit install. Only its owner reaches here; see `run_owned_operation`.
+    fn install_staged_owned(
+        &self,
+        token: OperationToken,
+        update: PreparedUpdate,
+    ) -> Result<(), UpdateError> {
+        require_stable_installer()?;
+        let installer = update.installer.ok_or_else(|| {
+            UpdateError::new(
+                "update_not_ready",
+                "No verified update is ready to install.",
+            )
+        })?;
+        let binding = installer.binding().clone();
+        let mac_swap = installer.mac_swap_attempt();
+        self.runtime().machine.check_token(token)?;
+        // Recorded first: if this build is not running at the next launch, for any reason, it is
+        // offered with the restart prompt rather than silently retried.
+        self.update_silent_record(|record| {
+            Some(silent_fallback::after_exit_attempt(
+                record,
+                &update.candidate.version,
+            ))
+        });
+        // The lease only lets a KalCode launched during the install step aside instead of
+        // recording a false result; installing without it is still correct.
+        let lease = ApplyLease::acquire(
+            &self.0.update_dir.join(apply_lease::LEASE_FILE),
+            &self.0.current_version,
+        )
+        .inspect_err(|error| {
+            tracing::warn!(
+                event = "updater.apply_lease_unavailable",
+                error_code = error.code()
+            );
+        })
+        .ok();
+        self.record_attempt(
+            InstallKind::Upgrade,
+            &self.0.current_version,
+            &update.candidate.version,
+            &update.candidate.metadata.sha256,
+            binding,
+            mac_swap,
+        )?;
+        if let Err(error) = installer.launch_after_exit(lease.as_ref()) {
+            // Nothing will apply the update, so the journal must not report it pending.
+            let _ = self.cancel_attempt("update_launch_failed");
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn silent_record(&self) -> Option<SilentInstallRecord> {
+        self.0
+            .silent_record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn update_silent_record(
+        &self,
+        next: impl FnOnce(Option<SilentInstallRecord>) -> Option<SilentInstallRecord>,
+    ) {
+        let mut record = self
+            .0
+            .silent_record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let updated = next(record.clone());
+        if updated == *record {
+            return;
+        }
+        if let Err(error) = silent_fallback::save(
+            &self.0.update_dir.join(silent_fallback::RECORD_FILE),
+            updated.as_ref(),
+        ) {
+            tracing::warn!(event = "updater.silent_record_unsaved", error = %error);
+        }
+        *record = updated;
     }
 
     async fn ensure_recovery_baseline(
@@ -1050,6 +1317,66 @@ impl DesktopUpdaterState {
             })?
             .cancel_install_attempt(failure)
     }
+}
+
+/// The macOS swap that installed `current_version` but left the previous bundle at its staged
+/// path: a swap the helper did not finish with a relaunch (`Launched`), whose own health check
+/// would otherwise remove that bundle.
+fn superseded_mac_bundle(state: &JournalState, current_version: &str) -> Option<MacSwapAttempt> {
+    let attempt = state.install_attempt.as_ref()?;
+    let swap = attempt.mac_swap.as_ref()?;
+    (attempt.to_version == current_version && swap.phase != MacSwapPhase::Launched)
+        .then(|| swap.clone())
+}
+
+/// Called first at launch, before any state is touched. `true` means this build is the one a
+/// post-exit update is replacing right now: the user reopened KalCode while the installer or
+/// helper still ran. The caller exits at once; the installer or helper opens the new build when
+/// it finishes. Any other launch clears a leftover reopen request, which it satisfies.
+pub fn step_aside_for_running_update(data_dir: &std::path::Path, current_version: &str) -> bool {
+    let update_dir = data_dir.join("updates");
+    let applying = apply_lease::applying_from(&update_dir.join(apply_lease::LEASE_FILE));
+    let marker = apply_lease::reopen_marker(&update_dir);
+    if apply_lease::superseded_while_applying(applying.as_deref(), current_version) {
+        if let Some(marker) = marker {
+            let _ = std::fs::File::create(marker);
+        }
+        return true;
+    }
+    if let Some(marker) = marker {
+        let _ = std::fs::remove_file(marker);
+    }
+    false
+}
+
+/// Quitting, cancelling or replacing a check stops staging on purpose; only a real failure counts
+/// toward offering the build with the restart prompt.
+fn counts_as_staging_failure(error: &UpdateError) -> bool {
+    !matches!(error.code(), "update_cancelled" | "stale_update_operation")
+}
+
+/// Drops a staged installer off the caller's thread: removing a staged macOS bundle takes a
+/// moment, and callers may be UI or async threads.
+fn discard_staged(installer: PreparedInstaller) {
+    let _ = std::thread::Builder::new()
+        .name("kalcode-updater-discard".into())
+        .spawn(move || drop(installer));
+}
+
+/// Whether Windows is logging off or shutting down, which would stop an installer part-way.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn session_ending() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+    // SAFETY: a side-effect-free query of a documented system metric.
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
+/// The macOS helper is crash-safe at every step (an atomic swap and a journaled phase), so a
+/// logout part-way leaves either build installed and the next launch reconciles it.
+#[cfg(not(windows))]
+const fn session_ending() -> bool {
+    false
 }
 
 /// Launch and manual checks may start from any phase (the state machine refuses busy ones).
@@ -2123,8 +2450,114 @@ mod tests {
             candidate: candidate("1.2.4"),
             bytes: vec![1, 2],
             signature: "signed".into(),
+            installer: None,
         });
         runtime
+    }
+
+    fn windows_binding() -> InstallBinding {
+        InstallBinding {
+            target: UpdateTarget::WindowsX86_64,
+            source_sha256: "c".repeat(64),
+            signing_requirement_sha256: "d".repeat(64),
+        }
+    }
+
+    #[test]
+    fn only_a_staged_build_installs_on_exit_and_a_refusal_changes_nothing() {
+        // Ready but not staged (a new public version, or a build still staging): refused, and
+        // the update stays exactly as it was for the user's own restart-and-install.
+        let runtime = Mutex::new(staged_runtime());
+        let before = lock_runtime(&runtime).status();
+        assert!(!before.install_on_quit);
+        let refused = run_owned_operation(&runtime, Runtime::admit_exit_install, never_runs);
+        assert_eq!(refused.unwrap_err().code(), "update_not_ready");
+        assert_eq!(lock_runtime(&runtime).status(), before);
+        assert!(lock_runtime(&runtime).prepared.is_some());
+
+        // Staged: reported to the UI, then admitted once, as the owner of the updater.
+        let mut staged = staged_runtime();
+        if let Some(prepared) = staged.prepared.as_mut() {
+            prepared.installer = Some(PreparedInstaller::test_stub(windows_binding()));
+        }
+        assert!(staged.status().install_on_quit);
+        let runtime = Mutex::new(staged);
+        let (token, admitted) = lock_runtime(&runtime).admit_exit_install().unwrap();
+        assert!(admitted.unwrap().installer.is_some());
+        {
+            let runtime = lock_runtime(&runtime);
+            assert_eq!(runtime.status().phase, UpdatePhase::Installing);
+            assert!(!runtime.status().install_on_quit);
+            runtime.machine.check_token(token).unwrap();
+        }
+        let refused = run_owned_operation(&runtime, Runtime::admit_exit_install, never_runs);
+        assert_eq!(refused.unwrap_err().code(), "update_not_ready");
+        lock_runtime(&runtime).machine.check_token(token).unwrap();
+    }
+
+    #[test]
+    fn only_a_real_staging_failure_moves_a_build_to_the_prompt() {
+        assert!(!counts_as_staging_failure(&preparation_cancelled()));
+        assert!(!counts_as_staging_failure(&UpdateError::new(
+            "stale_update_operation",
+            "x"
+        )));
+        assert!(counts_as_staging_failure(&UpdateError::new(
+            "update_installer_storage_failed",
+            "x"
+        )));
+    }
+
+    #[test]
+    fn a_staged_build_is_discarded_with_its_update() {
+        let mut runtime = staged_runtime();
+        if let Some(prepared) = runtime.prepared.as_mut() {
+            prepared.installer = Some(PreparedInstaller::test_stub(windows_binding()));
+        }
+        runtime.cancel().unwrap();
+        assert!(runtime.prepared.is_none());
+        assert!(!runtime.status().install_on_quit);
+    }
+
+    #[test]
+    fn only_a_swap_left_without_its_health_relaunch_has_a_bundle_to_remove() {
+        let swap = |phase| MacSwapAttempt {
+            current_app: std::env::temp_dir().join("KalCode.app"),
+            staged_app: std::env::temp_dir().join(".KalCode-update-test.app"),
+            parent_pid: 42,
+            parent_identity_sha256: "e".repeat(64),
+            phase,
+        };
+        let state = |phase| {
+            let mut state = JournalState::default();
+            state.install_attempt = Some(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.8+5".into(),
+                to_version: "0.1.8+6".into(),
+                sha256: "a".repeat(64),
+                binding: None,
+                mac_swap: Some(swap(phase)),
+                started_at: "1".into(),
+            });
+            state
+        };
+        for phase in [MacSwapPhase::Prepared, MacSwapPhase::Swapped] {
+            assert_eq!(
+                superseded_mac_bundle(&state(phase), "0.1.8+6"),
+                Some(swap(phase))
+            );
+            // The build being replaced keeps the bundle it may still need.
+            assert_eq!(superseded_mac_bundle(&state(phase), "0.1.8+5"), None);
+        }
+        // A relaunched swap's helper removes the bundle after the health check itself.
+        assert_eq!(
+            superseded_mac_bundle(&state(MacSwapPhase::Launched), "0.1.8+6"),
+            None
+        );
+        assert_eq!(
+            superseded_mac_bundle(&JournalState::default(), "0.1.8+6"),
+            None
+        );
     }
 
     /// `staged_runtime` with a verified previous version available, behind the updater's mutex.

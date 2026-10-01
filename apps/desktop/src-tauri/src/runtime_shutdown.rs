@@ -11,6 +11,9 @@ pub struct ExitControl {
     /// The updater drained runtime work but still owns installer handoff. Only its subsequent
     /// restart request may turn this proof into permission to exit.
     pub update_quiesced: std::sync::atomic::AtomicBool,
+    /// A restart was requested: the process ends only to start again, so a staged update must
+    /// not install on this exit.
+    pub restart_requested: std::sync::atomic::AtomicBool,
     /// Set once `RunEvent::Exit` arrives: the event loop is gone and the main thread is blocked in
     /// the final cleanup, so work queued for the main thread would never run. Cleanup must not
     /// wait on it.

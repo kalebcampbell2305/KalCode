@@ -14,6 +14,7 @@ const base: UpdateStatus = {
   totalBytes: null,
   lastError: null,
   recoveryAvailable: false,
+  installOnQuit: false,
 };
 
 const ready: UpdateStatus = { ...base, phase: "ready", availableVersion: "0.1.6", downloadedBytes: 10, totalBytes: 10 };
@@ -68,14 +69,41 @@ describe("UpdateReadyNotice", () => {
     expect(client.updaterInstall).not.toHaveBeenCalled();
   });
 
-  it("announces a new build of the running public version by its build number", async () => {
-    const client = fakeClient(async () => ({ ...ready, currentVersion: "0.1.7", availableVersion: "0.1.7+780" }));
+  it.each([
+    ["0.1.8", "0.1.8+780"],
+    ["0.1.8+779", "0.1.8+780"],
+  ])("never announces a build staged to install when KalCode closes (%s to %s)", async (current, next) => {
+    const client = fakeClient(async () => ({
+      ...ready,
+      currentVersion: current,
+      availableVersion: next,
+      installOnQuit: true,
+    }));
     renderNotice(client);
-    const notice = await findNotice();
-    expect(notice).toHaveTextContent("A new KalCode 0.1.7 build is ready (build 780).");
+    await waitFor(() => expect(client.updaterStatus).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByRole("status", { name: "Update ready" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restart to update" })).not.toBeInTheDocument();
+    expect(client.updaterInstall).not.toHaveBeenCalled();
+  });
+
+  it("offers a same-version build whose silent install failed through the restart prompt", async () => {
+    const client = fakeClient(async () => ({ ...ready, currentVersion: "0.1.8+779", availableVersion: "0.1.8+780" }));
+    renderNotice(client);
+    expect(await findNotice()).toHaveTextContent("A new KalCode 0.1.8 build is ready (build 780).");
     await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
-    expect(await screen.findByRole("alertdialog")).toHaveTextContent("restart into KalCode 0.1.7 build 780.");
-    expect(screen.getByRole("button", { name: "Restart and install 0.1.7 build 780" })).toBeInTheDocument();
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("restart into KalCode 0.1.8 build 780.");
+    await userEvent.click(screen.getByRole("button", { name: "Restart and install 0.1.8 build 780" }));
+    await waitFor(() => expect(client.updaterInstall).toHaveBeenCalledOnce());
+  });
+
+  it("still announces a new public version, with its restart prompt", async () => {
+    const client = fakeClient(async () => ({ ...ready, currentVersion: "0.1.8+780", availableVersion: "0.1.9+801" }));
+    renderNotice(client);
+    expect(await findNotice()).toHaveTextContent("KalCode 0.1.9 is ready to install.");
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("restart into KalCode 0.1.9 build 801.");
+    expect(screen.getByRole("button", { name: "Restart and install 0.1.9 build 801" })).toBeInTheDocument();
   });
 
   it("names only the public version when the update crosses public versions", async () => {
