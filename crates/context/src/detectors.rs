@@ -1078,6 +1078,11 @@ pub fn entropy_findings(text: &str) -> Vec<Finding> {
         if is_integrity_prefixed(bytes, start) || is_non_secret_token(&text[start..end]) {
             continue;
         }
+        // A placeholder cut this token short: the scan that wrote it judged the whole token, so
+        // its remnant is not a new candidate (redaction stays idempotent).
+        if text[end..].starts_with("[REDACTED") {
+            continue;
+        }
         findings.push(finding(ENTROPY_DETECTOR, start, end, Confidence::Medium));
     }
     findings
