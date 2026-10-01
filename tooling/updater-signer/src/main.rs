@@ -730,6 +730,26 @@ mod tests {
         );
         assert!(validate_version("v1.2.3").is_err());
         assert!(validate_version("1.2").is_err());
+        assert_eq!(validate_version("0.1.7+780").as_deref(), Ok("0.1.7+780"));
+    }
+
+    #[test]
+    fn build_versions_bind_to_a_plus_free_artifact_name() {
+        assert!(safe_file_name(Path::new("KalCode_0.1.7+780_x64-setup.exe")).is_err());
+        let file = "KalCode_0.1.7_build780_x64-setup.exe";
+        assert_eq!(safe_file_name(Path::new(file)).as_deref(), Ok(file));
+        assert!(
+            validate_trusted_comment(
+                &format!(
+                    "timestamp:1758792000	file:{file}	version:0.1.7+780	target:windows-x86_64	channel:stable"
+                ),
+                file,
+                "0.1.7+780",
+                Some("windows-x86_64"),
+                Some("stable"),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { RefreshCw, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
+import { formatVersion } from "../../platform/version.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import styles from "./UpdaterSettings.module.css";
 import { channelOptions, restartAndInstall, updatePresentation } from "./updaterModel.ts";
@@ -144,7 +145,7 @@ export function UpdaterSettings() {
               busy={operation === "install"}
               onClick={() => void run("install", () => restartAndInstall(client).then(() => undefined))}
             >
-              Restart and install{status.availableVersion ? ` ${status.availableVersion}` : ""}
+              Restart and install{status.availableVersion ? ` ${formatVersion(status.availableVersion)}` : ""}
             </Button>
           ) : null}
         </div>

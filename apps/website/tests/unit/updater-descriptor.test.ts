@@ -150,6 +150,26 @@ describe("updater descriptor validation", () => {
     }
   });
 
+  it("accepts a numbered build of a public version on stable", () => {
+    const build = "1.2.3+41";
+    const file = "KalCode_1.2.3_build41_x64-setup.exe";
+    const v1 = syntheticUpdaterDescriptor(build, file, SHA256, 42_000_000, "stable");
+    const parsed = parseUpdaterDescriptor(v1, "stable", build);
+    expect(parsed?.artifactKey).toBe(`releases/updater/stable/${build}/${SHA256}/${file}`);
+    expect(
+      parseUpdaterDescriptor(platformDescriptor(["windows-x86_64"], build, "stable"), "stable", build),
+    ).not.toBeNull();
+    expect(parseUpdaterDescriptor(v1, "stable", "1.2.3")).toBeNull();
+    for (const invalid of ["1.2.3+0", "1.2.3+041", "1.2.3+abc", "1.2.3-rc.1+41"]) {
+      const value = syntheticUpdaterDescriptor(invalid, file, SHA256, 42_000_000, "stable");
+      expect(parseUpdaterDescriptor(value, "stable", invalid)).toBeNull();
+    }
+    const beta = "1.2.4-rc.1+41";
+    expect(
+      parseUpdaterDescriptor(syntheticUpdaterDescriptor(beta, file, SHA256, 42_000_000, "beta"), "beta", beta),
+    ).not.toBeNull();
+  });
+
   it("rejects prerelease versions on stable while retaining beta and dev prerelease feeds", () => {
     const prerelease = "1.2.3-rc.1";
     const v1Stable = syntheticUpdaterDescriptor(prerelease, FILE, SHA256, 42_000_000, "stable");

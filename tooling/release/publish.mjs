@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 
 import {
-  appVersion,
   assertCleanTree,
   fail,
   formatBytes,
@@ -18,6 +17,7 @@ import {
   RELEASE_NOTES_DIR,
   ROOT,
   readJson,
+  releaseVersion,
   run,
   sha256File,
   stagingDir,
@@ -106,7 +106,7 @@ const D1_DATABASE = "kalcode-web";
 const wranglerBin = join(WEBSITE_DIR, "node_modules", "wrangler", "bin", "wrangler.js");
 const initializesAuthority = mode === "bootstrap";
 const publishesRemote = mode === "remote" || initializesAuthority;
-const version = appVersion();
+const version = releaseVersion();
 const outDir = stagingDir(version);
 let expectedWindowsFile;
 let expectedMacFile;
@@ -321,6 +321,21 @@ if (mode !== "local") {
         `HEAD ${head.slice(0, 12)} is not the shared build commit ${releaseBuild.commit.slice(0, 12)} plus release notes only${other.length ? ` (also changed: ${other.join(", ")})` : ""}; rebuild every platform`,
       );
     }
+  }
+  // Build numbers count commits along main; a build from any other history could be numbered
+  // below one already published and never reach users. Publish only builds of merged main
+  // (a dry run may rehearse any build).
+  const onMain =
+    mode === "dry-run" ||
+    spawnSync(
+      "git",
+      ["merge-base", "--is-ancestor", releaseBuild.commit, "origin/main"],
+      releaseProcessOptions({ cwd: ROOT, stdio: "ignore", timeout: 30_000 }),
+    ).status === 0;
+  if (!onMain) {
+    problems.push(
+      `build commit ${releaseBuild.commit.slice(0, 12)} is not on origin/main; merge it and fetch before publishing`,
+    );
   }
 }
 if (publishesRemote) assertCleanTree(initializesAuthority ? "A release-authority bootstrap" : "A publish");

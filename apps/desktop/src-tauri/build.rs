@@ -60,6 +60,29 @@ fn main() {
             "app identity/profile mismatch at {path}; use pnpm tauri dev/build, or set TAURI_CONFIG to the Dev overlay for direct debug Cargo commands"
         );
     }
+    // The runtime version (`package_info().version`) comes from the same merged config. A
+    // release build may only add a numeric internal build number: `X.Y.Z` -> `X.Y.Z+N`.
+    let public_version = base
+        .pointer("/version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("the base app config has no version"));
+    let version = overlay.pointer("/version").map_or(public_version, |value| {
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("TAURI_CONFIG version must be a string"))
+    });
+    if version != public_version {
+        let build = version
+            .strip_prefix(public_version)
+            .and_then(|rest| rest.strip_prefix('+'));
+        assert!(
+            build.is_some_and(|build| !build.is_empty()
+                && !build.starts_with('0')
+                && build.bytes().all(|byte| byte.is_ascii_digit())),
+            "TAURI_CONFIG version {version} must be {public_version} or {public_version}+<build number>"
+        );
+    }
+    println!("cargo:rustc-env=KALCODE_APP_VERSION={version}");
     println!("cargo:rerun-if-changed=test-capabilities");
     println!("cargo:rerun-if-env-changed=KALCODE_AUTHENTICODE_IDENTITY_OIDS");
     let mut commands = COMMANDS.to_vec();

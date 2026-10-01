@@ -245,6 +245,78 @@ fn candidate_requires_exact_channel_https_origin_version_and_metadata() {
 }
 
 #[test]
+fn build_numbers_order_numerically_after_the_plain_public_version() {
+    let parse = |value: &str| semver::Version::parse(value).unwrap();
+    for (older, newer) in [
+        ("0.1.7", "0.1.7+1"),
+        ("0.1.7", "0.1.7+779"),
+        ("0.1.7+779", "0.1.7+780"),
+        ("0.1.7+999", "0.1.7+1000"),
+        ("0.1.7+9", "0.1.7+10"),
+        ("0.1.7+9999", "0.1.8"),
+        ("0.1.8-beta.1+5000", "0.1.8"),
+    ] {
+        assert!(parse(older) < parse(newer), "{older} < {newer}");
+    }
+    assert_eq!(parse("0.1.7+779").to_string(), "0.1.7+779");
+}
+
+#[test]
+fn stable_accepts_a_newer_build_of_the_same_public_version_only() {
+    let bytes = b"signed build installer";
+    let url = "https://kalcoded.com/releases/updater/stable/0.1.7+780/KalCode.exe";
+    for (current, announced) in [
+        ("0.1.7", "0.1.7+780"),
+        ("0.1.7+779", "0.1.7+780"),
+        ("0.1.7+999", "0.1.7+1000"),
+        ("0.1.7+9999", "0.1.8"),
+    ] {
+        let candidate = validate_candidate_for_target(
+            UpdateTarget::WindowsX86_64,
+            UpdateChannel::Stable,
+            current,
+            announced,
+            url,
+            &feed("stable", bytes),
+        )
+        .unwrap();
+        assert_eq!(candidate.version, announced);
+    }
+    for (current, announced) in [
+        ("0.1.7+780", "0.1.7+780"),
+        ("0.1.7+780", "0.1.7+779"),
+        ("0.1.7+1000", "0.1.7+999"),
+        ("0.1.7+1", "0.1.7"),
+        ("0.1.8", "0.1.7+9999"),
+    ] {
+        let error = validate_candidate_for_target(
+            UpdateTarget::WindowsX86_64,
+            UpdateChannel::Stable,
+            current,
+            announced,
+            url,
+            &feed("stable", bytes),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "update_not_newer", "{current} -> {announced}");
+    }
+    let retained = validate_retained_candidate(
+        "0.1.7+780",
+        "0.1.7+780",
+        "https://kalcoded.com/releases/updater/stable/0.1.7+780/KalCode.exe",
+        &feed("stable", bytes),
+    )
+    .unwrap();
+    assert_eq!(retained.version, "0.1.7+780");
+    assert_eq!(
+        validate_retained_candidate("0.1.7+780", "0.1.7+779", url, &feed("stable", bytes))
+            .unwrap_err()
+            .code(),
+        "rollback_version_mismatch"
+    );
+}
+
+#[test]
 fn malformed_or_oversized_metadata_fails_closed() {
     let base = "https://kalcoded.com/releases/updater/a.zip";
     let malformed =
