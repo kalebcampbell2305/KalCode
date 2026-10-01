@@ -22,6 +22,7 @@ pub mod identity;
 pub mod ids;
 pub mod kalvoice;
 pub mod notifications;
+pub mod operations;
 pub mod permissions;
 pub mod provider_accounts;
 pub mod refs;

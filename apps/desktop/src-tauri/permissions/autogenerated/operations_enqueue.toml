@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-operations-enqueue"
+description = "Enables the operations_enqueue command without any pre-configured scope."
+commands.allow = ["operations_enqueue"]
+
+[[permission]]
+identifier = "deny-operations-enqueue"
+description = "Denies the operations_enqueue command without any pre-configured scope."
+commands.deny = ["operations_enqueue"]

@@ -110,6 +110,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
       payload: { threadId, providerAccountId: "0192f3c4-0000-7000-8000-000000000302", accountLabel: "Gemini B" },
     },
     "agent.message": { type: "agent.message", payload: { threadId, messageId: fx.id(), role: "assistant" } },
+    "agent.turn_completed": { type: "agent.turn_completed", payload: { threadId, ok: true, interrupted: false } },
     "tool.requested": {
       type: "tool.requested",
       payload: { threadId, toolCallId: "call_1", tool: "bash", summary: "Run npm test" },
@@ -120,6 +121,14 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "file.created": { type: "file.created", payload: { threadId, path: "src/new.ts" } },
     "file.modified": { type: "file.modified", payload: { threadId, path: "src/settings/store.ts" } },
     "file.deleted": { type: "file.deleted", payload: { threadId, path: "build/cache.json" } },
+    "operation.artifact_reported": {
+      type: "operation.artifact_reported",
+      payload: { path: "dist/app.zip" },
+    },
+    "operation.artifact_report_rejected": {
+      type: "operation.artifact_report_rejected",
+      payload: { code: "artifact_path_rejected" },
+    },
     "approval.requested": {
       type: "approval.requested",
       payload: { requestId, threadId, scopes: ["terminal.execute"], summary: "Run npm install lodash" },

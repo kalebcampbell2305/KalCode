@@ -1083,7 +1083,8 @@ fn migrations_keep_permissions_at_v4() {
             (16, "doctor"),
             (17, "utility_authority"),
             (18, "context_delivery"),
-            (19, "kalvoice_account_usage")
+            (19, "kalvoice_account_usage"),
+            (20, "operations")
         ]
     );
 }

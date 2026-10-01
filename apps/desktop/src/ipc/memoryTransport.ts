@@ -58,6 +58,7 @@ import {
 import { createHealthMemory, type HealthControls } from "./memory/health.ts";
 import { createLayoutsMemory, type LayoutControls } from "./memory/layouts.ts";
 import { createNotificationsMemory, type NotificationsMemory } from "./memory/notifications.ts";
+import { createOperationsMemory, type OperationsControls } from "./memory/operations.ts";
 import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
@@ -102,6 +103,7 @@ const PROVIDER_SCENARIOS: readonly string[] = [
 /** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
 const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
   "dashboard",
+  "operations",
   "kalvoice",
   "code",
   "threads",
@@ -128,6 +130,7 @@ export interface MemoryTransportOptions {
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
+  "operations",
   "kalvoice",
   "code",
   "threads",
@@ -205,7 +208,7 @@ export interface MemoryTransport extends Transport {
   /** Test hooks for Dashboard scenarios (null in scenarios without Dashboard data). */
   readonly dashboard: DashboardControls | null;
   /** Test hooks for workspaces and terminals (folder picker results, moved folders). */
-  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal">;
+  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal" | "snapshotWorkspaces">;
   /** Test hook: permission state (Z4), e.g. an agent asking for approval. */
   permissions: PermissionMemory;
   /** Provider panes (Z7-W4): pane output, like `attachTerminal`. */
@@ -216,6 +219,8 @@ export interface MemoryTransport extends Transport {
   health: HealthControls;
   /** Test hooks for pane layouts (Z7-W1): what is stored, save counts, failures. */
   layouts: LayoutControls;
+  /** Test hooks for the stateful Operations runtime. */
+  operations: OperationsControls;
   /** Test hooks for KalVoice (what the fake recognizer hears next). */
   kalvoice: { setTranscript(text: string): void };
 }
@@ -397,6 +402,11 @@ export function createMemoryTransport(
     requireCore,
     preload: scenario === "code",
   });
+  const operations = createOperationsMemory({
+    empty: scenario === "empty",
+    workspaces: code.snapshotWorkspaces(),
+    requireCore,
+  });
 
   // Pane layouts (Z7-W1), stored per workspace like native.
   const layouts = createLayoutsMemory({
@@ -510,6 +520,7 @@ export function createMemoryTransport(
     ...providerAccounts.handlers,
     ...updater.handlers,
     ...account.handlers,
+    ...operations.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -764,6 +775,7 @@ export function createMemoryTransport(
     panes: panes.controls,
     health: health.controls,
     layouts: layouts.controls,
+    operations: operations.controls,
     kalvoice: kalvoice.controls,
   };
   // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
@@ -776,6 +788,7 @@ export function createMemoryTransport(
       panes: transport.panes,
       health: transport.health,
       layouts: transport.layouts,
+      operations: transport.operations,
       kalvoice: transport.kalvoice,
       // Z7-W3: records an event as the runtime would (e.g. `provider.disconnected`), so tests can
       // drive notifications from any event the native runtime emits.

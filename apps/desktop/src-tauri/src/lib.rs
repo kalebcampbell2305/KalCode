@@ -35,6 +35,9 @@ mod layout_commands;
 mod locator_commands;
 pub mod native_confirm;
 mod notification_commands;
+mod operation_artifacts;
+mod operations_commands;
+mod operations_observed;
 pub mod permission_commands;
 mod provider_account_commands;
 mod provider_auth_commands;
@@ -772,6 +775,18 @@ pub fn run(removed_overrides: Vec<String>) {
                 doctor_commands::doctor_ignore,
                 doctor_commands::doctor_ignored,
                 doctor_commands::doctor_fix_log,
+                operations_commands::operations_snapshot,
+                operations_commands::operations_detail,
+                operations_commands::operations_history,
+                operations_commands::operations_enqueue,
+                operations_commands::operations_update,
+                operations_commands::operations_reorder,
+                operations_commands::operations_pause,
+                operations_commands::operations_hold,
+                operations_commands::operations_cancel,
+                operations_commands::operations_run_now,
+                operations_commands::operations_service_action,
+                operations_commands::operations_open_url,
                 utility_commands::utility_status,
                 utility_commands::utility_http_send,
                 utility_commands::utility_http_history,

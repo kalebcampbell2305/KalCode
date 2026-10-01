@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-operations-pause"
+description = "Enables the operations_pause command without any pre-configured scope."
+commands.allow = ["operations_pause"]
+
+[[permission]]
+identifier = "deny-operations-pause"
+description = "Denies the operations_pause command without any pre-configured scope."
+commands.deny = ["operations_pause"]

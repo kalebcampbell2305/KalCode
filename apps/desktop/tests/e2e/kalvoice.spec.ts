@@ -116,7 +116,14 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     expect(workspaces).toHaveLength(1);
     const workspaceId = workspaces[0]?.id as string;
     await expect(widget(page)).toBeVisible();
-    await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible();
+    if (MODEL) {
+      await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible();
+    } else {
+      // Without an installed model, zero-setup provisioning asks the signed catalog for this
+      // build's channel. E2E builds compile as Development, which has no published catalog, so
+      // the widget honestly reports speech as unavailable instead of Ready (never Ready early).
+      await expect(shown(page).getByText("Speech unavailable", { exact: true })).toBeVisible();
+    }
     await expect(widget(page).getByRole("textbox")).toHaveCount(0);
 
     // A typed request on the KalVoice page.

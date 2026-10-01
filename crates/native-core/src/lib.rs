@@ -11,6 +11,8 @@ pub mod error;
 pub mod events;
 pub mod flags;
 pub mod logging;
+pub mod operations;
+pub mod protected_file;
 pub mod redact;
 pub mod runtime;
 pub mod settings;
