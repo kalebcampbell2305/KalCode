@@ -9,3 +9,4 @@ out/
 audio/*.wav
 blender/*.blend1
 __pycache__/
+capture/plates_orig/

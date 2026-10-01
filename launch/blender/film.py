@@ -21,7 +21,8 @@ A = kc.ASSETS
 UI = os.path.join(A, "ui")
 SEQ = os.path.join(A, "seq")
 PL = kc.PLATES
-BR = os.path.join(kc.LAUNCH, "..", "assets", "branding")
+BR = os.path.join(kc.LAUNCH, "..", "assets", "branding")  # KALCODE wordmark lettering
+BRAND = os.path.join(A, "brand")  # mascot logo (the terminal-globe symbol is retired)
 R = math.radians
 rng = random.Random(7)
 CUES = {}
@@ -220,7 +221,8 @@ kc.sock_keys(now_m, "Wipe", [(328, 0.0, "cubic_out"), (366, 1.0)])
 kc.sock_keys(now_m, "Opacity", [(452, 1.0, "cubic"), (470, 0.0)])
 kc.keys(now, "location", [(328, at(0, 0.64, 0.02), "linear"), (470, at(0, 0.685, 0.02))])
 
-sym, sym_m = kc.image_plane("intro_symbol", os.path.join(BR, "kalcode-icon-1024.png"), 0.64, at(0, 0.2, 0.01), strength=1.15)
+# the app-icon tile: the same mark the sidebar shows, so the hand-off at 548 lands on it
+sym, sym_m = kc.image_plane("intro_symbol", os.path.join(BRAND, "kalcode-icon-1024.png"), 0.64, at(0, 0.2, 0.01), strength=1.15)
 kc.sock_keys(sym_m, "Opacity", [(344, 0.0, "cubic_out"), (362, 1.0)])
 kc.keys(sym, "scale", [(344, (0.78,) * 3, "back_out"), (382, (1,) * 3)])
 kc.sock_keys(sym_m, "Strength", [(344, 2.4, "expo_out"), (384, 1.15)])
@@ -276,11 +278,16 @@ kc._pad_uv(rim, 3.2, 1.92, 0.55)
 kc.sock_keys(rim_m, "Opacity", [(548, 0.0, "expo_out"), (566, 0.6), (620, 0.22)])
 
 
-kc.keys(wm, "location", [(482, at(0, -0.24, 0.0), "expo"), (548, at(-1.406, 0.898, 0.012))])
-kc.keys(wm, "scale", [(482, (1,) * 3, "expo"), (548, (0.157,) * 3)])
+# lands exactly on the plate's sidebar KALCODE lettering (fit to its letter edges in code.png: plate px
+# 97-292 x 56-73 -> scale 0.1534 at (-1.4049, 0.8959)), pulled toward the frame-548 camera so the
+# 0.012 lift above the plate doesn't parallax-double the letters
+kc.keys(wm, "location", [(482, at(0, -0.24, 0.0), "expo"), (548, at(-1.4022, 0.894, 0.012))])
+kc.keys(wm, "scale", [(482, (1,) * 3, "expo"), (548, (0.1531,) * 3)])
 kc.sock_keys(wm_m, "Opacity", [(544, 1.0, "cubic"), (558, 0.0)])
-kc.keys(sym, "location", [(482, at(0, 0.2, 0.01), "expo"), (548, at(-1.548, 0.898, 0.014))])
-kc.keys(sym, "scale", [(482, (1,) * 3, "expo"), (548, (0.075,) * 3)])
+kc.keys(sym, "location", [(482, at(0, 0.2, 0.01), "expo"), (548, at(-1.5446, 0.8952, 0.014))])
+# tile spans 824/1024 of the plane; the sidebar mark is 50 plate px = 0.050 BU, so 0.050/(0.64*824/1024),
+# then parallax-corrected toward the frame-548 camera like the wordmark
+kc.keys(sym, "scale", [(482, (1,) * 3, "expo"), (548, (0.0969,) * 3)])
 kc.sock_keys(sym_m, "Opacity", [(544, 1.0, "cubic"), (558, 0.0)])
 
 # hero: close 3/4 on the assembled window
@@ -572,7 +579,9 @@ def et(x, y, z=0.0):
 CUT(3352, et(0, 0, 5.4), et(0, 0, 0))
 fstop(3352, 3.2, "const")
 CK(3599, et(0, 0, 5.0), et(0, 0, 0), ease="cubic")
-esym, esm = kc.image_plane("end_symbol", os.path.join(BR, "kalcode-icon-1024.png"), 0.56, et(0, 0.52, 0.01), strength=1.15)
+# the full rim-lit mascot reads better large than the tile; a touch bigger and higher than the old
+# round glyph so the figure (taller than wide) keeps a clear gap above the wordmark
+esym, esm = kc.image_plane("end_symbol", os.path.join(BRAND, "kalcode-mascot-dark-1024.png"), 0.60, et(0, 0.535, 0.01), strength=1.15)
 kc.sock_keys(esm, "Opacity", [(3356, 0.0, "cubic_out"), (3374, 1.0)])
 kc.keys(esym, "scale", [(3356, (0.8,) * 3, "back_out"), (3392, (1,) * 3)])
 ewm, ewm_m = kc.image_plane("end_wordmark", os.path.join(BR, "kalcode-wordmark.png"), 1.2, et(0, 0.08, 0.0))
