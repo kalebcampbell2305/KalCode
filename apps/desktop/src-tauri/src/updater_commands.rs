@@ -27,8 +27,10 @@ use url::Url;
 
 mod apply_lease;
 mod installer;
+mod silent_fallback;
 use apply_lease::ApplyLease;
 use installer::PreparedInstaller;
+use silent_fallback::SilentInstallRecord;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
@@ -273,6 +275,10 @@ struct Inner {
     before_exit: BeforeUpdaterExit,
     preparation: crate::update_preparation::UpdatePreparation,
     preparation_ready: bool,
+    /// See `silent_fallback`: same-version builds whose silent install failed.
+    silent_record: Mutex<Option<SilentInstallRecord>>,
+    /// A staging failure counts once per session.
+    staging_failure_counted: std::sync::atomic::AtomicBool,
     /// Dropping the sender stops the periodic re-check timer.
     periodic_stop: Mutex<Option<Sender<()>>>,
 }
@@ -360,6 +366,12 @@ impl DesktopUpdaterState {
                 (None, machine)
             }
         };
+        let silent_record_path = update_dir.join(silent_fallback::RECORD_FILE);
+        let loaded = silent_fallback::load(&silent_record_path);
+        let silent_record = silent_fallback::reconcile_at_launch(loaded.clone(), current_version);
+        if silent_record != loaded {
+            let _ = silent_fallback::save(&silent_record_path, silent_record.as_ref());
+        }
         let rollback = RollbackCache::new(update_dir.join("rollback"));
         if let Some(key) = public_key {
             match rollback.load_verified(key) {
@@ -395,6 +407,8 @@ impl DesktopUpdaterState {
             before_exit,
             preparation: crate::update_preparation::UpdatePreparation::default(),
             preparation_ready,
+            silent_record: Mutex::new(silent_record),
+            staging_failure_counted: std::sync::atomic::AtomicBool::new(false),
             periodic_stop: Mutex::new(None),
         }))
     }
@@ -608,10 +622,35 @@ impl DesktopUpdaterState {
             )
             .await?;
         // A newer build of the running public version installs when KalCode closes, with no
-        // prompt. Stage it now, while KalCode runs, so closing only has to start it.
-        let (bytes, installer) = if same_public_build(&self.0.current_version, &candidate.version) {
-            let (bytes, installer) = self.stage_for_exit(token, candidate.clone(), bytes).await?;
-            (bytes, Some(installer))
+        // prompt. Stage it now, while KalCode runs, so closing only has to start it. A build
+        // whose silent install already failed is offered with the restart prompt instead.
+        let silent = same_public_build(&self.0.current_version, &candidate.version)
+            && !silent_fallback::prompt_instead(self.silent_record().as_ref(), &candidate.version);
+        let (bytes, installer) = if silent {
+            match self.stage_for_exit(token, candidate.clone(), bytes).await {
+                Ok((bytes, installer)) => {
+                    self.update_silent_record(|record| {
+                        silent_fallback::after_staging_success(record, &candidate.version)
+                    });
+                    (bytes, Some(installer))
+                }
+                Err(error) => {
+                    if counts_as_staging_failure(&error)
+                        && !self
+                            .0
+                            .staging_failure_counted
+                            .swap(true, std::sync::atomic::Ordering::AcqRel)
+                    {
+                        self.update_silent_record(|record| {
+                            Some(silent_fallback::after_staging_failure(
+                                record,
+                                &candidate.version,
+                            ))
+                        });
+                    }
+                    return Err(error);
+                }
+            }
         } else {
             (bytes, None)
         };
@@ -716,6 +755,14 @@ impl DesktopUpdaterState {
         let binding = installer.binding().clone();
         let mac_swap = installer.mac_swap_attempt();
         self.runtime().machine.check_token(token)?;
+        // Recorded first: if this build is not running at the next launch, for any reason, it is
+        // offered with the restart prompt rather than silently retried.
+        self.update_silent_record(|record| {
+            Some(silent_fallback::after_exit_attempt(
+                record,
+                &update.candidate.version,
+            ))
+        });
         // The lease only lets a KalCode launched during the install step aside instead of
         // recording a false result; installing without it is still correct.
         let lease = ApplyLease::acquire(
@@ -743,6 +790,36 @@ impl DesktopUpdaterState {
             return Err(error);
         }
         Ok(())
+    }
+
+    fn silent_record(&self) -> Option<SilentInstallRecord> {
+        self.0
+            .silent_record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn update_silent_record(
+        &self,
+        next: impl FnOnce(Option<SilentInstallRecord>) -> Option<SilentInstallRecord>,
+    ) {
+        let mut record = self
+            .0
+            .silent_record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let updated = next(record.clone());
+        if updated == *record {
+            return;
+        }
+        if let Err(error) = silent_fallback::save(
+            &self.0.update_dir.join(silent_fallback::RECORD_FILE),
+            updated.as_ref(),
+        ) {
+            tracing::warn!(event = "updater.silent_record_unsaved", error = %error);
+        }
+        *record = updated;
     }
 
     async fn ensure_recovery_baseline(
@@ -1234,6 +1311,12 @@ pub fn step_aside_for_running_update(data_dir: &std::path::Path, current_version
         let _ = std::fs::remove_file(marker);
     }
     false
+}
+
+/// Quitting, cancelling or replacing a check stops staging on purpose; only a real failure counts
+/// toward offering the build with the restart prompt.
+fn counts_as_staging_failure(error: &UpdateError) -> bool {
+    !matches!(error.code(), "update_cancelled" | "stale_update_operation")
 }
 
 /// Drops a staged installer off the caller's thread: removing a staged macOS bundle takes a
@@ -2110,6 +2193,19 @@ mod tests {
         let refused = run_owned_operation(&runtime, Runtime::admit_exit_install, never_runs);
         assert_eq!(refused.unwrap_err().code(), "update_not_ready");
         lock_runtime(&runtime).machine.check_token(token).unwrap();
+    }
+
+    #[test]
+    fn only_a_real_staging_failure_moves_a_build_to_the_prompt() {
+        assert!(!counts_as_staging_failure(&preparation_cancelled()));
+        assert!(!counts_as_staging_failure(&UpdateError::new(
+            "stale_update_operation",
+            "x"
+        )));
+        assert!(counts_as_staging_failure(&UpdateError::new(
+            "update_installer_storage_failed",
+            "x"
+        )));
     }
 
     #[test]

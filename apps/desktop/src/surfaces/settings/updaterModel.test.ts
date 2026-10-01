@@ -40,20 +40,29 @@ describe("updatePresentation", () => {
     expect(updatePresentation({ ...base, currentVersion: "0.1.7+780" }).label).toBe("KalCode 0.1.7 build 780");
   });
 
-  it("says a new build of the running public version installs when KalCode closes", () => {
-    const current = { ...base, currentVersion: "0.1.8", phase: "ready" as const, availableVersion: "0.1.8+780" };
-    expect(updatePresentation({ ...current, installOnQuit: true })).toEqual({
+  it("says a staged build of the running public version installs when KalCode closes", () => {
+    const staged = {
+      ...base,
+      currentVersion: "0.1.8",
+      phase: "ready" as const,
+      availableVersion: "0.1.8+780",
+      installOnQuit: true,
+    };
+    expect(updatePresentation(staged)).toEqual({
       label: "A new KalCode 0.1.8 build is ready (build 780)",
       detail: "Installs when you close KalCode.",
       progress: 100,
     });
-    expect(updatePresentation(current).detail).toBe("Getting ready to install when you close KalCode.");
-    expect(installsWhenClosed(current)).toBe(true);
-    // A new public version keeps the restart-and-install prompt.
-    const next = { ...current, availableVersion: "0.1.9+801" };
-    expect(installsWhenClosed(next)).toBe(false);
-    expect(updatePresentation(next).detail).toBe("Your work stays open until you choose to restart and install.");
-    expect(installsWhenClosed({ ...base, phase: "ready" })).toBe(false);
+    expect(installsWhenClosed(staged)).toBe(true);
+    // A build whose silent install failed, and a new public version, keep the prompt.
+    for (const prompt of [
+      { ...staged, installOnQuit: false },
+      { ...staged, availableVersion: "0.1.9+801", installOnQuit: false },
+    ]) {
+      expect(installsWhenClosed(prompt)).toBe(false);
+      expect(updatePresentation(prompt).detail).toBe("Your work stays open until you choose to restart and install.");
+    }
+    expect(installsWhenClosed({ ...staged, phase: "installing" })).toBe(false);
   });
 
   it("bounds download progress and keeps unknown totals indeterminate", () => {

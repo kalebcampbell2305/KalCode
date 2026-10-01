@@ -48,9 +48,7 @@ export function updatePresentation(status: UpdateStatus): UpdatePresentation {
       return {
         label: status.availableVersion ? readyLabel(status.currentVersion, status.availableVersion) : "Update ready",
         detail: installsWhenClosed(status)
-          ? status.installOnQuit
-            ? "Installs when you close KalCode."
-            : "Getting ready to install when you close KalCode."
+          ? "Installs when you close KalCode."
           : "Your work stays open until you choose to restart and install.",
         progress: 100,
       };
@@ -94,12 +92,12 @@ export function readyLabel(currentVersion: string | null | undefined, availableV
 }
 
 /**
- * Whether the ready update is a newer build of the running public version. Those install
- * silently when KalCode closes, so Settings offers no restart for them; new public versions keep
- * the restart-and-install prompt.
+ * Whether native staged the ready update (a newer build of the running public version) to
+ * install silently when KalCode closes. Those get no prompt and no restart button. New public
+ * versions, and any build whose silent install failed, keep the restart-and-install prompt.
  */
 export function installsWhenClosed(status: UpdateStatus): boolean {
-  return status.availableVersion !== null && sameVersionBuild(status.currentVersion, status.availableVersion) !== null;
+  return status.phase === "ready" && status.installOnQuit;
 }
 
 /**

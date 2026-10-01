@@ -4,7 +4,7 @@ import { AlertDialog } from "radix-ui";
 import { useEffect, useState } from "react";
 import type { KalCodeClient } from "../ipc/client.ts";
 import { toKalCodeError } from "../ipc/errors.ts";
-import { formatVersion, publicVersion } from "../platform/version.ts";
+import { formatVersion, publicVersion, sameVersionBuild } from "../platform/version.ts";
 import { installsWhenClosed, restartAndInstall } from "../surfaces/settings/updaterModel.ts";
 import styles from "./UpdateReadyNotice.module.css";
 
@@ -16,13 +16,16 @@ export const UPDATE_STATUS_POLL_MS = 60_000;
 /** A verified update that is ready; `version` is null when native didn't name it. */
 interface ReadyUpdate {
   version: string | null;
+  /** The running version, to tell a new build of the same public version apart. */
+  currentVersion?: string;
 }
 
 /**
  * Non-modal, app-wide notice for a downloaded and verified new public version. It never
  * restarts on its own: "Restart to update" asks for confirmation first, then uses the same
  * install path as Settings → Updates. "Later" hides it for this app session. A newer build of
- * the running public version is never announced: it installs silently when KalCode closes.
+ * the running public version staged to install silently when KalCode closes is not announced;
+ * one whose silent install failed is offered here, so nobody stays on an old build.
  * Status read failures stay silent — Settings → Updates is where updater problems are reported.
  */
 export function UpdateReadyNotice({
@@ -47,7 +50,9 @@ export function UpdateReadyNotice({
         const status = await client.updaterStatus();
         if (active)
           setReady(
-            status.phase === "ready" && !installsWhenClosed(status) ? { version: status.availableVersion } : null,
+            status.phase === "ready" && !installsWhenClosed(status)
+              ? { version: status.availableVersion, currentVersion: status.currentVersion }
+              : null,
           );
       } catch {
         if (active) setReady(null);
@@ -63,9 +68,12 @@ export function UpdateReadyNotice({
 
   // "Later" hides this version for the session; a newer ready version is announced again.
   const visible = ready !== null && !(dismissed !== null && dismissed.version === ready.version);
-  const title = ready?.version
-    ? `KalCode ${publicVersion(ready.version)} is ready to install.`
-    : "A KalCode update is ready to install.";
+  const build = ready?.version ? sameVersionBuild(ready.currentVersion, ready.version) : null;
+  const title = !ready?.version
+    ? "A KalCode update is ready to install."
+    : build === null
+      ? `KalCode ${publicVersion(ready.version)} is ready to install.`
+      : `A new KalCode ${publicVersion(ready.version)} build is ready (build ${build}).`;
   const target = ready?.version ? `KalCode ${formatVersion(ready.version)}` : "the new version";
 
   const install = async () => {
