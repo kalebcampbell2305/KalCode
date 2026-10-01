@@ -135,7 +135,7 @@ pub fn remove_swapped_out_app(current: &Path, staged: &Path) -> Result<(), Updat
 #[must_use]
 pub fn bundle_version_matches(
     short_version: &str,
-    bundle_version: Option<&str>,
+    bundle_version: &str,
     expected_version: &str,
 ) -> bool {
     if short_version != expected_version {
@@ -146,8 +146,9 @@ pub fn bundle_version_matches(
         Some((public, build)) => {
             !public.is_empty()
                 && !build.is_empty()
+                && !build.starts_with('0')
                 && build.bytes().all(|byte| byte.is_ascii_digit())
-                && bundle_version == Some(build)
+                && bundle_version == build
         }
     }
 }
@@ -180,30 +181,16 @@ mod tests {
 
     #[test]
     fn bundle_version_requires_the_exact_release_and_its_build_number() {
-        assert!(bundle_version_matches("0.1.7", None, "0.1.7"));
-        assert!(bundle_version_matches("0.1.7", Some("0.1.7"), "0.1.7"));
-        assert!(bundle_version_matches(
-            "0.1.7+780",
-            Some("780"),
-            "0.1.7+780"
-        ));
+        assert!(bundle_version_matches("0.1.7", "0.1.7", "0.1.7"));
+        assert!(bundle_version_matches("0.1.7+780", "780", "0.1.7+780"));
 
-        assert!(!bundle_version_matches("0.1.7+780", None, "0.1.7+780"));
-        assert!(!bundle_version_matches(
-            "0.1.7+780",
-            Some("779"),
-            "0.1.7+780"
-        ));
-        assert!(!bundle_version_matches("0.1.7", Some("780"), "0.1.7+780"));
-        assert!(!bundle_version_matches("0.1.7", None, "0.1.7+780"));
-        assert!(!bundle_version_matches("0.1.6", Some("780"), "0.1.7+780"));
-        assert!(!bundle_version_matches(
-            "0.1.7+779",
-            Some("780"),
-            "0.1.7+780"
-        ));
-        assert!(!bundle_version_matches("+", Some(""), "+"));
-        assert!(!bundle_version_matches("0.1.7+x", Some("x"), "0.1.7+x"));
+        assert!(!bundle_version_matches("0.1.7+780", "779", "0.1.7+780"));
+        assert!(!bundle_version_matches("0.1.7", "780", "0.1.7+780"));
+        assert!(!bundle_version_matches("0.1.6", "780", "0.1.7+780"));
+        assert!(!bundle_version_matches("0.1.7+779", "780", "0.1.7+780"));
+        assert!(!bundle_version_matches("+", "", "+"));
+        assert!(!bundle_version_matches("0.1.7+0780", "0780", "0.1.7+0780"));
+        assert!(!bundle_version_matches("0.1.7+x", "x", "0.1.7+x"));
     }
 
     #[test]

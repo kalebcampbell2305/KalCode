@@ -419,13 +419,13 @@ test("a build candidate needs its full version and the matching CFBundleVersion"
     stapled: false,
     compiledChannelVerification: { ...record.compiledChannelVerification, version: "1.2.3+41" },
   };
-  const verify = (bundleVersion) => {
+  const verify = (bundleVersion, shortVersion = "1.2.3+41") => {
     const { runner, fs } = fixture();
     const capture = runner.capture;
     runner.capture = (command, args, options) => {
       if (args[0] === "--build-info")
         return JSON.stringify({ schemaVersion: 1, version: "1.2.3+41", channel: "stable", testHooks: false });
-      if (command === "plutil" && args[1] === "CFBundleShortVersionString") return "1.2.3+41";
+      if (command === "plutil" && args[1] === "CFBundleShortVersionString") return shortVersion;
       if (command === "plutil" && args[1] === "CFBundleVersion") return bundleVersion;
       return capture(command, args, options);
     };
@@ -443,4 +443,5 @@ test("a build candidate needs its full version and the matching CFBundleVersion"
   assert.equal((await verify("41")).status, "signed-candidate-verified");
   await assert.rejects(verify("40"), /build number/);
   await assert.rejects(verify("1.2.3+41"), /build number/);
+  await assert.rejects(verify("41", "1.2.3"), /app version/);
 });

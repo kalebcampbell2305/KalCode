@@ -446,6 +446,28 @@ describe("pipeline", () => {
     assert.equal(rows.find((x) => x.id === "build").status, "BLOCKED");
   });
 
+  test("identity accepts a build revision when the manifests declare its public version", async () => {
+    const buildFx = makeRepo("1.2.3");
+    try {
+      const identity = validateIdentity({ version: "1.2.3+7", commit: buildFx.commit });
+      const p = makePipeline(buildFx, makeKit(buildFx.repo), {
+        identity,
+        stateDir: join(buildFx.repo, "state-build"),
+      });
+      const result = await p.run("identity", { execute: true });
+      assert.equal(result.code, 0);
+      const receipt = p.state.receipt("identity").value;
+      assert.equal(receipt.outputs.version, "1.2.3+7");
+      assert.deepEqual(receipt.steps[0].authorities, {
+        "apps/desktop/src-tauri/tauri.conf.json": "1.2.3",
+        "apps/desktop/package.json": "1.2.3",
+        "Cargo.toml": "1.2.3",
+      });
+    } finally {
+      rmSync(buildFx.repo, { recursive: true, force: true });
+    }
+  });
+
   test("full run: gates, operator attestation, pins, human QA, approval, production write, poll, resume", async () => {
     const kit = makeKit(fx.repo);
     let p = makePipeline(fx, kit);

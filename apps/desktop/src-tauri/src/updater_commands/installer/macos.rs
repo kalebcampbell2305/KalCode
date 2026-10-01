@@ -1205,14 +1205,10 @@ fn verify_app(
             .to_owned())
     };
     let short_version = plist_value("CFBundleShortVersionString")?;
-    let bundle_version = if short_version == expected_version {
-        None
-    } else {
-        Some(plist_value("CFBundleVersion")?)
-    };
+    let bundle_version = plist_value("CFBundleVersion")?;
     if !kalcode_updater::mac_swap::bundle_version_matches(
         &short_version,
-        bundle_version.as_deref(),
+        &bundle_version,
         expected_version,
     ) {
         return Err(installer_invalid());
