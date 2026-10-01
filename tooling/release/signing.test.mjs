@@ -78,6 +78,8 @@ test("release installer names are derived from canonical SemVer only", () => {
   assert.equal(expectedWindowsInstallerFile("1.2.3"), "KalCode_1.2.3_x64-setup.exe");
   assert.equal(expectedWindowsInstallerFile("1.2.3-beta.1"), "KalCode_1.2.3-beta.1_x64-setup.exe");
   assert.throws(() => expectedWindowsInstallerFile("../private"), /SemVer/);
+  assert.equal(expectedWindowsInstallerFile("0.1.7+779"), "KalCode_0.1.7_build779_x64-setup.exe");
+  assert.throws(() => expectedWindowsInstallerFile("0.1.7+0779"), /SemVer/);
 });
 
 test("updater signing evidence has a closed redacted schema", () => {

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { appVersion } from "./lib.mjs";
 import {
   acceptedNotaryInfo,
   acceptedNotaryLog,
@@ -47,6 +48,8 @@ test("artifact names bind SemVer and native architecture", () => {
   assert.equal(expectedMacDmgFile("1.2.3", "arm64"), "KalCode_1.2.3_arm64.dmg");
   assert.equal(expectedMacDmgFile("1.2.3-beta.1", "x86_64"), "KalCode_1.2.3-beta.1_x64.dmg");
   assert.throws(() => expectedMacDmgFile("../1", "arm64"), /SemVer/);
+  assert.equal(expectedMacDmgFile("0.1.7+779", "arm64"), "KalCode_0.1.7_build779_arm64.dmg");
+  assert.throws(() => expectedMacDmgFile("0.1.7+x", "arm64"), /SemVer/);
 });
 
 test("release credentials require Developer ID for the exact team and a stored notary profile", () => {
@@ -136,6 +139,13 @@ test("the release build is a native DMG and cannot include e2e hooks", () => {
     "--features",
     "kalvoice-whisper",
   ]);
+  const version = `${appVersion()}+779`;
+  const stamped = macTauriBuildArgs({ target: "aarch64-apple-darwin", features: [], version });
+  assert.deepEqual(stamped.slice(-2), [
+    "--config",
+    JSON.stringify({ version, bundle: { macOS: { bundleVersion: "779" } } }),
+  ]);
+  assert.throws(() => macTauriBuildArgs({ target: "aarch64-apple-darwin", version: "9.9.9+1" }), /checked-in version/);
   assert.throws(() => macTauriBuildArgs({ target: "aarch64-apple-darwin", features: ["e2e"] }), /cannot enable e2e/);
   assert.throws(() => macTauriBuildArgs({ target: "universal-apple-darwin" }), /not approved/);
 });

@@ -1190,18 +1190,27 @@ fn verify_app(
     if identifier != BUNDLE_IDENTIFIER {
         return Err(identity_mismatch());
     }
-    let version = checked_cancellable(
-        Command::new("/usr/bin/plutil")
-            .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
-            .arg(path.join("Contents").join("Info.plist")),
-        lease,
-        cancel,
-    )?;
-    if std::str::from_utf8(&version.stdout)
-        .map_err(|_| installer_invalid())?
-        .trim()
-        != expected_version
-    {
+    // A missing key fails `plutil`, and so fails closed.
+    let plist_value = |key: &str| -> Result<String, UpdateError> {
+        let output = checked_cancellable(
+            Command::new("/usr/bin/plutil")
+                .args(["-extract", key, "raw", "-o", "-"])
+                .arg(path.join("Contents").join("Info.plist")),
+            lease,
+            cancel,
+        )?;
+        Ok(std::str::from_utf8(&output.stdout)
+            .map_err(|_| installer_invalid())?
+            .trim()
+            .to_owned())
+    };
+    let short_version = plist_value("CFBundleShortVersionString")?;
+    let bundle_version = plist_value("CFBundleVersion")?;
+    if !kalcode_updater::mac_swap::bundle_version_matches(
+        &short_version,
+        &bundle_version,
+        expected_version,
+    ) {
         return Err(installer_invalid());
     }
 

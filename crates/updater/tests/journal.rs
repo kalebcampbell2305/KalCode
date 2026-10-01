@@ -339,3 +339,38 @@ fn interrupted_atomic_replace_recovers_the_last_valid_state() {
     assert_eq!(recovered.state().channel, UpdateChannel::Dev);
     assert!(path.exists());
 }
+
+#[test]
+fn a_build_upgrade_of_the_same_public_version_reconciles_by_exact_build() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("updater.json");
+    let mut journal = UpdateJournal::load(&path).unwrap();
+    let build = |from: &str, to: &str| InstallAttempt {
+        from_version: from.into(),
+        to_version: to.into(),
+        ..attempt()
+    };
+    for (from, to) in [("0.1.7+780", "0.1.7+780"), ("0.1.7+780", "0.1.7+779")] {
+        assert_eq!(
+            journal
+                .record_install_attempt(build(from, to))
+                .unwrap_err()
+                .code(),
+            "update_install_record_invalid"
+        );
+    }
+    journal
+        .record_install_attempt(build("0.1.7", "0.1.7+780"))
+        .unwrap();
+    assert_eq!(
+        journal.reconcile_startup("0.1.7+780").unwrap(),
+        InstallOutcome::Updated
+    );
+    journal
+        .record_install_attempt(build("0.1.7+780", "0.1.7+1000"))
+        .unwrap();
+    assert_eq!(
+        journal.reconcile_startup("0.1.7+780").unwrap(),
+        InstallOutcome::PreviousVersionPreserved
+    );
+}
