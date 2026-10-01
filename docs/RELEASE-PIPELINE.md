@@ -323,25 +323,76 @@ refuses to run from a branch or from a checkout with local changes.
    - When the owner records an approval or attestation, the next tick resumes the pipeline to the next
      gate.
    - A failure is not retried until the head, the identity or a person's record changes.
+   - Before starting, the runner checks that the control checkout is exactly the gated head with no
+     local changes. If it is not, the runner fails closed with a `kalcode/release` failure.
+   - If a killed run left `ship.mjs`'s own lock behind, the runner reports it once as a failure that
+     names the lock file to delete after checking its log. The release resumes once the file is gone.
+     The lock counts as left behind when its PID is gone or it is older than the release limit.
+     While a live run holds the lock, the runner waits quietly.
 2. **PRs.** For each open PR whose head is in this repository and whose author is allowlisted (by
    default, the repository owner), the runner runs the local gate on the PR head commit once and posts
-   `kalcode/local-gate` on that commit. The PR runs in `<state-root>/pr-clone`. That clone:
+   `kalcode/local-gate` on that commit. One PR's failure never stops the others. If checking out a PR
+   fails, for example on a head pushed after the tick's fetch, the runner retries on the next ticks. After
+   three failed attempts it reports an `error` status. Each PR runs in a newly created
+   `<state-root>/pr-clone`. That clone:
+   - is deleted and recreated for every PR, so no hooks, config or files carry over from an earlier PR;
    - fetches from the local repository's object store, never from GitHub, so it holds no credential;
-   - shares no `.git` (hooks, config) with the control checkout;
-   - is driven with `core.hooksPath` set to an empty directory and `core.fsmonitor=false`;
-   - runs with an environment from which tokens, keys and passwords are removed (`SECRET_ENV`);
-   - points `AZURE_CONFIG_DIR` and `GH_CONFIG_DIR` at empty directories;
-   - uses its own `CARGO_TARGET_DIR`, never shared with a release build.
+   - shares no `.git` with the control checkout;
+   - is driven with `core.hooksPath` set to an empty directory and `core.fsmonitor=false`.
+
+   The PR's environment, for `git`, `pnpm install` and the gate alike, is built from an **allowlist**
+   (`PR_ENV_ALLOW`: `PATH`, `SystemRoot`, `ComSpec`, `PATHEXT`, processor and Program Files variables).
+   Every other variable, including any token, is dropped. On top of the allowlist:
+   - Runner-owned isolated directories under `<state-root>/pr-isolated/` replace these:
+     - `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`;
+     - `TEMP`/`TMP`;
+     - `CARGO_HOME`, `CARGO_TARGET_DIR`;
+     - `npm_config_cache`;
+     - the pnpm store (`--store-dir` and `npm_config_store_dir`);
+     - `AZURE_CONFIG_DIR`, `GH_CONFIG_DIR`.
+
+     A PR therefore cannot poison the pnpm store or cargo cache that release builds use. Tools that look
+     under the home directory find no `~/.ssh`, `~/.azure`, gh hosts file or global git config.
+   - `GIT_CONFIG_NOSYSTEM=1` drops the system git config, including the Git Credential Manager helper.
+   - Two shared, read-mostly locations are passed in explicitly because the gate needs them: the rustup
+     toolchains (`RUSTUP_HOME`) and the Playwright browsers (`PLAYWRIGHT_BROWSERS_PATH`).
+
+**Timeouts.** Every command has a hard limit:
+
+| Command | Limit |
+| --- | --- |
+| `pnpm install` | 15 min |
+| `ship.mjs gate` | 90 min |
+| `ship.mjs run` | 8 h |
+| `git` | 10 min |
+| `gh` | 5 min |
+
+When a command hits its limit, the runner kills its whole process tree (`taskkill /T /F` on Windows) and
+counts the command as failed. A hung gate therefore cannot wedge the runner.
+
+**Tick lock.** Only one tick runs at a time:
+- The lock file appears atomically with its content: a hard link of a fully written temp file.
+- The holder refreshes it every minute.
+- A lock is stale when its PID is gone or its heartbeat is older than 10 minutes, so a reused PID cannot
+  hold it forever.
+- A stale lock is removed only if it is still the same lock that was judged stale.
 
 State, per-run logs and `runner.log` are kept in `%LOCALAPPDATA%\KalCode\trusted-runner\`. Release state
 and evidence stay where `ship.mjs` keeps them: `<main repo>/target/release-pipeline/`.
 
-**Trust boundary.** PR code still runs as the owner's Windows user, so it is not sandboxed. It could read
-anything that user can read. The real boundary is who can open a PR that the runner will check: only
-same-repository branches by allowlisted authors on a private, single-collaborator repository. That is the
-same exposure as the owner or an agent running `ship.mjs gate` by hand today. The scrubbing above removes
-credentials from the PR's default path. It is not a hard sandbox. Hard isolation would need a separate
-low-privilege Windows account for PR checks. That is optional hardening and is not required by policy.
+**Trust boundary.** PR code still runs as the owner's Windows user (`Kaleb`). It is not sandboxed.
+Redirecting the environment changes where tools look, not what the user can open. These all remain
+readable to a PR that asks for them directly:
+- absolute paths such as `C:\Users\Kaleb\.ssh` (including the Mac release ssh key), `C:\Users\Kaleb\.azure`
+  and the gh config;
+- the Windows Credential Manager, which holds the GitHub token;
+- DPAPI-protected files;
+- the release repository itself.
+
+The real boundary is who can open a PR that the runner will check: only same-repository branches by
+allowlisted authors on a private, single-collaborator repository. That is the same exposure as the owner
+or an agent running `ship.mjs gate` by hand today. Hard isolation would need a separate low-privilege
+Windows account for PR checks. That is optional hardening and is not required by policy.
 
 ### One-time setup (owner consent)
 
@@ -382,7 +433,7 @@ them. It does not run them without the owner's go-ahead.
 
 - **Pause:** create `%LOCALAPPDATA%\KalCode\trusted-runner\PAUSED`. Delete the file to resume. Pause it
   before driving a release by hand. `ship.mjs` also holds a per-release lock. A tick that finds the lock
-  reports `pending` and retries.
+  held by a live run waits and retries.
 - **Look:**
   - `node C:/kc-trusted/tooling/release/trusted-runner.mjs status`;
   - `runner.log`;
