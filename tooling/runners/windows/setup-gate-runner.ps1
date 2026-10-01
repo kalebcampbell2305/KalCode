@@ -33,7 +33,7 @@ if (Get-LocalUser -Name $Account -ErrorAction SilentlyContinue) {
     Set-LocalUser -Name $Account -Password $secure -PasswordNeverExpires $true
 } else {
     New-LocalUser -Name $Account -Password $secure -PasswordNeverExpires -UserMayNotChangePassword `
-        -Description 'KalCode PR/CI gate runner (no signing credentials)' | Out-Null
+        -Description 'KalCode gate runner (no signing credentials)' | Out-Null
 }
 
 # 2. Its own tree. Only the account, SYSTEM and Administrators have access.
