@@ -34,6 +34,10 @@ pub enum CaptureError {
     Unsupported,
     #[error("The microphone stopped working. Try again.")]
     Failed(String),
+    #[error(
+        "Your computer is low on memory, so KalCode couldn't keep this recording. Close some apps, then try again."
+    )]
+    LowMemory,
 }
 
 impl CaptureError {
@@ -46,6 +50,7 @@ impl CaptureError {
             Self::Interrupted => "microphone_interrupted",
             Self::Unsupported => "microphone_unsupported",
             Self::Failed(_) => "microphone_failed",
+            Self::LowMemory => "microphone_low_memory",
         }
     }
 }
@@ -164,11 +169,30 @@ pub fn display_level(rms: f32) -> f32 {
     (rms * 6.0).sqrt().min(1.0)
 }
 
+/// Copies `samples` into a new buffer, or `None` when the allocation fails.
+///
+/// A failed ordinary allocation aborts the whole process in Rust (no panic, no unwinding), so
+/// audio buffers, which are megabytes and copied on every live transcription pass, are allocated
+/// fallibly: under memory pressure KalVoice skips a partial transcript or reports
+/// [`CaptureError::LowMemory`] instead of taking KalCode down.
+pub fn try_copy(samples: &[f32]) -> Option<Vec<f32>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(samples.len()).ok()?;
+    out.extend_from_slice(samples);
+    Some(out)
+}
+
 /// Resamples mono audio to 16 kHz. Downsampling low-passes first (windowed sinc) so speech
-/// above 8 kHz does not alias into the band the model hears.
+/// above 8 kHz does not alias into the band the model hears. Returns an empty buffer when
+/// memory is short (see [`try_resample_to_16k`]).
 pub fn resample_to_16k(input: &[f32], rate: u32) -> Vec<f32> {
+    try_resample_to_16k(input, rate).unwrap_or_default()
+}
+
+/// [`resample_to_16k`], or `None` when the output buffer can't be allocated.
+pub fn try_resample_to_16k(input: &[f32], rate: u32) -> Option<Vec<f32>> {
     if rate == TARGET_RATE || input.is_empty() || rate == 0 {
-        return input.to_vec();
+        return try_copy(input);
     }
     let step = f64::from(rate) / f64::from(TARGET_RATE);
     let out_len = ((input.len() as f64) / step).floor() as usize;
@@ -189,7 +213,8 @@ pub fn resample_to_16k(input: &[f32], rate: u32) -> Vec<f32> {
             }
         }
     };
-    let mut out = Vec::with_capacity(out_len);
+    let mut out = Vec::new();
+    out.try_reserve_exact(out_len).ok()?;
     for n in 0..out_len {
         let pos = n as f64 * step;
         let i = pos.floor() as usize;
@@ -202,7 +227,7 @@ pub fn resample_to_16k(input: &[f32], rate: u32) -> Vec<f32> {
         };
         out.push(value);
     }
-    out
+    Some(out)
 }
 
 /// Hann-windowed sinc low-pass; `cutoff` in cycles per input sample (0..0.5).
@@ -242,7 +267,9 @@ mod mic {
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-    use super::{ActiveCapture, AudioSource, CaptureError, MicrophoneSource, resample_to_16k};
+    use super::{
+        ActiveCapture, AudioSource, CaptureError, MicrophoneSource, try_copy, try_resample_to_16k,
+    };
 
     #[derive(Default)]
     struct Shared {
@@ -315,6 +342,17 @@ mod mic {
             .samples
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let incoming = data.len() / channels.max(1);
+        if samples.capacity() - samples.len() < incoming {
+            let wanted = incoming
+                .max(samples.capacity())
+                .min(max.saturating_sub(samples.len()));
+            if samples.try_reserve(wanted).is_err() {
+                drop(samples);
+                shared.fail(CaptureError::LowMemory);
+                return;
+            }
+        }
         let mut energy = 0.0f32;
         let mut frames = 0usize;
         for frame in data.chunks(channels.max(1)) {
@@ -438,9 +476,9 @@ mod mic {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner),
             );
-            let out = resample_to_16k(&raw, rate);
+            let out = try_resample_to_16k(&raw, rate);
             raw.fill(0.0);
-            Ok(out)
+            out.ok_or(CaptureError::LowMemory)
         }
 
         fn cancel(mut self: Box<Self>) {
@@ -453,14 +491,17 @@ mod mic {
 
         fn snapshot(&self) -> Vec<f32> {
             let rate = self.shared.rate.load(Ordering::SeqCst);
-            let raw = self
-                .shared
-                .samples
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
-            let mut raw = raw;
-            let out = resample_to_16k(&raw, rate);
+            // Short on memory: an empty snapshot skips this partial; the final pass still runs.
+            let Some(mut raw) = try_copy(
+                &self
+                    .shared
+                    .samples
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+            ) else {
+                return Vec::new();
+            };
+            let out = try_resample_to_16k(&raw, rate).unwrap_or_default();
             raw.fill(0.0);
             out
         }
@@ -639,6 +680,13 @@ mod tests {
     }
 
     #[test]
+    fn fallible_copies_and_resampling_return_the_audio() {
+        assert_eq!(try_copy(&[0.5, -0.5]), Some(vec![0.5, -0.5]));
+        assert_eq!(try_resample_to_16k(&[0.25; 4], 16_000), Some(vec![0.25; 4]));
+        assert_eq!(try_resample_to_16k(&[], 48_000), Some(vec![]));
+    }
+
+    #[test]
     fn identity_at_16k() {
         let x = sine(440.0, 16_000, 0.1);
         assert_eq!(resample_to_16k(&x, 16_000), x);
@@ -684,6 +732,7 @@ mod tests {
         );
         assert_eq!(CaptureError::Interrupted.code(), "microphone_interrupted");
         assert_eq!(CaptureError::NoDevice.code(), "microphone_unavailable");
+        assert_eq!(CaptureError::LowMemory.code(), "microphone_low_memory");
         assert!(
             CaptureError::PermissionDenied
                 .to_string()
