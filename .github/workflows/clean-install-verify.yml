@@ -1,0 +1,226 @@
+name: Clean install verify (self-hosted)
+
+# Zero-owner clean-state verification (docs/RELEASE-PIPELINE.md, People): the pinned verify-windows.mjs from a release's
+# verify packet installs, checks and uninstalls the signed Windows installer on a profile that has never run KalCode, as the
+# low-privilege gate account kalcode-ci. No UAC, no secrets, no extra interactive account. The receipt binds the run to the
+# installer SHA-256, the packet's SHA256SUMS, the runner account and this run; the release records accept it (ZO-3).
+#
+# source packet: the installer inside the packet (C:\Users\Public\Documents\KalCode-QA\windows\verify-*, readable by the
+#   gate account through NT AUTHORITY\SERVICE). source public: the same check on the bytes downloaded from public_url,
+#   which must equal installer_sha256 (the post-publish clean download check).
+# The gate runner takes one job at a time, so this queues behind PR gates. A KalCode leftover in the kalcode-ci profile fails the
+# job (fail closed): later gate jobs share that profile.
+# Dispatch from main only, after the owner's own KalCode is closed (verify-windows.mjs refuses while any kalcode.exe runs):
+#   gh workflow run clean-install-verify.yml --ref main -f packet=... -f sums_sha256=... -f version=... -f commit=...
+#     -f installer_sha256=... -f verifier_sha256=... [-f source=public -f public_url=https://kalcoded.com/download/...]
+# Then: gh run download <run id> -n ci-clean-install-<run id> -D target/recovery-B12-release/receipts/ci-clean-install-<run id>
+#   and gh api repos/<owner>/<repo>/actions/runs/<run id> > .../ci-clean-install-<run id>/run.json
+
+run-name: Clean install verify ${{ inputs.version }} (${{ inputs.source }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      packet:
+        description: Verify packet folder under C:\Users\Public\Documents\KalCode-QA\windows (verify-successor-* or verify-baseline-*)
+        required: true
+        type: string
+      sums_sha256:
+        description: Pinned SHA-256 of the packet's SHA256SUMS
+        required: true
+        type: string
+      version:
+        description: Release version, for example 0.1.8+812
+        required: true
+        type: string
+      commit:
+        description: Full 40-character commit of that release
+        required: true
+        type: string
+      installer_sha256:
+        description: SHA-256 of the signed installer
+        required: true
+        type: string
+      verifier_sha256:
+        description: Pinned SHA-256 of the packet's tooling/release/verify-windows.mjs
+        required: true
+        type: string
+      source:
+        description: packet (the packet's installer) or public (download public_url, which must be the same bytes)
+        required: true
+        default: packet
+        type: choice
+        options:
+          - packet
+          - public
+      public_url:
+        description: With source public, the https://kalcoded.com/ installer URL
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-install-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Clean install and uninstall (kalcode-ci)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Windows, kalcode-gate]
+    timeout-minutes: 45
+    env:
+      PACKET: ${{ inputs.packet }}
+      SUMS_SHA256: ${{ inputs.sums_sha256 }}
+      VERSION: ${{ inputs.version }}
+      COMMIT: ${{ inputs.commit }}
+      INSTALLER_SHA256: ${{ inputs.installer_sha256 }}
+      VERIFIER_SHA256: ${{ inputs.verifier_sha256 }}
+      SOURCE: ${{ inputs.source }}
+      PUBLIC_URL: ${{ inputs.public_url }}
+    steps:
+      # No checkout: nothing from the repository runs here. The verifier comes from the pinned packet.
+      - name: Verify, install and uninstall with the pinned verifier
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ci-clean-install-out'
+          $work = Join-Path $env:RUNNER_TEMP ('ci-clean-install-work-' + $env:GITHUB_RUN_ID)
+          if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
+          New-Item -ItemType Directory -Path $out | Out-Null
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          $receipt = [ordered]@{
+            schema = 'kalcode-ci-clean-install-verify/v1'; status = 'FAILED'; source = $env:SOURCE
+            version = $env:VERSION; commit = $env:COMMIT; installerSha256 = $env:INSTALLER_SHA256; exit = $null
+            packet = [ordered]@{ path = $env:PACKET; sumsSha256 = $env:SUMS_SHA256; verifierSha256 = $env:VERIFIER_SHA256; files = $null }
+            public = $null
+            runner = [ordered]@{ name = $env:RUNNER_NAME; user = $id.Name; sid = $id.User.Value; profile = $env:USERPROFILE; elevated = $elevated }
+            github = [ordered]@{ repository = $env:GITHUB_REPOSITORY; workflowRef = $env:GITHUB_WORKFLOW_REF; ref = $env:GITHUB_REF; sha = $env:GITHUB_SHA
+              runId = [int64]$env:GITHUB_RUN_ID; runAttempt = [int]$env:GITHUB_RUN_ATTEMPT; event = $env:GITHUB_EVENT_NAME; actor = $env:GITHUB_ACTOR }
+            preflight = $null; verify = $null; postCheck = $null; checks = @(); startedAt = [DateTime]::UtcNow.ToString('o')
+          }
+          function Note([string]$l) { Write-Host $l; $receipt.checks += $l }
+          function Sha([string]$p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
+          function Refuse([string]$m) { throw "REFUSED: $m" }
+          # Fail closed (runner owner, kalcode-76): later gate jobs share this profile, so EVERY path (also an error after the
+          # install began) re-checks it for anything KalCode left behind, and any leftover fails the job.
+          function PostCheck {
+            $run = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+            $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+            $me = [Diagnostics.Process]::GetCurrentProcess().SessionId
+            [ordered]@{
+              uninstallEntry = Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode'
+              installFolder = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'KalCode')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'))
+              protocolRegistration = Test-Path -LiteralPath 'HKCU:\Software\Classes\kalcode'
+              productKey = Test-Path -LiteralPath 'HKCU:\Software\KalCode'
+              runValue = [bool]($run -and @($run.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and [string]$_.Value -match '(?i)kalcode' }).Count)
+              appData = (Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.kalcode.desktop')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'com.kalcode.desktop'))
+              shortcuts = (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'KalCode.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'KalCode'))
+              processes = [bool]@(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }).Count
+            }
+          }
+          try {
+            # 1. this job: main, dispatched, this workflow, the non-elevated kalcode-ci account
+            if ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') { Refuse 'dispatch on main only' }
+            if ($env:GITHUB_WORKFLOW_REF -ne "$($env:GITHUB_REPOSITORY)/.github/workflows/clean-install-verify.yml@refs/heads/main") { Refuse "unexpected workflow ref $($env:GITHUB_WORKFLOW_REF)" }
+            if ($elevated -or $id.Name -notmatch '\\kalcode-ci$') { Refuse "runs only as the non-elevated kalcode-ci account (got $($id.Name), elevated $elevated)" }
+            if ($env:PACKET -notmatch '^C:\\Users\\Public\\Documents\\KalCode-QA\\windows\\verify-(successor|baseline)-[A-Za-z0-9._+-]{1,120}$') { Refuse 'packet must be a verify-successor-* or verify-baseline-* folder in C:\Users\Public\Documents\KalCode-QA\windows' }
+            foreach ($k in 'SUMS_SHA256', 'INSTALLER_SHA256', 'VERIFIER_SHA256') { if ([Environment]::GetEnvironmentVariable($k) -cnotmatch '^[0-9a-f]{64}$') { Refuse "$k must be a lowercase SHA-256" } }
+            if ($env:COMMIT -cnotmatch '^[0-9a-f]{40}$') { Refuse 'commit must be a full lowercase SHA' }
+            if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(\+[1-9][0-9]*)?$') { Refuse 'version must be X.Y.Z or X.Y.Z+N' }
+            Note "ok   $($id.Name) ($($id.User.Value)) on $($env:RUNNER_NAME), run $($env:GITHUB_RUN_ID) at $($env:GITHUB_SHA)"
+            # 2. no KalCode in any session: the NSIS installer and uninstaller stop running kalcode.exe
+            $procs = @(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue | ForEach-Object { '{0}#{1}@session{2}' -f $_.Name, $_.Id, $_.SessionId })
+            $receipt.preflight = [ordered]@{ kalcodeProcesses = $procs }
+            if ($procs.Count) { Refuse "KalCode is running ($($procs -join ', ')); close it first (the lead runs relocate-lead.ps1)" }
+            # 3. the pinned packet, byte for byte, copied into this job's own folder
+            $sumsPath = Join-Path $env:PACKET 'SHA256SUMS'
+            if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) { Refuse "no SHA256SUMS in $($env:PACKET)" }
+            if ((Sha $sumsPath) -ne $env:SUMS_SHA256) { Refuse "SHA256SUMS is not the pinned $($env:SUMS_SHA256)" }
+            $entries = [ordered]@{}
+            foreach ($line in [IO.File]::ReadAllLines($sumsPath)) {
+              if (-not $line.Trim()) { continue }
+              if ($line -notmatch '^([0-9a-f]{64}) \*(.+)$') { Refuse "bad SHA256SUMS line: $line" }
+              $rel = $Matches[2]; $digest = $Matches[1]
+              if ($rel -match '(^|/)\.\.(/|$)' -or $rel -match '^[A-Za-z]:' -or $rel.StartsWith('/') -or $rel.Contains('\')) { Refuse "unsafe path in SHA256SUMS: $rel" }
+              $entries[$rel] = $digest
+            }
+            $fileVer = $env:VERSION -replace '\+([0-9]+)$', '_build$1'
+            $instRel = "dist/release/$($env:VERSION)/KalCode_$($fileVer)_x64-setup.exe"
+            if ($entries[$instRel] -ne $env:INSTALLER_SHA256) { Refuse "the packet's $instRel is not $($env:INSTALLER_SHA256)" }
+            if ($entries['tooling/release/verify-windows.mjs'] -ne $env:VERIFIER_SHA256) { Refuse "the packet's verify-windows.mjs is not $($env:VERIFIER_SHA256)" }
+            if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+            foreach ($rel in $entries.Keys) {
+              $src = Join-Path $env:PACKET ($rel -replace '/', '\'); $dst = Join-Path $work ($rel -replace '/', '\')
+              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+              Copy-Item -LiteralPath $src -Destination $dst
+              if ((Sha $dst) -ne $entries[$rel]) { Refuse "$rel does not match SHA256SUMS" }
+            }
+            $receipt.packet.files = $entries.Count
+            Note "ok   packet copy $($entries.Count)/$($entries.Count) files match SHA256SUMS $($env:SUMS_SHA256.Substring(0, 8)) (installer $($env:INSTALLER_SHA256.Substring(0, 8)), verifier $($env:VERIFIER_SHA256.Substring(0, 8)))"
+            # 4. source public: the downloaded bytes must be exactly the pinned installer; they are what gets verified
+            if ($env:SOURCE -eq 'public') {
+              if ($env:PUBLIC_URL -notmatch '^https://kalcoded\.com/(download|releases)/[A-Za-z0-9._+%/-]{1,200}/KalCode_[0-9]+\.[0-9]+\.[0-9]+(_build[1-9][0-9]*)?_x64-setup\.exe$') { Refuse 'public_url must be a https://kalcoded.com/download/ or /releases/ installer URL' }
+              $dl = Join-Path $env:RUNNER_TEMP ('public-' + $env:GITHUB_RUN_ID + '.exe')
+              Invoke-WebRequest -UseBasicParsing -Uri $env:PUBLIC_URL -OutFile $dl -TimeoutSec 900
+              $ps = Sha $dl
+              $receipt.public = [ordered]@{ url = $env:PUBLIC_URL; sha256 = $ps; size = (Get-Item -LiteralPath $dl).Length }
+              if ($ps -ne $env:INSTALLER_SHA256) { Refuse "the public download is $ps, not $($env:INSTALLER_SHA256)" }
+              Copy-Item -LiteralPath $dl -Destination (Join-Path $work ($instRel -replace '/', '\')) -Force
+              Remove-Item -LiteralPath $dl -Force
+              Note "ok   public download $($env:PUBLIC_URL) = $ps (verified below as the installer)"
+            } elseif ($env:SOURCE -ne 'packet') { Refuse 'source must be packet or public' }
+            # 5. the pinned verifier: install, check and uninstall (two passes) and the upgrade pass; it never launches KalCode
+            $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
+            $nv = (& $node --version).Trim()
+            if ($nv -notmatch '^v24\.') { Refuse "Node v24 required at $node, found $nv" }
+            $env:PATH = (Join-Path $work 'shim') + ';' + $env:PATH
+            $p = Start-Process -FilePath $node -ArgumentList 'tooling\release\verify-windows.mjs' -WorkingDirectory $work -NoNewWindow -Wait -PassThru `
+              -RedirectStandardOutput (Join-Path $out 'verify.log') -RedirectStandardError (Join-Path $out 'verify.err.log')
+            $receipt.exit = $p.ExitCode
+            Note "     verify-windows.mjs exit $($p.ExitCode) (Node $nv)"
+            $vj = Join-Path $work "dist\release\$($env:VERSION)\verify.json"
+            if (Test-Path -LiteralPath $vj) {
+              Copy-Item -LiteralPath $vj -Destination (Join-Path $out 'verify.json')
+              $v = Get-Content -Raw -LiteralPath $vj | ConvertFrom-Json
+              $receipt.verify = [ordered]@{ sha256 = (Sha (Join-Path $out 'verify.json')); status = $v.status; version = $v.version; commit = $v.commit; sha256OfInstaller = $v.sha256 }
+            }
+            # 6. nothing left behind in this account (checked again in finally, on every path)
+            $receipt.postCheck = PostCheck
+            $left = @($receipt.postCheck.Keys | Where-Object { $receipt.postCheck[$_] })
+            if ($receipt.exit -ne 0 -or -not $receipt.verify -or $receipt.verify.status -ne 'passed' -or $receipt.verify.version -ne $env:VERSION -or
+                $receipt.verify.commit -ne $env:COMMIT -or $receipt.verify.sha256OfInstaller -ne $env:INSTALLER_SHA256) {
+              Refuse "verification did not pass (exit $($receipt.exit), status $(if ($receipt.verify) { $receipt.verify.status } else { 'no verify.json' })); see verify.log"
+            }
+            if ($left.Count) { Refuse "left behind after the uninstall: $($left -join ', ')" }
+            $receipt.status = 'PASS'
+            Note "PASS $($env:VERSION) installer $($env:INSTALLER_SHA256.Substring(0, 8)) installed, verified and uninstalled as $($id.Name); verify.json $($receipt.verify.sha256.Substring(0, 12))"
+          } catch {
+            $receipt.error = $_.Exception.Message
+            Write-Host "::error::$($_.Exception.Message)"
+          } finally {
+            if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+            try { $receipt.postCheck = PostCheck } catch { $receipt.postCheck = [ordered]@{ postCheckFailed = $true }; $receipt.postCheckError = $_.Exception.Message }
+            $left = @($receipt.postCheck.Keys | Where-Object { $receipt.postCheck[$_] })
+            if ($left.Count) {
+              $receipt.status = 'FAILED'; $receipt.leftBehind = $left
+              Write-Host "::error::KalCode left behind in the kalcode-ci profile ($($left -join ', ')). Later gate jobs share this profile: clean it before the next gate run."
+            }
+            $receipt.finishedAt = [DateTime]::UtcNow.ToString('o')
+            [IO.File]::WriteAllText((Join-Path $out 'clean-install-receipt.json'), (($receipt | ConvertTo-Json -Depth 6) + "`n"), (New-Object Text.UTF8Encoding($false)))
+          }
+          if ($receipt.status -ne 'PASS') { exit 1 }
+
+      - name: Upload the receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-clean-install-${{ github.run_id }}
+          path: ${{ runner.temp }}/ci-clean-install-out/
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 90
