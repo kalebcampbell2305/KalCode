@@ -43,6 +43,13 @@ pub struct TerminalLimit {
 pub const MAX_WRITE_BYTES: usize = 64 * 1024;
 /// Longest shell id accepted over IPC (real ids are short words like `pwsh`).
 const MAX_SHELL_ID_LEN: usize = 32;
+/// Marker persisted in `terminals.shell_id` for terminals whose lifecycle belongs to Operations.
+/// It deliberately is not a valid ordinary shell id, so the generic terminal restart path cannot
+/// turn an operation command into an unrelated interactive shell.
+const OPERATION_SHELL_PREFIX: &str = "operation:";
+/// Owner-authored commands are bounded before they reach a shell argv.
+const MAX_OPERATION_COMMAND_BYTES: usize = 64 * 1024;
+const TERMINAL_OUTPUT_TRUNCATED: &str = "[earlier terminal output truncated]\n";
 /// How long closing a tab waits for its shell to end before forgetting the tab anyway.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const META_ACTIVE_WORKSPACE: &str = "active_workspace_id";
@@ -150,6 +157,9 @@ pub struct TerminalRegistry {
     next_generation: AtomicU64,
     /// Tabs being closed by the user: terminal id → workspace id.
     closing: Mutex<HashMap<String, String>>,
+    /// Operations sessions deliberately stopped while their tab and scrollback are retained.
+    /// The generation prevents a late exit from changing the meaning of a replacement session.
+    operation_stopping: Mutex<HashMap<String, u64>>,
     attachments: Mutex<HashMap<AttachmentId, Attachment>>,
     next_attachment: AtomicU64,
     shutting_down: AtomicBool,
@@ -246,6 +256,67 @@ fn validate_shell_id(id: &str) -> Result<()> {
     } else {
         Err(KalError::validation("invalid_shell", "Invalid shell."))
     }
+}
+
+fn operation_shell(mut shell: ShellInfo, command: &str) -> Result<ShellInfo> {
+    if command.trim().is_empty()
+        || command.len() > MAX_OPERATION_COMMAND_BYTES
+        || command.as_bytes().contains(&0)
+    {
+        return Err(KalError::validation(
+            "invalid_operation_command",
+            "The operation command must be non-empty and no larger than 64 KB.",
+        ));
+    }
+    shell.args = match shell.id.as_str() {
+        "pwsh" | "powershell" => {
+            let mut args = shell.args;
+            args.extend([
+                "-NoProfile".to_owned(),
+                "-Command".to_owned(),
+                command.to_owned(),
+            ]);
+            args
+        }
+        "cmd" => vec![
+            "/D".to_owned(),
+            "/S".to_owned(),
+            "/C".to_owned(),
+            command.to_owned(),
+        ],
+        "git-bash" | "zsh" | "bash" | "fish" | "sh" => {
+            vec!["-lc".to_owned(), command.to_owned()]
+        }
+        _ => {
+            return Err(KalError::new(
+                ErrorCategory::Terminal,
+                "operation_shell_unavailable",
+                "KalCode couldn't find a supported shell for that operation.",
+            ));
+        }
+    };
+    shell.id = format!("{OPERATION_SHELL_PREFIX}{}", shell.id);
+    shell.name = format!("Operation · {}", shell.name);
+    Ok(shell)
+}
+
+fn redacted_terminal_output(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let redacted = crate::redact::redact_text(
+        &text,
+        crate::redact::secrets::ScanContext::default(),
+        crate::redact::PlaceholderStyle::Labelled,
+    )
+    .text;
+    if redacted.len() <= kalcode_pty::SCROLLBACK_BYTES {
+        return redacted;
+    }
+    let tail_bytes = kalcode_pty::SCROLLBACK_BYTES - TERMINAL_OUTPUT_TRUNCATED.len();
+    let mut start = redacted.len() - tail_bytes;
+    while !redacted.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{TERMINAL_OUTPUT_TRUNCATED}{}", &redacted[start..])
 }
 
 fn folder_name(path: &Path) -> String {
@@ -747,6 +818,121 @@ impl Core {
         Ok(info)
     }
 
+    /// Starts an owner-authored Operations command in the workspace's detected default shell.
+    ///
+    /// `operation_id` is also the terminal id. That deterministic binding makes a launch retry
+    /// idempotent and lets recovery find a process that started before its run row was linked. The
+    /// command is passed as one native argv item to the detected shell; it is never concatenated
+    /// into a host-side command line and is never persisted by the terminal subsystem.
+    pub fn create_operation_terminal(
+        self: &Arc<Self>,
+        workspace_id: &str,
+        operation_id: &str,
+        command: &str,
+        size: TerminalSize,
+    ) -> Result<TerminalInfo> {
+        validate_id(workspace_id)?;
+        validate_id(operation_id)?;
+        let shell = operation_shell(self.shell(None)?, command)?;
+
+        let mut conn = self.conn();
+        let workspace =
+            load_workspace(&conn, workspace_id)?.ok_or_else(|| not_found("workspace"))?;
+        if !workspace.available {
+            return Err(folder_missing());
+        }
+
+        let existing = conn
+            .query_row(
+                &format!("SELECT {TERMINAL_COLUMNS} FROM terminals WHERE id = ?1"),
+                [operation_id],
+                |row| row_to_terminal(row, self.terminal_registry()),
+            )
+            .optional()?;
+        if let Some(existing) = &existing {
+            if existing.workspace_id != workspace_id
+                || !existing.shell_id.starts_with(OPERATION_SHELL_PREFIX)
+            {
+                return Err(KalError::validation(
+                    "terminal_id_conflict",
+                    "That operation identity already belongs to another terminal.",
+                ));
+            }
+            if existing.status == TerminalStatus::Running {
+                return Ok(existing.clone());
+            }
+        } else {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM terminals WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )?;
+            if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_TERMINALS_PER_WORKSPACE {
+                return Err(KalError::validation(
+                    "too_many_terminals",
+                    format!(
+                        "A workspace can have up to {MAX_TERMINALS_PER_WORKSPACE} terminals. Close one to start this operation."
+                    ),
+                ));
+            }
+        }
+
+        let tx = conn.transaction()?;
+        if existing.is_some() {
+            tx.execute(
+                "UPDATE terminals SET shell_id = ?1, title = ?2 WHERE id = ?3",
+                params![shell.id, shell.name, operation_id],
+            )?;
+        } else {
+            let position: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM terminals WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO terminals (id, workspace_id, shell_id, title, position, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    operation_id,
+                    workspace_id,
+                    shell.id,
+                    shell.name,
+                    position,
+                    now_rfc3339()
+                ],
+            )?;
+        }
+        let (session, generation, envelope) = self.start_shell(
+            &tx,
+            operation_id,
+            workspace_id,
+            &workspace.root_path,
+            &shell,
+            size,
+        )?;
+        if let Err(error) = tx.commit() {
+            let _ = session.kill();
+            return Err(error.into());
+        }
+
+        // An exited session may still retain scrollback. Replace it only after the new process and
+        // database start state committed, so a failed restart leaves the old evidence available.
+        if let Some(previous) = self.terminal_registry().forget(operation_id) {
+            let _ = previous.kill();
+        }
+        self.terminal_registry()
+            .register(operation_id, generation, session);
+        self.publish(&envelope);
+        let info = self.terminal_in(&conn, operation_id)?;
+        drop(conn);
+        tracing::info!(
+            event = "operation_terminal.started",
+            terminal_id = %operation_id,
+            workspace_id = %workspace_id
+        );
+        Ok(info)
+    }
+
     /// Starts a fresh shell in an ended tab (same tab, same shell when still available).
     /// A running tab is returned unchanged.
     pub fn restart_terminal(
@@ -903,6 +1089,9 @@ impl Core {
         }
         // Taken after the connection lock, so a close in progress has registered itself.
         let closing = lock(&registry.closing).remove(id);
+        let operation_stopped = lock(&registry.operation_stopping)
+            .remove(id)
+            .is_some_and(|stopped_generation| stopped_generation == generation);
         if closing.is_some() {
             // A tab closed by the user: its session is no longer needed.
             let mut sessions = lock(&registry.sessions);
@@ -936,15 +1125,22 @@ impl Core {
                     // The tab was already forgotten (workspace removed); nothing to record.
                     None => None,
                     Some(workspace_id) => {
+                        let end_reason = if operation_stopped {
+                            "app_closed"
+                        } else {
+                            "exited"
+                        };
                         tx.execute(
-                            "UPDATE terminals SET ended_at = ?1, exit_code = ?2, end_reason = 'exited'
-                             WHERE id = ?3",
-                            params![now_rfc3339(), exit_code, id],
+                            "UPDATE terminals SET ended_at = ?1, exit_code = ?2, end_reason = ?3
+                             WHERE id = ?4",
+                            params![now_rfc3339(), exit_code, end_reason, id],
                         )?;
-                        let event = if exit.success {
+                        let event = if exit.success || operation_stopped {
                             EventPayload::ShellCompleted {
                                 terminal_id: id.to_owned(),
                                 exit_code,
+                                // The Operations layer records the deliberate Stop/Cancel. The
+                                // terminal tab itself remains available for its scrollback.
                                 closed_by_user: false,
                             }
                         } else {
@@ -969,6 +1165,123 @@ impl Core {
         }
         drop(conn);
         tracing::info!(event = "terminal.exited", terminal_id = %id, code = exit.code, killed = exit.killed);
+    }
+
+    /// Stops one Operations-owned session while retaining its tab and bounded scrollback.
+    ///
+    /// Holding the connection lock across generation validation and the kill prevents a restart
+    /// from replacing the registry entry between those steps. The PTY killer owns the original
+    /// child/job identity, so this never reopens a process by a reusable pid.
+    pub fn stop_operation_terminal(
+        &self,
+        id: &str,
+        expected_generation: Option<u64>,
+    ) -> Result<()> {
+        validate_id(id)?;
+        let conn = self.conn();
+        let terminal = self.terminal_in(&conn, id)?;
+        if !terminal.shell_id.starts_with(OPERATION_SHELL_PREFIX) {
+            return Err(KalError::validation(
+                "terminal_not_operation_owned",
+                "That terminal is not owned by an Operations run.",
+            ));
+        }
+        let (generation, session) = {
+            let sessions = lock(&self.terminal_registry().sessions);
+            let Some((generation, session)) = sessions.get(id) else {
+                return Ok(());
+            };
+            if expected_generation.is_some_and(|expected| expected != *generation) {
+                return Err(KalError::validation(
+                    "terminal_replaced",
+                    "That operation terminal has restarted. Refresh Operations before stopping it.",
+                ));
+            }
+            (*generation, session.clone())
+        };
+        if session.exit_info().is_some() {
+            return Ok(());
+        }
+        lock(&self.terminal_registry().operation_stopping).insert(id.to_owned(), generation);
+        if let Err(error) = session.kill() {
+            lock(&self.terminal_registry().operation_stopping).remove(id);
+            return Err(terminal_error(
+                "operation_stop_failed",
+                "KalCode couldn't stop that operation.",
+            )(error));
+        }
+        let deadline = Instant::now() + CLOSE_TIMEOUT;
+        while session.exit_info().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        if session.exit_info().is_none() {
+            return Err(KalError::new(
+                ErrorCategory::Terminal,
+                "operation_stop_unproven",
+                "KalCode could not verify that the operation stopped.",
+            ));
+        }
+        drop(conn);
+        Ok(())
+    }
+
+    /// Sends Ctrl-C to the exact live generation of a terminal.
+    ///
+    /// The generation check prevents a stale caller from interrupting a replacement session, but
+    /// Ctrl-C still targets that terminal's current foreground job rather than one observed
+    /// descendant pid. Callers must therefore own or otherwise verify the foreground command.
+    pub fn interrupt_terminal(&self, id: &str, expected_generation: u64) -> Result<()> {
+        validate_id(id)?;
+        let _conn = self.conn();
+        let session = {
+            let sessions = lock(&self.terminal_registry().sessions);
+            let Some((generation, session)) = sessions.get(id) else {
+                return Err(not_running());
+            };
+            if *generation != expected_generation {
+                return Err(KalError::validation(
+                    "terminal_replaced",
+                    "That terminal has restarted. Refresh Operations before stopping its service.",
+                ));
+            }
+            session.clone()
+        };
+        session.write(&[3]).map_err(|error| match error {
+            kalcode_pty::PtyError::Exited => not_running(),
+            kalcode_pty::PtyError::Busy => KalError::new(
+                ErrorCategory::Terminal,
+                "terminal_busy",
+                "The terminal is busy. Try stopping the service again.",
+            ),
+            other => terminal_error(
+                "terminal_interrupt_failed",
+                "KalCode couldn't interrupt that terminal.",
+            )(other),
+        })
+    }
+
+    /// Returns one terminal's bounded in-memory scrollback with secret-shaped values redacted.
+    /// Output is never persisted by this method and `None` means this app process has no retained
+    /// session (for example, the terminal was restored after a restart).
+    pub fn terminal_output(&self, id: &str) -> Result<Option<String>> {
+        validate_id(id)?;
+        let bytes = {
+            // Serialize the replay snapshot with terminal replacement through the narrow session
+            // registry lock. No database state is read and redaction runs after this lock drops.
+            let sessions = lock(&self.terminal_registry().sessions);
+            let Some((_, session)) = sessions.get(id) else {
+                return Ok(None);
+            };
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&output);
+            let attachment = session.attach(move |bytes| {
+                lock(&sink).extend_from_slice(bytes);
+                false
+            });
+            session.detach(attachment);
+            lock(&output).clone()
+        };
+        Ok(Some(redacted_terminal_output(&bytes)))
     }
 
     /// Closes a tab: ends its shell — and, because the pseudo-terminal closes, programs started
@@ -1306,6 +1619,14 @@ mod tests {
     use super::*;
     use crate::flags::BuildChannel;
     use crate::runtime::{CoreConfig, Paths};
+
+    #[test]
+    fn terminal_output_bound_applies_after_lossy_utf8_and_redaction() {
+        let invalid = vec![0xff; kalcode_pty::SCROLLBACK_BYTES];
+        let output = redacted_terminal_output(&invalid);
+        assert!(output.starts_with(TERMINAL_OUTPUT_TRUNCATED));
+        assert!(output.len() <= kalcode_pty::SCROLLBACK_BYTES);
+    }
 
     /// Switch accounts: a removed workspace takes its per-workspace account defaults with it,
     /// so no binding dangles for a workspace id that no longer exists.

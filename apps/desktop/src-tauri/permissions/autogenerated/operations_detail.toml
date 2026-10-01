@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-operations-detail"
+description = "Enables the operations_detail command without any pre-configured scope."
+commands.allow = ["operations_detail"]
+
+[[permission]]
+identifier = "deny-operations-detail"
+description = "Denies the operations_detail command without any pre-configured scope."
+commands.deny = ["operations_detail"]

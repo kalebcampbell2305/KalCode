@@ -110,6 +110,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
       payload: { threadId, providerAccountId: "0192f3c4-0000-7000-8000-000000000302", accountLabel: "Gemini B" },
     },
     "agent.message": { type: "agent.message", payload: { threadId, messageId: fx.id(), role: "assistant" } },
+    "agent.turn_completed": { type: "agent.turn_completed", payload: { threadId, ok: true, interrupted: false } },
     "tool.requested": {
       type: "tool.requested",
       payload: { threadId, toolCallId: "call_1", tool: "bash", summary: "Run npm test" },

@@ -46,6 +46,9 @@ belongs here or in an ADR under `docs/adr/`.
 adapter implements the shared `AgentProvider` contract (`crates/contracts`). See
 `docs/PROVIDERS.md`.
 
+The shared execution ledger and its Runs, Queue, Services, Environments, and Activity projections
+are described in `docs/OPERATIONS.md`.
+
 Future: PTY / filesystem / permissions crates (Z1, Z4), mission engine (Z9).
 Not built yet: sign-in, Stripe billing and deployment of `apps/api` (Z13); see `docs/BILLING.md`.
 

@@ -50,7 +50,8 @@ fn migrations_are_numbered_contiguously() {
             (16, "doctor"),
             (17, "utility_authority"),
             (18, "context_delivery"),
-            (19, "kalvoice_account_usage")
+            (19, "kalvoice_account_usage"),
+            (20, "operations")
         ]
     );
 }
@@ -697,7 +698,7 @@ fn upgrade_v4_to_v5_backs_up_and_preserves_everything() {
 }
 
 /// Tables each migration after v6 adds, including credential-free provider account metadata.
-const POST_V6_TABLES: [&str; 10] = [
+const POST_V6_TABLES: [&str; 13] = [
     "checkpoints",
     "context_firewall_log",
     "context_items",
@@ -705,6 +706,9 @@ const POST_V6_TABLES: [&str; 10] = [
     "context_packages",
     "git_worktrees",
     "layout_presets",
+    "operation_moments",
+    "operations",
+    "operations_state",
     "provider_account_bindings",
     "provider_accounts",
     "workspace_layouts",

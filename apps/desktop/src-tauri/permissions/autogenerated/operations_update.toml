@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-operations-update"
+description = "Enables the operations_update command without any pre-configured scope."
+commands.allow = ["operations_update"]
+
+[[permission]]
+identifier = "deny-operations-update"
+description = "Denies the operations_update command without any pre-configured scope."
+commands.deny = ["operations_update"]

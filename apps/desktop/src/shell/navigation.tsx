@@ -30,6 +30,12 @@ export interface SurfaceMeta {
 }
 
 export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
+  operations: {
+    id: "operations",
+    label: "Operations",
+    icon: PanelsTopLeft,
+    summary: "Runs, queue, services, environments and project activity.",
+  },
   dashboard: {
     id: "dashboard",
     label: "Dashboard",
@@ -165,6 +171,7 @@ export function viewVisible(view: AppView, features: readonly FeatureFlag[] | un
 /** Navigation order within the sidebar. Settings is pinned to the bottom separately. */
 export const PRIMARY_ORDER: readonly SurfaceId[] = [
   "dashboard",
+  "operations",
   "kalvoice",
   "code",
   "threads",

@@ -22,6 +22,8 @@ export interface MemoryWorkspacesOptions {
 export interface MemoryWorkspaces {
   handlers: Record<string, (args: Record<string, unknown>) => unknown>;
   attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
+  /** Internal fixture projection; unlike a command handler it does not assert runtime health. */
+  snapshotWorkspaces(): readonly Workspace[];
   /** Test hook: the folders the fake picker returns next (null = the user cancels). */
   queueFolders(...folders: PickedFolder[]): void;
   /** Test hook: simulates a folder moved or deleted outside KalCode. */
@@ -536,6 +538,7 @@ export function createMemoryWorkspaces({
 
   return {
     handlers,
+    snapshotWorkspaces: () => sortedWorkspaces().map((workspace) => ({ ...workspace })),
     async attachTerminal(terminalId, onOutput) {
       await Promise.resolve();
       requireCore();

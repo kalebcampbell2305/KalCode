@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-operations-hold"
+description = "Enables the operations_hold command without any pre-configured scope."
+commands.allow = ["operations_hold"]
+
+[[permission]]
+identifier = "deny-operations-hold"
+description = "Denies the operations_hold command without any pre-configured scope."
+commands.deny = ["operations_hold"]

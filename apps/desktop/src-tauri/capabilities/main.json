@@ -215,6 +215,18 @@
     "allow-layout-preset-save",
     "allow-layout-preset-delete",
     "allow-notification-list",
-    "allow-notification-mark"
+    "allow-notification-mark",
+    "allow-operations-snapshot",
+    "allow-operations-detail",
+    "allow-operations-history",
+    "allow-operations-enqueue",
+    "allow-operations-update",
+    "allow-operations-reorder",
+    "allow-operations-pause",
+    "allow-operations-hold",
+    "allow-operations-cancel",
+    "allow-operations-run-now",
+    "allow-operations-service-action",
+    "allow-operations-open-url"
   ]
 }

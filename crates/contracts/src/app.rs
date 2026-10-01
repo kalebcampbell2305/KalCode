@@ -18,6 +18,7 @@ pub enum BuildChannel {
 #[ts(export)]
 pub enum SurfaceId {
     Dashboard,
+    Operations,
     #[serde(rename = "kalvoice")]
     KalVoice,
     Code,

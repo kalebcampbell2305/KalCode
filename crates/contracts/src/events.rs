@@ -303,6 +303,14 @@ pub enum EventPayload {
         message_id: String,
         role: crate::threads::MessageRole,
     },
+    /// A provider turn ended. Unlike thread status, this is the durable execution boundary for
+    /// one submitted agent task; `interrupted` distinguishes an owner halt from provider failure.
+    #[serde(rename = "agent.turn_completed")]
+    AgentTurnCompleted {
+        thread_id: String,
+        ok: bool,
+        interrupted: bool,
+    },
     #[serde(rename = "tool.requested")]
     ToolRequested {
         thread_id: String,
@@ -644,6 +652,7 @@ impl EventPayload {
             Self::ThreadUnarchived { .. } => "thread.unarchived",
             Self::ThreadAccountChanged { .. } => "thread.account_changed",
             Self::AgentMessage { .. } => "agent.message",
+            Self::AgentTurnCompleted { .. } => "agent.turn_completed",
             Self::ToolRequested { .. } => "tool.requested",
             Self::ToolStarted { .. } => "tool.started",
             Self::ToolCompleted { .. } => "tool.completed",
@@ -868,6 +877,11 @@ mod tests {
                 thread_id: s(),
                 message_id: s(),
                 role: MessageRole::Assistant,
+            },
+            EventPayload::AgentTurnCompleted {
+                thread_id: s(),
+                ok: true,
+                interrupted: false,
             },
             EventPayload::ToolRequested {
                 thread_id: s(),
@@ -1134,7 +1148,25 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 80);
+        assert_eq!(samples.len(), 81);
+    }
+
+    #[test]
+    fn agent_turn_completed_uses_a_stable_content_free_wire_shape() {
+        let completed = EventPayload::AgentTurnCompleted {
+            thread_id: "thread".into(),
+            ok: false,
+            interrupted: true,
+        };
+        let json = serde_json::to_value(&completed).expect("serialize turn completion");
+        assert_eq!(json["type"], "agent.turn_completed");
+        assert_eq!(json["payload"]["threadId"], "thread");
+        assert_eq!(json["payload"]["ok"], false);
+        assert_eq!(json["payload"]["interrupted"], true);
+        assert_eq!(
+            serde_json::from_value::<EventPayload>(json).expect("round trip"),
+            completed
+        );
     }
 
     #[test]
