@@ -43,7 +43,7 @@ export function StartupError({ client, info, error }: StartupErrorProps) {
           }
         >
           <p>{error.message}</p>
-          <p>Close KalCode, resolve the issue, then open KalCode again.</p>
+          <p>Nothing was deleted or changed. Close KalCode, resolve the issue, then open KalCode again.</p>
           {openError ? <p role="alert">{openError}</p> : null}
         </ErrorState>
         {info ? (
