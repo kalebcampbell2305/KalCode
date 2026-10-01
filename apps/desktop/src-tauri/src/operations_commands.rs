@@ -16,13 +16,15 @@ use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::confirm::{NativeConfirmation, confirm};
 use kalcode_core::operations::OperationsStore;
-use kalcode_core::workspaces::{TerminalInfo, TerminalSize, TerminalStatus};
+use kalcode_core::workspaces::{TerminalInfo, TerminalLimit, TerminalSize, TerminalStatus};
 use kalcode_core::{Core, IpcError, KalError, Result};
 use kalcode_git::GitCore;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use crate::account::model::AccountSnapshot;
+use crate::account::runtime::AccountRuntime;
 use crate::native_confirm::TauriConfirmer;
 use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
 use crate::thread_commands::ThreadsState;
@@ -221,6 +223,9 @@ pub struct OperationsState {
     store: OperationsStore,
     threads: Arc<ThreadsState>,
     git: Arc<GitCore>,
+    /// The signed-in account whose verified plan caps terminals per workspace. `None` applies
+    /// the signed-out (Free) cap.
+    account: Option<Arc<AccountRuntime>>,
     /// Serializes claims, confirmations, edits and effects; never held on the UI thread.
     gate: Mutex<()>,
     /// Consent is exact-object and account-epoch scoped, never restored from disk.
@@ -236,6 +241,7 @@ impl OperationsState {
         core: Arc<Core>,
         threads: Arc<ThreadsState>,
         git: Arc<GitCore>,
+        account: Arc<AccountRuntime>,
         app: &AppHandle,
     ) -> Result<Arc<Self>> {
         let store = OperationsStore::new(core.clone());
@@ -245,6 +251,7 @@ impl OperationsState {
             store,
             threads,
             git,
+            account: Some(account),
             gate: Mutex::new(()),
             authorized: Mutex::new(HashMap::new()),
             stop: Arc::new((Mutex::new(false), Condvar::new())),
@@ -295,6 +302,13 @@ impl OperationsState {
             })?;
         *state.worker.lock().map_err(|_| poisoned())? = Some(worker);
         Ok(state)
+    }
+
+    fn terminal_limit(&self) -> Option<TerminalLimit> {
+        self.account.as_ref().map_or_else(
+            || AccountSnapshot::signed_out().terminal_limit(),
+            |account| account.snapshot().terminal_limit(),
+        )
     }
 
     pub fn shutdown_checked(&self) -> bool {
@@ -512,11 +526,25 @@ impl OperationsState {
                         .finish_at(&row.id, status, outcome, &event.occurred_at)?;
                     continue;
                 }
-                let thread = self
+                let thread = match self
                     .threads
                     .runtime_handle()
                     .ok_or_else(unavailable)?
-                    .get(id)?;
+                    .get(id)
+                {
+                    Ok(thread) => thread,
+                    // Reconcile runs under the gate, so no launch is between reserving this
+                    // identity and creating its thread: a missing thread was removed.
+                    Err(error) if error.code == "thread_not_found" => {
+                        self.store.finish(
+                            &row.id,
+                            OperationStatus::Interrupted,
+                            "The provider thread is no longer available; completion was not observed.",
+                        )?;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let status = thread_status(thread.status);
                 if matches!(
                     status,
@@ -629,6 +657,7 @@ impl OperationsState {
                     &row.id,
                     command,
                     TerminalSize::new(120, 30).map_err(|_| unavailable())?,
+                    self.terminal_limit(),
                 )?;
                 if let Err(error) = self.store.bind(
                     &row.id,
@@ -767,7 +796,13 @@ impl OperationsState {
                 let thread = if let Some(thread) = threads.get(id) {
                     thread.clone()
                 } else {
-                    let thread = runtime.get(id)?;
+                    // A launching agent reserves its thread id before the thread exists, and a
+                    // removed thread is reconciled by the scheduler; keep the stored row.
+                    let thread = match runtime.get(id) {
+                        Ok(thread) => thread,
+                        Err(error) if error.code == "thread_not_found" => continue,
+                        Err(error) => return Err(error),
+                    };
                     threads.insert(id.to_owned(), thread.clone());
                     thread
                 };
@@ -1975,6 +2010,7 @@ mod tests {
                 core,
                 threads,
                 git: Arc::new(GitCore::new(data)),
+                account: None,
                 gate: Mutex::new(()),
                 authorized: Mutex::new(HashMap::new()),
                 stop: Arc::new((Mutex::new(false), Condvar::new())),
@@ -2021,6 +2057,7 @@ mod tests {
                 core,
                 threads,
                 git: Arc::new(GitCore::new(data)),
+                account: None,
                 gate: Mutex::new(()),
                 authorized: Mutex::new(HashMap::new()),
                 stop: Arc::new((Mutex::new(false), Condvar::new())),
@@ -2710,6 +2747,69 @@ mod tests {
     }
 
     #[test]
+    fn reserved_or_removed_agent_thread_never_breaks_the_snapshot() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.7-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let (state, resources) = fixture_with_thread_runtime(core.clone(), data.path());
+        let mut spec = observed_spec(
+            "Agent operation".into(),
+            workspace.id.clone(),
+            OperationKind::Agent,
+        );
+        spec.prompt = Some("Task".into());
+        spec.provider_id = Some("fixture".into());
+        spec.model = Some("fixture-model".into());
+        let operation = state.store.enqueue(spec).expect("enqueue");
+        state
+            .store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("running operation");
+        // The launch reserves the thread id before the provider thread exists.
+        state
+            .store
+            .reserve_agent_thread(&operation.id, None, None)
+            .expect("reserve exact thread");
+
+        let row = state
+            .rows(&[])
+            .expect("snapshot while the thread is not created yet")
+            .2
+            .into_iter()
+            .find(|row| row.id == operation.id)
+            .expect("operation row");
+        assert_eq!(row.thread_id.as_deref(), Some(operation.id.as_str()));
+
+        // Outside a launch (the scheduler holds the gate), a missing thread was removed:
+        // reconciliation records that completion was not observed instead of failing the tick.
+        state.reconcile().expect("reconcile a removed thread");
+        assert_eq!(
+            state
+                .store
+                .get(&operation.id)
+                .expect("canonical run")
+                .status,
+            OperationStatus::Interrupted
+        );
+
+        state
+            .threads
+            .shutdown_checked()
+            .expect("thread runtime shutdown");
+        assert!(resources.shutdown_checked());
+        core.shutdown();
+    }
+
+    #[test]
     fn old_completed_operation_detail_survives_newer_workspace_event_volume() {
         let data = tempfile::tempdir().expect("data");
         let project = tempfile::tempdir().expect("project");
@@ -2826,6 +2926,7 @@ mod tests {
                 &row.id,
                 "echo operations-history-proof",
                 TerminalSize::new(80, 24).expect("size"),
+                None,
             )
             .expect("real execution");
             state

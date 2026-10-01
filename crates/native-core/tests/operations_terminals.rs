@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use kalcode_core::events::EventPayload;
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::workspaces::TerminalStatus;
+use kalcode_core::workspaces::{TerminalLimit, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_pty::TerminalSize;
 
@@ -58,7 +58,13 @@ fn operation_terminal_runs_command_and_reports_nonzero_exit() {
     let success_id = uuid::Uuid::now_v7().to_string();
 
     let terminal = core
-        .create_operation_terminal(&workspace.id, &success_id, "echo operation-ready", size())
+        .create_operation_terminal(
+            &workspace.id,
+            &success_id,
+            "echo operation-ready",
+            size(),
+            None,
+        )
         .expect("start operation");
     assert_eq!(terminal.id, success_id);
     assert!(terminal.shell_id.starts_with("operation:"));
@@ -79,6 +85,7 @@ fn operation_terminal_runs_command_and_reports_nonzero_exit() {
         &secret_id,
         &format!("echo TOKEN={secret}"),
         size(),
+        None,
     )
     .expect("start redaction operation");
     assert!(wait_until(Duration::from_secs(20), || {
@@ -93,7 +100,7 @@ fn operation_terminal_runs_command_and_reports_nonzero_exit() {
     assert!(output.contains("[REDACTED:"), "{output:?}");
 
     let failure_id = uuid::Uuid::now_v7().to_string();
-    core.create_operation_terminal(&workspace.id, &failure_id, "exit 7", size())
+    core.create_operation_terminal(&workspace.id, &failure_id, "exit 7", size(), None)
         .expect("start failing operation");
     assert!(wait_until(Duration::from_secs(20), || {
         core.terminal(&failure_id)
@@ -119,6 +126,7 @@ fn stop_is_generation_bound_keeps_logs_and_restart_replaces_generation() {
         &operation_id,
         long_running_command(&core),
         size(),
+        None,
     )
     .expect("start operation");
     assert!(wait_until(Duration::from_secs(20), || {
@@ -177,6 +185,7 @@ fn stop_is_generation_bound_keeps_logs_and_restart_replaces_generation() {
         &operation_id,
         long_running_command(&core),
         size(),
+        None,
     )
     .expect("restart operation");
     let second = core
@@ -207,25 +216,52 @@ fn operation_identity_cannot_cross_workspaces_or_stop_an_ordinary_terminal() {
     ] {
         let invalid_id = uuid::Uuid::now_v7().to_string();
         let error = core
-            .create_operation_terminal(&first.id, &invalid_id, &invalid, size())
+            .create_operation_terminal(&first.id, &invalid_id, &invalid, size(), None)
             .expect_err("invalid operation command");
         assert_eq!(error.code, "invalid_operation_command");
     }
 
     let operation_id = uuid::Uuid::now_v7().to_string();
-    core.create_operation_terminal(&first.id, &operation_id, "echo first", size())
+    core.create_operation_terminal(&first.id, &operation_id, "echo first", size(), None)
         .expect("first operation");
     let conflict = core
-        .create_operation_terminal(&second.id, &operation_id, "echo second", size())
+        .create_operation_terminal(&second.id, &operation_id, "echo second", size(), None)
         .expect_err("operation id cannot move workspaces");
     assert_eq!(conflict.code, "terminal_id_conflict");
 
     let ordinary = core
-        .create_terminal(&first.id, None, size())
+        .create_terminal(&first.id, None, size(), None)
         .expect("ordinary terminal");
     let refused = core
         .stop_operation_terminal(&ordinary.id, None)
         .expect_err("ordinary terminal is not operation-owned");
     assert_eq!(refused.code, "terminal_not_operation_owned");
+    core.close_terminal(&ordinary.id).expect("close ordinary");
+}
+
+#[test]
+fn operation_terminal_counts_toward_the_plan_terminal_limit() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let limit = Some(TerminalLimit {
+        max: 1,
+        plan: "Free",
+    });
+    let ordinary = core
+        .create_terminal(&workspace.id, None, size(), limit)
+        .expect("first terminal fits the plan");
+
+    let operation_id = uuid::Uuid::now_v7().to_string();
+    let refused = core
+        .create_operation_terminal(&workspace.id, &operation_id, "echo capped", size(), limit)
+        .expect_err("a capped plan refuses another terminal");
+    assert_eq!(refused.code, "too_many_terminals");
+    assert!(refused.message.contains("Free plan allows up to 1"));
+
+    // No numeric cap (Owner, MAX, MAX 2X) never refuses an operation terminal.
+    core.create_operation_terminal(&workspace.id, &operation_id, "echo uncapped", size(), None)
+        .expect("an uncapped plan starts the operation");
     core.close_terminal(&ordinary.id).expect("close ordinary");
 }
