@@ -124,11 +124,11 @@ Processes cannot survive KalCode exiting.
 | --- | --- |
 | Ctrl+Shift+` | New terminal in the active workspace (from anywhere; asks for a folder if none) |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
-| Ctrl+Shift+W | Close the tab in front (a running shell keeps running) |
+| Ctrl+Shift+W | Close the tab in front (ends its shell) |
 | Ctrl+Shift+E | Leave the terminal: focus moves to its tab |
 | ←/→, Home, End (on tabs) | Move between tabs |
 | Enter (on a tab) | Focus its terminal |
-| Delete (on a tab) | Close it (a running shell keeps running) |
+| Delete (on a tab) | Close it (ends its shell) |
 | Ctrl+Alt+←↑→↓ / +Shift | Focus / grow the pane in that direction (pane shortcuts: `docs/campaigns/Z7-W1.md`) |
 | Ctrl+C with a selection / Ctrl+Shift+C | Copy |
 | Ctrl+V / Ctrl+Shift+V | Paste |

@@ -185,7 +185,7 @@ KalVoice opens it first.
 | "split the pane vertically / down / stacked / top and bottom" | `split { axis: vertical }` | `split_pane` | The new pane opens below. |
 | "split Claude and Codex side by side", "put Claude next to Codex", "arrange Gemini and Claude top and bottom" | `split` + the named providers (carried inside `crates/kalvoice` as `NamedTarget::Providers` → `ExecContext.providers`; the contract intent can't hold them) | `arrange_panes { axis, providerIds }` | The newest pane of each named provider in the workspace is put next to the first; a provider without a pane is reported honestly ("No pane yet for …"), nothing is started. |
 | "make this pane bigger / larger / wider / taller / smaller / narrower / shorter", "grow / enlarge / expand / widen / shrink the pane" (+ "a bit" = 1 step, "much / a lot" = 4, default 2) | `resize { direction, steps }` (bigger → right, taller → down, smaller → left, shorter → up) | `resize_pane` | The focused pane grows (or shrinks) by 32 px per step; with no neighbour that way it grows toward the other side, so "bigger" always does something. |
-| "close this pane", "close the Codex pane" | `close { query }` | `close_pane` | The pane leaves the layout; what it runs keeps running ("in background") and Ctrl Alt R reopens it. |
+| "close this pane", "close the Codex pane" | `close { query }` | `close_pane` | The pane closes: its terminals end and its agents stop, as when you close it yourself. |
 
 Axis convention (shared with `apps/desktop/src/shell/panes/model.ts`): `horizontal` = side by
 side, `vertical` = stacked. "And" normally makes a request compound (→ `Reasoning`); the only
