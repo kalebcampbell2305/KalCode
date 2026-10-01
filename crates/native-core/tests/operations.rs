@@ -622,6 +622,7 @@ fn recovery_links_a_terminal_committed_before_the_run_binding() {
             &operation_id,
             long_running_command(),
             TerminalSize::new(80, 24).expect("terminal size"),
+            None,
         )
         .expect("launch committed terminal");
         // Simulate a crash before OperationsStore::bind and without Core::shutdown.
@@ -674,6 +675,7 @@ fn recovery_preserves_recorded_terminal_success_and_failure() {
                     &operation_id,
                     command,
                     TerminalSize::new(80, 24).expect("terminal size"),
+                    None,
                 )
                 .expect("launch terminal");
             store
@@ -1080,6 +1082,7 @@ fn real_terminal_completion_persists_logs_and_releases_dependencies() {
                 &completed.id,
                 "echo operations-success",
                 TerminalSize::new(80, 24).expect("terminal size"),
+                None,
             )
             .expect("launch command");
         store
@@ -1151,6 +1154,7 @@ fn cancelling_a_service_stops_its_real_process_and_releases_capacity() {
             &service.id,
             long_running_command(),
             TerminalSize::new(80, 24).expect("terminal size"),
+            None,
         )
         .expect("launch service");
     store

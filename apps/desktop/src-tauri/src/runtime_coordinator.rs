@@ -199,6 +199,7 @@ impl RuntimeBundle {
                 core.clone(),
                 threads.clone(),
                 git.0.clone(),
+                account.clone(),
                 app,
             ) {
                 Ok(operations) => bundle.operations = Some(operations),

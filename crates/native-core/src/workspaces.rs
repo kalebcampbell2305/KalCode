@@ -823,15 +823,17 @@ impl Core {
     /// `operation_id` is also the terminal id. That deterministic binding makes a launch retry
     /// idempotent and lets recovery find a process that started before its run row was linked. The
     /// command is passed as one native argv item to the detected shell; it is never concatenated
-    /// into a host-side command line and is never persisted by the terminal subsystem.
+    /// into a host-side command line and is never persisted by the terminal subsystem. A new
+    /// operation terminal counts toward the plan's `limit`, like any other tab.
     pub fn create_operation_terminal(
         self: &Arc<Self>,
         workspace_id: &str,
         operation_id: &str,
         command: &str,
         size: TerminalSize,
+        limit: Option<TerminalLimit>,
     ) -> Result<TerminalInfo> {
-        self.create_operation_terminal_inner(workspace_id, operation_id, command, None, size)
+        self.create_operation_terminal_inner(workspace_id, operation_id, command, None, size, limit)
     }
 
     /// Starts an Operations command with one native-owned artifact-report handoff path.
@@ -843,6 +845,7 @@ impl Core {
         command: &str,
         artifact_report: &Path,
         size: TerminalSize,
+        limit: Option<TerminalLimit>,
     ) -> Result<TerminalInfo> {
         let expected_name = format!("{operation_id}.json");
         let expected_directory = self
@@ -871,6 +874,7 @@ impl Core {
             command,
             Some(artifact_report),
             size,
+            limit,
         )
     }
 
@@ -881,6 +885,7 @@ impl Core {
         command: &str,
         artifact_report: Option<&Path>,
         size: TerminalSize,
+        limit: Option<TerminalLimit>,
     ) -> Result<TerminalInfo> {
         validate_id(workspace_id)?;
         validate_id(operation_id)?;
@@ -918,11 +923,13 @@ impl Core {
                 [workspace_id],
                 |row| row.get(0),
             )?;
-            if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_TERMINALS_PER_WORKSPACE {
+            if let Some(TerminalLimit { max, plan }) = limit
+                && usize::try_from(count).unwrap_or(usize::MAX) >= max
+            {
                 return Err(KalError::validation(
                     "too_many_terminals",
                     format!(
-                        "A workspace can have up to {MAX_TERMINALS_PER_WORKSPACE} terminals. Close one to start this operation."
+                        "The {plan} plan allows up to {max} terminals per workspace. Close one to start this operation, or upgrade to MAX for unlimited terminals."
                     ),
                 ));
             }

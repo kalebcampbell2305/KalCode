@@ -475,6 +475,7 @@ mod tests {
             report_command(&core),
             &report,
             TerminalSize::new(120, 30).expect("size"),
+            None,
         )
         .expect("start command");
         wait_for_exit(&core, &run.id);
