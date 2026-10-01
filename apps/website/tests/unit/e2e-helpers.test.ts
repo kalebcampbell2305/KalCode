@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { type ReleaseManifest, servedStableRelease, signedStableRelease } from "../../src/lib/releases";
+import {
+  displayManifest,
+  type ReleaseManifest,
+  servedStableRelease,
+  signedStableRelease,
+} from "../../src/lib/releases";
 import { PAGES } from "../../src/lib/site";
 // The e2e specs cannot import src/lib/releases.ts (Playwright rejects its JSON import), so
 // helpers.ts restates the signed Stable rule; this keeps the two from drifting apart.
-import { isServedStable, isSignedStable, renderedDescription } from "../e2e/helpers";
+import { isServedStable, isSignedStable, presentedManifest, renderedDescription } from "../e2e/helpers";
 import { publishedManifest } from "./fixtures/releases";
 
 function stable(mac: "signed" | "unsigned" | "none"): ReleaseManifest {
@@ -30,6 +35,19 @@ function stable(mac: "signed" | "unsigned" | "none"): ReleaseManifest {
 }
 
 describe("e2e helpers", () => {
+  it("presentedManifest names a build by its public version, exactly like displayManifest", () => {
+    for (const version of ["0.1.8", "0.1.8+813"]) {
+      const manifest = stable("signed");
+      if (!manifest.latest) throw new Error("fixture has no release");
+      manifest.latest.version = version;
+      expect(presentedManifest(manifest)).toEqual(displayManifest(manifest));
+      expect(presentedManifest(manifest).latest?.version).toBe("0.1.8");
+    }
+    expect(presentedManifest(structuredClone(publishedManifest))).toEqual(
+      displayManifest(structuredClone(publishedManifest)),
+    );
+  });
+
   it.each([
     ["preview", structuredClone(publishedManifest), false],
     ["signed Windows and Mac Stable", stable("signed"), true],

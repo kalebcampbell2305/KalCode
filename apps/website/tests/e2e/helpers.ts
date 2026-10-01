@@ -6,10 +6,19 @@ import type { APIRequestContext, Page } from "@playwright/test";
 import type { ReleaseManifest } from "../../src/data/releases";
 
 export const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-/** The committed release manifest: specs assert the state the site is built from. */
-export const MANIFEST = JSON.parse(
-  readFileSync(resolve(APP_ROOT, "src/data/releases.json"), "utf8"),
-) as ReleaseManifest;
+/**
+ * The committed release manifest as the site presents it: specs assert the state the site is built from.
+ * A production build "X.Y.Z+N" is named by its public version "X.Y.Z" everywhere on the site, mirroring
+ * displayManifest() in src/lib/releases.ts (which specs cannot import, see isSignedStable). File names and
+ * pinned URLs keep the build.
+ */
+export function presentedManifest(manifest: ReleaseManifest): ReleaseManifest {
+  if (!manifest.latest) return manifest;
+  return { ...manifest, latest: { ...manifest.latest, version: manifest.latest.version.replace(/\+\d+$/, "") } };
+}
+export const MANIFEST = presentedManifest(
+  JSON.parse(readFileSync(resolve(APP_ROOT, "src/data/releases.json"), "utf8")) as ReleaseManifest,
+);
 /** The published Windows build, or null while there is no public build. */
 export const WINDOWS_BUILD = MANIFEST.latest?.platforms.find((platform) => platform.os === "windows") ?? null;
 /** "Stable" or "Preview", as the site labels the manifest's channel (src/lib/releases.ts channelLabel). */
