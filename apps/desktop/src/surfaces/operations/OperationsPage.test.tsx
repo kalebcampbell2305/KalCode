@@ -238,7 +238,7 @@ describe("OperationsPage", () => {
       timeline: [],
       logs: null,
       files: [],
-      artifacts: [{ name: "Build bundle", location: "dist/app.zip", kind: "file" }],
+      artifacts: [{ name: "Build bundle", location: "dist/app.zip", kind: "reported_file" }],
       tests: [],
       relatedServices: [],
       relatedDeployments: [],
@@ -259,6 +259,8 @@ describe("OperationsPage", () => {
     expect(within(detail).getByText("Deployment completed")).toBeInTheDocument();
     await user.click(within(detail).getByRole("tab", { name: "Artifacts" }));
     expect(within(detail).getByText("Build bundle")).toBeInTheDocument();
+    expect(within(detail).getByText(/Reported File/)).toBeInTheDocument();
+    expect(within(detail).getByText("dist/app.zip")).toBeInTheDocument();
     await user.click(within(detail).getByRole("tab", { name: "Overview" }));
     seams.snapshot = {
       ...seams.snapshot,
