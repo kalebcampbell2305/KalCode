@@ -152,6 +152,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     seams.snapshot = { ...baseSnapshot(), items: [run] };
@@ -238,6 +240,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [{ name: "Build bundle", location: "dist/app.zip", kind: "file" }],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();
@@ -285,6 +289,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();
@@ -292,6 +298,55 @@ describe("OperationsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Queue" }));
     await user.click(screen.getByRole("button", { name: "Open run Task active-4" }));
     expect(client.detail).toHaveBeenCalledWith("active-4");
+  });
+
+  it("retains superseded deployment evidence without presenting it as the current environment", async () => {
+    const run = queued("old-deployment", 1);
+    run.spec = { ...run.spec, kind: "deploy", environment: "preview" };
+    run.status = "succeeded";
+    run.startedAt = run.createdAt;
+    run.endedAt = run.createdAt;
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      notes: [],
+      relatedServices: [],
+      relatedDeployments: [
+        {
+          isCurrent: false,
+          environment: {
+            workspaceId: run.spec.workspaceId,
+            kind: "preview",
+            runId: run.id,
+            branch: "previous-branch",
+            version: "previous-revision",
+            urls: [],
+            deploymentStatus: "deployed_unverified",
+            health: "not_probed",
+            platform: null,
+            lastDeploy: run.endedAt,
+            variables: [],
+            observedAt: run.endedAt,
+            notes: [],
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage(client);
+    await user.click(screen.getByRole("button", { name: /Task old-deployment/ }));
+    const detail = await screen.findByRole("complementary", { name: "Run details" });
+    expect(
+      await within(detail).findByText("Recorded deployment outcome · not current environment state"),
+    ).toBeVisible();
+    expect(within(detail).getByText("previous-branch · previous-revision")).toBeVisible();
+    expect(within(detail).queryByText("Current environment")).not.toBeInTheDocument();
   });
 
   it.each(["test", "agent"] as const)("cancels an active Operations %s through native authority", async (kind) => {
@@ -308,6 +363,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();
@@ -331,6 +388,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();
@@ -356,6 +415,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();
@@ -553,6 +614,8 @@ describe("OperationsPage", () => {
         files: [],
         artifacts: [],
         tests: [],
+        relatedServices: [],
+        relatedDeployments: [],
         notes: [],
       })
       .mockResolvedValueOnce({
@@ -562,6 +625,8 @@ describe("OperationsPage", () => {
         files: [],
         artifacts: [],
         tests: [],
+        relatedServices: [],
+        relatedDeployments: [],
         notes: [],
       });
     const user = userEvent.setup();
@@ -596,6 +661,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();
@@ -626,6 +693,8 @@ describe("OperationsPage", () => {
         files: [],
         artifacts: [],
         tests: [],
+        relatedServices: [],
+        relatedDeployments: [],
         notes: [],
       });
     const user = userEvent.setup();
@@ -646,6 +715,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     await waitFor(() => expect(client.detail).toHaveBeenCalledTimes(2));
@@ -739,6 +810,8 @@ describe("OperationsPage", () => {
       files: [],
       artifacts: [],
       tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
       notes: [],
     });
     const user = userEvent.setup();

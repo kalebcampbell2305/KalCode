@@ -391,11 +391,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           snapshot={snapshot}
           busy={busy}
           mutate={mutate}
-          refreshKey={
-            snapshot.items.some((item) => item.id === selectedRun && isActiveRun(item))
-              ? `${snapshot.revision}:${snapshot.observedAt}`
-              : String(snapshot.revision)
-          }
+          refreshKey={`${snapshot.revision}:${snapshot.observedAt}`}
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
@@ -1877,15 +1873,35 @@ function RunDetail({
 function RunOverview({ detail, snapshot }: { detail: OperationDetail; snapshot: OperationsSnapshot }) {
   const run = detail.run;
   // Relationships are projections of the current canonical snapshot, never copied run state.
-  const services = snapshot.services.filter(
+  const currentServices = snapshot.services.filter(
     (service) => service.runId === run.id && service.workspaceId === run.spec.workspaceId,
   );
-  const environments = snapshot.environments.filter(
+  const currentEnvironments = snapshot.environments.filter(
     (environment) => environment.runId === run.id && environment.workspaceId === run.spec.workspaceId,
   );
   const activity = snapshot.activity.filter(
     (event) => event.runId === run.id && event.workspaceId === run.spec.workspaceId,
   );
+  const services = [
+    ...currentServices.map((service) => ({ service, isCurrent: true })),
+    ...(detail.relatedServices ?? []).filter(
+      ({ service, isCurrent }) =>
+        !isCurrent &&
+        service.runId === run.id &&
+        service.workspaceId === run.spec.workspaceId &&
+        !currentServices.some((current) => current.id === service.id),
+    ),
+  ];
+  const environments = [
+    ...currentEnvironments.map((environment) => ({ environment, isCurrent: true })),
+    ...(detail.relatedDeployments ?? []).filter(
+      ({ environment, isCurrent }) =>
+        !isCurrent &&
+        environment.runId === run.id &&
+        environment.workspaceId === run.spec.workspaceId &&
+        !currentEnvironments.some((current) => current.kind === environment.kind),
+    ),
+  ];
   return (
     <div className={styles.overview}>
       <Metadata record={run} />
@@ -1932,11 +1948,12 @@ function RunOverview({ detail, snapshot }: { detail: OperationDetail; snapshot: 
         <h3>Services</h3>
         {services.length ? (
           <ul className={styles.evidenceList}>
-            {services.map((service) => (
+            {services.map(({ service, isCurrent }) => (
               <li key={service.id}>
                 <Server aria-hidden="true" />
                 <span>
                   <strong>{service.name}</strong>
+                  <small>{isCurrent ? "Current observation" : "Historical execution · not a live-service claim"}</small>
                   <small>
                     {titleCase(service.status)}
                     {service.ports.length ? ` · Ports ${service.ports.join(", ")}` : " · No listening port observed"}
@@ -1946,17 +1963,20 @@ function RunOverview({ detail, snapshot }: { detail: OperationDetail; snapshot: 
             ))}
           </ul>
         ) : (
-          <p>No current service observation is linked to this run.</p>
+          <p>No service evidence is linked to this run.</p>
         )}
       </section>
       <section aria-label="Run environments">
         <h3>Environments</h3>
         {environments.length ? (
           <ul className={styles.evidenceList}>
-            {environments.map((environment) => (
+            {environments.map(({ environment, isCurrent }) => (
               <li key={environment.kind}>
                 <span>
                   <strong>{titleCase(environment.kind)}</strong>
+                  <small>
+                    {isCurrent ? "Current environment" : "Recorded deployment outcome · not current environment state"}
+                  </small>
                   <small>{titleCase(environment.deploymentStatus)}</small>
                   <small>Health: {titleCase(environment.health)}</small>
                   <small>
@@ -1975,7 +1995,7 @@ function RunOverview({ detail, snapshot }: { detail: OperationDetail; snapshot: 
             ))}
           </ul>
         ) : (
-          <p>No current environment state is linked to this run.</p>
+          <p>No environment evidence is linked to this run.</p>
         )}
       </section>
       <section aria-label="Run activity">

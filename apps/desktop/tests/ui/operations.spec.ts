@@ -143,6 +143,15 @@ test("Operations connects real run evidence, queue transitions, services, enviro
       ),
     )
     .toBe("service_restart");
+  await tab(page, "Runs");
+  await history
+    .getByRole("button", { name: /Frontend dev server/ })
+    .filter({ hasText: "Cancelled" })
+    .click();
+  await expect(detail.getByRole("region", { name: "Run services" })).toContainText("Historical execution");
+  await expect(detail.getByRole("region", { name: "Run services" })).not.toContainText("3000");
+  await detail.getByRole("button", { name: "Close run details" }).click();
+  await tab(page, "Services");
   await frontend.getByRole("button", { name: "Stop" }).click();
   await expect(frontend).toContainText("Stopped");
 
@@ -214,6 +223,8 @@ test("@screenshots Operations rich evidence in dark and light themes", async ({ 
     page.getByRole("complementary", { name: "Run details" }).getByRole("region", { name: "Run environments" }),
   ).toContainText("Deployed Unverified");
   await page.screenshot({ path: screenshotPath("operations-run-connections-dark-1360") });
+  await page.getByRole("region", { name: "Run activity" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshotPath("operations-run-linked-evidence-dark-1360") });
   await page.getByRole("button", { name: "Close run details" }).click();
   await tab(page, "Activity");
   await page.screenshot({ path: screenshotPath("operations-activity-dark-1360") });
