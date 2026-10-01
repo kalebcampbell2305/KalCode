@@ -35,9 +35,9 @@ import {
   powershellJson,
   psQuote,
   readJson,
-  releaseVersion,
   sha256File,
   stagingDir,
+  verificationReleaseVersion,
   writeJson,
 } from "./lib.mjs";
 import {
@@ -67,7 +67,8 @@ const WINDOWS_KALVOICE_FEATURE = "kalvoice-whisper";
 const WINDOWS_NOTICE_RESOURCE_PATH = "third_party/kalvoice-notices";
 const WINDOWS_UPDATER_TARGET = "windows-x86_64";
 
-const version = releaseVersion();
+// A git checkout numbers the build from history; the git-less clean-state verification packet reads the one staged build.
+const version = verificationReleaseVersion();
 const outDir = stagingDir(version);
 const buildPath = join(outDir, "build.json");
 if (!existsSync(buildPath)) fail(`No build record at ${buildPath}. Run pnpm release:build first.`);
