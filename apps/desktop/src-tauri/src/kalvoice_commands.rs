@@ -971,7 +971,8 @@ pub fn on_page_load(app: &AppHandle) {
 }
 
 /// Starts following OS foreground changes (Windows), so the key is registered when KalCode comes
-/// to the front even if no webview reports a focus change. Called once from `setup`.
+/// to the front even if no webview reports a focus change, with a short poll that repairs any
+/// missed change. Called once from `setup`.
 pub fn watch_foreground(app: &AppHandle) {
     #[cfg(windows)]
     if !foreground::watch(app) {
@@ -1122,6 +1123,8 @@ fn reconcile_talk_key(
     trigger: &'static str,
 ) -> Status<Shortcut> {
     let foreground = kalcode_foreground();
+    #[cfg(windows)]
+    foreground::reconciled(foreground);
     let shutting_down = runtime.shutting_down.load(Ordering::SeqCst);
     let (prefs, mut held) = {
         // Serialize preference snapshots with saved admission, then release before plugin calls.
@@ -1244,18 +1247,20 @@ fn reconcile_talk_key(
 #[allow(unsafe_code)]
 mod foreground {
     //! Windows foreground ownership: two read-only user32 queries, plus one out-of-context
-    //! foreground-change notification (no DLL injection, no input hook, no other app's content;
-    //! only whether the foreground window's process is this one).
+    //! foreground-change notification and a thread timer (no DLL injection, no input hook, no
+    //! other app's content; only whether the foreground window's process is this one).
 
     use std::ffi::c_void;
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     use tauri::AppHandle;
+
+    use super::talk_key::{FOREGROUND_POLL, ForegroundBasis};
 
     type Hwnd = *mut c_void;
     type WinEventHook = *mut c_void;
     type WinEventProc = unsafe extern "system" fn(WinEventHook, u32, Hwnd, i32, i32, u32, u32);
+    type TimerProc = unsafe extern "system" fn(Hwnd, u32, usize, u32);
 
     const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
     const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
@@ -1273,10 +1278,12 @@ mod foreground {
             thread_id: u32,
             flags: u32,
         ) -> WinEventHook;
+        fn SetTimer(window: Hwnd, id: usize, elapse_ms: u32, callback: Option<TimerProc>) -> usize;
     }
 
     static APP: OnceLock<AppHandle> = OnceLock::new();
-    static WAS_OURS: AtomicBool = AtomicBool::new(false);
+    /// What the talk key was last reconciled for; written by every reconcile, from any trigger.
+    static BASIS: ForegroundBasis = ForegroundBasis::new();
 
     /// Whether the foreground window belongs to this process: the main window (whichever of
     /// its webviews or child views has focus) or one of KalCode's own dialogs.
@@ -1294,6 +1301,21 @@ mod foreground {
         process_id == std::process::id()
     }
 
+    /// Called by every reconcile with the foreground state it used.
+    pub fn reconciled(foreground: bool) {
+        BASIS.record(foreground);
+    }
+
+    /// Reconciles when KalCode's foreground state differs from what the key was last reconciled
+    /// for. Foreground moves between other apps, and repeats, change nothing.
+    fn check(trigger: &'static str) {
+        if BASIS.stale(is_ours())
+            && let Some(app) = APP.get()
+        {
+            super::foreground_changed(app, trigger);
+        }
+    }
+
     unsafe extern "system" fn on_foreground(
         _hook: WinEventHook,
         _event: u32,
@@ -1303,22 +1325,21 @@ mod foreground {
         _thread: u32,
         _time: u32,
     ) {
-        // Only transitions into or out of KalCode matter; foreground moves between other apps
-        // are ignored.
-        let ours = is_ours();
-        if WAS_OURS.swap(ours, Ordering::SeqCst) != ours
-            && let Some(app) = APP.get()
-        {
-            super::foreground_changed(app, "os_foreground");
-        }
+        check("os_foreground");
     }
 
-    /// Installs the notification on the calling (main) thread, whose message loop delivers it.
+    /// The level check behind the edges: a focus event or foreground notification that was
+    /// missed, or delivered before the activation completed, is repaired within one interval.
+    unsafe extern "system" fn on_poll(_window: Hwnd, _message: u32, _id: usize, _time: u32) {
+        check("foreground_poll");
+    }
+
+    /// Installs the notification and the poll on the calling (main) thread, whose message loop
+    /// delivers both.
     pub fn watch(app: &AppHandle) -> bool {
         if APP.set(app.clone()).is_err() {
             return true;
         }
-        WAS_OURS.store(is_ours(), Ordering::SeqCst);
         // SAFETY: `on_foreground` has the WINEVENTPROC signature and lives for the whole
         // process; no module handle is passed (out-of-context delivery on this thread), and the
         // hook stays installed until the process exits.
@@ -1333,7 +1354,11 @@ mod foreground {
                 WINEVENT_OUTOFCONTEXT,
             )
         };
-        !hook.is_null()
+        let interval = u32::try_from(FOREGROUND_POLL.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: a thread timer (no window) on this thread; `on_poll` has the TIMERPROC
+        // signature and lives for the whole process, and the timer runs until the process exits.
+        let timer = unsafe { SetTimer(std::ptr::null_mut(), 0, interval, Some(on_poll)) };
+        !hook.is_null() && timer != 0
     }
 }
 

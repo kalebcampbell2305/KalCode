@@ -85,6 +85,44 @@ pub fn want<K: Copy>(
     prefs.key.map_or(Want::Unparseable, Want::Hold)
 }
 
+/// How often the OS foreground is re-checked against [`ForegroundBasis`] (Windows).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The foreground state the last reconcile used, shared by every trigger (Windows).
+///
+/// Focus events (WebView2's synthesized `Focused`) and the OS foreground notification are edges
+/// that can be missed, or seen before the activation completes. Comparing the OS state with this
+/// basis instead of with a trigger's own last sample means a change one trigger already
+/// reconciled cannot hide the next change from another, and the poll repairs any missed edge.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Default)]
+pub struct ForegroundBasis(std::sync::atomic::AtomicU8);
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl ForegroundBasis {
+    const UNKNOWN: u8 = 0;
+
+    pub const fn new() -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::UNKNOWN))
+    }
+
+    const fn code(foreground: bool) -> u8 {
+        if foreground { 2 } else { 1 }
+    }
+
+    /// Records the foreground state a reconcile derived the key from.
+    pub fn record(&self, foreground: bool) {
+        self.0
+            .store(Self::code(foreground), std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether the OS foreground state differs from what the key was last reconciled for.
+    pub fn stale(&self, foreground: bool) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst) != Self::code(foreground)
+    }
+}
+
 /// Why registering a key failed, as reported by the OS layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisterError {
@@ -453,5 +491,90 @@ mod tests {
         }
         assert!(os.ours.is_empty());
         assert_eq!(held, None);
+    }
+
+    /// Mirrors `reconcile_talk_key`: every reconcile records the foreground it used.
+    fn reconcile_for(
+        basis: &ForegroundBasis,
+        held: &mut Option<u32>,
+        os: &mut Fake,
+        foreground: bool,
+    ) -> Status<u32> {
+        basis.record(foreground);
+        step(held, os, foreground, F8)
+    }
+
+    /// Mirrors the Windows foreground hook and poll: reconcile only when the OS state differs
+    /// from the basis.
+    fn check(
+        basis: &ForegroundBasis,
+        held: &mut Option<u32>,
+        os: &mut Fake,
+        foreground: bool,
+    ) -> Option<Status<u32>> {
+        basis
+            .stale(foreground)
+            .then(|| reconcile_for(basis, held, os, foreground))
+    }
+
+    #[test]
+    fn a_refocus_with_no_focus_event_is_reinstalled_by_the_next_poll() {
+        // 0.1.8+901 QA, 12:40:13Z: the blur was reconciled by window_focus, then KalCode came
+        // back to the front with no Focused(true) and no foreground hook reconcile, and F8 stayed
+        // released for two minutes until a manual focus toggle.
+        let basis = ForegroundBasis::new();
+        let (mut held, mut os) = (None, Fake::default());
+        reconcile_for(&basis, &mut held, &mut os, true);
+        assert_eq!(held, Some(F8));
+
+        // Blur: window_focus reconciles; the hook then sees the same background, nothing to do.
+        reconcile_for(&basis, &mut held, &mut os, false);
+        assert_eq!(held, None);
+        assert_eq!(check(&basis, &mut held, &mut os, false), None);
+
+        // Refocus: no focus event, and the hook sampled the foreground before activation.
+        assert_eq!(check(&basis, &mut held, &mut os, false), None);
+        assert_eq!(held, None);
+
+        // The next poll tick sees KalCode in front and reinstalls the key.
+        assert_eq!(
+            check(&basis, &mut held, &mut os, true),
+            Some(Status::Holding(F8, Held::Registered))
+        );
+        assert_eq!(held, Some(F8));
+        assert!(FOREGROUND_POLL <= std::time::Duration::from_secs(1));
+
+        // Steady state: later ticks change nothing.
+        for _ in 0..10 {
+            assert_eq!(check(&basis, &mut held, &mut os, true), None);
+        }
+        assert_eq!(os.registrations, 2);
+    }
+
+    #[test]
+    fn a_blur_reconciled_by_window_focus_does_not_hide_the_return_from_the_hook() {
+        // The hook used to keep its own last sample. When its blur callback ran after KalCode was
+        // already back (it samples the foreground at delivery), that sample stayed "front" and the
+        // real return produced no change, so it never reconciled. The shared basis knows the key
+        // was last reconciled for the background.
+        let basis = ForegroundBasis::new();
+        let (mut held, mut os) = (None, Fake::default());
+        reconcile_for(&basis, &mut held, &mut os, true);
+        reconcile_for(&basis, &mut held, &mut os, false);
+        assert_eq!(
+            check(&basis, &mut held, &mut os, true),
+            Some(Status::Holding(F8, Held::Registered))
+        );
+        // Foreground moving between other apps never reconciles.
+        reconcile_for(&basis, &mut held, &mut os, false);
+        assert_eq!(check(&basis, &mut held, &mut os, false), None);
+    }
+
+    #[test]
+    fn the_basis_is_stale_until_a_reconcile_records_it() {
+        let basis = ForegroundBasis::new();
+        assert!(basis.stale(true) && basis.stale(false));
+        basis.record(false);
+        assert!(!basis.stale(false) && basis.stale(true));
     }
 }
