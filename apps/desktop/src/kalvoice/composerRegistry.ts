@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { accountFullLabel } from "../surfaces/providers/accountIdentity.ts";
 import { forgetVoiceText } from "./voiceSpans.ts";
 
 /**
@@ -148,10 +149,16 @@ export function waitForComposer(
   });
 }
 
-/** "KALVOICE TARGET · Claude Code · Authentication · Work" (the account only when the thread has one). */
+/**
+ * "KALVOICE TARGET · Authentication · Claude Code · Work": thread, then provider and account named as
+ * everywhere else (the account only when the thread has one).
+ */
 export function voiceTargetLabel(identity: ComposerIdentity): string {
   const account = identity.accountLabel?.trim();
-  return `KALVOICE TARGET · ${identity.providerName} · ${identity.threadName}${account ? ` · ${account}` : ""}`;
+  const runtime = account
+    ? accountFullLabel({ providerId: identity.providerId, displayName: account })
+    : identity.providerName;
+  return `KALVOICE TARGET · ${identity.threadName} · ${runtime}`;
 }
 
 /** Called by KalVoice while a push-to-talk session targets a composer (null when none does). */

@@ -102,6 +102,24 @@ describe("palette account commands (Stable)", () => {
     expect(getRebindRequest()).toBeNull();
   });
 
+  it("lists matching accounts default first, then in natural name order, marking the default", async () => {
+    const { user, client } = await mountStable();
+    await client.createProviderAccount("gemini-cli", "Gemini 10");
+    await client.createProviderAccount("gemini-cli", "Gemini 2");
+    setSelectedThread({ threadId: "thread-gemini", providerId: "gemini-cli", providerAccountId: null });
+    const palette = await typeInPalette(user, "switch to gemini");
+    const options = await palette.findAllByRole("option", { name: /for this thread/ });
+    expect(options.map((option) => option.textContent?.replace(/ for this thread.*/, ""))).toEqual([
+      "Use Personal (Gemini CLI)",
+      "Use Gemini 2 (Gemini CLI)",
+      "Use Gemini 10 (Gemini CLI)",
+      "Use Gemini A (Gemini CLI)",
+      "Use Gemini B (Gemini CLI)",
+    ]);
+    expect(options[0]).toHaveTextContent("Default · Not checked");
+    expect(options[1]).not.toHaveTextContent("Default");
+  });
+
   it("sets the workspace default with a confirmation toast", async () => {
     const { user, invoke } = await mountStable();
     const palette = await typeInPalette(user, "use claude personal");
@@ -122,7 +140,7 @@ describe("palette account commands (Stable)", () => {
     const item = await palette.findByRole("option", { name: /Use Work \(Codex\) in this workspace/ });
     expect(item).toHaveTextContent("Signed out");
     await user.click(item);
-    expect(await screen.findByText("Sign in to Work first")).toBeInTheDocument();
+    expect(await screen.findByText("Sign in to Work (Codex) first")).toBeInTheDocument();
     expect(invoked(invoke as never, "provider_account_bind")).toHaveLength(0);
   });
 

@@ -168,7 +168,7 @@ describe("KalVoice composer target (Stable, TK-2)", () => {
     await focusComposer();
 
     await talk(h, "cover the empty input case", () => {
-      const hint = within(detail()).getByText(`KALVOICE TARGET · Claude Code · ${PARSER} · Personal`);
+      const hint = within(detail()).getByText(`KALVOICE TARGET · ${PARSER} · Claude Code · Personal`);
       expect(hint).toHaveAttribute("aria-live", "polite");
     });
 

@@ -115,7 +115,7 @@ describe("composer registry (TK-2)", () => {
     await expect(waitForComposer(B, { timeoutMs: 30 })).resolves.toBeNull();
   });
 
-  it("labels the target as text: provider, thread, then the account when there is one", () => {
+  it("labels the target as text: thread, then provider and account named as everywhere else", () => {
     const identity = {
       threadId: A,
       threadName: "Authentication",
@@ -123,10 +123,10 @@ describe("composer registry (TK-2)", () => {
       providerName: "Claude Code",
     };
     expect(voiceTargetLabel({ ...identity, accountLabel: "Work" })).toBe(
-      "KALVOICE TARGET · Claude Code · Authentication · Work",
+      "KALVOICE TARGET · Authentication · Claude Code · Work",
     );
     expect(voiceTargetLabel({ ...identity, accountLabel: null })).toBe(
-      "KALVOICE TARGET · Claude Code · Authentication",
+      "KALVOICE TARGET · Authentication · Claude Code",
     );
   });
 });

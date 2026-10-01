@@ -33,6 +33,7 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { MODE_LABELS, startModeFor, usePermissions } from "../permissions/index.ts";
+import { accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
 import { openProviderAccounts } from "../providers/providersTab.ts";
 import type { NewThreadPrefill } from "./intent.tsx";
 import { PERMISSION_MODES, providerModeNote, type UnavailableProvider, unavailableProviders } from "./model.ts";
@@ -238,7 +239,7 @@ function NewThreadForm({
   const taskRef = useRef<HTMLTextAreaElement>(null);
 
   const provider = options.providers.find((p) => p.id === providerId);
-  const providerAccounts = accounts.filter((account) => account.providerId === providerId);
+  const providerAccounts = sortAccounts(accounts.filter((account) => account.providerId === providerId));
   const providerAccount = providerAccounts.find((account) => account.id === providerAccountId);
   const workspaceBinding = bindingFor(bindings, providerId, workspaceId);
   const accountReady = providerAccount != null && providerAccount.authenticationState !== "not_authenticated";
@@ -255,7 +256,7 @@ function NewThreadForm({
   ].join(":");
   const confirmation = usePromptConfirmation(promptScope, client);
   const cancelConfirmation = confirmation.cancel;
-  const launchDetail = providerAccount ? `${modelName} · ${providerAccount.displayName}` : modelName;
+  const launchDetail = providerAccount ? `${modelName} · ${accountName(providerAccount)}` : modelName;
 
   useEffect(() => {
     taskRef.current?.focus();
@@ -316,7 +317,7 @@ function NewThreadForm({
           await client.bindProviderAccount(providerId, "workspace", rememberFor.workspace.id, rememberFor.account.id);
           toast.show({
             tone: "success",
-            title: `New ${rememberFor.providerName} threads in ${rememberFor.workspace.name} use ${rememberFor.account.displayName}`,
+            title: `New ${rememberFor.providerName} threads in ${rememberFor.workspace.name} use ${accountName(rememberFor.account)}`,
           });
         } catch (err) {
           toast.show({
@@ -463,7 +464,7 @@ function NewThreadForm({
               <span>
                 {providerAccounts.length === 0
                   ? `Add a ${provider?.displayName ?? "provider"} account before starting this thread.`
-                  : `${providerAccount?.displayName ?? "This account"} is signed out.`}
+                  : `${providerAccount ? accountName(providerAccount) : "This account"} is signed out.`}
               </span>
               <Button
                 size="sm"
@@ -515,7 +516,7 @@ function NewThreadForm({
           {remember && providerAccount && workspace ? (
             <p id={`${id}-remember-hint`} className={styles.hint}>
               New {provider?.displayName ?? "provider"} threads in {workspace.name} will start with{" "}
-              {providerAccount.displayName}.
+              {accountName(providerAccount)}.
             </p>
           ) : null}
         </div>
@@ -638,9 +639,10 @@ function sourceText(
   return "Chosen for this thread.";
 }
 
+/** "Work", "Work · Default", "Work · Signed out": the name, the default marker, then any sign-in caveat. */
 function accountOption(account: ProviderAccount): string {
-  const qualifiers: string[] = [];
-  if (account.isDefault) qualifiers.push("default");
-  if (account.authenticationState === "not_authenticated") qualifiers.push("signed out");
-  return qualifiers.length > 0 ? `${account.displayName} (${qualifiers.join(", ")})` : account.displayName;
+  const parts = [accountName(account)];
+  if (account.isDefault) parts.push("Default");
+  if (account.authenticationState !== "authenticated") parts.push(accountSignIn(account).label);
+  return parts.join(" · ");
 }

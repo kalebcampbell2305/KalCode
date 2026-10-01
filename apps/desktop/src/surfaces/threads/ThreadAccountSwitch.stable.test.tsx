@@ -175,13 +175,26 @@ describe("thread account switch on Stable", () => {
     expect(within(menu).getByText("Switch account")).toBeInTheDocument();
     const radios = within(menu).getAllByRole("menuitemradio");
     expect(radios.map((item) => item.textContent)).toEqual([
-      "PersonalActiveNot checked",
+      "PersonalDefaultActiveNot checked",
       "Gemini Bb@example.com · Not checked",
     ]);
     expect(radios[0]).toHaveAttribute("aria-checked", "true");
     expect(radios[1]).toHaveAttribute("aria-checked", "false");
     expect(within(menu).getByRole("menuitem", { name: "Connect another Gemini CLI account" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "Manage provider accounts" })).toBeInTheDocument();
+  });
+
+  it("lists accounts default first, then in natural name order", async () => {
+    const { user, client } = await mountStable();
+    await client.createProviderAccount("gemini-cli", "Gemini 10");
+    await client.createProviderAccount("gemini-cli", "Gemini 2");
+    await openThreads(user);
+    await openThread(user, "Gemini docs pass");
+    const menu = await openMenu(user, "Personal");
+    const names = within(menu)
+      .getAllByRole("menuitemradio")
+      .map((item) => item.textContent?.split(/Default|Active|b@example|Not checked/)[0]);
+    expect(names).toEqual(["Personal", "Gemini 2", "Gemini 10", "Gemini B"]);
   });
 
   it("Connect another opens Providers → Accounts with that provider's connect form; Manage opens it without", async () => {
@@ -251,7 +264,7 @@ describe("thread account switch on Stable", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(calls("thread_rebind_account")).toBe(1);
     expect(await accountButton("Gemini B")).toBeInTheDocument();
-    expect(await screen.findByText("Switched to Gemini B")).toBeInTheDocument();
+    expect(await screen.findByText("Switched to Gemini B (Gemini CLI)")).toBeInTheDocument();
     const list = screen.getByRole("list", { name: "Threads" });
     await waitFor(() =>
       expect(within(list).getByRole("button", { name: /Gemini docs pass/ })).toHaveTextContent(

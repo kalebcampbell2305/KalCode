@@ -64,7 +64,9 @@ import {
 } from "react";
 import type { OperationsApi } from "../../ipc/operations.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { accountProviderName } from "../../shell/accountCommands.ts";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
+import { accountFullLabel, accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
 import {
   type ActivityRange,
   activityLevel,
@@ -136,10 +138,27 @@ function dependencyLabel(owner: OperationRecord, dependencyId: string, records: 
   return `${dependency.spec.name} (${state})`;
 }
 
+/** "Claude Code · Work" when the work is bound to an account, "Claude Code" on the provider default. */
+function runtimeAccount(record: OperationRecord): string | null {
+  const providerId = record.spec.providerId;
+  if (!providerId) return null;
+  const account = record.accountLabel?.trim();
+  return account ? accountFullLabel({ providerId, displayName: account }) : accountProviderName(providerId);
+}
+
+/** The bound account only ("Claude Code · Work"); null when the work runs on the provider default. */
+function boundAccount(record: OperationRecord): string | null {
+  return record.accountLabel?.trim() ? runtimeAccount(record) : null;
+}
+
+/** An account in a picker whose provider is already chosen: "Work · Default", "Work · Signed out". */
+function accountOptionLabel(account: ProviderAccount): string {
+  const signIn = account.authenticationState === "authenticated" ? null : accountSignIn(account).label;
+  return [accountName(account), account.isDefault ? "Default" : null, signIn].filter(Boolean).join(" · ");
+}
+
 function Metadata({ record }: { record: OperationRecord }) {
-  const provider = [record.spec.providerId, record.accountLabel, record.spec.model, record.spec.effort]
-    .filter(Boolean)
-    .join(" · ");
+  const provider = [runtimeAccount(record), record.spec.model, record.spec.effort].filter(Boolean).join(" · ");
   return (
     <dl className={styles.metadata}>
       <div>
@@ -522,6 +541,7 @@ function RunsView({
               <span className={styles.runContext}>
                 {run.workspaceName}
                 {run.branch ? ` · ${run.branch}` : ""}
+                {boundAccount(run) ? ` · ${boundAccount(run)}` : ""}
               </span>
               <span className={styles.runAction}>
                 {run.currentAction ??
@@ -691,7 +711,8 @@ function QueueView({
                   {status(item, true)}
                 </div>
                 <p>
-                  {titleCase(item.spec.kind)} · {item.workspaceName} · Priority {item.spec.priority}
+                  {titleCase(item.spec.kind)} · {item.workspaceName}
+                  {boundAccount(item) ? ` · ${boundAccount(item)}` : ""} · Priority {item.spec.priority}
                 </p>
                 {item.spec.dependencies.length > 0 ? (
                   <p>Depends on {item.spec.dependencies.map((id) => dependencyLabel(item, id, records)).join(", ")}</p>
@@ -900,7 +921,9 @@ function TaskEditor({
   }, [optionsRevision, providerAccounts, threadOptions]);
 
   const provider = options?.providers.find((item) => item.id === spec.providerId);
-  const providerAccountsForSelection = accounts.filter((account) => account.providerId === spec.providerId);
+  const providerAccountsForSelection = sortAccounts(
+    accounts.filter((account) => account.providerId === spec.providerId),
+  );
   const isAgent = spec.kind === "agent";
   const valid = Boolean(
     spec.name.trim() && spec.workspaceId && (isAgent ? spec.prompt?.trim() && spec.providerId : spec.command?.trim()),
@@ -1068,7 +1091,7 @@ function TaskEditor({
                 <option value="">Provider default</option>
                 {providerAccountsForSelection.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.displayName}
+                    {accountOptionLabel(account)}
                   </option>
                 ))}
               </Select>
