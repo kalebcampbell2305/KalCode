@@ -421,10 +421,20 @@ impl KalVoiceRuntime {
         let background_settled = self.background.wait_until(deadline);
         let reasoning_settled =
             background_settled && local_settled && self.reasoning.shutdown_reasoning(deadline);
-        if downloads_settled && background_settled && local_settled && reasoning_settled {
+        let settled = downloads_settled && background_settled && local_settled && reasoning_settled;
+        if settled {
             self.recognizers.shutdown();
+        } else {
+            // Which owner kept KalVoice from stopping in time (an unclean exit names it).
+            tracing::warn!(
+                event = "kalvoice.shutdown_incomplete",
+                downloads_settled,
+                background_settled,
+                local_settled,
+                reasoning_settled,
+            );
         }
-        downloads_settled && background_settled && local_settled && reasoning_settled
+        settled
     }
 }
 

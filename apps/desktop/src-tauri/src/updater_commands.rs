@@ -368,7 +368,10 @@ impl DesktopUpdaterState {
         };
         let silent_record_path = update_dir.join(silent_fallback::RECORD_FILE);
         let loaded = silent_fallback::load(&silent_record_path);
-        let silent_record = silent_fallback::reconcile_at_launch(loaded.clone(), current_version);
+        let silent_record = silent_fallback::reconcile_at_launch(
+            silent_fallback::count_skipped_exit(loaded.clone()),
+            current_version,
+        );
         if silent_record != loaded {
             let _ = silent_fallback::save(&silent_record_path, silent_record.as_ref());
         }
