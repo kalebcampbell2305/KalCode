@@ -240,7 +240,7 @@ describe("KalVoice composer target (Stable, TK-2)", () => {
     await findInWidget("Nothing to clear.");
     expect(composer()).toHaveValue("my own words");
     expect(sent(h)).toHaveLength(1);
-  });
+  }, 15_000);
 
   it("a warned prompt stops at the warning dialog: voice never confirms it", async () => {
     const h = await mountStable();

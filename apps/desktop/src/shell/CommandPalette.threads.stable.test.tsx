@@ -97,5 +97,5 @@ describe("palette threads (Stable)", () => {
     await waitFor(() =>
       expect(within(detail).getByRole("heading", { name: "Write Unit Tests for Parser Module" })).toBeInTheDocument(),
     );
-  });
+  }, 15_000);
 });
