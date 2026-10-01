@@ -152,7 +152,7 @@ test("Operations connects real run evidence, queue transitions, services, enviro
   await tab(page, "Activity");
   const activity = page.getByRole("region", { name: "Project activity" });
   await expect(activity.getByRole("heading", { name: "Activity heatmap" })).toBeVisible();
-  await expect(activity.getByText("Operations tests passed")).toBeVisible();
+  await expect(activity.getByText("Typecheck desktop started")).toBeVisible();
   await activity.getByRole("button", { name: "Release", exact: true }).click();
   await expect(activity.getByText("Preview deployed")).toBeVisible();
   await activity
