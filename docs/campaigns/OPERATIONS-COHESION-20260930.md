@@ -105,10 +105,11 @@ in `docs/OPERATIONS.md`.
 Source rollback reference: `rollback/operations-cohesion-20260930` at `1186f335`. Use a forward
 revert/corrective commit that preserves subsequent work, not a reset or database downgrade.
 The primary checkout's main branch and Claude's release checkout remain unchanged by this task.
-Integration of this stacked follow-up into #41, conflict resolution against current main, the
-registered release gates, signed Windows/macOS builds, publication, and production update
-verification remain owned by Claude. No owner credential or manual action was requested by this
-implementation pass. Delivery truth: implemented and locally verified; not published by this pass.
+Claude owns canonical integration and production signing/publication. Codex continued beyond the
+initial handoff to assemble and validate an isolated combined checkout, resolve integration
+conflicts, and repair failing gates. A handoff is not delivery. No owner credential or manual
+action has been requested. Delivery truth remains unpublished until the final production build
+and update feed have been verified.
 
 ## Broader CI follow-up
 
@@ -118,6 +119,56 @@ The first macOS job exposed an inherited updater test still calling the five-arg
 `startup_healthy = true`, preserving its existing successful-reconciliation assertions; independent
 review approved this narrow compatibility repair. No updater production behavior changed.
 The Linux job also reported pre-existing KalVoice Fn-key dead-code errors outside Operations.
-Current-main compatibility and any remaining release-lane baseline fixes must be reconciled before
-claiming a green complete matrix or publication. The local results above do not assert that broader
-CI passed.
+Commit `6f12d65a` scopes the three native Fn adapters to Windows/macOS and allows dead code only
+inside the reducer module on unsupported platforms; its shared cancellation/reset ownership
+remains available. All 16 Fn reducer tests passed and independent review approved the target
+boundary. Linux CI reproof is still required; no global lint setting changed.
+
+## Resumed build and integration verification
+
+At CI head `4aa9dab7`, run `36800899035` passed Windows workspace formatting, strict Clippy,
+all workspace tests (2,576 passed, zero failed, 22 registered ignores, 127 result blocks), and
+protocol freshness. The complete desktop Vitest suite passed 1,301 tests; the visual evidence,
+website build/E2E, dependency audit, and dependency policy jobs also passed. These are genuine
+results for that source revision, not a claim that the later candidate is already released.
+
+Functional browser CI passed 264 tests and failed one inherited startup-message assertion.
+Commit `fb030455` reuses the exact correction already present in Claude's release integration;
+four focused browser checks passed. A local full-unit run under load passed 1,297 and timed out
+four tests; all 16 tests in those two files passed when isolated. A subsequent serialized
+registered frontend gate exceeded its unchanged five-minute deadline. After native compilation
+finished, bounded six-worker execution passed the registered gate on the combined source:
+1,306 executed, zero skipped, zero flaky. No assertion or deadline was weakened.
+
+The macOS job exposed a real context-redaction idempotence failure. The first local correction
+was rejected by independent review because splitting opaque values at internal equals signs
+could miss secrets. It was never pushed or published alone. Corrective commit `f5678a08`
+restores opaque-token detection and passes accepted format findings from the canonical scanner
+to bounded prefix analysis. The worker's complete context suite passed 110 tests with one
+registered performance ignore; an independent reviewer passed all 15 redaction-roundtrip tests.
+Regressions include the original failure, internal-equals true positives, long values, delimiter
+crossing, accepted fixed-format suffixes, and false-positive controls. Do not revert only this
+corrective commit to its rejected intermediate parent; use a reviewed forward correction or
+restore both redactor changes together.
+
+The isolated `verify/operations-cohesion` branch in `C:/kc-ops-proof` combines Claude's integration,
+this follow-up, and current main without modifying Claude's checkout. The merge forwards the
+existing TerminalLimit through the artifact-report wrapper to the canonical terminal creator.
+A denial regression proves no operation terminal, command artifact, or report is created when
+the limit rejects execution. Combined native Operations tests passed 38/38; Operations and shell
+browser checks passed 19/19; the frontend production build passed. Claude's schema-20 and
+KalVoice-provisioning E2E corrections through `3d94d9ad` are included.
+
+The combined release range also contains a film patch fixture with intentional CRLF payload
+and blank unified-diff context markers. Independent review approved an exact-file whitespace
+attribute; the fixture bytes remain unchanged and range diff-check passes. Secret scanning
+identified one inherited deterministic credential-shaped rejection fixture in
+`operation_inputs_are_bounded_and_never_persist_secret_values`. Independent review classified
+that exact historical finding as synthetic; the scanner rule remains enabled.
+
+Trusted-machine gate copies under ignored `target/operations-cohesion-gates` preserve the B12
+checks, add the previously unexecuted permissions suite, and pin one exact candidate. Windows
+uses one Cargo build job after a reproduced out-of-memory failure at higher concurrency. Mac
+and Windows native gates, production packaging, publication, and installed-update verification
+must have their own completed receipts before delivery can be claimed. The original B12
+release infrastructure and production data remain untouched by this validation work.
