@@ -71,8 +71,7 @@ jobs:
         run: mkdir -p apps/desktop/dist && echo '<!doctype html>' > apps/desktop/dist/index.html
       - name: Select isolated Dev identity for Rust debug gates
         shell: bash
-        run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_ENV, "TAURI_CONFIG=" + JSON.stringify(JSON.parse(fs.readFileSync("apps/desktop/src-tauri/tauri.dev.conf.json", "utf8"))) + "
-");'
+        run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_ENV, "TAURI_CONFIG=" + JSON.stringify(JSON.parse(fs.readFileSync("apps/desktop/src-tauri/tauri.dev.conf.json", "utf8"))) + "\n");'
       - name: Build real macOS Tauri sidecars for Rust gates
         shell: bash
         run: |
