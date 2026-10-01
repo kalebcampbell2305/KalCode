@@ -269,3 +269,12 @@ The registered production-speech Rust suite failed; direct diagnostic execution 
 speech stalled-body timeout-test failure while unrelated long-running tests continued. The exact
 same speech test binary passed that test in isolation, unchanged, in 14.22 seconds. Full-suite
 success is not claimed from that focused pass. Final native E2E and frontend reproof are pending.
+
+Source checkpoint `84a7c4e088be0d3baae49eaacbadae9cfcffe444` was pushed only to
+`feat/operations-services`; draft PR 41 records all remaining gates. Final browser reproof
+passed all four tests after replacing the obsolete fabricated test-success assertion with the
+actual cancellation Activity outcome and explicit absence of the fabricated record.
+The speech diagnostic completed with 298 passed, one failed, and two intentional ignores in
+that package: the failed blocked-read duration was 6.9509094 seconds against 6.5 seconds.
+The assertion and timeout remain unchanged. Other workspace packages after that failure did
+not execute, so the production-speech suite remains open.
