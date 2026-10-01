@@ -224,6 +224,7 @@ test("@screenshots Operations rich evidence in dark and light themes", async ({ 
   ).toContainText("Deployed Unverified");
   await page.screenshot({ path: screenshotPath("operations-run-connections-dark-1360") });
   await page.getByRole("region", { name: "Run activity" }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("region", { name: "Run activity" })).toBeInViewport();
   await page.screenshot({ path: screenshotPath("operations-run-linked-evidence-dark-1360") });
   await page.getByRole("button", { name: "Close run details" }).click();
   await tab(page, "Activity");

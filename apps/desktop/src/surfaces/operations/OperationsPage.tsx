@@ -1765,7 +1765,7 @@ function RunDetail({
         </ErrorState>
       ) : null}
       {value ? (
-        <Tabs value={tab} onValueChange={(next) => setTab(next as DetailTab)}>
+        <Tabs value={tab} onValueChange={(next) => setTab(next as DetailTab)} className={styles.detailContent}>
           <TabsList className={styles.detailTabs} aria-label="Run evidence">
             {(["overview", "logs", "timeline", "files", "artifacts", "tests"] as DetailTab[]).map((value) => (
               <TabsTrigger key={value} value={value}>
