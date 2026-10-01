@@ -58,6 +58,31 @@ fn round_trip_is_idempotent_structure_preserving_and_clean() {
 }
 
 #[test]
+fn adjacent_assignment_cannot_expose_a_second_pass_entropy_secret() {
+    let text = [
+        "https://u:",
+        "ib0c+Ae-1__",
+        "password=",
+        "____A=",
+        "\"api_key\": \"",
+    ]
+    .concat();
+
+    let once = redact_text(&text, ctx(), PlaceholderStyle::Labelled);
+    let twice = redact_text(&once.text, ctx(), PlaceholderStyle::Labelled);
+
+    assert_eq!(once.text, twice.text);
+    assert!(!once.text.contains("ib0c+Ae-1__"));
+    assert!(!once.text.contains("____A="));
+    assert!(
+        scan(&once.text).is_empty(),
+        "residual finding in {:?}",
+        once.text
+    );
+    assert_eq!(once.text.matches('\n').count(), text.matches('\n').count());
+}
+
+#[test]
 fn plain_style_matches_the_log_format() {
     let (text, secret) = &common::samples()[1];
     let out = redact_text(text, ctx(), PlaceholderStyle::Plain);

@@ -1052,12 +1052,18 @@ pub fn entropy_findings(text: &str) -> Vec<Finding> {
     let mut i = 0;
     let mut previous_end = 0usize;
     while i < bytes.len() {
-        if !is_token_byte(bytes[i]) {
+        if !is_token_body_byte(bytes[i]) {
             i += 1;
             continue;
         }
         let start = i;
-        while i < bytes.len() && is_token_byte(bytes[i]) {
+        while i < bytes.len() && is_token_body_byte(bytes[i]) {
+            i += 1;
+        }
+        // Base64 padding is terminal. Treating `=` as an unrestricted token byte can join an
+        // assignment name and its value; replacing the value then exposes a new entropy match
+        // on the second pass. Include terminal padding, but stop before a token resumes.
+        while i < bytes.len() && bytes[i] == b'=' {
             i += 1;
         }
         let end = i;
@@ -1083,8 +1089,8 @@ pub fn entropy_findings(text: &str) -> Vec<Finding> {
     findings
 }
 
-fn is_token_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'_' | b'-')
+fn is_token_body_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'_' | b'-')
 }
 
 /// Quoted literal or the value after `=` / `:`. Looks back only to the previous token, so the
