@@ -49,6 +49,9 @@ $env:RUSTUP_HOME = Join-Path $ciHome 'rustup'
 $env:CARGO_HOME = Join-Path $ciHome 'cargo'
 $npmPrefix = Join-Path $ciHome 'npm'
 
+# Native tools below write progress to stderr; their exit codes are checked instead.
+$ErrorActionPreference = 'Continue'
+
 # 3. Toolchain the account owns: rustup (the repo's rust-toolchain.toml picks the channel on
 #    first use), pnpm pinned to the repo's packageManager.
 # rustup picks its behaviour from its file name, so it must stay rustup-init.exe.
