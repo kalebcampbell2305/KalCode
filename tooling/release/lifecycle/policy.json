@@ -71,6 +71,7 @@
         "assets/**",
         "kalcode-film/**",
         "launch/**",
+        "marketing/**",
         "AGENTS.md",
         "CLAUDE.md",
         "README.md",
@@ -85,7 +86,7 @@
         "package.json"
       ],
       "lanes": ["internal"],
-      "why": "tooling, CI, agent/dev files, unpublished docs and the marketing films (kalcode-film/, a standalone npm project outside the pnpm workspace, and launch/, the Blender launch film); the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
+      "why": "tooling, CI, agent/dev files, unpublished docs and the marketing films (kalcode-film/, a standalone npm project outside the pnpm workspace, and launch/, the Blender launch film) and marketing copy (marketing/); the website does not render docs/*.md, and assets/ only feeds the committed brand generators"
     },
     {
       "id": "website",
