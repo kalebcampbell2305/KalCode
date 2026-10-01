@@ -125,13 +125,11 @@ export function FloatingAssistant() {
       ? "bottom"
       : null;
   const compactHeight = useRef(0);
-  const detailShown =
-    attention ||
-    state.phase === "listening" ||
-    state.phase === "transcribing" ||
-    state.phase === "done" ||
-    state.phase === "error";
-  if (panel.view !== "expanded" && !detailShown && size.height > 0) compactHeight.current = size.height;
+  // A take's detail opens over the page only for a moment. A problem (attention) stays open
+  // until it is fixed, so the band reserves its height too and it never covers page controls.
+  const transientDetail =
+    state.phase === "listening" || state.phase === "transcribing" || state.phase === "done" || state.phase === "error";
+  if (panel.view !== "expanded" && !transientDetail && size.height > 0) compactHeight.current = size.height;
   const reserving = panel.visible && status !== null && slotEdge !== null && slots !== null;
   const bandHeight = Math.ceil((compactHeight.current || 44) + 2 * VOICE_SLOT_GAP);
   const setVoice = slots?.setVoice;
