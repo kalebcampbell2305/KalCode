@@ -156,6 +156,47 @@ test("baseline source validator permits only canonical version authorities and t
   }
 });
 
+// A build release X.Y.Z+N is stamped at build time: the five authorities declare the public X.Y.Z,
+// and only the derived baseline's Stable selector names the full candidate release version.
+function buildRevisionSnapshot() {
+  const snapshot = sourceSnapshot();
+  snapshot.candidateVersion = `${CANDIDATE_VERSION}+40`;
+  snapshot.baselineVersion = `${BASELINE_VERSION}+41`;
+  snapshot.baselineFiles["crates/updater/src/lib.rs"] = snapshot.baselineFiles["crates/updater/src/lib.rs"].replace(
+    `stable/${CANDIDATE_VERSION}.json`,
+    `stable/${CANDIDATE_VERSION}+40.json`,
+  );
+  return snapshot;
+}
+
+test("baseline source validator accepts X.Y.Z+N releases whose authorities declare the public versions", () => {
+  assert.deepEqual(validateBaselineSourceSnapshot(buildRevisionSnapshot()), []);
+  for (const mutate of [
+    // The selector must name the exact candidate build, not its public version or another build.
+    (snapshot) =>
+      (snapshot.baselineFiles["crates/updater/src/lib.rs"] = snapshot.baselineFiles[
+        "crates/updater/src/lib.rs"
+      ].replace(`${CANDIDATE_VERSION}+40.json`, `${CANDIDATE_VERSION}.json`)),
+    (snapshot) =>
+      (snapshot.baselineFiles["crates/updater/src/lib.rs"] = snapshot.baselineFiles[
+        "crates/updater/src/lib.rs"
+      ].replace(`${CANDIDATE_VERSION}+40.json`, `${CANDIDATE_VERSION}+39.json`)),
+    // Build numbers are never checked in.
+    (snapshot) =>
+      (snapshot.baselineFiles["apps/desktop/src-tauri/tauri.conf.json"] = JSON.stringify({
+        version: `${BASELINE_VERSION}+41`,
+      })),
+    // A baseline build of the same public version cannot be a mechanical derivation.
+    (snapshot) => (snapshot.baselineVersion = `${CANDIDATE_VERSION}+39`),
+    // A baseline build must still be lower than the candidate build.
+    (snapshot) => (snapshot.baselineVersion = `${CANDIDATE_VERSION}+41`),
+  ]) {
+    const snapshot = buildRevisionSnapshot();
+    mutate(snapshot);
+    assert.notDeepEqual(validateBaselineSourceSnapshot(snapshot), []);
+  }
+});
+
 function release(version, byte, commit) {
   const updaterBytes = Buffer.from(byte);
   const downloadBytes = Buffer.from(`${byte}-download`);
