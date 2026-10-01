@@ -129,7 +129,8 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await expect(page.locator("[data-pane-id][data-collapsed]")).toHaveCount(1);
     await shot(page, "w1-e2e-arranged");
 
-    // Closing a pane keeps its process: the shell in pane 1 keeps running in the background.
+    // Closing a pane ends what it runs (owner decision): the shell in pane 1 and the program it
+    // started stop; nothing keeps running in the background. Reopen brings back only the pane.
     await page.keyboard.press("Control+Alt+ArrowLeft");
     await pane(page, 0).locator(".xterm-screen").click();
     await page.keyboard.type("ping -n 97 127.0.0.1");
@@ -137,15 +138,10 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await expect.poll(() => processesMatching("-n 97 127.0.0.1").length, { timeout: 20_000 }).toBeGreaterThan(0);
     await pane(page, 0).getByRole("button", { name: "Close pane 1" }).click();
     await expect(panes(page)).toHaveCount(2);
-    await page.waitForTimeout(1500);
-    expect(processesMatching("-n 97 127.0.0.1").length).toBeGreaterThan(0);
+    await expect.poll(() => processesMatching("-n 97 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
+    await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
     await page.keyboard.press("Control+Alt+r");
     await expect(panes(page)).toHaveCount(3);
-    await expect(pane(page, 0).locator('[role="tabpanel"] .xterm-rows')).toContainText("-n 97 127.0.0.1");
-    // Ending it is explicit.
-    await pane(page, 0).getByRole("button", { name: "Actions for pane 1" }).click();
-    await page.getByRole("menuitem", { name: "End terminal" }).click();
-    await expect.poll(() => processesMatching("-n 97 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
 
     // Reopen put pane 1 back where it was; bring the divider back to the saved ratio.
     await expect(divider(page)).toHaveAttribute("aria-valuenow", ratio ?? "");
@@ -169,7 +165,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
       "ended in an earlier run",
       { timeout: 20_000 },
     );
-    // Pane 1's shell was ended explicitly, so pane 1 is empty; the collapsed pane's shell ended
+    // Pane 1's shell ended when its pane was closed, so pane 1 is empty; the collapsed pane's shell ended
     // with KalCode and offers Restart.
     await expect(pane(page, 0).getByRole("heading", { name: "Empty pane" })).toBeVisible();
     await page
