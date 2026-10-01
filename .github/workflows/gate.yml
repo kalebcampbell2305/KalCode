@@ -50,11 +50,10 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
-        run: node tooling/release/ship.mjs gate --base $env:BASE
-      - name: DIAG tooling-unit (temporary)
-        if: failure()
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: pnpm --filter @kalcode/tooling test 2>&1 | Select-String -Pattern 'not ok|failing|Error|expected|actual|fatal|✖' | Select-Object -First 80
+        # Release tooling expects Cargo's default target/ (checkout-local; the runner keeps it).
+        run: |
+          Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+          node tooling/release/ship.mjs gate --base $env:BASE
 
   macos:
     name: Gate (macOS, Rust)

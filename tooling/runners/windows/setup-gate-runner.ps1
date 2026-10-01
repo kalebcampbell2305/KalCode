@@ -75,7 +75,6 @@ Expand-Archive -Force -Path $zip -DestinationPath $runner
     "npm_config_cache=$(Join-Path $ciHome 'npm-cache')"
     "PNPM_HOME=$npmPrefix"
     "PLAYWRIGHT_BROWSERS_PATH=$(Join-Path $ciHome 'ms-playwright')"
-    "CARGO_TARGET_DIR=$(Join-Path $Root 'target')"
     "PATH=$(Join-Path $env:CARGO_HOME 'bin');$npmPrefix;C:\Program Files\nodejs;C:\Program Files\Git\cmd;C:\Program Files\Git\usr\bin;C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0"
     'GIT_CONFIG_NOSYSTEM=1'
 ) | Set-Content -Encoding ascii -Path (Join-Path $runner '.env')
