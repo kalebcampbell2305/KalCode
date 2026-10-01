@@ -48,7 +48,10 @@ $npmPrefix = Join-Path $ciHome 'npm'
 
 # 3. Toolchain the account owns: rustup (the repo's rust-toolchain.toml picks the channel on
 #    first use), pnpm pinned to the repo's packageManager.
-$rustupInit = Join-Path $env:TEMP 'kalcode-ci-rustup-init.exe'
+# rustup picks its behaviour from its file name, so it must stay rustup-init.exe.
+$rustupDir = Join-Path $env:TEMP 'kalcode-ci-rustup'
+New-Item -ItemType Directory -Force -Path $rustupDir | Out-Null
+$rustupInit = Join-Path $rustupDir 'rustup-init.exe'
 Invoke-WebRequest -UseBasicParsing -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $rustupInit
 & $rustupInit -y --no-modify-path --profile minimal --default-toolchain stable -c rustfmt -c clippy | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "rustup-init failed ($LASTEXITCODE)" }
