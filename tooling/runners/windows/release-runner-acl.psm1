@@ -309,7 +309,7 @@ function Set-ReleaseRunnerOwnerOnlyAcl {
         Set-ItemOwnerOnlySecurityDescriptor -Item $item -OwnerSid $OwnerSid
     }
 
-    Assert-ReleaseRunnerOwnerOnlyAcl -Root $Root -ApprovedRoot $ApprovedRoot -OwnerSid $OwnerSid | Out-Null
+    Assert-ReleaseRunnerOwnerOnlyAcl -Root $Root -ApprovedRoot $ApprovedRoot -OwnerSid $OwnerSid -RequireProtected | Out-Null
 }
 
 function Assert-ReleaseRunnerOwnerOnlyAcl {
@@ -317,7 +317,8 @@ function Assert-ReleaseRunnerOwnerOnlyAcl {
     param(
         [Parameter(Mandatory)][string]$Root,
         [string]$ApprovedRoot = $script:ApprovedReleaseRunnerRoot,
-        [System.Security.Principal.SecurityIdentifier]$OwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        [System.Security.Principal.SecurityIdentifier]$OwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+        [switch]$RequireProtected
     )
 
     $allowed = @{}
@@ -330,7 +331,7 @@ function Assert-ReleaseRunnerOwnerOnlyAcl {
         if ($actualOwner.Value -ne $OwnerSid.Value) {
             throw "Unexpected owner on release-runner item: $($item.FullName)"
         }
-        if (-not $acl.AreAccessRulesProtected) {
+        if ($RequireProtected -and -not $acl.AreAccessRulesProtected) {
             throw "ACL inheritance remains enabled on release-runner item: $($item.FullName)"
         }
 
@@ -343,7 +344,7 @@ function Assert-ReleaseRunnerOwnerOnlyAcl {
             if (-not $allowed.ContainsKey($rule.IdentityReference.Value) -or
                 $seen.ContainsKey($rule.IdentityReference.Value) -or
                 $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
-                $rule.IsInherited -or
+                ($RequireProtected -and $rule.IsInherited) -or
                 $rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
                 throw "Unexpected ACL rule on release-runner item: $($item.FullName)"
             }
@@ -364,7 +365,8 @@ function Assert-ReleaseRunnerOwnerOnlyAcl {
         Root = Get-CanonicalRunnerRoot -Root $Root -ApprovedRoot $ApprovedRoot
         ItemCount = $items.Count
         OwnerSid = $OwnerSid.Value
-        Protected = $true
+        Protected = @($items | Where-Object { -not (Get-Acl -LiteralPath $_.FullName).AreAccessRulesProtected }).Count -eq 0
+        EffectiveAclRestricted = $true
     }
 }
 

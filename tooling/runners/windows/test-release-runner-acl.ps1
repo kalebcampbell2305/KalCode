@@ -92,13 +92,25 @@ try {
 
     Assert-ApprovedReleaseRunnerRoot -Root $testRoot -ApprovedRoot $testRoot | Out-Null
     Set-ReleaseRunnerOwnerOnlyAcl -Root $testRoot -ApprovedRoot $testRoot -ProcessSnapshot @() -ProcessTreeSnapshot @() -ServiceSnapshot @()
-    $status = Assert-ReleaseRunnerOwnerOnlyAcl -Root $testRoot -ApprovedRoot $testRoot
+    $status = Assert-ReleaseRunnerOwnerOnlyAcl -Root $testRoot -ApprovedRoot $testRoot -RequireProtected
     if ($status.ItemCount -ne 6) { throw "Unexpected verified item count: $($status.ItemCount)" }
     if ([System.IO.File]::ReadAllText($credential) -ne $before.Credential -or
         [System.IO.File]::ReadAllText($guard) -ne $before.Guard -or
         [System.IO.File]::ReadAllText($nestedFile) -ne $before.Nested) {
         throw 'ACL repair changed file contents.'
     }
+
+    $runtimeFile = Join-Path $nested.FullName 'runtime-created.log'
+    [System.IO.File]::WriteAllText($runtimeFile, 'runtime sentinel')
+    $runtimeAcl = Get-Acl -LiteralPath $runtimeFile
+    if ($runtimeAcl.AreAccessRulesProtected) { throw 'Runtime regression fixture did not inherit its safe parent ACL.' }
+    Assert-ReleaseRunnerOwnerOnlyAcl -Root $testRoot -ApprovedRoot $testRoot | Out-Null
+    $strictRejectedInherited = $false
+    try { Assert-ReleaseRunnerOwnerOnlyAcl -Root $testRoot -ApprovedRoot $testRoot -RequireProtected | Out-Null } catch {
+        $strictRejectedInherited = $_.Exception.Message -like '*inheritance remains enabled*'
+    }
+    if (-not $strictRejectedInherited) { throw 'Strict setup verification accepted a runtime-inherited ACL.' }
+    Set-ReleaseRunnerOwnerOnlyAcl -Root $testRoot -ApprovedRoot $testRoot -ProcessSnapshot @() -ProcessTreeSnapshot @() -ServiceSnapshot @()
 
     $outsideSentinel = Join-Path $outside 'sentinel.txt'
     [System.IO.File]::WriteAllText($outsideSentinel, 'outside sentinel')

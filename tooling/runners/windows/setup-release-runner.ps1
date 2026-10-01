@@ -58,6 +58,6 @@ $startup = [Environment]::GetFolderPath('Startup')
 "@start `"KalCode release runner`" /min `"$Runner\run.cmd`"" |
     Set-Content -Encoding ascii -Path (Join-Path $startup 'kalcode-release-runner.cmd')
 Set-ReleaseRunnerOwnerOnlyAcl -Root $Runner -ApprovedRoot $approvedRunner
-$aclStatus = Assert-ReleaseRunnerOwnerOnlyAcl -Root $Runner -ApprovedRoot $approvedRunner
+$aclStatus = Assert-ReleaseRunnerOwnerOnlyAcl -Root $Runner -ApprovedRoot $approvedRunner -RequireProtected
 Write-Host "Release runner ready at $Runner (guard: $guard). It starts at sign-in; start it now with $Runner\run.cmd."
 Write-Host "Release runner ACL verified for $($aclStatus.ItemCount) items."
