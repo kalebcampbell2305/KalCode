@@ -91,7 +91,7 @@ export function servedStableRelease(manifest: ReleaseManifest): ReleaseManifest[
 /**
  * The version that release-scoped copy names ("Gemini CLI is unavailable in 0.1.6", "threads in
  * 0.1.6 run in Plan, Approve or Auto"): the served Stable release, else 0.1.6, the release that copy
- * was written for. Both facts are unchanged in 0.1.7.
+ * was written for. Both facts are unchanged in 0.1.7 and 0.1.8.
  */
 export function releaseCopyVersion(manifest: ReleaseManifest): string {
   return servedStableRelease(manifest)?.version ?? "0.1.6";
