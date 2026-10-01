@@ -6,7 +6,7 @@
 //! crate has no backtracking), value readers scan forward from a match, and range lookups use
 //! sorted vectors.
 
-use std::sync::LazyLock;
+use std::{collections::HashSet, sync::LazyLock};
 
 use regex::Regex;
 
@@ -1044,9 +1044,13 @@ const ENTROPY_THRESHOLD: f64 = 4.0;
 /// The shared entropy heuristic with the same false-positive controls, in one linear pass:
 /// `data:` URI ranges are sorted and walked with a cursor instead of being searched for every
 /// candidate.
-pub fn entropy_findings(text: &str) -> Vec<Finding> {
+pub fn entropy_findings(text: &str, format_findings: &[Finding]) -> Vec<Finding> {
     let bytes = text.as_bytes();
     let data_uris = data_uri_ranges(text);
+    let format_starts: HashSet<usize> = format_findings
+        .iter()
+        .map(|finding| finding.start)
+        .collect();
     let mut uri = 0usize;
     let mut findings = Vec::new();
     let mut i = 0;
@@ -1063,7 +1067,7 @@ pub fn entropy_findings(text: &str) -> Vec<Finding> {
         let end = i;
         let after_previous = previous_end;
         previous_end = end;
-        if !(ENTROPY_MIN_LEN..=ENTROPY_MAX_LEN).contains(&(end - start)) {
+        if end - start < ENTROPY_MIN_LEN {
             continue;
         }
         while uri < data_uris.len() && data_uris[uri].1 < end {
@@ -1075,7 +1079,7 @@ pub fn entropy_findings(text: &str) -> Vec<Finding> {
         if !in_value_position(bytes, after_previous, start, end) {
             continue;
         }
-        if is_integrity_prefixed(bytes, start) || is_non_secret_token(&text[start..end]) {
+        if is_integrity_prefixed(bytes, start) {
             continue;
         }
         // A placeholder cut this token short: the scan that wrote it judged the whole token, so
@@ -1083,13 +1087,61 @@ pub fn entropy_findings(text: &str) -> Vec<Finding> {
         if text[end..].starts_with("[REDACTED") {
             continue;
         }
-        findings.push(finding(ENTROPY_DETECTOR, start, end, Confidence::Medium));
+        if end - start <= ENTROPY_MAX_LEN && !is_non_secret_token(&text[start..end]) {
+            findings.push(finding(ENTROPY_DETECTOR, start, end, Confidence::Medium));
+        } else {
+            let Some(prefix_end) =
+                exposed_format_prefix(text, after_previous, start, end, &format_starts)
+            else {
+                continue;
+            };
+            // A format finding will replace the suffix with `[REDACTED:...]`, which terminates
+            // this token. Detect the high-entropy prefix now so that the first and second
+            // redaction passes agree without splitting all opaque tokens at internal `=`.
+            findings.push(finding(
+                ENTROPY_DETECTOR,
+                start,
+                prefix_end,
+                Confidence::Medium,
+            ));
+        }
     }
     findings
 }
 
 fn is_token_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'_' | b'-')
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'_' | b'-' | b'=')
+}
+
+fn exposed_format_prefix(
+    text: &str,
+    floor: usize,
+    start: usize,
+    end: usize,
+    format_starts: &HashSet<usize>,
+) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let before = bytes[floor..start]
+        .iter()
+        .rev()
+        .find(|byte| **byte != b' ' && **byte != b'\t');
+    if !matches!(before, Some(b'=') | Some(b':')) {
+        return None;
+    }
+    let mut longest = None;
+    for separator in start..end {
+        let prefix_len = separator + 1 - start;
+        if bytes[separator] != b'=' || !(ENTROPY_MIN_LEN..=ENTROPY_MAX_LEN).contains(&prefix_len) {
+            continue;
+        }
+        if !format_starts.contains(&(separator + 1))
+            || is_non_secret_token(&text[start..=separator])
+        {
+            continue;
+        }
+        longest = Some(separator + 1);
+    }
+    longest
 }
 
 /// Quoted literal or the value after `=` / `:`. Looks back only to the previous token, so the

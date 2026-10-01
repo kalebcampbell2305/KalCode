@@ -303,6 +303,14 @@ pub enum EventPayload {
         message_id: String,
         role: crate::threads::MessageRole,
     },
+    /// A provider turn ended. Unlike thread status, this is the durable execution boundary for
+    /// one submitted agent task; `interrupted` distinguishes an owner halt from provider failure.
+    #[serde(rename = "agent.turn_completed")]
+    AgentTurnCompleted {
+        thread_id: String,
+        ok: bool,
+        interrupted: bool,
+    },
     #[serde(rename = "tool.requested")]
     ToolRequested {
         thread_id: String,
@@ -341,6 +349,15 @@ pub enum EventPayload {
         thread_id: Option<String>,
         path: String,
     },
+    /// An Operations command explicitly reported a workspace-relative output that native code
+    /// verified as a present regular file. This is reported provenance, not a claim that the
+    /// command created or modified the file.
+    #[serde(rename = "operation.artifact_reported")]
+    OperationArtifactReported { path: String },
+    /// A command placed an artifact report at its app-owned handoff path, but native validation
+    /// rejected it. `code` is a bounded stable reason; report contents are never persisted.
+    #[serde(rename = "operation.artifact_report_rejected")]
+    OperationArtifactReportRejected { code: String },
 
     // ---- Permissions (Z4) ----
     #[serde(rename = "approval.requested")]
@@ -644,6 +661,7 @@ impl EventPayload {
             Self::ThreadUnarchived { .. } => "thread.unarchived",
             Self::ThreadAccountChanged { .. } => "thread.account_changed",
             Self::AgentMessage { .. } => "agent.message",
+            Self::AgentTurnCompleted { .. } => "agent.turn_completed",
             Self::ToolRequested { .. } => "tool.requested",
             Self::ToolStarted { .. } => "tool.started",
             Self::ToolCompleted { .. } => "tool.completed",
@@ -651,6 +669,8 @@ impl EventPayload {
             Self::FileCreated { .. } => "file.created",
             Self::FileModified { .. } => "file.modified",
             Self::FileDeleted { .. } => "file.deleted",
+            Self::OperationArtifactReported { .. } => "operation.artifact_reported",
+            Self::OperationArtifactReportRejected { .. } => "operation.artifact_report_rejected",
             Self::ApprovalRequested { .. } => "approval.requested",
             Self::ApprovalApproved { .. } => "approval.approved",
             Self::ApprovalDenied { .. } => "approval.denied",
@@ -869,6 +889,11 @@ mod tests {
                 message_id: s(),
                 role: MessageRole::Assistant,
             },
+            EventPayload::AgentTurnCompleted {
+                thread_id: s(),
+                ok: true,
+                interrupted: false,
+            },
             EventPayload::ToolRequested {
                 thread_id: s(),
                 tool_call_id: s(),
@@ -900,6 +925,8 @@ mod tests {
                 thread_id: None,
                 path: s(),
             },
+            EventPayload::OperationArtifactReported { path: s() },
+            EventPayload::OperationArtifactReportRejected { code: s() },
             EventPayload::ApprovalRequested {
                 request_id: s(),
                 thread_id: s(),
@@ -1134,7 +1161,25 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 80);
+        assert_eq!(samples.len(), 83);
+    }
+
+    #[test]
+    fn agent_turn_completed_uses_a_stable_content_free_wire_shape() {
+        let completed = EventPayload::AgentTurnCompleted {
+            thread_id: "thread".into(),
+            ok: false,
+            interrupted: true,
+        };
+        let json = serde_json::to_value(&completed).expect("serialize turn completion");
+        assert_eq!(json["type"], "agent.turn_completed");
+        assert_eq!(json["payload"]["threadId"], "thread");
+        assert_eq!(json["payload"]["ok"], false);
+        assert_eq!(json["payload"]["interrupted"], true);
+        assert_eq!(
+            serde_json::from_value::<EventPayload>(json).expect("round trip"),
+            completed
+        );
     }
 
     #[test]

@@ -59,8 +59,11 @@ it("mounts Stable KalVoice navigation, provider, widget and Settings when the sp
   const user = await mountStable();
   const primary = within(screen.getByRole("navigation", { name: "Primary" }));
   expect(primary.getByRole("button", { name: "KalVoice" })).toBeInTheDocument();
+  expect(primary.getByRole("button", { name: "Operations" })).toBeInTheDocument();
   expect(await screen.findByRole("region", { name: "KalVoice widget" })).toBeInTheDocument();
   expect(primary.queryByRole("button", { name: "Agents" })).toBeNull();
+  await user.click(primary.getByRole("button", { name: "Operations" }));
+  expect(await screen.findByRole("heading", { name: "Operations", level: 1 })).toBeInTheDocument();
   await user.click(primary.getByRole("button", { name: "KalVoice" }));
   expect(await screen.findByRole("heading", { name: "KalVoice", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Type a request for KalVoice" })).toBeInTheDocument();

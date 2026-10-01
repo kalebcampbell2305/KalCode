@@ -266,6 +266,13 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "Thread account switched", detail: event.payload.accountLabel, tone: "idle" };
     case "agent.message":
       return { title: event.payload.role === "user" ? "Message sent" : "Message received", detail: null, tone: "idle" };
+    case "agent.turn_completed":
+      if (event.payload.interrupted) {
+        return { title: "Agent turn interrupted", detail: null, tone: "waiting" };
+      }
+      return event.payload.ok
+        ? { title: "Agent turn completed", detail: null, tone: "success" }
+        : { title: "Agent turn failed", detail: null, tone: "danger" };
     case "tool.requested":
       return { title: "Tool requested", detail: event.payload.summary, tone: "live" };
     case "tool.started":
@@ -280,6 +287,10 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "File changed", detail: event.payload.path, tone: "idle" };
     case "file.deleted":
       return { title: "File deleted", detail: event.payload.path, tone: "waiting" };
+    case "operation.artifact_reported":
+      return { title: "Operation artifact reported", detail: event.payload.path, tone: "success" };
+    case "operation.artifact_report_rejected":
+      return { title: "Operation artifact report rejected", detail: null, tone: "danger" };
     case "approval.requested":
       return { title: "Approval needed", detail: event.payload.summary, tone: "waiting" };
     case "approval.approved":

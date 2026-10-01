@@ -86,6 +86,8 @@ one-to-one (`EventPayload::from(GitEvent)`, `EventPayload::from(ContextEvent)`,
 | `tool.started` / `.completed` | 1 | I (Z3) | `{ threadId, toolCallId }` |
 | `tool.failed` | 1 | I (Z3) | `{ threadId, toolCallId, summary? }` |
 | `file.created` / `.modified` / `.deleted` | 1 | I (Z3) | `{ threadId?, path }` — workspace-relative where possible |
+| `operation.artifact_reported` | 1 | I (Operations) | `{ path }` — an exact Operations command reported a workspace-relative regular file and native code verified it; this does not claim creation |
+| `operation.artifact_report_rejected` | 1 | I (Operations) | `{ code }` — bounded reason only; report contents and unsafe paths are not persisted |
 | `approval.requested` | 1 | I (Z4) | `{ requestId, threadId, scopes, summary }` — the engine asked; the thread waits |
 | `approval.approved` | 1 | I (Z4) | `{ requestId, threadId, decision }` — answered by the user only |
 | `approval.denied` / `.expired` | 1 | I (Z4) | `{ requestId, threadId }` — expired: thread stopped or interrupted, superseded, mode changed, restart, answered in the provider |

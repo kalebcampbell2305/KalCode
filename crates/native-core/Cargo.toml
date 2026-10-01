@@ -21,6 +21,7 @@ uuid.workspace = true
 time.workspace = true
 rusqlite = { workspace = true, features = ["bundled", "backup"] }
 sha2 = "0.10"
+same-file = "1"
 regex = "1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
 tracing-appender = "0.2"
@@ -29,6 +30,9 @@ ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

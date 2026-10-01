@@ -74,7 +74,7 @@ interface EventLite {
 }
 
 /** The schema version this build migrates to (through v19 KalVoice account usage). */
-const LATEST = 19;
+const LATEST = 20;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));

@@ -3,4 +3,4 @@
 /**
  * Top-level product surfaces (navigation, feature flags, KalVoice navigation commands).
  */
-export type SurfaceId = "dashboard" | "kalvoice" | "code" | "threads" | "agents" | "missions" | "automations" | "skills" | "plugins" | "memory" | "providers" | "settings" | "command_center";
+export type SurfaceId = "dashboard" | "operations" | "kalvoice" | "code" | "threads" | "agents" | "missions" | "automations" | "skills" | "plugins" | "memory" | "providers" | "settings" | "command_center";

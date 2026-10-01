@@ -119,6 +119,32 @@ fn create_starts_a_session_and_records_the_lifecycle() {
     assert!(!json.contains("OAuth callback race"));
 }
 
+#[test]
+fn operation_thread_uses_reserved_id_and_never_replays_on_collision() {
+    let h = Harness::new();
+    let operation_id = new_id();
+    let request = h.request("run the queued operation exactly once");
+
+    let thread = h
+        .runtime
+        .create_reviewed_for_operation(&operation_id, request.clone(), None)
+        .expect("create reserved operation thread");
+    assert_eq!(thread.id, operation_id);
+    assert_eq!(h.provider.session_count(), 1);
+
+    assert!(
+        h.runtime
+            .create_reviewed_for_operation(&operation_id, request, None)
+            .is_err(),
+        "a durable id collision must fail closed"
+    );
+    assert_eq!(
+        h.provider.session_count(),
+        1,
+        "a duplicate operation id must not start another provider session"
+    );
+}
+
 fn secret_shaped_prompt() -> String {
     let value = ["deterministic", "Q7x", "private", "value"].join("-");
     ["password", "=", &value].concat()
@@ -335,6 +361,57 @@ fn status_follows_structured_events_only() {
             (ThreadStatus::Active, ThreadStatus::Thinking),
             (ThreadStatus::Thinking, ThreadStatus::Testing),
             (ThreadStatus::Testing, ThreadStatus::Idle),
+        ]
+    );
+}
+
+#[test]
+fn turn_completion_events_preserve_provider_result_and_owner_interruption() {
+    let h = Harness::new();
+    let id = started(&h, "first turn");
+    let session = h.provider.last_session();
+
+    session.emit(AgentEvent::TurnCompleted { ok: true });
+    wait_status(&h, &id, ThreadStatus::Idle);
+    h.runtime
+        .send(&id, "second turn")
+        .expect("send second turn");
+    h.runtime.pause(&id).expect("pause second turn");
+    wait_until("two durable turn completions", || {
+        h.events_for(&id)
+            .iter()
+            .filter(|event| matches!(event.event, EventPayload::AgentTurnCompleted { .. }))
+            .count()
+            == 2
+    });
+
+    let completions = h
+        .events_for(&id)
+        .into_iter()
+        .filter_map(|event| match event.event {
+            EventPayload::AgentTurnCompleted {
+                thread_id,
+                ok,
+                interrupted,
+            } => Some((thread_id, ok, interrupted, event.source)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completions,
+        [
+            (
+                id.clone(),
+                true,
+                false,
+                kalcode_contracts::events::EventSource::Provider
+            ),
+            (
+                id,
+                false,
+                true,
+                kalcode_contracts::events::EventSource::Provider
+            ),
         ]
     );
 }

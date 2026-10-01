@@ -60,6 +60,8 @@ use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
+// The reducer also owns shared session reset state; only Windows/macOS have Fn input adapters.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 #[path = "kalvoice_fn_key.rs"]
 // Linux has no Fn adapter, so only the platform-independent gesture tests reach it there.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
@@ -681,6 +683,7 @@ pub(crate) fn surface_label(surface: SurfaceId) -> &'static str {
         SurfaceId::Providers => "Providers",
         SurfaceId::Settings => "Settings",
         SurfaceId::CommandCenter => "the Command Center",
+        SurfaceId::Operations => "Operations",
     }
 }
 

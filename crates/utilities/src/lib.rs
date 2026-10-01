@@ -25,9 +25,11 @@
 pub mod env;
 pub mod files;
 pub mod http;
+pub mod operation_evidence;
 pub mod ports;
 pub mod processes;
 pub mod regex_lab;
+pub mod services;
 pub mod sqlite;
 pub mod store;
 pub mod types;
