@@ -28,6 +28,16 @@ interface Entry extends LineState {
 }
 
 const entries = new Map<string, Entry>();
+/**
+ * When this window started watching terminals. Nothing before it was seen (a reload or a fresh
+ * window forgets typed text and timing), so KalTidy treats every terminal as used at this moment.
+ */
+let watchingSince = Date.now();
+
+/** Since when this window has seen terminal activity (epoch ms). */
+export function activityWatchedSince(): number {
+  return watchingSince;
+}
 
 const EMPTY: TerminalActivity = { lastOutputAt: null, lastInputAt: null, unsent: false };
 
@@ -171,6 +181,7 @@ export function forgetTerminalActivity(terminalId: string): void {
   entries.delete(terminalId);
 }
 
-export function resetTerminalActivityForTests(): void {
+export function resetTerminalActivityForTests(since = Date.now()): void {
   entries.clear();
+  watchingSince = since;
 }

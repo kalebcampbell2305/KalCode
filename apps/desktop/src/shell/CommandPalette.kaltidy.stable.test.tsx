@@ -29,6 +29,8 @@ beforeEach(() => {
     },
   );
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: () => {} });
+  // This window has watched the terminals for an hour (no reload grace period).
+  resetTerminalActivityForTests(Date.now() - 60 * 60_000);
 });
 afterEach(() => {
   resetAccountIntentForTests();

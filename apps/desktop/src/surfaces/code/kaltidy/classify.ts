@@ -2,6 +2,7 @@ import type { OperationsSnapshot, TerminalInfo } from "@kalcode/protocol";
 import type { ProcessInfo } from "../../../ipc/utilities.ts";
 import type { TerminalActivity } from "./activity.ts";
 import type { KalTidyClass } from "./kalTidyContext.ts";
+import type { ScreenState } from "./screen.ts";
 
 /**
  * KalTidy's classifier (pure). Conservative by construction: a terminal is `idle` only when every
@@ -19,9 +20,14 @@ import type { KalTidyClass } from "./kalTidyContext.ts";
  *  7. Hosts a development service, or something in it listens on a port → `background`.
  *  8. Programs run under the shell: busy (CPU above {@link ACTIVE_CPU_PERCENT} or output in the
  *     last {@link ACTIVE_OUTPUT_MS}) → `active`; quiet → `waiting` (likely waiting for input).
- *  9. Text typed at the prompt without Enter → `waiting` (work that would be lost).
- * 10. Used (input, output or started) within {@link QUIET_MS} → `active`.
- * 11. Otherwise → `idle`: a shell at its prompt, nothing typed, quiet for {@link QUIET_MS}.
+ *  9. The shell itself is busy (its own CPU above {@link ACTIVE_CPU_PERCENT}: a script, a loop)
+ *     → `active`.
+ * 10. Text typed at the prompt without Enter → `waiting` (work that would be lost).
+ * 11. The screen doesn't show the shell back at its prompt (a silent script, `Read-Host`,
+ *     `read`, `Get-Content -Wait`, a sourced script; see `screen.ts`) → `waiting`.
+ * 12. Used (input, output or started) within {@link QUIET_MS}, or this window has watched it
+ *     for less than that (a reload forgets what was typed) → `active`.
+ * 13. Otherwise → `idle`: a shell at its prompt, nothing typed, quiet for {@link QUIET_MS}.
  */
 
 /** A terminal counts as idle only after this long without input or output (2 minutes). */
@@ -50,6 +56,8 @@ export interface TidyEntry {
   cls: KalTidyClass;
   /** One short reason ("Running vite dev server on :5173", "Quiet for 14 min"). */
   reason: string;
+  /** The shell process the scan saw (null when it wasn't running): a stop re-checks it. */
+  root: { pid: number; generation: number | null } | null;
 }
 
 export interface TidyScan {
@@ -71,6 +79,10 @@ export interface TidyInputs {
   activity: (terminalId: string) => TerminalActivity;
   /** The terminal the person is working in right now (Code's focused pane), if any. */
   focusedTerminalId: string | null;
+  /** What each running terminal's screen shows; null when it couldn't be read. */
+  screens: (terminalId: string) => ScreenState | null;
+  /** Since when this window has watched terminal activity (epoch ms). */
+  watchedSince: number;
   now: number;
 }
 
@@ -115,7 +127,13 @@ export function workUnderShell(terminal: TerminalInfo, tree: readonly ProcessInf
   return tree.filter((p) => p.pid !== root.pid && p.pid !== shellPid && !CONSOLE_HOSTS.has(p.name.toLowerCase()));
 }
 
-function classifyOne(terminal: TidyTerminal, inputs: TidyInputs, blocked: string | null): Omit<TidyEntry, "terminal"> {
+type Verdict = Pick<TidyEntry, "cls" | "reason">;
+
+function shellRoot(tree: readonly ProcessInfo[]): ProcessInfo | undefined {
+  return tree.find((p) => p.terminalGeneration !== null);
+}
+
+function classifyOne(terminal: TidyTerminal, inputs: TidyInputs, blocked: string | null): Verdict {
   const { processes, operations, now } = inputs;
   if (blocked || !processes || !operations) {
     return { cls: "protected", reason: "Couldn't check this terminal, so it stays" };
@@ -153,7 +171,7 @@ function classifyOne(terminal: TidyTerminal, inputs: TidyInputs, blocked: string
     };
   }
 
-  const root = tree.find((p) => p.terminalGeneration !== null);
+  const root = shellRoot(tree);
   if (!root) return { cls: "protected", reason: "Couldn't see its shell process, so it stays" };
 
   const service = operations.services.find(
@@ -181,9 +199,23 @@ function classifyOne(terminal: TidyTerminal, inputs: TidyInputs, blocked: string
     return { cls: "waiting", reason: `${names} is open and quiet — may be waiting for input` };
   }
 
+  const shellCpu = root.cpuPercent ?? 0;
+  if (shellCpu > ACTIVE_CPU_PERCENT) {
+    return { cls: "active", reason: `Shell is busy (${shellCpu.toFixed(1)}% CPU)` };
+  }
+
   if (activity.unsent) return { cls: "waiting", reason: "Unsent input at the prompt" };
 
+  const screen = inputs.screens(terminal.id);
+  if (!screen) return { cls: "waiting", reason: "Couldn't read its screen, so it stays" };
+  if (!screen.atPrompt) {
+    return { cls: "waiting", reason: "Command may still be running or waiting for input" };
+  }
+
   const started = parseTime(terminal.startedAt) ?? 0;
+  if (now - inputs.watchedSince < QUIET_MS && inputs.watchedSince >= Math.max(lastUse, started)) {
+    return { cls: "active", reason: "No activity seen since KalCode reopened" };
+  }
   const quietSince = Math.max(lastUse, started);
   if (now - quietSince < QUIET_MS) return { cls: "active", reason: `Used ${formatAgo(now - quietSince)} ago` };
   return {
@@ -201,8 +233,29 @@ export function classifyTerminals(inputs: TidyInputs): TidyScan {
   const blocked =
     problems.length > 0 ? `KalCode couldn't check what your terminals are running: ${problems.join("; ")}.` : null;
   return {
-    entries: inputs.terminals.map((terminal) => ({ terminal, ...classifyOne(terminal, inputs, blocked) })),
+    entries: inputs.terminals.map((terminal) => {
+      const root = shellRoot(inputs.processes?.filter((p) => p.terminalId === terminal.id) ?? []);
+      return {
+        terminal,
+        ...classifyOne(terminal, inputs, blocked),
+        root: root ? { pid: root.pid, generation: root.terminalGeneration } : null,
+      };
+    }),
     blocked,
     at: inputs.now,
   };
+}
+
+/**
+ * Re-checks a terminal right before KalTidy stops it, against a fresh process scan: it must
+ * still be the same shell (same process and generation; an ended one must not have restarted),
+ * and one stopped as idle must still have nothing running under it and a quiet shell.
+ */
+export function stillSafeToStop(entry: TidyEntry, fresh: readonly ProcessInfo[]): boolean {
+  const tree = fresh.filter((p) => p.terminalId === entry.terminal.id);
+  const root = shellRoot(tree);
+  if (!entry.root) return !root;
+  if (!root || root.pid !== entry.root.pid || root.terminalGeneration !== entry.root.generation) return false;
+  if (entry.cls !== "idle") return true;
+  return workUnderShell(entry.terminal, tree, root).length === 0 && (root.cpuPercent ?? 0) <= ACTIVE_CPU_PERCENT;
 }

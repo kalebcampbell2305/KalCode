@@ -1,5 +1,6 @@
 import { type ToastTone, useToast } from "@kalcode/ui/components";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import type { KalCodeClient } from "../../../ipc/client.ts";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { OperationsClient } from "../../../ipc/operations.ts";
 import { type ProcessList, UtilityClient } from "../../../ipc/utilities.ts";
@@ -7,13 +8,42 @@ import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../../runtime/WorkspaceProvider.tsx";
 import { tabLabels } from "../../../runtime/workspaceState.ts";
 import { useNavigation } from "../../../shell/navigation.tsx";
-import { forgetTerminalActivity, terminalActivity } from "./activity.ts";
-import { classifyTerminals, type TidyEntry, type TidyScan, type TidyTerminal } from "./classify.ts";
+import { activityWatchedSince, forgetTerminalActivity, terminalActivity } from "./activity.ts";
+import { classifyTerminals, stillSafeToStop, type TidyEntry, type TidyScan, type TidyTerminal } from "./classify.ts";
 import { KalTidyDialog } from "./KalTidyDialog.tsx";
 import { type KalTidyApi, KalTidyContext, type KalTidyOutcome } from "./kalTidyContext.ts";
+import { type ScreenState, screenFromReplay } from "./screen.ts";
 
 /** CPU becomes measurable on the sampler's second reading; wait this long before taking it. */
 const CPU_RESAMPLE_MS = 350;
+/** How long KalTidy waits for a terminal's scrollback before treating its screen as unreadable. */
+const SCREEN_TIMEOUT_MS = 2_000;
+
+/**
+ * Reads a running terminal's screen from its native scrollback: a brief extra attachment (the
+ * same stream a terminal view uses) whose first message is the replay, detached right away.
+ * Works for terminals no view shows and after a window reload. Null when unreadable.
+ */
+async function readScreen(client: KalCodeClient, terminalId: string): Promise<ScreenState | null> {
+  let received: (bytes: Uint8Array) => void = () => undefined;
+  const replay = new Promise<Uint8Array>((resolve) => {
+    received = resolve;
+  });
+  let attachment: number | null = null;
+  try {
+    attachment = await client.attachTerminal(terminalId, (bytes) => received(bytes));
+    if (attachment === null) return null;
+    const bytes = await Promise.race([
+      replay,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), SCREEN_TIMEOUT_MS)),
+    ]);
+    return bytes ? screenFromReplay(bytes) : null;
+  } catch {
+    return null;
+  } finally {
+    if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
+  }
+}
 
 function terminalsWord(n: number): string {
   return n === 1 ? "1 terminal" : `${n} terminals`;
@@ -89,7 +119,13 @@ export function KalTidyProvider({ children }: { children: ReactNode }) {
       await new Promise((resolve) => setTimeout(resolve, CPU_RESAMPLE_MS));
       return utilities.processes("related");
     };
-    const [processes, snapshot] = await Promise.allSettled([sample(), operations.snapshot()]);
+    const screens = new Map<string, ScreenState | null>();
+    const readScreens = Promise.all(
+      terminals
+        .filter((t) => t.status === "running")
+        .map(async (t) => screens.set(t.id, await readScreen(client, t.id))),
+    );
+    const [processes, snapshot] = await Promise.allSettled([sample(), operations.snapshot(), readScreens]);
     return classifyTerminals({
       terminals,
       processes: processes.status === "fulfilled" ? processes.value.processes : null,
@@ -98,22 +134,32 @@ export function KalTidyProvider({ children }: { children: ReactNode }) {
       operationsError: snapshot.status === "rejected" ? errorText(snapshot.reason) : null,
       activity: terminalActivity,
       focusedTerminalId: focused.current,
+      screens: (id) => screens.get(id) ?? null,
+      watchedSince: activityWatchedSince(),
       now: Date.now(),
     });
   }, [client, utilities, operations]);
 
   /**
    * Stops each terminal unless someone typed into it after `since` (or, for an idle one, left
-   * text at its prompt in the meantime).
+   * text at its prompt in the meantime), or a fresh process scan shows it changed: another
+   * shell (restarted), or, for an idle one, something now running in it. No fresh scan, no stop.
    */
   const stopAll = useCallback(
     async (targets: readonly TidyEntry[], since: number) => {
       let stopped = 0;
       let failed = 0;
       let changed = 0;
-      for (const { terminal, cls } of targets) {
+      const fresh = targets.length > 0 ? await utilities.processes("related").catch(() => null) : null;
+      for (const entry of targets) {
+        const { terminal, cls } = entry;
         const latest = terminalActivity(terminal.id);
-        if ((latest.lastInputAt ?? 0) > since || (cls === "idle" && latest.unsent)) {
+        if (
+          !fresh ||
+          !stillSafeToStop(entry, fresh.processes) ||
+          (latest.lastInputAt ?? 0) > since ||
+          (cls === "idle" && latest.unsent)
+        ) {
           changed += 1;
           continue;
         }
@@ -128,7 +174,7 @@ export function KalTidyProvider({ children }: { children: ReactNode }) {
       if (stopped + failed > 0) await refreshWorkspaces.current();
       return { stopped, failed, changed };
     },
-    [client],
+    [client, utilities],
   );
 
   const report = useCallback(

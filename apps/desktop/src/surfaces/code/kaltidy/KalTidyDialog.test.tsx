@@ -9,6 +9,7 @@ function entry(id: string, cls: KalTidyClass, reason: string): TidyEntry {
   return {
     cls,
     reason,
+    root: null,
     terminal: {
       id,
       workspaceId: "w1",

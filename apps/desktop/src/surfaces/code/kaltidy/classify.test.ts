@@ -8,9 +8,11 @@ import {
   formatAgo,
   PROCESS_SCAN_LIMIT,
   QUIET_MS,
+  stillSafeToStop,
   type TidyInputs,
   type TidyTerminal,
 } from "./classify.ts";
+import { type ScreenState, screenFromOutput } from "./screen.ts";
 
 const NOW = Date.parse("2026-10-01T12:00:00Z");
 const LONG_AGO = new Date(NOW - 60 * 60_000).toISOString();
@@ -126,6 +128,7 @@ function service(terminalId: string, patch: Partial<DevelopmentService> = {}): D
 }
 
 const NO_ACTIVITY: TerminalActivity = { lastOutputAt: null, lastInputAt: null, unsent: false };
+const AT_PROMPT: ScreenState = { line: "PS C:\\site> ", atPrompt: true };
 
 function classify(patch: Partial<TidyInputs> & Pick<TidyInputs, "terminals">) {
   return classifyTerminals({
@@ -133,6 +136,8 @@ function classify(patch: Partial<TidyInputs> & Pick<TidyInputs, "terminals">) {
     operations: { items: [], services: [] },
     activity: () => NO_ACTIVITY,
     focusedTerminalId: null,
+    screens: () => AT_PROMPT,
+    watchedSince: NOW - 24 * 60 * 60_000,
     now: NOW,
     ...patch,
   });
@@ -145,7 +150,7 @@ function only(patch: Partial<TidyInputs> & Pick<TidyInputs, "terminals">) {
 }
 
 describe("KalTidy classifier", () => {
-  it("rule 11: a shell at its prompt, nothing typed, quiet past the threshold, is idle", () => {
+  it("rule 13: a shell at its prompt, nothing typed, quiet past the threshold, is idle", () => {
     const t = terminal("t1");
     const entry = only({ terminals: [t], processes: [shell("t1")] });
     expect(entry?.cls).toBe("idle");
@@ -311,7 +316,41 @@ describe("KalTidy classifier", () => {
     expect(nested?.cls).toBe("waiting");
   });
 
-  it("rule 9: unsent input at the prompt is waiting (work that would be lost)", () => {
+  it("rule 9: a shell busy on its own (a script, no child processes) is active", () => {
+    const entry = only({ terminals: [terminal("t1")], processes: [shell("t1", { cpuPercent: 3.2 })] });
+    expect(entry).toMatchObject({ cls: "active", reason: "Shell is busy (3.2% CPU)" });
+  });
+
+  it("rule 11: a PowerShell script with no child processes, printing nothing, is waiting", () => {
+    // ./deploy.ps1 polling with Start-Sleep: the screen still shows the command line.
+    const screen = screenFromOutput("PS C:\\site> ./deploy.ps1\r\nPolling the release…\r\n");
+    expect(screen.atPrompt).toBe(false);
+    const entry = only({ terminals: [terminal("t1")], processes: [shell("t1")], screens: () => screen });
+    expect(entry).toMatchObject({ cls: "waiting", reason: "Command may still be running or waiting for input" });
+  });
+
+  it("rule 11: a Read-Host prompt is waiting", () => {
+    const screen = screenFromOutput("PS C:\\site> ./ask.ps1\r\nName: ");
+    expect(only({ terminals: [terminal("t1")], processes: [shell("t1")], screens: () => screen })?.cls).toBe("waiting");
+  });
+
+  it("rule 11: an unreadable screen is waiting", () => {
+    expect(only({ terminals: [terminal("t1")], processes: [shell("t1")], screens: () => null })?.cls).toBe("waiting");
+  });
+
+  it("rule 13: once the prompt has returned, the shell is idle", () => {
+    const screen = screenFromOutput("PS C:\\site> ./deploy.ps1\r\nDeployed.\r\nPS C:\\site> ");
+    expect(only({ terminals: [terminal("t1")], processes: [shell("t1")], screens: () => screen })?.cls).toBe("idle");
+  });
+
+  it("rule 12: after a reload, nothing is idle until the window has watched for the quiet threshold", () => {
+    const reopened = only({ terminals: [terminal("t1")], processes: [shell("t1")], watchedSince: NOW - 30_000 });
+    expect(reopened).toMatchObject({ cls: "active", reason: "No activity seen since KalCode reopened" });
+    const watched = only({ terminals: [terminal("t1")], processes: [shell("t1")], watchedSince: NOW - QUIET_MS });
+    expect(watched?.cls).toBe("idle");
+  });
+
+  it("rule 10: unsent input at the prompt is waiting (work that would be lost)", () => {
     const entry = only({
       terminals: [terminal("t1")],
       processes: [shell("t1")],
@@ -320,7 +359,7 @@ describe("KalTidy classifier", () => {
     expect(entry).toMatchObject({ cls: "waiting", reason: "Unsent input at the prompt" });
   });
 
-  it("rule 10: a terminal used within the quiet threshold is active", () => {
+  it("rule 12: a terminal used within the quiet threshold is active", () => {
     const typed = only({
       terminals: [terminal("t1")],
       processes: [shell("t1")],
@@ -347,6 +386,28 @@ describe("KalTidy classifier", () => {
       ["b", "waiting"],
       ["c", "idle"],
     ]);
+  });
+
+  it("re-checks the shell right before a stop", () => {
+    const root = shell("t1", { pid: 7, terminalGeneration: 3 });
+    const [entry] = classify({ terminals: [terminal("t1")], processes: [root] }).entries;
+    if (!entry) throw new Error("no entry");
+    expect(entry.root).toEqual({ pid: 7, generation: 3 });
+    expect(stillSafeToStop(entry, [root])).toBe(true);
+    // Restarted: another shell process or generation.
+    expect(stillSafeToStop(entry, [{ ...root, pid: 8 }])).toBe(false);
+    expect(stillSafeToStop(entry, [{ ...root, terminalGeneration: 4 }])).toBe(false);
+    // Something started in it, or the shell got busy, since the scan.
+    expect(stillSafeToStop(entry, [root, child(root, { name: "deploy.exe" })])).toBe(false);
+    expect(stillSafeToStop(entry, [{ ...root, cpuPercent: 9 }])).toBe(false);
+    // An ended terminal must not have restarted.
+    const [ended] = classify({
+      terminals: [terminal("t2", { status: "exited", endedAt: LONG_AGO })],
+      processes: [],
+    }).entries;
+    if (!ended) throw new Error("no entry");
+    expect(stillSafeToStop(ended, [])).toBe(true);
+    expect(stillSafeToStop(ended, [shell("t2")])).toBe(false);
   });
 
   it("formats durations", () => {
