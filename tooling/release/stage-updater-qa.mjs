@@ -35,6 +35,16 @@ import { releaseProcessOptions } from "./signing.mjs";
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[1-9]\d*)?$/;
+
+/**
+ * The public version a release version declares in its source authorities: an internal build
+ * "X.Y.Z+N" is stamped by the release build (Tauri overlay), never checked in, so the five
+ * authorities always declare the public "X.Y.Z" while the compiled selector names the full release.
+ */
+function publicVersionOf(version) {
+  return String(version).replace(/\+[1-9]\d*$/u, "");
+}
+
 const SOURCE_FILES = Object.freeze([
   "Cargo.lock",
   "Cargo.toml",
@@ -139,14 +149,20 @@ export function validateBaselineSourceSnapshot(snapshot) {
   ) {
     return [...problems, "baseline source snapshot must contain exactly the five canonical authorities"];
   }
+  // The authorities declare public versions; only the selector names the full candidate release.
+  const candidatePublic = publicVersionOf(candidateVersion);
+  const baselinePublic = publicVersionOf(baselineVersion);
+  if (candidatePublic === baselinePublic) {
+    problems.push("QA baseline must declare a lower public version than the candidate");
+  }
   const changedFiles = snapshot.changedFiles ?? SOURCE_FILES;
   if (JSON.stringify([...changedFiles].sort()) !== JSON.stringify([...SOURCE_FILES].sort())) {
     problems.push("baseline source diff contains a file outside the exact QA whitelist");
   }
   const cargoExpected = exactReplacement(
     candidateFiles["Cargo.toml"],
-    `version = "${candidateVersion}"`,
-    `version = "${baselineVersion}"`,
+    `version = "${candidatePublic}"`,
+    `version = "${baselinePublic}"`,
   );
   if (cargoExpected === null || cargoExpected !== baselineFiles["Cargo.toml"]) {
     problems.push("workspace package version change is not exact");
@@ -155,15 +171,15 @@ export function validateBaselineSourceSnapshot(snapshot) {
     ...jsonVersionOnly(
       candidateFiles["apps/desktop/package.json"],
       baselineFiles["apps/desktop/package.json"],
-      candidateVersion,
-      baselineVersion,
+      candidatePublic,
+      baselinePublic,
       "desktop package manifest",
     ),
     ...jsonVersionOnly(
       candidateFiles["apps/desktop/src-tauri/tauri.conf.json"],
       baselineFiles["apps/desktop/src-tauri/tauri.conf.json"],
-      candidateVersion,
-      baselineVersion,
+      candidatePublic,
+      baselinePublic,
       "Tauri configuration",
     ),
   );
@@ -173,8 +189,8 @@ export function validateBaselineSourceSnapshot(snapshot) {
     const expectedLock = mechanicalLockfile(
       candidateFiles["Cargo.lock"],
       workspacePackages,
-      candidateVersion,
-      baselineVersion,
+      candidatePublic,
+      baselinePublic,
     );
     if (expectedLock.changed === 0 || expectedLock.text !== baselineFiles["Cargo.lock"]) {
       problems.push("Cargo.lock has changes beyond mechanical workspace package versions");
