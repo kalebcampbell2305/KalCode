@@ -26,8 +26,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 # 1. The account: a standard user with a random password nobody keeps. Only the service
 #    control manager holds it.
-Add-Type -AssemblyName System.Web
-$password = [System.Web.Security.Membership]::GeneratePassword(40, 8)
+#    Letters and digits only: config.cmd is a batch file, so cmd metacharacters would break it.
+$alphabet = [char[]]'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+$bytes = New-Object byte[] 48
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$password = 'Kc7' + (-join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] }))
 $secure = ConvertTo-SecureString $password -AsPlainText -Force
 if (Get-LocalUser -Name $Account -ErrorAction SilentlyContinue) {
     Set-LocalUser -Name $Account -Password $secure -PasswordNeverExpires $true
