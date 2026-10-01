@@ -202,6 +202,71 @@ fn mac_install_attempt_can_only_be_created_in_prepared_phase() {
 }
 
 #[test]
+fn forward_only_mac_fence_changes_helper_attempt_identity_and_is_restart_idempotent() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("updater.json");
+    let mut mac_attempt = attempt();
+    mac_attempt.binding = Some(InstallBinding {
+        target: UpdateTarget::DarwinAarch64,
+        source_sha256: "c".repeat(64),
+        signing_requirement_sha256: "d".repeat(64),
+    });
+    mac_attempt.mac_swap = Some(MacSwapAttempt {
+        current_app: temp.path().join("KalCode.app"),
+        staged_app: temp.path().join(".KalCode-update-test.app"),
+        parent_pid: 42,
+        parent_identity_sha256: "e".repeat(64),
+        phase: MacSwapPhase::Prepared,
+    });
+    let mut journal = UpdateJournal::load(&path).unwrap();
+    journal.record_install_attempt(mac_attempt).unwrap();
+    journal
+        .mark_mac_swap_phase(MacSwapPhase::Prepared, MacSwapPhase::Swapped)
+        .unwrap();
+    journal
+        .mark_mac_swap_phase(MacSwapPhase::Swapped, MacSwapPhase::Launched)
+        .unwrap();
+    let captured_by_helper = journal.state().install_attempt.clone().unwrap();
+
+    journal.fence_forward_only_mac_install("0.1.6").unwrap();
+    let fenced = journal.state().install_attempt.clone().unwrap();
+    assert_ne!(fenced, captured_by_helper);
+    assert!(
+        fenced
+            .started_at
+            .starts_with(&captured_by_helper.started_at)
+    );
+
+    let mut reopened = UpdateJournal::load(&path).unwrap();
+    reopened.fence_forward_only_mac_install("0.1.6").unwrap();
+    assert_eq!(reopened.state().install_attempt.as_ref(), Some(&fenced));
+
+    assert_eq!(
+        reopened.reconcile_startup("0.1.6").unwrap(),
+        InstallOutcome::Updated
+    );
+    assert!(reopened.state().install_attempt.is_none());
+    assert_eq!(
+        reopened.state().last_successful_version.as_deref(),
+        Some("0.1.6")
+    );
+}
+
+#[test]
+fn forward_only_mac_fence_rejects_the_wrong_target_phase_or_version() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut journal = UpdateJournal::load(temp.path().join("updater.json")).unwrap();
+    journal.record_install_attempt(attempt()).unwrap();
+    assert_eq!(
+        journal
+            .fence_forward_only_mac_install("0.1.6")
+            .unwrap_err()
+            .code(),
+        "update_install_record_invalid"
+    );
+}
+
+#[test]
 fn journal_defaults_to_stable_and_survives_restart() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("updater.json");

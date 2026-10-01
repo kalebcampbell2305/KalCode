@@ -182,6 +182,48 @@ fn reconcile_core_startup(core: &Arc<Core>) -> kalcode_core::Result<(usize, u64)
     Ok((recovered, invalidated))
 }
 
+/// Opens Core only after the update recovery guard for a forward-only migration is durable.
+fn open_core_after_update_guard<T>(
+    guard: Result<(), kalcode_updater::UpdateError>,
+    open: impl FnOnce() -> kalcode_core::Result<T>,
+) -> kalcode_core::Result<T> {
+    guard.map_err(|error| {
+        KalError::new(
+            ErrorCategory::Update,
+            "update_rollback_guard_failed",
+            "KalCode couldn't safely prepare its data for this version. Restart KalCode and try again.",
+        )
+        .with_source(error)
+    })?;
+    open()
+}
+
+#[cfg(test)]
+mod update_guard_startup_tests {
+    use std::cell::Cell;
+
+    use super::open_core_after_update_guard;
+
+    #[test]
+    fn failed_update_guard_prevents_core_open() {
+        let open_calls = Cell::new(0);
+        let error = open_core_after_update_guard(
+            Err(kalcode_updater::UpdateError::new(
+                "update_state_unavailable",
+                "test guard failure",
+            )),
+            || {
+                open_calls.set(open_calls.get() + 1);
+                Ok(())
+            },
+        )
+        .expect_err("a failed durable guard must block Core::open");
+
+        assert_eq!(open_calls.get(), 0);
+        assert_eq!(error.code, "update_rollback_guard_failed");
+    }
+}
+
 fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
@@ -219,13 +261,29 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         tracing::warn!(event = "environment.webview_overrides_removed", variables = ?removed_overrides);
     }
 
+    // Every migration is forward-only, so before Core can apply one, raise the update rollback
+    // floor (and fence a just-launched macOS upgrade) so recovery never restores a build that
+    // can't open the migrated data. An unreadable schema is treated as a pending migration.
+    let migration_pending = kalcode_core::db::has_pending_migrations(
+        &state.paths.database,
+        kalcode_core::db::MIGRATIONS,
+    )
+    .unwrap_or_else(|error| {
+        tracing::warn!(event = "app.schema_check_failed", error_code = error.code);
+        true
+    });
+    let update_guard = updater_commands::guard_forward_only_schema_upgrade(
+        &state.paths.data_dir,
+        &version,
+        migration_pending,
+    );
     let config = CoreConfig {
         paths: state.paths.clone(),
         app_version: version,
         channel,
     };
     // Z7-W2: `open_core` is `Core::open` (plus the provisional v11 for the E2E suite only).
-    match locator_commands::open_core(config) {
+    match open_core_after_update_guard(update_guard, || locator_commands::open_core(config)) {
         Ok(core) => {
             let core = Arc::new(core);
             match reconcile_core_startup(&core) {
@@ -537,6 +595,7 @@ pub fn run(removed_overrides: Vec<String>) {
             #[cfg(feature = "e2e")]
             let fixture_account = account::e2e::runtime_from_environment(&resolve_data_dir(app)?)?;
             let state = start(app, &removed_overrides);
+            let startup_healthy = state.core.is_some();
             #[cfg(feature = "e2e")]
             let account = fixture_account.unwrap_or_else(|| {
                 Arc::new(account::runtime::AccountRuntime::production(Arc::new(
@@ -555,6 +614,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 app.handle().clone(),
                 &state.paths.data_dir,
                 &state.info.version,
+                startup_healthy,
                 option_env!("KALCODE_UPDATER_PUBLIC_KEY"),
                 Arc::new(move || shutdown_for_update(&updater_app)),
             );

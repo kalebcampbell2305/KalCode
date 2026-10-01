@@ -282,6 +282,32 @@ fn ensure_migrations_table(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Whether opening the database at `path` would apply any of `migrations`: true for a missing
+/// database or an older schema. Read-only, so it never creates or changes the file. Every
+/// migration is forward-only (an older build refuses a newer schema), so callers use this to
+/// protect update recovery before [`migrate`] runs.
+pub fn has_pending_migrations(path: &Path, migrations: &[Migration]) -> Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    let conn = open_read_only(path)?;
+    let tracked: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",
+        [],
+        |row| row.get(0),
+    )?;
+    let current: i64 = if tracked {
+        conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?
+    } else {
+        0
+    };
+    Ok(current < migrations.last().map_or(0, |m| m.version))
+}
+
 /// Applies pending `migrations`. `backup_dir` receives a copy of an existing database first.
 pub fn migrate(
     conn: &mut Connection,
@@ -483,6 +509,26 @@ mod tests {
             schema_version(&conn).expect("version"),
             MIGRATIONS.len() as i64
         );
+    }
+
+    #[test]
+    fn pending_migrations_are_detected_without_changing_the_database() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("kalcode.db");
+        assert!(has_pending_migrations(&path, MIGRATIONS).expect("missing"));
+        assert!(!path.exists());
+
+        let mut conn = open(&path).expect("open");
+        migrate(&mut conn, &MIGRATIONS[..MIGRATIONS.len() - 1], None).expect("older schema");
+        assert!(has_pending_migrations(&path, MIGRATIONS).expect("older"));
+        assert!(!has_pending_migrations(&path, &MIGRATIONS[..MIGRATIONS.len() - 1]).expect("same"));
+        assert_eq!(
+            schema_version(&conn).expect("version"),
+            MIGRATIONS.len() as i64 - 1
+        );
+
+        migrate(&mut conn, MIGRATIONS, None).expect("latest");
+        assert!(!has_pending_migrations(&path, MIGRATIONS).expect("latest"));
     }
 
     #[test]

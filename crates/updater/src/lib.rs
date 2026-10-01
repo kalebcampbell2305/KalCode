@@ -29,6 +29,8 @@ const ROLLBACK_RECEIPT_SCHEMA_VERSION_V1: u8 = 1;
 const ROLLBACK_RECEIPT_SCHEMA_VERSION_V2: u8 = 2;
 const MAX_PUBLIC_KEY_BASE64_BYTES: usize = 4 * 1024;
 const MAX_SIGNATURE_BASE64_BYTES: usize = 16 * 1024;
+const MAX_ATTEMPT_IDENTITY_BYTES: usize = 512;
+const FORWARD_ONLY_MAC_FENCE_SUFFIX: &str = "|forward-only-schema-upgrade";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1462,6 +1464,8 @@ pub struct InstallAttempt {
     pub binding: Option<InstallBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_swap: Option<MacSwapAttempt>,
+    /// Opaque durable attempt identity. New attempts begin with their creation time; the
+    /// forward-only schema fence may append a bounded marker before a database migration.
     pub started_at: String,
 }
 
@@ -1680,6 +1684,43 @@ impl UpdateJournal {
             ));
         }
         swap.phase = next;
+        self.save()
+    }
+
+    /// Fences a launched macOS upgrade against rollback by the helper before a forward-only
+    /// schema migration begins. Shipped helpers capture the complete attempt before the swap and
+    /// compare it again immediately before swapping back, so this durable marker makes that
+    /// rollback fail closed without changing the journal schema. Their success path still
+    /// observes normal startup reconciliation and cleans up the verified previous app.
+    pub fn fence_forward_only_mac_install(
+        &mut self,
+        current_version: &str,
+    ) -> Result<(), UpdateError> {
+        parse_version(current_version)?;
+        let invalid = || {
+            UpdateError::new(
+                "update_install_record_invalid",
+                "KalCode couldn't create a safe update recovery record.",
+            )
+        };
+        let attempt = self.state.install_attempt.as_mut().ok_or_else(invalid)?;
+        let launched_macos_upgrade = attempt.kind == InstallKind::Upgrade
+            && attempt.to_version == current_version
+            && attempt.binding.as_ref().map(|binding| binding.target)
+                == Some(UpdateTarget::DarwinAarch64)
+            && attempt.mac_swap.as_ref().map(|swap| swap.phase) == Some(MacSwapPhase::Launched);
+        if !launched_macos_upgrade {
+            return Err(invalid());
+        }
+        if attempt.started_at.ends_with(FORWARD_ONLY_MAC_FENCE_SUFFIX) {
+            return Ok(());
+        }
+        if attempt.started_at.len() + FORWARD_ONLY_MAC_FENCE_SUFFIX.len()
+            > MAX_ATTEMPT_IDENTITY_BYTES
+        {
+            return Err(invalid());
+        }
+        attempt.started_at.push_str(FORWARD_ONLY_MAC_FENCE_SUFFIX);
         self.save()
     }
 

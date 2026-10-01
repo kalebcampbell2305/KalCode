@@ -3,6 +3,7 @@
 //! launch stay native.
 
 use std::collections::HashMap;
+use std::io::{Read as _, Write as _};
 use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -31,6 +32,10 @@ use installer::PreparedInstaller;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
 const MAX_FEED_BYTES: u64 = 64 * 1024;
+/// The build that most recently raised this data folder's database schema. Every migration is
+/// forward-only, so recovery may only restore a build at or after this floor.
+const ROLLBACK_FLOOR_FILE: &str = "rollback-floor";
+const MAX_ROLLBACK_FLOOR_BYTES: u64 = 256;
 
 fn require_stable_installer() -> Result<(), UpdateError> {
     if cfg!(debug_assertions) {
@@ -179,6 +184,7 @@ fn reconcile_after_cleanup(
     journal: &mut UpdateJournal,
     cleanup: Result<bool, UpdateError>,
     target_matches: bool,
+    startup_healthy: bool,
     current_version: &str,
 ) -> (bool, Result<Option<InstallOutcome>, UpdateError>) {
     let preparation_ready = cleanup.unwrap_or_else(|error| {
@@ -189,7 +195,9 @@ fn reconcile_after_cleanup(
         );
         true
     });
-    let outcome = target_matches
+    // An unhealthy startup must not acknowledge the install: on macOS the helper then restores
+    // the previous app, which a forward-only migration has fenced off when it would be unsafe.
+    let outcome = (target_matches && startup_healthy)
         .then(|| journal.reconcile_startup(current_version))
         .transpose();
     (preparation_ready, outcome)
@@ -228,6 +236,8 @@ struct Inner {
     runtime: Mutex<Runtime>,
     journal: Mutex<Option<UpdateJournal>>,
     rollback: RollbackCache,
+    /// See [`ROLLBACK_FLOOR_FILE`]; `None` (missing or unreadable) offers no recovery.
+    rollback_floor: Option<String>,
     prepared_dir: std::path::PathBuf,
     before_exit: BeforeUpdaterExit,
     preparation: crate::update_preparation::UpdatePreparation,
@@ -244,10 +254,12 @@ impl DesktopUpdaterState {
         app: AppHandle,
         data_dir: &std::path::Path,
         current_version: &str,
+        startup_healthy: bool,
         public_key: Option<&str>,
         before_exit: BeforeUpdaterExit,
     ) -> Self {
         let update_dir = data_dir.join("updates");
+        let rollback_floor = read_rollback_floor(&update_dir);
         let target = UpdateTarget::current().ok();
         let mut preparation_ready = false;
         let (journal, mut machine) = match UpdateJournal::load(update_dir.join("updater.json")) {
@@ -270,10 +282,22 @@ impl DesktopUpdaterState {
                         .as_ref()
                         .and_then(|attempt| attempt.mac_swap.as_ref()),
                 );
-                let (ready, outcome) =
-                    reconcile_after_cleanup(&mut journal, cleanup, target_matches, current_version);
+                let (ready, outcome) = reconcile_after_cleanup(
+                    &mut journal,
+                    cleanup,
+                    target_matches,
+                    startup_healthy,
+                    current_version,
+                );
                 preparation_ready = ready;
                 match outcome {
+                    Ok(None) if !startup_healthy => {
+                        if journal.state().install_attempt.is_some() {
+                            machine.mark_failed(
+                                "KalCode couldn't confirm the previous update because startup did not complete.",
+                            );
+                        }
+                    }
                     Ok(None) => {
                         machine.mark_failed("KalCode couldn't verify the previous update target.");
                     }
@@ -304,7 +328,11 @@ impl DesktopUpdaterState {
             match rollback.load_verified(key) {
                 Ok(Some(artifact)) => machine.set_recovery_available(
                     target == Some(artifact.receipt().target())
-                        && is_previous_version(current_version, &artifact.receipt().version),
+                        && schema_compatible_recovery(
+                            current_version,
+                            &artifact.receipt().version,
+                            rollback_floor.as_deref(),
+                        ),
                 ),
                 Ok(None) => {}
                 Err(_) => {
@@ -329,6 +357,7 @@ impl DesktopUpdaterState {
             }),
             journal: Mutex::new(journal),
             rollback,
+            rollback_floor,
             prepared_dir: update_dir.join("prepared"),
             before_exit,
             preparation: crate::update_preparation::UpdatePreparation::default(),
@@ -568,9 +597,10 @@ impl DesktopUpdaterState {
             if existing.receipt().target() == self.target()?
                 && (existing.receipt().version == self.0.current_version || !current.pre.is_empty())
             {
-                return Ok(is_previous_version(
+                return Ok(schema_compatible_recovery(
                     &self.0.current_version,
                     &existing.receipt().version,
+                    self.0.rollback_floor.as_deref(),
                 ));
             }
         }
@@ -887,14 +917,6 @@ impl DesktopUpdaterState {
 
     /// The admitted restore. Only its owner reaches here; see `run_owned_operation`.
     fn restore_owned(&self, token: OperationToken, public_key: &str) -> Result<(), UpdateError> {
-        let preparation = self.begin_preparation()?;
-        let cancel = || {
-            if preparation.cancelled() {
-                Err(preparation_cancelled())
-            } else {
-                Ok(())
-            }
-        };
         let (artifact, bytes) = self
             .0
             .rollback
@@ -929,6 +951,20 @@ impl DesktopUpdaterState {
             &version,
             &metadata,
         )?;
+        // Refuse a build that can't open this data before any installer preparation or launch.
+        require_schema_compatible_recovery(
+            &self.0.current_version,
+            &version,
+            self.0.rollback_floor.as_deref(),
+        )?;
+        let preparation = self.begin_preparation()?;
+        let cancel = || {
+            if preparation.cancelled() {
+                Err(preparation_cancelled())
+            } else {
+                Ok(())
+            }
+        };
         let installer = PreparedInstaller::prepare(
             &self.0.prepared_dir,
             &prepared_installer_name(kalcode_contracts::ids::new_id(), metadata.format),
@@ -1256,6 +1292,104 @@ fn is_previous_version(current: &str, cached: &str) -> bool {
     cached.pre.is_empty() && cached < current
 }
 
+/// Recovery is offered and performed only for an older stable build at or after the rollback
+/// floor: an earlier build can't open data this build's migrations have already advanced.
+fn schema_compatible_recovery(current: &str, cached: &str, floor: Option<&str>) -> bool {
+    let (Some(floor), Ok(cached_version)) = (floor, Version::parse(cached)) else {
+        return false;
+    };
+    let Ok(floor) = Version::parse(floor) else {
+        return false;
+    };
+    is_previous_version(current, cached) && cached_version >= floor
+}
+
+fn require_schema_compatible_recovery(
+    current: &str,
+    cached: &str,
+    floor: Option<&str>,
+) -> Result<(), UpdateError> {
+    if schema_compatible_recovery(current, cached, floor) {
+        return Ok(());
+    }
+    Err(UpdateError::new(
+        "rollback_schema_incompatible",
+        "The previous version can't open data saved by this version, so it can't be restored. Your data has not been changed.",
+    ))
+}
+
+fn read_rollback_floor(update_dir: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(update_dir.join(ROLLBACK_FLOOR_FILE)).ok()?;
+    let mut raw = String::new();
+    file.take(MAX_ROLLBACK_FLOOR_BYTES)
+        .read_to_string(&mut raw)
+        .ok()?;
+    let floor = raw.trim();
+    Version::parse(floor).ok().map(|_| floor.to_owned())
+}
+
+fn update_state_unavailable(_error: std::io::Error) -> UpdateError {
+    UpdateError::new(
+        "update_state_unavailable",
+        "KalCode couldn't save its update state.",
+    )
+}
+
+fn write_rollback_floor(update_dir: &std::path::Path, version: &str) -> Result<(), UpdateError> {
+    Version::parse(version).map_err(|_| UpdateError::invalid_manifest("current version"))?;
+    std::fs::create_dir_all(update_dir).map_err(update_state_unavailable)?;
+    let path = update_dir.join(ROLLBACK_FLOOR_FILE);
+    let next = update_dir.join(format!("{ROLLBACK_FLOOR_FILE}.next"));
+    let mut file = std::fs::File::create(&next).map_err(update_state_unavailable)?;
+    file.write_all(version.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(update_state_unavailable)?;
+    drop(file);
+    std::fs::rename(&next, &path).map_err(update_state_unavailable)
+}
+
+/// Runs before Core can apply a forward-only migration. It raises the rollback floor to this
+/// build and, on macOS, fences a just-launched upgrade so the helper can't swap back to a build
+/// that would refuse the migrated data. Both are durable before the migration runs.
+pub(crate) fn guard_forward_only_schema_upgrade(
+    data_dir: &std::path::Path,
+    current_version: &str,
+    migration_pending: bool,
+) -> Result<(), UpdateError> {
+    if !migration_pending {
+        return Ok(());
+    }
+    let update_dir = data_dir.join("updates");
+    write_rollback_floor(&update_dir, current_version)?;
+    if cfg!(target_os = "macos") {
+        fence_launched_macos_upgrade(&update_dir, current_version)?;
+    }
+    Ok(())
+}
+
+fn fence_launched_macos_upgrade(
+    update_dir: &std::path::Path,
+    current_version: &str,
+) -> Result<(), UpdateError> {
+    let mut journal = UpdateJournal::load(update_dir.join("updater.json"))?;
+    let launched_upgrade = journal
+        .state()
+        .install_attempt
+        .as_ref()
+        .is_some_and(|attempt| {
+            attempt.kind == InstallKind::Upgrade
+                && attempt.to_version == current_version
+                && attempt
+                    .mac_swap
+                    .as_ref()
+                    .is_some_and(|swap| swap.phase == kalcode_updater::MacSwapPhase::Launched)
+        });
+    if !launched_upgrade {
+        return Ok(());
+    }
+    journal.fence_forward_only_mac_install(current_version)
+}
+
 fn append_bounded(
     target: &mut Vec<u8>,
     chunk: &[u8],
@@ -1430,7 +1564,8 @@ mod tests {
             let mut journal = UpdateJournal::load(&path).unwrap();
             journal.record_install_attempt(attempt()).unwrap();
 
-            let (ready, outcome) = reconcile_after_cleanup(&mut journal, cleanup, true, "0.1.6");
+            let (ready, outcome) =
+                reconcile_after_cleanup(&mut journal, cleanup, true, true, "0.1.6");
 
             assert_eq!(ready, expected_ready);
             assert!(matches!(outcome, Ok(Some(InstallOutcome::Updated))));
@@ -1732,6 +1867,171 @@ mod tests {
         assert!(is_previous_version("0.1.7+780", "0.1.7+779"));
         assert!(!is_previous_version("0.1.7+780", "0.1.7+780"));
         assert!(!is_previous_version("0.1.7+999", "0.1.7+1000"));
+    }
+
+    #[test]
+    fn rollback_floor_gates_recovery_visibility_and_execution() {
+        let floor = Some("0.1.8+820");
+        // A build from before the floor can't open data the floor build migrated.
+        assert!(!schema_compatible_recovery("0.1.8+830", "0.1.7+800", floor));
+        assert!(!schema_compatible_recovery("0.1.8+830", "0.1.7", floor));
+        assert!(schema_compatible_recovery("0.1.8+830", "0.1.8+820", floor));
+        assert!(schema_compatible_recovery("0.1.8+830", "0.1.8+825", floor));
+        // Build revisions compare numerically, not lexically.
+        assert!(!schema_compatible_recovery(
+            "0.1.7+1001",
+            "0.1.7+999",
+            Some("0.1.7+1000")
+        ));
+        // Still only an older stable build.
+        assert!(!schema_compatible_recovery("0.1.8+830", "0.1.8+830", floor));
+        assert!(!schema_compatible_recovery("0.1.8+830", "0.1.8+840", floor));
+        // An unknown floor fails closed.
+        assert!(!schema_compatible_recovery("0.1.8+830", "0.1.8+825", None));
+        assert!(!schema_compatible_recovery(
+            "0.1.8+830",
+            "0.1.8+825",
+            Some("garbage")
+        ));
+
+        assert!(require_schema_compatible_recovery("0.1.8+830", "0.1.8+825", floor).is_ok());
+        assert_eq!(
+            require_schema_compatible_recovery("0.1.8+830", "0.1.7+800", floor)
+                .unwrap_err()
+                .code(),
+            "rollback_schema_incompatible"
+        );
+    }
+
+    #[test]
+    fn a_pending_migration_raises_the_rollback_floor_before_it_runs() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let update_dir = data_dir.path().join("updates");
+        assert_eq!(read_rollback_floor(&update_dir), None);
+
+        guard_forward_only_schema_upgrade(data_dir.path(), "0.1.7+800", false).unwrap();
+        assert_eq!(read_rollback_floor(&update_dir), None);
+
+        guard_forward_only_schema_upgrade(data_dir.path(), "0.1.8+820", true).unwrap();
+        assert_eq!(
+            read_rollback_floor(&update_dir).as_deref(),
+            Some("0.1.8+820")
+        );
+
+        // A later build without a migration keeps the floor; a later migration raises it.
+        guard_forward_only_schema_upgrade(data_dir.path(), "0.1.8+830", false).unwrap();
+        assert_eq!(
+            read_rollback_floor(&update_dir).as_deref(),
+            Some("0.1.8+820")
+        );
+        guard_forward_only_schema_upgrade(data_dir.path(), "0.1.8+900", true).unwrap();
+        assert_eq!(
+            read_rollback_floor(&update_dir).as_deref(),
+            Some("0.1.8+900")
+        );
+
+        std::fs::write(update_dir.join(ROLLBACK_FLOOR_FILE), "not a version").unwrap();
+        assert_eq!(read_rollback_floor(&update_dir), None);
+    }
+
+    #[test]
+    fn startup_failure_never_acknowledges_a_pending_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut journal = UpdateJournal::load(temp.path().join("updater.json")).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.7".into(),
+                to_version: "0.1.8+820".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::WindowsX86_64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: None,
+                started_at: "2026-10-01T12:00:00Z".into(),
+            })
+            .unwrap();
+
+        let (ready, outcome) =
+            reconcile_after_cleanup(&mut journal, Ok(true), true, false, "0.1.8+820");
+
+        assert!(ready);
+        assert_eq!(outcome.unwrap(), None);
+        assert!(journal.state().install_attempt.is_some());
+        assert!(journal.state().last_successful_version.is_none());
+    }
+
+    #[test]
+    fn launched_macos_upgrade_is_fenced_before_migration_and_healthy_ack_clears_it() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let update_dir = data_dir.path().join("updates");
+        std::fs::create_dir_all(&update_dir).unwrap();
+        let journal_path = update_dir.join("updater.json");
+
+        // No pending install: nothing to fence.
+        fence_launched_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
+
+        let mut journal = UpdateJournal::load(&journal_path).unwrap();
+        journal
+            .record_install_attempt(InstallAttempt {
+                kind: InstallKind::Upgrade,
+                from_version: "0.1.7".into(),
+                to_version: "0.1.8+820".into(),
+                sha256: "a".repeat(64),
+                binding: Some(InstallBinding {
+                    target: UpdateTarget::DarwinAarch64,
+                    source_sha256: "c".repeat(64),
+                    signing_requirement_sha256: "d".repeat(64),
+                }),
+                mac_swap: Some(MacSwapAttempt {
+                    current_app: data_dir.path().join("KalCode.app"),
+                    staged_app: data_dir.path().join(".KalCode-update-previous.app"),
+                    parent_pid: 42,
+                    parent_identity_sha256: "e".repeat(64),
+                    phase: kalcode_updater::MacSwapPhase::Prepared,
+                }),
+                started_at: "2026-10-01T12:00:00Z".into(),
+            })
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(
+                kalcode_updater::MacSwapPhase::Prepared,
+                kalcode_updater::MacSwapPhase::Swapped,
+            )
+            .unwrap();
+        journal
+            .mark_mac_swap_phase(
+                kalcode_updater::MacSwapPhase::Swapped,
+                kalcode_updater::MacSwapPhase::Launched,
+            )
+            .unwrap();
+        // What the helper captured and compares again before it swaps back.
+        let captured = journal.state().install_attempt.clone().unwrap();
+        drop(journal);
+
+        fence_launched_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
+        let fenced = UpdateJournal::load(&journal_path)
+            .unwrap()
+            .state()
+            .install_attempt
+            .clone()
+            .unwrap();
+        assert_ne!(fenced, captured);
+
+        fence_launched_macos_upgrade(&update_dir, "0.1.8+820").unwrap();
+        let mut reopened = UpdateJournal::load(&journal_path).unwrap();
+        assert_eq!(reopened.state().install_attempt.as_ref(), Some(&fenced));
+
+        let (_, outcome) =
+            reconcile_after_cleanup(&mut reopened, Ok(true), true, true, "0.1.8+820");
+        assert_eq!(outcome.unwrap(), Some(InstallOutcome::Updated));
+        assert!(reopened.state().install_attempt.is_none());
+        assert_eq!(
+            reopened.state().last_successful_version.as_deref(),
+            Some("0.1.8+820")
+        );
     }
 
     #[test]
