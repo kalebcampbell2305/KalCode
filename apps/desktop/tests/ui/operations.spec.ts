@@ -50,6 +50,9 @@ test("Operations connects real run evidence, queue transitions, services, enviro
 
   const detail = page.getByRole("complementary", { name: "Run details" });
   await expect(detail.getByRole("heading", { name: "Publish preview build" })).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run environments" })).toContainText("Deployed Unverified");
+  await expect(detail.getByRole("region", { name: "Run environments" })).toContainText("Health: Not Probed");
+  await expect(detail.getByRole("region", { name: "Run activity" })).not.toContainText("No linked activity");
   await detail.getByRole("tab", { name: "Logs", exact: true }).click();
   await expect(detail.getByText("Uploading preview artifact", { exact: false })).toBeVisible();
   await detail.getByRole("tab", { name: "Timeline", exact: true }).click();
@@ -92,6 +95,9 @@ test("Operations connects real run evidence, queue transitions, services, enviro
       ).__kalcodeMemory.operations.lastAction(),
     ),
   ).toBe("run_now");
+  await page.getByRole("button", { name: "Open run Typecheck desktop", exact: true }).click();
+  await expect(detail.getByRole("heading", { name: "Typecheck desktop", exact: true })).toBeVisible();
+  await detail.getByRole("button", { name: "Close run details" }).click();
 
   await tab(page, "Runs");
   await expect(page.getByRole("region", { name: "Execution history" }).getByText("Typecheck desktop")).toBeVisible();
@@ -110,6 +116,8 @@ test("Operations connects real run evidence, queue transitions, services, enviro
   await expect(frontend.getByRole("button", { name: "Open terminal" })).toBeVisible();
   await frontend.getByRole("button", { name: "Logs" }).click();
   await expect(page.getByRole("complementary", { name: "Run details" })).toContainText("Frontend dev server");
+  await expect(detail.getByRole("region", { name: "Run services" })).toContainText("Frontend");
+  await expect(detail.getByRole("region", { name: "Run services" })).toContainText("3000");
   await page.getByRole("button", { name: "Close run details" }).click();
   await frontend.getByRole("button", { name: "Open in Browser" }).click();
   await expect
@@ -198,6 +206,15 @@ test("Operations tab navigation is keyboard accessible and passes axe", async ({
 
 test("@screenshots Operations rich evidence in dark and light themes", async ({ page }) => {
   await openOperations(page);
+  await page
+    .getByRole("region", { name: "Execution history" })
+    .getByRole("button", { name: /Publish preview build/ })
+    .click();
+  await expect(
+    page.getByRole("complementary", { name: "Run details" }).getByRole("region", { name: "Run environments" }),
+  ).toContainText("Deployed Unverified");
+  await page.screenshot({ path: screenshotPath("operations-run-connections-dark-1360") });
+  await page.getByRole("button", { name: "Close run details" }).click();
   await tab(page, "Activity");
   await page.screenshot({ path: screenshotPath("operations-activity-dark-1360") });
 

@@ -356,6 +356,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
             mutate={mutate}
             threadOptions={threadOptions}
             providerAccounts={providerAccounts}
+            onRun={showRun}
           />
         </TabsContent>
         <TabsContent value="services">
@@ -387,6 +388,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           key={selectedRun}
           client={client}
           id={selectedRun}
+          snapshot={snapshot}
           busy={busy}
           mutate={mutate}
           refreshKey={
@@ -570,6 +572,7 @@ function QueueView({
   mutate,
   threadOptions,
   providerAccounts,
+  onRun,
 }: {
   snapshot: OperationsSnapshot;
   client: OperationsApi;
@@ -577,6 +580,7 @@ function QueueView({
   mutate: MutationRunner;
   threadOptions: () => Promise<ThreadOptions>;
   providerAccounts?: () => Promise<ProviderAccount[]>;
+  onRun: (id: string) => void;
 }) {
   const sections = queueSections(snapshot.items);
   const [creating, setCreating] = useState(false);
@@ -654,7 +658,7 @@ function QueueView({
         />
       ) : null}
       <div className={styles.queueColumns}>
-        <QueueColumn title="Now" detail="Running" items={sections.now} empty="No work is running." />
+        <QueueColumn title="Now" detail="Running" items={sections.now} empty="No work is running." onRun={onRun} />
         <QueueColumn title="Next" detail="Ready order" items={sections.next} empty="No tasks are ready next." />
         <QueueColumn title="Later" detail="Deferred" items={sections.later} empty="No later tasks." />
       </div>
@@ -783,11 +787,13 @@ function QueueColumn({
   detail,
   items,
   empty,
+  onRun,
 }: {
   title: string;
   detail: string;
   items: OperationRecord[];
   empty: string;
+  onRun?: (id: string) => void;
 }) {
   return (
     <section className={styles.queueColumn}>
@@ -801,9 +807,20 @@ function QueueColumn({
         <p className={styles.columnEmpty}>{empty}</p>
       ) : (
         <ol>
-          {items.slice(0, 4).map((item) => (
+          {(onRun ? items : items.slice(0, 4)).map((item) => (
             <li key={item.id}>
-              <span>{item.spec.name}</span>
+              {onRun ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Open run ${item.spec.name}`}
+                  onClick={() => onRun(item.id)}
+                >
+                  {item.spec.name}
+                </Button>
+              ) : (
+                <span>{item.spec.name}</span>
+              )}
               {status(item, true)}
             </li>
           ))}
@@ -1651,6 +1668,7 @@ function ActivityEvent({ event, onRun }: { event: OperationActivity; onRun: (id:
 function RunDetail({
   client,
   id,
+  snapshot,
   busy,
   mutate,
   refreshKey,
@@ -1658,6 +1676,7 @@ function RunDetail({
 }: {
   client: OperationsApi;
   id: string;
+  snapshot: OperationsSnapshot;
   busy: string | null;
   mutate: MutationRunner;
   refreshKey: string;
@@ -1759,7 +1778,7 @@ function RunDetail({
             ))}
           </TabsList>
           <div className={styles.detailBody}>
-            {tab === "overview" ? <RunOverview detail={value} /> : null}
+            {tab === "overview" ? <RunOverview detail={value} snapshot={snapshot} /> : null}
             {tab === "logs" ? (
               value.logs ? (
                 <pre className={styles.logs} data-selectable>
@@ -1855,8 +1874,18 @@ function RunDetail({
   );
 }
 
-function RunOverview({ detail }: { detail: OperationDetail }) {
+function RunOverview({ detail, snapshot }: { detail: OperationDetail; snapshot: OperationsSnapshot }) {
   const run = detail.run;
+  // Relationships are projections of the current canonical snapshot, never copied run state.
+  const services = snapshot.services.filter(
+    (service) => service.runId === run.id && service.workspaceId === run.spec.workspaceId,
+  );
+  const environments = snapshot.environments.filter(
+    (environment) => environment.runId === run.id && environment.workspaceId === run.spec.workspaceId,
+  );
+  const activity = snapshot.activity.filter(
+    (event) => event.runId === run.id && event.workspaceId === run.spec.workspaceId,
+  );
   return (
     <div className={styles.overview}>
       <Metadata record={run} />
@@ -1898,6 +1927,78 @@ function RunOverview({ detail }: { detail: OperationDetail }) {
             <dd>{run.version ?? "Not observed"}</dd>
           </div>
         </dl>
+      </section>
+      <section aria-label="Run services">
+        <h3>Services</h3>
+        {services.length ? (
+          <ul className={styles.evidenceList}>
+            {services.map((service) => (
+              <li key={service.id}>
+                <Server aria-hidden="true" />
+                <span>
+                  <strong>{service.name}</strong>
+                  <small>
+                    {titleCase(service.status)}
+                    {service.ports.length ? ` · Ports ${service.ports.join(", ")}` : " · No listening port observed"}
+                  </small>
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No current service observation is linked to this run.</p>
+        )}
+      </section>
+      <section aria-label="Run environments">
+        <h3>Environments</h3>
+        {environments.length ? (
+          <ul className={styles.evidenceList}>
+            {environments.map((environment) => (
+              <li key={environment.kind}>
+                <span>
+                  <strong>{titleCase(environment.kind)}</strong>
+                  <small>{titleCase(environment.deploymentStatus)}</small>
+                  <small>Health: {titleCase(environment.health)}</small>
+                  <small>
+                    {environment.branch ?? "Branch not observed"} · {environment.version ?? "Version not observed"}
+                  </small>
+                  {environment.urls.map((url) => (
+                    <small key={url}>
+                      Declared target: <code data-selectable>{url}</code>
+                    </small>
+                  ))}
+                  {environment.notes.map((note) => (
+                    <small key={note}>{note}</small>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No current environment state is linked to this run.</p>
+        )}
+      </section>
+      <section aria-label="Run activity">
+        <h3>Activity</h3>
+        {activity.length ? (
+          <ul className={styles.evidenceList}>
+            {activity.slice(0, 10).map((event) => (
+              <li key={event.id}>
+                <span>
+                  <strong>{event.name}</strong>
+                  <small>
+                    {event.area} · {timeLabel(event.at)}
+                  </small>
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No linked activity appears in the current observation window.</p>
+        )}
+        {activity.length > 10 ? (
+          <p>Showing the latest 10 linked events. Open Activity for the full observation window.</p>
+        ) : null}
       </section>
       {detail.notes.length > 0 ? (
         <section>

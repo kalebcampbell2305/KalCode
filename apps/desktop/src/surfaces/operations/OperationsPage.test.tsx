@@ -142,6 +142,158 @@ describe("OperationsPage", () => {
     vi.clearAllMocks();
   });
 
+  it("opens the same queued identity from Now after execution starts", async () => {
+    const run = queued("queue-to-run", 1);
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      notes: [],
+    });
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    const user = userEvent.setup();
+    const view = renderPage(client);
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Run now" }));
+    expect(client.runNow).toHaveBeenCalledWith(run.id);
+    run.status = "running";
+    run.startedAt = run.createdAt;
+    seams.snapshot = { ...seams.snapshot, revision: 8, items: [run] };
+    view.rerender(page(client));
+    expect(screen.queryByRole("list", { name: "Pending tasks" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open run Task queue-to-run" }));
+    expect(client.detail).toHaveBeenCalledWith(run.id);
+    expect(await screen.findByRole("complementary", { name: "Run details" })).toHaveTextContent(run.spec.name);
+  });
+
+  it("projects a run's services, deployment and activity from the shared snapshot and refreshes them", async () => {
+    const run = queued("connected", 1);
+    run.status = "succeeded";
+    run.startedAt = run.createdAt;
+    run.endedAt = run.createdAt;
+    run.spec.kind = "deploy";
+    run.spec.environment = "preview";
+    const service = {
+      id: "service-connected",
+      runId: run.id,
+      name: "Linked server",
+      status: "running",
+      pid: 123,
+      processName: "node",
+      uptimeSeconds: 10,
+      ports: [3000],
+      urls: [],
+      workspaceId: "workspace-1",
+      workspaceName: "KalCode",
+      terminalId: null,
+      canStop: false,
+      canRestart: false,
+      actionReason: null,
+    };
+    const environment = {
+      workspaceId: "workspace-1",
+      kind: "preview" as const,
+      branch: "main",
+      version: "revision-one",
+      urls: [],
+      deploymentStatus: "deployed_unverified",
+      health: "not_probed",
+      platform: null,
+      lastDeploy: run.endedAt,
+      runId: run.id,
+      variables: [],
+      observedAt: run.createdAt,
+      notes: ["A newer deployment failed; the preceding deployment remains shown."],
+    };
+    seams.snapshot = {
+      ...baseSnapshot(),
+      items: [run],
+      services: [
+        service,
+        { ...service, id: "unrelated", runId: "other", name: "Unrelated server" },
+        { ...service, id: "foreign", workspaceId: "workspace-2", name: "Foreign workspace server" },
+      ],
+      environments: [environment],
+      activity: [
+        {
+          id: "event-connected",
+          at: run.createdAt,
+          kind: "deploy",
+          name: "Deployment completed",
+          area: "Environments",
+          workspaceId: "workspace-1",
+          runId: run.id,
+        },
+      ],
+    };
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [{ name: "Build bundle", location: "dist/app.zip", kind: "file" }],
+      tests: [],
+      notes: [],
+    });
+    const user = userEvent.setup();
+    const view = renderPage(client);
+    await user.selectOptions(screen.getByLabelText("Workspace"), "");
+    await user.click(screen.getByRole("button", { name: /Task connected/ }));
+    const detail = await screen.findByRole("complementary", { name: "Run details" });
+    expect(await within(detail).findByText("Linked server")).toBeInTheDocument();
+    expect(within(detail).queryByText("Unrelated server")).not.toBeInTheDocument();
+    expect(within(detail).queryByText("Foreign workspace server")).not.toBeInTheDocument();
+    expect(within(detail).getByText("Deployed Unverified")).toBeInTheDocument();
+    expect(
+      within(detail).getByText("A newer deployment failed; the preceding deployment remains shown."),
+    ).toBeInTheDocument();
+    expect(within(detail).getByText("Deployment completed")).toBeInTheDocument();
+    await user.click(within(detail).getByRole("tab", { name: "Artifacts" }));
+    expect(within(detail).getByText("Build bundle")).toBeInTheDocument();
+    await user.click(within(detail).getByRole("tab", { name: "Overview" }));
+    seams.snapshot = {
+      ...seams.snapshot,
+      services: [],
+      environments: [{ ...environment, runId: "new-deploy" }],
+      activity: [],
+    };
+    view.rerender(page(client));
+    expect(within(detail).queryByText("Linked server")).not.toBeInTheDocument();
+    expect(within(detail).queryByText("Deployed Unverified")).not.toBeInTheDocument();
+    expect(within(detail).queryByText("Deployment completed")).not.toBeInTheDocument();
+  });
+
+  it("keeps all active runs reachable from Now when the four service slots and foreground slot are occupied", async () => {
+    const runs = Array.from({ length: 5 }, (_, index) => ({
+      ...queued(`active-${index}`, index),
+      status: "running" as const,
+      startedAt: "2026-09-30T12:00:00Z",
+    }));
+    seams.snapshot = { ...baseSnapshot(), items: runs };
+    const client = operations();
+    const fifth = runs[4];
+    if (!fifth) throw new Error("Expected five active fixture runs");
+    vi.mocked(client.detail).mockResolvedValue({
+      run: fifth,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      notes: [],
+    });
+    const user = userEvent.setup();
+    renderPage(client);
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "Open run Task active-4" }));
+    expect(client.detail).toHaveBeenCalledWith("active-4");
+  });
+
   it.each(["test", "agent"] as const)("cancels an active Operations %s through native authority", async (kind) => {
     const run = queued("active-cancel", 1);
     run.spec.kind = kind;
