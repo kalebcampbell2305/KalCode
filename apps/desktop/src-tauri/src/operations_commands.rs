@@ -1258,7 +1258,7 @@ impl OperationsState {
         } else {
             return Err(operation_not_found());
         };
-        let (mut events, truncated) = if event_evidence_available {
+        let (mut events, mut truncated) = if event_evidence_available {
             self.matching_events(EventQuery {
                 correlation: CorrelationFilter {
                     workspace_id: (!run.spec.workspace_id.is_empty())

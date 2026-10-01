@@ -794,15 +794,8 @@ impl Core {
             "UPDATE workspaces SET active_terminal_id = ?1 WHERE id = ?2",
             params![id, workspace_id],
         )?;
-        let (session, generation, envelope) = self.start_shell(
-            &tx,
-            &id,
-            workspace_id,
-            &workspace.root_path,
-            &shell,
-            None,
-            size,
-        )?;
+        let (session, generation, envelope) =
+            self.start_shell(&tx, &id, &workspace, &shell, None, size)?;
         if let Err(error) = tx.commit() {
             let _ = session.kill();
             return Err(error.into());
@@ -950,15 +943,8 @@ impl Core {
                 ],
             )?;
         }
-        let (session, generation, envelope) = self.start_shell(
-            &tx,
-            operation_id,
-            workspace_id,
-            &workspace.root_path,
-            &shell,
-            artifact_report,
-            size,
-        )?;
+        let (session, generation, envelope) =
+            self.start_shell(&tx, operation_id, &workspace, &shell, artifact_report, size)?;
         if let Err(error) = tx.commit() {
             let _ = session.kill();
             return Err(error.into());
@@ -1002,15 +988,8 @@ impl Core {
         }
         let shell = self.shell(Some(&terminal.shell_id))?;
         let tx = conn.transaction()?;
-        let (session, generation, envelope) = self.start_shell(
-            &tx,
-            id,
-            &terminal.workspace_id,
-            &workspace.root_path,
-            &shell,
-            None,
-            size,
-        )?;
+        let (session, generation, envelope) =
+            self.start_shell(&tx, id, &workspace, &shell, None, size)?;
         if let Err(error) = tx.commit() {
             let _ = session.kill();
             return Err(error.into());
@@ -1034,8 +1013,7 @@ impl Core {
         self: &Arc<Self>,
         tx: &Connection,
         id: &str,
-        workspace_id: &str,
-        root: &str,
+        workspace: &Workspace,
         shell: &ShellInfo,
         artifact_report: Option<&Path>,
         size: TerminalSize,
@@ -1082,7 +1060,7 @@ impl Core {
         let spec = SpawnSpec {
             program: shell.program.clone(),
             args: shell.args.clone(),
-            cwd: PathBuf::from(root),
+            cwd: PathBuf::from(&workspace.root_path),
             env,
             env_remove,
             size,
@@ -1117,7 +1095,7 @@ impl Core {
             )?;
             append(
                 tx,
-                workspace_id,
+                &workspace.id,
                 EventPayload::ShellStarted {
                     terminal_id: id.to_owned(),
                     shell_id: shell.id.clone(),

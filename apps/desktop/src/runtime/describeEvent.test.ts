@@ -205,9 +205,9 @@ describe("describeEvent", () => {
   });
 
   it("describes verified and rejected operation artifact reports without report contents", () => {
-    expect(
-      describeEvent(envelope({ type: "operation.artifact_reported", payload: { path: "dist/app.zip" } })),
-    ).toEqual({ title: "Operation artifact reported", detail: "dist/app.zip", tone: "success" });
+    expect(describeEvent(envelope({ type: "operation.artifact_reported", payload: { path: "dist/app.zip" } }))).toEqual(
+      { title: "Operation artifact reported", detail: "dist/app.zip", tone: "success" },
+    );
     expect(
       describeEvent(
         envelope({ type: "operation.artifact_report_rejected", payload: { code: "artifact_path_rejected" } }),

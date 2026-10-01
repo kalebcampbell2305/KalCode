@@ -157,6 +157,7 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
             status: "succeeded",
             createdAt: at(-68),
             startedAt: at(-65),
+            terminalId: "op-release",
             endedAt: at(-58),
             currentAction: null,
             outcome: "Preview build command completed; endpoint health was not probed.",
@@ -478,7 +479,8 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
             ]
           : [];
 
-    const deploymentRun = run.spec.kind === "deploy" || run.spec.kind === "release";
+    const deploymentRun =
+      (run.spec.kind === "deploy" || run.spec.kind === "release") && (run.terminalId !== null || run.threadId !== null);
     const currentDeployments = deploymentRun
       ? environments
           .filter(
@@ -489,12 +491,11 @@ export function createOperationsMemory({ empty, workspaces, requireCore }: Opera
           )
           .map((environment) => ({ environment, isCurrent: true }))
       : [];
-    const started = run.startedAt !== null || run.terminalId !== null || run.threadId !== null;
     const succeeded = run.status === "succeeded";
     const relatedDeployments =
       currentDeployments.length > 0
         ? currentDeployments
-        : deploymentRun && started
+        : deploymentRun
           ? [
               {
                 environment: {

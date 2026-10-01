@@ -77,7 +77,8 @@ terminal output, and a report proves only that the command declared a verified f
   artifacts.
 - **Queue** is the pending subset of the same durable records. Edits and reordering use the
   `operations_state.revision` optimistic lock. Dependency ordering is computed transactionally;
-  blocked dependencies cannot be bypassed by drag order or **Run now**.
+  blocked dependencies cannot be bypassed by drag order or **Run now**. Every active item in
+  **Now** opens its existing run, without creating a second record.
 - **Services** samples workspace-related processes and listening ports through native Windows and
   macOS implementations. A process can be shown without a port, and a listening port does not
   prove HTTP health. Stop and restart are enabled only when the process belongs to an
@@ -89,6 +90,12 @@ terminal output, and a report proves only that the command declared a verified f
   liveness evidence.
 - **Activity** projects typed events, run transitions, and bounded Git log samples. File areas come
   only from safe workspace-relative paths. Secret-shaped or private paths are withheld.
+
+The run overview joins Services, Environments, and Activity by workspace and exact run identity.
+Current observations refresh with the snapshot. Older runs retain explicitly historical service
+and deployment relationships from their execution bindings; those records do not inherit a
+successor's ports, controls, or health. Concurrent same-command services retain distinct run
+identities. A scheduler claim without a runtime binding is not service or deployment evidence.
 
 Environment-variable values never enter Operations. Specs contain expected names only. Local
 presence means the variable name exists in KalCode's inherited process environment; it does not
@@ -109,7 +116,8 @@ detail from the canonical source identity rather than relying on the overview wi
 record without durable completion evidence is **Unknown**; KalCode does not infer success or
 failure from its age or absence from the overview.
 
-Activity reads at most ten 500-event pages and reports when older events were omitted. Service
+Activity reads at most ten 500-event pages plus up to 5,000 canonical operation moments, preserving
+queue, start, and finish transitions with their durable IDs. It reports omitted history. Service
 observations are cached for five seconds. Git activity is sampled for at most 16 workspaces and 50
 commits per workspace, cached for 30 seconds. The merged Activity response is deduplicated,
 sorted, and capped at 5,000 items. These limits mean absence outside the displayed window is

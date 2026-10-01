@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use kalcode_contracts::events::{
     Correlation, CorrelationFilter, EventPayload, EventQuery, EventSource, NewEvent, SeqOrder,
 };
-use kalcode_contracts::operations::{OPERATION_ARTIFACT_REPORT_ENV, OperationRecord};
+use kalcode_contracts::operations::OperationRecord;
 use kalcode_core::protected_file::{
     consume_operation_artifact_report_file, is_link_or_reparse,
     open_ordinary_file_without_following, read_bounded_ordinary_file,
@@ -19,7 +19,6 @@ use kalcode_core::{Core, KalError, Result};
 use kalcode_git::{RelPath, WorkspaceRoot};
 use serde::Deserialize;
 
-pub const REPORT_ENV: &str = OPERATION_ARTIFACT_REPORT_ENV;
 const REPORT_VERSION: u8 = 1;
 const MAX_REPORT_BYTES: u64 = 64 * 1024;
 const MAX_ARTIFACTS: usize = 256;

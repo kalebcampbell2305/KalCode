@@ -192,6 +192,24 @@ describe("Operations memory runtime", () => {
     expect(after.activity.at(-1)).toEqual(expect.objectContaining({ runId: "op-typecheck" }));
   });
 
+  it("does not project a claimed deployment before its execution is bound", () => {
+    const { invoke } = setup();
+    const before = invoke("operations_snapshot") as OperationsSnapshot;
+    const pending = before.items.find((item) => item.id === "op-typecheck");
+    if (!pending) throw new Error("Missing pending fixture");
+    invoke("operations_update", {
+      id: pending.id,
+      spec: { ...pending.spec, kind: "deploy", environment: "preview" },
+      revision: before.revision,
+    });
+    invoke("operations_pause", { paused: false });
+    invoke("operations_run_now", { id: pending.id });
+    const detail = invoke("operations_detail", { id: pending.id }) as OperationDetail;
+    expect(detail.run.startedAt).not.toBeNull();
+    expect(detail.run.terminalId).toBeNull();
+    expect(detail.relatedDeployments).toEqual([]);
+  });
+
   it("rejects stale queue order and records a complete accepted order", () => {
     const { memory, invoke } = setup();
     const before = invoke("operations_snapshot") as OperationsSnapshot;
