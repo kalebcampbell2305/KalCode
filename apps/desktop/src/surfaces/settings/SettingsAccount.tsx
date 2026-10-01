@@ -5,7 +5,7 @@ import type { AccountUiError } from "../../account/accountState.ts";
 import type { AccountSnapshot, AccountTier, AccountUsageSnapshot } from "../../ipc/account.ts";
 import styles from "./SettingsAccount.module.css";
 
-const TIER_NAMES: Record<AccountTier, string> = {
+export const TIER_NAMES: Record<AccountTier, string> = {
   free: "Free",
   pro: "Pro",
   max: "Max",

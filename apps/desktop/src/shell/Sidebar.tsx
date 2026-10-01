@@ -2,10 +2,10 @@ import type { SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
 import { Bell, BellDot, PanelLeftClose, PanelLeftOpen, Search, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useId } from "react";
-import { publicVersion } from "../platform/version.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { DashboardDataBoundary, useWaitingForYouCount } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
+import { AccountHub } from "./AccountHub.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
 import { type Destination, destinationMeta, PRIMARY_ORDER, useNavigation, viewVisible } from "./navigation.tsx";
 import { useNotifications } from "./notifications/NotificationsProvider.tsx";
@@ -85,13 +85,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
           {visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}
         </ul>
         <div className={styles.footerRow}>
-          {collapsed ? null : (
-            <p className={styles.build}>
-              {info.channel === "stable"
-                ? `Version ${publicVersion(info.version)}`
-                : `${capitalize(info.channel)} build ${publicVersion(info.version)}`}
-            </p>
-          )}
+          <AccountHub collapsed={collapsed} onOpenPalette={onOpenPalette} />
           <Tooltip content={`${collapsed ? "Expand" : "Collapse"} sidebar (${MOD_LABEL} B)`} side="right">
             <IconButton
               size="sm"
@@ -104,10 +98,6 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       </div>
     </nav>
   );
-}
-
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 interface NavItemProps {
