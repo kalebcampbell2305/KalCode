@@ -194,7 +194,12 @@ test("clearStaleGuardian removes only the guardian bin's link outputs so cargo r
     mkdirSync(libFp, { recursive: true });
     writeFileSync(join(binFp, "bin-kalcode-provider-guardian"), "x");
     writeFileSync(join(libFp, "lib-kalcode_providers"), "x");
-    for (const f of ["kalcode_provider_guardian-0a1b.exe", "kalcode_provider_guardian-0a1b.pdb", "kalcode_provider_guardian-0a1b.d", "libkalcode_providers-2c3d.rlib"]) {
+    for (const f of [
+      "kalcode_provider_guardian-0a1b.exe",
+      "kalcode_provider_guardian-0a1b.pdb",
+      "kalcode_provider_guardian-0a1b.d",
+      "libkalcode_providers-2c3d.rlib",
+    ]) {
       writeFileSync(join(release, "deps", f), "x");
     }
     writeFileSync(join(release, GUARDIAN_FILENAME), "old");

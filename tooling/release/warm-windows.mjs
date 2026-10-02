@@ -10,8 +10,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { clearStaleGuardian, GUARDIAN_FILENAME, guardianBuildArgs, guardianBundleOverlay } from "./guardian-packaging.mjs";
-import { assertCleanTree, headCommit, ROOT, releaseVersion, releaseVersionOverlay, run, TARGET_DIR, writeJson } from "./lib.mjs";
+import {
+  clearStaleGuardian,
+  GUARDIAN_FILENAME,
+  guardianBuildArgs,
+  guardianBundleOverlay,
+} from "./guardian-packaging.mjs";
+import {
+  assertCleanTree,
+  headCommit,
+  ROOT,
+  releaseVersion,
+  releaseVersionOverlay,
+  run,
+  TARGET_DIR,
+  writeJson,
+} from "./lib.mjs";
 import { buildEnvironment } from "./release-channel.mjs";
 import { ARTIFACT_SIGNING, buildSigningOverlay, signingEnvironment } from "./signing.mjs";
 import { readUpdaterPublicKey, UPDATER_SIGNER_MANIFEST } from "./updater-signing.mjs";
@@ -48,13 +62,28 @@ try {
   writeJson(overlayPath, {
     ...guardianBundleOverlay({
       guardianPath: join(TARGET_DIR, "release", GUARDIAN_FILENAME),
-      signingOverlay: buildSigningOverlay({ nodePath: process.execPath, signerPath: join(ROOT, "tooling", "release", "sign-windows.mjs") }),
+      signingOverlay: buildSigningOverlay({
+        nodePath: process.execPath,
+        signerPath: join(ROOT, "tooling", "release", "sign-windows.mjs"),
+      }),
     }),
     version: releaseVersionOverlay(releaseVersion()).version,
   });
   run(
     "pnpm",
-    ["--filter", "@kalcode/desktop", "tauri", "build", "--bundles", "nsis", "--features", "kalvoice-whisper", "--no-sign", "--config", overlayPath],
+    [
+      "--filter",
+      "@kalcode/desktop",
+      "tauri",
+      "build",
+      "--bundles",
+      "nsis",
+      "--features",
+      "kalvoice-whisper",
+      "--no-sign",
+      "--config",
+      overlayPath,
+    ],
     { env: desktopEnv },
   );
 } finally {

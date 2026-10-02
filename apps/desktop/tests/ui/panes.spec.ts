@@ -152,7 +152,9 @@ test.describe("splitting and resizing", () => {
 });
 
 test.describe("maximize, collapse, close and reopen never stop a process", () => {
-  test("maximize shows one pane; the others' views stay mounted but hidden and come back with their output", async ({ page }) => {
+  test("maximize shows one pane; the others' views stay mounted but hidden and come back with their output", async ({
+    page,
+  }) => {
     await openCode(page);
     await pane(page, 0).locator(".xterm-screen").click();
     await page.keyboard.type("echo before-maximize");
