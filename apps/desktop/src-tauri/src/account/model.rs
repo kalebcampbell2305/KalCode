@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kalcode_core::workspaces::TerminalLimit;
+use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
 use serde::Serialize;
 
 use super::social::{SocialProvider, valid_opaque};
@@ -61,10 +61,6 @@ pub struct AccountUsageSnapshot {
     pub resets_at: String,
 }
 
-/// Terminal tabs per workspace on the Free and Pro plans (`terminalsPerWorkspace` in
-/// `packages/protocol/src/plans.ts`). MAX, MAX 2X and Owner have no KalCode-side cap.
-pub const PLAN_TERMINALS_PER_WORKSPACE: usize = 12;
-
 /// `degraded_reason` of a signed-out snapshot whose session expired or was rejected (401).
 pub const SESSION_EXPIRED_REASON: &str = "session_expired";
 
@@ -102,22 +98,30 @@ impl AccountSnapshot {
         }
     }
 
-    /// The terminal cap of this account's verified plan. Without an active verified plan
-    /// (signed out, bootstrapping, not yet activated) the Free cap applies.
-    pub fn terminal_limit(&self) -> Option<TerminalLimit> {
+    /// The plan whose limits apply: the verified plan of an active account. Without an active
+    /// verified plan (signed out, bootstrapping, not yet activated, degraded) Free applies.
+    pub fn plan_tier(&self) -> PlanTier {
         let tier = match self.authority() {
             AccountAuthority::Active => self.tier,
             _ => None,
         };
-        let plan = match tier.unwrap_or(AccountTier::Free) {
-            AccountTier::Free => "Free",
-            AccountTier::Pro => "Pro",
-            AccountTier::Max | AccountTier::Max2x | AccountTier::Owner => return None,
-        };
-        Some(TerminalLimit {
-            max: PLAN_TERMINALS_PER_WORKSPACE,
-            plan,
-        })
+        match tier.unwrap_or(AccountTier::Free) {
+            AccountTier::Free => PlanTier::Free,
+            AccountTier::Pro => PlanTier::Pro,
+            AccountTier::Max => PlanTier::Max,
+            AccountTier::Max2x => PlanTier::Max2x,
+            AccountTier::Owner => PlanTier::Owner,
+        }
+    }
+
+    /// This account's cap on `kind` (`kalcode_core::plans`), or `None` when uncapped.
+    pub fn plan_limit(&self, kind: Limited) -> Option<PlanLimit> {
+        self.plan_tier().limit(kind)
+    }
+
+    /// The cap on terminals open at the same time across all of KalCode.
+    pub fn terminal_limit(&self) -> Option<PlanLimit> {
+        self.plan_limit(Limited::OpenTerminals)
     }
 
     fn for_phase(phase: AccountPhase) -> Self {

@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_core::events::EventPayload;
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::workspaces::{TerminalLimit, TerminalStatus};
+use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
+use kalcode_core::workspaces::TerminalStatus;
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_pty::TerminalSize;
 
@@ -245,9 +246,10 @@ fn operation_terminal_counts_toward_the_plan_terminal_limit() {
     let project = tempfile::tempdir().expect("project");
     let core = open(data.path());
     let workspace = core.open_workspace(project.path()).expect("workspace");
-    let limit = Some(TerminalLimit {
+    let limit = Some(PlanLimit {
+        tier: PlanTier::Free,
+        kind: Limited::OpenTerminals,
         max: 1,
-        plan: "Free",
     });
     let ordinary = core
         .create_terminal(&workspace.id, None, size(), limit)
@@ -258,7 +260,11 @@ fn operation_terminal_counts_toward_the_plan_terminal_limit() {
         .create_operation_terminal(&workspace.id, &operation_id, "echo capped", size(), limit)
         .expect_err("a capped plan refuses another terminal");
     assert_eq!(refused.code, "too_many_terminals");
-    assert!(refused.message.contains("Free plan allows up to 1"));
+    assert!(
+        refused
+            .message
+            .starts_with("The Free plan allows 1 open terminal.")
+    );
 
     // No numeric cap (Owner, MAX, MAX 2X) never refuses an operation terminal.
     core.create_operation_terminal(&workspace.id, &operation_id, "echo uncapped", size(), None)

@@ -28,17 +28,14 @@ use ts_rs::TS;
 
 use crate::error::{ErrorCategory, KalError, Result};
 use crate::events::{Correlation, EventEnvelope, EventPayload, EventSource, EventStore, NewEvent};
+use crate::plans::Limited;
 use crate::runtime::{Core, display_path};
 use crate::time::now_rfc3339;
 
-/// A plan's cap on terminal tabs per workspace. Callers derive it from the signed-in account's
-/// verified entitlement; `None` (Owner, MAX, MAX 2X) means KalCode imposes no numeric cap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalLimit {
-    pub max: usize,
-    /// The plan's display name, for the refusal message ("Free", "Pro").
-    pub plan: &'static str,
-}
+/// A plan's cap on open terminals across all of KalCode, or on workspaces. Callers derive it
+/// from the signed-in account's verified plan (`plans::PlanTier::limit`); `None` means KalCode
+/// imposes no numeric cap.
+pub use crate::plans::PlanLimit;
 /// Upper bound on a single input write from the WebView.
 pub const MAX_WRITE_BYTES: usize = 64 * 1024;
 /// Longest shell id accepted over IPC (real ids are short words like `pwsh`).
@@ -517,6 +514,22 @@ impl Core {
     /// Opens `folder` (chosen natively), creating its workspace on first use, and makes it the
     /// active workspace. Emits `workspace.created` or `workspace.opened`.
     pub fn open_workspace(&self, folder: &Path) -> Result<Workspace> {
+        self.open_workspace_limited(folder, None)
+    }
+
+    /// Refuses adding a workspace when `limit` workspaces already exist. Reopening one never is.
+    pub fn check_workspace_capacity(&self, limit: Option<PlanLimit>) -> Result<()> {
+        let Some(limit) = limit else { return Ok(()) };
+        admit_workspace(&self.conn(), limit)
+    }
+
+    /// [`Self::open_workspace`] under the plan's workspace cap: reopening an existing root is
+    /// never refused; adding a new one is refused once `limit` workspaces exist.
+    pub fn open_workspace_limited(
+        &self,
+        folder: &Path,
+        limit: Option<PlanLimit>,
+    ) -> Result<Workspace> {
         let root = canonical_folder(folder)?;
         let root_text = root.to_string_lossy().into_owned();
         let now = now_rfc3339();
@@ -538,6 +551,9 @@ impl Core {
                 (id, false)
             }
             None => {
+                if let Some(limit) = limit {
+                    admit_workspace(&tx, limit)?;
+                }
                 let id = new_id();
                 tx.execute(
                     "INSERT INTO workspaces (id, name, root_path, created_at, last_opened_at)
@@ -745,14 +761,14 @@ impl Core {
     }
 
     /// Opens a new terminal tab in `workspace_id` running `shell_id` (or the default shell) in
-    /// the workspace folder, refusing it when the workspace already holds `limit.max` tabs.
-    /// Existing tabs are never closed. Emits `shell.started`.
+    /// the workspace folder, refusing it when `limit.max` terminals are already open across all
+    /// workspaces. Existing tabs are never closed. Emits `shell.started`.
     pub fn create_terminal(
         self: &Arc<Self>,
         workspace_id: &str,
         shell_id: Option<&str>,
         size: TerminalSize,
-        limit: Option<TerminalLimit>,
+        limit: Option<PlanLimit>,
     ) -> Result<TerminalInfo> {
         validate_id(workspace_id)?;
         if let Some(shell_id) = shell_id {
@@ -767,20 +783,8 @@ impl Core {
         if !workspace.available {
             return Err(folder_missing());
         }
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM terminals WHERE workspace_id = ?1",
-            [workspace_id],
-            |r| r.get(0),
-        )?;
-        if let Some(TerminalLimit { max, plan }) = limit
-            && usize::try_from(count).unwrap_or(usize::MAX) >= max
-        {
-            return Err(KalError::validation(
-                "too_many_terminals",
-                format!(
-                    "The {plan} plan allows up to {max} terminals per workspace. Close one to open another, or upgrade to MAX for unlimited terminals."
-                ),
-            ));
+        if let Some(limit) = limit {
+            admit_terminal(&conn, limit)?;
         }
         let tx = conn.transaction()?;
         let position: i64 = tx.query_row(
@@ -831,7 +835,7 @@ impl Core {
         operation_id: &str,
         command: &str,
         size: TerminalSize,
-        limit: Option<TerminalLimit>,
+        limit: Option<PlanLimit>,
     ) -> Result<TerminalInfo> {
         self.create_operation_terminal_inner(workspace_id, operation_id, command, None, size, limit)
     }
@@ -845,7 +849,7 @@ impl Core {
         command: &str,
         artifact_report: &Path,
         size: TerminalSize,
-        limit: Option<TerminalLimit>,
+        limit: Option<PlanLimit>,
     ) -> Result<TerminalInfo> {
         let expected_name = format!("{operation_id}.json");
         let expected_directory = self
@@ -885,7 +889,7 @@ impl Core {
         command: &str,
         artifact_report: Option<&Path>,
         size: TerminalSize,
-        limit: Option<TerminalLimit>,
+        limit: Option<PlanLimit>,
     ) -> Result<TerminalInfo> {
         validate_id(workspace_id)?;
         validate_id(operation_id)?;
@@ -917,22 +921,8 @@ impl Core {
             if existing.status == TerminalStatus::Running {
                 return Ok(existing.clone());
             }
-        } else {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM terminals WHERE workspace_id = ?1",
-                [workspace_id],
-                |row| row.get(0),
-            )?;
-            if let Some(TerminalLimit { max, plan }) = limit
-                && usize::try_from(count).unwrap_or(usize::MAX) >= max
-            {
-                return Err(KalError::validation(
-                    "too_many_terminals",
-                    format!(
-                        "The {plan} plan allows up to {max} terminals per workspace. Close one to start this operation, or upgrade to MAX for unlimited terminals."
-                    ),
-                ));
-            }
+        } else if let Some(limit) = limit {
+            admit_terminal(&conn, limit)?;
         }
 
         let tx = conn.transaction()?;
@@ -1636,6 +1626,21 @@ impl Core {
             let _ = session.kill();
         }
     }
+}
+
+/// Refuses one more terminal once `limit` are open across all workspaces. Closing a tab deletes
+/// its row, so every row (shells, agents and Operations) is an open terminal.
+fn admit_terminal(conn: &Connection, limit: PlanLimit) -> Result<()> {
+    debug_assert_eq!(limit.kind, Limited::OpenTerminals);
+    let open: i64 = conn.query_row("SELECT COUNT(*) FROM terminals", [], |r| r.get(0))?;
+    limit.admit(open)
+}
+
+/// Refuses one more workspace once `limit` exist. Removing a workspace deletes its row.
+fn admit_workspace(conn: &Connection, limit: PlanLimit) -> Result<()> {
+    debug_assert_eq!(limit.kind, Limited::Workspaces);
+    let added: i64 = conn.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))?;
+    limit.admit(added)
 }
 
 fn folder_missing() -> KalError {

@@ -8,6 +8,7 @@ use kalcode_contracts::operations::{
 use kalcode_core::events::{Correlation, EventPayload, NewEvent};
 use kalcode_core::flags::BuildChannel;
 use kalcode_core::operations::{OperationsStore, normalize_spec};
+use kalcode_core::plans::{Limited, PlanTier};
 use kalcode_core::workspaces::{TerminalSize, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
 use rusqlite::params;
@@ -355,6 +356,48 @@ fn activity_moments_follow_one_operation_identity_through_its_lifecycle() {
             .code,
         "invalid_operations_activity_limit"
     );
+}
+
+#[test]
+fn a_limited_plan_bounds_waiting_tasks_and_an_unlimited_one_does_not() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace_id = workspace(&core, project.path());
+    let store = OperationsStore::new(core);
+    let limit = PlanTier::Free.limit(Limited::QueuedTasks);
+    let queued: Vec<_> = (0..3)
+        .map(|n| {
+            store
+                .enqueue_limited(spec(&workspace_id, &format!("Task {n}")), limit)
+                .expect("fits")
+        })
+        .collect();
+    store.check_queue_capacity(None).expect("uncapped");
+    assert_eq!(
+        store.check_queue_capacity(limit).expect_err("full").code,
+        "too_many_queued_tasks"
+    );
+    let refused = store
+        .enqueue_limited(spec(&workspace_id, "Fourth"), limit)
+        .expect_err("a fourth waiting task");
+    assert_eq!(refused.code, "too_many_queued_tasks");
+    assert_eq!(
+        refused.message,
+        "The Free plan allows 3 queued tasks. Run or remove one to queue another, or upgrade to Pro for unlimited."
+    );
+    let (_, _, items) = store.snapshot().expect("snapshot");
+    assert_eq!(items.len(), 3, "a refusal writes nothing");
+
+    // Removing a waiting task frees a slot; Pro and above have no queue cap.
+    store.cancel_pending(&queued[0].id).expect("cancel");
+    store
+        .enqueue_limited(spec(&workspace_id, "Fourth"), limit)
+        .expect("a removed task frees a slot");
+    assert_eq!(PlanTier::Pro.limit(Limited::QueuedTasks), None);
+    store
+        .enqueue_limited(spec(&workspace_id, "Fifth"), None)
+        .expect("uncapped");
 }
 
 #[test]

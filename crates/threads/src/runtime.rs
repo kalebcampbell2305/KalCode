@@ -36,6 +36,7 @@ use kalcode_contracts::threads::{
     MessageRole, ThreadError, ThreadMessage, ThreadStatus, ThreadSummary, error_codes,
 };
 use kalcode_core::events::SubscriptionId;
+use kalcode_core::plans::PlanLimit;
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::{Core, ErrorCategory, KalError, Result};
 
@@ -75,6 +76,11 @@ pub const LAST_TURN_FAILED_ACTIVITY: &str = "Last turn failed";
 pub const ARCHIVED_ACTIVITY: &str = "Archived";
 
 type StreamSubscriber = Box<dyn Fn(&AgentEvent) -> bool + Send + Sync>;
+
+/// The current plan's cap on coding agents running at the same time (`None`: no cap). The
+/// desktop derives it from the verified account on every check, so a plan change applies to the
+/// next start without restarting the runtime.
+pub type AgentLimitSource = Arc<dyn Fn() -> Option<PlanLimit> + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Resolution {
@@ -413,6 +419,8 @@ struct Inner {
     streams: StreamHub,
     /// Set by shutdown: no wait may start or re-check a provider launch any more.
     shutting_down: AtomicBool,
+    /// Caps how many agents may run at once; unset (tests, no account) imposes none.
+    agent_limit: Mutex<Option<AgentLimitSource>>,
     self_ref: Weak<Inner>,
 }
 
@@ -448,6 +456,7 @@ impl ThreadRuntime {
             routes: Mutex::new(Routes::default()),
             streams: StreamHub::default(),
             shutting_down: AtomicBool::new(false),
+            agent_limit: Mutex::new(None),
             self_ref: weak.clone(),
         });
 
@@ -480,6 +489,17 @@ impl ThreadRuntime {
         };
         runtime.inner.recover();
         Ok(runtime)
+    }
+
+    /// Installs the plan's cap on agents running at the same time. Every new agent session
+    /// (create or resume) is refused with `too_many_agents` at the cap; running agents are never
+    /// stopped.
+    pub fn set_agent_limit(&self, source: AgentLimitSource) {
+        *self
+            .inner
+            .agent_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
     }
 
     // ---- Queries ----
@@ -1445,6 +1465,21 @@ impl Inner {
             .clone()
     }
 
+    /// Refuses starting one more agent session once the plan's cap of running (or held)
+    /// sessions is reached. Checked before any thread row is written, so a refusal leaves
+    /// nothing behind.
+    fn admit_agent(&self) -> Result<()> {
+        let source = self
+            .agent_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some(limit) = source.and_then(|limit| limit()) else {
+            return Ok(());
+        };
+        limit.admit(i64::try_from(self.running_ids().len()).unwrap_or(i64::MAX))
+    }
+
     fn running_ids(&self) -> Vec<String> {
         let all: Vec<Arc<LiveThread>> = self
             .live
@@ -1604,6 +1639,7 @@ impl Inner {
         let workspace = self.workspaces.resolve(request.workspace_id)?;
         let cwd = workspace.root.to_string_lossy().into_owned();
 
+        self.admit_agent()?;
         let id = thread_id.map(str::to_owned).unwrap_or_else(new_id);
         let now = now_rfc3339();
         let row = NewThreadRow {
@@ -3079,6 +3115,7 @@ impl Inner {
                 return Ok(());
             }
         }
+        self.admit_agent()?;
         let entry = self
             .providers
             .get(&row.provider_id)

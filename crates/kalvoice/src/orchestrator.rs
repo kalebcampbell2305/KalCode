@@ -743,7 +743,7 @@ impl Orchestrator {
         )
     }
 
-    /// Current usage (for "N / 75 used · remaining · renews …" on Free).
+    /// Current usage (for "N / 25 used · remaining · renews …" on Free).
     pub fn usage(&self) -> Result<KalVoiceUsage> {
         if let Some(accounting) = &self.accounting {
             return accounting.usage();

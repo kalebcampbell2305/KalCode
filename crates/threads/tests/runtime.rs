@@ -2016,3 +2016,51 @@ fn scoped_operations_and_search_for_non_ui_callers() {
     let exact = h.runtime.find("write release notes").unwrap();
     assert_eq!(exact[0].id, b, "exact name first");
 }
+
+#[test]
+fn a_limited_plan_bounds_running_agents_without_leaving_rows_behind() {
+    use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
+    let h = Harness::new();
+    let plan: Arc<Mutex<Option<PlanLimit>>> =
+        Arc::new(Mutex::new(PlanTier::Free.limit(Limited::ParallelAgents)));
+    let source = plan.clone();
+    h.runtime
+        .set_agent_limit(Arc::new(move || *source.lock().unwrap()));
+
+    let first = started(&h, "first task");
+    let refused = h
+        .runtime
+        .create(h.request("second task"))
+        .expect_err("one agent at a time on Free");
+    assert_eq!(refused.code, "too_many_agents");
+    assert_eq!(
+        refused.message,
+        "The Free plan allows 1 coding agent at a time. Stop an agent to start another, or upgrade to Pro for 4."
+    );
+    assert_eq!(
+        h.runtime.list(None, true).expect("list").len(),
+        1,
+        "a refused create writes no thread row"
+    );
+
+    // Stopping the agent frees the slot; the running one is never stopped by a refusal.
+    h.runtime.stop(&first).expect("stop");
+    let stopped = status(&h, &first);
+    let second = started(&h, "second task");
+    let refused = h
+        .runtime
+        .resume(&first, None)
+        .expect_err("resume past the cap");
+    assert_eq!(refused.code, "too_many_agents");
+    assert_eq!(
+        status(&h, &first),
+        stopped,
+        "a refused resume never leaves the thread starting"
+    );
+    assert_eq!(status(&h, &second), ThreadStatus::Active);
+
+    // No KalCode-side cap (MAX 2X, Owner): both run.
+    *plan.lock().unwrap() = PlanTier::Max2x.limit(Limited::ParallelAgents);
+    h.runtime.resume(&first, None).expect("uncapped resume");
+    started(&h, "third task");
+}

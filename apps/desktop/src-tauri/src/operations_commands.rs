@@ -16,7 +16,8 @@ use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::confirm::{NativeConfirmation, confirm};
 use kalcode_core::operations::{ACTIVITY_MOMENT_LIMIT, OperationsStore};
-use kalcode_core::workspaces::{TerminalInfo, TerminalLimit, TerminalSize, TerminalStatus};
+use kalcode_core::plans::{Limited, PlanLimit};
+use kalcode_core::workspaces::{TerminalInfo, TerminalSize, TerminalStatus};
 use kalcode_core::{Core, IpcError, KalError, Result};
 use kalcode_git::GitCore;
 use serde::{Deserialize, Serialize};
@@ -307,11 +308,15 @@ impl OperationsState {
         Ok(state)
     }
 
-    fn terminal_limit(&self) -> Option<TerminalLimit> {
+    fn plan_limit(&self, kind: Limited) -> Option<PlanLimit> {
         self.account.as_ref().map_or_else(
-            || AccountSnapshot::signed_out().terminal_limit(),
-            |account| account.snapshot().terminal_limit(),
+            || AccountSnapshot::signed_out().plan_limit(kind),
+            |account| account.snapshot().plan_limit(kind),
         )
+    }
+
+    fn terminal_limit(&self) -> Option<PlanLimit> {
+        self.plan_limit(Limited::OpenTerminals)
     }
 
     pub fn shutdown_checked(&self) -> bool {
@@ -1935,9 +1940,12 @@ pub async fn operations_enqueue(
 ) -> std::result::Result<OperationRecord, IpcError> {
     blocking(state, move |s| {
         let _gate = s.gate.lock().map_err(|_| poisoned())?;
+        // Refuse a task past the plan's queue cap before asking the owner to approve it.
+        let limit = s.plan_limit(Limited::QueuedTasks);
+        s.store.check_queue_capacity(limit)?;
         let consent = s.authorize(&app, &spec)?;
         s.revalidate_core()?;
-        let row = s.store.enqueue(consent.spec.clone())?;
+        let row = s.store.enqueue_limited(consent.spec.clone(), limit)?;
         s.authorized
             .lock()
             .map_err(|_| poisoned())?

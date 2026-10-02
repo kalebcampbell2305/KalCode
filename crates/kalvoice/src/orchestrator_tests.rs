@@ -477,7 +477,7 @@ fn typed_navigation_runs_counts_once_and_records_facts_only() {
     );
     assert!(response.counted);
     assert_eq!(response.usage.used, 1);
-    assert_eq!(response.usage.allowance, Some(75));
+    assert_eq!(response.usage.allowance, Some(25));
     assert_eq!(response.usage.resets_at, "2026-10-01T00:00:00.000Z");
     assert_eq!(response.intent.as_deref(), Some("navigate"));
     let events = kalvoice_events(&h.core);
@@ -857,7 +857,7 @@ fn limit_reached_is_returned_before_any_work() {
     let h = harness();
     h.core
         .read(|c| {
-            for _ in 0..75 {
+            for _ in 0..25 {
                 ledger::consume(
                     c,
                     ledger::RequestClaim {
@@ -869,7 +869,7 @@ fn limit_reached_is_returned_before_any_work() {
                     ledger::ConsumptionContext {
                         now: NOW,
                         anchor_day: 1,
-                        allowance: Some(75),
+                        allowance: Some(25),
                     },
                 )?;
             }
@@ -887,10 +887,10 @@ fn limit_reached_is_returned_before_any_work() {
         }
     );
     assert!(!response.counted);
-    assert_eq!(response.usage.used, 75);
+    assert_eq!(response.usage.used, 25);
     assert!(h.executor.executed.lock().expect("lock").is_empty());
     assert_eq!(types(&kalvoice_events(&h.core)), ["kalvoice.limit_reached"]);
-    assert_eq!(kalvoice_events(&h.core)[0]["payload"]["allowance"], 75);
+    assert_eq!(kalvoice_events(&h.core)[0]["payload"]["allowance"], 25);
 }
 
 #[test]
