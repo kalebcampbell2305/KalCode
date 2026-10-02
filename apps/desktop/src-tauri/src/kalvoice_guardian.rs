@@ -702,16 +702,16 @@ mod local_reasoner_live_test {
         PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required")))
     }
 
-    fn private_test_directory(path: &Path) {
+    fn private_test_directory(path: &Path) -> std::io::Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
 
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-                .expect("private component test directory");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
         #[cfg(windows)]
         let _ = path;
+        Ok(())
     }
 
     /// Opt-in trusted-machine proof. It either opens `KALCODE_COMPONENT_TEST_ROOT`, which must be
@@ -730,7 +730,7 @@ mod local_reasoner_live_test {
             .is_none()
             .then(|| TempDir::new().expect("ephemeral component store"));
         if let Some(stage) = &component_stage {
-            private_test_directory(stage.path());
+            private_test_directory(stage.path()).expect("private component test directory");
         }
         let component_root = std::env::var_os("KALCODE_COMPONENT_TEST_ROOT")
             .map(PathBuf::from)

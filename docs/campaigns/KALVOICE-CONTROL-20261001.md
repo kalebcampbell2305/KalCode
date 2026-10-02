@@ -422,3 +422,9 @@ review passed. A complete committed desktop rerun hit one existing five-second p
 timeout under concurrent build load; that unchanged palette file passed immediately with
 one worker. Original failure is preserved in `target/kalvoice-resume-desktop-committed.json`;
 no timeout or assertion was changed. Trusted immutable PR gates remain required.
+
+The next macOS gate exposed a Unix-only test-helper `expect_used` lint. Directory-permission
+setup now returns its I/O error to the actual test, which still fails with the same message;
+production behavior and test assertions are unchanged. Windows desktop all-target Clippy
+passed. The local gate had passed tooling, packages, API, and website units/build; it was
+stopped at website E2E so final verification can start from the corrected immutable commit.
