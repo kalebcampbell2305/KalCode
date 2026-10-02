@@ -94,8 +94,15 @@ test("the mode chip sets the permission mode new threads start in", async ({ pag
   await bar(page)
     .getByRole("button", { name: /^Permission mode: Approve/ })
     .click();
-  await page.getByRole("menuitemradio", { name: /^Plan/ }).click();
-  await expect(bar(page).getByRole("button", { name: /^Permission mode: Plan/ })).toBeVisible();
+  // Choose only once the menu is open: a click while it opens can be dropped on a loaded machine.
+  const menu = page.getByRole("menu", { name: /^Permission mode/ });
+  await expect(menu).toBeVisible();
+  const plan = menu.getByRole("menuitemradio", { name: /^Plan/ });
+  await expect(plan).toBeVisible();
+  await plan.click();
+  await expect(menu).toBeHidden();
+  // The saved setting comes back from the runtime before the chip shows it.
+  await expect(bar(page).getByRole("button", { name: /^Permission mode: Plan/ })).toBeVisible({ timeout: 10_000 });
 });
 
 test("the command field and its shortcut open the palette", async ({ page }) => {
