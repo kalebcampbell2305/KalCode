@@ -32,152 +32,228 @@ const ranges = [
     <meta name="color-scheme" content="dark" />
     <title>{OWNER_PAGE.title}</title>
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="preload" as="image" type="image/avif" href="/assets/hero/orb-768.avif" fetchpriority="high" />
   </head>
-  <body class="owner">
-    <div class="owner-watermark" aria-hidden="true">
-      <picture>
-        <source srcset="/assets/brand/kalcode-mascot-724.avif" type="image/avif" />
-        <img src="/assets/brand/kalcode-mascot-724.webp" alt="" width="724" height="724" decoding="async" />
-      </picture>
-    </div>
+  <body class="oc">
+    <canvas class="oc-stars" data-stars aria-hidden="true"></canvas>
+    <div class="oc-atmos" aria-hidden="true"></div>
 
-    <header class="owner-bar">
-      <div class="owner-bar__brand">
-        <img src="/assets/brand/kalcode-mark-64.png" width="28" height="28" alt="" />
-        <div>
-          <span class="owner-bar__name">KalCode</span>
-          <span class="owner-bar__tag">Owner command center</span>
-        </div>
-      </div>
-      <div class="owner-bar__controls" data-controls hidden>
-        <div class="owner-range" role="radiogroup" aria-label="Time range">
+    <header class="oc-bar">
+      <a class="oc-brand" href="/owner/analytics" aria-label="KalCode owner command center">
+        <img src="/assets/brand/kalcode-mark-64.png" width="30" height="30" alt="" />
+        <span class="oc-brand__text"><span class="oc-brand__name">KalCode</span><span class="oc-brand__tag">Command center</span></span>
+      </a>
+      <span class="oc-live" data-live data-state="connecting" role="status" aria-live="polite"><i aria-hidden="true"></i><span data-live-label>Connecting</span></span>
+      <div class="oc-controls" data-controls hidden>
+        <div class="oc-range" role="radiogroup" aria-label="Time range">
           {ranges.map(([value, label]) => (
             <button type="button" role="radio" aria-checked={value === "7d" ? "true" : "false"} data-range={value}>{label}</button>
           ))}
         </div>
-        <span class="owner-updated" data-updated aria-live="polite">Loading…</span>
-        <button type="button" class="owner-refresh" data-refresh aria-label="Refresh now">
-          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 3v3.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
-          Refresh
+        <span class="oc-updated" data-updated>—</span>
+        <button type="button" class="oc-refresh" data-refresh aria-label="Refresh now">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 3v3.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <span>Refresh</span>
         </button>
       </div>
     </header>
 
-    <main class="owner-main">
-      <section class="owner-gate" data-gate="loading" aria-live="polite">
-        <div class="owner-gate__card">
-          <div class="owner-spinner" data-gate-spinner aria-hidden="true"></div>
+    <main class="oc-main">
+      <section class="oc-gate" data-gate="loading" aria-live="polite">
+        <div class="oc-gate__card">
+          <picture class="oc-gate__mascot" aria-hidden="true">
+            <source srcset="/assets/hero/orb-384.avif" type="image/avif" />
+            <img src="/assets/hero/orb-384.webp" alt="" width="384" height="384" />
+          </picture>
           <h1 data-gate-title>Checking owner access…</h1>
           <p data-gate-text>One moment.</p>
-          <a class="owner-button" href="/account" data-gate-link hidden>Sign in to KalCode</a>
+          <div class="oc-spinner" data-gate-spinner aria-hidden="true"></div>
+          <a class="oc-button" href="/account" data-gate-link hidden>Sign in to KalCode</a>
         </div>
       </section>
 
-      <div class="owner-content" data-content hidden>
-        <section class="owner-kpis" aria-label="Distribution summary">
-          <article class="kpi kpi--hero" data-kpi="downloads.today"><span class="kpi__label">Downloads today</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
-          <article class="kpi" data-kpi="downloads.last7d"><span class="kpi__label">This week</span><strong class="kpi__value">—</strong><span class="kpi__note">Last 7 days</span></article>
-          <article class="kpi" data-kpi="downloads.last30d"><span class="kpi__label">This month</span><strong class="kpi__value">—</strong><span class="kpi__note">Last 30 days</span></article>
-          <article class="kpi" data-kpi="downloads.allTime"><span class="kpi__label">All-time downloads</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
-          <article class="kpi" data-kpi="installs.today"><span class="kpi__label">New desktop sign-ins today</span><strong class="kpi__value">—</strong><span class="kpi__note">First sign-in from a desktop app</span></article>
-          <article class="kpi" data-kpi="activity.lastHour"><span class="kpi__label">Activity · last hour</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
-          <article class="kpi" data-kpi="updates.inRange"><span class="kpi__label">Updates delivered</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
-        </section>
-        <section class="owner-kpis owner-kpis--money" aria-label="Revenue summary">
-          <article class="kpi kpi--money kpi--hero" data-kpi="revenue.subscribers"><span class="kpi__label">Paid subscribers</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
-          <article class="kpi kpi--money" data-kpi="revenue.mrr"><span class="kpi__label">MRR</span><strong class="kpi__value">—</strong><span class="kpi__note">Monthly recurring · yearly ÷ 12</span></article>
-          <article class="kpi kpi--money" data-kpi="revenue.arr"><span class="kpi__label">ARR</span><strong class="kpi__value">—</strong><span class="kpi__note">MRR × 12</span></article>
-          <article class="kpi kpi--money" data-kpi="revenue.cash"><span class="kpi__label">Cash collected this month</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+      <div class="oc-content" data-content hidden>
+        <!-- HERO: ARR -->
+        <section class="hero" aria-labelledby="hero-arr-label">
+          <div class="hero__world" aria-hidden="true">
+            <picture>
+              <source media="(max-width: 767px)" type="image/avif" srcset="/assets/hero/world/world-portrait-720.avif 720w, /assets/hero/world/world-portrait-1080.avif 1080w" sizes="100vw" />
+              <source type="image/avif" srcset="/assets/hero/world/world-1280.avif 1280w, /assets/hero/world/world-1920.avif 1920w, /assets/hero/world/world-2560.avif 2560w" sizes="max(100vw, 1280px)" />
+              <img src="/assets/hero/world/world-1920.webp" alt="" width="1920" height="1081" decoding="async" />
+            </picture>
+          </div>
+          <div class="hero__stage" data-tilt aria-hidden="true">
+            <div class="hero__halo"></div>
+            <picture class="hero__mascot">
+              <source srcset="/assets/hero/orb-512.avif 512w, /assets/hero/orb-768.avif 768w, /assets/hero/orb-1024.avif 1024w" sizes="(max-width: 767px) 260px, 360px" type="image/avif" />
+              <img src="/assets/hero/orb-768.webp" alt="" width="768" height="768" decoding="async" />
+            </picture>
+            <div class="hero__pad"></div>
+          </div>
+
+          <div class="hero__copy">
+            <p class="hero__eyebrow" id="hero-arr-label">Annual recurring revenue <span>· USD</span></p>
+            <p class="hero__arr" data-count="arr" data-format="usd0" data-pending aria-describedby="hero-arr-label">$000,000</p>
+            <div class="goal" data-goal data-pending>
+              <div class="goal__row">
+                <div class="goal__next"><span>Next milestone</span><strong data-goal-next>—</strong></div>
+                <div class="goal__left"><strong data-goal-left>—</strong><span>to go</span></div>
+              </div>
+              <div class="goal__track" data-goal-track role="progressbar" aria-label="Progress to the next ARR milestone" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="goal__fill" data-goal-fill><i class="goal__spark"></i></div>
+              </div>
+              <div class="goal__foot"><span data-goal-from></span><span data-goal-pct></span><span data-goal-to>—</span></div>
+            </div>
+          </div>
         </section>
 
-        <section class="owner-grid owner-grid--wide">
-          <article class="panel panel--chart">
+        <!-- VITAL SIGNS -->
+        <section class="vitals" aria-label="Vital signs">
+          <article class="vital vital--xl" data-vital="mrr">
+            <span class="vital__label">MRR</span>
+            <strong class="vital__value" data-count="mrr" data-format="usdAuto" data-pending>0,000</strong>
+            <span class="vital__note">Monthly recurring · yearly plans ÷ 12</span>
+          </article>
+          <article class="vital vital--xl vital--warm" data-vital="cash">
+            <span class="vital__label">Revenue this month</span>
+            <strong class="vital__value" data-count="cash" data-format="usdAuto" data-pending>0,000</strong>
+            <span class="vital__note" data-note="cash">Cash collected, net of refunds</span>
+          </article>
+          <article class="vital" data-vital="subscribers">
+            <span class="vital__label">Paid subscribers</span>
+            <strong class="vital__value" data-count="subscribers" data-pending>0,000</strong>
+            <span class="vital__note" data-note="subscribers">Active · live mode</span>
+          </article>
+          <article class="vital" data-vital="downloadsToday">
+            <span class="vital__label">Downloads today</span>
+            <strong class="vital__value" data-count="downloadsToday" data-pending>0,000</strong>
+            <span class="vital__note" data-note="downloadsToday">Since midnight</span>
+          </article>
+          <article class="vital" data-vital="downloadsAll">
+            <span class="vital__label">Total downloads</span>
+            <strong class="vital__value" data-count="downloadsAll" data-pending>0,000</strong>
+            <span class="vital__note" data-note="downloadsAll">All time</span>
+          </article>
+        </section>
+
+        <!-- LIVE STRIP -->
+        <section class="pulse" aria-label="Live activity">
+          <span class="pulse__badge"><i aria-hidden="true"></i>Live</span>
+          <ul class="pulse__items" data-pulse></ul>
+        </section>
+
+        <!-- MILESTONES -->
+        <section class="ladder" aria-labelledby="ladder-title">
+          <header class="ladder__head">
+            <h2 id="ladder-title">Revenue milestones</h2>
+            <span data-ladder-summary></span>
+          </header>
+          <ol class="ladder__track" data-ladder></ol>
+        </section>
+
+        <!-- REVENUE -->
+        <div class="oc-section">
+          <h2>Revenue</h2>
+          <span data-range-label></span>
+        </div>
+        <p class="oc-error" data-revenue-error hidden></p>
+        <section class="grid grid--2-1" data-revenue>
+          <article class="panel">
             <header class="panel__head">
-              <h2>Downloads and updates</h2>
+              <h3>Revenue by plan</h3>
+              <div class="legend" aria-hidden="true">{paid.map((plan, i) => <span class={`legend__item legend__item--s${i + 1}`}>{plan.name}</span>)}</div>
+            </header>
+            <div class="plans" data-plans>
+              {paid.map((plan, i) => (
+                <div class={`plan plan--s${i + 1}`} data-plan={plan.id}>
+                  <div class="plan__head"><span class="plan__name">{plan.name}</span><span class="plan__price">${plan.price.monthlyUsd}/mo · ${plan.price.yearlyUsd}/yr</span></div>
+                  <strong class="plan__mrr" data-f="mrr">—</strong>
+                  <span class="plan__mrr-label">MRR</span>
+                  <dl class="plan__facts">
+                    <div><dt>Subscribers</dt><dd data-f="subscribers">—</dd></div>
+                    <div><dt>Monthly</dt><dd data-f="monthly">—</dd></div>
+                    <div><dt>Yearly</dt><dd data-f="yearly">—</dd></div>
+                    <div><dt>ARR</dt><dd data-f="arr">—</dd></div>
+                  </dl>
+                  <div class="plan__share"><i data-f="share"></i></div>
+                </div>
+              ))}
+            </div>
+            <div class="stackbar" data-plan-bar role="img" aria-label="MRR by plan"></div>
+          </article>
+          <article class="panel panel--warm">
+            <header class="panel__head"><h3>Cash collected</h3><span class="panel__hint">Charges minus refunds</span></header>
+            <div class="cash" data-cash></div>
+            <p class="panel__foot">Actual money received. Not MRR: a yearly plan pays twelve months up front.</p>
+          </article>
+        </section>
+        <section class="grid grid--3">
+          <article class="panel">
+            <header class="panel__head"><h3>MRR</h3><span class="panel__hint" data-since></span></header>
+            <div class="chart chart--sm" data-chart="mrr" role="img" aria-label="MRR over time"></div>
+          </article>
+          <article class="panel">
+            <header class="panel__head"><h3>Paid subscribers</h3><span class="panel__hint" data-since></span></header>
+            <div class="chart chart--sm" data-chart="subscribers" role="img" aria-label="Paid subscribers over time"></div>
+          </article>
+          <article class="panel">
+            <header class="panel__head"><h3>Movement</h3><span class="panel__hint" data-range-label></span></header>
+            <dl class="facts" data-movement></dl>
+          </article>
+        </section>
+
+        <!-- DISTRIBUTION -->
+        <div class="oc-section">
+          <h2>Distribution</h2>
+          <span data-range-label></span>
+        </div>
+        <section class="grid grid--2-1">
+          <article class="panel">
+            <header class="panel__head">
+              <h3>Downloads and updates</h3>
               <div class="legend" aria-hidden="true"><span class="legend__item legend__item--s1">Downloads</span><span class="legend__item legend__item--s2">Updates</span></div>
             </header>
             <div class="chart" data-chart="distribution" role="img" aria-label="Downloads and updates over time"></div>
             <details class="panel__table"><summary>Show data</summary><table data-table="distribution"></table></details>
           </article>
-
           <article class="panel">
-            <header class="panel__head"><h2>Version adoption</h2><span class="panel__hint" data-adoption-hint></span></header>
-            <div class="adoption" data-adoption></div>
+            <header class="panel__head"><h3>Version adoption</h3><span class="panel__hint">Last two days</span></header>
+            <div class="adoption">
+              <div class="ring" data-ring role="img" aria-label="Share of running copies on the latest version">
+                <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring__bg" cx="60" cy="60" r="50" /><circle class="ring__fg" data-ring-fg cx="60" cy="60" r="50" /></svg>
+                <div class="ring__label"><strong data-ring-value>—</strong><span data-ring-caption>on latest</span></div>
+              </div>
+              <div class="bars" data-adoption></div>
+            </div>
             <dl class="facts" data-adoption-facts></dl>
-            <p class="panel__foot">Share of update checks from running copies over the last two days. Each copy checks at launch and every six hours.</p>
           </article>
         </section>
-
-        <section class="owner-grid">
+        <section class="grid grid--3">
           <article class="panel">
-            <header class="panel__head"><h2>Platform</h2><span class="panel__hint" data-range-label></span></header>
+            <header class="panel__head"><h3>Windows vs macOS</h3><span class="panel__hint" data-range-label></span></header>
             <div class="split" data-split></div>
           </article>
           <article class="panel">
-            <header class="panel__head"><h2>Builds</h2><span class="panel__hint">All time</span></header>
-            <table class="table" data-builds><thead><tr><th scope="col">Build</th><th scope="col">Downloads</th><th scope="col">Updates</th></tr></thead><tbody></tbody></table>
-          </article>
-          <article class="panel">
-            <header class="panel__head"><h2>Accounts</h2><span class="panel__hint" data-range-label></span></header>
+            <header class="panel__head"><h3>Installs and accounts</h3><span class="panel__hint" data-range-label></span></header>
             <dl class="facts" data-accounts></dl>
           </article>
-        </section>
-
-        <h2 class="owner-section">Revenue</h2>
-        <p class="owner-error" data-revenue-error hidden></p>
-        <section class="owner-grid owner-grid--wide" data-revenue>
           <article class="panel">
-            <header class="panel__head">
-              <h2>Revenue by plan</h2>
-              <div class="legend" aria-hidden="true">{paid.map((plan, i) => <span class={`legend__item legend__item--s${i + 1}`}>{plan.name}</span>)}</div>
-            </header>
-            <div class="stackbar" data-plan-bar role="img" aria-label="MRR by plan"></div>
-            <table class="table table--plans" data-plans>
-              <thead><tr><th scope="col">Plan</th><th scope="col">Subscribers</th><th scope="col">Monthly</th><th scope="col">Yearly</th><th scope="col">MRR</th><th scope="col">ARR</th></tr></thead>
-              <tbody>
-                {paid.map((plan, i) => (
-                  <tr data-plan={plan.id}>
-                    <th scope="row"><span class={`swatch swatch--s${i + 1}`} aria-hidden="true"></span>{plan.name}<span class="table__sub">${plan.price.monthlyUsd}/mo · ${plan.price.yearlyUsd}/yr</span></th>
-                    <td data-f="subscribers">—</td><td data-f="monthly">—</td><td data-f="yearly">—</td><td data-f="mrr">—</td><td data-f="arr">—</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </article>
-          <article class="panel">
-            <header class="panel__head"><h2>Cash collected</h2><span class="panel__hint">Charges minus refunds</span></header>
-            <dl class="facts facts--cash" data-cash></dl>
-            <p class="panel__foot">Actual money received. Not the same as MRR: a yearly plan pays twelve months up front.</p>
+            <header class="panel__head"><h3>Builds</h3><span class="panel__hint">All time</span></header>
+            <table class="table" data-builds><thead><tr><th scope="col">Build</th><th scope="col">Downloads</th><th scope="col">Updates</th></tr></thead><tbody></tbody></table>
           </article>
         </section>
-
-        <section class="owner-grid">
-          <article class="panel panel--chart">
-            <header class="panel__head"><h2>MRR</h2><span class="panel__hint" data-since></span></header>
-            <div class="chart chart--sm" data-chart="mrr" role="img" aria-label="MRR over time"></div>
-          </article>
-          <article class="panel panel--chart">
-            <header class="panel__head"><h2>Paid subscribers</h2><span class="panel__hint" data-since></span></header>
-            <div class="chart chart--sm" data-chart="subscribers" role="img" aria-label="Paid subscribers over time"></div>
-          </article>
+        <section class="grid grid--2-1">
           <article class="panel">
-            <header class="panel__head"><h2>Movement</h2><span class="panel__hint" data-range-label></span></header>
-            <dl class="facts" data-movement></dl>
-          </article>
-        </section>
-
-        <section class="owner-grid owner-grid--wide">
-          <article class="panel">
-            <header class="panel__head"><h2>Recent activity</h2><span class="panel__hint">Live</span></header>
+            <header class="panel__head"><h3>Recent activity</h3><span class="panel__hint panel__hint--live"><i aria-hidden="true"></i>Live</span></header>
             <ol class="feed" data-feed></ol>
           </article>
-          <article class="panel panel--privacy">
-            <header class="panel__head"><h2>What is counted</h2></header>
+          <article class="panel panel--quiet">
+            <header class="panel__head"><h3>What is counted</h3></header>
             <ul class="privacy">
-              <li>Installer downloads from a browser, update checks and update downloads from KalCode, counted on our server when the file is served.</li>
+              <li>Installer downloads from a browser, plus update checks and update downloads from KalCode, counted on our server when the file is served.</li>
               <li>Stored: time, event, platform, architecture and KalCode version. No IP address, no device or installation id, no cookie.</li>
               <li>Revenue comes from Stripe live mode only. Failed, incomplete and test payments never count.</li>
-              <li>Installs are not measured on the device: KalCode sends no telemetry. New desktop sign-ins are the install signal.</li>
+              <li>KalCode sends no telemetry. A first desktop sign-in is the install signal.</li>
             </ul>
           </article>
         </section>
