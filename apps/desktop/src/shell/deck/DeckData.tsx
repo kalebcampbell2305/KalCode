@@ -1,10 +1,11 @@
 /**
  * Live data for the Command Deck chrome (top bar and status strip): the Operations snapshot,
- * provider health and the active workspace's Git summary. Each is a cheap native read, refreshed
- * while the window is visible, on window focus and after the events that change it. A failed read
- * keeps the last good value and reports the error; nothing is invented to fill a gap.
+ * provider health, the connected provider accounts and the active workspace's Git summary. Each is
+ * a cheap native read, refreshed while the window is visible, on window focus and after the events
+ * that change it. A failed read keeps the last good value and reports the error; nothing is
+ * invented to fill a gap.
  */
-import type { GitStatusSummary, OperationsSnapshot, ProviderHealth } from "@kalcode/protocol";
+import type { GitStatusSummary, OperationsSnapshot, ProviderAccount, ProviderHealth } from "@kalcode/protocol";
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsClient } from "../../ipc/operations.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
@@ -19,6 +20,8 @@ export interface Feed<T> {
 export interface DeckDataValue {
   operations: Feed<OperationsSnapshot>;
   health: Feed<ProviderHealth[]>;
+  /** Every provider account, removed ones included (the Provider Dock filters). */
+  accounts: Feed<ProviderAccount[]>;
   /** `null` data with `failed: false` once loaded means the folder isn't a Git repository. */
   git: Feed<GitStatusSummary> & { loaded: boolean };
 }
@@ -26,6 +29,7 @@ export interface DeckDataValue {
 /** Operations snapshots read event history; the strip doesn't need the page's 3 s cadence. */
 const OPERATIONS_MS = 10_000;
 const HEALTH_MS = 30_000;
+const ACCOUNTS_MS = 30_000;
 const GIT_MS = 15_000;
 
 const DeckDataContext = createContext<DeckDataValue | null>(null);
@@ -90,6 +94,7 @@ export function DeckDataProvider({ children }: { children: ReactNode }) {
   );
   const loadOperations = useMemo(() => () => operationsClient.snapshot(), [operationsClient]);
   const loadHealth = useMemo(() => () => client.listProviderHealth(), [client]);
+  const loadAccounts = useMemo(() => () => client.listProviderAccounts(), [client]);
   const loadGit = useMemo(
     () => (activeId ? () => client.gitStatus(activeId, 1).then((r) => (r.repository ? r.summary : null)) : null),
     [client, activeId],
@@ -103,15 +108,27 @@ export function DeckDataProvider({ children }: { children: ReactNode }) {
 
   const operations = usePolled(loadOperations, OPERATIONS_MS, operationSeq);
   const health = usePolled(loadHealth, HEALTH_MS, providerSeq);
+  const accounts = usePolled(loadAccounts, ACCOUNTS_MS, providerSeq);
   const git = usePolled(loadGit, GIT_MS, gitSeq);
 
   const value = useMemo<DeckDataValue>(
     () => ({
       operations: { data: operations.data, failed: operations.failed },
       health: { data: health.data, failed: health.failed },
+      accounts: { data: accounts.data, failed: accounts.failed },
       git: { data: git.data, failed: git.failed, loaded: git.at > 0 },
     }),
-    [operations.data, operations.failed, health.data, health.failed, git.data, git.failed, git.at],
+    [
+      operations.data,
+      operations.failed,
+      health.data,
+      health.failed,
+      accounts.data,
+      accounts.failed,
+      git.data,
+      git.failed,
+      git.at,
+    ],
   );
   return <DeckDataContext.Provider value={value}>{children}</DeckDataContext.Provider>;
 }

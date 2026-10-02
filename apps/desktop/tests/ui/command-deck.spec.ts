@@ -115,3 +115,35 @@ test("the command field and its shortcut open the palette", async ({ page }) => 
   await page.keyboard.press(`${MOD}+k`);
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
 });
+
+test("the provider dock shows each account and takes a dragged thread after asking", async ({ page }) => {
+  await open(page, "busy");
+  await toOperations(page);
+  const dock = strip(page).getByRole("group", { name: "Provider accounts" });
+  await expect(dock.getByRole("button").first()).toBeVisible();
+  const chips = dock.getByRole("button");
+  expect(await chips.count()).toBeGreaterThanOrEqual(2);
+
+  // A real pointer drag from an agent row onto an account of the same provider.
+  const row = agents(page).getByRole("button", { name: /^Refactor auth middleware/ });
+  const name = (await row.getAttribute("aria-label")) ?? "";
+  const provider = /, (Claude Code|Codex|Gemini CLI) in /.exec(name)?.[1] ?? "Claude Code";
+  const target = dock.getByRole("button", { name: new RegExp(`^${provider} · `) }).last();
+  const from = await row.boundingBox();
+  const to = await target.boundingBox();
+  if (!from || !to) throw new Error("dock or agent row not laid out");
+  await page.mouse.move(from.x + 20, from.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 60, from.y + 60, { steps: 4 });
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 });
+  await expect(page.getByText(/^(Move to |Already uses|Answer its|Working.|Waiting to|Not a )/).first()).toBeVisible();
+  await page.mouse.up();
+  // Either the confirmation opens, or the dock says why that account can't take the thread.
+  await expect(
+    page
+      .getByRole("alertdialog", { name: "Rebind thread?" })
+      .or(page.getByText(/can't take “Refactor auth middleware”/)),
+  ).toBeVisible();
+  // The drop never opened the row's thread on its own.
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
+});

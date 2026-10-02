@@ -2,6 +2,7 @@ import { Badge, Button, ErrorState, ProviderGlyph, Skeleton, StatusChip, TextInp
 import { Search } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { beginThreadDrag } from "../../shell/deck/threadDrag.ts";
 import { matchesQuery, presentThread } from "./model.ts";
 import styles from "./ThreadList.module.css";
 import type { useThreadList } from "./useThreads.ts";
@@ -127,6 +128,7 @@ export function ThreadList({
                   className={styles.row}
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onSelect(thread.id)}
+                  onPointerDown={(event) => beginThreadDrag(event, thread)}
                 >
                   <span className={styles.nameRow}>
                     <span className={styles.name}>

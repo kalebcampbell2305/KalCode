@@ -22,6 +22,8 @@
   background: transparent;
   color: var(--color-text-muted);
   white-space: nowrap;
+  /* With the Provider Dock beside them, segments clip rather than overlap in narrow windows. */
+  overflow: hidden;
   transition:
     background-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
