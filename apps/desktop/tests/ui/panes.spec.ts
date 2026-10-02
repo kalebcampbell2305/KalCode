@@ -213,6 +213,22 @@ test.describe("tabs and drag and drop", () => {
     await page.keyboard.press("Control+Alt+d");
     await expect(panes(page)).toHaveCount(2);
     const gitBash = pane(page, 0).getByRole("tab", { name: /Git Bash/ });
+    // Provider detection finishes asynchronously, one provider at a time, and the panes move ~40 px down
+    // once all are in, so an early press could land on a toolbar button. Measure only after they appear
+    // and the tab holds still as the element under its own centre.
+    for (const provider of ["Claude Code", "Codex", "Gemini CLI"]) {
+      await expect(page.getByRole("button", { name: `New ${provider} pane` })).toBeVisible();
+    }
+    await expect
+      .poll(async () => {
+        const before = await box(gitBash);
+        await page.waitForTimeout(100);
+        const after = await box(gitBash);
+        if (before.x !== after.x || before.y !== after.y) return false;
+        const centre = { x: after.x + after.width / 2, y: after.y + after.height / 2 };
+        return gitBash.evaluate((tab, point) => tab.contains(document.elementFromPoint(point.x, point.y)), centre);
+      })
+      .toBe(true);
     const target = await box(pane(page, 1));
     const from = await box(gitBash);
     // Onto the bottom edge of the right pane: a new pane below it.
