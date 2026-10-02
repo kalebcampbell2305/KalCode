@@ -14,7 +14,7 @@ The live site is version-aware. The 0.1.9 Updates entry (`apps/website/src/pages
 These status flips happen only after the release lead's live verification of 0.1.9. Plans and values stay the same.
 
 - Agent Fleet: Coming soon → **Available** (verified in 0.1.9+N)
-- KalTidy: Coming soon → **Available** (verified in 0.1.8+944 or 0.1.9+N)
+- KalTidy: **Available** (verifiedIn 0.1.8+944, flipped in PR #80)
 - Contextual follow-ups and completion callbacks: Coming soon → Available, only if packaged-app QA proves them
 
 ## Homepage / meta (optional, owner's call)

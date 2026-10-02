@@ -355,7 +355,7 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         status: "coming_soon",
       },
       { id: "localhost", label: "Automatic localhost detection", from: "free", status: "available", verifiedIn: LIVE },
-      { id: "kaltidy", label: "KalTidy", from: "free", status: "coming_soon" },
+      { id: "kaltidy", label: "KalTidy", from: "free", status: "available", verifiedIn: "0.1.8+944" },
       { id: "favorites", label: "Favorites", from: "free", status: "coming_soon" },
       {
         id: "navigation",
