@@ -44,6 +44,13 @@ const QA_SAFEGUARDS = Object.freeze([
   "testHooks",
   "tlsBypassed",
 ]);
+// Fast-lane automated QA (schemaVersion 3, owner policy 2026-10-02): CI / disposable-profile checks instead of
+// physical sittings. restoreGuard ("Restore previous version is not offered") is required exactly when the build
+// changes KalCode's data, because no older build can open the migrated data.
+const QA_AUTOMATED_CHECKS = Object.freeze(["install", "cleanInstall", "launch", "updateFromLive", "dataKept"]);
+const AUTOMATED_TRIAL_METHOD = "automated-update-from-live-v1";
+export const QA_DATA_PATHS = Object.freeze(["crates/native-core/migrations/", "crates/timeline/migrations/"]);
+export const QA_UPDATER_PATHS = Object.freeze(["crates/updater/", "apps/desktop/src-tauri/src/updater"]);
 
 function fail(message) {
   throw new Error(`updater manifest blocked: ${message}`);
@@ -79,6 +86,7 @@ function releaseIdentityProblems(value, expected, label) {
  * lower-to-newer, rollback and re-update sequence.
  */
 export function updaterQaProblems(record, expected, phase = "final") {
+  if (record?.schemaVersion === 3) return automatedQaProblems(record, expected, phase);
   const problems = [];
   if (
     !exactKeys(record, [
@@ -155,6 +163,119 @@ export function updaterQaProblems(record, expected, phase = "final") {
       problems.push(...releaseIdentityProblems(outcome.to, to, `updater QA ${step} destination`));
     }
   }
+  return problems;
+}
+
+/**
+ * Fast-lane automated QA (schemaVersion 3). The trial is a real update from the live public build to the exact
+ * candidate on a clean CI / disposable profile. A data-changing build must prove Restore previous version is not
+ * offered (restoreGuard); an updater-code change without a data change must also prove rollback and re-update.
+ */
+function automatedQaProblems(record, expected, phase) {
+  const problems = [];
+  if (
+    !exactKeys(record, [
+      "channel",
+      "checks",
+      "release",
+      "safeguards",
+      "schemaVersion",
+      "status",
+      "target",
+      "updateTrial",
+    ])
+  ) {
+    return ["updater QA record has unexpected fields"];
+  }
+  if (!Object.hasOwn(TARGET_FORMATS, record.target) || record.target !== expected?.target) {
+    problems.push("updater QA target does not match the release");
+  }
+  if (!CHANNELS.has(record.channel) || record.channel !== expected?.channel) {
+    problems.push("updater QA channel does not match the release");
+  }
+  problems.push(...releaseIdentityProblems(record.release, expected?.release, "updater QA release"));
+  const checks = record.checks;
+  const hasGuard = checks !== null && typeof checks === "object" && Object.hasOwn(checks, "restoreGuard");
+  const checkKeys = hasGuard ? [...QA_AUTOMATED_CHECKS, "restoreGuard"] : QA_AUTOMATED_CHECKS;
+  if (!exactKeys(checks, checkKeys) || checkKeys.some((key) => checks?.[key] !== true)) {
+    problems.push("automated updater QA checks are incomplete");
+  }
+  if (!exactKeys(record.safeguards, QA_SAFEGUARDS) || QA_SAFEGUARDS.some((key) => record.safeguards?.[key] !== false)) {
+    problems.push("updater QA used a test hook, cache seed, bypass, or fixture-only proof");
+  }
+  if (phase === "preliminary") {
+    if (record.channel !== "stable") problems.push("preliminary updater QA staging is Stable-only");
+    if (record.status !== "preliminary-passed" || record.updateTrial !== null) {
+      problems.push("preliminary updater QA must leave the real update trial pending");
+    }
+    return problems;
+  }
+  if (phase !== "final") return ["updater QA validation phase is invalid"];
+  if (record.status !== "passed") problems.push("completed updater QA is required");
+  const trial = record.updateTrial;
+  if (!exactKeys(trial, ["candidate", "changesData", "changesUpdater", "live", "method", "outcomes"])) {
+    problems.push("automated updater QA trial is invalid");
+    return problems;
+  }
+  if (trial.method !== AUTOMATED_TRIAL_METHOD)
+    problems.push("automated updater QA did not use the update-from-live method");
+  if (typeof trial.changesData !== "boolean" || typeof trial.changesUpdater !== "boolean") {
+    problems.push("automated updater QA must declare whether the build changes data or updater code");
+  }
+  problems.push(...releaseIdentityProblems(trial.live, null, "updater QA live build"));
+  problems.push(...releaseIdentityProblems(trial.candidate, expected?.release, "updater QA candidate"));
+  try {
+    if (semverPrecedenceKey(trial.live?.version) >= semverPrecedenceKey(trial.candidate?.version)) {
+      problems.push("updater QA live build is not lower than the candidate");
+    }
+  } catch {
+    problems.push("updater QA trial versions are invalid");
+  }
+  if (trial.changesData === true && checks?.restoreGuard !== true) {
+    problems.push("a data-changing build must prove Restore previous version is not offered (restoreGuard)");
+  }
+  if (trial.changesData !== true && hasGuard) {
+    problems.push("restoreGuard applies only to a data-changing build");
+  }
+  const roundTrip = trial.changesUpdater === true && trial.changesData !== true;
+  const required = [["update", trial.live, trial.candidate]];
+  if (roundTrip) required.push(["rollback", trial.candidate, trial.live], ["reupdate", trial.live, trial.candidate]);
+  if (!Array.isArray(trial.outcomes) || trial.outcomes.length !== required.length) {
+    problems.push(
+      roundTrip
+        ? "an updater-code change must prove update, rollback, and re-update exactly once"
+        : "automated updater QA must prove exactly one update from the live build",
+    );
+    return problems;
+  }
+  for (let index = 0; index < required.length; index += 1) {
+    const [step, from, to] = required[index];
+    const outcome = trial.outcomes[index];
+    if (!exactKeys(outcome, ["from", "passed", "step", "to"]) || outcome.step !== step || outcome.passed !== true) {
+      problems.push(`updater QA ${step} outcome is incomplete`);
+      continue;
+    }
+    problems.push(...releaseIdentityProblems(outcome.from, from, `updater QA ${step} source`));
+    problems.push(...releaseIdentityProblems(outcome.to, to, `updater QA ${step} destination`));
+  }
+  return problems;
+}
+
+/** A v3 record's change declarations must match the source diff from the live build to the candidate. */
+export function qaChangeDeclarationProblems(record, changedFiles) {
+  if (record?.schemaVersion !== 3 || record.updateTrial === null) return [];
+  const files = Array.isArray(changedFiles) ? changedFiles : [];
+  const changesData = files.some((file) => QA_DATA_PATHS.some((path) => file.startsWith(path)));
+  const changesUpdater = files.some((file) => QA_UPDATER_PATHS.some((path) => file.startsWith(path)));
+  const problems = [];
+  if (record.updateTrial?.changesData !== changesData)
+    problems.push(
+      `${record.target} QA declares changesData=${record.updateTrial?.changesData}, the source diff says ${changesData}`,
+    );
+  if (record.updateTrial?.changesUpdater !== changesUpdater)
+    problems.push(
+      `${record.target} QA declares changesUpdater=${record.updateTrial?.changesUpdater}, the source diff says ${changesUpdater}`,
+    );
   return problems;
 }
 

@@ -57,7 +57,7 @@ import {
   publicVerificationProblems,
   releaseProcessOptions,
 } from "./signing.mjs";
-import { createPlatformUpdaterManifest } from "./updater-manifest.mjs";
+import { createPlatformUpdaterManifest, qaChangeDeclarationProblems } from "./updater-manifest.mjs";
 import { readUpdaterPublicKey } from "./updater-signing.mjs";
 
 let mode;
@@ -336,6 +336,19 @@ if (mode !== "local") {
     problems.push(
       `build commit ${releaseBuild.commit.slice(0, 12)} is not on origin/main; merge it and fetch before publishing`,
     );
+  }
+  // Fast-lane (v3) QA: the declared data / updater-code changes must match the real live-to-candidate source diff,
+  // because they decide which restore and rollback proof the record must carry.
+  for (const packet of packets) {
+    const live = packet.qa?.schemaVersion === 3 ? packet.qa.updateTrial?.live?.commit : null;
+    if (!live) continue;
+    const diff = spawnSync(
+      "git",
+      ["diff", "--name-only", live, releaseBuild.commit],
+      releaseProcessOptions({ cwd: ROOT, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }),
+    );
+    if (diff.status !== 0) problems.push(`${packet.target} QA live build ${live.slice(0, 12)} is not in this checkout`);
+    else problems.push(...qaChangeDeclarationProblems(packet.qa, diff.stdout.split(/\r?\n/).filter(Boolean)));
   }
 }
 if (publishesRemote) assertCleanTree(initializesAuthority ? "A release-authority bootstrap" : "A publish");

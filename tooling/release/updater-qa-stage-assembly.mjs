@@ -106,9 +106,14 @@ function sourceFiles(source, commit) {
 }
 
 function validateSourceAuthority({ baselineSource, candidateSource, baseline, candidate }) {
-  const baselineHead = git(baselineSource, ["rev-parse", "HEAD"]);
-  if (baselineHead !== baseline.commit || git(baselineSource, ["status", "--porcelain", "--untracked-files=normal"])) {
-    throw new Error("baseline source must be a clean checkout of the exact signed build commit");
+  if (baselineSource) {
+    const baselineHead = git(baselineSource, ["rev-parse", "HEAD"]);
+    if (
+      baselineHead !== baseline.commit ||
+      git(baselineSource, ["status", "--porcelain", "--untracked-files=normal"])
+    ) {
+      throw new Error("baseline source must be a clean checkout of the exact signed build commit");
+    }
   }
   const candidateHead = git(candidateSource, ["rev-parse", "HEAD"]);
   if (resolve(candidateSource) !== resolve(ROOT)) {
@@ -131,7 +136,7 @@ function validateSourceAuthority({ baselineSource, candidateSource, baseline, ca
   if (candidateTail.some((path) => !path.startsWith("docs/releases/"))) {
     throw new Error("candidate source changed beyond release notes after the signed build commit");
   }
-  validateBaselineSourceAuthority({ baselineSource, baseline, candidate });
+  if (baselineSource) validateBaselineSourceAuthority({ baselineSource, baseline, candidate });
 }
 
 export function validateBaselineSourceAuthority({ baselineSource, baseline, candidate }) {
@@ -293,24 +298,26 @@ export async function assembleRelease({ staging, source, packets, version, notes
 }
 
 export async function assembleUpdaterQaStage(options) {
+  const withBaseline = Boolean(options.baselineSource);
   for (const path of [
-    options.baselineSource,
-    options.baselineStaging,
+    ...(withBaseline ? [options.baselineSource, options.baselineStaging] : []),
     options.candidateSource,
     options.candidateStaging,
   ]) {
     if (!existsSync(path)) throw new Error(`updater QA input path does not exist: ${path}`);
   }
-  const baselineBuild = readJson(join(options.baselineStaging, "build.json"), "baseline Windows build record");
+  const baselineBuild = withBaseline
+    ? readJson(join(options.baselineStaging, "build.json"), "baseline Windows build record")
+    : null;
   const candidateBuild = readJson(join(options.candidateStaging, "build.json"), "candidate Windows build record");
-  const baselineVersion = baselineBuild.version;
+  const baselineVersion = baselineBuild?.version;
   const candidateVersion = candidateBuild.version;
-  const baselinePackets = await loadPackets(options.baselineStaging, baselineVersion);
+  const baselinePackets = withBaseline ? await loadPackets(options.baselineStaging, baselineVersion) : null;
   const candidatePackets = await loadPackets(options.candidateStaging, candidateVersion);
   validateSourceAuthority({
     baselineSource: options.baselineSource,
     candidateSource: options.candidateSource,
-    baseline: { version: baselineVersion, commit: baselineBuild.commit },
+    baseline: withBaseline ? { version: baselineVersion, commit: baselineBuild.commit } : null,
     candidate: { version: candidateVersion, commit: candidateBuild.commit },
   });
   const notesPath = join(options.candidateSource, "docs", "releases", `${candidateVersion}.md`);
@@ -320,14 +327,16 @@ export async function assembleUpdaterQaStage(options) {
     throw new Error("candidate release notes do not bind every target artifact SHA-256");
   }
   const write = options.mode === "remote";
-  const baseline = await assembleRelease({
-    staging: options.baselineStaging,
-    source: options.baselineSource,
-    packets: baselinePackets,
-    version: baselineVersion,
-    notes: "Private signed baseline for KalCode updater release QA.",
-    write,
-  });
+  const baseline = withBaseline
+    ? await assembleRelease({
+        staging: options.baselineStaging,
+        source: options.baselineSource,
+        packets: baselinePackets,
+        version: baselineVersion,
+        notes: "Private signed baseline for KalCode updater release QA.",
+        write,
+      })
+    : null;
   const candidate = await assembleRelease({
     staging: options.candidateStaging,
     source: options.candidateSource,
