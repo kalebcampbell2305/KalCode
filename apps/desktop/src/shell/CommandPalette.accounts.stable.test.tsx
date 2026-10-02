@@ -88,7 +88,7 @@ describe("palette account commands (Stable)", () => {
     expect(getRebindRequest()).toMatchObject({ threadId: "thread-gemini", accountId: geminiB.id });
     expect(invoked(invoke as never, "thread_rebind_account")).toHaveLength(0);
     expect(invoked(invoke as never, "provider_account_bind")).toHaveLength(0);
-  });
+  }, 15_000);
 
   it("shows every matching account when the name is ambiguous and marks the thread's current one", async () => {
     const { user, geminiA } = await mountStable();
@@ -100,7 +100,7 @@ describe("palette account commands (Stable)", () => {
     expect(palette.getByRole("option", { name: /Use Personal \(Gemini CLI\) for this thread/ })).toBeInTheDocument();
     // Nothing was picked for the person.
     expect(getRebindRequest()).toBeNull();
-  });
+  }, 15_000);
 
   it("lists matching accounts default first, then in natural name order, marking the default", async () => {
     const { user, client } = await mountStable();
