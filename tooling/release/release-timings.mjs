@@ -31,7 +31,12 @@ export function mark(root, { release, step, phase, at = new Date().toISOString()
   if (phase !== "start" && phase !== "end") throw new Error(`phase must be start or end, got ${phase}`);
   if (Number.isNaN(Date.parse(at))) throw new Error(`bad timestamp ${at}`);
   const record = readTimings(root, release);
-  record.events.push({ step, phase, at: new Date(at).toISOString(), ...(note ? { note: String(note).slice(0, 300) } : {}) });
+  record.events.push({
+    step,
+    phase,
+    at: new Date(at).toISOString(),
+    ...(note ? { note: String(note).slice(0, 300) } : {}),
+  });
   const path = timingsPath(root, release);
   mkdirSync(join(root, "timings"), { recursive: true });
   writeFileSync(`${path}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
@@ -52,8 +57,14 @@ export function summarize(record) {
     ...row,
     minutes: row.start && row.end ? Math.round((Date.parse(row.end) - Date.parse(row.start)) / 6000) / 10 : null,
   }));
-  const starts = rows.map((r) => r.start).filter(Boolean).map(Date.parse);
-  const ends = rows.map((r) => r.end).filter(Boolean).map(Date.parse);
+  const starts = rows
+    .map((r) => r.start)
+    .filter(Boolean)
+    .map(Date.parse);
+  const ends = rows
+    .map((r) => r.end)
+    .filter(Boolean)
+    .map(Date.parse);
   const total = starts.length && ends.length ? Math.round((Math.max(...ends) - Math.min(...starts)) / 6000) / 10 : null;
   return { release: record.release, totalMinutes: total, steps: rows };
 }
@@ -70,7 +81,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     if (!root) throw new Error("--root <dir> is required");
     if (command === "mark") {
-      mark(root, { release, step: option(args, "--step"), phase: option(args, "--phase"), at: option(args, "--at") ?? undefined, note: option(args, "--note") });
+      mark(root, {
+        release,
+        step: option(args, "--step"),
+        phase: option(args, "--phase"),
+        at: option(args, "--at") ?? undefined,
+        note: option(args, "--note"),
+      });
     } else if (command === "report") {
       process.stdout.write(`${JSON.stringify(summarize(readTimings(root, release)), null, 2)}\n`);
     } else {

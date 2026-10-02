@@ -27,7 +27,11 @@ export function warmPlan({ repo, commit, worktreeExists }) {
       : { cwd: repo, cmd: "git", args: ["worktree", "add", "--detach", worktree, commit] },
   );
   steps.push({ cwd: worktree, cmd: "pnpm", args: ["install", "--frozen-lockfile"] });
-  steps.push({ cwd: worktree, cmd: process.execPath, args: [join(worktree, "tooling", "release", "warm-windows.mjs")] });
+  steps.push({
+    cwd: worktree,
+    cmd: process.execPath,
+    args: [join(worktree, "tooling", "release", "warm-windows.mjs")],
+  });
   return { worktree, steps };
 }
 
@@ -55,15 +59,22 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const started = new Date().toISOString();
     for (const step of plan.steps) {
       if (step.requireClean) {
-        const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=normal"], { cwd: step.cwd, encoding: "utf8" });
-        if (status.status !== 0 || status.stdout.trim()) throw new Error(`refused: ${step.cwd} is not clean (a release build may own it)`);
+        const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=normal"], {
+          cwd: step.cwd,
+          encoding: "utf8",
+        });
+        if (status.status !== 0 || status.stdout.trim())
+          throw new Error(`refused: ${step.cwd} is not clean (a release build may own it)`);
       }
       sh(step);
     }
     if (timingsRoot) {
       // Warm passes are recorded per main commit (a release's own timings are per version, release-timings.mjs).
       mkdirSync(join(timingsRoot, "warm"), { recursive: true });
-      writeFileSync(join(timingsRoot, "warm", `${commit}.json`), `${JSON.stringify({ commit, started, finished: new Date().toISOString() })}\n`);
+      writeFileSync(
+        join(timingsRoot, "warm", `${commit}.json`),
+        `${JSON.stringify({ commit, started, finished: new Date().toISOString() })}\n`,
+      );
     }
     console.log(`warm release tree at ${commit.slice(0, 12)}: ${plan.worktree}`);
   } catch (error) {
