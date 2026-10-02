@@ -191,6 +191,10 @@ pub struct CodexAccountAuthManager {
     profiles: Arc<ManagedProfiles>,
     launch_mode: LaunchMode,
     timeouts: AuthTimeouts,
+    /// KalCode's public version, reported to the app-server as `clientInfo.version`. The caller
+    /// supplies it so this crate never compiles in the release version (a version bump then
+    /// recompiles only the app crate).
+    client_version: String,
 }
 
 impl fmt::Debug for CodexAccountAuthManager {
@@ -205,13 +209,19 @@ impl fmt::Debug for CodexAccountAuthManager {
 }
 
 impl CodexAccountAuthManager {
-    pub fn new(executable: PathBuf, source_env: DetectEnv, profiles: Arc<ManagedProfiles>) -> Self {
+    pub fn new(
+        executable: PathBuf,
+        source_env: DetectEnv,
+        profiles: Arc<ManagedProfiles>,
+        client_version: impl Into<String>,
+    ) -> Self {
         Self {
             executable,
             source_env,
             profiles,
             launch_mode: LaunchMode::Production,
             timeouts: AuthTimeouts::default(),
+            client_version: client_version.into(),
         }
     }
 
@@ -230,6 +240,7 @@ impl CodexAccountAuthManager {
             profiles,
             launch_mode: LaunchMode::Test { args, extra_env },
             timeouts,
+            client_version: tests::TEST_CLIENT_VERSION.into(),
         }
     }
 
@@ -516,6 +527,7 @@ impl CodexAccountAuthManager {
             expected_home: launch.profile_home,
             allow_test_harness_output,
             lease: Some(launch.lease),
+            client_version: self.client_version.clone(),
             cleanup_attempted: false,
             #[cfg(test)]
             force_cleanup_failure,
@@ -732,6 +744,7 @@ struct RpcSession {
     expected_home: PathBuf,
     allow_test_harness_output: bool,
     lease: Option<ProfileLease>,
+    client_version: String,
     cleanup_attempted: bool,
     #[cfg(test)]
     force_cleanup_failure: bool,
@@ -745,7 +758,7 @@ impl RpcSession {
                 "clientInfo": {
                     "name": "kalcode",
                     "title": null,
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": self.client_version,
                 },
                 "capabilities": {"experimentalApi":false},
             })),
@@ -984,6 +997,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    /// The `clientInfo.version` the test manager reports and the fake app-server expects.
+    pub(super) const TEST_CLIENT_VERSION: &str = "0.0.0-test";
 
     const ACCOUNT_ID: &str = "5c61fc90-b5b6-4970-979c-a5876275e90f";
     const AUTH_URL: &str = "https://auth.openai.com/oauth/authorize?client_id=official";
@@ -1539,7 +1555,7 @@ mod tests {
                     assert_eq!(
                         request["params"],
                         json!({
-                            "clientInfo": {"name":"kalcode","title":null,"version":env!("CARGO_PKG_VERSION")},
+                            "clientInfo": {"name":"kalcode","title":null,"version":TEST_CLIENT_VERSION},
                             "capabilities": {"experimentalApi":false}
                         })
                     );

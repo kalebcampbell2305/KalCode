@@ -35,7 +35,11 @@ function git(cwd, ...args) {
   return r.stdout.trim();
 }
 
-function makeRepo(version = "1.2.3", endpoint = 'Self::Stable => "https://kalcoded.com/releases/updater/stable.json"') {
+function makeRepo(
+  version = "1.2.3",
+  endpoint = 'Self::Stable => "https://kalcoded.com/releases/updater/stable.json"',
+  crateVersion = version,
+) {
   const repo = mkdtempSync(join(tmpdir(), "ship-test-"));
   git(repo, "init", "-q", "-b", "main");
   git(repo, "config", "user.email", "t@example.invalid");
@@ -47,7 +51,7 @@ function makeRepo(version = "1.2.3", endpoint = 'Self::Stable => "https://kalcod
   };
   w("apps/desktop/src-tauri/tauri.conf.json", JSON.stringify({ productName: "KalCode", version }));
   w("apps/desktop/package.json", JSON.stringify({ name: "@kalcode/desktop", version }));
-  w("Cargo.toml", `[workspace]\nmembers = []\n\n[workspace.package]\nversion = "${version}"\nedition = "2024"\n`);
+  w("Cargo.toml", `[workspace]\nmembers = []\n\n[workspace.package]\nversion = "${crateVersion}"\nedition = "2024"\n`);
   w("crates/updater/src/lib.rs", `match c {\n  ${endpoint},\n}\n`);
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "fixture");
@@ -461,7 +465,6 @@ describe("pipeline", () => {
       assert.deepEqual(receipt.steps[0].authorities, {
         "apps/desktop/src-tauri/tauri.conf.json": "1.2.3",
         "apps/desktop/package.json": "1.2.3",
-        "Cargo.toml": "1.2.3",
       });
     } finally {
       rmSync(buildFx.repo, { recursive: true, force: true });
@@ -622,6 +625,21 @@ describe("pipeline", () => {
       await refusedAsync(p.run("identity", { execute: true }), /declares "1\.2\.2", not 1\.2\.3/);
     } finally {
       rmSync(wrong.repo, { recursive: true, force: true });
+    }
+    // The Cargo workspace carries the fixed internal crate version (before the split: the public one).
+    const fixedCrates = makeRepo("1.2.3", undefined, "0.0.0");
+    try {
+      const p = makePipeline(fixedCrates, makeKit(fixedCrates.repo));
+      assert.equal((await p.run("identity", { execute: true })).code, 0);
+    } finally {
+      rmSync(fixedCrates.repo, { recursive: true, force: true });
+    }
+    const strayCrates = makeRepo("1.2.3", undefined, "9.9.9");
+    try {
+      const p = makePipeline(strayCrates, makeKit(strayCrates.repo));
+      await refusedAsync(p.run("identity", { execute: true }), /neither the fixed 0\.0\.0 nor 1\.2\.3/);
+    } finally {
+      rmSync(strayCrates.repo, { recursive: true, force: true });
     }
     const baseline = makeRepo("1.2.3", 'Self::Stable => "https://kalcoded.com/releases/updater/stable/1.2.4.json"');
     try {

@@ -20,7 +20,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-
+import { WORKSPACE_INTERNAL_VERSION } from "./lib.mjs";
 import {
   buildPointerReadStatement,
   buildQaVersionClaimStatement,
@@ -139,17 +139,34 @@ export function validateBaselineSourceSnapshot(snapshot) {
   ) {
     return [...problems, "baseline source snapshot must contain exactly the five canonical authorities"];
   }
-  const changedFiles = snapshot.changedFiles ?? SOURCE_FILES;
-  if (JSON.stringify([...changedFiles].sort()) !== JSON.stringify([...SOURCE_FILES].sort())) {
+  // Since the version split the Cargo workspace carries a fixed internal version, so a QA baseline
+  // changes only the public version authorities and leaves Cargo.toml and Cargo.lock untouched.
+  const fixedCrates =
+    /\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(candidateFiles["Cargo.toml"])?.[1] ===
+    WORKSPACE_INTERNAL_VERSION;
+  const expectedChanged = fixedCrates
+    ? SOURCE_FILES.filter((file) => file !== "Cargo.toml" && file !== "Cargo.lock")
+    : SOURCE_FILES;
+  const changedFiles = snapshot.changedFiles ?? expectedChanged;
+  if (JSON.stringify([...changedFiles].sort()) !== JSON.stringify([...expectedChanged].sort())) {
     problems.push("baseline source diff contains a file outside the exact QA whitelist");
   }
-  const cargoExpected = exactReplacement(
-    candidateFiles["Cargo.toml"],
-    `version = "${candidateVersion}"`,
-    `version = "${baselineVersion}"`,
-  );
-  if (cargoExpected === null || cargoExpected !== baselineFiles["Cargo.toml"]) {
-    problems.push("workspace package version change is not exact");
+  if (fixedCrates) {
+    if (
+      candidateFiles["Cargo.toml"] !== baselineFiles["Cargo.toml"] ||
+      candidateFiles["Cargo.lock"] !== baselineFiles["Cargo.lock"]
+    ) {
+      problems.push("the fixed-version Cargo workspace must not change for a QA baseline");
+    }
+  } else {
+    const cargoExpected = exactReplacement(
+      candidateFiles["Cargo.toml"],
+      `version = "${candidateVersion}"`,
+      `version = "${baselineVersion}"`,
+    );
+    if (cargoExpected === null || cargoExpected !== baselineFiles["Cargo.toml"]) {
+      problems.push("workspace package version change is not exact");
+    }
   }
   problems.push(
     ...jsonVersionOnly(
@@ -167,7 +184,9 @@ export function validateBaselineSourceSnapshot(snapshot) {
       "Tauri configuration",
     ),
   );
-  if (!Array.isArray(workspacePackages) || workspacePackages.length === 0) {
+  if (fixedCrates) {
+    // Cargo.lock was compared above.
+  } else if (!Array.isArray(workspacePackages) || workspacePackages.length === 0) {
     problems.push("workspace package names are unavailable for Cargo.lock validation");
   } else {
     const expectedLock = mechanicalLockfile(
