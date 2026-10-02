@@ -37,6 +37,63 @@ Stop only for a real external blocker, such as unavailable credentials, broken s
 - If CI billing or minutes are the blocker, replace that dependency with self-hosted execution.
 - Implement this with the smallest technically correct change. Preserve the existing release pipeline (`tooling/release/ship.mjs`), signing infrastructure and valid evidence. Do not rebuild the release system.
 
+## Permanent fast release, merge and ship policy (owner directive 2026-10-02)
+
+**KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.** This section replaces any older release-gate rule in this file that adds unnecessary delay, repeated validation, waiting, giant checklists or release ceremony. Where it conflicts with another section, this section wins.
+
+Pipeline: **IMPLEMENT → TEST WHAT CHANGED → REVIEW → MERGE → BUILD → SHIP → VERIFY → CLEAN UP**, as fast as is technically safe.
+
+- **Gates need a reason.** Every gate must answer: "What specific realistic failure does this gate protect against for THIS change?" If it has no strong answer, it does not block merge or release.
+- **None of these blocks merging or shipping:**
+  - waiting or soak periods;
+  - giant generic QA checklists or unrelated test suites;
+  - re-running tests whose evidence is still valid;
+  - old procedures that don't apply to the changed surface;
+  - owner steps that can be automated;
+  - a new public version number, or waiting for unrelated features;
+  - reopening finished work;
+  - "just in case" audits;
+  - broad regression passes for small isolated changes;
+  - testing every platform when a change can't affect one;
+  - duplicate reviews of unchanged code.
+- **Validate the change.** Find the affected surface and its realistic failure modes. Run the smallest test set that controls them, reuse still-valid evidence, then ship. Examples:
+  - small UI fix → focused UI test, build, ship, production check;
+  - terminal change → terminal tests and the affected integration;
+  - billing change → billing and entitlement tests, verified in the right environment;
+  - release or updater change → package, update-path and signing verification.
+- **Keep evidence that is still valid.** A result stays valid until the code, a material dependency or the environment behind it changes, or new evidence suggests a failure. Rerun only what the change invalidated.
+- **Merge fast.** When a change is correct and its relevant tests pass, merge it. Don't leave finished work on branches, don't stage review rituals for low-risk changes, and don't hold independent work for unrelated work. Resolve real conflicts, not invented process.
+- **Ship continuously.** Merged is not done. Work meant for users continues automatically: current build → package and sign → publish → update path → verify users can receive it, under the CURRENT public version.
+  - Public versions are owner-controlled labels and never release gates.
+  - When the owner says "Change KalCode to 0.1.10", bump the version consistently and keep working.
+- **Automate owner busywork.** Agents run builds, tests, packaging, release metadata, signing (with credentials already configured), publishing, updater metadata, website release references, production verification and cleanup. Involve the owner only for a real decision, a credential or action that can't be automated, an irreversible risk, or an ambiguity.
+- **Stop only for real blockers:**
+  - a failing relevant test or a reproducible regression;
+  - a merge conflict that affects correctness;
+  - missing signing capability, a broken package, a failed deployment or an updater failure;
+  - a billing or entitlement mismatch, or a security or integrity issue;
+  - a missing credential, or an ambiguity that could damage user data or production.
+
+  On a blocker: name it exactly → root cause → fix → rerun only the invalidated check → continue. Don't restart the whole release.
+- **Don't stall on commit counts.** If work is legitimately progressing, continue. Commit coherent, validated units; avoid both giant uncommitted batches and commit ceremony.
+- **Parallelize when safe.** Run Windows and macOS builds together, write release notes during tests, and update the website while packaging runs. Keep one canonical writer per conflicting surface; read-only reviewers can work in parallel.
+- **Cross-platform.** Windows + macOS where the feature applies, but don't repeat every test everywhere. Test platform-specific behavior on the affected platform, reuse unchanged platform evidence, and validate both when shared code can affect both.
+- **Speed never overrides these:** code-signing integrity, notarization, credential and secret protection, billing and entitlement correctness, updater integrity and user-data safety. They are real gates when relevant. Make them fast and automated, never optional.
+- **Production verification.** Verify only the facts that prove the release is live: the version served, the updater receives it, the app launches, the changed feature works, plus the relevant endpoint, checkout (if billing changed) or website. Once production truth is established, the release is DONE.
+- **Desktop release fast lane** (about 2 hours from merge to users):
+  - Self-hosted PR gates (Windows + macOS) run on the merged tree; don't re-run them at the release commit when the tree is the same.
+  - Build and sign (Windows Authenticode, updater signatures), then Mac package, notarize and staple.
+  - Check artifact integrity, then run the CI clean install.
+  - Run an automated update from the live build on both OS with a data-kept check, on the CI account or a disposable profile rather than the owner's KalCode.
+  - If the build changes data or the updater, also run the automated rollback / no-Restore check.
+  - Then stage → publish → website deploy → live verify.
+  - No QA sittings, evidence matrices or maps, review receipts, or unneeded baseline builds.
+- **Clean up after.** Once you've shipped and kept the required artifacts and evidence, apply the storage hygiene policy below.
+
+**Definition of Done for user-facing work:** IMPLEMENTED → RELEVANT TESTS PASS → REVIEWED → MERGED → BUILT → SIGNED/PACKAGED IF REQUIRED → PUBLISHED → USER-RECEIVABLE → FOCUSED PRODUCTION VERIFICATION PASSES → SAFE CLEANUP COMPLETE. Writing the code, passing the tests or merging is not done.
+
+This is permanent repository memory for Claude Code, Codex and every future agent.
+
 ## Permanent cross-platform rule
 
 Unless the owner explicitly says otherwise, every new KalCode or KalVoice feature, fix, UI behavior, workflow, automation, and product capability must support **both Windows and macOS**. This is a universal engineering rule for all future work.
