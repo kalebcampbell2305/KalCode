@@ -45,6 +45,18 @@ Flow: IMPLEMENT → TEST RELEVANT CHANGES → REVIEW → MERGE TO MAIN → BUILD
 
 For user-facing work, "shipped" means the update is actually available through KalCode's production update path: merged → build → sign/package → publish → production update feed live → the user closes KalCode → reopens it → KalCode receives and applies the new build → the new feature is available. Merging, building an installer, uploading an artifact or creating a release entry is not shipping. After every user-facing shipment, verify on Windows and macOS that an existing installed KalCode receives the new build through the normal close/reopen experience. The owner must never need to download and reinstall KalCode by hand for a normal update. If close/reopen does not deliver the build, shipping is not complete: fix the update path and continue.
 
+### Fastest truthful path from main to users (owner directive 2026-10-02)
+
+**KALCODE RELEASES MUST USE THE FASTEST TRUTHFUL PATH FROM MAIN TO USERS.** Once user-facing work is merged to main, shipping begins immediately.
+
+- **Parallelize.** Run release stages in parallel whenever it is safe; never serialize independent build, sign, package or publish work. Examples: Windows and macOS builds together; two builds side by side; notes, metadata and website while binaries build; update-feed preparation before the artifacts finish.
+- **No repeats, no waits.** Never repeat QA that is still valid. Never add arbitrary waits. Every blocking gate must name the specific failure it prevents right now.
+- **Bootstrap builds.** If an intermediate bootstrap build is genuinely required, prepare the final build concurrently, so it can publish the moment the dependency clears.
+- **Slow releases are bugs.** A long release is a pipeline problem to investigate and optimize, not something to accept as normal. Record per-release timings (merge, build start/end, sign, package, notarize, upload, publish, feed live, user-receivable verified) and use them to remove recurring bottlenecks.
+- **Shipped.** An existing user can close KalCode, reopen it, receive the production update and use the new feature.
+
+This supersedes older release-gate behavior that delays publication.
+
 ### Automate and parallelize safely
 
 Automate builds, tests, metadata, configured signing, publication, updater metadata, website release references, production checks, and cleanup. Do not require routine manual steps merely because old procedures did. Ask the owner only for a real decision, unavailable credential/action, irreversible risk, or ambiguity.
