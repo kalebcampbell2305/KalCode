@@ -51,7 +51,7 @@ KalCode exists to hold all of it, and 0.1.9 is the release where that becomes ob
 - **F8 push to talk** recovers right after you switch back to KalCode on Windows, and push to talk can be cancelled while it starts.
 - **Monthly or yearly plans** in the app, and plan limits that count across all of KalCode. Reaching a limit never closes anything.
 
-**Getting 0.1.9.** If you're on the latest 0.1.8 build, 0.1.9 downloads in the background and installs the next time you close KalCode. On an earlier 0.1.8 build or 0.1.7, KalCode offers the update: choose Restart to update, or go to Settings > Updates. On Windows 0.1.6, download the installer once from https://kalcoded.com/download. From then on, every update installs when you close KalCode. KalCode now saves each thread's reasoning effort, so Restore previous version only goes back to builds that can open that data. Windows 10 and later (x64) and macOS 14 and later (Apple silicon) are supported.
+**Getting 0.1.9.** If you're on 0.1.8 or 0.1.7, KalCode offers the update: choose Restart to update, or go to Settings > Updates. On Windows 0.1.6, download the installer once from https://kalcoded.com/download. From 0.1.9 on, every update installs when you close KalCode. KalCode now saves each thread's reasoning effort, so Restore previous version only goes back to builds that can open that data. Windows 10 and later (x64) and macOS 14 and later (Apple silicon) are supported.
 
 **What's next.** Squads (reusable agent teams), Agent Handoff Chains, Brainstorm, Live Browser Studio, KalCode Deploy, KalCode Remote, and more autonomy are all on the roadmap at https://kalcoded.com/pricing. They aren't in 0.1.9. KalCode runs Claude Code and Codex today, and more providers are coming.
 
