@@ -15,10 +15,12 @@ const page = getPage("/kalvoice");
 const stable = servedStableRelease(RELEASES);
 const description = stable ? page.description.replace(/ In development\.$/, "") : page.description;
 
-const allowances = PLANS.map((plan) => plan.limits.kalvoiceRequestsPerMonth ?? 0);
+// KalVoice Requests on a log scale from the smallest allowance (6%) to the largest (100%).
+const allowances = PLANS.map((plan) => plan.limits.kalvoiceRequestsPerMonth ?? 0).filter((value) => value > 0);
+const logMin = Math.log10(Math.min(...allowances));
 const logMax = Math.log10(Math.max(...allowances));
 const meterWidth = (value: number | null) =>
-  value === null ? 100 : Math.max(6, Math.round(((Math.log10(value) - 2) / (logMax - 2)) * 100));
+  value === null ? 100 : Math.max(6, Math.round(((Math.log10(value) - logMin) / (logMax - logMin)) * 94 + 6));
 
 const privacy = [
   {
@@ -127,8 +129,8 @@ const privacy = [
       <div class="feature-split__copy">
         <h2 id="requests-title" class="h2">Unlimited dictation. Counted commands.</h2>
         <p>
-          Dictation is free on every plan. Commands count as KalVoice Requests — one per top-level
-          request, however many steps it takes.
+          Dictation and voice into terminals are unlimited on every plan. Commands count as KalVoice
+          Requests — one for each command KalCode carries out, however many steps it takes.
         </p>
         <a class="text-link" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
       </div>

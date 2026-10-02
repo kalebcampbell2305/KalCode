@@ -145,11 +145,11 @@ describe("/terms once paid checkout is open", () => {
     const open = text(await renderTerms());
     const noSale = "Nothing on the site is an offer to sell, and no purchase can be made through it today.";
     const paid =
-      "Paid plans (Pro, MAX and MAX 2X) are monthly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically every month until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.";
+      "Paid plans (Pro, MAX and MAX 2X) are monthly or yearly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically at the end of each billing period (every month or every year) until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.";
     expect(closed).toContain(noSale);
     expect(open).not.toContain(noSale);
     expect(open).toContain(paid);
-    expect(open).toContain("Last updated September 30, 2026");
-    expect(open.replace(paid, noSale).replace("September 30, 2026", "September 29, 2026")).toBe(closed);
+    expect(open).toContain("Last updated October 1, 2026");
+    expect(open.replace(paid, noSale).replace("October 1, 2026", "September 29, 2026")).toBe(closed);
   });
 });

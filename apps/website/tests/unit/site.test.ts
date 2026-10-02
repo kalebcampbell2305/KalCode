@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PLANS } from "@kalcode/protocol/plans";
+import { PLANS, formatPrice } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
 import { ACCOUNT_PAGE, EMAIL_ACTION_PAGES, FOOTER_NAV, isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";
@@ -108,19 +108,22 @@ describe("site map", () => {
 
 describe("pricing source of truth", () => {
   it("reads the four public plans from @kalcode/protocol", () => {
-    expect(PLANS.map((plan) => [plan.name, plan.price.amountUsd])).toEqual([
-      ["Free", 0],
-      ["Pro", 10],
-      ["MAX", 25],
-      ["MAX 2X", 50],
+    expect(PLANS.map((plan) => [plan.name, plan.price.monthlyUsd, plan.price.yearlyUsd])).toEqual([
+      ["Free", 0, 0],
+      ["Pro", 10, 100],
+      ["MAX", 25, 250],
+      ["MAX 2X", 50, 500],
     ]);
   });
 
   it("never hardcodes a price or an allowance in page sources", () => {
     const sources = ["/", "/pricing", "/kalvoice", "/product"].map((path) => readFileSync(pageFile(path), "utf8"));
     sources.push(readFileSync(resolve(root, "src/components/PlanStrip.astro"), "utf8"));
+    sources.push(readFileSync(resolve(root, "src/pages/account.astro"), "utf8"));
+    sources.push(readFileSync(resolve(root, "src/pages/docs/kalvoice.astro"), "utf8"));
     for (const source of sources) {
-      expect(source).not.toMatch(/\$\s?(0|10|25|50)\b/);
+      expect(source).not.toMatch(/\$\s?(0|10|20|25|50|100|250|500)\b/);
+      expect(source).not.toMatch(/\b(150|1,000)\b/);
       expect(source).not.toMatch(/\b(75|1,500|5,000|10,000)\b/);
     }
   });
@@ -129,7 +132,8 @@ describe("pricing source of truth", () => {
     const pricing = visibleText(readFileSync(resolve(dist, "pricing.html"), "utf8"));
     for (const plan of PLANS) {
       expect(pricing).toContain(plan.name);
-      expect(pricing).toContain(`$${plan.price.amountUsd}`);
+      expect(pricing).toContain(formatPrice(plan, "month"));
+      expect(pricing).toContain(formatPrice(plan, "year"));
       expect(pricing).toContain((plan.limits.kalvoiceRequestsPerMonth ?? 0).toLocaleString("en-US"));
     }
     expect(pricing).toContain("Every plan includes");
@@ -149,10 +153,10 @@ describe("plan wording on the public site", () => {
     }
   });
 
-  it("shows every plan's KalVoice Request allowance on the pricing page", () => {
+  it("shows every plan's limits from the catalog on the pricing page", () => {
     const pricing = readFileSync(pageFile("/pricing"), "utf8");
-    expect(pricing).toContain("formatKalVoiceAllowance");
-    expect(pricing).toContain("plan.limits");
+    expect(pricing).toContain("formatCoreLimit(plan.limits, limit)");
+    expect(pricing).toContain("CORE_LIMITS.map");
     expect(pricing).not.toContain("OWNER");
   });
 });

@@ -1,5 +1,4 @@
 ---
-import { PLANS, formatInterval, formatKalVoiceAllowance, formatPrice } from "@kalcode/protocol/plans";
 import Backdrop from "../components/Backdrop.astro";
 import Closing from "../components/Closing.astro";
 import DownloadButton from "../components/DownloadButton.astro";
@@ -7,13 +6,14 @@ import Globe from "../components/Globe.astro";
 import HeroOrbSlot from "../components/HeroOrbSlot.astro";
 import Icon from "../components/Icon.astro";
 import PageStyles from "../components/PageStyles.astro";
+import PlanStrip from "../components/PlanStrip.astro";
 import ProviderGlyph from "../components/ProviderGlyph.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
 import { RELEASES, downloadCta, releaseCopy, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
-import { GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage, planSummary } from "../lib/site";
+import { GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage } from "../lib/site";
 import { firstStage, hasStage } from "../lib/stage";
 
 const page = getPage("/");
@@ -27,17 +27,6 @@ const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 const workspaceStage = firstStage("TryKalCode", "AppWindow");
 const voiceStage = firstStage("KalVoiceStage", "KalVoiceDemo");
 const commandStage = firstStage("CommandCenterStage", "DemoCenter");
-
-/**
- * Plan cards: two honest highlights each, straight from the catalog. Agents, team workflows and
- * missions are Gated on Stable 0.1.6 (crates/native-core/src/flags.rs), so no card offers them.
- * Stable enforces no per-plan thread limit, so no card offers a thread count.
- */
-const FEATURED = "pro";
-const planPoints = (plan: (typeof PLANS)[number]) => [
-  `${formatKalVoiceAllowance(plan.limits)} KalVoice Requests a month`,
-  "Every provider; Plan, Approve and Auto modes",
-];
 
 /** Permission policy as it reads in Approve mode (the default). */
 const policies = [
@@ -335,7 +324,7 @@ const policies = [
     </div>
   </section>
 
-  <!-- Pricing: three plans over a lit horizon. -->
+  <!-- Pricing: the four plans over a lit horizon (components/PlanStrip.astro). -->
   <section class="world-section pricing-band" id="plans" aria-labelledby="plans-title">
     <Backdrop variant="deep" />
     <Backdrop variant="horizon" rocks={false} />
@@ -350,38 +339,9 @@ const policies = [
             Your AI usage stays on your own account.
           </p>
           <a class="button button--secondary" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
-          <p class="pricing-band__note">{checkoutOpen ? "Paid plans are open. Subscribe from your account." : "Plans open at launch. Nothing is for sale today."}</p>
+          <p class="pricing-band__note">{checkoutOpen ? "Paid plans are open, monthly or yearly." : "Plans open at launch. Nothing is for sale today."}</p>
         </header>
-        <ul class="plan-cards" role="list">
-          {
-            PLANS.map((plan) => (
-              <li class:list={["plan-card", { "plan-card--featured": plan.id === FEATURED }]}>
-                <p class="plan-card__name">
-                  {plan.name}
-                  {plan.id === FEATURED && <span class="plan-card__tag">Recommended</span>}
-                </p>
-                <p class="plan-card__price">
-                  {formatPrice(plan.price)}
-                  <small>{formatInterval(plan.price)}</small>
-                </p>
-                <p class="plan-card__summary">{planSummary(plan)}</p>
-                <ul class="plan-card__points" role="list">
-                  {planPoints(plan).map((point) => (
-                    <li>
-                      <Icon name="check" /> {point}
-                    </li>
-                  ))}
-                </ul>
-                <a
-                  class:list={["button", plan.id === FEATURED ? "button--primary" : "button--secondary"]}
-                  href={cta.kind === "download" ? "/download" : "#early-access"}
-                >
-                  {cta.kind === "download" ? "Download KalCode" : "Join early access"}
-                </a>
-              </li>
-            ))
-          }
-        </ul>
+        <PlanStrip />
       </div>
     </div>
   </section>
