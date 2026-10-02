@@ -18,7 +18,8 @@ on:
       packet: { description: Packet folder under C:\Users\Public\Documents\KalCode-QA\windows (ufl-*), required: true, type: string }
       sums_sha256: { description: Pinned SHA-256 of the packet's SHA256SUMS, required: true, type: string }
       script_sha256: { description: Pinned SHA-256 of win-update-from-live.ps1, required: true, type: string }
-      live_url: { description: https://kalcoded.com/ installer URL of the live Stable build, required: true, type: string }
+      live_url: { description: https://kalcoded.com/ installer URL of the live Stable build (or 'packet' with live_file), required: true, type: string }
+      live_file: { description: Optional pre-publish live installer file name inside the packet (sha pinned by SHA256SUMS and live_sha256), required: false, type: string, default: '' }
       live_sha256: { description: SHA-256 of the live installer, required: true, type: string }
       live_version: { description: Live version X.Y.Z+N, required: true, type: string }
       candidate_version: { description: Candidate version X.Y.Z+N, required: true, type: string }
@@ -44,6 +45,7 @@ jobs:
       SUMS_SHA256: ${{ inputs.sums_sha256 }}
       SCRIPT_SHA256: ${{ inputs.script_sha256 }}
       LIVE_URL: ${{ inputs.live_url }}
+      LIVE_FILE: ${{ inputs.live_file }}
       LIVE_SHA256: ${{ inputs.live_sha256 }}
       LIVE_VERSION: ${{ inputs.live_version }}
       CANDIDATE_VERSION: ${{ inputs.candidate_version }}
@@ -66,14 +68,16 @@ jobs:
           if ((Sha $sums) -ne $env:SUMS_SHA256) { throw 'REFUSED: SHA256SUMS is not pinned' }
           $work = Join-Path $env:RUNNER_TEMP ('ufl-' + $env:GITHUB_RUN_ID); $out = Join-Path $env:RUNNER_TEMP 'ufl-out'
           foreach ($d in $work, $out) { if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }; New-Item -ItemType Directory -Path $d | Out-Null }
-          $inst = $null
+          $inst = $null; $liveInst = $null
           foreach ($line in [IO.File]::ReadAllLines($sums)) {
             if (-not $line.Trim()) { continue }
             if ($line -notmatch '^([0-9a-f]{64}) \*([A-Za-z0-9._+-]{1,160})$') { throw "REFUSED: bad SHA256SUMS line: $line" }
             $dst = Join-Path $work $Matches[2]; Copy-Item -LiteralPath (Join-Path $env:PACKET $Matches[2]) -Destination $dst
             if ((Sha $dst) -ne $Matches[1]) { throw "REFUSED: $($Matches[2]) does not match SHA256SUMS" }
+            if ($env:LIVE_FILE -and $Matches[2] -ceq $env:LIVE_FILE) { $liveInst = $dst; continue }
             if ($Matches[2] -like '*_x64-setup.exe') { $inst = $dst }
           }
+          if ($env:LIVE_FILE -and (-not $liveInst -or (Sha $liveInst) -ne $env:LIVE_SHA256)) { throw 'REFUSED: live_file is not in the packet or not live_sha256' }
           $script = Join-Path $work 'win-update-from-live.ps1'
           if ((Sha $script) -ne $env:SCRIPT_SHA256) { throw 'REFUSED: script is not pinned' }
           if (-not $inst -or (Sha $inst) -ne $env:CANDIDATE_SHA256) { throw 'REFUSED: candidate installer is not pinned' }
@@ -81,6 +85,7 @@ jobs:
             '-LiveVersion', $env:LIVE_VERSION, '-CandidateInstaller', $inst, '-CandidateSha256', $env:CANDIDATE_SHA256,
             '-CandidateVersion', $env:CANDIDATE_VERSION, '-ExpectSchema', $env:EXPECT_SCHEMA, '-OutDir', $out)
           if ($env:CHANGES_DATA -eq 'true') { $a += '-ChangesData' }
+          if ($liveInst) { $a += @('-LiveInstaller', $liveInst) }
           $p = Start-Process -FilePath powershell.exe -ArgumentList $a -NoNewWindow -Wait -PassThru
           $r = Get-Content -Raw -LiteralPath (Join-Path $out 'update-from-live-receipt.json') | ConvertFrom-Json
           $r | Add-Member -NotePropertyName github -NotePropertyValue ([ordered]@{ runId = [int64]$env:GITHUB_RUN_ID; sha = $env:GITHUB_SHA; workflowRef = $env:GITHUB_WORKFLOW_REF; packetSums = $env:SUMS_SHA256; scriptSha256 = $env:SCRIPT_SHA256 })
