@@ -103,6 +103,16 @@ export const ACCOUNT_PAGE = {
 } as const satisfies PageInfo;
 
 /**
+ * The private owner dashboard (docs/OWNER_ANALYTICS.md). Deliberately not in PAGES, navigation,
+ * the footer or the sitemap, and noindex. Its data is served only to an OWNER account.
+ */
+export const OWNER_PAGE = {
+  path: "/owner/analytics",
+  title: "KalCode · Owner",
+  description: "Private KalCode owner dashboard.",
+} as const satisfies PageInfo;
+
+/**
  * Every public page. Titles are the exact <title> text; tests assert against this list and
  * the Worker accepts only these paths as an early-access `source`.
  */

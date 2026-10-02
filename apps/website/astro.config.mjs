@@ -24,8 +24,13 @@ export default defineConfig({
     // dist/.well-known/kalcode-build.json: the commit production serves (tooling/release/lifecycle).
     kalcodeBuildStamp(),
     sitemap({
-      // The 404 page and the pages opened from email links (noindex) are not public pages.
-      filter: (page) => !page.endsWith("/404") && !page.endsWith("/404.html") && !page.includes("/early-access/"),
+      // The 404 page, the pages opened from email links (noindex) and the private owner dashboard
+      // are not public pages.
+      filter: (page) =>
+        !page.endsWith("/404") &&
+        !page.endsWith("/404.html") &&
+        !page.includes("/early-access/") &&
+        !page.includes("/owner/"),
     }),
   ],
   // Astro 7 defaults to JSX whitespace rules, which drop the spaces between text and inline

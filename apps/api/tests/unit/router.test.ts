@@ -5,6 +5,8 @@ import {
   type Deps,
   ENTITLEMENT_PATH,
   handleRequest,
+  INSIGHTS_DISTRIBUTION_PATH,
+  INSIGHTS_REVENUE_PATH,
   KALVOICE_REQUESTS_PATH,
   KALVOICE_USAGE_PATH,
   KEYS_PATH,
@@ -174,6 +176,8 @@ describe("route table", () => {
       { method: "GET", path: "/v1/entitlement/keys", access: "public" },
       { method: "GET", path: "/v1/kalvoice/usage", access: "account" },
       { method: "POST", path: "/v1/kalvoice/requests", access: "account" },
+      { method: "GET", path: "/v1/insights/distribution", access: "owner" },
+      { method: "GET", path: "/v1/insights/revenue", access: "owner" },
     ]);
   });
 
@@ -221,7 +225,7 @@ describe("the production configuration", () => {
     const secret = await generateSigningSecret("prod-test");
     const env = { DB: {} as D1Database, ENTITLEMENT_SIGNING_KEY: secret } satisfies Env;
     const production = { ...depsFromEnv(env), store: fakeStore() };
-    for (const route of ROUTES.filter((r) => r.access === "account")) {
+    for (const route of ROUTES.filter((r) => r.access !== "public")) {
       for (const headers of [
         {},
         { [TEST_ACCOUNT_HEADER]: OWNER_ACCOUNT },
@@ -513,5 +517,81 @@ describe("responses", () => {
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
       expect(response.headers.get("access-control-allow-origin")).toBeNull();
     }
+  });
+});
+
+describe("owner insights", () => {
+  const served: string[] = [];
+  const insights = {
+    distribution: async () => {
+      served.push("distribution");
+      return new Response(JSON.stringify({ ok: true, secret: "owner-data" }), { status: 200 });
+    },
+    revenue: async () => {
+      served.push("revenue");
+      return new Response(JSON.stringify({ ok: true, secret: "owner-data" }), { status: 200 });
+    },
+    snapshot: async () => {},
+  };
+
+  it.each([INSIGHTS_DISTRIBUTION_PATH, INSIGHTS_REVENUE_PATH])(
+    "%s is served only to an active OWNER grant",
+    async (path) => {
+      served.length = 0;
+      const d = deps({ insights });
+      const anonymous = await handleRequest(new Request(`${BASE}${path}`), d);
+      expect(anonymous.status).toBe(401);
+      for (const accountId of [FREE_ACCOUNT, PRO_ACCOUNT, YEARLY_ACCOUNT, "acct-unknown"]) {
+        const response = await handleRequest(asAccount(accountId, path), d);
+        expect(response.status, accountId).toBe(accountId === "acct-unknown" ? 401 : 403);
+        expect(await response.text()).not.toContain("owner-data");
+      }
+      // Tier claims in the request are never trusted.
+      const claimed = await handleRequest(
+        asAccount(PRO_ACCOUNT, `${path}?tier=owner`, { headers: { "x-kalcode-tier": "owner" } }),
+        d,
+      );
+      expect(claimed.status).toBe(403);
+      expect(served).toEqual([]);
+      const owner = await handleRequest(asAccount(OWNER_ACCOUNT, path), d);
+      expect(owner.status).toBe(200);
+      expect(served).toHaveLength(1);
+    },
+  );
+
+  it("refuses other browser origins even for the owner, and allows kalcoded.com with credentials", async () => {
+    const d = deps({ insights });
+    const foreign = await handleRequest(
+      asAccount(OWNER_ACCOUNT, INSIGHTS_REVENUE_PATH, { headers: { origin: "https://evil.example" } }),
+      d,
+    );
+    expect(foreign.status).toBe(403);
+    expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
+    const site = await handleRequest(
+      asAccount(OWNER_ACCOUNT, INSIGHTS_REVENUE_PATH, { headers: { origin: "https://kalcoded.com" } }),
+      d,
+    );
+    expect(site.status).toBe(200);
+    expect(site.headers.get("access-control-allow-origin")).toBe("https://kalcoded.com");
+    expect(site.headers.get("access-control-allow-credentials")).toBe("true");
+  });
+
+  it("ignores an owner row that does not come from an operator grant", async () => {
+    const d = deps({ insights });
+    const store = d.store;
+    d.store = {
+      ...store,
+      activeGrants: async () => [{ tier: "owner", source: "billing", grantedAt: CREATED, expiresAt: null }],
+    } as typeof store;
+    const response = await handleRequest(asAccount(PRO_ACCOUNT, INSIGHTS_REVENUE_PATH), d);
+    expect(response.status).toBe(403);
+  });
+
+  it("answers 503 for the owner when insights are not configured", async () => {
+    const response = await handleRequest(
+      asAccount(OWNER_ACCOUNT, INSIGHTS_DISTRIBUTION_PATH),
+      deps({ insights: null }),
+    );
+    expect(response.status).toBe(503);
   });
 });

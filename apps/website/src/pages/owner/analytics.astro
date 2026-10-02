@@ -1,0 +1,192 @@
+---
+/**
+ * Private KalCode owner command center (docs/OWNER_ANALYTICS.md).
+ *
+ * Not linked from any page, excluded from the sitemap, noindex. The page itself holds no data:
+ * every number is fetched from api.kalcoded.com/v1/insights/*, which answers only an account with
+ * an active OWNER grant. Everyone else sees the sign-in or "not available" state.
+ */
+import "@kalcode/ui/fonts.css";
+import "@kalcode/ui/tokens.css";
+import "@kalcode/ui/base.css";
+import "../../styles/owner.css";
+import { PLANS } from "@kalcode/protocol/plans";
+import { OWNER_PAGE } from "../../lib/site";
+
+const paid = PLANS.filter((plan) => plan.price.monthlyUsd > 0);
+const ranges = [
+  ["24h", "24H"],
+  ["7d", "7D"],
+  ["30d", "30D"],
+  ["90d", "90D"],
+  ["all", "ALL"],
+] as const;
+---
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
+    <title>{OWNER_PAGE.title}</title>
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+  </head>
+  <body class="owner">
+    <div class="owner-watermark" aria-hidden="true">
+      <picture>
+        <source srcset="/assets/brand/kalcode-mascot-724.avif" type="image/avif" />
+        <img src="/assets/brand/kalcode-mascot-724.webp" alt="" width="724" height="724" decoding="async" />
+      </picture>
+    </div>
+
+    <header class="owner-bar">
+      <div class="owner-bar__brand">
+        <img src="/assets/brand/kalcode-mark-64.png" width="28" height="28" alt="" />
+        <div>
+          <span class="owner-bar__name">KalCode</span>
+          <span class="owner-bar__tag">Owner command center</span>
+        </div>
+      </div>
+      <div class="owner-bar__controls" data-controls hidden>
+        <div class="owner-range" role="radiogroup" aria-label="Time range">
+          {ranges.map(([value, label]) => (
+            <button type="button" role="radio" aria-checked={value === "7d" ? "true" : "false"} data-range={value}>{label}</button>
+          ))}
+        </div>
+        <span class="owner-updated" data-updated aria-live="polite">Loading…</span>
+        <button type="button" class="owner-refresh" data-refresh aria-label="Refresh now">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 3v3.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <main class="owner-main">
+      <section class="owner-gate" data-gate="loading" aria-live="polite">
+        <div class="owner-gate__card">
+          <div class="owner-spinner" data-gate-spinner aria-hidden="true"></div>
+          <h1 data-gate-title>Checking owner access…</h1>
+          <p data-gate-text>One moment.</p>
+          <a class="owner-button" href="/account" data-gate-link hidden>Sign in to KalCode</a>
+        </div>
+      </section>
+
+      <div class="owner-content" data-content hidden>
+        <section class="owner-kpis" aria-label="Distribution summary">
+          <article class="kpi kpi--hero" data-kpi="downloads.today"><span class="kpi__label">Downloads today</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+          <article class="kpi" data-kpi="downloads.last7d"><span class="kpi__label">This week</span><strong class="kpi__value">—</strong><span class="kpi__note">Last 7 days</span></article>
+          <article class="kpi" data-kpi="downloads.last30d"><span class="kpi__label">This month</span><strong class="kpi__value">—</strong><span class="kpi__note">Last 30 days</span></article>
+          <article class="kpi" data-kpi="downloads.allTime"><span class="kpi__label">All-time downloads</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+          <article class="kpi" data-kpi="installs.today"><span class="kpi__label">New desktop sign-ins today</span><strong class="kpi__value">—</strong><span class="kpi__note">First sign-in from a desktop app</span></article>
+          <article class="kpi" data-kpi="activity.lastHour"><span class="kpi__label">Activity · last hour</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+          <article class="kpi" data-kpi="updates.inRange"><span class="kpi__label">Updates delivered</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+        </section>
+        <section class="owner-kpis owner-kpis--money" aria-label="Revenue summary">
+          <article class="kpi kpi--money kpi--hero" data-kpi="revenue.subscribers"><span class="kpi__label">Paid subscribers</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+          <article class="kpi kpi--money" data-kpi="revenue.mrr"><span class="kpi__label">MRR</span><strong class="kpi__value">—</strong><span class="kpi__note">Monthly recurring · yearly ÷ 12</span></article>
+          <article class="kpi kpi--money" data-kpi="revenue.arr"><span class="kpi__label">ARR</span><strong class="kpi__value">—</strong><span class="kpi__note">MRR × 12</span></article>
+          <article class="kpi kpi--money" data-kpi="revenue.cash"><span class="kpi__label">Cash collected this month</span><strong class="kpi__value">—</strong><span class="kpi__note" data-note></span></article>
+        </section>
+
+        <section class="owner-grid owner-grid--wide">
+          <article class="panel panel--chart">
+            <header class="panel__head">
+              <h2>Downloads and updates</h2>
+              <div class="legend" aria-hidden="true"><span class="legend__item legend__item--s1">Downloads</span><span class="legend__item legend__item--s2">Updates</span></div>
+            </header>
+            <div class="chart" data-chart="distribution" role="img" aria-label="Downloads and updates over time"></div>
+            <details class="panel__table"><summary>Show data</summary><table data-table="distribution"></table></details>
+          </article>
+
+          <article class="panel">
+            <header class="panel__head"><h2>Version adoption</h2><span class="panel__hint" data-adoption-hint></span></header>
+            <div class="adoption" data-adoption></div>
+            <dl class="facts" data-adoption-facts></dl>
+            <p class="panel__foot">Share of update checks from running copies over the last two days. Each copy checks at launch and every six hours.</p>
+          </article>
+        </section>
+
+        <section class="owner-grid">
+          <article class="panel">
+            <header class="panel__head"><h2>Platform</h2><span class="panel__hint" data-range-label></span></header>
+            <div class="split" data-split></div>
+          </article>
+          <article class="panel">
+            <header class="panel__head"><h2>Builds</h2><span class="panel__hint">All time</span></header>
+            <table class="table" data-builds><thead><tr><th scope="col">Build</th><th scope="col">Downloads</th><th scope="col">Updates</th></tr></thead><tbody></tbody></table>
+          </article>
+          <article class="panel">
+            <header class="panel__head"><h2>Accounts</h2><span class="panel__hint" data-range-label></span></header>
+            <dl class="facts" data-accounts></dl>
+          </article>
+        </section>
+
+        <h2 class="owner-section">Revenue</h2>
+        <p class="owner-error" data-revenue-error hidden></p>
+        <section class="owner-grid owner-grid--wide" data-revenue>
+          <article class="panel">
+            <header class="panel__head">
+              <h2>Revenue by plan</h2>
+              <div class="legend" aria-hidden="true">{paid.map((plan, i) => <span class={`legend__item legend__item--s${i + 1}`}>{plan.name}</span>)}</div>
+            </header>
+            <div class="stackbar" data-plan-bar role="img" aria-label="MRR by plan"></div>
+            <table class="table table--plans" data-plans>
+              <thead><tr><th scope="col">Plan</th><th scope="col">Subscribers</th><th scope="col">Monthly</th><th scope="col">Yearly</th><th scope="col">MRR</th><th scope="col">ARR</th></tr></thead>
+              <tbody>
+                {paid.map((plan, i) => (
+                  <tr data-plan={plan.id}>
+                    <th scope="row"><span class={`swatch swatch--s${i + 1}`} aria-hidden="true"></span>{plan.name}<span class="table__sub">${plan.price.monthlyUsd}/mo · ${plan.price.yearlyUsd}/yr</span></th>
+                    <td data-f="subscribers">—</td><td data-f="monthly">—</td><td data-f="yearly">—</td><td data-f="mrr">—</td><td data-f="arr">—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </article>
+          <article class="panel">
+            <header class="panel__head"><h2>Cash collected</h2><span class="panel__hint">Charges minus refunds</span></header>
+            <dl class="facts facts--cash" data-cash></dl>
+            <p class="panel__foot">Actual money received. Not the same as MRR: a yearly plan pays twelve months up front.</p>
+          </article>
+        </section>
+
+        <section class="owner-grid">
+          <article class="panel panel--chart">
+            <header class="panel__head"><h2>MRR</h2><span class="panel__hint" data-since></span></header>
+            <div class="chart chart--sm" data-chart="mrr" role="img" aria-label="MRR over time"></div>
+          </article>
+          <article class="panel panel--chart">
+            <header class="panel__head"><h2>Paid subscribers</h2><span class="panel__hint" data-since></span></header>
+            <div class="chart chart--sm" data-chart="subscribers" role="img" aria-label="Paid subscribers over time"></div>
+          </article>
+          <article class="panel">
+            <header class="panel__head"><h2>Movement</h2><span class="panel__hint" data-range-label></span></header>
+            <dl class="facts" data-movement></dl>
+          </article>
+        </section>
+
+        <section class="owner-grid owner-grid--wide">
+          <article class="panel">
+            <header class="panel__head"><h2>Recent activity</h2><span class="panel__hint">Live</span></header>
+            <ol class="feed" data-feed></ol>
+          </article>
+          <article class="panel panel--privacy">
+            <header class="panel__head"><h2>What is counted</h2></header>
+            <ul class="privacy">
+              <li>Installer downloads from a browser, update checks and update downloads from KalCode, counted on our server when the file is served.</li>
+              <li>Stored: time, event, platform, architecture and KalCode version. No IP address, no device or installation id, no cookie.</li>
+              <li>Revenue comes from Stripe live mode only. Failed, incomplete and test payments never count.</li>
+              <li>Installs are not measured on the device: KalCode sends no telemetry. New desktop sign-ins are the install signal.</li>
+            </ul>
+          </article>
+        </section>
+      </div>
+    </main>
+
+    <div class="tooltip" data-tooltip role="status" hidden></div>
+    <script>
+      import "../../scripts/owner-analytics";
+    </script>
+  </body>
+</html>

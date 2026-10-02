@@ -4,7 +4,15 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPrice, PLANS } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
-import { ACCOUNT_PAGE, EMAIL_ACTION_PAGES, FOOTER_NAV, isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
+import {
+  ACCOUNT_PAGE,
+  EMAIL_ACTION_PAGES,
+  FOOTER_NAV,
+  isKnownPagePath,
+  OWNER_PAGE,
+  PAGES,
+  PRIMARY_NAV,
+} from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";
 import { buildCsp, cspHash } from "../../worker/lib/security";
 
@@ -39,7 +47,7 @@ describe("site map", () => {
 
   it("lists every page source (no unlisted public pages)", () => {
     const listed = new Set(
-      [...PAGES, ...Object.values(EMAIL_ACTION_PAGES), ACCOUNT_PAGE].map((page) => pageFile(page.path)),
+      [...PAGES, ...Object.values(EMAIL_ACTION_PAGES), ACCOUNT_PAGE, OWNER_PAGE].map((page) => pageFile(page.path)),
     );
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
@@ -51,6 +59,19 @@ describe("site map", () => {
     for (const file of sources) {
       expect(listed.has(file), file).toBe(true);
     }
+  });
+
+  it("keeps the private owner dashboard out of every public listing", () => {
+    expect(PAGES.map((page) => page.path)).not.toContain(OWNER_PAGE.path);
+    expect(isKnownPagePath(OWNER_PAGE.path)).toBe(false);
+    for (const file of ["src/components/Header.astro", "src/components/Footer.astro", "src/lib/site.ts"]) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      expect(source.match(/\/owner\//g) ?? [], file).toHaveLength(file.endsWith("site.ts") ? 1 : 0);
+    }
+    const config = readFileSync(resolve(root, "astro.config.mjs"), "utf8");
+    expect(config).toContain('!page.includes("/owner/")');
+    const owner = readFileSync(resolve(root, "src/pages/owner/analytics.astro"), "utf8");
+    expect(owner).toContain('content="noindex, nofollow, noarchive"');
   });
 
   it("gives every page a unique title and description", () => {
@@ -182,7 +203,9 @@ describe("content security policy", () => {
       const inline = [
         ...html.matchAll(/<script(?![^>]*\bsrc=)(?![^>]*type="application\/ld\+json")[^>]*>([\s\S]*?)<\/script>/g),
       ].map((match) => match[1]);
-      expect(inline, file).toEqual([THEME_SCRIPT]);
+      // The dark-only owner dashboard has no theme toggle, so it carries no inline script at all.
+      const ownerPage = file.replaceAll("\\", "/") === "owner/analytics.html";
+      expect(inline, file).toEqual(ownerPage ? [] : [THEME_SCRIPT]);
       expect(html, file).not.toMatch(/<style[\s>]/);
       expect(html, file).not.toMatch(/\sstyle="/);
     }

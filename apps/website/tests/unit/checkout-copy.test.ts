@@ -26,7 +26,7 @@ describe("paid-plan copy", () => {
     expect(await render(Home, "/")).toContain("Nothing is for sale today.");
     const privacy = await render(Privacy, "/privacy");
     expect(privacy).not.toContain(PRIVACY_LINE);
-    expect(privacy).toContain("Last updated September 28, 2026");
+    expect(privacy).toContain("Last updated October 2, 2026");
   });
 
   it("sends buyers to their account and names Stripe once checkout is open", async () => {
@@ -41,10 +41,8 @@ describe("paid-plan copy", () => {
     expect(home).not.toContain("Nothing is for sale today.");
     const privacy = await render(Privacy, "/privacy");
     expect(privacy).toContain(PRIVACY_LINE);
-    expect(privacy).toContain("Last updated September 30, 2026");
-    // Only the approved line and the date differ.
-    expect(privacy.replace(` ${PRIVACY_LINE}`, "").replace("September 30, 2026", "September 28, 2026")).toBe(
-      closedPrivacy,
-    );
+    expect(privacy).toContain("Last updated October 2, 2026");
+    // Only the approved line differs.
+    expect(privacy.replace(` ${PRIVACY_LINE}`, "")).toBe(closedPrivacy);
   });
 });

@@ -377,5 +377,11 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
     response = await deps.assets.fetch(request);
   }
 
-  return withSecurityHeaders(response, url.pathname, csp);
+  const secured = withSecurityHeaders(response, url.pathname, csp);
+  // The private owner dashboard is never indexed or cached by intermediaries (docs/OWNER_ANALYTICS.md).
+  if (url.pathname === "/owner" || url.pathname.startsWith("/owner/")) {
+    secured.headers.set("x-robots-tag", "noindex, nofollow, noarchive");
+    secured.headers.set("cache-control", "no-store");
+  }
+  return secured;
 }

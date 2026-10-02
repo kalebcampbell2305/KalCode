@@ -14,6 +14,7 @@ import { readJsonBody } from "./body";
 import type { EmailAuthService } from "./email-auth";
 import { buildEntitlement, resolveEntitlement } from "./entitlement";
 import { apiError, json } from "./http";
+import type { InsightsService } from "./insights";
 import { type PublicKeyEntry, publishedKeySet } from "./keys";
 import type { OpenIdAuthService } from "./openid-auth-routes";
 import type { AccountRecord, EntitlementStore, RequestSource, UsageStore } from "./store";
@@ -28,6 +29,8 @@ export interface Deps {
   openIdAuth?: OpenIdAuthService | null;
   emailAuth?: EmailAuthService | null;
   billing?: BillingService | null;
+  /** Private owner dashboard data; served only to an account holding an active OWNER grant. */
+  insights?: InsightsService | null;
   /** The current signing key, or null when none is configured (signed documents unavailable). */
   signingKey: () => Promise<EntitlementSigningKey | null>;
   previousPublicKeys: () => readonly PublicKeyEntry[];
@@ -40,8 +43,11 @@ type Handler = (request: Request, deps: Deps) => Promise<Response>;
 export interface Route {
   method: "GET" | "POST";
   path: string;
-  /** `account`: the caller must be an authenticated account. `public`: anyone. */
-  access: "account" | "public";
+  /**
+   * `account`: the caller must be an authenticated account. `owner`: an authenticated account with
+   * an active OWNER operator grant (read-only owner reporting). `public`: anyone.
+   */
+  access: "account" | "owner" | "public";
   handler: Handler;
 }
 
@@ -69,6 +75,8 @@ export const ACCOUNT_DELETE_START_PATH = "/v1/account/delete/start";
 export const BILLING_CHECKOUT_PATH = "/v1/billing/checkout";
 export const BILLING_PORTAL_PATH = "/v1/billing/portal";
 export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
+export const INSIGHTS_DISTRIBUTION_PATH = "/v1/insights/distribution";
+export const INSIGHTS_REVENUE_PATH = "/v1/insights/revenue";
 
 const SERVER_ERROR_MESSAGE = "Something went wrong on our side. Please try again later.";
 
@@ -173,6 +181,32 @@ const billingPortal: Handler = async (request, deps) => {
   if (!account) return unauthenticated();
   return deps.billing?.portal(request, account.id) ?? unavailable();
 };
+
+/**
+ * OWNER-only gate for read-only owner reporting. Identity comes only from the server-verified
+ * session; the tier only from `resolveEntitlement` (an active OWNER grant with source `grant`).
+ * Anything else is refused before any reporting code runs.
+ */
+async function requireOwner(request: Request, deps: Deps): Promise<Response | null> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== "https://kalcoded.com") {
+    return apiError(403, "forbidden", "This request origin is not allowed.");
+  }
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  const resolved = await resolveEntitlement(deps.store, account.id, deps.now());
+  if (resolved.tier !== "owner") {
+    deps.log({ level: "warn", event: "insights.forbidden" });
+    return apiError(403, "forbidden", "This is not available for this account.");
+  }
+  return null;
+}
+
+const insightsDistribution: Handler = async (request, deps) =>
+  (await requireOwner(request, deps)) ?? deps.insights?.distribution(request) ?? unavailable();
+
+const insightsRevenue: Handler = async (request, deps) =>
+  (await requireOwner(request, deps)) ?? deps.insights?.revenue(request) ?? unavailable();
 
 const billingWebhook: Handler = (request, deps) => deps.billing?.webhook(request) ?? Promise.resolve(unavailable());
 
@@ -320,6 +354,8 @@ export const ROUTES: readonly Route[] = [
   { method: "GET", path: KEYS_PATH, access: "public", handler: getKeys },
   { method: "GET", path: KALVOICE_USAGE_PATH, access: "account", handler: getUsage },
   { method: "POST", path: KALVOICE_REQUESTS_PATH, access: "account", handler: postRequest },
+  { method: "GET", path: INSIGHTS_DISTRIBUTION_PATH, access: "owner", handler: insightsDistribution },
+  { method: "GET", path: INSIGHTS_REVENUE_PATH, access: "owner", handler: insightsRevenue },
 ];
 
 async function dispatch(request: Request, deps: Deps): Promise<Response> {

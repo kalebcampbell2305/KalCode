@@ -16,4 +16,10 @@ export default {
     }
     return handleRequest(request, depsFromEnv(env));
   },
+
+  /** Daily cron (wrangler.jsonc): stores the day's aggregate revenue snapshot for the owner dashboard. */
+  async scheduled(_controller, env, ctx) {
+    if (env.ACCOUNT_SCHEMA_MAINTENANCE === "true") return;
+    ctx.waitUntil(depsFromEnv(env).insights?.snapshot() ?? Promise.resolve());
+  },
 } satisfies ExportedHandler<Env>;

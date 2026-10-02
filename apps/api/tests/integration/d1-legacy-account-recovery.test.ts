@@ -59,6 +59,7 @@ describe("deployed legacy account schema recovery", () => {
     apply(root, repair);
     apply(root, join(API_DIR, "migrations/0008_checkout_retry_binding.sql"));
     apply(root, join(API_DIR, "migrations/0009_social_oidc_browser.sql"));
+    apply(root, join(API_DIR, "migrations/0010_owner_metric_snapshots.sql"));
     expect(execSql(root, "SELECT activated_at, deleted_at FROM accounts")[0]).toEqual([
       { activated_at: "2026-09-25T12:00:00Z", deleted_at: null },
     ]);

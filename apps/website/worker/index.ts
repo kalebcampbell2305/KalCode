@@ -1,5 +1,13 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { componentDepsFromEnv, handleComponent } from "./components";
+import {
+  countServedRequest,
+  type DistributionStatsInput,
+  distributionStats,
+  isAnalyticsRange,
+  purgeDistributionEvents,
+  validTzOffset,
+} from "./distribution";
 import { type DownloadEnv, downloadDepsFromEnv, handleDownload } from "./downloads";
 import {
   type AccountMailRpcRequest,
@@ -30,14 +38,37 @@ export class AccountMailEntrypoint extends WorkerEntrypoint<WorkerEnv> {
   }
 }
 
+/**
+ * Internal-only named RPC entrypoint for the owner dashboard. Reachable only through the
+ * kalcode-api service binding, which checks the caller's OWNER grant first (docs/OWNER_ANALYTICS.md).
+ * Returns anonymous aggregate counts only.
+ */
+export class DistributionStatsEntrypoint extends WorkerEntrypoint<WorkerEnv> {
+  async distributionStats(input: DistributionStatsInput) {
+    if (!isAnalyticsRange(input?.range) || !validTzOffset(input?.tzOffsetMinutes)) {
+      throw new Error("invalid distribution stats input");
+    }
+    return distributionStats(this.env.DB, { range: input.range, tzOffsetMinutes: input.tzOffsetMinutes }, new Date());
+  }
+}
+
+// Structured logs only. Never IP addresses, User-Agent strings or request headers.
+// biome-ignore lint/suspicious/noConsole: console is the Workers structured-logging sink.
+const log = (entry: Record<string, string>) => console.log(JSON.stringify(entry));
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const component = await handleComponent(request, componentDepsFromEnv(env));
     if (component) return component;
     // Desktop downloads (/download/windows-x64, /download/<version>/<file>, /releases/latest.json)
     // are served from R2; everything else goes through the site router.
     const download = await handleDownload(request, downloadDepsFromEnv(env));
-    return download ?? handleRequest(request, depsFromEnv(env));
+    if (download) {
+      // Anonymous distribution counts, recorded after the response is chosen (distribution.ts).
+      ctx.waitUntil(countServedRequest(env.DB, request, download, new Date(), log));
+      return download;
+    }
+    return handleRequest(request, depsFromEnv(env));
   },
 
   /**
@@ -46,6 +77,12 @@ export default {
    */
   async scheduled(_controller, env, ctx) {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
-    ctx.waitUntil(Promise.all([scheduledPurge(depsFromEnv(env)), purgeAccountMailDispatches(env.DB, thirtyDaysAgo)]));
+    ctx.waitUntil(
+      Promise.all([
+        scheduledPurge(depsFromEnv(env)),
+        purgeAccountMailDispatches(env.DB, thirtyDaysAgo),
+        purgeDistributionEvents(env.DB, new Date()),
+      ]),
+    );
   },
 } satisfies ExportedHandler<WorkerEnv>;

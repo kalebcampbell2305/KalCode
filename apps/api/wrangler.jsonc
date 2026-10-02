@@ -24,8 +24,18 @@
       "binding": "ACCOUNT_MAILER",
       "service": "kalcode-website",
       "entrypoint": "AccountMailEntrypoint"
+    },
+    {
+      // Anonymous distribution counts for the OWNER-only /v1/insights routes (docs/OWNER_ANALYTICS.md).
+      "binding": "DISTRIBUTION_STATS",
+      "service": "kalcode-website",
+      "entrypoint": "DistributionStatsEntrypoint"
     }
   ],
+  "triggers": {
+    // Daily aggregate revenue snapshot for the owner dashboard (worker/index.ts `scheduled`).
+    "crons": ["55 23 * * *"]
+  },
   // Secrets (never in this file or the repository):
   //   GITHUB_OAUTH_CLIENT_SECRET, GOOGLE_OIDC_CLIENT_SECRET,
   //   MICROSOFT_OIDC_CLIENT_SECRET, AUTH_RATE_LIMIT_KEY

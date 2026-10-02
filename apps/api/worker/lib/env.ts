@@ -12,9 +12,11 @@ import { billingPriceCatalog } from "./billing-plans";
 import { billingService } from "./billing-routes";
 import { d1BillingStore } from "./billing-store";
 import { emailAuthService } from "./email-auth";
+import { type DistributionStatsBinding, insightsService, isDistributionStatsBinding } from "./insights";
 import { importSigningKey, parsePreviousPublicKeys } from "./keys";
 import { openIdAuthService } from "./openid-auth-routes";
 import type { OpenIdClientConfig } from "./openid-connect";
+import { d1OwnerMetricsStore } from "./owner-metrics-store";
 import type { Deps } from "./router";
 import { d1Store } from "./store";
 import { stripeClient } from "./stripe";
@@ -37,6 +39,8 @@ export interface Env {
   AUTH_RATE_LIMIT_KEY?: string;
   /** Internal named RPC entrypoint on the website Worker; never a public HTTP mail route. */
   ACCOUNT_MAILER?: AccountMailServiceBinding;
+  /** Internal named RPC entrypoint on the website Worker: anonymous distribution counts. */
+  DISTRIBUTION_STATS?: DistributionStatsBinding;
   STRIPE_SECRET_KEY?: string;
   /** Exact "true" only after signed release installation/upgrade gates pass. */
   CHECKOUT_ENABLED?: string;
@@ -140,6 +144,16 @@ export function depsFromEnv(env: Env): Deps {
     prices.ok &&
     /^(?:sk|rk)_live_[A-Za-z0-9_]+$/.test(env.STRIPE_SECRET_KEY ?? "") &&
     /^whsec_[A-Za-z0-9_]+$/.test(env.STRIPE_WEBHOOK_SECRET ?? "");
+  // Owner revenue reads live Stripe with the same live-only key as billing; never test mode.
+  const liveStripe = /^(?:sk|rk)_live_[A-Za-z0-9_]+$/.test(env.STRIPE_SECRET_KEY ?? "");
+  const insights = insightsService({
+    store: d1OwnerMetricsStore(env.DB),
+    distribution: isDistributionStatsBinding(env.DISTRIBUTION_STATS) ? env.DISTRIBUTION_STATS : null,
+    stripe: liveStripe && prices.ok ? stripeClient({ secretKey: env.STRIPE_SECRET_KEY as string }) : null,
+    catalog: prices.ok ? prices : null,
+    now,
+    log,
+  });
   return {
     store: d1Store(env.DB),
     accountStore,
@@ -157,6 +171,7 @@ export function depsFromEnv(env: Env): Deps {
           now,
         })
       : null,
+    insights,
     signingKey: () => loadSigningKey(env.ENTITLEMENT_SIGNING_KEY),
     previousPublicKeys: () => parsePreviousPublicKeys(env.ENTITLEMENT_PREVIOUS_PUBLIC_KEYS),
     now,
