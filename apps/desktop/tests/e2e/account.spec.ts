@@ -104,7 +104,7 @@ test("real native account commands gate onboarding, logout, cleanup, and relogin
     const account = page.getByRole("region", { name: "KalCode account" });
     await expect(account).toContainText("owner@example.com");
     await expect(account).toContainText("Free");
-    await expect(account).toContainText("75 of 75 requests used");
+    await expect(account).toContainText("0 remaining · 25 / 25 used");
 
     await account.getByRole("button", { name: "Sign out" }).click();
     await expect(page.getByRole("heading", { name: "Welcome to KalCode" })).toBeVisible({ timeout: 20_000 });
