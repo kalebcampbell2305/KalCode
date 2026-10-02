@@ -350,6 +350,7 @@ export function createFixtures(options: FixtureOptions = {}) {
         permissionProfileId: null,
         runtimeKind: null,
         terminalId: null,
+        worktreeId: null,
       },
       overrides,
     );
