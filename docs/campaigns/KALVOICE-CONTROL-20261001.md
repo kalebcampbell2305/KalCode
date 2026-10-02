@@ -471,3 +471,11 @@ The regression failed before repair and passed at ordinary and smaller window
 sizes afterward; neighboring UI 3/3 and focused units 18/18 passed. The new test
 raises functional UI inventory to 282 and the combined established suite to 338.
 Final integrated gates, merge, signed packages, and delivery remain pending.
+
+The current UI gate also reproduced a midnight fixture defect: an activity
+required in Today was timestamped 20 minutes ago and therefore appeared in
+Yesterday shortly after local midnight. The test now fixes browser-local time
+at 00:10; the fixture modification occurs at the current time. Production date
+filtering is unchanged. Deterministic red/green, independent exact UI reproof,
+neighboring Home UI 3/3, and recency units 11/11 passed. No tests were skipped
+or removed, and the existing test count is unchanged.

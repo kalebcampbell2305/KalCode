@@ -1510,7 +1510,7 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
       at(60 * 3),
     );
     emit({ type: "thread.started", payload: { threadId: auth.id } }, threadCorr(auth, 50));
-    emit({ type: "file.modified", payload: { threadId: auth.id, path: "src/auth/callback.ts" } }, threadCorr(auth, 20));
+    emit({ type: "file.modified", payload: { threadId: auth.id, path: "src/auth/callback.ts" } }, threadCorr(auth, 0));
     emit({ type: "thread.completed", payload: { threadId: greeting.id } }, threadCorr(greeting, 35));
     emit(
       {
