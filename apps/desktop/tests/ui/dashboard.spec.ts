@@ -440,8 +440,14 @@ test.describe("states", () => {
         window as unknown as { __kalcodeMemory: { dashboard: { recover(): void } } }
       ).__kalcodeMemory.dashboard.recover(),
     );
-    await board(page).getByRole("button", { name: "Try again" }).click();
-    await expect(cards(page)).toHaveCount(13);
+    // The board also re-reads threads once by itself when its event history arrives. When that read
+    // lands after recover(), the board is already back and "Try again" detaches mid-click, so press it
+    // while it is still offered and require the recovered board either way.
+    await expect(async () => {
+      const retry = board(page).getByRole("button", { name: "Try again" });
+      if (await retry.isVisible()) await retry.click({ timeout: 2_000 });
+      await expect(cards(page)).toHaveCount(13, { timeout: 2_000 });
+    }).toPass();
   });
 
   test("loading: skeletons are announced as busy", async ({ page }) => {
