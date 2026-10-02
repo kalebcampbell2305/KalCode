@@ -2625,6 +2625,9 @@ fn the_agent_cap_is_checked_before_an_agents_worktree_is_prepared() {
         })
         .expect_err("one agent at a time on Free");
     assert_eq!(refused.code, "too_many_agents");
-    assert!(!prepared.get(), "no worktree is created for a refused agent");
+    assert!(
+        !prepared.get(),
+        "no worktree is created for a refused agent"
+    );
     assert_eq!(h.runtime.list(None, true).expect("list").len(), 1);
 }
