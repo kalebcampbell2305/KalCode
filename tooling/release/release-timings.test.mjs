@@ -12,7 +12,13 @@ test("marks start/end per step and summarizes minutes and the end-to-end total",
     mark(root, { release: "0.1.9+1038", step: "merge", phase: "end", at: "2026-10-02T20:00:00Z" });
     mark(root, { release: "0.1.9+1038", step: "build-windows", phase: "start", at: "2026-10-02T20:00:00Z" });
     mark(root, { release: "0.1.9+1038", step: "build-windows", phase: "end", at: "2026-10-02T20:10:30Z" });
-    mark(root, { release: "0.1.9+1038", step: "package-mac", phase: "start", at: "2026-10-02T20:04:00Z", note: "cold base" });
+    mark(root, {
+      release: "0.1.9+1038",
+      step: "package-mac",
+      phase: "start",
+      at: "2026-10-02T20:04:00Z",
+      note: "cold base",
+    });
     const summary = summarize(readTimings(root, "0.1.9+1038"));
     const win = summary.steps.find((s) => s.step === "build-windows");
     assert.equal(win.minutes, 10.5);
