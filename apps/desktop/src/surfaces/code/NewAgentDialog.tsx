@@ -46,7 +46,7 @@ export interface NewAgentDialogProps {
   initialProvider: PaneProviderId;
   busy: boolean;
   error: string | null;
-  /** Starts the agents; resolves true when every one started (the dialog then closes). */
+  /** Starts the agents; resolves true when at least one started (the dialog then closes). */
   onLaunch: (spec: AgentLaunchSpec) => Promise<boolean>;
   onClose: () => void;
 }
@@ -74,7 +74,9 @@ export function NewAgentDialog({
   const [accountId, setAccountId] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
-  const [count, setCount] = useState(1);
+  // What the person typed; the launch uses it clamped, so editing "1" to "5" never passes through 15.
+  const [countText, setCountText] = useState("1");
+  const count = clampAgentCount(Number(countText));
 
   // Models, accounts and the workspace's remembered accounts. A read that fails leaves the
   // provider defaults, which native resolves the same way.
@@ -121,7 +123,7 @@ export function NewAgentDialog({
     if (busy || !data) return;
     const ok = await onLaunch({
       providerId,
-      count: clampAgentCount(count),
+      count,
       providerAccountId: accountId || null,
       model: model || null,
       effort: effort || null,
@@ -226,7 +228,7 @@ export function NewAgentDialog({
                   label="One fewer agent"
                   icon={<Minus />}
                   disabled={busy || count <= 1}
-                  onClick={() => setCount((n) => clampAgentCount(n - 1))}
+                  onClick={() => setCountText(String(clampAgentCount(count - 1)))}
                 />
                 <TextInput
                   id={`${id}-count`}
@@ -235,17 +237,18 @@ export function NewAgentDialog({
                   inputMode="numeric"
                   min={1}
                   max={MAX_AGENTS_PER_LAUNCH}
-                  value={count}
+                  value={countText}
                   disabled={busy}
                   aria-describedby={`${id}-count-hint`}
-                  onChange={(e) => setCount(clampAgentCount(Number(e.target.value)))}
+                  onChange={(e) => setCountText(e.target.value)}
+                  onBlur={() => setCountText(String(count))}
                 />
                 <IconButton
                   size="sm"
                   label="One more agent"
                   icon={<Plus />}
                   disabled={busy || count >= MAX_AGENTS_PER_LAUNCH}
-                  onClick={() => setCount((n) => clampAgentCount(n + 1))}
+                  onClick={() => setCountText(String(clampAgentCount(count + 1)))}
                 />
               </div>
             </Field>

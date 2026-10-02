@@ -519,6 +519,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   // Coding agents (AGENTS.md): each one is a real provider CLI in its own terminal pane, so a
   // launch of N agents starts N panes and lays them out together.
   const [launcher, setLauncher] = useState<{ providerId: PaneProviderId; paneId: string | null } | null>(null);
+  // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
+  const [launching, setLaunching] = useState(false);
   const openAgentLauncher = useCallback(
     (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => setLauncher({ providerId, paneId }),
     [],
@@ -526,10 +528,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const launchAgents = useCallback(
     async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null) => {
       const created: string[] = [];
-      for (let i = 0; i < count; i += 1) {
-        const thread = await providerPanes.create(providerId, launch);
-        if (!thread) break;
-        created.push(thread.id);
+      setLaunching(true);
+      try {
+        for (let i = 0; i < count; i += 1) {
+          const thread = await providerPanes.create(providerId, launch);
+          if (!thread) break;
+          created.push(thread.id);
+        }
+      } finally {
+        setLaunching(false);
       }
       const current = controllerRef.current;
       if (paneId) current.focusPane(paneId, false);
@@ -550,7 +557,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           for (const id of created) current.show(threadContent(id), { focus: id === first, placement: "tab" });
         }
       }
-      return created.length === count;
+      // Any started agent closes the launcher, so a retry never duplicates them; a failure that
+      // stopped the batch stays visible in the Code toolbar.
+      return created.length > 0;
     },
     [providerPanes],
   );
@@ -1024,7 +1033,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           workspace={workspace}
           offered={providerPanes.offered}
           initialProvider={launcher.providerId}
-          busy={providerPanes.creating}
+          busy={launching || providerPanes.creating}
           error={providerPanes.error}
           onLaunch={(spec) => launchAgents(spec, launcher.paneId)}
           onClose={() => setLauncher(null)}

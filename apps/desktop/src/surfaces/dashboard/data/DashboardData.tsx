@@ -223,7 +223,17 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
         invalidate(["threads"], session);
         if (!ownsAction()) return;
         // Archive and unarchive move the thread between the open and archived sides.
-        allThreads.update((list) => list.map((t) => (t.id === updated.id ? updated : t)));
+        // Commands other than thread_list/thread_get don't say how the provider runs: keep what
+        // the list knew, so a coding agent never drops off agent surfaces until the next read.
+        allThreads.update((list) =>
+          list.map((t) =>
+            t.id === updated.id
+              ? updated.runtimeKind === null
+                ? { ...updated, runtimeKind: t.runtimeKind }
+                : updated
+              : t,
+          ),
+        );
         const announcement = {
           id: ++announceSeq.current,
           text:
@@ -321,7 +331,8 @@ export function useArchivedCodingAgents() {
  * the same thread list. 0 until the list has loaded (and when it can't be read).
  */
 export function useWaitingForYouCount(): number {
-  const { state } = useDashboardData().threads;
+  // The Dashboard's badge counts what its Fleet shows: coding agents.
+  const { state } = useCodingAgents();
   return useMemo(() => (state.status === "ready" ? chipCounts(state.data).waiting_for_you : 0), [state]);
 }
 
