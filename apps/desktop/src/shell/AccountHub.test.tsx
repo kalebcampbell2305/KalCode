@@ -140,8 +140,10 @@ describe("Account Hub", () => {
       "Full Settings",
       "Sign out",
     ]);
-    // Usage comes from the verified account (Free: 75 KalVoice requests).
-    await waitFor(() => expect(menu).toHaveTextContent("0 of 75"));
+    // Usage comes from the verified account (Free: 25 KalVoice requests): remaining first, then used and the reset.
+    await waitFor(() => expect(menu).toHaveTextContent("25 remaining"));
+    expect(menu).toHaveTextContent("0 of 25 used");
+    expect(menu).toHaveTextContent(/Resets /);
   });
 
   it("is keyboard operable and returns focus to the hub on Escape", async () => {

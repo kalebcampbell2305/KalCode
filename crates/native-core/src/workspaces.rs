@@ -921,7 +921,14 @@ impl Core {
             if existing.status == TerminalStatus::Running {
                 return Ok(existing.clone());
             }
-        } else if let Some(limit) = limit {
+        }
+        // A finished operation terminal doesn't count as open (`admit_terminal`), so running it
+        // again is admitted like a new one.
+        if let Some(limit) = limit
+            && existing
+                .as_ref()
+                .is_none_or(|existing| existing.ended_at.is_some())
+        {
             admit_terminal(&conn, limit)?;
         }
 
@@ -1629,10 +1636,16 @@ impl Core {
 }
 
 /// Refuses one more terminal once `limit` are open across all workspaces. Closing a tab deletes
-/// its row, so every row (shells, agents and Operations) is an open terminal.
+/// its row, so every row (shells, agents and Operations) is an open terminal, except a finished
+/// Operations terminal: Operations keeps it only as the run's log, and it can't be restarted.
 fn admit_terminal(conn: &Connection, limit: PlanLimit) -> Result<()> {
     debug_assert_eq!(limit.kind, Limited::OpenTerminals);
-    let open: i64 = conn.query_row("SELECT COUNT(*) FROM terminals", [], |r| r.get(0))?;
+    let open: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM terminals
+         WHERE NOT (substr(shell_id, 1, ?1) = ?2 AND ended_at IS NOT NULL)",
+        params![OPERATION_SHELL_PREFIX.len() as i64, OPERATION_SHELL_PREFIX],
+        |r| r.get(0),
+    )?;
     limit.admit(open)
 }
 

@@ -253,6 +253,14 @@ function Avatar({ initials, large = false }: { initials: string; large?: boolean
   );
 }
 
+/** The real reset moment from the usage snapshot, e.g. "Nov 1, 9:00 AM". */
+function formatReset(resetsAt: string): string {
+  const date = new Date(resetsAt);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 function UsageMeter({ usage }: { usage: AccountUsageSnapshot }) {
   const { used, allowance } = usage;
   const fraction = allowance === null || allowance === 0 ? null : Math.min(1, used / allowance);
@@ -261,7 +269,7 @@ function UsageMeter({ usage }: { usage: AccountUsageSnapshot }) {
       <p className={styles.usageText}>
         <span>KalVoice requests</span>
         <span className={styles.usageValue}>
-          {allowance === null ? "Unlimited" : `${used.toLocaleString()} of ${allowance.toLocaleString()}`}
+          {allowance === null ? "Unlimited" : `${Math.max(0, allowance - used).toLocaleString()} remaining`}
         </span>
       </p>
       {fraction !== null ? (
@@ -269,6 +277,14 @@ function UsageMeter({ usage }: { usage: AccountUsageSnapshot }) {
           <span className={styles.fill} style={{ width: `${Math.max(fraction * 100, used > 0 ? 3 : 0)}%` }} />
         </span>
       ) : null}
+      <p className={styles.usageText}>
+        <span>
+          {allowance === null
+            ? `${used.toLocaleString()} used`
+            : `${used.toLocaleString()} of ${allowance.toLocaleString()} used`}
+        </span>
+        <span>Resets {formatReset(usage.resetsAt)}</span>
+      </p>
     </div>
   );
 }
