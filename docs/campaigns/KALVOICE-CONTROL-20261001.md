@@ -479,3 +479,18 @@ at 00:10; the fixture modification occurs at the current time. Production date
 filtering is unchanged. Deterministic red/green, independent exact UI reproof,
 neighboring Home UI 3/3, and recency units 11/11 passed. No tests were skipped
 or removed, and the existing test count is unchanged.
+
+## Shared-machine gate stabilization
+
+The API diagnostic at `bb691484` reproduced two 60-second test timeouts with
+23 default Vitest workers under memory pressure. The identical registered suite
+passed 293/293 with supported `VITEST_MAX_WORKERS=4`, zero skips/flakes and all
+existing deadlines unchanged. The final local gate will inherit that bound.
+
+Independent review also confirmed a synchronization race in the resources waiter
+test: the parent slept before the worker began measuring. A one-shot handshake
+now starts the parent's existing 50ms wait after measurement begins. Production
+code and both >=40ms / <2s assertions are unchanged. A controlled late-worker
+probe measured 10.38ms before synchronization and 50.45ms afterward; primary
+standalone compilation and the exact regression passed. Full registered proof
+is still required before integration; these focused results are not shipment.
