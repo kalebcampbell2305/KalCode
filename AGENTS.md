@@ -57,6 +57,16 @@ For user-facing work, "shipped" means the update is actually available through K
 
 This supersedes older release-gate behavior that delays publication.
 
+### Build → auto-merge → ship; versions are marketing labels (owner directive 2026-10-02)
+
+**KALCODE DEVELOPMENT IS CONTINUOUS.** The owner gives an agent something to build. The agent builds it, tests the relevant change, reports or shows the result, and **merges it to main automatically. Owner approval is not needed to merge.** Merging user-facing work to main automatically ships it to users in one continuous pipeline: build the current public version → sign/package → publish → production update feed → users receive it → quick production verification → cleanup.
+
+- **Never wait for:** a separate "ship" command, another feature, a batch, a version change, a marketing video, a release date, unrelated QA, a soak period, or release ceremony.
+- **Post-merge work is release-critical only.** Prove the build, the package, signing/notarization, publishing, the update feed, that users receive the build, and that the changed feature works in production. Keep still-valid evidence.
+- **Stop only for real blockers:** a build, packaging, signing, updater or production failure; a security/integrity issue; an affected billing/entitlement failure; user-data safety. On a blocker: fix → rerun only what the fix invalidated → continue.
+- **Versions are labels, not gates.** Public version numbers are owner-controlled **marketing labels**. They never control building, merging or shipping, and many builds can ship under the same label. "Change KalCode to 0.1.10" is a simple, consistent version-label switch (app, package, installer and updater metadata, About, website, release metadata). Then keep building, with no rebuilt features, re-run QA, reopened work or release ceremony. Never question whether there are "enough changes" for a version.
+- **Release history.** Keep lightweight, truthful release history (git history, docs/releases, notes) so "what did we add for 0.1.10?" or a launch video can be answered from real history. It is metadata, never a gate. Never invent features.
+
 ### Automate and parallelize safely
 
 Automate builds, tests, metadata, configured signing, publication, updater metadata, website release references, production checks, and cleanup. Do not require routine manual steps merely because old procedures did. Ask the owner only for a real decision, unavailable credential/action, irreversible risk, or ambiguity.
