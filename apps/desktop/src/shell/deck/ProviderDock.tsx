@@ -61,6 +61,10 @@ export function ProviderDock() {
   );
   const suggested = new Set(alternatives.map((entry) => entry.account.id));
   const [dropped, setDropped] = useState<{ thread: ThreadSummary; entry: DockAccount } | null>(null);
+  // The dialog keeps its words while it animates closed.
+  const lastDropped = useRef(dropped);
+  if (dropped) lastDropped.current = dropped;
+  const shown = dropped ?? lastDropped.current;
   const [busy, setBusy] = useState(false);
   const chips = useRef(new Map<string, HTMLButtonElement>());
 
@@ -87,7 +91,11 @@ export function ProviderDock() {
     [],
   );
 
+  // One rebind at a time across the menu and the drop dialog (a double confirm sends one request).
+  const inFlight = useRef(false);
   const rebind = async (thread: ThreadSummary, entry: DockAccount): Promise<boolean> => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
     const target = entry.account;
     try {
       await client.rebindThreadAccount(thread.id, target.id);
@@ -105,11 +113,13 @@ export function ProviderDock() {
       });
       toast.show({ tone: "danger", title: failure.title, description: failure.description });
       return false;
+    } finally {
+      inFlight.current = false;
     }
   };
 
   const confirmDrop = async () => {
-    if (!dropped || busy) return;
+    if (!dropped || inFlight.current) return;
     setBusy(true);
     await rebind(dropped.thread, dropped.entry);
     setBusy(false);
@@ -149,15 +159,15 @@ export function ProviderDock() {
       {drag ? <DragGhost drag={drag} entries={entries} /> : null}
       <RebindThreadDialog
         open={dropped !== null}
-        from={dropped ? threadAccountLabel(dropped.thread) : ""}
-        to={dropped ? accountName(dropped.entry.account) : ""}
+        from={shown ? threadAccountLabel(shown.thread) : ""}
+        to={shown ? accountName(shown.entry.account) : ""}
         busy={busy}
         blocker={dropped ? rebindBlocker(dropped.thread) : null}
         signInRequired={false}
         onConfirm={() => void confirmDrop()}
         onCancel={() => setDropped(null)}
         onSignIn={() => setDropped(null)}
-        returnFocus={() => (dropped ? chips.current.get(dropped.entry.account.id)?.focus() : undefined)}
+        returnFocus={() => (shown ? chips.current.get(shown.entry.account.id)?.focus() : undefined)}
       />
     </div>
   );

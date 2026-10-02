@@ -50,50 +50,74 @@ function swallowNextClick() {
   setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
 }
 
+/** Ends the gesture in progress (if any) without dropping. One gesture at a time. */
+let cancelActive: (() => void) | null = null;
+
 /** Starts watching a press on a thread row; it becomes a drag once it moves past the threshold. */
 export function beginThreadDrag(event: PointerEvent<HTMLElement>, thread: ThreadSummary): void {
-  if (event.button !== 0 || thread.archivedAt) return;
+  if (event.button !== 0 || event.isPrimary === false || thread.archivedAt) return;
+  cancelActive?.();
+  const pointerId = event.pointerId;
   const start = { x: event.clientX, y: event.clientY };
   let active = false;
+  // Escape ends the drag at once, but the button is still down: its release must not open the row.
+  let escaped = false;
+  const mine = (e: globalThis.PointerEvent) => e.pointerId === pointerId;
 
   const onMove = (e: globalThis.PointerEvent) => {
+    if (!mine(e) || escaped) return;
     if (!active && Math.hypot(e.clientX - start.x, e.clientY - start.y) < THREAD_DRAG_THRESHOLD) return;
     if (!active) window.getSelection?.()?.removeAllRanges();
     active = true;
     publish({ thread, x: e.clientX, y: e.clientY, overAccountId: accountAt(e.clientX, e.clientY) });
   };
   const stop = () => {
+    if (cancelActive === onCancel) cancelActive = null;
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onCancel);
+    window.removeEventListener("pointercancel", onPointerCancel);
     window.removeEventListener("keydown", onKey, true);
     window.removeEventListener("dragstart", noNativeDrag, true);
+    window.removeEventListener("blur", onCancel);
   };
   const onUp = (e: globalThis.PointerEvent) => {
+    if (!mine(e)) return;
     stop();
+    if (escaped) {
+      swallowNextClick();
+      return;
+    }
     if (!active) return;
     swallowNextClick();
     const accountId = accountAt(e.clientX, e.clientY);
     publish(null);
     if (accountId) dropHandler?.(thread, accountId);
   };
+  // A lost release (another window took focus, the gesture was cancelled) drops nothing.
   const onCancel = () => {
     stop();
-    publish(null);
+    if (active || escaped) publish(null);
+  };
+  const onPointerCancel = (e: globalThis.PointerEvent) => {
+    if (mine(e)) onCancel();
   };
   // A row's provider mark is an <img>: the browser's own image drag would cancel this gesture.
   const noNativeDrag = (e: DragEvent) => e.preventDefault();
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape" || !active) return;
     e.preventDefault();
+    e.stopPropagation();
+    escaped = true;
     active = false;
-    onCancel();
+    publish(null);
   };
+  cancelActive = onCancel;
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
-  window.addEventListener("pointercancel", onCancel);
+  window.addEventListener("pointercancel", onPointerCancel);
   window.addEventListener("keydown", onKey, true);
   window.addEventListener("dragstart", noNativeDrag, true);
+  window.addEventListener("blur", onCancel);
 }
 
 /** The dock registers where drops go; returns the unregister function. */

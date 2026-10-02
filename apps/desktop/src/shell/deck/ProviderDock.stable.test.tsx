@@ -196,6 +196,31 @@ describe("Provider Dock on Stable", () => {
     expect(screen.getByRole("heading", { name: "Gemini docs pass", level: 2 })).toBeInTheDocument();
   }, 20_000);
 
+  it("Escape ends a drag: the release neither drops nor opens the row", async () => {
+    const { user, calls } = await mountStable();
+    await openThread(user, "Gemini docs pass");
+    const list = screen.getByRole("list", { name: "Threads" });
+    const row = within(list).getByRole("button", { name: /Codex cleanup/ });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => screen.getByRole("button", { name: /^Codex · B:/ }),
+    });
+    pointer(row, "pointerdown", 10, 10);
+    pointer(window, "pointermove", 80, 400);
+    expect(document.documentElement).toHaveAttribute("data-thread-drag");
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(document.documentElement).not.toHaveAttribute("data-thread-drag");
+    pointer(window, "pointerup", 80, 400);
+    act(() => {
+      row.click();
+    });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Gemini docs pass", level: 2 })).toBeInTheDocument();
+    expect(calls("thread_rebind_account")).toBe(0);
+  }, 20_000);
+
   it("outlines compatible accounts when the open thread's account is unavailable, without switching", async () => {
     const { user, calls } = await mountStable({ codexPersonalFailing: true });
     await openThread(user, "Codex cleanup");
