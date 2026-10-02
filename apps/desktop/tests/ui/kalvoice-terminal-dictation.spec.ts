@@ -15,8 +15,10 @@ async function talk(page: Page) {
   await page.keyboard.up("F8");
 }
 
-async function openWorkspace(page: Page, transcript: string, folder: string) {
-  await page.goto(`/?transcript=${encodeURIComponent(transcript)}`);
+async function openWorkspace(page: Page, transcript: string, folder: string, panes?: "limited") {
+  const params = new URLSearchParams({ transcript });
+  if (panes) params.set("panes", panes);
+  await page.goto(`/?${params.toString()}`);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.evaluate((nextFolder) => {
     (
@@ -106,13 +108,16 @@ test.describe("KalVoice terminal destinations", () => {
     expect(await runningProcesses(page)).toBe(before);
   });
 
-  test("an unverified provider prompt receives no text and starts no replacement session", async ({ page }) => {
-    await openWorkspace(page, "say voice-provider", "voice-provider");
+  test("a limited Claude hook channel receives no submitted text and starts no replacement session", async ({
+    page,
+  }) => {
+    await openWorkspace(page, "say voice-provider", "voice-provider", "limited");
     await page.getByRole("button", { name: "New Claude Code pane" }).click();
     const pane = page.locator("[data-provider-pane]").first();
     const terminal = pane.locator("[data-pane-terminal]");
     await expect(terminal.locator("textarea")).toBeFocused();
     await expect(pane.locator("[data-pane-status]")).toHaveText("IDLE");
+    await expect(pane.getByText(/Limited status.*approvals in Claude Code/)).toBeVisible();
     const threadId = await pane.getAttribute("data-provider-pane");
     const before = await runningProcesses(page);
 

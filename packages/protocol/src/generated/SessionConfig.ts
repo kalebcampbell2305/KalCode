@@ -8,7 +8,11 @@ export type SessionConfig = { threadId: string, workspaceId: string,
 /**
  * Stable KalCode provider-account metadata id. Credentials remain provider-managed.
  */
-providerAccountId: string | null, workingDirectory: string, model: string | null, permissionMode: PermissionMode,
+providerAccountId: string | null, workingDirectory: string, model: string | null,
+/**
+ * Provider-native reasoning effort. Missing means the provider default.
+ */
+effort: string | null, permissionMode: PermissionMode,
 /**
  * Provider session id to resume, when the provider supports resuming.
  */

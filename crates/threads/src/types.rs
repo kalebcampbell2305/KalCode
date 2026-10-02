@@ -21,6 +21,8 @@ pub struct CreateThread {
     pub account_label: Option<String>,
     pub workspace_id: String,
     pub model: Option<String>,
+    /// Provider-native reasoning effort; `None` uses the provider default.
+    pub effort: Option<String>,
     pub permission_mode: PermissionMode,
     pub prompt: String,
     pub name: Option<String>,
@@ -36,6 +38,8 @@ pub struct CreateIdleThread {
     pub account_label: Option<String>,
     pub workspace_id: String,
     pub model: Option<String>,
+    /// Provider-native reasoning effort; `None` uses the provider default.
+    pub effort: Option<String>,
     pub permission_mode: PermissionMode,
     pub name: Option<String>,
 }

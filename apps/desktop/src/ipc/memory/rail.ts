@@ -563,6 +563,7 @@ function fixtureThread(
     providerId,
     providerName,
     model: providerId === "claude-code" ? "sonnet" : null,
+    effort: null,
     providerAccountId: null,
     accountLabel: "Personal",
     workspaceId: workspace.id,

@@ -954,6 +954,7 @@ fn session_config() -> SessionConfig {
         provider_account_id: Some(kalcode_contracts::ids::new_id()),
         working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
         model: None,
+        effort: None,
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,

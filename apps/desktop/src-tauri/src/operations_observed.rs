@@ -502,6 +502,7 @@ mod tests {
             provider_id: ProviderId::new(ProviderId::CODEX),
             provider_name: "Codex".into(),
             model: Some("gpt-6".into()),
+            effort: None,
             provider_account_id: Some("account-1".into()),
             account_label: Some("Work".into()),
             workspace_id: "workspace-1".into(),

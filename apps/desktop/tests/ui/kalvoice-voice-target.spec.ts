@@ -169,6 +169,7 @@ test.describe("KalVoice thread composer target", () => {
     await expect(choices(page)).toHaveCount(0);
     await expect(detail(page).getByRole("heading", { name: PARSER })).toBeVisible();
     await expect(conversation(page)).toContainText("run the linter");
+    await expect(widget(page).getByText(`Sent to “${PARSER}”.`, { exact: true }).first()).toBeVisible();
 
     await blur(page);
     await talk(page, "tell claude to update the changelog");
@@ -177,6 +178,7 @@ test.describe("KalVoice thread composer target", () => {
       .click();
     await expect(detail(page).getByRole("heading", { name: OAUTH })).toBeVisible();
     await expect(conversation(page)).toContainText("update the changelog");
+    await expect(widget(page).getByText(`Sent to “${OAUTH}”.`, { exact: true }).first()).toBeVisible();
   });
 
   test("“Type it instead” lands in the thread that was focused, not the one on screen", async ({ page }) => {

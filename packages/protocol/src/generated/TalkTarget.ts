@@ -3,4 +3,4 @@
 /**
  * What had focus when the push-to-talk key went down.
  */
-export type TalkTarget = "field" | "terminal" | "none";
+export type TalkTarget = "field" | "terminal" | "provider_pane" | "none";

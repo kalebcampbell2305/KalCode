@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
 import { OperationsPage } from "./OperationsPage.tsx";
 
 const seams = vi.hoisted(() => ({
@@ -140,6 +141,95 @@ describe("OperationsPage", () => {
   beforeEach(() => {
     seams.snapshot = baseSnapshot();
     vi.clearAllMocks();
+  });
+
+  it("acknowledges voice focus only after the requested Operations tab is focused", async () => {
+    const client = operations();
+    renderPage(client);
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = focusOperationsTarget({ kind: "tab", tab: "services" }, { timeoutMs: 500 });
+    });
+    const focused = await pending;
+    expect(focused).toBe(true);
+    const tab = screen.getByRole("tab", { name: "Services" });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("data-kalvoice-focused", "true");
+    expect(tab).toHaveFocus();
+  });
+
+  it("registers the focus handoff when the live Operations snapshot arrives after mount", async () => {
+    seams.snapshot = null;
+    const client = operations();
+    const view = renderPage(client);
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = focusOperationsTarget({ kind: "tab", tab: "services" }, { timeoutMs: 500 });
+    });
+    seams.snapshot = baseSnapshot();
+    view.rerender(page(client));
+    await expect(pending).resolves.toBe(true);
+    const tab = screen.getByRole("tab", { name: "Services" });
+    expect(tab).toHaveAttribute("data-kalvoice-focused", "true");
+    expect(tab).toHaveFocus();
+  });
+
+  it("switches workspace before acknowledging a cross-workspace run target", async () => {
+    const crossWorkspace = queued("cross-workspace", 1);
+    crossWorkspace.spec.workspaceId = "workspace-2";
+    crossWorkspace.workspaceName = "Other";
+    crossWorkspace.status = "failed";
+    crossWorkspace.startedAt = crossWorkspace.createdAt;
+    crossWorkspace.endedAt = crossWorkspace.createdAt;
+    seams.snapshot = { ...baseSnapshot(), items: [...baseSnapshot().items, crossWorkspace] };
+    const client = operations();
+    vi.mocked(client.detail).mockResolvedValue({
+      run: crossWorkspace,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
+      notes: [],
+    });
+    renderPage(client);
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = focusOperationsTarget(
+        {
+          kind: "run",
+          tab: "runs",
+          runId: crossWorkspace.id,
+          workspaceId: "workspace-2",
+          label: crossWorkspace.spec.name,
+        },
+        { timeoutMs: 500 },
+      );
+    });
+    const focused = await pending;
+    expect(focused).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveValue("workspace-2");
+    const row = screen.getByRole("button", { name: /Task cross-workspace/ });
+    expect(row).toHaveAttribute("data-kalvoice-focused", "true");
+    expect(row).toHaveFocus();
+  });
+
+  it("returns false when a stale target has no canonical rendered row", async () => {
+    const client = operations();
+    vi.mocked(client.detail).mockRejectedValue(new Error("Run not found"));
+    renderPage(client);
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = focusOperationsTarget(
+        { kind: "run", tab: "runs", runId: "missing", workspaceId: "workspace-1", label: "Missing" },
+        { timeoutMs: 500 },
+      );
+    });
+    const focused = await pending;
+    expect(focused).toBe(false);
+    expect(screen.queryByRole("button", { name: /Missing/ })).not.toBeInTheDocument();
   });
 
   it("opens the same queued identity from Now after execution starts", async () => {

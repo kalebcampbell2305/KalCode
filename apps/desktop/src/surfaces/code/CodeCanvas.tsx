@@ -27,6 +27,14 @@ import {
   X,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { VoiceSceneTarget } from "../../kalvoice/sceneTargets.ts";
+import {
+  registerVoicePaneScene,
+  replayVoiceFocusTrace,
+  type VoicePaneSceneRegistration,
+  voiceTerminalStatus,
+  voiceThreadEffort,
+} from "../../kalvoice/useVoiceScene.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
@@ -47,6 +55,7 @@ import {
   splitPane,
 } from "../../shell/panes/model.ts";
 import { PaneCanvas, type PaneHost } from "../../shell/panes/PaneCanvas.tsx";
+import { paneDomId } from "../../shell/panes/PaneFrame.tsx";
 import {
   applyPaneControl,
   type PaneCommand,
@@ -255,6 +264,175 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
+
+  // KalVoice reads the same live layout and identities that this canvas renders. The registry is
+  // in-memory and publishes metadata only: terminal output, provider responses and browser URLs
+  // never enter the scene snapshot.
+  const sceneLive = useRef({
+    controller,
+    terminals,
+    labels,
+    paneById,
+    providerPanes,
+    accountFor,
+    titleOf,
+    workspaceName: workspace.name,
+  });
+  sceneLive.current = {
+    controller,
+    terminals,
+    labels,
+    paneById,
+    providerPanes,
+    accountFor,
+    titleOf,
+    workspaceName: workspace.name,
+  };
+  useEffect(() => {
+    const registration: VoicePaneSceneRegistration = {
+      workspaceId: workspace.id,
+      snapshot: () => {
+        const current = sceneLive.current;
+        const layout = current.controller.layout;
+        const aliases = providerPaneAliases(
+          current.providerPanes.panes.map((entry) => ({
+            threadId: entry.thread.id,
+            providerId: entry.thread.providerId,
+          })),
+          (providerId) => {
+            const full = providerIdentity(providerId).name;
+            return {
+              full,
+              short: providerId === "claude-code" ? "Claude" : providerId === "gemini-cli" ? "Gemini" : full,
+            };
+          },
+        );
+        const terminalById = new Map(current.terminals.map((terminal) => [terminal.id, terminal]));
+        return leaves(layout.root).flatMap((leaf) => {
+          const element = typeof document === "undefined" ? null : document.getElementById(paneDomId(leaf.paneId));
+          const bounds = element?.getBoundingClientRect();
+          const paneVisible = !leaf.collapsed && (!layout.maximizedPaneId || layout.maximizedPaneId === leaf.paneId);
+          return leaf.tabs.flatMap((content, index): VoiceSceneTarget[] => {
+            const active = index === leaf.activeTab;
+            const shared = {
+              workspaceId: workspace.id,
+              workspaceName: current.workspaceName,
+              paneId: leaf.paneId,
+              visible: active && paneVisible,
+              focused: active && paneVisible && current.controller.focusedPaneId === leaf.paneId,
+              rect:
+                active && paneVisible && bounds
+                  ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+                  : null,
+            } as const;
+            if (content.kind === "terminal") {
+              const terminal = terminalById.get(content.terminalId);
+              if (!terminal) return [];
+              const ordinal = terminal.position + 1;
+              const title = current.labels.get(terminal.id) ?? terminal.title;
+              return [
+                {
+                  ...shared,
+                  kind: "terminal" as const,
+                  entityId: terminal.id,
+                  title,
+                  aliases: [`${title} terminal`, `Terminal ${ordinal}`, `${terminal.title} ${ordinal}`],
+                  status: voiceTerminalStatus(terminal),
+                  updatedAt: terminal.endedAt ?? terminal.startedAt,
+                },
+              ];
+            }
+            if (content.kind === "thread") {
+              const thread = current.paneById.get(content.threadId)?.thread;
+              if (!thread) return [];
+              const account = current.accountFor(thread);
+              const effort = voiceThreadEffort(thread);
+              return [
+                {
+                  ...shared,
+                  kind: "thread" as const,
+                  entityId: thread.id,
+                  title: account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name,
+                  aliases: [
+                    ...(aliases.get(contentKey(content)) ?? []),
+                    thread.providerName,
+                    ...(thread.accountLabel ? [thread.accountLabel] : []),
+                    thread.workspaceName,
+                    `${thread.workspaceName} workspace`,
+                    ...(thread.model ? [thread.model] : []),
+                    ...(effort ? [effort] : []),
+                    ...(thread.branch ? [thread.branch] : []),
+                  ],
+                  subtitle: thread.currentActivity,
+                  status: thread.status,
+                  providerId: thread.providerId,
+                  providerName: thread.providerName,
+                  providerAccountId: thread.providerAccountId,
+                  accountLabel: thread.accountLabel,
+                  model: thread.model,
+                  effort,
+                  branch: thread.branch,
+                  updatedAt: thread.lastActivityAt,
+                },
+              ];
+            }
+            if (content.kind === "browser") {
+              return [
+                {
+                  ...shared,
+                  kind: "browser" as const,
+                  entityId: content.browserId,
+                  title: "Browser",
+                  aliases: ["Browser pane", "web preview"],
+                },
+              ];
+            }
+            if (content.kind === "dashboard") {
+              return [{ ...shared, kind: "dashboard" as const, entityId: "dashboard", title: "Dashboard" }];
+            }
+            if (content.kind === "widget") {
+              return [
+                {
+                  ...shared,
+                  kind: "widget" as const,
+                  entityId: content.widgetId,
+                  title: current.titleOf(content),
+                },
+              ];
+            }
+            if (content.kind === "git") {
+              return [{ ...shared, kind: "git" as const, entityId: content.workspaceId, title: "Git" }];
+            }
+            return [];
+          });
+        });
+      },
+      focus: (target) => {
+        const current = sceneLive.current.controller;
+        const content = allContents(current.layout).find((candidate) => {
+          if (target.kind === "terminal" && candidate.kind === "terminal")
+            return candidate.terminalId === target.entityId;
+          if (target.kind === "thread" && candidate.kind === "thread") return candidate.threadId === target.entityId;
+          if (target.kind === "browser" && candidate.kind === "browser") return candidate.browserId === target.entityId;
+          if (target.kind === "dashboard") return candidate.kind === "dashboard";
+          if (target.kind === "widget" && candidate.kind === "widget") return candidate.widgetId === target.entityId;
+          return target.kind === "git" && candidate.kind === "git" && candidate.workspaceId === target.entityId;
+        });
+        if (!content) return false;
+        const found = findContent(current.layout, contentKey(content));
+        if (!found) return false;
+        current.show(content, { paneId: found.paneId, focus: true });
+        const replay = () => {
+          const element = typeof document === "undefined" ? null : document.getElementById(paneDomId(found.paneId));
+          if (element) replayVoiceFocusTrace(element);
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(replay);
+        else queueMicrotask(replay);
+        return true;
+      },
+    };
+    return registerVoicePaneScene(registration);
+  }, [workspace.id]);
 
   // ---------- Keep the layout in step with the runtime ----------
   const seenTerminals = useRef<Set<string> | null>(null);

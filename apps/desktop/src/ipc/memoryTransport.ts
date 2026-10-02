@@ -114,6 +114,7 @@ const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
 /** Features available in every channel (mirrors `feature_state` in crates/native-core/src/flags.rs). */
 const AVAILABLE_FEATURES: ReadonlySet<string> = new Set([
   "pane_system",
+  "provider_panes",
   "provider_health",
   "provider_profiles",
   "notification_center",

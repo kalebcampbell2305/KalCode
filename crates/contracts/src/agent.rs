@@ -164,6 +164,9 @@ pub struct SessionConfig {
     pub provider_account_id: Option<String>,
     pub working_directory: String,
     pub model: Option<String>,
+    /// Provider-native reasoning effort. Missing means the provider default.
+    #[serde(default)]
+    pub effort: Option<String>,
     pub permission_mode: PermissionMode,
     /// Provider session id to resume, when the provider supports resuming.
     pub resume_session_id: Option<String>,
@@ -333,6 +336,17 @@ pub trait AgentSession: Send + Sync {
     fn interrupt(&self) -> Result<(), ProviderError>;
     /// Ends the session and its process tree.
     fn terminate(&self) -> Result<(), ProviderError>;
+    /// Reserves a fresh interactive session for an immediate configuration restart. While held,
+    /// provider-native writes fail instead of racing the restart. Other adapters fail closed.
+    fn reserve_if_unused(&self) -> Result<bool, ProviderError> {
+        Ok(false)
+    }
+    /// Releases a successful [`Self::reserve_if_unused`] that will not be terminated.
+    fn cancel_unused_reservation(&self) {}
+    /// Terminates a session after a successful [`Self::reserve_if_unused`].
+    fn terminate_reserved(&self) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported)
+    }
     /// Answers an `ApprovalRequired` (host-approval providers only).
     fn respond_to_approval(
         &self,
@@ -387,5 +401,6 @@ mod tests {
         }))
         .expect("legacy config");
         assert_eq!(config.provider_account_id, None);
+        assert_eq!(config.effort, None);
     }
 }

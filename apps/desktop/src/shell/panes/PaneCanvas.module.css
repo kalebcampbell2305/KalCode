@@ -63,7 +63,7 @@
 }
 
 /*
- * Focusing a terminal pane runs one electric-blue trace around its edge, then the lit outline
+ * Focusing a pane runs one electric-blue trace around its edge, then the lit outline
  * above stays. CSS only: the pseudo-element exists only while the pane is focused, so each new
  * focus replays it once. It never loops, and reduced motion (0ms durations) skips it.
  */
@@ -73,7 +73,7 @@
   initial-value: 0deg;
 }
 
-.frame[data-focused][data-terminal]::after {
+.frame[data-focused]::after {
   position: absolute;
   z-index: 10;
   inset: 0;

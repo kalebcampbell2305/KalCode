@@ -3,8 +3,8 @@
 //! Turns a request ("open four Codex threads", "pause every active thread", "what needs
 //! permission?") into a typed [`KalVoiceIntent`] without any model. The grammar is deliberately
 //! conservative: a command is recognized only when a pattern matches the *whole* request, after
-//! politeness words are removed. Anything else — including negated or compound requests such as
-//! "don't stop the threads" or "stop the threads and then delete the branch" — becomes
+//! politeness words are removed. Anything else â€” including negated or compound requests such as
+//! "don't stop the threads" or "stop the threads and then delete the branch" â€” becomes
 //! [`KalVoiceIntent::Reasoning`], which only the bounded on-device interpreter may handle.
 //!
 //! Matching is case- and punctuation-insensitive. Counts accept digits and the words one to
@@ -15,8 +15,8 @@ use std::sync::OnceLock;
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::kalvoice::{
-    BrowserControl, KalVoiceIntent, PaneControl, PaneDirection, ProviderPaneRequest,
-    RequestableMode, ThreadScope,
+    AgentLaunchAssignment, BrowserControl, KalVoiceIntent, PaneControl, PaneDirection,
+    ProviderPaneRequest, RequestableMode, ThreadScope,
 };
 use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 use url::Url;
@@ -97,7 +97,7 @@ pub fn understand_with_confidence(text: &str) -> (Understood, Confidence) {
 pub struct Parsed {
     pub understood: Understood,
     pub confidence: Confidence,
-    /// The person addressed KalVoice ("Hey Kal, …", "Kal, …"). An addressed utterance is a
+    /// The person addressed KalVoice ("Hey Kal, â€¦", "Kal, â€¦"). An addressed utterance is a
     /// command or a request, never words to type.
     pub addressed: bool,
 }
@@ -123,7 +123,17 @@ fn understand_inner(text: &str, confidence: &mut Confidence, second_chance: bool
         };
     }
     let tokens = normalize(trimmed);
-    // "Send that", "don't send that", "tell Auth to …", "go back": before the length, negation
+    // Account chooser retries are transient, machine-produced commands whose hex payload can
+    // exceed spoken-command bounds. Decode them before ordinary transcript guards; every field
+    // still passes the same typed executor validation and canonical account revalidation.
+    if tokens.first().is_some_and(|word| word == "retry")
+        && tokens.get(1).is_some_and(|word| word == "launch")
+        && let Some(understood) = retry_launch(&tokens)
+    {
+        *confidence = Confidence::High;
+        return understood;
+    }
+    // "Send that", "don't send that", "tell Auth to â€¦", "go back": before the length, negation
     // and compound checks, because their own words may contain both.
     if let Some((understood, sure)) = sessions::before_guards(trimmed, &tokens) {
         *confidence = sure;
@@ -216,6 +226,10 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
     let core = strip_filler(tokens);
     if core.is_empty() {
         return Understood::reasoning(trimmed);
+    }
+    if let Some(rejected) = standalone_launch_modifier(core) {
+        *confidence = Confidence::High;
+        return rejected;
     }
     if let Some(intent) = browser_request(trimmed, core) {
         *confidence = Confidence::High;
@@ -379,10 +393,143 @@ fn disallowed_browser_url_character(character: char) -> bool {
         )
 }
 
+fn standalone_launch_modifier(tokens: &[String]) -> Option<Understood> {
+    if tokens.len() < 9 || tokens[0] != "use" {
+        return None;
+    }
+    let suffix = &tokens[tokens.len() - 7..];
+    let [at, effort, effort_word, for_word, all, of, them] = suffix else {
+        return None;
+    };
+    if at != "at"
+        || !matches!(
+            effort.as_str(),
+            "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        )
+        || effort_word != "effort"
+        || for_word != "for"
+        || all != "all"
+        || of != "of"
+        || them != "them"
+    {
+        return None;
+    }
+    let model_words = &tokens[1..tokens.len() - 7];
+    let (provider_id, model_words) = match model_words {
+        [alias, ..] if matches!(alias.as_str(), "opus" | "sonnet" | "haiku" | "fable") => {
+            (ProviderId::new(ProviderId::CLAUDE_CODE), model_words)
+        }
+        [claude, code, rest @ ..] if claude == "claude" && code == "code" && !rest.is_empty() => {
+            (ProviderId::new(ProviderId::CLAUDE_CODE), rest)
+        }
+        [claude, ..] if claude == "claude" => {
+            (ProviderId::new(ProviderId::CLAUDE_CODE), model_words)
+        }
+        [provider, rest @ ..] if provider == "codex" && !rest.is_empty() => {
+            (ProviderId::new(ProviderId::CODEX), rest)
+        }
+        [provider, rest @ ..] if provider == "gemini" && !rest.is_empty() => {
+            (ProviderId::new(ProviderId::GEMINI_CLI), rest)
+        }
+        _ => {
+            return Some(Understood::Rejected {
+                code: "launch_modifier_provider_required",
+                message:
+                    "Name a Claude, Codex, or Gemini model for the sessions you just launched."
+                        .into(),
+            });
+        }
+    };
+    Some(Understood::intent(KalVoiceIntent::ConfigureRecentLaunch {
+        provider_id,
+        model: model_words.join("-"),
+        effort: effort.clone(),
+    }))
+}
+
 /// Full-utterance pane commands, including bounded mixed-provider/account groups. This is
 /// deliberately separate from general conjunctions: "and delete files" never becomes an
 /// executable continuation of a UI command.
 fn pane_request(tokens: &[String]) -> Option<Understood> {
+    if tokens.first().is_some_and(|word| word == "retry") {
+        return retry_launch(tokens);
+    }
+    if let Some(rejected) = standalone_launch_modifier(tokens) {
+        return Some(rejected);
+    }
+    if let Some(at) = tokens.windows(2).position(|words| words == ["and", "put"]) {
+        let Understood::Intent {
+            intent:
+                KalVoiceIntent::CreateProviderPanes {
+                    mut groups,
+                    workspace_id,
+                },
+            target,
+        } = pane_request(&tokens[..at])?
+        else {
+            return None;
+        };
+        if groups.len() != 1 {
+            return Some(Understood::Rejected {
+                code: "launch_assignment_groups_unsupported",
+                message: "Name one provider, then say how many agents should work on each task."
+                    .into(),
+            });
+        }
+        let mut assignment_words = &tokens[at + 2..];
+        if assignment_words.len() >= 9 {
+            let suffix = &assignment_words[assignment_words.len() - 9..];
+            if suffix[0] == "using"
+                && suffix[2] == "at"
+                && suffix[4..] == ["effort", "for", "all", "of", "them"]
+                && matches!(suffix[1].as_str(), "opus" | "sonnet" | "haiku" | "fable")
+                && matches!(
+                    suffix[3].as_str(),
+                    "low" | "medium" | "high" | "xhigh" | "max"
+                )
+            {
+                if groups[0]
+                    .provider_id
+                    .as_ref()
+                    .is_some_and(|provider| provider.as_str() != ProviderId::CLAUDE_CODE)
+                {
+                    return Some(Understood::Rejected {
+                        code: "model_provider_mismatch",
+                        message: "Opus, Sonnet, Haiku, and Fable are Claude Code models.".into(),
+                    });
+                }
+                groups[0].provider_id = Some(ProviderId::new(ProviderId::CLAUDE_CODE));
+                groups[0].model = Some(suffix[1].clone());
+                groups[0].effort = Some(suffix[3].clone());
+                assignment_words = &assignment_words[..assignment_words.len() - 9];
+            }
+        }
+        let assignments = match launch_assignments(assignment_words) {
+            Ok(assignments) => assignments,
+            Err(rejected) => return Some(*rejected),
+        };
+        let assigned: u32 = assignments
+            .iter()
+            .map(|assignment| u32::from(assignment.count))
+            .sum();
+        if assigned != u32::from(groups[0].count) {
+            return Some(Understood::Rejected {
+                code: "launch_assignment_count_mismatch",
+                message: format!(
+                    "The task counts add up to {assigned}, but you asked for {} agents.",
+                    groups[0].count
+                ),
+            });
+        }
+        groups[0].assignments = assignments;
+        return Some(Understood::Intent {
+            intent: KalVoiceIntent::CreateProviderPanes {
+                groups,
+                workspace_id,
+            },
+            target,
+        });
+    }
     if tokens.first().is_some_and(|w| w == "use")
         && let Some(at) = tokens.windows(3).position(|w| w == ["to", "work", "on"])
     {
@@ -395,9 +542,37 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
     let mut words = tokens;
     let mut workspace = None;
     let mut global_account = None;
-    if let Some(workspace_at) = words
-        .iter()
-        .rposition(|w| matches!(w.as_str(), "in" | "inside" | "within"))
+    let mut global_effort = None;
+    if let Some(effort_at) = words.iter().rposition(|word| word == "effort") {
+        let suffix = &words[effort_at + 1..];
+        let applies_to_all = suffix.is_empty()
+            || matches!(suffix, [for_word, all, of, them] if for_word == "for" && all == "all" && of == "of" && them == "them");
+        if !applies_to_all || effort_at < 2 || words[effort_at - 2] != "at" {
+            return None;
+        }
+        let effort = words[effort_at - 1].as_str();
+        if !matches!(
+            effort,
+            "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        ) {
+            return Some(Understood::Rejected {
+                code: "invalid_effort",
+                message: "Choose low, medium, high, xhigh, max, or ultra effort.".into(),
+            });
+        }
+        global_effort = Some(effort.to_owned());
+        words = &words[..effort_at - 2];
+    }
+    let workspace_separator = |candidate: &[String]| {
+        candidate.iter().rposition(|word| {
+            matches!(word.as_str(), "in" | "inside" | "within")
+                || (word == "on"
+                    && candidate
+                        .last()
+                        .is_some_and(|last| matches!(last.as_str(), "workspace" | "project")))
+        })
+    };
+    if let Some(workspace_at) = workspace_separator(words)
         && let Some(account_at) = words.iter().rposition(|w| w == "using")
         && account_at > workspace_at
     {
@@ -417,10 +592,7 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
         global_account = Some(account.join(" "));
         words = &words[..account_at];
     }
-    if let Some(at) = words
-        .iter()
-        .rposition(|w| matches!(w.as_str(), "in" | "inside" | "within"))
-    {
+    if let Some(at) = workspace_separator(words) {
         let mut name = &words[at + 1..];
         if name
             .first()
@@ -567,12 +739,12 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
                 break;
             }
         }
-        let model = if provider
+        let mut model = if provider
             .as_ref()
             .is_some_and(|p| p.as_str() == ProviderId::CLAUDE_CODE)
             && rest
                 .first()
-                .is_some_and(|w| matches!(w.as_str(), "opus" | "sonnet" | "haiku"))
+                .is_some_and(|w| matches!(w.as_str(), "opus" | "sonnet" | "haiku" | "fable"))
         {
             let model = Some(rest[0].clone());
             rest = &rest[1..];
@@ -606,6 +778,10 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
         if noun {
             rest = &rest[1..];
         }
+        if rest.len() >= 3 && matches!(rest[0].as_str(), "using" | "with") && rest[1] == "model" {
+            model = Some(rest[2..].join("-"));
+            rest = &[];
+        }
         if provider.is_none() && !default_agents && previous_provider.is_none() {
             return None;
         }
@@ -632,11 +808,11 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
         };
         let count = match check_count(count) {
             Ok(count) => count,
-            Err(error) => return Some(error),
+            Err(error) => return Some(*error),
         };
         total = total.saturating_add(u32::from(count));
         if let Err(error) = check_count(total) {
-            return Some(error);
+            return Some(*error);
         }
         let provider_id = provider.or_else(|| previous_provider.clone());
         previous_provider = provider_id.clone();
@@ -645,6 +821,8 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
             count,
             account_query,
             model,
+            effort: global_effort.clone(),
+            assignments: Vec::new(),
         });
     }
     Some(Understood::Intent {
@@ -654,6 +832,203 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
         },
         target: workspace,
     })
+}
+
+fn retry_launch(tokens: &[String]) -> Option<Understood> {
+    if tokens.get(2).is_some_and(|token| token == "groups") {
+        if tokens.len() != 4
+            || tokens[3].is_empty()
+            || tokens[3].len() > 8_192
+            || !tokens[3].len().is_multiple_of(2)
+            || !tokens[3].bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        let payload = (0..tokens[3].len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&tokens[3][index..index + 2], 16))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let groups = serde_json::from_slice::<Vec<ProviderPaneRequest>>(&payload).ok()?;
+        let total = groups
+            .iter()
+            .map(|group| u32::from(group.count))
+            .sum::<u32>();
+        if groups.is_empty()
+            || groups.len() > usize::try_from(MAX_THREADS_PER_REQUEST).ok()?
+            || check_count(total).is_err()
+            || groups.iter().any(|group| {
+                group.count == 0
+                    || (!group.assignments.is_empty()
+                        && (group
+                            .assignments
+                            .iter()
+                            .map(|assignment| u32::from(assignment.count))
+                            .sum::<u32>()
+                            != u32::from(group.count)
+                            || group
+                                .assignments
+                                .iter()
+                                .any(|assignment| assignment.task.trim().is_empty())))
+            })
+        {
+            return None;
+        }
+        return Some(Understood::intent(KalVoiceIntent::CreateProviderPanes {
+            groups,
+            workspace_id: None,
+        }));
+    }
+    if tokens.len() < 11
+        || tokens[1] != "launch"
+        || tokens[4] != "account"
+        || tokens[6] != "model"
+        || tokens[8] != "effort"
+        || tokens[10] != "tasks"
+    {
+        return None;
+    }
+    let count = tokens[2]
+        .parse::<u32>()
+        .ok()
+        .and_then(|count| check_count(count).ok())?;
+    let provider_id = ProviderId::new(match tokens[3].as_str() {
+        "claude" => ProviderId::CLAUDE_CODE,
+        "codex" => ProviderId::CODEX,
+        "gemini" => ProviderId::GEMINI_CLI,
+        _ => return None,
+    });
+    let compact_id = &tokens[5];
+    if compact_id.len() != 32 || !compact_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let account_query = format!(
+        "{}-{}-{}-{}-{}",
+        &compact_id[..8],
+        &compact_id[8..12],
+        &compact_id[12..16],
+        &compact_id[16..20],
+        &compact_id[20..]
+    );
+    if !kalcode_contracts::ids::is_valid_id(&account_query) {
+        return None;
+    }
+    let decode = |value: &str| {
+        if value == "none" {
+            return Some(None);
+        }
+        if !value.len().is_multiple_of(2) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let bytes = (0..value.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&value[index..index + 2], 16))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        String::from_utf8(bytes).ok().map(Some)
+    };
+    let model = decode(&tokens[7])?;
+    let effort = decode(&tokens[9])?;
+    let mut assignments = Vec::new();
+    if tokens[11..] != ["none"] {
+        let mut chunks = tokens[11..].chunks_exact(2);
+        for chunk in &mut chunks {
+            let assignment_count = chunk[0].parse::<u32>().ok()?;
+            let assignment_count = check_count(assignment_count).ok()?;
+            let task = decode(&chunk[1])??;
+            assignments.push(AgentLaunchAssignment {
+                count: assignment_count,
+                task,
+            });
+        }
+        if !chunks.remainder().is_empty()
+            || assignments
+                .iter()
+                .map(|assignment| u32::from(assignment.count))
+                .sum::<u32>()
+                != u32::from(count)
+        {
+            return None;
+        }
+    }
+    Some(Understood::intent(KalVoiceIntent::CreateProviderPanes {
+        groups: vec![ProviderPaneRequest {
+            provider_id: Some(provider_id),
+            count,
+            account_query: Some(account_query),
+            model,
+            effort,
+            assignments,
+        }],
+        workspace_id: None,
+    }))
+}
+
+fn launch_assignments(tokens: &[String]) -> Result<Vec<AgentLaunchAssignment>, Box<Understood>> {
+    let mut assignments = Vec::new();
+    let mut cursor = 0;
+    while cursor < tokens.len() {
+        if tokens[cursor] == "and" {
+            cursor += 1;
+        }
+        let Some(count) = tokens.get(cursor).and_then(|word| count_word(word)) else {
+            return Err(Box::new(Understood::Rejected {
+                code: "launch_assignment_invalid",
+                message: "Say each assignment like â€œtwo on frontendâ€.".into(),
+            }));
+        };
+        let count = check_count(count)?;
+        cursor += 1;
+        if !tokens
+            .get(cursor)
+            .is_some_and(|word| matches!(word.as_str(), "on" | "to"))
+        {
+            return Err(Box::new(Understood::Rejected {
+                code: "launch_assignment_invalid",
+                message: "Say each assignment like â€œtwo on frontendâ€.".into(),
+            }));
+        }
+        cursor += 1;
+        if tokens
+            .get(cursor)
+            .is_some_and(|word| matches!(word.as_str(), "the" | "my"))
+        {
+            cursor += 1;
+        }
+        let task_start = cursor;
+        while cursor < tokens.len() {
+            let next_group = tokens[cursor] == "and"
+                && tokens
+                    .get(cursor + 1)
+                    .and_then(|word| count_word(word))
+                    .is_some()
+                || (count_word(&tokens[cursor]).is_some()
+                    && tokens
+                        .get(cursor + 1)
+                        .is_some_and(|word| matches!(word.as_str(), "on" | "to")));
+            if next_group {
+                break;
+            }
+            cursor += 1;
+        }
+        if task_start == cursor {
+            return Err(Box::new(Understood::Rejected {
+                code: "launch_assignment_invalid",
+                message: "Name the task for every group of agents.".into(),
+            }));
+        }
+        assignments.push(AgentLaunchAssignment {
+            count,
+            task: tokens[task_start..cursor].join(" "),
+        });
+    }
+    if assignments.is_empty() {
+        return Err(Box::new(Understood::Rejected {
+            code: "launch_assignment_invalid",
+            message: "Name at least one task for the agents.".into(),
+        }));
+    }
+    Ok(assignments)
 }
 
 /// Binds a resolved workspace or thread id into an intent produced with a [`NamedTarget`].
@@ -680,12 +1055,18 @@ pub fn bind_target(intent: KalVoiceIntent, id: String) -> KalVoiceIntent {
             provider_id,
             count,
             account_query,
+            model,
+            effort,
+            assignments,
             ..
         } => KalVoiceIntent::CreateThreads {
             provider_id,
             count,
             workspace_id: Some(id),
             account_query,
+            model,
+            effort,
+            assignments,
         },
         KalVoiceIntent::CreateTerminal { .. } => KalVoiceIntent::CreateTerminal {
             workspace_id: Some(id),
@@ -705,8 +1086,12 @@ pub fn bind_target(intent: KalVoiceIntent, id: String) -> KalVoiceIntent {
         KalVoiceIntent::ResumeThreads { scope } => KalVoiceIntent::ResumeThreads {
             scope: bind_scope(scope),
         },
-        KalVoiceIntent::StopThreads { scope } => KalVoiceIntent::StopThreads {
+        KalVoiceIntent::StopThreads {
+            scope,
+            expected_count,
+        } => KalVoiceIntent::StopThreads {
             scope: bind_scope(scope),
+            expected_count,
         },
         other => other,
     }
@@ -1018,7 +1403,7 @@ fn phrase_at(tokens: &[String], phrase: &[&str], leading: bool) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Pattern engine: a tiny backtracking matcher over tokens.
 //
-// Syntax: `word` literal · `(a b|c)` alternatives · `[a|b c]` optional · `<count>`, `<provider>`,
+// Syntax: `word` literal Â· `(a b|c)` alternatives Â· `[a|b c]` optional Â· `<count>`, `<provider>`,
 // `<surface>`, `<account>`, `<name>` slots. A pattern must consume every token.
 
 #[derive(Debug, Clone)]
@@ -1198,7 +1583,7 @@ fn slot_candidates(slot: Slot, tokens: &[String]) -> Vec<(usize, Fill)> {
             if let Some((len, id)) = provider
                 && tokens.get(len).is_some_and(|w| !is_account_stop_word(w))
             {
-                // Shortest first, so optional trailing words ("… account") are not swallowed.
+                // Shortest first, so optional trailing words ("â€¦ account") are not swallowed.
                 for end in len + 1..=tokens.len() {
                     let label = tokens[..end].join(" ");
                     out.push((
@@ -1212,7 +1597,7 @@ fn slot_candidates(slot: Slot, tokens: &[String]) -> Vec<(usize, Fill)> {
             }
         }
         Slot::Name => {
-            // Shortest first, so optional trailing words ("… workspace") are not swallowed.
+            // Shortest first, so optional trailing words ("â€¦ workspace") are not swallowed.
             for len in 1..=tokens.len() {
                 let words = &tokens[..len];
                 // A name never starts with an article or pronoun ("show me the X thread"), nor
@@ -1292,7 +1677,7 @@ fn small_number(word: &str) -> Option<u32> {
     })
 }
 
-/// "twenty one", "thirty five", "one hundred" — only so larger numbers are refused clearly.
+/// "twenty one", "thirty five", "one hundred" â€” only so larger numbers are refused clearly.
 fn compound_number(first: &str, second: &str) -> Option<u32> {
     let a = match first {
         "a" | "an" => 1,
@@ -1356,16 +1741,18 @@ fn surface_words(words: &[String]) -> Option<SurfaceId> {
 fn surface_name(name: &str) -> Option<SurfaceId> {
     Some(match name {
         "dashboard" | "home" | "overview" => SurfaceId::Dashboard,
+        "operations" => SurfaceId::Operations,
         "kalvoice" | "kal voice" | "voice" => SurfaceId::KalVoice,
         "code" | "code mode" | "editor" => SurfaceId::Code,
         "threads" => SurfaceId::Threads,
-        "agents" => SurfaceId::Agents,
+        "agents" | "agent fleet" => SurfaceId::Agents,
         "missions" => SurfaceId::Missions,
         "automations" => SurfaceId::Automations,
         "skills" => SurfaceId::Skills,
         "plugins" | "integrations" => SurfaceId::Plugins,
         "memory" | "memories" => SurfaceId::Memory,
-        "providers" => SurfaceId::Providers,
+        "providers" | "provider accounts" => SurfaceId::Providers,
+        "command center" => SurfaceId::CommandCenter,
         "settings" | "preferences" => SurfaceId::Settings,
         _ => return None,
     })
@@ -1671,8 +2058,12 @@ fn build_rules() -> Vec<Rule> {
     thread_control(
         &mut add,
         "(stop|halt|kill|end|terminate|cancel|shut down)",
-        |scope| KalVoiceIntent::StopThreads { scope },
+        |scope| KalVoiceIntent::StopThreads {
+            scope,
+            expected_count: None,
+        },
     );
+    counted_stop(&mut add, "(stop|halt|kill|end|terminate|cancel|shut down)");
 
     // Workspaces.
     for p in [
@@ -1696,7 +2087,7 @@ fn build_rules() -> Vec<Rule> {
         ),
         Box::new(|c| {
             match check_count(c.count.unwrap_or(1)) {
-            Err(rejected) => rejected,
+            Err(rejected) => *rejected,
             Ok(_) => Understood::Rejected {
                 code: "provider_not_specified",
                 message: "Say which provider to use: Claude Code, Codex or Gemini CLI. For example, \u{201c}open two Codex threads\u{201d}.".into(),
@@ -1755,7 +2146,7 @@ fn build_rules() -> Vec<Rule> {
             }),
         );
     }
-    // "What was I working on yesterday?" — recent work, answered from the event log.
+    // "What was I working on yesterday?" â€” recent work, answered from the event log.
     for (when, query) in [
         ("yesterday", "yesterday"),
         ("today", "today"),
@@ -1926,7 +2317,7 @@ fn account_rules(add: &mut impl FnMut(String, Build)) {
         Box::new(|c: &Caps| {
             let count = match check_count(c.count.unwrap_or(1)) {
                 Ok(count) => count,
-                Err(rejected) => return rejected,
+                Err(rejected) => return *rejected,
             };
             let (Some(provider), Some(account)) = (c.provider, c.names.first()) else {
                 return Understood::reasoning("");
@@ -1940,6 +2331,9 @@ fn account_rules(add: &mut impl FnMut(String, Build)) {
                     count,
                     workspace_id: None,
                     account_query: Some(account.clone()),
+                    model: None,
+                    effort: None,
+                    assignments: Vec::new(),
                 },
                 c.names.get(1),
             )
@@ -1948,7 +2342,7 @@ fn account_rules(add: &mut impl FnMut(String, Build)) {
 }
 
 /// Words that are never an account label: permission modes and model names. "Switch this
-/// thread to plan" keeps its old meaning (not a command) and "… to bypass" is refused, instead of
+/// thread to plan" keeps its old meaning (not a command) and "â€¦ to bypass" is refused, instead of
 /// looking for an account called "plan" or "bypass".
 const NOT_AN_ACCOUNT: &[&str] = &[
     "mode",
@@ -1987,8 +2381,8 @@ fn bypass_refused() -> Understood {
     }
 }
 
-/// A rebind request, or reasoning when the "account" is really a mode or model ("… to fast
-/// mode", "… to plan", "… to Gemini Pro"); Bypass is refused.
+/// A rebind request, or reasoning when the "account" is really a mode or model ("â€¦ to fast
+/// mode", "â€¦ to plan", "â€¦ to Gemini Pro"); Bypass is refused.
 fn rebind(
     thread_query: Option<String>,
     provider: Option<&'static str>,
@@ -2051,7 +2445,7 @@ fn dashboard_filter_patterns() -> Vec<(DashboardChip, Vec<String>)> {
         (
             DashboardChip::WaitingForYou,
             vec![
-                // "for me" is trailing filler, so "… waiting for me" arrives as "… waiting".
+                // "for me" is trailing filler, so "â€¦ waiting for me" arrives as "â€¦ waiting".
                 format!(
                     "{show} (everything|all|anything|all the things|whatever is|what) [that is|that are] (waiting [for|on] [me]|(that needs|that need|needing) me)"
                 ),
@@ -2145,6 +2539,31 @@ fn thread_control(
     );
 }
 
+fn counted_stop(add: &mut impl FnMut(String, Build), verb: &str) {
+    add(
+        format!("{verb} [the|my] <count> [{THREAD_STATE}] {THREAD_WORD} [{IN_WORKSPACE}]"),
+        Box::new(|c| {
+            let count = match check_count(c.count.unwrap_or_default()) {
+                Ok(count) => count,
+                Err(rejected) => return *rejected,
+            };
+            Understood::Intent {
+                intent: KalVoiceIntent::StopThreads {
+                    scope: if c.names.is_empty() {
+                        ThreadScope::All
+                    } else {
+                        ThreadScope::Workspace {
+                            workspace_id: String::new(),
+                        }
+                    },
+                    expected_count: Some(count),
+                },
+                target: c.names.first().cloned().map(NamedTarget::Workspace),
+            }
+        }),
+    );
+}
+
 fn with_workspace(intent: KalVoiceIntent, name: Option<&String>) -> Understood {
     Understood::Intent {
         intent,
@@ -2152,31 +2571,33 @@ fn with_workspace(intent: KalVoiceIntent, name: Option<&String>) -> Understood {
     }
 }
 
-fn check_count(count: u32) -> Result<u8, Understood> {
+fn check_count(count: u32) -> Result<u8, Box<Understood>> {
     if count == 0 {
-        return Err(Understood::Rejected {
+        return Err(Box::new(Understood::Rejected {
             code: "thread_count_invalid",
             message: "Say how many threads to open, from one to twenty.".into(),
-        });
+        }));
     }
     if count > MAX_THREADS_PER_REQUEST {
-        return Err(Understood::Rejected {
+        return Err(Box::new(Understood::Rejected {
             code: "thread_count_too_large",
             message: format!(
                 "KalVoice opens at most {MAX_THREADS_PER_REQUEST} threads per request. Ask for {MAX_THREADS_PER_REQUEST} or fewer."
             ),
-        });
+        }));
     }
-    u8::try_from(count).map_err(|_| Understood::Rejected {
-        code: "thread_count_too_large",
-        message: String::new(),
+    u8::try_from(count).map_err(|_| {
+        Box::new(Understood::Rejected {
+            code: "thread_count_too_large",
+            message: String::new(),
+        })
     })
 }
 
 fn create_threads(c: &Caps) -> Understood {
     let count = match check_count(c.count.unwrap_or(1)) {
         Ok(count) => count,
-        Err(rejected) => return rejected,
+        Err(rejected) => return *rejected,
     };
     let Some(provider) = c.provider else {
         return Understood::reasoning("");
@@ -2187,6 +2608,9 @@ fn create_threads(c: &Caps) -> Understood {
             count,
             workspace_id: None,
             account_query: None,
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
         },
         c.names.first(),
     )

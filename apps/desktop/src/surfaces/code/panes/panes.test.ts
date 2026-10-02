@@ -25,6 +25,7 @@ function info(partial: Partial<PaneInfo>): PaneInfo {
   return {
     threadId: "t",
     providerId: "claude-code",
+    instanceId: "pane-instance",
     hookChannel: "active",
     decisionRouting: "engine",
     kalcodeAnswersApprovals: true,
@@ -178,7 +179,12 @@ describe("in-memory provider panes", () => {
     expect(id).not.toBeNull();
     await settle();
     expect(chunks.join("")).toContain("KalCode fake provider");
-    expect((await channel.info(thread.id))?.hookChannel).toBe("active");
+    const paneInfo = await channel.info(thread.id);
+    expect(paneInfo?.hookChannel).toBe("active");
+    expect(paneInfo?.instanceId).toBeTruthy();
+    await expect(channel.writeVoice(thread.id, "stale-instance", "x")).rejects.toMatchObject({
+      code: "provider_target_changed",
+    });
 
     await channel.write(thread.id, "run npm test\r");
     await settle(600);
@@ -209,6 +215,11 @@ describe("in-memory provider panes", () => {
     await channel.write(thread.id, "run git push origin main\r");
     await settle();
     expect((await client.getThread(thread.id)).status).toBe("waiting_for_permission");
+    const instanceId = (await channel.info(thread.id))?.instanceId;
+    if (!instanceId) throw new Error("provider pane has no live instance identity");
+    await expect(channel.writeVoice(thread.id, instanceId, "\r")).rejects.toMatchObject({
+      code: "provider_permission_prompt",
+    });
     const [request] = (await client.listApprovals("pending")).filter(
       (r: ApprovalView) => r.action.threadId === thread.id,
     );
@@ -217,6 +228,26 @@ describe("in-memory provider panes", () => {
     await settle();
     expect(chunks.join("")).toContain("BLOCKED BY HOOK");
     expect((await client.getThread(thread.id)).status).toBe("idle");
+  });
+
+  it("keeps insert-only voice safe but refuses submit when Claude's hook channel is limited", async () => {
+    const { transport, channel, workspace } = await setup();
+    transport.panes.configure({ hookChannel: "limited" });
+    const thread = await channel.create({ workspaceId: workspace.id, permissionMode: "approve" });
+    const chunks: string[] = [];
+    await channel.attach(thread.id, (bytes) => chunks.push(new TextDecoder().decode(bytes)));
+    await settle();
+    const paneInfo = await channel.info(thread.id);
+    expect(paneInfo).toMatchObject({ hookChannel: "limited", kalcodeAnswersApprovals: false });
+    if (!paneInfo?.instanceId) throw new Error("provider pane has no live instance identity");
+
+    await expect(channel.writeVoice(thread.id, paneInfo.instanceId, "voice submit\r")).rejects.toMatchObject({
+      code: "provider_input_unverified",
+    });
+    expect(chunks.join("")).not.toContain("voice submit");
+
+    await channel.writeVoice(thread.id, paneInfo.instanceId, "voice draft");
+    expect(chunks.join("")).toContain("voice draft");
   });
 
   it("validates like native and can be turned off", async () => {

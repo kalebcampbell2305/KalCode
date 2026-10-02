@@ -51,9 +51,94 @@ fn migrations_are_numbered_contiguously() {
             (17, "utility_authority"),
             (18, "context_delivery"),
             (19, "kalvoice_account_usage"),
-            (20, "operations")
+            (20, "operations"),
+            (21, "threads_effort")
         ]
     );
+}
+
+#[test]
+fn thread_effort_upgrade_preserves_existing_rows_and_reopens() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let core =
+            Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..20]).expect("v20 open");
+        core.transact(|conn| {
+            conn.execute(
+                "INSERT INTO workspaces (id, name, root_path, created_at, last_opened_at) \
+                 VALUES ('w', 'Workspace', 'C:/repo', 't', 't')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO threads (id, name, provider_id, provider_name, workspace_id, \
+                    workspace_name, cwd, permission_mode, status, created_at, last_activity_at) \
+                 VALUES ('t', 'Thread', 'codex', 'Codex', 'w', 'Workspace', 'C:/repo', \
+                    'approve', 'idle', 't', 't')",
+                [],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("seed v20 thread");
+        core.shutdown();
+    }
+
+    for pass in 0..2 {
+        let core = Core::open(config(dir.path())).expect("upgrade/reopen");
+        let preserved: (String, String, String) = core
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT name, workspace_id, status FROM threads WHERE id = 't'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?)
+            })
+            .expect("preserved thread");
+        assert_eq!(preserved, ("Thread".into(), "w".into(), "idle".into()));
+        let effort: Option<String> = core
+            .read(|conn| {
+                Ok(
+                    conn.query_row("SELECT effort FROM threads WHERE id = 't'", [], |row| {
+                        row.get(0)
+                    })?,
+                )
+            })
+            .expect("effort");
+        if pass == 0 {
+            assert_eq!(effort, None, "legacy rows use provider-default effort");
+            core.transact(|conn| {
+                conn.execute("UPDATE threads SET effort = 'high' WHERE id = 't'", [])?;
+                Ok(((), Vec::new()))
+            })
+            .expect("persist effort");
+        } else {
+            assert_eq!(effort.as_deref(), Some("high"));
+        }
+        core.shutdown();
+    }
+
+    let backups: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+        .expect("backups")
+        .map(|entry| entry.expect("backup").path())
+        .collect();
+    assert_eq!(backups.len(), 1, "reopen must not repeat the v21 backup");
+    let backup = db::open_read_only(&backups[0]).expect("open pre-v21 backup");
+    assert_eq!(db::schema_version(&backup).expect("backup schema"), 20);
+    let preserved: (String, String, String) = backup
+        .query_row(
+            "SELECT name, workspace_id, status FROM threads WHERE id = 't'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("backup thread");
+    assert_eq!(preserved, ("Thread".into(), "w".into(), "idle".into()));
+    let effort_columns: i64 = backup
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('threads') WHERE name = 'effort'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("backup columns");
+    assert_eq!(effort_columns, 0, "backup remains exact pre-v21 schema");
 }
 
 #[test]

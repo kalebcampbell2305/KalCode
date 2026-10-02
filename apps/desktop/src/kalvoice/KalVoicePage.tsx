@@ -8,7 +8,7 @@ import { useProviderPanesEnabled } from "../surfaces/code/panes/useProviderPanes
 import { Examples, LimitNotice, RequestForm, ResultView } from "./Assistant.tsx";
 import { limitReached, usageLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
-import { useKalVoice } from "./KalVoiceProvider.tsx";
+import { type HistoryItem, useKalVoice } from "./KalVoiceProvider.tsx";
 import { LatencyDiagnostics } from "./LatencyDiagnostics.tsx";
 import { localIntelligence } from "./localIntelligence.ts";
 import { pushToTalkReadiness } from "./readiness.ts";
@@ -28,6 +28,23 @@ function intelligenceAction(status: KalVoiceStatus): string | null {
     return view.pausable ? null : "Set up local intelligence";
   }
   return view.retry ? "Open KalVoice settings" : null;
+}
+
+function historyKind(item: HistoryItem): string {
+  if (item.response) return item.response.outcome.kind;
+  if (!item.localResult) return "pending";
+  if (item.localResult.ok) return "completed";
+  return item.localResult.message === "Cancelled." ? "cancelled" : "failed";
+}
+
+function historyOutcome(item: HistoryItem): string {
+  if (item.localResult) return item.localResult.message;
+  if (!item.response) return "Working…";
+  const { outcome } = item.response;
+  if (outcome.kind === "completed") return outcome.summary;
+  if (outcome.kind === "failed" || outcome.kind === "needs_provider") return outcome.message;
+  if (outcome.kind === "limit_reached") return "Monthly limit reached.";
+  return "The provider session is waiting for permission in its native prompt.";
 }
 
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
@@ -211,16 +228,8 @@ export function KalVoicePage() {
                   {item.input === "voice" ? <AudioLines aria-label="Spoken" /> : <Sparkles aria-label="Typed" />}
                   {item.text}
                 </p>
-                <p className={styles.historyOutcome} data-kind={item.response?.outcome.kind ?? "pending"}>
-                  {item.response === null
-                    ? "Working…"
-                    : item.response.outcome.kind === "completed"
-                      ? item.response.outcome.summary
-                      : item.response.outcome.kind === "failed" || item.response.outcome.kind === "needs_provider"
-                        ? item.response.outcome.message
-                        : item.response.outcome.kind === "limit_reached"
-                          ? "Monthly limit reached."
-                          : "The provider session is waiting for permission in its native prompt."}
+                <p className={styles.historyOutcome} data-kind={historyKind(item)}>
+                  {historyOutcome(item)}
                   {item.response?.counted ? <span className={styles.counted}> · counted</span> : null}
                 </p>
               </li>

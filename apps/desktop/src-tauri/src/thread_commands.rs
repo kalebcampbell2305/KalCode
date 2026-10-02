@@ -728,6 +728,7 @@ fn resolved_create_request(
         account_label: account.map(|account| account.display_name),
         workspace_id,
         model,
+        effort: None,
         permission_mode,
         prompt,
         name,
@@ -1321,6 +1322,7 @@ mod tests {
             provider_account_id,
             working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Approve,
             resume_session_id: None,
             secret_ref: None,
@@ -1893,6 +1895,7 @@ mod tests {
                     account_label: Some(account.display_name.clone()),
                     workspace_id: self.accounts.workspace_id.clone(),
                     model: None,
+                    effort: None,
                     permission_mode: PermissionMode::Approve,
                     name: None,
                 })

@@ -708,6 +708,7 @@ mod tests {
                 let mut exec = crate::codex::argv::exec_args_with_overrides(
                     mode,
                     None,
+                    None,
                     resume,
                     &prepared.cli_overrides,
                 )

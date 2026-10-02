@@ -90,6 +90,13 @@ export class PaneChannel {
     }
   }
 
+  /** Voice input uses the same PTY path with native instance and lifecycle guards at each write. */
+  async writeVoice(threadId: string, instanceId: string, data: string): Promise<void> {
+    for (const part of splitInput(data)) {
+      await this.call<void>("provider_pane_write", { threadId, instanceId, data: part, voice: true });
+    }
+  }
+
   resize(threadId: string, size: TerminalSize): Promise<void> {
     return this.call("provider_pane_resize", { threadId, ...clampTerminalSize(size) });
   }

@@ -32,6 +32,7 @@ export function thread(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
     providerId: "claude-code",
     providerName: "Claude Code",
     model: null,
+    effort: null,
     providerAccountId: null,
     accountLabel: null,
     workspaceId: "01999a4e-0001-7001-8a2e-000000001001",

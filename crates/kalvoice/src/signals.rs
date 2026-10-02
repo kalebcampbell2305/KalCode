@@ -145,6 +145,28 @@ pub struct ListeningSession {
     pub mode: KalVoiceMode,
 }
 
+/// Why a concise lifecycle callback was spoken. This contains no provider or terminal content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum LifecycleCallbackClass {
+    Completed,
+    Failed,
+    NeedsUser,
+    Permission,
+    Oauth,
+    Deployment,
+}
+
+/// The canonical object a spoken lifecycle callback describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum LifecycleTargetKind {
+    Thread,
+    Operation,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
@@ -232,6 +254,17 @@ pub enum KalVoiceSignal {
         request_id: String,
         active: bool,
     },
+    /// A concise lifecycle callback started speaking. The UI uses only this bounded identity to
+    /// bind immediate follow-ups such as "open it"; task output stays in its canonical store.
+    LifecycleCallback {
+        request_id: String,
+        class: LifecycleCallbackClass,
+        target_kind: LifecycleTargetKind,
+        target_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        workspace_id: Option<String>,
+    },
     /// The push-to-talk key's registration changed (registered, released, skipped or refused).
     /// When inactive, `reason` is a code: `not_focused`, `disabled`, `shutting_down`,
     /// `prefs_error`, `not_connected` (no KalCode page subscribed yet), `os_refused` or
@@ -241,4 +274,37 @@ pub enum KalVoiceSignal {
         reason: Option<String>,
         accelerator: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_callback_contract_is_typed_and_contains_no_task_content() {
+        for (class, expected) in [
+            (LifecycleCallbackClass::Completed, "completed"),
+            (LifecycleCallbackClass::Failed, "failed"),
+            (LifecycleCallbackClass::NeedsUser, "needs_user"),
+            (LifecycleCallbackClass::Permission, "permission"),
+            (LifecycleCallbackClass::Oauth, "oauth"),
+            (LifecycleCallbackClass::Deployment, "deployment"),
+        ] {
+            let encoded = serde_json::to_value(KalVoiceSignal::LifecycleCallback {
+                request_id: "callback-1".into(),
+                class,
+                target_kind: LifecycleTargetKind::Operation,
+                target_id: "run-1".into(),
+                workspace_id: Some("kalcode".into()),
+            })
+            .expect("serialize lifecycle callback");
+            assert_eq!(encoded["kind"], "lifecycle_callback");
+            assert_eq!(encoded["class"], expected);
+            assert_eq!(encoded["targetKind"], "operation");
+            assert_eq!(encoded["targetId"], "run-1");
+            assert_eq!(encoded["workspaceId"], "kalcode");
+            assert!(encoded.get("text").is_none());
+            assert!(encoded.get("summary").is_none());
+        }
+    }
 }

@@ -128,6 +128,21 @@ pub struct ProviderPaneRequest {
     pub count: u8,
     pub account_query: Option<String>,
     pub model: Option<String>,
+    /// Exact provider effort level. `None` preserves the provider/account default.
+    pub effort: Option<String>,
+    /// Optional per-agent task groups. Counts must add up to `count`; an empty list opens
+    /// idle provider sessions that wait for the user's first prompt.
+    #[serde(default)]
+    pub assignments: Vec<AgentLaunchAssignment>,
+}
+
+/// A bounded task shared by one or more agents in a natural multi-agent launch request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentLaunchAssignment {
+    pub count: u8,
+    pub task: String,
 }
 
 /// App layout controls. These never issue provider input or stop a runtime process.
@@ -208,10 +223,26 @@ pub enum KalVoiceIntent {
         /// provider's accounts by label. `None` keeps the workspace default / provider default.
         /// Missing on the wire decodes as `None` (pre-0.1.5 payloads).
         account_query: Option<String>,
+        /// Exact provider model id or documented alias. Missing keeps the account/provider
+        /// default and preserves compatibility with older KalVoice payloads.
+        model: Option<String>,
+        /// Exact provider effort level. Missing keeps the provider/account default.
+        effort: Option<String>,
+        /// Optional counted tasks. Missing on older payloads keeps the idle-session behavior.
+        #[serde(default)]
+        assignments: Vec<AgentLaunchAssignment>,
     },
     CreateProviderPanes {
         groups: Vec<ProviderPaneRequest>,
         workspace_id: Option<String>,
+    },
+    /// Applies an exact model and effort to the immediately preceding launch group. The
+    /// orchestrator supplies generation-bound thread instances from transient follow-up memory;
+    /// the executor refuses stale, active, used, or mixed-provider groups before changing any.
+    ConfigureRecentLaunch {
+        provider_id: ProviderId,
+        model: String,
+        effort: String,
     },
     ControlPane {
         command: PaneControl,
@@ -232,6 +263,11 @@ pub enum KalVoiceIntent {
     },
     StopThreads {
         scope: ThreadScope,
+        /// When spoken (for example, "stop six active terminals"), execution proceeds only if
+        /// exactly this many provider sessions are live in the resolved scope. Older payloads
+        /// omit it and keep the existing all-in-scope behavior.
+        #[serde(default)]
+        expected_count: Option<u8>,
     },
     ShowApprovals,
     /// "What are my threads doing?" — answered from runtime state, no model needed.
@@ -332,6 +368,7 @@ impl KalVoiceIntent {
             Self::CreateTerminal { .. } => "create_terminal",
             Self::CreateThreads { .. } => "create_threads",
             Self::CreateProviderPanes { .. } => "create_provider_panes",
+            Self::ConfigureRecentLaunch { .. } => "configure_recent_launch",
             Self::ControlPane { .. } => "control_pane",
             Self::ControlBrowser { .. } => "control_browser",
             Self::OpenThread { .. } => "open_thread",
@@ -438,6 +475,9 @@ mod tests {
                 count: 4,
                 workspace_id: None,
                 account_query: None,
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
             }
             .needs_reasoning()
         );
@@ -515,6 +555,9 @@ mod tests {
                 count: 1,
                 workspace_id: None,
                 account_query: Some("work".into()),
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
             },
             KalVoiceIntent::SubmitFocused,
             KalVoiceIntent::ClearFocused,
@@ -635,9 +678,23 @@ mod tests {
             old,
             KalVoiceIntent::CreateThreads {
                 account_query: None,
+                model: None,
                 ..
             }
         ));
+
+        let modeled = serde_json::to_value(KalVoiceIntent::CreateThreads {
+            provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            count: 6,
+            workspace_id: None,
+            account_query: Some("Claude A".into()),
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            assignments: Vec::new(),
+        })
+        .expect("modeled launch");
+        assert_eq!(modeled["model"], "opus");
+        assert_eq!(modeled["effort"], "high");
     }
 
     #[test]
@@ -700,5 +757,24 @@ mod tests {
         .expect("json");
         assert_eq!(json["kind"], "pause_threads");
         assert_eq!(json["scope"]["kind"], "all");
+
+        let legacy: KalVoiceIntent = serde_json::from_value(serde_json::json!({
+            "kind": "stop_threads",
+            "scope": { "kind": "all" }
+        }))
+        .expect("legacy stop intent");
+        assert_eq!(
+            legacy,
+            KalVoiceIntent::StopThreads {
+                scope: ThreadScope::All,
+                expected_count: None,
+            }
+        );
+        let counted = serde_json::to_value(KalVoiceIntent::StopThreads {
+            scope: ThreadScope::All,
+            expected_count: Some(6),
+        })
+        .expect("counted stop intent");
+        assert_eq!(counted["expectedCount"], 6);
     }
 }

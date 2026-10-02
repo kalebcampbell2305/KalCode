@@ -7,7 +7,8 @@ import { toKalCodeError } from "../../../ipc/errors.ts";
 import {
   createOrderedInputQueue,
   DictationDeliveryError,
-  frameProviderPrompt,
+  type DictationDeliveryOptions,
+  providerInputPayload,
   providerInputReadiness,
   registerDictationSink,
   throwIfDictationCancelled,
@@ -28,6 +29,10 @@ const ACK_EVERY_BYTES = 64 * 1024;
 interface PaneTerminalProps {
   channel: PaneChannel;
   threadId: string;
+  /** Opaque identity of this exact provider process/PTY instance. */
+  instanceId: string | null;
+  /** Authoritative native PTY bound to this provider thread. */
+  terminalId?: string | null;
   providerId: string;
   providerAccountId: string | null;
   status: ThreadStatus;
@@ -56,6 +61,8 @@ function monoFontFamily(): string {
 export function PaneTerminal({
   channel,
   threadId,
+  instanceId,
+  terminalId = null,
   providerId,
   providerAccountId,
   status,
@@ -77,8 +84,24 @@ export function PaneTerminal({
   const labelRef = useRef(label);
   labelRef.current = label;
   const inputRef = useRef<ReturnType<typeof createOrderedInputQueue> | null>(null);
-  const contextRef = useRef({ threadId, providerId, providerAccountId, status, providerPromptActive });
-  contextRef.current = { threadId, providerId, providerAccountId, status, providerPromptActive };
+  const contextRef = useRef({
+    threadId,
+    instanceId,
+    terminalId,
+    providerId,
+    providerAccountId,
+    status,
+    providerPromptActive,
+  });
+  contextRef.current = {
+    threadId,
+    instanceId,
+    terminalId,
+    providerId,
+    providerAccountId,
+    status,
+    providerPromptActive,
+  };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -122,6 +145,14 @@ export function PaneTerminal({
         if (import.meta.env.DEV && toKalCodeError(error).code !== "pane_not_running") {
           console.warn("pane input failed", error);
         }
+      },
+      (data) => {
+        if (!instanceId) {
+          return Promise.reject(
+            new DictationDeliveryError("target_closed", "That provider pane has no live runtime identity."),
+          );
+        }
+        return channel.writeVoice(threadId, instanceId, data);
       },
     );
     inputRef.current = input;
@@ -245,67 +276,111 @@ export function PaneTerminal({
       termRef.current = null;
       term.dispose();
     };
-  }, [channel, threadId]);
+  }, [channel, instanceId, threadId]);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    return registerDictationSink(host, {
-      label: labelRef.current,
-      destination: { kind: "provider_pane", threadId, providerId, providerAccountId },
-      async deliver(transcript, options) {
-        throwIfDictationCancelled(options?.signal);
-        const current = contextRef.current;
-        if (
-          current.threadId !== threadId ||
-          current.providerId !== providerId ||
-          current.providerAccountId !== providerAccountId
-        ) {
-          throw new DictationDeliveryError("target_closed", "That provider destination changed.");
-        }
-        const readiness = providerInputReadiness({
-          running: runningRef.current,
-          status: current.status,
-          providerPromptActive: current.providerPromptActive,
+    const voiceInput = () => {
+      const current = contextRef.current;
+      if (
+        current.threadId !== threadId ||
+        current.instanceId !== instanceId ||
+        current.terminalId !== terminalId ||
+        current.providerId !== providerId ||
+        current.providerAccountId !== providerAccountId
+      ) {
+        throw new DictationDeliveryError("target_closed", "That provider destination changed.");
+      }
+      const readiness = providerInputReadiness({
+        running: runningRef.current,
+        status: current.status,
+        providerPromptActive: current.providerPromptActive,
+      });
+      if (readiness === "ended") {
+        throw new DictationDeliveryError("terminal_not_running", "That provider session is no longer running.");
+      }
+      if (readiness === "provider_prompt") {
+        throw new DictationDeliveryError(
+          "provider_permission_prompt",
+          "The provider is waiting for an answer to its native prompt.",
+        );
+      }
+      if (readiness === "busy") {
+        throw new DictationDeliveryError("provider_input_busy", "The provider is still working.");
+      }
+      if (readiness !== "ready") {
+        throw new DictationDeliveryError(
+          "provider_input_unverified",
+          "KalCode cannot yet confirm that the provider is ready for a prompt.",
+        );
+      }
+      const input = inputRef.current;
+      if (!input) throw new DictationDeliveryError("target_closed", "That provider pane has closed.");
+      return input;
+    };
+    const writeVoiceInput = async (
+      input: NonNullable<typeof inputRef.current>,
+      data: string,
+      options?: DictationDeliveryOptions,
+    ) => {
+      try {
+        await input.deliver(data, options, () => {
+          // Input may wait behind a keyboard write. Recheck identity, runtime state, and native
+          // provider prompts at the exact point this write enters the PTY.
+          if (voiceInput() !== input) {
+            throw new DictationDeliveryError("target_closed", "That provider pane has closed.");
+          }
         });
-        if (readiness === "ended") {
+      } catch (cause) {
+        if (cause instanceof DictationDeliveryError) throw cause;
+        const error = toKalCodeError(cause);
+        if (error.code === "pane_not_running") {
           throw new DictationDeliveryError("terminal_not_running", "That provider session is no longer running.");
         }
-        if (readiness === "provider_prompt") {
+        if (error.code === "provider_target_changed") {
+          throw new DictationDeliveryError("target_closed", "That provider pane restarted before delivery.");
+        }
+        if (error.code === "provider_permission_prompt") {
           throw new DictationDeliveryError(
             "provider_permission_prompt",
             "The provider is waiting for an answer to its native prompt.",
           );
         }
-        if (readiness === "busy") {
-          throw new DictationDeliveryError("provider_input_busy", "The provider is still working.");
-        }
-        if (readiness !== "ready") {
+        if (error.code === "provider_input_unverified") {
           throw new DictationDeliveryError(
             "provider_input_unverified",
             "KalCode cannot yet confirm that the provider is ready for a prompt.",
           );
         }
-        const framed = frameProviderPrompt(transcript);
-        const input = inputRef.current;
-        if (!input) throw new DictationDeliveryError("target_closed", "That provider pane has closed.");
-        try {
-          await input.deliver(framed, options);
-        } catch (cause) {
-          if (cause instanceof DictationDeliveryError) throw cause;
-          const error = toKalCodeError(cause);
-          if (error.code === "pane_not_running") {
-            throw new DictationDeliveryError("terminal_not_running", "That provider session is no longer running.");
-          }
-          throw new DictationDeliveryError(
-            "provider_delivery_failed",
-            "KalCode could not write to that provider pane.",
-          );
-        }
-        return framed.length - 1;
+        throw new DictationDeliveryError("provider_delivery_failed", "KalCode could not write to that provider pane.");
+      }
+    };
+    return registerDictationSink(host, {
+      label: labelRef.current,
+      destination: {
+        kind: "provider_pane",
+        threadId,
+        instanceId,
+        terminalId,
+        providerId,
+        providerAccountId,
+      },
+      async deliver(transcript, options) {
+        throwIfDictationCancelled(options?.signal);
+        const mode = options?.mode ?? "send";
+        const input = voiceInput();
+        const payload = providerInputPayload(transcript, mode);
+        await writeVoiceInput(input, payload, options);
+        return payload.length - (mode === "send" ? 1 : 0);
+      },
+      async submit(options) {
+        throwIfDictationCancelled(options?.signal);
+        const input = voiceInput();
+        await writeVoiceInput(input, "\r", options);
       },
     });
-  }, [providerAccountId, providerId, threadId]);
+  }, [instanceId, providerAccountId, providerId, terminalId, threadId]);
 
   useEffect(() => {
     termRef.current?.textarea?.setAttribute("aria-label", label);

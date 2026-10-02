@@ -162,6 +162,7 @@ impl CodexProvider {
 struct CodexTurns {
     mode: PermissionMode,
     model: Option<String>,
+    effort: Option<String>,
     cwd: String,
     policy_overrides: Vec<OsString>,
 }
@@ -179,6 +180,7 @@ impl TurnAdapter for CodexTurns {
         argv::exec_args_with_overrides(
             self.mode,
             self.model.as_deref(),
+            self.effort.as_deref(),
             resume,
             &self.policy_overrides,
         )
@@ -355,6 +357,7 @@ impl AgentProvider for CodexProvider {
         let adapter = CodexTurns {
             mode: config.permission_mode,
             model: config.model,
+            effort: config.effort,
             cwd: config.working_directory,
             policy_overrides,
         };
@@ -456,6 +459,7 @@ mod tests {
         let turns = |mode| CodexTurns {
             mode,
             model: None,
+            effort: None,
             cwd: String::new(),
             policy_overrides: Vec::new(),
         };

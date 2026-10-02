@@ -1,6 +1,6 @@
 import type { ProviderAccount, SurfaceFlag, ThreadSummary } from "@kalcode/protocol";
 import { ToastProvider, TooltipProvider } from "@kalcode/ui/components";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountProvider } from "../../account/AccountProvider.tsx";
@@ -34,8 +34,11 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
-  vi.unstubAllGlobals();
+  // FloatingAssistant disconnects its observer during React cleanup. Unmount while the browser
+  // fixture still exists so a final queued render cannot observe a torn-down global.
+  cleanup();
   resetAccountIntentForTests();
+  vi.unstubAllGlobals();
 });
 
 interface Mounted {

@@ -87,6 +87,7 @@ const PROVIDER_NAMES: Record<PaneKind, string> = {
 
 interface Pane {
   kind: PaneKind;
+  instanceId: string;
   thread: ThreadSummary;
   output: string;
   listeners: Map<number, (bytes: Uint8Array) => void>;
@@ -275,6 +276,7 @@ export function createPanesMemory(options: {
   const info = (p: Pane): PaneInfo => ({
     threadId: p.thread.id,
     providerId: p.thread.providerId,
+    instanceId: p.instanceId,
     hookChannel: p.hookChannel,
     decisionRouting: p.routing,
     kalcodeAnswersApprovals: p.kind === "claude-code" && p.routing === "engine" && p.hookChannel === "active",
@@ -297,6 +299,7 @@ export function createPanesMemory(options: {
       });
       const p: Pane = {
         kind,
+        instanceId: crypto.randomUUID(),
         thread,
         output: "",
         listeners: new Map(),
@@ -343,6 +346,17 @@ export function createPanesMemory(options: {
         invalid("provider_pane_failed", "That input is too large.");
       if (!p.running)
         invalid("pane_not_running", "This pane's provider has ended. Resume the thread to start it again.");
+      if (args.voice === true && args.instanceId !== p.instanceId) {
+        invalid("provider_target_changed", "That provider pane restarted before voice input was delivered.");
+      }
+      if (args.voice === true && /[\r\n]/.test(data as string)) {
+        if (p.pending || p.askingInPane) {
+          invalid("provider_permission_prompt", "Answer the provider's current prompt before sending voice input.");
+        }
+        if (p.kind === "claude-code" && p.hookChannel !== "active") {
+          invalid("provider_input_unverified", "KalCode cannot yet confirm that this provider is ready for input.");
+        }
+      }
       for (const ch of data as string) {
         if (ch === "\r" || ch === "\n") {
           const line = p.line;

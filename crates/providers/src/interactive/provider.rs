@@ -25,7 +25,9 @@ use kalcode_hook_bridge::server::BridgeServer;
 use kalcode_pty::{AttachId, ProgramSpec, PtySession, TerminalSize};
 
 use super::claude::{HookCommand, InteractiveArgs, interactive_args, settings_json};
-use super::session::{HandlerRef, InteractiveSession, SessionLimits, SessionParts, Shared};
+use super::session::{
+    HandlerRef, InteractiveSession, PaneVoiceWriteError, SessionLimits, SessionParts, Shared,
+};
 use super::{ApprovalExpiry, DecisionRouting, PaneInfo, TitleSink};
 use crate::catalog;
 use crate::claude::actions::ActionContext;
@@ -168,10 +170,29 @@ impl PaneRegistry {
             return Err(ProviderError::Io("That input is too large.".into()));
         }
         let shared = self.get(thread_id).ok_or(ProviderError::SessionEnded)?;
-        let pty = shared.pty().ok_or(ProviderError::SessionEnded)?;
-        pty.write(data)
-            .map_err(|e| ProviderError::Io(e.to_string()))?;
-        Ok(())
+        shared.write(data)
+    }
+
+    /// Voice input stays in the ordinary pane PTY but holds the registry generation and provider
+    /// lifecycle locks through the write. This prevents a replacement session or native prompt
+    /// transition from receiving a trusted Enter.
+    pub fn write_voice(
+        &self,
+        thread_id: &str,
+        instance_id: &str,
+        data: &[u8],
+    ) -> Result<(), PaneVoiceWriteError> {
+        if data.len() > super::session::MAX_WRITE_BYTES {
+            return Err(PaneVoiceWriteError::Io);
+        }
+        let panes = lock(&self.panes);
+        let shared = panes
+            .get(thread_id)
+            .ok_or(PaneVoiceWriteError::SessionEnded)?;
+        if shared.instance_id() != instance_id {
+            return Err(PaneVoiceWriteError::TargetChanged);
+        }
+        shared.write_voice(data)
     }
 
     pub fn resize(&self, thread_id: &str, cols: u16, rows: u16) -> Result<(), ProviderError> {
@@ -371,6 +392,7 @@ impl InteractiveClaudeProvider {
             start,
             settings_path: &settings_path,
             model: config.model.as_deref(),
+            effort: config.effort.as_deref(),
             title: None,
         })
         .map_err(|e| ProviderError::Start(e.to_string()))?;

@@ -13,6 +13,19 @@ fn intent(text: &str) -> KalVoiceIntent {
     }
 }
 
+#[test]
+fn current_product_surfaces_route_without_local_reasoning() {
+    for (text, surface) in [
+        ("Open Operations", SurfaceId::Operations),
+        ("Take me to Operations", SurfaceId::Operations),
+        ("Open Agent Fleet", SurfaceId::Agents),
+        ("Open provider accounts", SurfaceId::Providers),
+        ("Open Command Center", SurfaceId::CommandCenter),
+    ] {
+        assert_eq!(intent(text), KalVoiceIntent::Navigate { surface }, "{text}");
+    }
+}
+
 fn target(text: &str) -> Option<NamedTarget> {
     match understand(text) {
         Understood::Intent { target, .. } => target,
@@ -43,6 +56,9 @@ fn create(provider: &str, count: u8) -> KalVoiceIntent {
         count,
         workspace_id: None,
         account_query: None,
+        model: None,
+        effort: None,
+        assignments: Vec::new(),
     }
 }
 
@@ -67,6 +83,179 @@ fn provider_pane_requests_use_the_local_command_path() {
             "{text}: {understood:?}"
         );
     }
+}
+
+#[test]
+fn natural_agent_launch_keeps_count_account_workspace_and_model() {
+    assert_eq!(
+        intent("Open six Claude Code agents"),
+        KalVoiceIntent::CreateThreads {
+            provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            count: 6,
+            workspace_id: None,
+            account_query: None,
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
+        }
+    );
+    assert_eq!(
+        intent("Launch three agents using Claude A"),
+        KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: None,
+                count: 3,
+                account_query: Some("claude a".into()),
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: None,
+        }
+    );
+    assert_eq!(
+        target("Launch six agents in KalCode"),
+        Some(NamedTarget::Workspace("kalcode".into()))
+    );
+    assert_eq!(
+        intent("Launch one Gemini agent with model flash lite"),
+        KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::GEMINI_CLI)),
+                count: 1,
+                account_query: None,
+                model: Some("flash-lite".into()),
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: None,
+        }
+    );
+
+    let spoken = "Launch three Claude Code opus agents using Claude A in the website workspace at high effort";
+    assert_eq!(
+        target(spoken),
+        Some(NamedTarget::Workspace("website".into()))
+    );
+    assert_eq!(
+        bind_target(intent(spoken), "ws-web".into()),
+        KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::CLAUDE_CODE)),
+                count: 3,
+                account_query: Some("claude a".into()),
+                model: Some("opus".into()),
+                effort: Some("high".into()),
+                assignments: Vec::new(),
+            }],
+            workspace_id: Some("ws-web".into()),
+        }
+    );
+    let on_workspace = "Start four Claude agents on the website workspace";
+    assert_eq!(
+        target(on_workspace),
+        Some(NamedTarget::Workspace("website".into()))
+    );
+    assert_eq!(
+        bind_target(intent(on_workspace), "ws-web".into()),
+        KalVoiceIntent::CreateThreads {
+            provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            count: 4,
+            workspace_id: Some("ws-web".into()),
+            account_query: None,
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn natural_agent_launch_expands_counted_assignments() {
+    assert_eq!(
+        intent("Use Opus at High effort for all of them"),
+        KalVoiceIntent::ConfigureRecentLaunch {
+            provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            model: "opus".into(),
+            effort: "high".into(),
+        }
+    );
+    let exact_tokens = normalize("Use Claude Opus 4 1 at High effort for all of them");
+    assert_eq!(
+        exact_tokens,
+        [
+            "use", "claude", "opus", "4", "1", "at", "high", "effort", "for", "all", "of", "them"
+        ]
+    );
+    let direct_modifier = pane_request(&exact_tokens);
+    assert_eq!(
+        direct_modifier,
+        Some(Understood::intent(KalVoiceIntent::ConfigureRecentLaunch {
+            provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            model: "claude-opus-4-1".into(),
+            effort: "high".into(),
+        }))
+    );
+    let exact_modifier = understand("Use Claude Opus 4 1 at High effort for all of them");
+    assert_eq!(
+        exact_modifier,
+        Understood::intent(KalVoiceIntent::ConfigureRecentLaunch {
+            provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            model: "claude-opus-4-1".into(),
+            effort: "high".into(),
+        })
+    );
+    assert_eq!(
+        intent(
+            "Launch six Claude Code agents and put two on frontend, two on backend, one on tests, and one on review"
+        ),
+        KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::CLAUDE_CODE)),
+                count: 6,
+                account_query: None,
+                model: None,
+                effort: None,
+                assignments: vec![
+                    AgentLaunchAssignment {
+                        count: 2,
+                        task: "frontend".into(),
+                    },
+                    AgentLaunchAssignment {
+                        count: 2,
+                        task: "backend".into(),
+                    },
+                    AgentLaunchAssignment {
+                        count: 1,
+                        task: "tests".into(),
+                    },
+                    AgentLaunchAssignment {
+                        count: 1,
+                        task: "review".into(),
+                    },
+                ],
+            }],
+            workspace_id: None,
+        }
+    );
+    assert!(matches!(
+        understand("Launch six Claude Code agents and put two on frontend and one on tests"),
+        Understood::Rejected {
+            code: "launch_assignment_count_mismatch",
+            ..
+        }
+    ));
+    let modified = intent(
+        "Launch two Claude Code agents and put one on frontend and one on tests using Opus at High effort for all of them",
+    );
+    assert!(matches!(
+        modified,
+        KalVoiceIntent::CreateProviderPanes { groups, .. }
+            if groups[0].provider_id.as_ref().map(ProviderId::as_str) == Some(ProviderId::CLAUDE_CODE)
+                && groups[0].model.as_deref() == Some("opus")
+                && groups[0].effort.as_deref() == Some("high")
+                && groups[0].assignments[1].task == "tests"
+    ));
 }
 
 #[test]
@@ -329,6 +518,9 @@ fn threads_in_a_named_workspace() {
             count: 2,
             workspace_id: Some("ws-1".into()),
             account_query: None,
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
         }
     );
 }
@@ -377,24 +569,28 @@ fn thread_control_all_workspace_and_one() {
             "stop all threads",
             KalVoiceIntent::StopThreads {
                 scope: ThreadScope::All,
+                expected_count: None,
             },
         ),
         (
             "please stop every agent",
             KalVoiceIntent::StopThreads {
                 scope: ThreadScope::All,
+                expected_count: None,
             },
         ),
         (
             "kill all sessions",
             KalVoiceIntent::StopThreads {
                 scope: ThreadScope::All,
+                expected_count: None,
             },
         ),
         (
             "stop the threads",
             KalVoiceIntent::StopThreads {
                 scope: ThreadScope::All,
+                expected_count: None,
             },
         ),
     ];
@@ -403,6 +599,14 @@ fn thread_control_all_workspace_and_one() {
         assert_eq!(target(text), None, "{text}");
     }
 
+    assert_eq!(
+        intent("stop six active terminals"),
+        KalVoiceIntent::StopThreads {
+            scope: ThreadScope::All,
+            expected_count: Some(6),
+        }
+    );
+
     let text = "stop all threads in the kalcode workspace";
     assert_eq!(target(text), Some(NamedTarget::Workspace("kalcode".into())));
     assert_eq!(
@@ -410,7 +614,8 @@ fn thread_control_all_workspace_and_one() {
         KalVoiceIntent::StopThreads {
             scope: ThreadScope::Workspace {
                 workspace_id: "ws".into()
-            }
+            },
+            expected_count: None,
         }
     );
 
@@ -674,6 +879,7 @@ fn ids_are_never_invented() {
             intent:
                 KalVoiceIntent::StopThreads {
                     scope: ThreadScope::Workspace { workspace_id },
+                    expected_count: None,
                 },
             target: Some(NamedTarget::Workspace(name)),
         } => {
@@ -1236,6 +1442,9 @@ fn new_threads_can_name_their_account() {
         count,
         workspace_id: None,
         account_query: Some(account.into()),
+        model: None,
+        effort: None,
+        assignments: Vec::new(),
     };
     assert_eq!(
         intent("Open a new Codex thread with my work account."),
@@ -1257,6 +1466,9 @@ fn new_threads_can_name_their_account() {
             count: 1,
             workspace_id: Some("ws-1".into()),
             account_query: Some("work".into()),
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
         }
     );
     // Without an account the phrase is unchanged; panes keep the pane grammar.
@@ -1773,6 +1985,9 @@ fn second_chance_understands_paraphrases_and_speech_variants() {
                 count: 2,
                 workspace_id: None,
                 account_query: None,
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
             },
         ),
     ] {

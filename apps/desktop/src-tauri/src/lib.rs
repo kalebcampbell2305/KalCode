@@ -26,6 +26,7 @@ mod doctor_commands;
 #[allow(dead_code)]
 mod git_commands;
 mod kalvoice_accounting;
+mod kalvoice_callbacks;
 mod kalvoice_commands;
 mod kalvoice_component_trust;
 mod kalvoice_components;

@@ -7,6 +7,34 @@
   background: var(--app-backdrop), var(--color-bg);
 }
 
+@keyframes kalvoice-operation-trace {
+  0% {
+    outline-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  45% {
+    outline-color: var(--color-accent);
+    box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--color-accent) 28%, transparent);
+  }
+  100% {
+    outline-color: var(--color-accent);
+    box-shadow: 0 0 0 0.08rem color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+}
+
+.page [data-kalvoice-focused="true"] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 0.08rem color-mix(in srgb, var(--color-accent) 18%, transparent);
+  animation: kalvoice-operation-trace var(--dur-slow) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page [data-kalvoice-focused="true"] {
+    animation: none;
+  }
+}
+
 .header,
 .sectionToolbar,
 .activityHeading,

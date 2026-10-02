@@ -134,7 +134,11 @@ fn exhausted_account_does_not_charge_or_execute_but_dictation_is_unlimited() {
             .outcome,
         KalVoiceOutcome::LimitReached { .. }
     ));
-    for target in [TalkTarget::Field, TalkTarget::Terminal] {
+    for target in [
+        TalkTarget::Field,
+        TalkTarget::Terminal,
+        TalkTarget::ProviderPane,
+    ] {
         let talked = orchestrator
             .talk(
                 TalkRequest {
@@ -179,6 +183,7 @@ struct FakeExecutor {
     checked: Mutex<Vec<KalVoiceIntent>>,
     executed: Mutex<Vec<KalVoiceIntent>>,
     workspaces: Vec<WorkspaceOption>,
+    scene_actions: Vec<LocalActionGrounding>,
     unavailable: bool,
     failure: bool,
 }
@@ -186,6 +191,14 @@ struct FakeExecutor {
 impl Executor for FakeExecutor {
     fn workspace_options(&self) -> std::result::Result<Vec<WorkspaceOption>, ExecError> {
         Ok(self.workspaces.clone())
+    }
+
+    fn local_reasoning_actions(
+        &self,
+        _request: &str,
+        _ctx: &ExecContext,
+    ) -> std::result::Result<Vec<LocalActionGrounding>, ExecError> {
+        Ok(self.scene_actions.clone())
     }
 
     fn find_workspace(&self, name: &str) -> std::result::Result<Option<String>, ExecError> {
@@ -518,7 +531,7 @@ fn talk(text: &str, target: TalkTarget) -> TalkRequest {
 #[test]
 fn one_gesture_routes_commands_dictation_and_requests() {
     use TalkRoute::{Command, Dictation, Request};
-    use TalkTarget::{Field, None as Nothing, Terminal};
+    use TalkTarget::{Field, None as Nothing, ProviderPane, Terminal};
     let cases = [
         ("Open four Codex threads.", Field, Command),
         ("Pause every active thread", Terminal, Command),
@@ -529,6 +542,23 @@ fn one_gesture_routes_commands_dictation_and_requests() {
         ("pending approvals", Field, Dictation),
         ("fix the parser so it handles empty input", Field, Dictation),
         ("npm test", Terminal, Dictation),
+        (
+            "refactor the parser and run the tests",
+            ProviderPane,
+            Dictation,
+        ),
+        ("show me the dashboard", ProviderPane, Command),
+        (
+            "Use Opus at High effort for all of them",
+            ProviderPane,
+            Command,
+        ),
+        (
+            "Use Claude Opus 4 1 at High effort for all of them",
+            ProviderPane,
+            Command,
+        ),
+        ("Use Opus at High effort for all of them", Terminal, Command),
         ("plan the release", Nothing, Request),
         ("don't stop the threads", Field, Dictation),
         ("don't stop the threads", Nothing, Request),
@@ -1388,6 +1418,7 @@ fn legacy_provider_preference_cannot_trigger_a_provider_call() {
             request: "plan the release".into(),
             workspace_id: None,
             workspaces: Vec::new(),
+            grounded_actions: Vec::new(),
         }]
     );
     assert_eq!(directory.calls.load(Ordering::SeqCst), 0);
@@ -1423,7 +1454,12 @@ fn every_focus_and_legacy_provider_selection_keeps_commands_local_and_unknown_re
                 ..Default::default()
             })
             .unwrap();
-        for target in [TalkTarget::None, TalkTarget::Field, TalkTarget::Terminal] {
+        for target in [
+            TalkTarget::None,
+            TalkTarget::Field,
+            TalkTarget::Terminal,
+            TalkTarget::ProviderPane,
+        ] {
             let response = h
                 .orchestrator
                 .talk(talk("open dashboard", target), &|_| {})
@@ -1485,6 +1521,44 @@ fn uncertain_local_interpretation_never_executes_or_counts() {
 }
 
 #[test]
+fn live_scene_actions_reach_the_existing_local_selector_and_execute_canonically() {
+    let action = KalVoiceIntent::OpenThread {
+        query: "login fix".into(),
+    };
+    let grounding = LocalActionGrounding {
+        label: "Open Login fix · Claude Code · KalCode · Running website tests".into(),
+        intent: action.clone(),
+    };
+    let interpreter = Arc::new(FakeLocalInterpreter::new(Ok(LocalInterpretation::Action(
+        action.clone(),
+    ))));
+    let h = harness_with_interpreter(
+        Tier::Free,
+        FakeExecutor {
+            scene_actions: vec![grounding.clone()],
+            ..Default::default()
+        },
+        Arc::new(SpyDirectory::default()),
+        Some(interpreter.clone()),
+    );
+
+    let response = h
+        .orchestrator
+        .handle(request("find Claude working on the website"))
+        .expect("handle");
+
+    assert!(matches!(
+        response.outcome,
+        KalVoiceOutcome::Completed { .. }
+    ));
+    assert_eq!(*h.executor.executed.lock().expect("lock"), vec![action]);
+    assert_eq!(
+        interpreter.requests.lock().expect("lock")[0].grounded_actions,
+        vec![grounding]
+    );
+}
+
+#[test]
 fn malicious_recursive_local_output_is_rejected_before_execution() {
     let interpreter = Arc::new(FakeLocalInterpreter::new(Ok(LocalInterpretation::Action(
         KalVoiceIntent::Reasoning {
@@ -1522,6 +1596,9 @@ fn invalid_local_action_fields_are_rejected_before_execution() {
             count: u8::MAX,
             workspace_id: None,
             account_query: None,
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
         },
     ))));
     let h = harness_with_interpreter(
@@ -1688,6 +1765,7 @@ fn local_workspace_actions_must_reference_the_bounded_snapshot() {
                 id: "0192f3c4-0000-7000-8000-00000000000a".into(),
                 name: "KalCode".into(),
             }],
+            grounded_actions: Vec::new(),
         }
     );
 }
@@ -1883,6 +1961,9 @@ fn required_push_to_talk_commands_run_without_the_local_interpreter() {
         count: 4,
         workspace_id: None,
         account_query: None,
+        model: None,
+        effort: None,
+        assignments: Vec::new(),
     };
     let permission = KalVoiceIntent::WhichSessions {
         state: kalcode_contracts::sessions::SessionAttention::WaitingForPermission,
@@ -2023,6 +2104,9 @@ fn named_targets_resolve_or_fail_uncounted() {
             count: 2,
             workspace_id: Some("0192f3c4-0000-7000-8000-00000000000a".into()),
             account_query: None,
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
         }
     );
     let missing = h
@@ -2179,6 +2263,7 @@ fn terminal_kalvoice_directives_use_stable_tags() {
 // ---- 0.1.5 terminal-aware KalVoice ----
 
 const AUTH: &str = "0192f3c4-0000-7000-8000-0000000000a1";
+const RECENT_SECOND: &str = "0192f3c4-0000-7000-8000-0000000000a2";
 const WORKSPACE_A: &str = "0192f3c4-0000-7000-8000-0000000000c1";
 const WORKSPACE_B: &str = "0192f3c4-0000-7000-8000-0000000000c2";
 
@@ -2272,6 +2357,22 @@ impl Executor for SessionExecutor {
             KalVoiceIntent::OpenWorkspace { .. } => Some(UiDirective::OpenWorkspace {
                 workspace_id: WORKSPACE_B.into(),
             }),
+            KalVoiceIntent::CreateThreads { .. } | KalVoiceIntent::CreateProviderPanes { .. } => {
+                Some(UiDirective::OpenProviderPanes {
+                    workspace_id: WORKSPACE_A.into(),
+                    thread_ids: vec![AUTH.into(), RECENT_SECOND.into()],
+                    instances: vec![
+                        LaunchThreadInstance {
+                            thread_id: AUTH.into(),
+                            generation: 7,
+                        },
+                        LaunchThreadInstance {
+                            thread_id: RECENT_SECOND.into(),
+                            generation: 11,
+                        },
+                    ],
+                })
+            }
             _ => None,
         };
         Ok(Executed {
@@ -2279,6 +2380,42 @@ impl Executor for SessionExecutor {
             directive,
         })
     }
+}
+
+#[test]
+fn model_effort_follow_up_carries_only_the_exact_recent_launch_instances() {
+    let h = session_harness(Tier::Owner);
+    h.orchestrator
+        .handle(in_workspace("Launch two Claude agents", WORKSPACE_A))
+        .expect("launch");
+    h.orchestrator
+        .handle(in_workspace(
+            "Use Claude Opus 4 1 at High effort for all of them",
+            WORKSPACE_A,
+        ))
+        .expect("configure");
+    let context = h.last_context();
+    assert_eq!(
+        context.last_launch_instances,
+        vec![
+            LaunchThreadInstance {
+                thread_id: AUTH.into(),
+                generation: 7,
+            },
+            LaunchThreadInstance {
+                thread_id: RECENT_SECOND.into(),
+                generation: 11,
+            },
+        ]
+    );
+    h.advance(time::Duration::minutes(3));
+    h.orchestrator
+        .handle(in_workspace(
+            "Use Opus at High effort for all of them",
+            WORKSPACE_A,
+        ))
+        .expect("expired follow-up");
+    assert!(h.last_context().last_launch_instances.is_empty());
 }
 
 struct SessionHarness {
@@ -2386,6 +2523,52 @@ fn send_that_and_clear_that_are_free_and_work_with_the_allowance_used_up() {
         matches!(nothing.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "thread_not_focused")
     );
     assert!(!nothing.counted);
+}
+
+#[test]
+fn provider_pane_submit_is_allowed_but_a_raw_terminal_cannot_spoof_a_thread() {
+    let h = session_harness(Tier::Free);
+
+    let mut provider = talk("send that", TalkTarget::ProviderPane);
+    provider.thread_id = Some(AUTH.into());
+    let sent = h
+        .orchestrator
+        .talk(provider, &|_| {})
+        .expect("provider pane submit");
+    assert_eq!(sent.route, TalkRoute::Command);
+    assert_eq!(
+        sent.response.expect("response").directive,
+        Some(UiDirective::SubmitComposer {
+            thread_id: AUTH.into(),
+        })
+    );
+    assert_eq!(
+        h.executor.executed.lock().expect("lock").as_slice(),
+        [KalVoiceIntent::SubmitFocused]
+    );
+
+    for (text, code) in [
+        ("send that", "terminal_submit_refused"),
+        ("clear that", "terminal_clear_refused"),
+    ] {
+        let mut raw = talk(text, TalkTarget::Terminal);
+        // A renderer bug or malicious caller cannot turn this valid provider thread id into
+        // authority to submit a shell line.
+        raw.thread_id = Some(AUTH.into());
+        let refused = h.orchestrator.talk(raw, &|_| {}).expect("raw refusal");
+        assert_eq!(refused.route, TalkRoute::Command);
+        let response = refused.response.expect("response");
+        assert!(
+            matches!(response.outcome, KalVoiceOutcome::Failed { code: ref actual, .. } if actual == code)
+        );
+        assert!(response.directive.is_none());
+        assert!(!response.counted);
+    }
+    assert_eq!(
+        h.executor.executed.lock().expect("lock").as_slice(),
+        [KalVoiceIntent::SubmitFocused],
+        "raw terminal refusals never reach the executor"
+    );
 }
 
 #[test]
@@ -2617,6 +2800,7 @@ fn default_thread_target_resolution_fails_closed_for_intents_that_act_on_a_threa
         thread_id: None,
         providers: Vec::new(),
         last_target_id: None,
+        last_launch_instances: Vec::new(),
     };
     for intent in [
         KalVoiceIntent::PauseThreads {
@@ -2627,6 +2811,7 @@ fn default_thread_target_resolution_fails_closed_for_intents_that_act_on_a_threa
         },
         KalVoiceIntent::StopThreads {
             scope: ThreadScope::All,
+            expected_count: None,
         },
         KalVoiceIntent::RebindThreadAccount {
             thread_query: Some("login".into()),

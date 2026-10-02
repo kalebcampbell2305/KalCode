@@ -21,6 +21,7 @@ function thread(status: ThreadStatus, overrides: Partial<ThreadSummary> = {}): T
     providerId: "claude-code",
     providerName: "Claude Code",
     model: "claude-sonnet-4-5",
+    effort: null,
     providerAccountId: null,
     accountLabel: null,
     workspaceId: "ws-a",

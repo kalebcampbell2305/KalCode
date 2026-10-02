@@ -71,7 +71,7 @@ async function mountStable(prepare?: (h: Omit<Harness, "user" | "raw">) => Promi
   }));
   expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(true);
   expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(true);
-  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(false);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(true);
 
   transport.workspaces.queueFolders("alpha", "beta");
   const alpha = (await client.openWorkspaceDialog()) as Workspace;

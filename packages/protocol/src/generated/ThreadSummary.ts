@@ -10,6 +10,10 @@ import type { ThreadStatus } from "./ThreadStatus.ts";
  */
 export type ThreadSummary = { id: string, name: string, providerId: ProviderId, providerName: string, model: string | null,
 /**
+ * Provider-native reasoning effort. Missing means the provider default.
+ */
+effort: string | null,
+/**
  * Stable selected provider-account metadata id; never a credential.
  */
 providerAccountId: string | null,

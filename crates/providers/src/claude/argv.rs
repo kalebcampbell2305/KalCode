@@ -305,6 +305,7 @@ pub enum SessionStart {
 #[derive(Debug, Clone)]
 pub struct SessionArgs {
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub mode: PermissionMode,
     pub start: SessionStart,
 }
@@ -313,6 +314,8 @@ pub struct SessionArgs {
 pub enum ArgsError {
     #[error("the model name is not valid")]
     InvalidModel,
+    #[error("the reasoning effort is not supported")]
+    InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
     #[error("the working directory must be an existing absolute folder")]
@@ -332,6 +335,13 @@ fn valid_model(model: &str) -> bool {
 /// Whether `model` is a model name KalCode passes to a provider (shared with interactive panes).
 pub fn valid_model_name(model: &str) -> bool {
     valid_model(model)
+}
+
+/// Claude Code effort values certified by KalCode's launch policy.
+pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+pub fn valid_effort_name(effort: &str) -> bool {
+    EFFORT_LEVELS.contains(&effort)
 }
 
 /// Session ids KalCode passes are canonical UUIDs (its own, or ones Claude Code reported).
@@ -354,6 +364,13 @@ pub fn session_args(args: &SessionArgs) -> Result<Vec<OsString>, ArgsError> {
         }
         out.push("--model".into());
         out.push(model.into());
+    }
+    if let Some(effort) = &args.effort {
+        if !valid_effort_name(effort) {
+            return Err(ArgsError::InvalidEffort);
+        }
+        out.push("--effort".into());
+        out.push(effort.into());
     }
     let (flag, id) = match &args.start {
         SessionStart::New { session_id } => ("--session-id", session_id),
@@ -392,6 +409,7 @@ mod tests {
     fn args_for(mode: PermissionMode) -> Vec<String> {
         session_args(&SessionArgs {
             model: None,
+            effort: None,
             mode,
             start: SessionStart::New {
                 session_id: "0192f3c4-0000-7000-8000-000000000000".into(),
@@ -525,6 +543,7 @@ mod tests {
     fn resume_uses_the_documented_flag() {
         let args = session_args(&SessionArgs {
             model: Some("sonnet".into()),
+            effort: Some("high".into()),
             mode: PermissionMode::Approve,
             start: SessionStart::Resume {
                 session_id: "5d7a3c0e-8a1b-4c7e-9f00-1234567890ab".into(),
@@ -540,6 +559,7 @@ mod tests {
             Some("5d7a3c0e-8a1b-4c7e-9f00-1234567890ab")
         );
         assert_eq!(value_after(&args, "--model").as_deref(), Some("sonnet"));
+        assert_eq!(value_after(&args, "--effort").as_deref(), Some("high"));
         assert!(!args.iter().any(|a| a == "--session-id"));
     }
 
@@ -547,6 +567,7 @@ mod tests {
     fn rejects_values_that_could_be_read_as_flags() {
         let base = SessionArgs {
             model: None,
+            effort: None,
             mode: PermissionMode::Approve,
             start: SessionStart::New {
                 session_id: "0192f3c4-0000-7000-8000-000000000000".into(),
@@ -575,6 +596,20 @@ mod tests {
                 ..base.clone()
             };
             assert!(session_args(&args).is_ok(), "{model:?}");
+        }
+        for effort in EFFORT_LEVELS {
+            let args = SessionArgs {
+                effort: Some((*effort).into()),
+                ..base.clone()
+            };
+            assert!(session_args(&args).is_ok(), "{effort:?}");
+        }
+        for effort in ["", "HIGH", "ultra", "high --model opus"] {
+            let args = SessionArgs {
+                effort: Some(effort.into()),
+                ..base.clone()
+            };
+            assert_eq!(session_args(&args), Err(ArgsError::InvalidEffort));
         }
         for id in ["--resume", "latest", "", "../x"] {
             let args = SessionArgs {

@@ -161,6 +161,8 @@ export function ProviderPane({
         <PaneTerminal
           channel={channel}
           threadId={thread.id}
+          instanceId={info?.instanceId ?? null}
+          terminalId={thread.terminalId}
           providerId={thread.providerId}
           providerAccountId={thread.providerAccountId}
           status={thread.status}
