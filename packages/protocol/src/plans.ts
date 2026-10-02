@@ -62,6 +62,12 @@ export interface PlanLimits {
   workspaces: number | null;
   /** Connected provider accounts (sign-ins) across every provider. */
   providerAccounts: number | null;
+  /**
+   * Finished Operations Runs shown in Run history, most recent first. A local display limit
+   * (the history is the user's own on-device data), never a signed entitlement. Active runs
+   * are always shown.
+   */
+  runHistory: number | null;
   permissionModes: typeof ALL_PERMISSION_MODES;
   /** Legacy signed-entitlement flags kept for document compatibility (`entitlements.ts`). */
   persistentAgents: boolean;
@@ -106,6 +112,7 @@ export const PLANS: readonly Plan[] = [
       parallelAgents: 1,
       workspaces: 2,
       providerAccounts: 2,
+      runHistory: 10,
       permissionModes: ALL_PERMISSION_MODES,
       persistentAgents: false,
       multiAgentWorkflows: false,
@@ -128,6 +135,7 @@ export const PLANS: readonly Plan[] = [
       parallelAgents: 4,
       workspaces: 10,
       providerAccounts: 6,
+      runHistory: null,
       permissionModes: ALL_PERMISSION_MODES,
       persistentAgents: true,
       multiAgentWorkflows: true,
@@ -150,6 +158,7 @@ export const PLANS: readonly Plan[] = [
       parallelAgents: 10,
       workspaces: null,
       providerAccounts: 8,
+      runHistory: null,
       permissionModes: ALL_PERMISSION_MODES,
       persistentAgents: true,
       multiAgentWorkflows: true,
@@ -172,6 +181,7 @@ export const PLANS: readonly Plan[] = [
       parallelAgents: null,
       workspaces: null,
       providerAccounts: null,
+      runHistory: null,
       permissionModes: ALL_PERMISSION_MODES,
       persistentAgents: true,
       multiAgentWorkflows: true,
@@ -194,6 +204,7 @@ export const OWNER_LIMITS: PlanLimits = {
   parallelAgents: null,
   workspaces: null,
   providerAccounts: null,
+  runHistory: null,
   permissionModes: ALL_PERMISSION_MODES,
   persistentAgents: true,
   multiAgentWorkflows: true,

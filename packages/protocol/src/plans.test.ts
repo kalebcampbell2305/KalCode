@@ -71,10 +71,25 @@ describe("plans", () => {
     expect(formatKalVoiceAllowance(limitsFor("max2x"))).toBe("1,000");
   });
 
+  it("shows Free the recent 10 Runs and every paid plan the full Run history", () => {
+    expect(PLANS.map((plan) => [plan.id, plan.limits.runHistory])).toEqual([
+      ["free", 10],
+      ["pro", null],
+      ["max", null],
+      ["max2x", null],
+    ]);
+    const history = getPlanFeature("operations-history");
+    for (const plan of PLANS) {
+      const limit = plan.limits.runHistory;
+      expect(history.values?.[plan.id], plan.id).toBe(limit === null ? "Full" : `Recent ${limit}`);
+    }
+  });
+
   it("gives OWNER no KalCode-side limit", () => {
     for (const limit of CORE_LIMITS) {
       expect(OWNER_LIMITS[limit.key]).toBeNull();
     }
+    expect(OWNER_LIMITS.runHistory).toBeNull();
     expect(formatKalVoiceAllowance(OWNER_LIMITS)).toBe("Unlimited");
   });
 
