@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseManifest } from "../../src/data/releases";
-import { publishedManifest } from "./fixtures/releases";
+import { publishedManifest, syntheticBuild } from "./fixtures/releases";
 
 // B11 truth: Stable 0.1.6 is live, and the committed releases.json stays Stable 0.1.6 until the 0.1.7
 // release assembly replaces it with the generated, signed Stable 0.1.7 manifest. 0.1.2 is the private
@@ -80,8 +80,8 @@ function signedStable(version: string): ReleaseManifest {
 
 /**
  * The only states releases.json may hold: the committed Stable 0.1.6 manifest exactly, a valid signed
- * Stable 0.1.7 manifest offering only the two 0.1.7 files, or a valid signed Stable 0.1.8+N build manifest
- * offering only the two files of that build. Returns why a state is refused.
+ * Stable 0.1.7 manifest offering only the two 0.1.7 files, or a valid signed Stable 0.1.8+N or 0.1.9+N
+ * build manifest offering only the two files of that build. Returns why a state is refused.
  */
 function refusal(candidate: ReleaseManifest): string | null {
   let manifest: ReleaseManifest;
@@ -107,14 +107,19 @@ function refusal(candidate: ReleaseManifest): string | null {
     }
     return null;
   }
-  // A signed Stable build of the public 0.1.8 (`0.1.8+N`, PR #34): build artifacts are named
-  // `KalCode_0.1.8_buildN_*`, are pinned under the full release version, and link to the public 0.1.8 Updates entry.
-  const build018 = /^0\.1\.8\+([1-9]\d*)$/.exec(latest.version);
-  if (build018) {
-    const expected = [`KalCode_0.1.8_build${build018[1]}_arm64.dmg`, `KalCode_0.1.8_build${build018[1]}_x64-setup.exe`];
+  // A signed Stable build of the public 0.1.8 or 0.1.9 (`0.1.8+N`, PR #34; `0.1.9+N`): build artifacts are
+  // named `KalCode_X.Y.Z_buildN_*`, are pinned under the full release version, and link to that public
+  // version's Updates entry.
+  const build = /^(0\.1\.[89])\+([1-9]\d*)$/.exec(latest.version);
+  if (build) {
+    const [, publicVersion, number] = build;
+    const expected = [
+      `KalCode_${publicVersion}_build${number}_arm64.dmg`,
+      `KalCode_${publicVersion}_build${number}_x64-setup.exe`,
+    ];
     if (JSON.stringify(files) !== JSON.stringify(expected)) return `${latest.version} files are ${files.join(", ")}`;
-    if (latest.notesUrl !== "/updates#release-0-1-8")
-      return `${latest.version} notes do not point at the 0.1.8 Updates entry`;
+    if (latest.notesUrl !== `/updates#release-${publicVersion?.replaceAll(".", "-")}`)
+      return `${latest.version} notes do not point at the ${publicVersion} Updates entry`;
     for (const p of latest.platforms) {
       if (p.pinnedUrl !== `/download/${latest.version}/${p.file}`)
         return `${p.file} is not pinned under /download/${latest.version}/`;
@@ -171,9 +176,28 @@ describe("the 0.1.7 release data", () => {
     expect(files.sort()).toEqual(FILES_017);
   });
 
-  it("holds the committed Stable 0.1.6 manifest, a signed Stable 0.1.7 one or a signed Stable 0.1.8+N build, never 0.1.2-0.1.5", async () => {
+  it("holds the committed Stable 0.1.6 manifest, a signed Stable 0.1.7 one or a signed Stable 0.1.8+N or 0.1.9+N build, never 0.1.2-0.1.5", async () => {
     const committed = (await import("../../src/data/releases.json")).default as ReleaseManifest;
     expect(refusal(committed)).toBeNull();
+  });
+
+  it("accepts a signed Stable 0.1.9+N build shaped exactly like the committed releases.json", async () => {
+    const committed = (await import("../../src/data/releases.json")).default as ReleaseManifest;
+    const build019 = syntheticBuild(committed, "0.1.9", 1050);
+    expect(build019.latest?.platforms.map((p) => [p.file, p.pinnedUrl])).toEqual([
+      ["KalCode_0.1.9_build1050_x64-setup.exe", "/download/0.1.9+1050/KalCode_0.1.9_build1050_x64-setup.exe"],
+      ["KalCode_0.1.9_build1050_arm64.dmg", "/download/0.1.9+1050/KalCode_0.1.9_build1050_arm64.dmg"],
+    ]);
+    expect(build019.latest?.notesUrl).toBe("/updates#release-0-1-9");
+    expect(refusal(build019)).toBeNull();
+    expect(signedStableRelease(assertManifest(build019))?.version).toBe("0.1.9+1050");
+    // The same shape with the 0.1.8 Updates entry, or 0.1.8 file names, is refused.
+    const staleNotes = structuredClone(build019);
+    if (staleNotes.latest) staleNotes.latest.notesUrl = "/updates#release-0-1-8";
+    expect(refusal(staleNotes)).not.toBeNull();
+    const staleFiles = syntheticBuild(committed, "0.1.8", 1050);
+    if (staleFiles.latest) staleFiles.latest.version = "0.1.9+1050";
+    expect(refusal(staleFiles)).not.toBeNull();
   });
 
   it("accepts only those states", () => {
@@ -201,20 +225,42 @@ describe("the 0.1.7 release data", () => {
     const zeroBuild = signedStableBuild("0.1.8", 813);
     if (zeroBuild.latest) zeroBuild.latest.version = "0.1.8+0";
     expect(refusal(zeroBuild)).not.toBeNull();
-    // The public 0.1.8 ships only as a build; another public version is refused with a build, and so is
-    // the private 0.1.2+K QA baseline.
+    // A signed Stable build of the public 0.1.9, with the same checks as 0.1.8.
+    expect(refusal(signedStableBuild("0.1.9", 1050))).toBeNull();
+    const wrongPin019 = signedStableBuild("0.1.9", 1050);
+    for (const p of wrongPin019.latest?.platforms ?? []) p.pinnedUrl = `/download/0.1.9/${p.file}`;
+    expect(refusal(wrongPin019)).not.toBeNull();
+    const otherBuildFiles019 = signedStableBuild("0.1.9", 1050);
+    for (const p of otherBuildFiles019.latest?.platforms ?? []) {
+      p.file = p.file.replace("_build1050_", "_build1049_");
+      p.pinnedUrl = `/download/0.1.9+1050/${p.file}`;
+    }
+    expect(refusal(otherBuildFiles019)).not.toBeNull();
+    // A 0.1.9 build must link to the 0.1.9 Updates entry, not 0.1.8's.
+    const wrongNotes019 = signedStableBuild("0.1.9", 1050);
+    if (wrongNotes019.latest) wrongNotes019.latest.notesUrl = "/updates#release-0-1-8";
+    expect(refusal(wrongNotes019)).not.toBeNull();
+    // The public 0.1.8 and 0.1.9 ship only as builds; another public version is refused with a build, and
+    // so is the private 0.1.2+K QA baseline.
     expect(refusal(signedStable("0.1.8"))).not.toBeNull();
+    expect(refusal(signedStable("0.1.9"))).not.toBeNull();
     for (const [publicVersion, build] of [
       ["0.1.7", 813],
       ["0.1.7", 1],
-      ["0.1.9", 813],
+      ["0.1.10", 813],
       ["0.1.2", 814],
     ] as const) {
       expect(refusal(signedStableBuild(publicVersion, build))).not.toBeNull();
     }
-    // Relabelling a valid 0.1.8+N manifest as another version is refused too.
-    for (const other of ["0.1.7+813", "0.1.9+813", "0.1.2+814"]) {
-      const relabelled = signedStableBuild("0.1.8", 813);
+    // Relabelling a valid 0.1.8+N or 0.1.9+N manifest as another version is refused too.
+    for (const [from, other] of [
+      ["0.1.8", "0.1.7+813"],
+      ["0.1.8", "0.1.9+813"],
+      ["0.1.8", "0.1.2+814"],
+      ["0.1.9", "0.1.8+813"],
+      ["0.1.9", "0.1.10+813"],
+    ] as const) {
+      const relabelled = signedStableBuild(from, 813);
       if (!relabelled.latest) throw new Error("fixture has no release");
       relabelled.latest.version = other;
       for (const p of relabelled.latest.platforms) p.pinnedUrl = `/download/${other}/${p.file}`;
@@ -251,8 +297,8 @@ describe("the download page for 0.1.7", () => {
 
   it("keeps the 0.1.7 note off every other release", async () => {
     const container = await AstroContainer.create();
-    // 0.1.8 carries the same note (release-018-updates.test.ts).
-    for (const version of ["0.1.6", "0.1.9"]) {
+    // 0.1.8 and 0.1.9 carry the same note (release-018-updates.test.ts, release-019-updates.test.ts).
+    for (const version of ["0.1.6", "0.1.10"]) {
       const html = await container.renderToString(DownloadPlatforms, { props: { manifest: signedStable(version) } });
       expect(text(html)).not.toContain("0.1.6 can't update itself");
     }
