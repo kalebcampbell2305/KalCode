@@ -34,13 +34,13 @@ const FIXTURE_INITIALIZED_CONTENT: &str = "kalcode-account-e2e-initialized-v1\n"
 
 const NOW: i64 = 1_790_000_060;
 const ACCOUNT_ID: &str = "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11";
-const TEST_PUBLIC_KEY: &str = "qcP_oTajE0Eubrj1mKtnsYQWs9tx7_aSG-4F49undqE";
+const TEST_PUBLIC_KEY: &str = "tKkvjavy0V_KqYw2EKs0tgb8eKU0PZGL9Mt8tcmnz8U";
 const SESSION_TOKEN: &str = "kcs_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const POLL_TOKEN: &str = "ppppppppppppppppppppppppppppppppppppppppppp";
-const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVucmVzdHJpY3RlZCI6ZmFsc2UsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7ImNvbmN1cnJlbnRUaHJlYWRzIjoyLCJrYWx2b2ljZVJlcXVlc3RzUGVyTW9udGgiOjc1fSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.JPD0pSzGnCY4FEO0wpcQOQRHEsNtpVGwmYVQSR2vwVdgF52ldGAy9Yhbz8M9phFb98HFZXYXpqFBrFNPmRQ3CQ";
-const FREE_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVzZWQiOjc1LCJhbGxvd2FuY2UiOjc1LCJwZXJpb2RTdGFydCI6IjIwMjYtMDktMTBUMDg6MDA6MDAuMDAwWiIsInJlc2V0c0F0IjoiMjAyNi0xMC0xMFQwODowMDowMC4wMDBaIiwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDI1OTIwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.JM5k8bKsK8Cu8kNyPjsxjLFk7Aj_ZyriamrglxQFBSmAp_uMdk6c4mlECTMxARrFp9IOzAmy4XXN6D2gGboMDQ";
-const PRO_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoicHJvIiwidW5yZXN0cmljdGVkIjpmYWxzZSwiZmVhdHVyZXMiOlsicGVyc2lzdGVudEFnZW50cyIsIm11bHRpQWdlbnRXb3JrZmxvd3MiLCJzY2hlZHVsZWRBdXRvbWF0aW9ucyJdLCJsaW1pdHMiOnsiY29uY3VycmVudFRocmVhZHMiOjgsImthbHZvaWNlUmVxdWVzdHNQZXJNb250aCI6MTUwMH0sImlzc3VlZEF0IjoxNzkwMDAwMDAwLCJleHBpcmVzQXQiOjE3OTA2MDQ4MDAsImtleUlkIjoidGVzdC12ZWN0b3JzLTEifQ.nLynMjJct_fE39u6wdztmdbtsv80fNmJZNS730JT_NefIGbpS-utQkibc2HPmcVIGVxydUjqo4UdrW9wZSXKBw";
-const PRO_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoicHJvIiwidXNlZCI6NDEyLCJhbGxvd2FuY2UiOjE1MDAsInBlcmlvZFN0YXJ0IjoiMjAyNi0wOS0xMFQwODowMDowMC4wMDBaIiwicmVzZXRzQXQiOiIyMDI2LTEwLTEwVDA4OjAwOjAwLjAwMFoiLCJpc3N1ZWRBdCI6MTc5MDAwMDAwMCwiZXhwaXJlc0F0IjoxNzkwMjU5MjAwLCJrZXlJZCI6InRlc3QtdmVjdG9ycy0xIn0.8CeQaN7fIUrTbyqieB5XvRRAEGlQitpey_l7x1cacYLjfytfY-diJTGH6pxvwYdNv21oxBXwSPZAUXJJC8VVDg";
+const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVucmVzdHJpY3RlZCI6ZmFsc2UsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7ImthbHZvaWNlUmVxdWVzdHNQZXJNb250aCI6MjUsIm9wZW5UZXJtaW5hbHMiOjQsInBhcmFsbGVsQWdlbnRzIjoxLCJ3b3Jrc3BhY2VzIjoyLCJwcm92aWRlckFjY291bnRzIjoyfSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.VgCLvAbISk34hIwd_bp7GehEM6SykB_SHtE1WV9Rcroo_7-Ux_ZijCUt59TX95VtlgJwKLSOeZJn2VQSBTCrDA";
+const FREE_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVzZWQiOjI1LCJhbGxvd2FuY2UiOjI1LCJwZXJpb2RTdGFydCI6IjIwMjYtMDktMTBUMDg6MDA6MDAuMDAwWiIsInJlc2V0c0F0IjoiMjAyNi0xMC0xMFQwODowMDowMC4wMDBaIiwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDI1OTIwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.1T8bcRIw4m5git7Fhqxdfa3pequo49PoYKa6rwTEwYyRTGJzC_3QKs-3d8cMj6KlxIB0R9sa6UDNixJfpnsLDg";
+const PRO_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoicHJvIiwidW5yZXN0cmljdGVkIjpmYWxzZSwiZmVhdHVyZXMiOlsicGVyc2lzdGVudEFnZW50cyIsIm11bHRpQWdlbnRXb3JrZmxvd3MiLCJzY2hlZHVsZWRBdXRvbWF0aW9ucyJdLCJsaW1pdHMiOnsia2Fsdm9pY2VSZXF1ZXN0c1Blck1vbnRoIjoxNTAsIm9wZW5UZXJtaW5hbHMiOjEyLCJwYXJhbGxlbEFnZW50cyI6NCwid29ya3NwYWNlcyI6MTAsInByb3ZpZGVyQWNjb3VudHMiOjZ9LCJpc3N1ZWRBdCI6MTc5MDAwMDAwMCwiZXhwaXJlc0F0IjoxNzkwNjA0ODAwLCJrZXlJZCI6InRlc3QtdmVjdG9ycy0xIn0.KI3dA4y8rmZDVjIp_ouIcH4E5m7kkTphyMNMD5qATHtfYFW_7XX-lO5UZfe6TqotfNlmW0zG5cnSKfFZMUnxAw";
+const PRO_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoicHJvIiwidXNlZCI6NDEsImFsbG93YW5jZSI6MTUwLCJwZXJpb2RTdGFydCI6IjIwMjYtMDktMTBUMDg6MDA6MDAuMDAwWiIsInJlc2V0c0F0IjoiMjAyNi0xMC0xMFQwODowMDowMC4wMDBaIiwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDI1OTIwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.BoYPdWR9NPUwEaqaRVD8fYOhb5y1eJHuB1H6tngtp0xXCQhqFhSS4BeKCpXjk0pT_oeDgVFC26oeMy-M8sKpCA";
 
 const PRODUCTION_SENTINELS: &[&str] = &[
     "kalcode.db",
@@ -484,9 +484,9 @@ impl AccountApi for E2eAccountApi {
     fn usage(&self, bearer: &str) -> Result<UsageResponse, ApiError> {
         Self::authorize(bearer)?;
         let (used, allowance, receipt) = if self.kalvoice_under_limit {
-            (412, 1500, PRO_USAGE_RECEIPT)
+            (41, 150, PRO_USAGE_RECEIPT)
         } else {
-            (75, 75, FREE_USAGE_RECEIPT)
+            (25, 25, FREE_USAGE_RECEIPT)
         };
         Ok(UsageResponse {
             usage: AccountUsageSnapshot {
@@ -547,7 +547,7 @@ mod tests {
         assert_eq!(active.phase, AccountPhase::Ready);
         assert_eq!(active.tier, Some(AccountTier::Free));
         let old_lease = runtime.acquire_active_lease().expect("active lease");
-        assert_eq!(runtime.usage().expect("signed usage").used, 75);
+        assert_eq!(runtime.usage().expect("signed usage").used, 25);
 
         assert_eq!(
             runtime.logout().expect("logout").phase,
@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(snapshot.phase, AccountPhase::Ready);
         assert_eq!(snapshot.tier, Some(AccountTier::Free));
         assert!(runtime.acquire_active_lease().is_ok());
-        assert_eq!(runtime.usage().expect("signed usage").used, 75);
+        assert_eq!(runtime.usage().expect("signed usage").used, 25);
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(snapshot.phase, AccountPhase::Ready);
         assert_eq!(snapshot.tier, Some(AccountTier::Pro));
         assert!(runtime.acquire_active_lease().is_ok());
-        assert_eq!(runtime.usage().expect("signed usage").used, 412);
-        assert_eq!(runtime.usage().expect("signed usage").allowance, Some(1500));
+        assert_eq!(runtime.usage().expect("signed usage").used, 41);
+        assert_eq!(runtime.usage().expect("signed usage").allowance, Some(150));
     }
 }

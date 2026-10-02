@@ -110,6 +110,7 @@ it.each([
       <PaneTerminal
         channel={channel}
         threadId="thread"
+        instanceId="replay-instance"
         providerId="codex"
         providerAccountId={null}
         status="idle"
@@ -162,6 +163,7 @@ it.each(["shell", "provider"])("ignores a late %s replay completion after detach
       <PaneTerminal
         channel={channel}
         threadId="thread"
+        instanceId="replay-instance-2"
         providerId="codex"
         providerAccountId={null}
         status="idle"

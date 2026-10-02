@@ -298,6 +298,7 @@ impl InteractiveCliProvider {
                         mode: config.permission_mode,
                         workspace: &cwd,
                         model: config.model.as_deref(),
+                        effort: config.effort.as_deref(),
                         resume_session_id: config.resume_session_id.as_deref(),
                         hook_program: &self.config.hook_program,
                         hook_prefix_args: &self.config.hook_prefix_args,

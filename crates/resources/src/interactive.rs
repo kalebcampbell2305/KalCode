@@ -185,10 +185,23 @@ mod tests {
         let gate = InteractivePriority::default();
         let span = gate.begin();
         assert!(gate.active());
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::sync_channel(1);
         let waiter = {
             let gate = gate.clone();
-            std::thread::spawn(move || gate.yield_to_interactive(Duration::from_secs(5), &never))
+            std::thread::spawn(move || {
+                let signalled = AtomicBool::new(false);
+                let signal_waiting = || {
+                    if !signalled.swap(true, Ordering::SeqCst) {
+                        waiting_tx.send(()).expect("signal waiting");
+                    }
+                    false
+                };
+                gate.yield_to_interactive(Duration::from_secs(5), &signal_waiting)
+            })
         };
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("waiter reached the measured wait");
         std::thread::sleep(Duration::from_millis(50));
         drop(span);
         let waited = waiter.join().expect("join");

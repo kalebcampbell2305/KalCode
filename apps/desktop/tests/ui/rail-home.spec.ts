@@ -245,6 +245,10 @@ test.describe("home", () => {
   });
 
   test("returning: greets by the Settings display name and summarises real state", async ({ page }) => {
+    // Exercise the local-calendar boundary in any browser timezone: relative fixture activity must
+    // still land in Today immediately after midnight.
+    const offsetMinutes = await page.evaluate(() => new Date(2026, 9, 2).getTimezoneOffset());
+    await page.clock.setFixedTime(new Date(Date.UTC(2026, 9, 2, 0, 10) + offsetMinutes * 60_000));
     await open(page, "home");
     await goHome(page);
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Kaleb");

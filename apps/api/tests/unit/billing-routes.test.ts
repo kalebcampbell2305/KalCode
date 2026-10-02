@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { billingPriceCatalog } from "../../worker/lib/billing-plans";
 import { billingService } from "../../worker/lib/billing-routes";
 import type { BillingStore } from "../../worker/lib/billing-store";
-import { hmacSha256Hex } from "../../worker/lib/crypto";
+import { hmacSha256Hex, sha256Base64Url } from "../../worker/lib/crypto";
 import type { StripeClient, StripeSubscriptionSnapshot } from "../../worker/lib/stripe";
 
 const NOW = new Date("2026-09-25T12:00:00.000Z");
@@ -10,6 +10,9 @@ const catalog = billingPriceCatalog({
   STRIPE_PRICE_PRO: "price_pro_123",
   STRIPE_PRICE_MAX: "price_max_456",
   STRIPE_PRICE_MAX_2X: "price_max2x_789",
+  STRIPE_PRICE_PRO_YEARLY: "price_pro_year_123",
+  STRIPE_PRICE_MAX_YEARLY: "price_max_year_456",
+  STRIPE_PRICE_MAX_2X_YEARLY: "price_max2x_year_789",
 });
 if (!catalog.ok) throw new Error("test catalog invalid");
 
@@ -157,6 +160,94 @@ describe("billing routes", () => {
     ]) {
       expect((await billing.checkout(post("/v1/billing/checkout", body), "acct_123")).status).toBe(400);
     }
+  });
+
+  it("chooses the monthly or yearly catalog price server-side from an optional interval", async () => {
+    const store = fakeStore();
+    const stripe = fakeStripe();
+    const billing = billingService({
+      checkoutEnabled: true,
+      store,
+      stripe,
+      catalog,
+      webhookSecret: "whsec_test",
+      now: () => NOW,
+    });
+    const cases = [
+      [{ tier: "pro", requestId: "interval_absent" }, "price_pro_123"],
+      [{ tier: "pro", requestId: "interval_month", interval: "month" }, "price_pro_123"],
+      [{ tier: "pro", requestId: "interval_year", interval: "year" }, "price_pro_year_123"],
+      [{ tier: "max", requestId: "interval_year", interval: "year" }, "price_max_year_456"],
+      [{ tier: "max2x", requestId: "interval_year", interval: "year" }, "price_max2x_year_789"],
+    ] as const;
+    for (const [index, [body, priceId]] of cases.entries()) {
+      expect((await billing.checkout(post("/v1/billing/checkout", body), "acct_123")).status).toBe(200);
+      expect(vi.mocked(stripe.createCheckout).mock.calls[index]?.[0].priceId).toBe(priceId);
+    }
+  });
+
+  it("rejects any interval other than exactly month or year before any billing effect", async () => {
+    const store = fakeStore();
+    const stripe = fakeStripe();
+    const billing = billingService({
+      checkoutEnabled: true,
+      store,
+      stripe,
+      catalog,
+      webhookSecret: "whsec_test",
+      now: () => NOW,
+    });
+    for (const interval of ["yearly", "annual", "Month", "YEAR", "", " year", null, 12, true, ["year"], { year: 1 }]) {
+      const response = await billing.checkout(
+        post("/v1/billing/checkout", { tier: "pro", requestId: "bad_interval", interval }),
+        "acct_123",
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "invalid_request" });
+    }
+    expect(
+      (
+        await billing.checkout(
+          post("/v1/billing/checkout", {
+            tier: "pro",
+            requestId: "client_price",
+            interval: "year",
+            priceId: "price_attacker",
+          }),
+          "acct_123",
+        )
+      ).status,
+    ).toBe(400);
+    expect(store.allowAction).not.toHaveBeenCalled();
+    expect(store.reserveCheckout).not.toHaveBeenCalled();
+    expect(stripe.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it("binds the reservation to the interval so one interval's checkout is never reused for the other", async () => {
+    const reserved = vi.fn(async ({ idempotencyKey }: { idempotencyKey: string; requestHash: string }) => ({
+      status: "reserved" as const,
+      idempotencyKey,
+    }));
+    const billing = billingService({
+      checkoutEnabled: true,
+      store: fakeStore({ reserveCheckout: reserved }),
+      stripe: fakeStripe(),
+      catalog,
+      webhookSecret: "whsec_test",
+      now: () => NOW,
+    });
+    for (const body of [
+      { tier: "pro", requestId: "same_request" },
+      { tier: "pro", requestId: "same_request", interval: "month" },
+      { tier: "pro", requestId: "same_request", interval: "year" },
+    ]) {
+      expect((await billing.checkout(post("/v1/billing/checkout", body), "acct_123")).status).toBe(200);
+    }
+    const [absent, month, year] = reserved.mock.calls.map(([input]) => input.requestHash);
+    // Absent and explicit "month" are the same operation; monthly hashes are unchanged.
+    expect(month).toBe(absent);
+    expect(absent).toBe(await sha256Base64Url("acct_123:pro:same_request"));
+    expect(year).not.toBe(month);
   });
 
   it("binds idempotency to the selected tier and sends existing subscribers to the portal", async () => {
@@ -331,6 +422,57 @@ describe("billing routes", () => {
       expect.any(String),
     );
     expect(store.releaseLease).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a yearly subscription to its tier with the grant following the year-out period end", async () => {
+    const apply = vi.fn(async (_snapshot: StripeSubscriptionSnapshot) => true);
+    const store = fakeStore({ applySubscription: apply });
+    const stripe = fakeStripe({
+      retrieveSubscription: vi.fn(async () => ({
+        id: "sub_12345678",
+        livemode: true,
+        customer: "cus_12345678",
+        status: "active",
+        items: {
+          data: [
+            {
+              quantity: 1,
+              price: { id: "price_max2x_year_789" },
+              current_period_start: 1_758_801_600, // 2025-09-25T12:00:00Z
+              current_period_end: 1_790_337_600, // 2026-09-25T12:00:00Z
+            },
+          ],
+        },
+      })),
+    });
+    const billing = billingService({
+      checkoutEnabled: true,
+      store,
+      stripe,
+      catalog,
+      webhookSecret: "whsec_test",
+      now: () => NOW,
+    });
+    const request = await signedWebhook({
+      id: "evt_yearly",
+      livemode: true,
+      type: "customer.subscription.created",
+      data: { object: { id: "sub_12345678" } },
+    });
+    expect((await billing.webhook(request)).status).toBe(200);
+    expect(apply).toHaveBeenCalledWith(
+      {
+        id: "sub_12345678",
+        customerId: "cus_12345678",
+        status: "active",
+        tier: "max2x",
+        periodStart: "2025-09-25T12:00:00.000Z",
+        periodEnd: "2026-09-25T12:00:00.000Z",
+      },
+      expect.objectContaining({ version: 1 }),
+      expect.any(String),
+    );
+    expect(store.revokeInvalidSubscription).not.toHaveBeenCalled();
   });
 
   it("retires every durable open-Checkout invalidation before completing the webhook", async () => {

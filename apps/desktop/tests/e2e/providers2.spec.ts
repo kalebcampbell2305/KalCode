@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
 import {
+  ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
   closeGracefully,
   EXE,
   launch,
@@ -100,6 +101,8 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
 
   try {
     const app = await launch(dataDir, {
+      // Two agents run at once: a verified Pro account (Free runs one coding agent at a time).
+      KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
       KALCODE_E2E_PICK_FOLDER: project,
       KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
       PATH: `${bin};${process.env.PATH ?? ""}`,

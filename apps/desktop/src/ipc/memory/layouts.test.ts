@@ -197,10 +197,14 @@ describe("pane layouts in the memory runtime", () => {
     await expect(client.layoutPresetDelete(preset.id)).rejects.toMatchObject({ code: "preset_not_found" });
   });
 
-  it("the pane system feature is available", async () => {
+  it("the pane system and provider terminals are available", async () => {
     const { client } = await setup();
     const { info } = await client.boot();
     expect(info.flags.features?.find((f) => f.id === "pane_system")).toMatchObject({
+      state: "available",
+      visible: true,
+    });
+    expect(info.flags.features?.find((f) => f.id === "provider_panes")).toMatchObject({
       state: "available",
       visible: true,
     });

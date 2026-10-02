@@ -127,7 +127,7 @@ All IPC types are defined in Rust and exported to TypeScript with `ts-rs` into
 | `shells_list` | — | `ShellOption[]` | detected at startup; ids and names only, never paths |
 | `terminal_list` | `{ workspaceId }` | `TerminalInfo[]` | tab order |
 | `terminals_running` | — | `TerminalInfo[]` | all workspaces (Dashboard) |
-| `terminal_create` | `{ workspaceId, shellId?, cols, rows }` | `TerminalInfo` | starts a detected shell in the workspace folder; at most 12 tabs per workspace |
+| `terminal_create` | `{ workspaceId, shellId?, cols, rows }` | `TerminalInfo` | starts a detected shell in the workspace folder; refused past the plan's open-terminal cap (a total across workspaces) |
 | `terminal_restart` | `{ terminalId, cols, rows }` | `TerminalInfo` | fresh shell in an ended tab |
 | `terminal_close` | `{ terminalId }` | — | ends the shell and programs started in it; forgets the tab |
 | `terminal_write` | `{ terminalId, data }` | — | UTF-8 input, at most 64 KB; queued, never blocks (sync, ordered) |

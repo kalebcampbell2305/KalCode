@@ -27,6 +27,7 @@ import {
 } from "react";
 import { useOptionalAccount } from "../account/AccountProvider.tsx";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
+import { OperationsClient } from "../ipc/operations.ts";
 import { DESKTOP_PLATFORM } from "../platform/keyboard.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
@@ -43,13 +44,17 @@ import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
 import { useOptionalThreadsIntent } from "../surfaces/threads/intent.tsx";
+import { combineAbortSignals } from "./abortSignals.ts";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import { composerForThread, setListeningComposer, waitForComposer } from "./composerRegistry.ts";
 import {
   type DictationTarget,
+  deliverToProviderThread,
+  dictationTargetForProviderThread,
   insertTranscript,
   reconnectTarget,
   resolveDictationTarget,
+  submitCapturedProviderTarget,
   targetIsAlive,
 } from "./dictation.ts";
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
@@ -64,12 +69,23 @@ import {
 } from "./readiness.ts";
 import { attachReportedFnInput } from "./reportedFnInput.ts";
 import {
+  executeOperationsVoiceChoice,
+  focusOperationsTarget,
+  handleOperationsVoice,
+  type OperationsVoiceResult,
+  type OperationsVoiceTarget,
+} from "./sceneOperations.ts";
+import { sceneReference } from "./sceneRouting.ts";
+import { sceneChoiceLabel, type VoiceSceneTarget } from "./sceneTargets.ts";
+import {
   CHOICE_TTL_MS,
   choiceIsLive,
   isChoiceAnswer,
+  normalizeSpoken,
   pickSpokenChoice,
   type SessionChoiceState,
 } from "./sessionChoice.ts";
+import { useVoiceScene } from "./useVoiceScene.ts";
 import {
   type ComposerDirectiveDeps,
   clearComposer,
@@ -85,6 +101,19 @@ export interface HistoryItem {
   text: string;
   input: KalVoiceInput;
   response: KalVoiceResponse | null;
+  /** Terminal result for a local scene action; never fabricated as a native response. */
+  localResult: DirectiveReport | null;
+}
+
+interface RequestLease {
+  requestId: string | null;
+  controller: AbortController;
+}
+
+interface RequestScope {
+  requestId: string;
+  signal: AbortSignal;
+  report: (result: DirectiveReport) => void;
 }
 
 export interface DownloadProgress {
@@ -143,6 +172,9 @@ interface KalVoiceValue {
   sessionChoice: SessionChoiceState | null;
   chooseSession: (threadId: string) => void;
   dismissSessionChoice: () => void;
+  sceneChoice: { question: string; choices: { id: string; label: string }[] } | null;
+  chooseScene: (id: string) => void;
+  dismissSceneChoice: () => void;
 }
 
 /** What the UI shows about the active push-to-talk destination (ids only). */
@@ -182,7 +214,10 @@ function useWindowWidth(): number {
 function targetKind(target: DictationTarget | null): TalkTarget {
   if (!target) return "none";
   // A thread composer is a text field to native routing (only High-confidence commands run).
-  return target.kind === "sink" ? "terminal" : "field";
+  if (target.kind === "sink") {
+    return target.sink.destination.kind === "provider_pane" ? "provider_pane" : "terminal";
+  }
+  return "field";
 }
 
 function dictationFailure(target: DictationTarget | null): string {
@@ -203,9 +238,10 @@ const PANE_WAIT_MS = 50;
 const PANE_WAIT_TRIES = 60;
 
 export function KalVoiceProvider({ children }: { children: ReactNode }) {
-  const { client } = useRuntime();
+  const { client, feed } = useRuntime();
   const { current, navigate } = useNavigation();
   const workspaces = useWorkspaces();
+  const scene = useVoiceScene();
   const permissions = usePermissions();
   const uiIntents = useUiIntents();
   const searchValue = useOptionalSearch();
@@ -235,13 +271,149 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [listeningComposer]);
   useEffect(() => () => setListeningComposer(null), []);
   const [sessionChoice, setSessionChoice] = useState<SessionChoiceState | null>(null);
+  const [sceneChoice, setSceneChoice] = useState<{
+    question: string;
+    requestId: string;
+    choices: { id: string; label: string; execute: (scope: RequestScope) => Promise<void> }[];
+    expiresAt: number;
+  } | null>(null);
+  const sceneChoiceRef = useRef(sceneChoice);
+  sceneChoiceRef.current = sceneChoice;
+  const activeRequest = useRef<RequestLease | null>(null);
+  /**
+   * Native request/talk IPC has no cancellation contract once invoked. Keep its lease exclusive
+   * until the promise settles; teardown may fence renderer work but cannot retract a native effect.
+   */
+  const nativeRequestInFlight = useRef<RequestLease | null>(null);
+  const reportNativeRequestBusy = useCallback(
+    () =>
+      toast.show({
+        tone: "info",
+        title: "KalVoice is already executing",
+        description: "It can't be cancelled now. Wait for its final result before starting another request.",
+      }),
+    [toast],
+  );
+  const abortActiveRequest = useCallback(
+    (markCancelled: boolean): boolean => {
+      if (markCancelled && nativeRequestInFlight.current) {
+        reportNativeRequestBusy();
+        return false;
+      }
+      const active = activeRequest.current;
+      if (!active) return true;
+      active.controller.abort();
+      activeRequest.current = null;
+      if (!markCancelled || !active.requestId) return true;
+      const localResult = { ok: false, message: "Cancelled." } satisfies DirectiveReport;
+      dispatch({ type: "action_result", requestId: active.requestId, ...localResult });
+      setHistory((items) =>
+        items.map((item) =>
+          item.requestId === active.requestId && item.response === null && item.localResult === null
+            ? { ...item, localResult }
+            : item,
+        ),
+      );
+      return true;
+    },
+    [reportNativeRequestBusy],
+  );
+  const beginRequest = useCallback(
+    (requestId: string | null): RequestLease | null => {
+      if (!abortActiveRequest(true)) return null;
+      const lease = { requestId, controller: new AbortController() };
+      activeRequest.current = lease;
+      return lease;
+    },
+    [abortActiveRequest],
+  );
+  const scopeFor = useCallback((lease: RequestLease, externalSignal?: AbortSignal): RequestScope | null => {
+    if (!lease.requestId) return null;
+    const signal = externalSignal
+      ? combineAbortSignals([lease.controller.signal, externalSignal])
+      : lease.controller.signal;
+    return {
+      requestId: lease.requestId,
+      signal,
+      report: (result) => {
+        if (signal.aborted || activeRequest.current !== lease) return;
+        dispatch({ type: "action_result", requestId: lease.requestId as string, ...result });
+        setHistory((items) =>
+          items.map((item) =>
+            item.requestId === lease.requestId && item.response === null ? { ...item, localResult: result } : item,
+          ),
+        );
+      },
+    };
+  }, []);
+  const lastOperation = useRef<{ target: OperationsVoiceTarget; expiresAt: number } | null>(null);
+  const lastSceneTarget = useRef<{ target: VoiceSceneTarget; expiresAt: number } | null>(null);
+  const lastCompletedThread = useRef<{ threadId: string; at: number } | null>(null);
+  const lastLifecycle = useRef<{
+    targetKind: "thread" | "operation";
+    targetId: string;
+    workspaceId?: string;
+    expiresAt: number;
+  } | null>(null);
+  const sceneLifetime = useRef(new AbortController());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client changes invalidate every pending scene action.
+  useEffect(() => {
+    sceneLifetime.current = new AbortController();
+    return () => {
+      // This only prevents renderer work after teardown; native talk may still finish its effect.
+      abortActiveRequest(false);
+      sceneLifetime.current.abort();
+      sceneChoiceRef.current = null;
+      lastSceneTarget.current = null;
+      lastOperation.current = null;
+      lastCompletedThread.current = null;
+      lastLifecycle.current = null;
+    };
+  }, [client, abortActiveRequest]);
+  const operationsClient = useMemo(
+    () => new OperationsClient((command, args) => client.transport.invoke(command, args)),
+    [client],
+  );
   const choiceRef = useRef(sessionChoice);
   choiceRef.current = sessionChoice;
+  const [contextClient, setContextClient] = useState(client);
+  if (contextClient !== client) {
+    abortActiveRequest(false);
+    setContextClient(client);
+    setSceneChoice(null);
+    setSessionChoice(null);
+    sceneChoiceRef.current = null;
+    choiceRef.current = null;
+    lastSceneTarget.current = null;
+    lastOperation.current = null;
+    lastCompletedThread.current = null;
+    lastLifecycle.current = null;
+  }
   const choiceId = useRef(0);
+  const launchRetry = useRef<((text: string, workspaceId: string, label: string) => Promise<void>) | null>(null);
   /** For "Type it instead": where the words would have gone and the page before a navigation. */
   const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: Destination | null } | null>(null);
   const statusRef = useRef({ status, error: statusError });
   statusRef.current = { status, error: statusError };
+  useEffect(() => {
+    lastCompletedThread.current = null;
+    lastLifecycle.current = null;
+    if (!feed) return;
+    const mountedAt = Date.now();
+    let highWater = feed.getSnapshot().events[0]?.seq ?? 0;
+    return feed.subscribe(() => {
+      const events = feed.getSnapshot().events;
+      const fresh = events.filter((event) => event.seq > highWater && Date.parse(event.occurredAt) >= mountedAt);
+      highWater = Math.max(highWater, events[0]?.seq ?? 0);
+      const completion = fresh.find(
+        (event) =>
+          event.type === "thread.completed" ||
+          (event.type === "agent.turn_completed" && event.payload.ok && !event.payload.interrupted),
+      );
+      if (!completion || (completion.type !== "thread.completed" && completion.type !== "agent.turn_completed")) return;
+      lastCompletedThread.current = { threadId: completion.payload.threadId, at: Date.parse(completion.occurredAt) };
+    });
+  }, [feed]);
   useEffect(() => {
     if (DESKTOP_PLATFORM !== "windows" || !status?.preferences.talkEnabled) return;
     return attachReportedFnInput(
@@ -335,11 +507,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy });
   surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy };
 
-  const report = useCallback((result: DirectiveReport) => dispatch({ type: "action_result", ...result }), []);
   /** Composer directives act on a thread's own message box, which lives in Threads. */
   const composerDeps = useCallback(
-    (): ComposerDirectiveDeps => ({
+    (scope?: RequestScope): ComposerDirectiveDeps => ({
       openThread: (threadId) => {
+        if (scope?.signal.aborted) return;
         if (currentRef.current === "threads" && composerForThread(threadId)?.handle.element()?.isConnected) return;
         const { threadsIntent: threads, uiIntents: intents } = surfaces.current;
         if (threads) {
@@ -349,20 +521,23 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           void intents.focus({ kind: "thread", threadId });
         }
       },
-      report,
+      report: (result) => scope?.report(result),
+      signal: scope?.signal,
     }),
-    [navigate, report],
+    [navigate],
   );
 
   const runDirective = useCallback(
-    (directive: UiDirective | null, origin: { target: DictationTarget | null } | null = null) => {
+    (directive: UiDirective | null, scope: RequestScope, origin: { target: DictationTarget | null } | null = null) => {
+      if (scope.signal.aborted) return;
       const { workspaces, permissions, toast, uiIntents: intents, threadsIntent: threads } = surfaces.current;
-      // Pane layout commands (Z7-W1) run on the Code canvas; they wait for it when Code isn't on
-      // screen yet. Layout only: nothing starts, stops or closes a process.
+      // Pane commands run on the Code canvas and wait for its registered handler when Code is opening.
       const pane = (command: PaneCommand) => {
+        if (scope.signal.aborted) return;
         navigate("code");
         const deliver = () => {
-          const result = dispatchPaneCommand(command);
+          if (scope.signal.aborted) return;
+          const result = dispatchPaneCommand(command, { signal: scope.signal });
           if (result.message) {
             toast.show({ tone: result.handled ? "info" : "danger", title: "Panes", description: result.message });
           }
@@ -374,41 +549,67 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         // Code is opening: run the command once its canvas is up, so its result can be shown.
         let tries = 0;
         const timer = setInterval(() => {
+          if (scope.signal.aborted) {
+            clearInterval(timer);
+            return;
+          }
           if (paneCanvasListening()) {
             clearInterval(timer);
             deliver();
           } else if (++tries >= PANE_WAIT_TRIES) {
             clearInterval(timer);
-            dispatchPaneCommand(command, { queue: true });
+            dispatchPaneCommand(command, { queue: true, signal: scope.signal });
           }
         }, PANE_WAIT_MS);
       };
       const scopedPane = (workspaceId: string, command: PaneCommand) => {
+        if (scope.signal.aborted) return;
         void activateAndDispatchPaneCommand(
           workspaceId,
           command,
           workspaces.activate,
           () => navigate("code"),
           (result) => {
+            if (scope.signal.aborted) return;
             if (result.message) {
               toast.show({ tone: result.handled ? "info" : "danger", title: "Panes", description: result.message });
             }
           },
+          scope.signal,
         );
       };
       switch (directive?.kind) {
+        case "choose_launch_account":
+          setSessionChoice(null);
+          setSceneChoice({
+            question: directive.question,
+            requestId: scope.requestId,
+            expiresAt: Date.now() + CHOICE_TTL_MS,
+            choices: directive.choices.map((choice) => ({
+              id: choice.accountId,
+              label: choice.label,
+              execute: async (choiceScope) => {
+                if (choiceScope.signal.aborted) return;
+                if (!launchRetry.current) return;
+                await launchRetry.current(choice.retryText, directive.workspaceId, choice.label);
+              },
+            })),
+          });
+          break;
         case "navigate":
           navigate(directive.surface);
           break;
         case "open_workspace":
           void workspaces.activate(directive.workspaceId).then((activated) => {
-            if (activated) navigate("code");
+            if (!scope.signal.aborted && activated) navigate("code");
           });
           break;
         case "open_terminal": {
           const { workspaceId, terminalId } = directive;
           navigate("code");
-          void workspaces.refresh().then(() => workspaces.selectTerminal(terminalId, true, workspaceId));
+          void workspaces.refresh().then(() => {
+            if (!scope.signal.aborted) workspaces.selectTerminal(terminalId, true, workspaceId);
+          });
           break;
         }
         case "open_thread":
@@ -456,20 +657,45 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           navigate("threads");
           break;
         case "submit_composer":
-          if (origin?.target?.kind === "sink") report({ ok: false, message: TERMINAL_SUBMIT_REFUSED });
-          else void submitComposer(composerDeps(), directive.threadId);
+          if (origin?.target?.kind === "sink" && origin.target.sink.destination.kind === "provider_pane") {
+            const captured = origin.target;
+            const capturedThreadId = origin.target.sink.destination.threadId;
+            if (!targetIsAlive(captured) || capturedThreadId !== directive.threadId) {
+              scope.report({ ok: false, message: "That agent is no longer the captured target. Nothing was sent." });
+              break;
+            }
+            void submitCapturedProviderTarget(captured, { signal: scope.signal }).then(
+              () => scope.report({ ok: true, message: `Sent to ${captured.sink.label}.` }),
+              (error) => scope.report({ ok: false, message: toKalCodeError(error).message }),
+            );
+          } else if (origin?.target?.kind === "sink") scope.report({ ok: false, message: TERMINAL_SUBMIT_REFUSED });
+          else void submitComposer(composerDeps(scope), directive.threadId);
           break;
         case "clear_composer":
-          if (origin?.target?.kind === "sink") report({ ok: false, message: TERMINAL_CLEAR_REFUSED });
-          else clearComposer(composerDeps(), directive.threadId);
+          if (origin?.target?.kind === "sink") scope.report({ ok: false, message: TERMINAL_CLEAR_REFUSED });
+          else clearComposer(composerDeps(scope), directive.threadId);
           break;
         case "compose_in_thread":
-          // No sink/terminal guard: it names its thread explicitly and never touches the focused target.
-          void composeInThread(composerDeps(), directive);
+          // A mounted provider terminal has the same immutable thread identity as its composer.
+          // Preserve its native input-readiness checks; never fall back after a refused delivery.
+          if (dictationTargetForProviderThread(directive.threadId)) {
+            void deliverToProviderThread(directive.threadId, directive.text, {
+              mode: directive.submit ? "send" : "insert",
+              signal: scope.signal,
+            }).then(
+              () =>
+                scope.report({
+                  ok: true,
+                  message: directive.submit ? "Sent to the agent." : "Inserted in the agent terminal.",
+                }),
+              (error) => scope.report({ ok: false, message: toKalCodeError(error).message }),
+            );
+          } else void composeInThread(composerDeps(scope), directive);
           break;
         case "focus_previous":
           void intents.focusPrevious().then((focused) => {
-            if (!focused) report({ ok: false, message: "There's no earlier thread or terminal to go back to." });
+            if (!scope.signal.aborted && !focused)
+              scope.report({ ok: false, message: "There's no earlier thread or terminal to go back to." });
           });
           break;
         case "choose_session":
@@ -495,19 +721,40 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           break;
       }
     },
-    [navigate, report, composerDeps],
+    [navigate, composerDeps],
   );
 
   const applyResponse = useCallback(
-    (response: KalVoiceResponse, origin: { target: DictationTarget | null } | null = null) => {
+    (
+      response: KalVoiceResponse,
+      origin: { target: DictationTarget | null } | null = null,
+      suppliedScope?: RequestScope,
+    ): boolean => {
+      const active = activeRequest.current;
+      const scope =
+        suppliedScope ??
+        (active?.requestId === response.requestId && !active.controller.signal.aborted ? scopeFor(active) : null);
+      if (!scope || scope.requestId !== response.requestId || scope.signal.aborted) return false;
+      if (response.directive && response.directive.kind !== "choose_session") {
+        lastLifecycle.current = null;
+        lastOperation.current = null;
+        if (response.directive.kind === "open_thread" || response.directive.kind === "compose_in_thread") {
+          const threadId = response.directive.threadId;
+          const target = scene
+            .snapshot()
+            .find((candidate) => candidate.kind === "thread" && candidate.entityId === threadId);
+          lastSceneTarget.current = target ? { target, expiresAt: Date.now() + 120_000 } : null;
+        } else if (response.directive.kind !== "submit_composer") lastSceneTarget.current = null;
+      }
       dispatch({ type: "response", response });
       setHistory((items) =>
-        items.map((item) => (item.requestId === response.requestId ? { ...item, response } : item)),
+        items.map((item) => (item.requestId === response.requestId ? { ...item, response, localResult: null } : item)),
       );
       setStatus((s) => (s ? { ...s, usage: response.usage } : s));
-      runDirective(response.directive, origin);
+      runDirective(response.directive, scope, origin);
+      return true;
     },
-    [runDirective],
+    [runDirective, scene, scopeFor],
   );
 
   // A clarification waits 30 s for an answer, then goes away on its own.
@@ -521,83 +768,413 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [sessionChoice]);
 
   const dismissSessionChoice = useCallback(() => setSessionChoice(null), []);
+
+  const dismissSceneChoice = useCallback(() => {
+    sceneChoiceRef.current = null;
+    setSceneChoice(null);
+  }, []);
+  const chooseScene = useCallback(
+    async (id: string, suppliedScope?: RequestScope): Promise<void> => {
+      const pending = sceneChoiceRef.current;
+      if (!pending || pending.expiresAt <= Date.now()) return;
+      const choice = pending.choices.find((candidate) => candidate.id === id);
+      if (!choice) return;
+      let active = activeRequest.current;
+      let scope =
+        suppliedScope ??
+        (active?.requestId === pending.requestId && !active.controller.signal.aborted ? scopeFor(active) : null);
+      // A PTT session invalidates the older request lease, but a still-visible, unexpired chooser
+      // remains an explicit user action. Give a click a fresh lease; spoken answers already supply
+      // the current utterance's scope through routeScene.
+      if (!scope && !suppliedScope) {
+        active = beginRequest(pending.requestId);
+        if (!active) return;
+        scope = scopeFor(active);
+        dispatch({ type: "submitted", requestId: pending.requestId });
+      }
+      if (!scope || scope.signal.aborted) return;
+      dismissSceneChoice();
+      try {
+        await choice.execute(scope);
+      } catch (error) {
+        scope.report({ ok: false, message: toKalCodeError(error).message });
+      }
+    },
+    [beginRequest, dismissSceneChoice, scopeFor],
+  );
+  useEffect(() => {
+    if (!sceneChoice) return;
+    const timer = setTimeout(dismissSceneChoice, Math.max(0, sceneChoice.expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [sceneChoice, dismissSceneChoice]);
+
+  const routeScene = useCallback(
+    async (text: string, requestScope: RequestScope): Promise<boolean> => {
+      if (requestScope.signal.aborted) return true;
+      const signal = combineAbortSignals([requestScope.signal, sceneLifetime.current.signal]);
+      const scope: RequestScope = {
+        ...requestScope,
+        signal,
+        report: (result) => {
+          if (!signal.aborted) requestScope.report(result);
+        },
+      };
+      const report = scope.report;
+      const spoken = normalizeSpoken(text);
+      const callback = lastLifecycle.current;
+      const callbackFollowup =
+        /^(?:(?:open|show|focus) (?:it|that)|what did (?:it|that|the agent) do|what happened)$/.test(spoken);
+      const liveCallback = callback && callback.expiresAt > Date.now() && callbackFollowup ? callback : null;
+      if (liveCallback?.targetKind === "operation") {
+        const detail = await operationsClient.detail(liveCallback.targetId).catch(() => null);
+        if (signal.aborted) return true;
+        if (!detail) {
+          lastLifecycle.current = null;
+          lastOperation.current = null;
+          report({ ok: false, message: "That run is no longer available." });
+          return true;
+        }
+        const { run } = detail;
+        if (
+          run.id !== liveCallback.targetId ||
+          (liveCallback.workspaceId && liveCallback.workspaceId !== run.spec.workspaceId)
+        ) {
+          lastLifecycle.current = null;
+          lastOperation.current = null;
+          report({ ok: false, message: "That run is no longer available." });
+          return true;
+        }
+        lastOperation.current = {
+          target: { kind: "run", tab: "runs", runId: run.id, workspaceId: run.spec.workspaceId, label: run.spec.name },
+          expiresAt: Date.now() + 120_000,
+        };
+        lastSceneTarget.current = null;
+        if (/^(?:what did|what happened)/.test(spoken)) {
+          report({ ok: true, message: `${run.spec.name}: ${run.status.replaceAll("_", " ")}.` });
+          return true;
+        }
+      }
+      const completed = lastCompletedThread.current;
+      const recentScene = lastSceneTarget.current;
+      const summaryTarget =
+        recentScene && recentScene.expiresAt > Date.now() && recentScene.target.kind === "thread"
+          ? recentScene.target.entityId
+          : null;
+      const completionQuery = /^(?:what|which (?:agent|terminal)) just (?:finished|completed)$/.test(spoken);
+      const completionFollowup =
+        /^(?:open|show|focus) (?:it|that)$/.test(spoken) &&
+        (!summaryTarget || liveCallback?.targetKind === "thread") &&
+        !lastOperation.current &&
+        statusRef.current.status?.preferences.voiceReplies;
+      const recentCompletion = completed && Date.now() - completed.at < 120_000 ? completed.threadId : null;
+      const summaryQuery = /^(?:what did (?:it|that|the agent) do|what happened)$/.test(spoken);
+      const threadToDescribe =
+        liveCallback?.targetKind === "thread"
+          ? liveCallback.targetId
+          : completionQuery || completionFollowup
+            ? recentCompletion
+            : summaryQuery
+              ? (summaryTarget ?? recentCompletion)
+              : null;
+      if (threadToDescribe && typeof client.getThread === "function") {
+        const thread = await client.getThread(threadToDescribe).catch(() => null);
+        if (signal.aborted) return true;
+        if (!thread || thread.id !== threadToDescribe || thread.archivedAt) {
+          lastLifecycle.current = null;
+          lastCompletedThread.current = null;
+          lastSceneTarget.current = null;
+          report({ ok: false, message: "That agent is no longer available." });
+          return true;
+        }
+        if (liveCallback?.workspaceId && thread.workspaceId !== liveCallback.workspaceId) {
+          lastLifecycle.current = null;
+          lastSceneTarget.current = null;
+          report({ ok: false, message: "That agent is no longer available." });
+          return true;
+        }
+        const target: VoiceSceneTarget = {
+          kind: "thread",
+          entityId: thread.id,
+          title: thread.name,
+          workspaceId: thread.workspaceId,
+          providerId: thread.providerId,
+          status: thread.status,
+        };
+        lastSceneTarget.current = { target, expiresAt: Date.now() + 120_000 };
+        lastOperation.current = null;
+        if (completionFollowup) {
+          const opened = await scene.focus(target, signal);
+          if (!opened) {
+            lastLifecycle.current = null;
+            lastCompletedThread.current = null;
+            lastSceneTarget.current = null;
+          }
+          if (!signal.aborted)
+            report({
+              ok: opened,
+              message: opened ? `${thread.name} opened.` : "That agent is no longer available.",
+            });
+        } else {
+          const changed = thread.filesChanged === null ? "" : ` ${thread.filesChanged} files changed.`;
+          const activity = thread.currentActivity ? ` Last activity: ${thread.currentActivity.slice(0, 180)}.` : "";
+          report({
+            ok: true,
+            message: `${thread.name}${completionQuery ? " finished its task" : ` is ${thread.status.replaceAll("_", " ")}`}.${changed}${activity}`,
+          });
+        }
+        return true;
+      }
+      const pending = sceneChoiceRef.current;
+      if (pending && pending.expiresAt > Date.now()) {
+        const answer = normalizeSpoken(text).replace(/^(?:the |number )/, "");
+        const ordinal = ["one", "two", "three", "four", "five", "six"].indexOf(answer);
+        const matches = pending.choices.filter(
+          (choice, index) =>
+            normalizeSpoken(choice.label) === answer ||
+            normalizeSpoken(choice.label.split(/\s+[—–]\s+/)[0] ?? "") === answer ||
+            String(index + 1) === answer ||
+            ordinal === index,
+        );
+        const matched = matches.length === 1 ? matches[0] : undefined;
+        if (matched) {
+          await chooseScene(matched.id, scope);
+          return true;
+        }
+        dismissSceneChoice();
+      }
+      const deps = {
+        client: operationsClient,
+        navigate: () => navigate("operations"),
+        focus: (target: OperationsVoiceTarget) => focusOperationsTarget(target, { signal }),
+        signal,
+      };
+      const show = (result: OperationsVoiceResult, resultScope: RequestScope = scope) => {
+        if (!result.handled || resultScope.signal.aborted) return;
+        if (result.target) {
+          lastLifecycle.current = null;
+          lastOperation.current = { target: result.target, expiresAt: Date.now() + 120_000 };
+          lastSceneTarget.current = null;
+        }
+        resultScope.report({ ok: result.status !== "failed", message: result.message });
+        if (result.choices?.length) {
+          setSessionChoice(null);
+          setSceneChoice({
+            question: result.message,
+            requestId: resultScope.requestId,
+            expiresAt: Date.now() + CHOICE_TTL_MS,
+            choices: result.choices.map((choice) => ({
+              id: choice.id,
+              label: choice.label,
+              execute: async (choiceScope) => {
+                const choiceDeps = { ...deps, signal: choiceScope.signal };
+                show(await executeOperationsVoiceChoice(choice, choiceDeps), choiceScope);
+              },
+            })),
+          });
+        }
+      };
+      const previous = lastOperation.current;
+      const result = await handleOperationsVoice(
+        text,
+        deps,
+        previous && previous.expiresAt > Date.now() ? previous.target : null,
+      );
+      show(result);
+      if (result.handled || signal.aborted) return true;
+      const reference = sceneReference(text);
+      if (!reference) return false;
+      const recent = lastSceneTarget.current;
+      const resolution = await scene.resolve(reference, {
+        lastTarget: recent && recent.expiresAt > Date.now() ? recent.target : null,
+      });
+      if (signal.aborted) return true;
+      const focusTarget = async (target: VoiceSceneTarget, focusScope: RequestScope = scope) => {
+        if (focusScope.signal.aborted) return;
+        lastLifecycle.current = null;
+        const focused = await scene.focus(target, focusScope.signal);
+        if (focusScope.signal.aborted) return;
+        if (focused) {
+          lastSceneTarget.current = { target, expiresAt: Date.now() + 120_000 };
+          lastOperation.current = null;
+        } else {
+          lastSceneTarget.current = null;
+          lastOperation.current = null;
+        }
+        focusScope.report({
+          ok: focused,
+          message: focused
+            ? `${target.title} opened.`
+            : `I couldn't open ${target.title}; it may no longer be available.`,
+        });
+      };
+      if (resolution.kind === "resolved") {
+        await focusTarget(resolution.target);
+        return true;
+      }
+      if (resolution.kind === "ambiguous") {
+        setSessionChoice(null);
+        setSceneChoice({
+          question: "Which one?",
+          requestId: scope.requestId,
+          expiresAt: Date.now() + CHOICE_TTL_MS,
+          choices: resolution.choices.map((target) => ({
+            id: `${target.kind}:${target.entityId}`,
+            label: sceneChoiceLabel(target),
+            execute: (choiceScope) => focusTarget(target, choiceScope),
+          })),
+        });
+        scope.report({ ok: true, message: `I found ${resolution.choices.length} matches. Which one?` });
+        return true;
+      }
+      return false;
+    },
+    [client, operationsClient, navigate, chooseScene, dismissSceneChoice, scene],
+  );
   /** Follows up on the session the person picked (a click or its spoken name). */
   const followUp = useCallback(
-    (threadId: string): boolean => {
+    async (threadId: string, suppliedScope?: RequestScope): Promise<boolean> => {
       const pending = choiceRef.current;
       if (!choiceIsLive(pending)) return false;
       const choice = pending.choices.find((candidate) => candidate.threadId === threadId);
       if (!choice) return false;
+      let selectedScope = suppliedScope;
+      if (!selectedScope) {
+        const requestId = crypto.randomUUID();
+        const lease = beginRequest(requestId);
+        if (!lease) return false;
+        selectedScope = scopeFor(lease) ?? undefined;
+        if (!selectedScope) return false;
+        dispatch({ type: "submitted", requestId });
+      }
+      const scope = selectedScope;
       choiceRef.current = null;
       setSessionChoice(null);
-      void followUpChoice(
-        {
-          ...composerDeps(),
-          focusThread: (id) => void surfaces.current.uiIntents.focus({ kind: "thread", threadId: id }),
-        },
-        choice,
-        pending.followUp,
-      );
+      try {
+        await followUpChoice(
+          {
+            ...composerDeps(scope),
+            focusThread: (id) => {
+              if (!scope.signal.aborted) void surfaces.current.uiIntents.focus({ kind: "thread", threadId: id });
+            },
+          },
+          choice,
+          pending.followUp,
+        );
+      } catch (error) {
+        scope.report({ ok: false, message: toKalCodeError(error).message });
+      }
       return true;
     },
-    [composerDeps],
+    [beginRequest, composerDeps, scopeFor],
   );
   const chooseSession = useCallback(
     (threadId: string) => {
-      followUp(threadId);
+      void followUp(threadId);
     },
     [followUp],
   );
 
   const submit = useCallback(
-    async (text: string, input: KalVoiceInput = "text") => {
+    async (text: string, input: KalVoiceInput = "text", workspaceIdOverride?: string, displayText?: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       const requestId = crypto.randomUUID();
-      // KalTidy runs in this window: it has no native intent and uses no KalVoice Request.
-      const tidy = parseKalTidyCommand(trimmed);
-      if (tidy) {
-        dispatch({ type: "submitted", requestId });
-        await runKalTidyCommand(surfaces.current.kalTidy, tidy, report);
-        return;
-      }
-      setHistory((items) => [{ requestId, text: trimmed, input, response: null }, ...items].slice(0, 20));
+      const lease = beginRequest(requestId);
+      if (!lease) return;
+      const scope = scopeFor(lease);
+      if (!scope) return;
+      setHistory((items) =>
+        [{ requestId, text: displayText ?? trimmed, input, response: null, localResult: null }, ...items].slice(0, 20),
+      );
       dispatch({ type: "submitted", requestId });
       try {
-        applyResponse(
-          await client.kalvoiceRequest({
+        const tidy = parseKalTidyCommand(trimmed);
+        if (tidy) {
+          nativeRequestInFlight.current = lease;
+          try {
+            await runKalTidyCommand(surfaces.current.kalTidy, tidy, scope.report);
+          } finally {
+            if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+          }
+          return;
+        }
+        if (await routeScene(trimmed, scope)) return;
+        if (scope.signal.aborted || activeRequest.current !== lease) return;
+        nativeRequestInFlight.current = lease;
+        let response: Awaited<ReturnType<typeof client.kalvoiceRequest>>;
+        try {
+          response = await client.kalvoiceRequest({
             requestId,
             text: trimmed,
             input,
-            workspaceId: workspaces.active?.id ?? null,
-            threadId: getSelectedThread()?.threadId ?? null,
-          }),
-        );
+            workspaceId: workspaceIdOverride ?? workspaces.active?.id ?? null,
+            threadId:
+              lastSceneTarget.current &&
+              lastSceneTarget.current.expiresAt > Date.now() &&
+              lastSceneTarget.current.target.kind === "thread"
+                ? lastSceneTarget.current.target.entityId
+                : (getSelectedThread()?.threadId ?? null),
+          });
+        } finally {
+          if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+        }
+        if (scope.signal.aborted || activeRequest.current !== lease) return;
+        applyResponse(response, null, scope);
       } catch (error) {
+        if (scope.signal.aborted || activeRequest.current !== lease) return;
         const e = toKalCodeError(error);
         dispatch({ type: "request_error", requestId, message: e.message, code: e.code });
+        setHistory((items) =>
+          items.map((item) =>
+            item.requestId === requestId && item.response === null
+              ? { ...item, localResult: { ok: false, message: e.message } }
+              : item,
+          ),
+        );
       }
     },
-    [client, applyResponse, report, workspaces.active?.id],
+    [client, applyResponse, beginRequest, scopeFor, workspaces.active?.id, routeScene],
   );
+  launchRetry.current = (text, workspaceId, label) => submit(text, "text", workspaceId, label);
 
   /** One utterance: native routing decides command, dictation or request. */
   const talk = useCallback(
     async (session: DictationSession<DictationTarget>, text: string, durationMs: number) => {
       const started = performance.now();
-      const { sessionId, target, signal } = session;
+      const { sessionId, target, signal: sessionSignal } = session;
       const requestId = crypto.randomUUID();
+      const lease = beginRequest(requestId);
+      if (!lease) {
+        dictationSessions.current.finish(sessionId);
+        return;
+      }
+      const scope = scopeFor(lease, sessionSignal);
+      if (!scope) return;
+      const { signal } = scope;
       dispatch({ type: "submitted", requestId });
       const recordAction = () =>
         afterPaint(() => void client.kalvoiceLatencyRecord(performance.now() - started).catch(() => undefined));
       try {
+        // Explicit insertion has precedence over every navigation/action grammar. The remainder
+        // is the user's literal draft; even command-shaped words must never execute here.
+        const literal = /^\s*type\s+([\s\S]+)$/i.exec(text)?.[1];
+        if (literal !== undefined) {
+          if (!target || !targetIsAlive(target)) {
+            scope.report({ ok: false, message: "Focus a text box or terminal before dictating." });
+          } else {
+            const characters = await insertTranscript(target, literal, { signal, mode: "insert" });
+            if (!signal.aborted) dispatch({ type: "dictation_inserted", characters });
+          }
+          recordAction();
+          return;
+        }
         // An answer to "Which one?" is handled here: native keeps no conversation state. Only a
         // short answer or a choice form counts; anything else is a new request and drops the question.
         const pending = choiceRef.current;
         if (choiceIsLive(pending)) {
           const answer = isChoiceAnswer(text);
           const picked = answer ? pickSpokenChoice(text, pending.choices) : null;
-          if (picked && followUp(picked.threadId)) {
+          if (picked && (await followUp(picked.threadId, scope))) {
             recordAction();
             return;
           }
@@ -606,26 +1183,49 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             setSessionChoice(null);
           }
         }
-        // "Close all idle terminals": KalTidy is a UI action with no native intent. Only its exact
-        // phrases count (as sure as a native high-confidence command); anything else routes natively.
         const tidy = parseKalTidyCommand(text);
         if (tidy) {
-          await runKalTidyCommand(surfaces.current.kalTidy, tidy, report);
+          if (signal.aborted || activeRequest.current !== lease) return;
+          nativeRequestInFlight.current = lease;
+          try {
+            await runKalTidyCommand(surfaces.current.kalTidy, tidy, scope.report);
+          } finally {
+            if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+          }
           recordAction();
           return;
         }
+        if (await routeScene(text, scope)) {
+          recordAction();
+          return;
+        }
+        if (signal.aborted || activeRequest.current !== lease) return;
         const previous = currentRef.current;
-        const talked = await client.kalvoiceTalk({
-          requestId,
-          sessionId,
-          text,
-          target: targetKind(target),
-          durationMs,
-          workspaceId: workspaces.active?.id ?? null,
-          // The captured composer's thread wins over whatever Threads shows by now.
-          threadId:
-            target?.kind === "composer" ? target.composer.handle.threadId : (getSelectedThread()?.threadId ?? null),
-        });
+        nativeRequestInFlight.current = lease;
+        let talked: Awaited<ReturnType<typeof client.kalvoiceTalk>>;
+        try {
+          talked = await client.kalvoiceTalk({
+            requestId,
+            sessionId,
+            text,
+            target: targetKind(target),
+            durationMs,
+            workspaceId: workspaces.active?.id ?? null,
+            // The captured composer's thread wins over whatever Threads shows by now.
+            threadId:
+              target?.kind === "composer"
+                ? target.composer.handle.threadId
+                : target?.kind === "sink" && target.sink.destination.kind === "provider_pane"
+                  ? target.sink.destination.threadId
+                  : lastSceneTarget.current &&
+                      lastSceneTarget.current.expiresAt > Date.now() &&
+                      lastSceneTarget.current.target.kind === "thread"
+                    ? lastSceneTarget.current.target.entityId
+                    : (getSelectedThread()?.threadId ?? null),
+          });
+        } finally {
+          if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+        }
         if (signal.aborted) return;
         if (talked.route === "dictation") {
           if (target && targetIsAlive(target)) {
@@ -645,13 +1245,15 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         }
         const response = talked.response;
         if (!response) return;
-        setHistory((items) => [{ requestId, text, input: "voice" as const, response }, ...items].slice(0, 20));
+        setHistory((items) =>
+          [{ requestId, text, input: "voice" as const, response, localResult: null }, ...items].slice(0, 20),
+        );
         undo.current = { requestId, target, previous: response.directive?.kind === "navigate" ? previous : null };
         dispatch({
           type: "talked",
           talk: { requestId, text, route: talked.route, hadTarget: target !== null },
         });
-        applyResponse(response, { target });
+        applyResponse(response, { target }, scope);
         recordAction();
       } catch (error) {
         if (signal.aborted) return;
@@ -661,17 +1263,33 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         dictationSessions.current.finish(sessionId);
       }
     },
-    [client, applyResponse, followUp, report, workspaces.active?.id],
+    [client, applyResponse, beginRequest, followUp, scopeFor, workspaces.active?.id, routeScene],
   );
 
   const onSignal = useCallback(
     (signal: KalVoiceSignal) => {
       switch (signal.kind) {
+        case "lifecycle_callback":
+          lastLifecycle.current = {
+            targetKind: signal.targetKind,
+            targetId: signal.targetId,
+            ...(signal.workspaceId ? { workspaceId: signal.workspaceId } : {}),
+            expiresAt: Date.now() + 120_000,
+          };
+          lastSceneTarget.current = null;
+          lastOperation.current = null;
+          return;
         case "level":
           levelRef.current = signal.level;
           return;
         case "listening_started":
           levelRef.current = 0;
+          if (!beginRequest(null)) {
+            dictationSessions.current.abandonPendingCapture();
+            setDictationTarget(null);
+            void client.kalvoiceListenCancel().catch(() => undefined);
+            return;
+          }
           {
             const session = dictationSessions.current.open(signal.sessionId);
             setDictationTarget(session ? targetView(session.sessionId, session.target) : null);
@@ -709,6 +1327,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         }
         case "cancelled":
         case "listening_failed":
+          if (nativeRequestInFlight.current) return;
           levelRef.current = 0;
           if (signal.sessionId) dictationSessions.current.cancel(signal.sessionId);
           else dictationSessions.current.abandonPendingCapture();
@@ -767,7 +1386,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       }
       dispatch({ type: "signal", signal });
     },
-    [client, talk, applyResponse, refreshStatus, toast, status],
+    [client, talk, applyResponse, beginRequest, refreshStatus, toast, status],
   );
 
   const onSignalRef = useRef(onSignal);
@@ -871,6 +1490,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const cancel = useCallback(async () => {
     const now = stateRef.current;
     const activeSession = now.sessionId !== null && dictationSessions.current.has(now.sessionId);
+    if (!abortActiveRequest(true)) return;
     if (now.sessionId) dictationSessions.current.cancel(now.sessionId);
     if (now.sessionId) {
       setDictationTarget((current) => (current?.sessionId === now.sessionId ? null : current));
@@ -886,7 +1506,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         signal: { kind: "cancelled", sessionId: now.sessionId, mode: now.mode ?? "talk" },
       });
     }
-  }, [client]);
+  }, [client, abortActiveRequest]);
 
   // Escape stops listening (and discards the recording) from anywhere.
   useEffect(() => {
@@ -904,6 +1524,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [cancel]);
 
   const startListening = useCallback(async () => {
+    if (nativeRequestInFlight.current) {
+      reportNativeRequestBusy();
+      return;
+    }
     const capture = dictationSessions.current.captureFocusedTarget();
     const started = client.kalvoiceListenStart("talk");
     // A release can arrive before the microphone opens (a quick tap); stopListening waits for it.
@@ -917,9 +1541,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       setDictationTarget(null);
       // The native side reports why as a `listening_failed` signal.
     }
-  }, [client]);
+  }, [client, reportNativeRequestBusy]);
 
   const stopListening = useCallback(async () => {
+    if (nativeRequestInFlight.current) return;
     const pending = pendingStart.current;
     pendingStart.current = null;
     const id = stateRef.current.sessionId ?? (pending ? await pending : null);
@@ -955,7 +1580,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     }
     if (target.element instanceof HTMLElement) target.element.focus();
     try {
-      await insertTranscript(target, last.text);
+      await insertTranscript(target, last.text, { mode: "insert" });
     } catch {
       dispatch({ type: "dictation_blocked", message: dictationFailure(target) });
       return;
@@ -1128,6 +1753,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       sessionChoice,
       chooseSession,
       dismissSessionChoice,
+      sceneChoice,
+      chooseScene,
+      dismissSceneChoice,
     }),
     [
       status,
@@ -1162,6 +1790,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       sessionChoice,
       chooseSession,
       dismissSessionChoice,
+      sceneChoice,
+      chooseScene,
+      dismissSceneChoice,
     ],
   );
 

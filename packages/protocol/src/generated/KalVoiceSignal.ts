@@ -2,6 +2,8 @@
 import type { ComponentProvisioning } from "./ComponentProvisioning.ts";
 import type { KalVoiceMode } from "./KalVoiceMode.ts";
 import type { KalVoiceResponse } from "./KalVoiceResponse.ts";
+import type { LifecycleCallbackClass } from "./LifecycleCallbackClass.ts";
+import type { LifecycleTargetKind } from "./LifecycleTargetKind.ts";
 import type { LocalReasoningStatus } from "./LocalReasoningStatus.ts";
 import type { RequestStage } from "./RequestStage.ts";
 import type { StageTimings } from "./StageTimings.ts";
@@ -15,4 +17,4 @@ issue?: string, } | { "kind": "listening_started", sessionId: string, mode: KalV
 /**
  * Stage timings measured natively (key-down to final transcript).
  */
-timings: StageTimings, } | { "kind": "listening_failed", sessionId: string | null, mode: KalVoiceMode, code: string, message: string, } | { "kind": "cancelled", sessionId: string, mode: KalVoiceMode, } | { "kind": "reveal" } | { "kind": "model_progress", modelId: string, receivedBytes: number, totalBytes: number, } | { "kind": "model_installed", modelId: string, } | { "kind": "model_failed", modelId: string, code: string, message: string, } | { "kind": "provisioning", items: Array<ComponentProvisioning>, } | { "kind": "request_stage", requestId: string, stage: RequestStage, } | { "kind": "request_resolved", response: KalVoiceResponse, } | { "kind": "speaking", requestId: string, active: boolean, } | { "kind": "talk_key", active: boolean, reason: string | null, accelerator: string, };
+timings: StageTimings, } | { "kind": "listening_failed", sessionId: string | null, mode: KalVoiceMode, code: string, message: string, } | { "kind": "cancelled", sessionId: string, mode: KalVoiceMode, } | { "kind": "reveal" } | { "kind": "model_progress", modelId: string, receivedBytes: number, totalBytes: number, } | { "kind": "model_installed", modelId: string, } | { "kind": "model_failed", modelId: string, code: string, message: string, } | { "kind": "provisioning", items: Array<ComponentProvisioning>, } | { "kind": "request_stage", requestId: string, stage: RequestStage, } | { "kind": "request_resolved", response: KalVoiceResponse, } | { "kind": "speaking", requestId: string, active: boolean, } | { "kind": "lifecycle_callback", requestId: string, class: LifecycleCallbackClass, targetKind: LifecycleTargetKind, targetId: string, workspaceId?: string, } | { "kind": "talk_key", active: boolean, reason: string | null, accelerator: string, };

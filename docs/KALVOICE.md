@@ -123,7 +123,9 @@ KEY UP   ─▶ tail check: if the last 300 ms are silent the latest
   `crates/kalvoice/benches/budgets.json` (`--check`). Fixtures are generated locally with the
   operating system's own speech synthesis (`tooling/kalvoice/make-fixtures.ps1`, Windows
   System.Speech, 16 kHz mono); they are not committed.
-- Measured numbers, the model choice and what is still over budget: `docs/campaigns/Z12.md`.
+- Speech-pipeline measurements and model choice: `docs/campaigns/Z12.md`. Current control-layer
+  deterministic before/after measurements and remaining unmeasured stages:
+  `docs/campaigns/KALVOICE-CONTROL-20261001.md`.
 
 ## Command pipeline
 
@@ -155,6 +157,19 @@ Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 30 
   what KalVoice typed), "tell <session> to …" (`direct_prompt`, through the composer's own Send),
   `focus_by_state`, `focus_previous` and `which_sessions` ("what needs permission?"). Every
   spoken session name goes through the session resolver; several fits get a "Which one?" choice.
+  In a focused provider pane, ordinary work instructions go to that pane; "Type …" inserts only,
+  "Tell <provider> …" inserts and sends, and "Send that" submits the KalVoice-owned draft.
+  Navigation commands never become provider text. A raw shell terminal remains insert-only and
+  cannot be submitted or cleared through a spoofed provider identity. Known structured approval
+  states and a Claude hook channel in Waiting/Limited state block voice submit while retaining
+  insert-only draft. Codex notify and Gemini process-only modes cannot expose every
+  provider-native prompt to KalCode, so KalVoice cannot guarantee that an ordinary provider send
+  will not land on an unreported native prompt. KalVoice does not deliberately classify or approve
+  that prompt; the provider UI and its permission mode remain the available authority.
+- **Operations:** open Operations, Runs, Queue, Services, Environments or Activity; open the latest
+  failed run or Production; answer what is running, blocked or just finished; and restart an exact
+  named service through the canonical Operations action. A service or Production environment with
+  several valid matches produces a chooser and is revalidated before focus or action.
 - **Approvals and status:** show approvals, status report ("what are my threads doing?"),
   filter the Dashboard (Z7-W3, `filter_dashboard`, UI-only).
 - **Layout:** pane layout (Z7-W1, below), `control_pane` (move, maximize, restore, collapse,
@@ -162,12 +177,54 @@ Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 30 
 
 Everything else is `Reasoning`.
 
-Refused in 0.1.5, before anything is counted:
+### Live scene and follow-ups
 
-- **Provider panes** (`create_provider_panes`, and `create_threads` without an account) need
-  the ProviderPanes feature, which is gated on Stable: refused `provider_panes_unavailable`.
-  "Open a new Codex thread with my work account" is not refused: it opens KalCode's New thread
-  form and starts nothing.
+KalVoice keeps a bounded, in-memory semantic scene from the same workspace, thread, terminal,
+provider-pane, Browser, Dashboard, widget, Git and Operations state that the interface renders.
+It carries safe identity and routing metadata such as names, provider/account, model/effort,
+structured current activity, status, visibility, focus and pane geometry. It never copies terminal
+output, prompts, provider responses, Browser URLs or filesystem paths into the scene.
+
+That scene resolves natural names and relations such as “this terminal”, “the other Codex
+session”, “the one beside this”, “the agent working on KalCode”, “the thing that just finished”
+and “the last failed run”. A successful target becomes the bounded follow-up target for “focus
+it”, “open it” and “tell it …”; the stable identity is revalidated before use. Equal valid matches
+produce a concise chooser instead of a guess. Locating an interface object opens its owning view,
+brings it onscreen, focuses it and uses the existing electric-blue route trace and settled outline.
+“What did it do?” returns concise canonical thread/run detail for the last lifecycle target; it
+does not read the full provider response or private terminal output.
+
+“Favorites” uses the existing pinned workspace rail, and “Agent Fleet” uses the existing Agents
+surface when available. Squads and Recipes do not yet have canonical KalCode product surfaces.
+Handoffs has no standalone surface; provider handoff stays behind its existing availability gate.
+KalVoice reports those limits instead of inventing destinations.
+
+**Provider panes and agent launches are available on Stable.** KalVoice resolves the existing
+workspace/default or explicitly named provider account, starts the real authenticated interactive
+session through the same `ThreadRuntime` as the interface, and opens its provider pane. It does not
+ask a signed-in provider account to sign in again. A sole valid account or unambiguous
+workspace/default account is reused; an explicit account wins over focused context, and same-provider
+account ambiguity gets a concise chooser that preserves the complete grouped launch. A generic
+provider-less request with several eligible providers gets provider-qualified choices and an exact
+retry. Mixed-provider grouped ambiguity uses sequential provider-qualified choices that bind only
+the ambiguous group while preserving the full group list. All groups are preflighted before any
+session starts. Any account, provider, entitlement, model or effort choice that cannot be resolved
+safely fails before any member of a grouped launch starts; there is no silent fallback.
+
+Effort is part of the durable thread configuration and survives restart/resume. Claude accepts
+`low`, `medium`, `high`, `xhigh` and `max`; Codex accepts `minimal`, `low`, `medium`, `high` and
+`xhigh`. Gemini's CLI does not expose an effort control, so KalVoice refuses an effort-qualified
+Gemini launch instead of silently dropping the request. Model and effort modifiers apply when they
+are part of the launch request; validated full Claude model IDs and aliases retain the exact model.
+A later standalone “use this model/effort for all of them” reconfigures only the complete, exact
+recent same-provider launch group while every member is still unused and idle. That context is
+bounded to two minutes or three later commands and binds thread ID plus runtime generation.
+KalVoice persists the new values and restarts each member through the canonical provider runtime.
+A stale, partial, used or active group is refused with zero effects, and the command never becomes
+terminal/provider dictation.
+
+Still refused before anything is counted:
+
 - **`search`** ("search for the login fix") reads back names and statuses from the Session
   Locator, a gated feature. Where the locator isn't shown (Stable), voice search is refused
   `not_in_this_build` and never reads locator results.
@@ -185,7 +242,7 @@ KalVoice opens it first.
 | "split the pane vertically / down / stacked / top and bottom" | `split { axis: vertical }` | `split_pane` | The new pane opens below. |
 | "split Claude and Codex side by side", "put Claude next to Codex", "arrange Gemini and Claude top and bottom" | `split` + the named providers (carried inside `crates/kalvoice` as `NamedTarget::Providers` → `ExecContext.providers`; the contract intent can't hold them) | `arrange_panes { axis, providerIds }` | The newest pane of each named provider in the workspace is put next to the first; a provider without a pane is reported honestly ("No pane yet for …"), nothing is started. |
 | "make this pane bigger / larger / wider / taller / smaller / narrower / shorter", "grow / enlarge / expand / widen / shrink the pane" (+ "a bit" = 1 step, "much / a lot" = 4, default 2) | `resize { direction, steps }` (bigger → right, taller → down, smaller → left, shorter → up) | `resize_pane` | The focused pane grows (or shrinks) by 32 px per step; with no neighbour that way it grows toward the other side, so "bigger" always does something. |
-| "close this pane", "close the Codex pane" | `close { query }` | `close_pane` | The pane closes: its terminals end and its agents stop, as when you close it yourself. |
+| "close this pane", "close the Codex pane" | `close { query }` | `close_pane` | An unqualified request closes the focused pane. A named request requires an exact or unique partial tab match; ambiguous, missing or blank targets do nothing. The resolved pane closes through its normal action, ending its terminals and agents as when you close it yourself. |
 
 Axis convention (shared with `apps/desktop/src/shell/panes/model.ts`): `horizontal` = side by
 side, `vertical` = stacked. "And" normally makes a request compound (→ `Reasoning`); the only
@@ -204,10 +261,15 @@ thread changes; the summary counts non-archived threads by `ThreadStatus::chip`)
 
 "Show what's waiting for me" still opens the Approvals panel, and "show agents" still navigates.
 
-**Workspace controls** use the same local actions as the interface. Creating, opening,
-pausing and resuming workspace sessions do not add a separate KalCode approval.
-Provider execution remains governed by the selected runtime's native permission mode.
-KalVoice does not answer provider approvals or enable Bypass.
+**KalVoice actions use the same controls as the interface.** KalVoice adds no separate voice-only
+approval gate for any user or owner. Workspace and bulk actions keep the same account, app and
+runtime authority as their UI path; provider execution keeps the selected runtime's native
+permission mode. KalVoice does not answer provider approvals or enable Bypass. Before a bulk
+action executes, its exact target set is revalidated so a stale name, count or resumed process
+cannot redirect the request. A count or preflight-snapshot mismatch stops nothing. Once stopping
+begins, each target is checked again against its captured runtime generation; a concurrently
+replaced session stays untouched. Partial execution is reported as the number stopped out of
+the selected total, with the failure reason; stopping multiple processes is not transactional.
 
 **KalVoice intelligence** is local-only: deterministic commands first, then the on-device
 interpreter when configured and ready. Missing local reasoning returns
@@ -256,17 +318,27 @@ the next candidate; see the campaign doc.
 - One top-level request to the assistant counts once, however many internal steps it takes
   ("Pause every active thread" = 1; "Have Claude implement this, Codex review it, then run the
   tests" = 1).
-- Allowances per monthly cycle: Free 75 · Pro 1,500 · MAX 5,000 · MAX 2X 10,000 · OWNER unlimited
+- Allowances per monthly cycle: Free 25 · Pro 150 · MAX 500 · MAX 2X 1,000 · OWNER unlimited
   (`packages/protocol/src/plans.ts`). Dictation is never counted. Provider tokens are never counted.
 - The server-side usage ledger is authoritative (docs/BILLING.md): idempotent per client request
   id, reset per the account's plan cycle. Before accounts exist, and briefly offline, the app keeps
   a provisional local count with the plan's allowance and reconciles with the ledger when it can.
-  A finite plan displays, for example, "482 / 1,500 used · 1,018 remaining · renews October 1."
+  A finite plan displays, for example, "118 remaining · 32 / 150 used · resets October 1."
 - User-facing unit: **KalVoice Requests** — never "tokens".
 
 ## Speech output
 
 Optional spoken replies use the operating system's speech synthesis. No cloud text-to-speech.
+When spoken replies are enabled, the live callback worker announces concise, named agent
+completion/failure, needs-user, permission/OAuth and provider-disconnect events, plus meaningful
+deployment/release outcomes. It does not replay history, speak while the microphone is active,
+or read prompts, terminal output or provider responses. An event without a safe target name stays
+silent rather than saying that an unspecified agent finished. Replies are serialized through one
+bounded worker so a later event cannot interrupt or overlap the name currently being spoken. A
+typed, identity-only lifecycle target lets a later “Open it” focus that result without placing
+provider output or message text in the signal. The target is bound only after the native speech
+backend acknowledges playback start; a backend failure does not claim speech or bind an unheard
+callback.
 
 ## Events
 
@@ -300,7 +372,7 @@ speech models) still require the owner's consent in their download dialog.
 | `grammar` | Compiled deterministic text → `KalVoiceIntent` with a confidence (high / low). Whole-utterance patterns after politeness words; negations ("don't…") and compound requests ("… and then …") are never commands (→ `Reasoning`). Counts: digits or one–twenty, at most 16 threads (`thread_count_too_large`), 0 refused, anything else never guessed. Hears "codecs"/"code x" as Codex and "for"/"to" as counts where speech recognition does. |
 | `ledger` | Provisional monthly count (table `kalvoice_requests`): one row per client request id (idempotent), atomic allowance check, period from the cycle anchor day (1st, UTC) to the same day next month, refund for "Type it instead" on reversible commands within two minutes. Rows hold ids, input kind and intent name only. |
 | `schema` | Migration **v6** (`crates/native-core/migrations/0006_kalvoice.sql`), registered in `kalcode_core::db::MIGRATIONS` after the event platform's v5 (embedded, checksummed, backed up before it runs). Upgrades v4 → v6 and v5 → v6 are tested in `crates/kalvoice/tests/schema.rs` and end to end in `apps/desktop/tests/e2e/integrity.spec.ts`. |
-| `plan` | Allowance per tier (Free 75, Pro 1,500, MAX 5,000, MAX 2X 10,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
+| `plan` | Allowance per tier (Free 25, Pro 150, MAX 500, MAX 2X 1,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
 | `orchestrator` | Allowance check ? deterministic grammar or local interpretation ? validated workspace/runtime action ? atomic request ledger ? execution. Duplicate request IDs never execute or count twice. Unavailable or invalid interpretations remain uncounted. Workspace controls use no extra approval; coding sessions keep provider-native permissions. Events publish only after committed state and contain no transcript. |
 | `voice`, `streaming`, `audio`, `stt` | One take at a time. Engine and model are checked **before** the microphone opens; capture of the default input (cpal) into memory (mono, 120 s cap), windowed-sinc resampling to 16 kHz, streaming partials, tail reuse, whisper.cpp (`whisper` feature) with a persistent decoder state, then the audio is zeroed and dropped. Only a 0–1 input level leaves the capture. |
 | `latency` | Five stage timings per take, rolling p50/p95/p99. |

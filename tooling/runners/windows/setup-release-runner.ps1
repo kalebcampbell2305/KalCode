@@ -15,7 +15,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$aclModule = Join-Path $PSScriptRoot 'release-runner-acl.psm1'
+Import-Module $aclModule -Force
+$approvedRunner = 'C:\actions-runner-kalcode'
+
+Assert-ApprovedReleaseRunnerRoot -Root $Runner -ApprovedRoot $approvedRunner | Out-Null
 New-Item -ItemType Directory -Force -Path $Runner | Out-Null
+Assert-ReleaseRunnerStopped -Root $Runner -ApprovedRoot $approvedRunner
+# Protect the directory before downloading or creating registration state so every
+# new object inherits an owner-only ACL. Reapply and verify after setup because an
+# archive or runner command can bring its own descriptors.
+Set-ReleaseRunnerOwnerOnlyAcl -Root $Runner -ApprovedRoot $approvedRunner
 if (-not (Test-Path (Join-Path $Runner 'config.cmd'))) {
     $zip = Join-Path $env:TEMP "actions-runner-win-x64-$RunnerVersion.zip"
     Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/actions/runner/releases/download/v$RunnerVersion/actions-runner-win-x64-$RunnerVersion.zip" -OutFile $zip
@@ -47,4 +57,7 @@ if ($RegistrationToken) {
 $startup = [Environment]::GetFolderPath('Startup')
 "@start `"KalCode release runner`" /min `"$Runner\run.cmd`"" |
     Set-Content -Encoding ascii -Path (Join-Path $startup 'kalcode-release-runner.cmd')
+Set-ReleaseRunnerOwnerOnlyAcl -Root $Runner -ApprovedRoot $approvedRunner
+$aclStatus = Assert-ReleaseRunnerOwnerOnlyAcl -Root $Runner -ApprovedRoot $approvedRunner -RequireProtected
 Write-Host "Release runner ready at $Runner (guard: $guard). It starts at sign-in; start it now with $Runner\run.cmd."
+Write-Host "Release runner ACL verified for $($aclStatus.ItemCount) items."

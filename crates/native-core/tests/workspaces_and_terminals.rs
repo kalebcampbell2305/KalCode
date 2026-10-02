@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_core::events::{EventEnvelope, EventPayload};
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::workspaces::{MAX_WRITE_BYTES, TerminalLimit, TerminalStatus};
+use kalcode_core::plans::{Limited, PlanTier};
+use kalcode_core::workspaces::{MAX_WRITE_BYTES, TerminalStatus};
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_pty::TerminalSize;
 
@@ -794,50 +795,97 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
 }
 
 #[test]
-fn a_limited_plan_bounds_tabs_and_an_unlimited_one_does_not() {
+fn a_limited_plan_bounds_open_terminals_across_workspaces_and_an_unlimited_one_does_not() {
     let data = tempfile::tempdir().expect("data");
-    let projects = tempfile::tempdir().expect("projects");
+    let first_project = tempfile::tempdir().expect("first project");
+    let second_project = tempfile::tempdir().expect("second project");
     let core = open(data.path());
-    let workspace = core.open_workspace(projects.path()).expect("open");
+    let first = core.open_workspace(first_project.path()).expect("open");
+    let second = core.open_workspace(second_project.path()).expect("open");
     let shell = test_shell(&core);
-    let limit = Some(TerminalLimit {
-        max: 3,
-        plan: "Free",
-    });
-    let tabs: Vec<_> = (0..3)
-        .map(|_| {
+    let limit = PlanTier::Free.limit(Limited::OpenTerminals);
+    assert_eq!(limit.map(|l| l.max), Some(4));
+    // The cap is a total across all workspaces: two tabs in each fill the Free plan's four.
+    let tabs: Vec<_> = [&first, &first, &second, &second]
+        .into_iter()
+        .map(|workspace| {
             core.create_terminal(&workspace.id, Some(&shell), size(), limit)
                 .expect("create")
         })
         .collect();
-    let refused = core
-        .create_terminal(&workspace.id, Some(&shell), size(), limit)
-        .expect_err("limit");
-    assert_eq!(refused.code, "too_many_terminals");
-    assert!(
-        refused
-            .message
-            .starts_with("The Free plan allows up to 3 terminals per workspace."),
-        "{}",
-        refused.message
-    );
+    for workspace in [&first, &second] {
+        let refused = core
+            .create_terminal(&workspace.id, Some(&shell), size(), limit)
+            .expect_err("limit");
+        assert_eq!(refused.code, "too_many_terminals");
+        assert_eq!(
+            refused.message,
+            "The Free plan allows 4 open terminals. Close one to open another, or upgrade to Pro for 12."
+        );
+    }
     // Hitting the cap never closes anything: every existing tab is still there and running.
-    let listed = core.terminals(&workspace.id).expect("list");
-    assert_eq!(
-        listed.iter().map(|t| t.position).collect::<Vec<_>>(),
-        [0, 1, 2]
-    );
-    assert!(listed.iter().all(|t| t.status == TerminalStatus::Running));
-    // No KalCode-side cap (Owner, MAX, MAX 2X): past the old fixed 12.
-    let more: Vec<_> = (0..11)
+    for workspace in [&first, &second] {
+        let listed = core.terminals(&workspace.id).expect("list");
+        assert_eq!(
+            listed.iter().map(|t| t.position).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(listed.iter().all(|t| t.status == TerminalStatus::Running));
+    }
+    // Closing one frees a slot.
+    core.close_terminal(&tabs[0].id).expect("close");
+    let reopened = core
+        .create_terminal(&second.id, Some(&shell), size(), limit)
+        .expect("a closed tab frees a slot");
+    // No KalCode-side cap (Owner, MAX 2X): well past every capped plan.
+    let more: Vec<_> = (0..15)
         .map(|_| {
-            core.create_terminal(&workspace.id, Some(&shell), size(), None)
+            core.create_terminal(&first.id, Some(&shell), size(), None)
                 .expect("unlimited")
         })
         .collect();
-    assert_eq!(core.terminals(&workspace.id).expect("list").len(), 14);
+    assert_eq!(core.terminals(&first.id).expect("list").len(), 16);
     core.shutdown();
-    drop((tabs, more));
+    drop((tabs, reopened, more));
+}
+
+#[test]
+fn a_limited_plan_bounds_new_workspaces_but_never_reopening_one() {
+    let data = tempfile::tempdir().expect("data");
+    let projects: Vec<_> = (0..4)
+        .map(|_| tempfile::tempdir().expect("project"))
+        .collect();
+    let core = open(data.path());
+    let limit = PlanTier::Free.limit(Limited::Workspaces);
+    let first = core
+        .open_workspace_limited(projects[0].path(), limit)
+        .expect("first");
+    core.open_workspace_limited(projects[1].path(), limit)
+        .expect("second");
+    core.check_workspace_capacity(None).expect("uncapped");
+    let refused = core.check_workspace_capacity(limit).expect_err("full");
+    assert_eq!(refused.code, "too_many_workspaces");
+    let refused = core
+        .open_workspace_limited(projects[2].path(), limit)
+        .expect_err("a third workspace");
+    assert_eq!(refused.code, "too_many_workspaces");
+    assert_eq!(
+        refused.message,
+        "The Free plan allows 2 workspaces. Remove one to add another, or upgrade to Pro for 10."
+    );
+    assert_eq!(core.workspaces().expect("list").len(), 2);
+    // Reopening an existing workspace at the cap is never refused.
+    let again = core
+        .open_workspace_limited(projects[0].path(), limit)
+        .expect("reopen");
+    assert_eq!(again.id, first.id);
+    // Removing one frees a slot; an uncapped plan adds past the cap.
+    core.remove_workspace(&first.id).expect("remove");
+    core.open_workspace_limited(projects[2].path(), limit)
+        .expect("a removed workspace frees a slot");
+    core.open_workspace_limited(projects[3].path(), None)
+        .expect("uncapped");
+    assert_eq!(core.workspaces().expect("list").len(), 3);
 }
 
 #[test]

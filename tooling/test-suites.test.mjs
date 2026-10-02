@@ -26,8 +26,8 @@ test("the registered Rust release gate includes the production speech engine and
   const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
   for (const [platform, expected] of [
-    ["win32", 23],
-    ["darwin", 23],
+    ["win32", 24],
+    ["darwin", 24],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
     ["linux", 21],
   ]) {
@@ -35,7 +35,7 @@ test("the registered Rust release gate includes the production speech engine and
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 23);
+  assert.equal(inventory.rustIntentionalIgnores.length, 24);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
@@ -281,8 +281,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 276);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 276);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 282);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 282);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -290,9 +290,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 276);
+  assert.equal(functional.size, 282);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 332);
+  assert.equal(established.size, 338);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

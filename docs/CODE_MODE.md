@@ -78,10 +78,18 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   `terminal/terminal_busy` (retryable). Input to an ended tab gets `terminal/terminal_not_running`.
 - **Resize.** The view fits the terminal to its panel (ResizeObserver → fit addon) and sends the
   new size, debounced by 80 ms. Sizes must be 2–1000 columns and rows (`validation/invalid_size`).
-- **Limits.** Terminal tabs per workspace follow the verified plan (`terminalsPerWorkspace` in
-  `packages/protocol/src/plans.ts`): 12 on Free and Pro, no KalCode-side cap on MAX, MAX 2X and
-  Owner. Hitting a cap refuses the new tab with a plan-specific `validation/too_many_terminals`
-  message; existing tabs are never closed, including after a downgrade.
+- **Limits.** Open terminals follow the verified plan (`openTerminals` in
+  `packages/protocol/src/plans.ts`, mirrored natively by `kalcode_core::plans`): a total across
+  all workspaces of 4 on Free, 12 on Pro and 18 on MAX; no KalCode-side cap on MAX 2X and Owner.
+  Shells, agent terminals and Operations terminals all count; restarting a tab does not. Without
+  an active verified plan the Free cap applies. Hitting the cap refuses the new tab with a
+  plan-specific `validation/too_many_terminals` message that names the next plan's capacity;
+  existing tabs are never closed, including after a downgrade.
+- **Other plan limits.** The same table caps, only when something new is added: workspaces (Free 2,
+  Pro 10; reopening one is never refused; `too_many_workspaces`), connected provider accounts
+  across providers (2, 6, 8; `too_many_provider_accounts`), coding agents running at once (1, 4,
+  10; checked before a thread is created or resumed; `too_many_agents`) and, on Free, 3 waiting
+  Operations tasks (`too_many_queued_tasks`). MAX 2X and Owner have none of these caps.
 - **Exit.** When a shell exits on its own, its tab stays with its final output and a Restart
   action. Exit code 0 records `shell.completed`; anything else `shell.failed`.
 - **Closing ends a terminal (owner decision, 2026-10-01).** Closing a terminal's tab, or a pane

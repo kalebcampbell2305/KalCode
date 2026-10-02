@@ -12,7 +12,8 @@
 //! 4. provider and/or account words plus the name ("Gemini B Research", "Claude Backend");
 //! 5. "this / that / it": the focused thread, else the last resolved target;
 //! 6. only provider and/or account words ("ask Codex"), current workspace first;
-//! 7. bounded fuzzy (a word-start fragment, then one or two typos) — resolved only when exactly
+//! 7. a locating phrase matched against bounded, owner-visible live task context;
+//! 8. bounded fuzzy (a word-start fragment, then one or two typos) — resolved only when exactly
 //!    one session fits.
 //!
 //! Archived threads never match. Names are compared case-insensitively with Latin diacritics
@@ -78,6 +79,54 @@ const TRAILING_FILLER: &[&str] = &[
 const QUALIFIER_FILLER: &[&str] = &[
     "the", "my", "our", "on", "in", "using", "with", "from", "for", "of", "s", "account", "thread",
     "threads", "session", "agent", "one", "pane", "terminal",
+];
+
+/// Words that express the locate action rather than identify a session. Task matching is only
+/// entered for an explicit locating phrase, and every remaining word must match owner-visible
+/// structured scene metadata.
+const TASK_FILLER: &[&str] = &[
+    "the",
+    "my",
+    "our",
+    "a",
+    "an",
+    "me",
+    "please",
+    "find",
+    "locate",
+    "open",
+    "focus",
+    "show",
+    "go",
+    "take",
+    "bring",
+    "pull",
+    "switch",
+    "to",
+    "up",
+    "on",
+    "in",
+    "for",
+    "with",
+    "using",
+    "from",
+    "currently",
+    "working",
+    "work",
+    "doing",
+    "do",
+    "is",
+    "who",
+    "which",
+    "what",
+    "whats",
+    "terminal",
+    "thread",
+    "session",
+    "agent",
+    "pane",
+    "tab",
+    "one",
 ];
 
 /// Resolves `query` against `threads` (the store listing, most recent first).
@@ -168,7 +217,17 @@ pub fn resolve(
         }
     }
 
-    // 7. Bounded fuzzy: a word-start fragment, then a typo or two. Never workspace-preferred:
+    // Live task context. Equal fits stay ambiguous; "other" only removes the session in front
+    // (or the immediately previous target) and never chooses by list order.
+    if let Some(matches) = task_context_matches(&open, &raw, ctx) {
+        return decide(
+            prefer_workspace(matches, &in_workspace),
+            SessionMatchTier::Fuzzy,
+            ctx,
+        );
+    }
+
+    // Bounded fuzzy: a word-start fragment, then a typo or two. Never workspace-preferred:
     // a partial name must fit exactly one open session anywhere to resolve.
     if !cleaned.is_empty() {
         let needle = format!(" {cleaned}");
@@ -200,6 +259,8 @@ struct Entry<'a> {
     name_tokens: Vec<String>,
     /// Provider name, provider id and account label words ("gemini", "cli", "b").
     qualifiers: Vec<String>,
+    /// Owner-visible live scene words. Never includes messages, prompts, output, paths or ids.
+    task_context: Vec<String>,
 }
 
 impl<'a> Entry<'a> {
@@ -213,11 +274,29 @@ impl<'a> Entry<'a> {
         }
         qualifiers.sort();
         qualifiers.dedup();
+        let mut task_context = name_tokens.clone();
+        task_context.extend(qualifiers.iter().cloned());
+        for value in [
+            Some(t.workspace_name.as_str()),
+            t.model.as_deref(),
+            t.effort.as_deref(),
+            t.current_activity.as_deref(),
+            t.branch.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            task_context.extend(words(&normalize(value)));
+        }
+        task_context.extend(words(&normalize(&format!("{:?}", t.status))));
+        task_context.sort();
+        task_context.dedup();
         Self {
             t,
             name,
             name_tokens,
             qualifiers,
+            task_context,
         }
     }
 
@@ -242,6 +321,70 @@ impl<'a> Entry<'a> {
             .peekable();
         real.peek().is_some() && real.all(|w| self.qualifiers.iter().any(|q| q == w))
     }
+}
+
+fn task_context_matches<'e, 'a>(
+    open: &'e [Entry<'a>],
+    query: &str,
+    ctx: &ResolveContext<'_>,
+) -> Option<Vec<&'e Entry<'a>>> {
+    if !is_locating_query(query) {
+        return None;
+    }
+    let query_words = words(query);
+    let other = query_words.iter().any(|word| word == "other");
+    let signals: Vec<&str> = query_words
+        .iter()
+        .map(String::as_str)
+        .filter(|word| *word != "other" && !TASK_FILLER.contains(word))
+        .collect();
+    if signals.is_empty() {
+        return None;
+    }
+    let excluded = if other {
+        ctx.focused_thread_id.or(ctx.last_target_id)
+    } else {
+        None
+    };
+    let matches: Vec<&Entry<'_>> = open
+        .iter()
+        .filter(|entry| excluded != Some(entry.t.id.as_str()))
+        .filter(|entry| {
+            signals.iter().all(|signal| {
+                entry.task_context.iter().any(|candidate| {
+                    candidate == signal
+                        || (signal.chars().count() >= 3
+                            && candidate.chars().count() >= 3
+                            && (candidate.starts_with(signal) || signal.starts_with(candidate)))
+                })
+            })
+        })
+        .collect();
+    (!matches.is_empty()).then_some(matches)
+}
+
+/// Whether an utterance explicitly asks KalVoice to locate/focus an object. Scene candidates are
+/// never offered for arbitrary coding prose, even if that prose happens to share task words.
+pub fn is_locating_query(query: &str) -> bool {
+    let query = normalize(query);
+    [
+        "find ",
+        "locate ",
+        "open ",
+        "focus ",
+        "show ",
+        "go to ",
+        "take me to ",
+        "bring up ",
+        "pull up ",
+        "switch to ",
+        "the one ",
+        "one ",
+        "the other ",
+        "other ",
+    ]
+    .iter()
+    .any(|prefix| query.starts_with(prefix))
 }
 
 fn prefer_workspace<'e, 'a>(

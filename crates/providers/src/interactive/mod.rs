@@ -109,6 +109,9 @@ pub enum HookChannelState {
 pub struct PaneInfo {
     pub thread_id: String,
     pub provider_id: String,
+    /// Opaque identity of this exact provider process/PTY instance. Changes on resume/restart.
+    #[serde(default)]
+    pub instance_id: Option<String>,
     pub hook_channel: HookChannelState,
     pub decision_routing: DecisionRouting,
     /// `true` only when KalCode answers approvals (engine routing) and hooks are active.

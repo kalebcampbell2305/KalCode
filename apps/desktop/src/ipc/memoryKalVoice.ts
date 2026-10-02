@@ -45,10 +45,12 @@ import type {
   TalkRoute,
   UiDirective,
 } from "@kalcode/protocol";
+import { getPlan } from "@kalcode/protocol";
 import { checkReserved, isTalkKey } from "../kalvoice/shortcutModel.ts";
 import { normalizeBrowserAddress } from "../surfaces/browser/browserModel.ts";
 
-const FREE_KALVOICE_ALLOWANCE = 75;
+// The in-memory backend has no verified plan: the Free allowance from the plan catalog.
+const FREE_KALVOICE_ALLOWANCE = getPlan("free").limits.kalvoiceRequestsPerMonth ?? 0;
 
 export const KALVOICE_SCENARIOS = [
   "kalvoice-limit",
@@ -829,9 +831,12 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     if (parsed.kind === "submit_focused" || parsed.kind === "clear_focused") {
       // Like native: a raw terminal is never submitted or edited by voice.
       if (target === "terminal") {
+        const submit = parsed.kind === "submit_focused";
         return failed(
-          "terminal_submit_refused",
-          "KalVoice never presses Enter in a terminal. Press Enter yourself to run it.",
+          submit ? "terminal_submit_refused" : "terminal_clear_refused",
+          submit
+            ? "KalVoice never presses Enter in a terminal. Press Enter yourself to run it."
+            : "KalVoice doesn't edit a terminal's line. Nothing was changed.",
           parsed.kind,
         );
       }

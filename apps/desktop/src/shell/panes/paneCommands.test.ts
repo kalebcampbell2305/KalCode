@@ -11,6 +11,7 @@ import {
   paneQueryCandidates,
   providerPaneAliases,
   resolvePaneQuery,
+  resolvePaneTabQuery,
   selectDistinctProviderThreads,
 } from "./paneCommands.ts";
 
@@ -186,6 +187,42 @@ describe("pane command bus", () => {
 
     expect(results).toEqual([{ handled: false, message: "That pane command expired before Code was ready." }]);
   });
+
+  it("never delivers a cancelled queued close when its canvas later mounts", () => {
+    const controller = new AbortController();
+    const received: PaneCommand[] = [];
+    dispatchPaneCommand({ kind: "close" }, { queue: true, scope: "workspace", signal: controller.signal });
+    controller.abort();
+    const stop = listenForPaneCommands((command) => {
+      received.push(command);
+      return { handled: true };
+    }, "workspace");
+    stop();
+    expect(received).toEqual([]);
+  });
+
+  it("cancellation during workspace activation prevents navigation and queued commands", async () => {
+    const controller = new AbortController();
+    const order: string[] = [];
+    const result = await activateAndDispatchPaneCommand(
+      "workspace",
+      { kind: "close" },
+      async () => {
+        controller.abort();
+        return true;
+      },
+      () => order.push("navigate"),
+      () => order.push("report"),
+      controller.signal,
+    );
+    const stop = listenForPaneCommands(() => {
+      order.push("close");
+      return { handled: true };
+    }, "workspace");
+    stop();
+    expect(result.handled).toBe(false);
+    expect(order).toEqual([]);
+  });
 });
 
 describe("pane query resolution", () => {
@@ -252,6 +289,20 @@ describe("pane query resolution", () => {
     expect(resolvePaneQuery("Codex 2", candidates)).toEqual({ kind: "found", paneId: "a" });
     expect(resolvePaneQuery("investigate", candidates)).toEqual({ kind: "ambiguous" });
     expect(resolvePaneQuery("missing", candidates)).toEqual({ kind: "missing" });
+  });
+
+  it("resolves a named tab without collapsing two tabs in one pane into a single target", () => {
+    const candidates = [
+      { paneId: "shared", tabIndex: 0, names: ["Agent frontend"] },
+      { paneId: "shared", tabIndex: 1, names: ["Agent release"] },
+    ];
+
+    expect(resolvePaneTabQuery("Agent release", candidates)).toEqual({
+      kind: "found",
+      paneId: "shared",
+      tabIndex: 1,
+    });
+    expect(resolvePaneTabQuery("agent", candidates)).toEqual({ kind: "ambiguous" });
   });
 
   it("applies named resize, move, collapse and expand to only the resolved pane", () => {

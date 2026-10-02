@@ -24,14 +24,22 @@ describe("Account page", () => {
     expect(source).not.toContain('searchParams.get("verify")');
     expect(source).toContain("sessionStorage.setItem");
     expect(source).toContain("sessionStorage.removeItem");
-    expect(source).not.toMatch(/localStorage|document\.cookie/);
+    expect(source).not.toMatch(/document\.cookie/);
+    // localStorage holds only the plan chosen on /pricing (lib/checkout-intent.ts), never a session.
+    const storageCalls = [...source.matchAll(/localStorage\.(\w+)\(([^,)]*)/g)].map((match) => [match[1], match[2]]);
+    expect(storageCalls.length).toBeGreaterThan(0);
+    for (const [method, key] of storageCalls) {
+      expect(["getItem", "setItem", "removeItem"]).toContain(method);
+      expect(key).toBe("CHECKOUT_INTENT_KEY");
+    }
     expect(source).not.toMatch(/sessionStorage\.setItem\([^\n]*(?:token|session|kcs_)/i);
     expect(source.indexOf("sessionStorage.removeItem")).toBeLessThan(source.indexOf(socialCompletePath));
   });
 
   it("states the current billing boundaries in user language", () => {
     expect(source).toContain("KalVoice Requests");
-    expect(source).toContain("remaining · Renews");
+    expect(source).toContain("remaining`");
+    expect(source).toContain("`Resets ${");
     expect(source).toContain("Unlimited on every plan");
     expect(source).toContain("Handled by your connected provider");
     expect(source).toContain("Confirming your plan…");
@@ -70,10 +78,20 @@ describe("Account page", () => {
   });
 
   it("renders every paid plan from the canonical protocol catalog without hardcoded prices", () => {
-    expect(PLANS.filter((plan) => plan.price.amountUsd > 0).map((plan) => plan.id)).toEqual(["pro", "max", "max2x"]);
+    expect(PLANS.filter((plan) => plan.price.monthlyUsd > 0).map((plan) => plan.id)).toEqual(["pro", "max", "max2x"]);
     expect(source).toContain('from "@kalcode/protocol/plans"');
     expect(source).toContain("paidPlans.map");
-    expect(source).toContain("formatPrice(plan.price)");
+    expect(source).toContain('formatPrice(plan, "month")');
+    expect(source).toContain('formatPrice(plan, "year")');
     expect(source).not.toMatch(/\$\s?(10|25|50)\b/);
+  });
+
+  it("sends only a public tier and an interval to checkout, never a price", () => {
+    const start = source.indexOf("async function startCheckout");
+    const body = source.slice(start, source.indexOf("});", source.indexOf("JSON.stringify", start)));
+    expect(body).toContain("tier,");
+    expect(body).toContain("interval,");
+    expect(body).toContain("requestId:");
+    expect(body).not.toMatch(/price/i);
   });
 });

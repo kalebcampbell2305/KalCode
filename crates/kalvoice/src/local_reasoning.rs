@@ -33,8 +33,9 @@ pub const LOCAL_REASONING_FAILED_MESSAGE: &str =
 pub const LOCAL_REASONING_INVALID_OUTPUT_MESSAGE: &str =
     "The on-device KalVoice interpreter returned an invalid action.";
 
-/// Minimal input for a local interpreter. No provider, account, credential, or environment data
-/// crosses this boundary.
+/// Minimal input for a local interpreter. A bounded action label may contain owner-visible
+/// provider/account display names; credentials, provider responses, paths, and environment data
+/// never cross this boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalInterpretationRequest {
     pub request: String,
@@ -42,6 +43,17 @@ pub struct LocalInterpretationRequest {
     pub workspace_id: Option<String>,
     /// Bounded native-resolved choices. Paths never cross this boundary.
     pub workspaces: Vec<WorkspaceOption>,
+    /// Read-only actions grounded in the current native scene. The model receives only each
+    /// action's opaque request-scoped ID and label; it never receives or constructs the intent.
+    pub grounded_actions: Vec<LocalActionGrounding>,
+}
+
+/// One native-grounded, read-only action the local selector may choose. Executors build these
+/// from canonical runtime state; labels contain only bounded owner-visible metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalActionGrounding {
+    pub label: String,
+    pub intent: KalVoiceIntent,
 }
 
 /// A local interpreter may propose one typed KalVoice action or decline when confidence is low.
@@ -66,7 +78,7 @@ pub(crate) struct GroundedActionCandidate {
 pub(crate) fn grounded_action_candidates(
     request: &LocalInterpretationRequest,
 ) -> Vec<GroundedActionCandidate> {
-    grammar::local_reasoning_groundings(&request.request)
+    let grammar_actions = grammar::local_reasoning_groundings(&request.request)
         .into_iter()
         .filter_map(|grounding| match grounding {
             grammar::LocalReasoningGrounding::ShowApprovals => Some((
@@ -90,8 +102,20 @@ pub(crate) fn grounded_action_candidates(
                     },
                 ))
             }
+        });
+    grammar_actions
+        .chain(
+            request
+                .grounded_actions
+                .iter()
+                .cloned()
+                .map(|action| (action.label, action.intent)),
+        )
+        .filter(|(label, intent)| {
+            valid_text(label)
+                && valid_local_grounding(intent)
+                && validate_action(intent.clone(), &request.workspaces).is_ok()
         })
-        .filter(|(_, intent)| validate_action(intent.clone(), &request.workspaces).is_ok())
         .fold(Vec::new(), |mut candidates, (label, intent)| {
             if candidates.len() < MAX_GROUNDED_ACTION_CANDIDATES
                 && !candidates
@@ -106,6 +130,49 @@ pub(crate) fn grounded_action_candidates(
             }
             candidates
         })
+}
+
+/// Removes malformed, duplicate, unsafe, and excess live actions before the snapshot crosses
+/// into the local interpreter. This is intentionally separate from candidate construction so a
+/// custom interpreter cannot observe entries the guarded llama worker would later discard.
+pub(crate) fn bounded_action_snapshot(
+    actions: Vec<LocalActionGrounding>,
+    workspaces: &[WorkspaceOption],
+) -> Vec<LocalActionGrounding> {
+    actions
+        .into_iter()
+        .filter(|action| {
+            valid_text(&action.label)
+                && valid_local_grounding(&action.intent)
+                && validate_action(action.intent.clone(), workspaces).is_ok()
+        })
+        .fold(Vec::new(), |mut bounded, action| {
+            if bounded.len() < MAX_GROUNDED_ACTION_CANDIDATES
+                && !bounded
+                    .iter()
+                    .any(|candidate: &LocalActionGrounding| candidate.intent == action.intent)
+            {
+                bounded.push(action);
+            }
+            bounded
+        })
+}
+
+fn valid_local_grounding(intent: &KalVoiceIntent) -> bool {
+    matches!(
+        intent,
+        KalVoiceIntent::Navigate { .. }
+            | KalVoiceIntent::OpenWorkspace { .. }
+            | KalVoiceIntent::OpenThread { .. }
+            | KalVoiceIntent::Focus { .. }
+            | KalVoiceIntent::Search { .. }
+            | KalVoiceIntent::ShowApprovals
+            | KalVoiceIntent::StatusReport
+            | KalVoiceIntent::FilterDashboard { .. }
+            | KalVoiceIntent::FocusByState { .. }
+            | KalVoiceIntent::FocusPrevious
+            | KalVoiceIntent::WhichSessions { .. }
+    )
 }
 
 fn surface_label(surface: kalcode_contracts::app::SurfaceId) -> &'static str {
@@ -233,16 +300,25 @@ pub(crate) fn validate_action(
             count,
             workspace_id,
             account_query,
+            model,
+            effort,
+            assignments,
         } => {
             valid_provider(provider_id)
                 && (1..=MAX_THREADS_PER_REQUEST).contains(&u32::from(*count))
                 && valid_workspace_id(workspace_id, workspaces)
                 && valid_optional_text(account_query)
+                && valid_optional_text(model)
+                && valid_optional_text(effort)
+                && valid_assignments(assignments, *count)
         }
         KalVoiceIntent::CreateProviderPanes {
             groups,
             workspace_id,
         } => valid_workspace_id(workspace_id, workspaces) && valid_provider_groups(groups),
+        // Recent-launch mutation requires generation-bound transient context that the local
+        // interpreter cannot manufacture. Only the deterministic grammar may request it.
+        KalVoiceIntent::ConfigureRecentLaunch { .. } => false,
         KalVoiceIntent::ControlPane {
             command,
             workspace_id,
@@ -251,9 +327,17 @@ pub(crate) fn validate_action(
             command,
             workspace_id,
         } => valid_workspace_id(workspace_id, workspaces) && valid_browser_control(command),
-        KalVoiceIntent::PauseThreads { scope }
-        | KalVoiceIntent::ResumeThreads { scope }
-        | KalVoiceIntent::StopThreads { scope } => valid_scope(scope, workspaces),
+        KalVoiceIntent::PauseThreads { scope } | KalVoiceIntent::ResumeThreads { scope } => {
+            valid_scope(scope, workspaces)
+        }
+        KalVoiceIntent::StopThreads {
+            scope,
+            expected_count,
+        } => {
+            valid_scope(scope, workspaces)
+                && expected_count
+                    .is_none_or(|count| (1..=MAX_THREADS_PER_REQUEST).contains(&u32::from(count)))
+        }
         // A local interpretation cannot recursively request reasoning or reach a provider.
         KalVoiceIntent::Reasoning { .. } => false,
         KalVoiceIntent::Resize { steps, .. } => (1..=10).contains(steps),
@@ -339,11 +423,28 @@ fn valid_provider_groups(groups: &[ProviderPaneRequest]) -> bool {
             || !group.provider_id.as_ref().is_none_or(valid_provider)
             || !valid_optional_text(&group.account_query)
             || !valid_optional_text(&group.model)
+            || !valid_optional_text(&group.effort)
+            || !valid_assignments(&group.assignments, group.count)
         {
             return false;
         }
     }
     true
+}
+
+fn valid_assignments(
+    assignments: &[kalcode_contracts::kalvoice::AgentLaunchAssignment],
+    expected: u8,
+) -> bool {
+    assignments.is_empty()
+        || (assignments
+            .iter()
+            .all(|assignment| assignment.count > 0 && valid_text(&assignment.task))
+            && assignments
+                .iter()
+                .map(|assignment| u32::from(assignment.count))
+                .sum::<u32>()
+                == u32::from(expected))
 }
 
 fn valid_pane_control(command: &PaneControl) -> bool {

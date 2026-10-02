@@ -37,10 +37,17 @@ export const FEATURES = [
 export type EntitlementFeatureId = (typeof FEATURES)[number];
 
 /**
- * Numeric limits gated by plan today. `kalvoiceRequestsPerMonth` counts top-level KalVoice
- * assistant requests per cycle — never provider model tokens; dictation is never metered.
+ * Numeric limits gated by plan, signed into every entitlement document. `kalvoiceRequestsPerMonth`
+ * counts executed KalVoice commands per cycle — never provider model tokens; dictation is never
+ * metered. The others are the core plan limits in `plans.ts` (`null` = no KalCode-side limit).
  */
-export const LIMITS = ["concurrentThreads", "kalvoiceRequestsPerMonth"] as const;
+export const LIMITS = [
+  "kalvoiceRequestsPerMonth",
+  "openTerminals",
+  "parallelAgents",
+  "workspaces",
+  "providerAccounts",
+] as const;
 export type LimitId = (typeof LIMITS)[number];
 
 /** Current entitlement document format. */
@@ -105,8 +112,11 @@ export function tierGrants(tier: EntitlementTier): TierGrants {
     advancedMissions: plan.advancedMissions,
   };
   const limits: Record<LimitId, number | null> = {
-    concurrentThreads: plan.concurrentThreads,
     kalvoiceRequestsPerMonth: plan.kalvoiceRequestsPerMonth,
+    openTerminals: plan.openTerminals,
+    parallelAgents: plan.parallelAgents,
+    workspaces: plan.workspaces,
+    providerAccounts: plan.providerAccounts,
   };
   return { unrestricted: false, features: FEATURES.filter((feature) => flags[feature]), limits };
 }

@@ -6,6 +6,7 @@ import {
   PLAN_CATALOG,
   parseAccountSnapshot,
   parseRuntimeStatus,
+  tierName,
 } from "./account.ts";
 
 const signedOut = {
@@ -125,12 +126,31 @@ describe("AccountClient", () => {
     expect(JSON.stringify(calls)).not.toMatch(/token|verifier/i);
   });
 
-  it("keeps the published plan catalog exact and Free outside checkout", () => {
-    expect(PLAN_CATALOG).toEqual([
-      { tier: "free", name: "Free", requests: 75, monthlyPriceUsd: 0, action: "activate_free" },
-      { tier: "pro", name: "Pro", requests: 1500, monthlyPriceUsd: 10, action: "checkout" },
-      { tier: "max", name: "Max", requests: 5000, monthlyPriceUsd: 25, action: "checkout" },
-      { tier: "max2x", name: "Max 2X", requests: 10000, monthlyPriceUsd: 50, action: "checkout" },
+  it("derives the plan catalog from the canonical protocol plans", () => {
+    expect(
+      PLAN_CATALOG.map(({ tier, name, requests, monthlyPriceUsd, yearlyPriceUsd, yearlySavingsUsd }) => ({
+        tier,
+        name,
+        requests,
+        monthlyPriceUsd,
+        yearlyPriceUsd,
+        yearlySavingsUsd,
+      })),
+    ).toEqual([
+      { tier: "free", name: "Free", requests: 25, monthlyPriceUsd: 0, yearlyPriceUsd: 0, yearlySavingsUsd: 0 },
+      { tier: "pro", name: "Pro", requests: 150, monthlyPriceUsd: 10, yearlyPriceUsd: 100, yearlySavingsUsd: 20 },
+      { tier: "max", name: "MAX", requests: 500, monthlyPriceUsd: 25, yearlyPriceUsd: 250, yearlySavingsUsd: 50 },
+      {
+        tier: "max2x",
+        name: "MAX 2X",
+        requests: 1000,
+        monthlyPriceUsd: 50,
+        yearlyPriceUsd: 500,
+        yearlySavingsUsd: 100,
+      },
     ]);
+    expect(PLAN_CATALOG.filter((plan) => plan.popular).map((plan) => plan.tier)).toEqual(["max"]);
+    expect(tierName("max2x")).toBe("MAX 2X");
+    expect(tierName("owner")).toBe("Owner");
   });
 });

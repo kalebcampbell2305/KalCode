@@ -563,6 +563,7 @@ function fixtureThread(
     providerId,
     providerName,
     model: providerId === "claude-code" ? "sonnet" : null,
+    effort: null,
     providerAccountId: null,
     accountLabel: "Personal",
     workspaceId: workspace.id,
@@ -1518,7 +1519,7 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
     emit({ type: "thread.started", payload: { threadId: auth.id } }, threadCorr(auth, today(50)));
     emit(
       { type: "file.modified", payload: { threadId: auth.id, path: "src/auth/callback.ts" } },
-      threadCorr(auth, today(20)),
+      threadCorr(auth, today(0)),
     );
     emit({ type: "thread.completed", payload: { threadId: greeting.id } }, threadCorr(greeting, today(35)));
     emit(

@@ -155,6 +155,7 @@ impl ClaudeCodeProvider {
                 env: self.env.provider_env(&spec.env_policy),
                 working_directory: config.working_directory,
                 model: config.model,
+                effort: config.effort,
                 mode: config.permission_mode,
                 resume_session_id: config.resume_session_id,
                 timeouts: self.timeouts,

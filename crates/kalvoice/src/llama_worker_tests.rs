@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use kalcode_contracts::kalvoice::KalVoiceIntent;
 use kalcode_contracts::threads::WorkspaceOption;
 
+use crate::local_reasoning::LocalActionGrounding;
+
 use super::*;
 
 fn absolute_fixture_paths() -> (PathBuf, PathBuf, PathBuf) {
@@ -36,6 +38,7 @@ fn request() -> LocalInterpretationRequest {
             id: "0199a914-5ea1-7db0-b36b-aee1bdc846d6".into(),
             name: "KalCode".into(),
         }],
+        grounded_actions: Vec::new(),
     }
 }
 
@@ -104,6 +107,41 @@ fn request_body_contains_only_bounded_grounded_candidate_context() {
 }
 
 #[test]
+fn live_scene_labels_reach_the_offline_selector_but_native_ids_do_not() {
+    let mut input = request();
+    input.request = "find Claude working on the website".into();
+    input.grounded_actions = vec![
+        LocalActionGrounding {
+            label: "Open Website refresh · Claude Code · KalCode · Running frontend tests".into(),
+            intent: KalVoiceIntent::OpenThread {
+                query: "0199a914-5ea1-7db0-b36b-aee1bdc846d8".into(),
+            },
+        },
+        LocalActionGrounding {
+            label: "Open API release · Claude Code · KalCode · Refactoring authentication".into(),
+            intent: KalVoiceIntent::OpenThread {
+                query: "0199a914-5ea1-7db0-b36b-aee1bdc846d9".into(),
+            },
+        },
+    ];
+    let candidates = grounded_action_candidates(&input);
+    let body = build_request(&input, &candidates, 128).expect("request body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    let system = body["messages"][0]["content"].as_str().expect("system");
+
+    assert!(system.contains("Website refresh"));
+    assert!(system.contains("Running frontend tests"));
+    assert!(system.contains("API release"));
+    assert!(!system.contains("0199a914"));
+    assert_eq!(
+        resolve_selection(Some("c0"), &candidates),
+        Ok(LocalInterpretation::Action(KalVoiceIntent::OpenThread {
+            query: "0199a914-5ea1-7db0-b36b-aee1bdc846d8".into(),
+        }))
+    );
+}
+
+#[test]
 fn invalid_current_workspace_and_oversized_request_are_refused_before_inference() {
     let mut invalid = request();
     invalid.workspace_id = Some("0199a914-5ea1-7db0-b36b-aee1bdc846d7".into());
@@ -114,6 +152,20 @@ fn invalid_current_workspace_and_oversized_request_are_refused_before_inference(
 
     invalid.workspace_id = None;
     invalid.request = "x".repeat(MAX_LOCAL_REQUEST_CHARS + 1);
+    assert_eq!(
+        validate_request(&invalid),
+        Err(LlamaWorkerError::InvalidConfiguration)
+    );
+
+    invalid.request = "find the matching terminal".into();
+    invalid.grounded_actions = (0..=MAX_GROUNDED_ACTION_CANDIDATES)
+        .map(|index| LocalActionGrounding {
+            label: format!("Open agent {index}"),
+            intent: KalVoiceIntent::OpenThread {
+                query: format!("0199a914-5ea1-7db0-b36b-aee1bdc8{index:04x}"),
+            },
+        })
+        .collect();
     assert_eq!(
         validate_request(&invalid),
         Err(LlamaWorkerError::InvalidConfiguration)

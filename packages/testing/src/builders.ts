@@ -330,6 +330,7 @@ export function createFixtures(options: FixtureOptions = {}) {
         providerId,
         providerName: PROVIDER_NAMES[providerId] ?? providerId,
         model: null,
+        effort: null,
         providerAccountId: null,
         accountLabel: "Personal",
         workspaceId: ws?.id ?? "",

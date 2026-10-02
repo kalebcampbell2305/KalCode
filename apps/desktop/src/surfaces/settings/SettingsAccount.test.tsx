@@ -16,8 +16,8 @@ const account: AccountSnapshot = {
   degradedReason: null,
 };
 const usage: AccountUsageSnapshot = {
-  used: 240,
-  allowance: 1_500,
+  used: 40,
+  allowance: 150,
   periodStart: "2026-09-01T00:00:00Z",
   resetsAt: "2026-10-01T00:00:00Z",
 };
@@ -35,7 +35,8 @@ describe("SettingsAccountView", () => {
       />,
     );
     expect(screen.getByRole("region", { name: "KalCode account" })).toHaveTextContent("owner@example.com");
-    expect(screen.getByText("240 of 1,500 requests used")).toBeInTheDocument();
+    expect(screen.getByText("Pro")).toBeInTheDocument();
+    expect(screen.getByText("110 remaining · 40 / 150 used · resets Oct 1")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/token|receipt|verifier|acct_01/i);
   });
 

@@ -100,18 +100,24 @@ KalVoice uses the same runtime as the rest of KalCode and is never above the per
 
 Defined once in `packages/protocol/src/plans.ts`.
 
-| | Free | Pro | MAX | MAX 2X | OWNER (private) |
+| | Free (TRY) | Pro (BUILD) | MAX (ORCHESTRATE, most popular) | MAX 2X (AUTOMATE) | OWNER (private) |
 | --- | --- | --- | --- | --- | --- |
-| Price | $0 | $10 / month | $25 / month | $50 / month | $0, non-billable |
-| KalVoice Requests / month | 75 | 1,500 | 5,000 | 10,000 | Unlimited |
+| Price | $0 | $10 / month or $100 / year | $25 / month or $250 / year | $50 / month or $500 / year | $0, non-billable |
+| KalVoice Requests / month | 25 | 150 | 500 | 1,000 | Unlimited |
+| Open terminals | 4 | 12 | 18 | Unlimited | Unlimited |
+| Parallel coding agents | 1 | 4 | 10 | Unlimited | Unlimited |
+| Workspaces | 2 | 10 | Unlimited | Unlimited | Unlimited |
+| Connected provider accounts | 2 | 6 | 8 | Unlimited | Unlimited |
 | Local KalVoice dictation | Unlimited | Unlimited | Unlimited | Unlimited | Unlimited |
-| Provider connections | All | All | All | All | All |
 | Permission modes (Plan, Approve, Auto, Bypass, Custom) | All | All | All | All | All |
-| Other features | Core | + agents, pair/team, automations, skills, plugins | + advanced missions, event automations, highest concurrency | MAX features + doubled KalVoice Request capacity | Everything, current and future |
+| Plan roadmap | `PLAN_FEATURE_GROUPS` in `plans.ts`: each feature's lowest plan and Available / Coming soon state | | | | Everything, current and future |
+
+"Unlimited" means KalCode sets no limit of its own; hardware, OS, provider, account, API and upstream
+limits may still apply.
 
 Rules:
 
-- Connecting a provider is never paywalled; provider tokens are never counted as KalVoice usage.
+- Every provider is available on every plan; plans limit how many provider accounts are connected. Provider tokens are never counted as KalVoice usage.
 - Permission modes are safety controls and are never paywalled.
 - "KalVoice Requests" is the user-facing unit. Never call them tokens.
 - Paid access and usage are authorized by trusted backend state (server-side entitlements and a

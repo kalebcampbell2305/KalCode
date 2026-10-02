@@ -1,4 +1,4 @@
-import type { BillableTier, BillingPriceCatalog } from "./billing-plans";
+import { type BillableTier, type BillingPriceCatalog, isBillingInterval } from "./billing-plans";
 import type { BillingStore } from "./billing-store";
 import { isBillableTier } from "./billing-store";
 import { readJsonBody } from "./body";
@@ -140,8 +140,11 @@ export function billingService(options: Options): BillingService {
       if (body instanceof Response) return body;
       const tier = body.tier;
       const requestId = body.requestId;
+      // Optional; absent means monthly. The Price itself always comes from the server catalog.
+      const hasInterval = Object.hasOwn(body, "interval");
+      const interval = hasInterval ? body.interval : "month";
       if (
-        Object.keys(body).length !== 2 ||
+        Object.keys(body).length !== (hasInterval ? 3 : 2) ||
         typeof tier !== "string" ||
         !isBillableTier(tier) ||
         typeof requestId !== "string" ||
@@ -149,11 +152,19 @@ export function billingService(options: Options): BillingService {
       ) {
         return apiError(400, "invalid_request", "Choose a public paid plan and try again.");
       }
+      if (!isBillingInterval(interval)) {
+        return apiError(400, "invalid_request", "Choose monthly or yearly billing and try again.");
+      }
       if (!(await rateAllowed(accountId, "checkout", 10))) {
         return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
       }
       const at = options.now().toISOString();
-      const requestHash = await sha256Base64Url(`${accountId}:${tier}:${requestId}`);
+      // The interval is part of the reservation identity, so a live checkout reserved for one
+      // interval is never reused for the other (the D1 fence compares tier and request hash).
+      // Monthly keeps its original hash so in-flight monthly retries survive a deploy.
+      const requestHash = await sha256Base64Url(
+        interval === "month" ? `${accountId}:${tier}:${requestId}` : `${accountId}:${tier}:${interval}:${requestId}`,
+      );
       const reservation = await options.store.reserveCheckout({
         accountId,
         tier,
@@ -181,7 +192,7 @@ export function billingService(options: Options): BillingService {
         now: options.now().toISOString(),
         parameters: {
           customerId,
-          priceId: options.catalog.priceForTier[tier as BillableTier],
+          priceId: options.catalog.priceFor[tier as BillableTier][interval],
           successUrl: CHECKOUT_SUCCESS,
           cancelUrl: CHECKOUT_CANCEL,
           expiresAt: 0, // The store replaces this with the reservation's immutable expiry.

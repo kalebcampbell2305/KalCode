@@ -1,3 +1,4 @@
+import { CORE_LIMITS, formatCoreLimit, formatPrice, PLANS } from "@kalcode/protocol/plans";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseManifest } from "../../src/data/releases";
@@ -18,7 +19,7 @@ import Rail from "../../src/components/stage/parts/Rail.astro";
 import ScrollStory from "../../src/components/stage/ScrollStory.astro";
 import TryKalCode from "../../src/components/stage/TryKalCode.astro";
 import { DEMO_TABS, MODES, STORY, THREADS } from "../../src/data/story";
-import { PAGES, planSummary } from "../../src/lib/site";
+import { PAGES } from "../../src/lib/site";
 import DocsIndex from "../../src/pages/docs/index.astro";
 import KalVoiceDocs from "../../src/pages/docs/kalvoice.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
@@ -258,17 +259,23 @@ const PLAN_CONCURRENCY_CLAIMS = [
 ];
 
 describe("plans", () => {
-  it("compare only what the plans differ in today", async () => {
+  it("compare plans by the catalog's limits and roadmap", async () => {
     const html = await render(Pricing, "/pricing");
     const copy = text(html);
     expect(copy).toContain(
-      "Every plan runs every provider in Plan, Approve and Auto modes. Plans differ in KalVoice Requests — your AI usage stays on your own account.",
+      "Start free. Upgrade for more agents, more terminals and more autonomy. Your AI usage stays on your own provider account.",
     );
+    expect(copy).not.toMatch(/Plans differ in KalVoice Requests/i);
     const rowHeads = [...html.matchAll(/<th scope="row"[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
-    expect(rowHeads).toEqual(["KalVoice Requests a month"]);
-    expect(PAGES.find((p) => p.path === "/pricing")?.description).toContain(
-      "plans differ in KalVoice Requests. AI usage stays on your own provider account.",
+    expect(rowHeads).toEqual(CORE_LIMITS.map((limit) => limit.label));
+    const description = PAGES.find((p) => p.path === "/pricing")?.description ?? "";
+    expect(description).toContain(
+      `KalCode plans: ${PLANS.map((plan) => plan.name)
+        .join(", ")
+        .replace(/, ([^,]*)$/, " and $1")}`,
     );
+    expect(description).toContain("AI usage stays on your own provider account.");
+    expect(description).not.toMatch(/plans differ in KalVoice Requests/i);
   });
 
   it.each([
@@ -280,29 +287,21 @@ describe("plans", () => {
     for (const pattern of PLAN_CONCURRENCY_CLAIMS) expect(copy).not.toMatch(pattern);
   });
 
-  it("give each home plan card only what Stable enforces", async () => {
+  it("give each home plan card its stage, monthly price and headline limits from the catalog", async () => {
     const html = await render(Home, "/");
-    const cards = [...html.matchAll(/<ul class="plan-card__points"[^>]*>([\s\S]*?)<\/ul>/g)].map((m) => text(m[1]));
-    expect(cards).toHaveLength(4);
-    for (const card of cards) {
-      expect(card).toMatch(/KalVoice Requests a month/);
-      expect(card).toContain("Every provider; Plan, Approve and Auto modes");
-      expect(card).not.toMatch(/\bthreads?\b/i);
-    }
-  });
-
-  it("render a website summary for MAX instead of the catalog's objectives claim", async () => {
-    expect(planSummary({ id: "max", summary: "For people who hand whole objectives to KalCode." })).toBe(
-      "For heavy daily KalVoice use across many projects.",
-    );
-    expect(planSummary({ id: "pro", summary: "Catalog text" })).toBe("Catalog text");
-    for (const [component, path] of [
-      [Home, "/"],
-      [Pricing, "/pricing"],
-    ] as const) {
-      expect(text(await render(component as Component, path))).toContain(
-        "For heavy daily KalVoice use across many projects.",
-      );
+    const cards = [
+      ...html.matchAll(
+        /<li class="plan-card[^"]*"[^>]*data-plan="([^"]+)"[^>]*>([\s\S]*?)<\/li>\s*(?=<li class="plan-card|<\/ul>)/g,
+      ),
+    ];
+    expect(cards.map((m) => m[1])).toEqual(PLANS.map((plan) => plan.id));
+    for (const [index, plan] of PLANS.entries()) {
+      const card = text(cards[index][2]);
+      expect(card).toContain(plan.stage);
+      expect(card).toContain(`${formatPrice(plan, "month")} /month`);
+      expect(card).toContain(plan.tagline);
+      expect(card).toContain(formatCoreLimit(plan.limits, CORE_LIMITS[0]));
+      expect(card.includes("Most popular")).toBe(plan.popular);
     }
   });
 });

@@ -88,7 +88,7 @@ describe("kalcodeIdentity (the hub's name and initials)", () => {
 describe("planLabel", () => {
   it("names the verified plan and says when access is offline", () => {
     expect(planLabel("pro", "ready")).toBe("Pro plan");
-    expect(planLabel("max2x", "ready")).toBe("Max 2X plan");
+    expect(planLabel("max2x", "ready")).toBe("MAX 2X plan");
     expect(planLabel("owner", "ready")).toBe("Owner");
     expect(planLabel("free", "offline_grace")).toBe("Free plan · Offline");
     expect(planLabel(null, "authenticated_unactivated")).toBeNull();
@@ -140,8 +140,10 @@ describe("Account Hub", () => {
       "Full Settings",
       "Sign out",
     ]);
-    // Usage comes from the verified account (Free: 75 KalVoice requests).
-    await waitFor(() => expect(menu).toHaveTextContent("0 of 75"));
+    // Usage comes from the verified account (Free: 25 KalVoice requests): remaining first, then used and the reset.
+    await waitFor(() => expect(menu).toHaveTextContent("25 remaining"));
+    expect(menu).toHaveTextContent("0 of 25 used");
+    expect(menu).toHaveTextContent(/Resets /);
   });
 
   it("is keyboard operable and returns focus to the hub on Escape", async () => {

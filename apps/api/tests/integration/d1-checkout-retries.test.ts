@@ -47,8 +47,13 @@ async function fixture(name: string) {
   const store = d1BillingStore(db);
   const catalog = {
     ok: true as const,
-    priceForTier: { pro: "price_original", max: "price_max", max2x: "price_max2x" },
+    priceFor: {
+      pro: { month: "price_original", year: "price_pro_year" },
+      max: { month: "price_max", year: "price_max_year" },
+      max2x: { month: "price_max2x", year: "price_max2x_year" },
+    },
     tierForPrice: {},
+    planForPrice: {},
   };
   const stripe = {
     createCheckout,
@@ -63,12 +68,12 @@ async function fixture(name: string) {
     now: () => new Date(clock),
     webhookSecret: "whsec_synthetic",
   });
-  const checkout = () =>
+  const checkout = (interval?: "month" | "year") =>
     service.checkout(
       new Request("https://api.kalcoded.com/v1/billing/checkout", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tier: "pro", requestId: "same_request_123" }),
+        body: JSON.stringify({ tier: "pro", requestId: "same_request_123", ...(interval ? { interval } : {}) }),
       }),
       accountId,
     );
@@ -130,10 +135,42 @@ describe("persisted checkout retries", () => {
     const f = await fixture("catalog");
     f.loseNextResponse();
     await expect(f.checkout()).rejects.toThrow("synthetic lost response");
-    f.catalog.priceForTier.pro = "price_replacement";
+    f.catalog.priceFor.pro.month = "price_replacement";
     f.advance(10);
     expect((await f.checkout()).status).toBe(200);
     expect(f.createCheckout.mock.calls[1]?.[0].priceId).toBe("price_original");
+  });
+
+  it("never reuses a live checkout reserved for one interval for the other interval", async () => {
+    const f = await fixture("interval");
+    expect((await f.checkout()).status).toBe(200);
+    expect(f.createCheckout.mock.calls[0]?.[0].priceId).toBe("price_original");
+    // Same request id, other interval: the live monthly reservation is neither reused nor replaced.
+    f.advance(10);
+    const yearlyWhileMonthlyLive = await f.checkout("year");
+    expect(yearlyWhileMonthlyLive.status).toBe(409);
+    expect(await yearlyWhileMonthlyLive.json()).toMatchObject({ error: "checkout_in_progress" });
+    expect(f.createCheckout).toHaveBeenCalledTimes(1);
+    // Explicit "month" is the same operation as an absent interval and returns the saved URL.
+    expect((await f.checkout("month")).status).toBe(200);
+    expect(f.createCheckout).toHaveBeenCalledTimes(1);
+    // After the monthly reservation expires, a yearly checkout is a distinct operation.
+    f.advance(2101);
+    expect((await f.checkout("year")).status).toBe(200);
+    expect(f.createCheckout).toHaveBeenCalledTimes(2);
+    expect(f.createCheckout.mock.calls[1]?.[0].priceId).toBe("price_pro_year");
+    expect(f.createCheckout.mock.calls[1]?.[0].idempotencyKey).not.toBe(
+      f.createCheckout.mock.calls[0]?.[0].idempotencyKey,
+    );
+    const stored = await db
+      .prepare("SELECT creation_parameters FROM billing_checkout_intents WHERE account_id = ?1")
+      .bind(f.accountId)
+      .first<{ creation_parameters: string }>();
+    expect(JSON.parse(stored?.creation_parameters ?? "{}")).toMatchObject({ priceId: "price_pro_year" });
+    // And the live yearly reservation is not reused for a monthly request.
+    f.advance(10);
+    expect((await f.checkout()).status).toBe(409);
+    expect(f.createCheckout).toHaveBeenCalledTimes(2);
   });
 
   it("does not return a saved URL after account deletion", async () => {
@@ -152,7 +189,7 @@ describe("persisted checkout retries", () => {
     const f = await fixture("replace");
     const original = await (await f.checkout()).json();
     f.advance(2101);
-    f.catalog.priceForTier.pro = "price_updated";
+    f.catalog.priceFor.pro.month = "price_updated";
     const replacement = await f.checkout();
     expect(replacement.status).toBe(200);
     expect(await replacement.json()).not.toEqual(original);

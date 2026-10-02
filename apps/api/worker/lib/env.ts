@@ -44,6 +44,9 @@ export interface Env {
   STRIPE_PRICE_PRO?: string;
   STRIPE_PRICE_MAX?: string;
   STRIPE_PRICE_MAX_2X?: string;
+  STRIPE_PRICE_PRO_YEARLY?: string;
+  STRIPE_PRICE_MAX_YEARLY?: string;
+  STRIPE_PRICE_MAX_2X_YEARLY?: string;
 }
 
 // Imported once per isolate for each distinct secret value.

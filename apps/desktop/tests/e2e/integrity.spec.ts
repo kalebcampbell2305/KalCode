@@ -73,8 +73,8 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-/** The schema version this build migrates to (through v19 KalVoice account usage). */
-const LATEST = 20;
+/** The schema version this build migrates to (through v21 provider reasoning effort). */
+const LATEST = 21;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
@@ -399,10 +399,10 @@ test("a v5 database (the app after the L-1 update) is upgraded to the latest sch
     });
 
     // KalVoice's v6 ledger and preferences work on the upgraded database. The signed Pro fixture
-    // provides under-limit account authority; its existing 412 requests are separate from this
+    // provides under-limit account authority; its existing 41 requests are separate from this
     // freshly migrated local request ledger.
     const status = await invoke<{ usage: { used: number; allowance: number | null } }>(page, "kalvoice_status");
-    expect(status.usage).toMatchObject({ used: 412, allowance: 1_500 });
+    expect(status.usage).toMatchObject({ used: 41, allowance: 150 });
     const typed = await invoke<{ counted: boolean; outcome: { kind: string } }>(page, "kalvoice_request", {
       request: { requestId: crypto.randomUUID(), text: "Go to settings", input: "text", workspaceId: null },
     });

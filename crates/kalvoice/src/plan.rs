@@ -1,8 +1,10 @@
 //! KalVoice Request allowances per entitlement tier.
 //!
-//! `packages/protocol/src/plans.ts` is the single source of truth for plan limits; this mirror
-//! exists because the native runtime enforces the allowance. A test reads `plans.ts` and fails
-//! if the numbers drift.
+//! `packages/protocol/src/plans.ts` is the single source of truth for plan limits. The allowance
+//! comes from its one Rust mirror, `kalcode_core::plans`; a test here also reads `plans.ts` and
+//! fails if the numbers drift.
+
+use kalcode_core::plans::PlanTier;
 
 /// Entitlement tier as far as KalVoice is concerned. Until accounts exist (campaign Z13), every
 /// installation is provisionally Free; the server entitlement replaces this.
@@ -20,13 +22,14 @@ pub enum Tier {
 impl Tier {
     /// Monthly KalVoice Requests; `None` means unlimited.
     pub fn kalvoice_allowance(self) -> Option<u32> {
-        match self {
-            Self::Free => Some(75),
-            Self::Pro => Some(1_500),
-            Self::Max => Some(5_000),
-            Self::Max2x => Some(10_000),
-            Self::Owner => None,
-        }
+        let tier = match self {
+            Self::Free => PlanTier::Free,
+            Self::Pro => PlanTier::Pro,
+            Self::Max => PlanTier::Max,
+            Self::Max2x => PlanTier::Max2x,
+            Self::Owner => PlanTier::Owner,
+        };
+        tier.limits().kalvoice_requests_per_month
     }
 }
 
@@ -88,6 +91,15 @@ mod tests {
     }
 
     #[test]
+    fn allowances_are_the_owner_catalog() {
+        assert_eq!(
+            [Tier::Free, Tier::Pro, Tier::Max, Tier::Max2x, Tier::Owner]
+                .map(Tier::kalvoice_allowance),
+            [Some(25), Some(150), Some(500), Some(1_000), None]
+        );
+    }
+
+    #[test]
     fn allowances_match_the_plan_catalog() {
         assert_eq!(
             plans_ts_allowances(),
@@ -105,6 +117,6 @@ mod tests {
     fn provisional_is_free_on_calendar_months() {
         assert_eq!(ProvisionalEntitlement.tier(), Tier::Free);
         assert_eq!(ProvisionalEntitlement.cycle_anchor_day(), 1);
-        assert_eq!(Tier::default().kalvoice_allowance(), Some(75));
+        assert_eq!(Tier::default().kalvoice_allowance(), Some(25));
     }
 }

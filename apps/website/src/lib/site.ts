@@ -3,7 +3,12 @@
  * Keep this module free of Astro or Worker imports so both runtimes can use it.
  */
 
-import type { Plan, PlanId } from "@kalcode/protocol/plans";
+import { PLANS } from "@kalcode/protocol/plans";
+
+/** "Free, Pro, MAX and MAX 2X", from the plan catalog. */
+const PLAN_NAMES = `${PLANS.slice(0, -1)
+  .map((plan) => plan.name)
+  .join(", ")} and ${PLANS.at(-1)?.name}`;
 
 export const SITE_ORIGIN = "https://kalcoded.com";
 export const SITE_NAME = "KalCode";
@@ -83,19 +88,6 @@ export const KALVOICE = {
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
 
-/**
- * Website wording for a plan's one-line summary. The shared catalog (packages/protocol/src/plans.ts,
- * also read by the desktop app) describes MAX by features that are Gated on Stable 0.1.6 (missions:
- * crates/native-core/src/flags.rs), so the site says what the plan gives today instead.
- */
-const PLAN_SUMMARY_OVERRIDES: Partial<Record<PlanId, string>> = {
-  max: "For heavy daily KalVoice use across many projects.",
-};
-
-export function planSummary(plan: Pick<Plan, "id" | "summary">): string {
-  return PLAN_SUMMARY_OVERRIDES[plan.id] ?? plan.summary;
-}
-
 export interface PageInfo {
   path: string;
   title: string;
@@ -136,8 +128,7 @@ export const PAGES = [
   {
     path: "/pricing",
     title: "Pricing — KalCode",
-    description:
-      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, the Plan, Approve and Auto modes and unlimited local dictation; plans differ in KalVoice Requests. AI usage stays on your own provider account.",
+    description: `KalCode plans: ${PLAN_NAMES}, monthly or yearly. Plans scale coding agents, open terminals, workspaces, provider accounts and KalVoice Requests; every plan includes the Plan, Approve and Auto modes and unlimited on-device dictation. AI usage stays on your own provider account.`,
   },
   {
     path: "/download",

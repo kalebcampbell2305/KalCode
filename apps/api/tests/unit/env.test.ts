@@ -16,6 +16,9 @@ describe("production auth and billing configuration", () => {
         STRIPE_PRICE_PRO: "price_pro",
         STRIPE_PRICE_MAX: "price_max",
         STRIPE_PRICE_MAX_2X: "price_max2x",
+        STRIPE_PRICE_PRO_YEARLY: "price_pro_year",
+        STRIPE_PRICE_MAX_YEARLY: "price_max_year",
+        STRIPE_PRICE_MAX_2X_YEARLY: "price_max2x_year",
       }).billing;
       expect(billing).not.toBeNull();
       if (!billing) throw new Error("billing dependencies must remain available");
@@ -97,7 +100,7 @@ describe("production auth and billing configuration", () => {
     expect(depsFromEnv({ DB, AUTH_RATE_LIMIT_KEY: "r".repeat(32) }).emailAuth).toBeNull();
   });
 
-  it("enables billing only with secret, webhook secret and all unique valid Prices", () => {
+  it("enables billing only with secret, webhook secret and all six unique valid monthly and yearly Prices", () => {
     const complete = {
       DB,
       STRIPE_SECRET_KEY: "sk_live_secret",
@@ -105,11 +108,17 @@ describe("production auth and billing configuration", () => {
       STRIPE_PRICE_PRO: "price_pro",
       STRIPE_PRICE_MAX: "price_max",
       STRIPE_PRICE_MAX_2X: "price_max2x",
+      STRIPE_PRICE_PRO_YEARLY: "price_pro_year",
+      STRIPE_PRICE_MAX_YEARLY: "price_max_year",
+      STRIPE_PRICE_MAX_2X_YEARLY: "price_max2x_year",
     } satisfies Env;
     expect(depsFromEnv(complete).billing).not.toBeNull();
     expect(depsFromEnv({ ...complete, STRIPE_SECRET_KEY: "rk_live_restricted" }).billing).not.toBeNull();
     const { STRIPE_PRICE_MAX_2X: _omitted, ...missingPrice } = complete;
     expect(depsFromEnv(missingPrice).billing).toBeNull();
+    const { STRIPE_PRICE_PRO_YEARLY: _omittedYearly, ...missingYearlyPrice } = complete;
+    expect(depsFromEnv(missingYearlyPrice).billing).toBeNull();
+    expect(depsFromEnv({ ...complete, STRIPE_PRICE_MAX_YEARLY: complete.STRIPE_PRICE_MAX }).billing).toBeNull();
     expect(depsFromEnv({ ...complete, STRIPE_PRICE_MAX: complete.STRIPE_PRICE_PRO }).billing).toBeNull();
     expect(depsFromEnv({ ...complete, STRIPE_WEBHOOK_SECRET: "bad" }).billing).toBeNull();
     expect(depsFromEnv({ ...complete, STRIPE_SECRET_KEY: "sk_test_secret" }).billing).toBeNull();

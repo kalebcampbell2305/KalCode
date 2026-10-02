@@ -756,6 +756,7 @@ export function createThreadsMemory(
         providerId: provider.id,
         providerName: provider.displayName,
         model,
+        effort: null,
         providerAccountId,
         // Snapshot only metadata resolved by the managed-account fixture store. Direct unit
         // construction without a resolver retains its bounded legacy provider label.
@@ -1111,6 +1112,7 @@ function seed(threads: Map<string, MemThread>) {
         providerId: provider.id,
         providerName: provider.displayName,
         model: provider.models[0]?.id ?? null,
+        effort: null,
         providerAccountId: null,
         accountLabel: provider.accountLabel,
         workspaceId: workspace.id,

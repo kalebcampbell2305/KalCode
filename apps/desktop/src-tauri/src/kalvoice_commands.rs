@@ -45,13 +45,18 @@ use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
 use kalcode_kalvoice::shortcuts;
 use kalcode_kalvoice::signals::{KalVoiceSignal, KalVoiceStatus, ListeningSession, ShortcutIssue};
 use kalcode_kalvoice::speech_output::{SpeechOutput, spoken_text};
-use kalcode_kalvoice::stt::{ENGINE_AVAILABLE, RecognizerCache, SpeechRecognizer, SttError};
+use kalcode_kalvoice::stt::{
+    ENGINE_AVAILABLE, RecognitionVocabulary, RecognizerCache, SpeechRecognizer, SttError,
+};
 use kalcode_kalvoice::voice::{RecognizerSource, VoiceController, VoiceError, VoiceResult};
 use kalcode_providers::ProviderRegistry;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Webview};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
+use crate::kalvoice_callbacks::{
+    Announcement, Callbacks, DeliveryDone, OperationAnnouncer, delivery_allowed,
+};
 use crate::kalvoice_components::{
     ComponentManagerError, KalVoiceComponentManager, REASONING_DOWNLOAD_ID,
 };
@@ -207,6 +212,16 @@ impl KalVoiceState {
             .as_ref()
             .is_none_or(|runtime| runtime.shutdown(app, Duration::from_secs(5)))
     }
+
+    /// Live-only Operations callback sink. Durable completion details stay in Operations; this
+    /// only schedules the concise optional spoken notification after a finish write commits.
+    pub(crate) fn operation_announcer(&self) -> Option<OperationAnnouncer> {
+        self.0
+            .as_ref()?
+            .callbacks
+            .get()
+            .map(Callbacks::operation_announcer)
+    }
 }
 
 #[derive(Default)]
@@ -240,6 +255,8 @@ pub struct KalVoiceRuntime {
     recognizers: Arc<DesktopRecognizers>,
     /// The OS voice, started on first use.
     speech: std::sync::OnceLock<Arc<dyn SpeechOutput>>,
+    /// Live lifecycle events and Operations completions, scoped to this account generation.
+    callbacks: std::sync::OnceLock<Callbacks>,
     microphone_supported: bool,
     /// The app-level signal channels (shared by every runtime generation).
     signals: Arc<KalVoiceSignals>,
@@ -409,6 +426,9 @@ impl KalVoiceRuntime {
 
         reset_push_to_talk(self);
         self.voice.cancel(None);
+        if let Some(callbacks) = self.callbacks.get() {
+            callbacks.shutdown();
+        }
         if let Some(speech) = self.speech.get() {
             speech.stop();
         }
@@ -443,8 +463,12 @@ impl KalVoiceRuntime {
 /// Picks the recognizer for the selected model, or another installed model.
 struct DesktopRecognizers {
     core: Arc<Core>,
+    threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
+    locator: Option<Arc<kalcode_locator::Locator>>,
     components: Arc<KalVoiceComponentManager>,
     cache: RecognizerCache,
+    repository_vocabulary: Mutex<RecognitionVocabulary>,
+    vocabulary: Mutex<Option<(Instant, RecognitionVocabulary)>>,
     /// The selected recognizer and its signed-store lease. Returned recognizer clones retain the
     /// same owner so deletion cannot remove or replace bytes during transcription.
     loaded: Mutex<Option<(String, Arc<LoadedRecognizer>)>>,
@@ -459,6 +483,10 @@ struct LoadedRecognizer {
 struct LeasedRecognizer(Arc<LoadedRecognizer>);
 
 impl SpeechRecognizer for LeasedRecognizer {
+    fn configure_vocabulary(&self, vocabulary: &RecognitionVocabulary) {
+        self.0.recognizer.configure_vocabulary(vocabulary);
+    }
+
     fn transcribe(&self, audio: &[f32]) -> Result<String, SttError> {
         self.0.recognizer.transcribe(audio)
     }
@@ -473,6 +501,127 @@ impl SpeechRecognizer for LeasedRecognizer {
 }
 
 impl DesktopRecognizers {
+    /// Refreshes recent repository path vocabulary through Locator's existing recent-work view.
+    /// It runs only on KalCode's warm background thread, never in the push-to-talk latency path.
+    fn refresh_repository_vocabulary(&self) {
+        let Some(locator) = &self.locator else {
+            return;
+        };
+        let page = kalcode_contracts::refs::PageRequest {
+            limit: 100,
+            cursor: None,
+        };
+        let Ok(recent) = locator.recent_work(kalcode_locator::RecentWorkWhen::ThisWeek, 0, &page)
+        else {
+            return;
+        };
+        let mut names = Vec::with_capacity(96);
+        for item in recent.items {
+            if item.kind != kalcode_locator::RecentWorkKind::File {
+                continue;
+            }
+            let path = item.title.replace('\\', "/");
+            names.push(path.clone());
+            names.extend(
+                path.split('/')
+                    .filter(|part| !part.is_empty())
+                    .rev()
+                    .take(3)
+                    .map(str::to_owned),
+            );
+            if names.len() >= 96 {
+                names.truncate(96);
+                break;
+            }
+        }
+        *self
+            .repository_vocabulary
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = RecognitionVocabulary::from_terms(names);
+        // Force the next preparation to combine these names with the current live scene.
+        *self
+            .vocabulary
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Names already present in KalCode's live stores, cached briefly so beginning a take never
+    /// walks a repository or performs network work. The recognizer itself ignores identical
+    /// snapshots, so its decoder tokens change only when the scene vocabulary changes.
+    fn vocabulary_snapshot(&self) -> RecognitionVocabulary {
+        const CACHE_FOR: Duration = Duration::from_secs(1);
+        let now = Instant::now();
+        {
+            let cached = self
+                .vocabulary
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some((captured_at, vocabulary)) = cached.as_ref()
+                && now.saturating_duration_since(*captured_at) < CACHE_FOR
+            {
+                return vocabulary.clone();
+            }
+        }
+
+        let mut names = Vec::with_capacity(128);
+        if let Ok(Some(active)) = self.core.active_workspace() {
+            names.push(active.name);
+        }
+        if let Some(threads) = &self.threads
+            && let Ok(threads) = threads.list(None, false)
+        {
+            names.extend(threads.iter().take(12).map(|thread| thread.name.clone()));
+            names.extend(
+                threads
+                    .iter()
+                    .take(4)
+                    .filter_map(|thread| thread.account_label.clone()),
+            );
+            names.extend(
+                threads
+                    .iter()
+                    .take(4)
+                    .filter_map(|thread| thread.model.clone()),
+            );
+            names.extend(
+                threads
+                    .iter()
+                    .take(4)
+                    .filter_map(|thread| thread.branch.clone()),
+            );
+        }
+        names.extend(
+            self.repository_vocabulary
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .terms()
+                .iter()
+                .cloned(),
+        );
+        if let Ok(terminals) = self.core.running_terminals() {
+            names.extend(
+                terminals
+                    .into_iter()
+                    .take(24)
+                    .map(|terminal| terminal.title),
+            );
+        }
+        if let Ok(workspaces) = self.core.workspaces() {
+            names.extend(
+                workspaces
+                    .into_iter()
+                    .take(24)
+                    .map(|workspace| workspace.name),
+            );
+        }
+        let vocabulary = RecognitionVocabulary::from_terms(names);
+        *self
+            .vocabulary
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((now, vocabulary.clone()));
+        vocabulary
+    }
+
     fn active_model(&self, prefs: &KalVoicePreferences) -> Option<String> {
         let installed = self.components.speech_models();
         std::iter::once(prefs.speech_model.as_str())
@@ -493,10 +642,12 @@ impl DesktopRecognizers {
         let id = self
             .active_model(&prefs)
             .ok_or(SttError::ModelNotInstalled)?;
+        let vocabulary = self.vocabulary_snapshot();
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((loaded_id, recognizer)) = loaded.as_ref()
             && loaded_id == &id
         {
+            recognizer.recognizer.configure_vocabulary(&vocabulary);
             return Ok(Arc::new(LeasedRecognizer(Arc::clone(recognizer))));
         }
 
@@ -510,6 +661,7 @@ impl DesktopRecognizers {
             .to_owned();
         let english_only = models::find(&id).is_some_and(|model| model.english_only);
         let recognizer = self.cache.get(&path, english_only)?;
+        recognizer.configure_vocabulary(&vocabulary);
         let recognizer = Arc::new(LoadedRecognizer {
             recognizer,
             path,
@@ -672,6 +824,7 @@ fn account_bound_session_config(
         workspace_id: workspace_id.unwrap_or_default().to_owned(),
         working_directory: reasoning_dir.to_string_lossy().into_owned(),
         model: None,
+        effort: None,
         permission_mode: PermissionMode::Plan,
         resume_session_id: None,
         secret_ref: None,
@@ -764,12 +917,18 @@ pub fn init(
         runtime: provider_runtime,
         reasoning_dir: core.paths().data_dir.join("kalvoice").join("reasoning"),
     });
+    let session_locator_enabled = feature_enabled(&info.flags, FeatureId::SessionLocator);
     let recognizers = Arc::new(DesktopRecognizers {
         core: core.clone(),
+        threads: threads.clone(),
+        locator: locator.clone().filter(|_| session_locator_enabled),
         components: components.clone(),
         cache: RecognizerCache::default(),
+        repository_vocabulary: Mutex::new(RecognitionVocabulary::default()),
+        vocabulary: Mutex::new(None),
         loaded: Mutex::new(None),
     });
+    let callback_threads = threads.clone();
     let visible = info
         .flags
         .surfaces
@@ -777,7 +936,6 @@ pub fn init(
         .filter(|s| s.visible)
         .map(|s| s.id)
         .collect();
-    let session_locator_enabled = feature_enabled(&info.flags, FeatureId::SessionLocator);
     let Ok(accounting) =
         crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
     else {
@@ -788,7 +946,6 @@ pub fn init(
         accounting.clone(),
         Arc::new(crate::kalvoice_executor::DesktopExecutor {
             visible,
-            provider_panes_enabled: feature_enabled(&info.flags, FeatureId::ProviderPanes),
             session_locator_enabled,
             core: core.clone(),
             account: Some(account),
@@ -816,6 +973,7 @@ pub fn init(
         provisioning: provisioning::Provisioner::default(),
         recognizers,
         speech: std::sync::OnceLock::new(),
+        callbacks: std::sync::OnceLock::new(),
         microphone_supported: cfg!(any(windows, target_os = "macos")),
         signals: app
             .try_state::<Arc<KalVoiceSignals>>()
@@ -828,6 +986,17 @@ pub fn init(
         voice_priority,
         priority_spans: Mutex::new(HashMap::new()),
     });
+    let callback_runtime = Arc::downgrade(&runtime);
+    let callback_speaker = Arc::new(move |announcement: Announcement, done: DeliveryDone| {
+        if let Some(runtime) = callback_runtime.upgrade() {
+            speak_callback(&runtime, announcement, done)
+        } else {
+            false
+        }
+    });
+    if let Some(callbacks) = Callbacks::start(core.clone(), callback_threads, callback_speaker) {
+        let _ = runtime.callbacks.set(callbacks);
+    }
     // Live partial transcripts go to the UI as ghost text.
     let partial_runtime = Arc::downgrade(&runtime);
     runtime
@@ -891,6 +1060,7 @@ fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
         .name("kalvoice-warm".into())
         .spawn(move || {
             let _task = task;
+            runtime.recognizers.refresh_repository_vocabulary();
             let started = Instant::now();
             match runtime.voice.warm() {
                 Ok(()) => tracing::info!(
@@ -900,6 +1070,13 @@ fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
                 Err(error) => {
                     tracing::info!(event = "kalvoice.model_not_warm", code = error.code())
                 }
+            }
+            if runtime
+                .orchestrator
+                .preferences()
+                .is_ok_and(|preferences| preferences.voice_replies)
+            {
+                let _ = runtime.speech().available();
             }
             runtime
                 .reasoning
@@ -1697,6 +1874,11 @@ fn start_listening_at(
     if runtime.shutting_down.load(Ordering::SeqCst) {
         return Err(VoiceError::NotListening);
     }
+    // The microphone always wins. This also closes the speaking signal through SpeechOutput's
+    // completion callback, so no system voice can feed back into a new recording.
+    if let Some(speech) = runtime.speech.get() {
+        speech.stop();
+    }
     match runtime.voice.begin_at(mode, pressed) {
         Ok(session_id) => {
             let key_down_to_mic_ms =
@@ -1909,6 +2091,7 @@ fn signal_kind(signal: &KalVoiceSignal) -> &'static str {
         KalVoiceSignal::RequestStage { .. } => "request_stage",
         KalVoiceSignal::RequestResolved { .. } => "request_resolved",
         KalVoiceSignal::Speaking { .. } => "speaking",
+        KalVoiceSignal::LifecycleCallback { .. } => "lifecycle_callback",
         KalVoiceSignal::TalkKey { .. } => "talk_key",
     }
 }
@@ -2150,7 +2333,13 @@ fn speak_reply(runtime: &Arc<KalVoiceRuntime>, response: &KalVoiceResponse) {
         .orchestrator
         .preferences()
         .is_ok_and(|p| p.voice_replies);
-    if !enabled || !runtime.speech().available() {
+    if !delivery_allowed(
+        enabled,
+        true,
+        runtime.voice.listening().is_some(),
+        runtime.shutting_down.load(Ordering::Acquire),
+    ) || !runtime.speech().available()
+    {
         return;
     }
     let text = match &response.outcome {
@@ -2166,24 +2355,102 @@ fn speak_reply(runtime: &Arc<KalVoiceRuntime>, response: &KalVoiceResponse) {
         }
     };
     let request_id = response.request_id.clone();
-    let done_runtime = runtime.clone();
-    let done_id = request_id.clone();
-    let done = Box::new(move || {
-        done_runtime
+    let started_runtime = runtime.clone();
+    let started_id = request_id.clone();
+    let started = Box::new(move || {
+        started_runtime
             .orchestrator
-            .record_voice_output(&done_id, false);
-        done_runtime.signal(&KalVoiceSignal::Speaking {
-            request_id: done_id,
+            .record_voice_output(&started_id, true);
+        started_runtime.signal(&KalVoiceSignal::Speaking {
+            request_id: started_id,
+            active: true,
+        });
+    });
+    let settled_runtime = runtime.clone();
+    let settled_id = request_id;
+    let settled = Box::new(move |did_start: bool| {
+        if !did_start {
+            return;
+        }
+        settled_runtime
+            .orchestrator
+            .record_voice_output(&settled_id, false);
+        settled_runtime.signal(&KalVoiceSignal::Speaking {
+            request_id: settled_id,
             active: false,
         });
     });
-    if runtime.speech().speak(&spoken_text(&text), done).is_ok() {
-        runtime.orchestrator.record_voice_output(&request_id, true);
-        runtime.signal(&KalVoiceSignal::Speaking {
-            request_id,
+    let _ = runtime
+        .speech()
+        .speak(&spoken_text(&text), started, settled);
+}
+
+fn speak_callback(
+    runtime: &Arc<KalVoiceRuntime>,
+    announcement: Announcement,
+    delivered: DeliveryDone,
+) -> bool {
+    let voice_replies = runtime
+        .orchestrator
+        .preferences()
+        .is_ok_and(|preferences| preferences.voice_replies);
+    if !delivery_allowed(
+        voice_replies,
+        true,
+        runtime.voice.listening().is_some(),
+        runtime.shutting_down.load(Ordering::Acquire),
+    ) {
+        return false;
+    }
+    // Do not initialize the native voice when spoken replies are disabled or the microphone is
+    // active. OS speech starts lazily only for a callback that is actually eligible to play.
+    if !runtime.speech().available() {
+        return false;
+    }
+    let request_id = format!("lifecycle:{}", announcement.request_id);
+    let started_runtime = runtime.clone();
+    let started_id = request_id.clone();
+    let started_class = announcement.class;
+    let started_target_kind = announcement.target_kind;
+    let started_target_id = announcement.target_id.clone();
+    let started_workspace_id = announcement.workspace_id.clone();
+    let started = Box::new(move || {
+        if let (Some(target_kind), Some(target_id)) =
+            (started_target_kind, started_target_id.as_ref())
+        {
+            started_runtime.signal(&KalVoiceSignal::LifecycleCallback {
+                request_id: started_id.clone(),
+                class: started_class,
+                target_kind,
+                target_id: target_id.clone(),
+                workspace_id: started_workspace_id.clone(),
+            });
+        }
+        tracing::info!(
+            event = "kalvoice.lifecycle_callback_spoken",
+            target_id = started_target_id.as_deref().unwrap_or(""),
+            workspace_id = started_workspace_id.as_deref().unwrap_or("")
+        );
+        started_runtime.signal(&KalVoiceSignal::Speaking {
+            request_id: started_id,
             active: true,
         });
-    }
+    });
+    let settled_runtime = runtime.clone();
+    let settled_id = request_id;
+    let settled = Box::new(move |did_start: bool| {
+        if did_start {
+            settled_runtime.signal(&KalVoiceSignal::Speaking {
+                request_id: settled_id,
+                active: false,
+            });
+        }
+        delivered();
+    });
+    runtime
+        .speech()
+        .speak(&spoken_text(&announcement.text), started, settled)
+        .is_ok()
 }
 
 /// Saves preferences. A new push-to-talk key is registered with the OS right away (while

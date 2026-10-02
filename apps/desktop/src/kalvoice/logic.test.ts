@@ -119,6 +119,7 @@ describe("dictation insertion", () => {
         threadId: "thread-personal",
         providerId: "codex",
         providerAccountId: "personal",
+        instanceId: "instance-personal",
       },
       deliver: async () => undefined,
     });
@@ -131,6 +132,7 @@ describe("dictation insertion", () => {
       threadId: "thread-personal",
       providerId: "codex",
       providerAccountId: "personal",
+      instanceId: "instance-personal",
     });
     unregister();
     document.body.replaceChildren();
@@ -211,6 +213,7 @@ describe("dictation insertion", () => {
         threadId: "thread-2",
         providerId: "codex",
         providerAccountId: "work",
+        instanceId: "instance-work",
       },
       deliver: async () => {
         throw new DictationDeliveryError("provider_input_busy", "Codex is working.");
@@ -277,6 +280,31 @@ describe("dictation insertion", () => {
     expect(writes).toEqual(["typed first"]);
   });
 
+  it("revalidates provider readiness after earlier terminal input and before the PTY write", async () => {
+    let releaseFirst: (() => void) | undefined;
+    let providerPromptActive = false;
+    const writes: string[] = [];
+    const queue = createOrderedInputQueue(async (text) => {
+      writes.push(text);
+      if (writes.length === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+    });
+    queue.send("typed first");
+    await Promise.resolve();
+    const dictated = queue.deliver("must not answer approval\r", undefined, () => {
+      if (providerPromptActive) {
+        throw new DictationDeliveryError(
+          "provider_permission_prompt",
+          "The provider is waiting for an answer to its native prompt.",
+        );
+      }
+    });
+    providerPromptActive = true;
+    releaseFirst?.();
+
+    await expect(dictated).rejects.toMatchObject({ code: "provider_permission_prompt" });
+    expect(writes).toEqual(["typed first"]);
+  });
+
   it("strips every terminal control and bracketed-paste wrapper from dictated shell text", () => {
     expect(sanitizeTerminalDictation("echo safe\r\nwhoami\u001b[200~\u001b]9;notify\u0007\u001b[201~\t now")).toBe(
       "echo safe whoami now",
@@ -302,9 +330,11 @@ describe("dictation insertion", () => {
     expect(
       providerInputReadiness({ running: true, status: "waiting_for_permission", providerPromptActive: true }),
     ).toBe("provider_prompt");
-    expect(providerInputReadiness({ running: true, status: "active", providerPromptActive: false })).toBe("busy");
-    // Idle alone cannot prove that the CLI is at its normal prompt rather than an auth/setup menu.
-    expect(providerInputReadiness({ running: true, status: "idle", providerPromptActive: false })).toBe("unknown");
+    expect(providerInputReadiness({ running: true, status: "active", providerPromptActive: false })).toBe("ready");
+    expect(providerInputReadiness({ running: true, status: "thinking", providerPromptActive: false })).toBe("ready");
+    expect(providerInputReadiness({ running: true, status: "starting", providerPromptActive: false })).toBe("ready");
+    expect(providerInputReadiness({ running: true, status: "recovering", providerPromptActive: false })).toBe("busy");
+    expect(providerInputReadiness({ running: true, status: "idle", providerPromptActive: false })).toBe("ready");
     expect(providerInputReadiness({ running: false, status: "idle", providerPromptActive: false })).toBe("ended");
   });
 });
@@ -443,13 +473,13 @@ describe("assistant state", () => {
 
   it("formats usage and sizes", () => {
     expect(usageLine({ used: 482, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "482 / 1,500 used · 1,018 remaining · renews Oct 1",
+      "1,018 remaining · 482 / 1,500 used · resets Oct 1",
     );
     expect(usageLine({ used: 1501, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "1,501 / 1,500 used · 0 remaining · renews Oct 1",
+      "0 remaining · 1,501 / 1,500 used · resets Oct 1",
     );
     expect(usageLine({ used: 9, allowance: null, periodStart: "", resetsAt: "" })).toBe(
-      "9 KalVoice Requests used · Unlimited",
+      "Unlimited · 9 used this month",
     );
     expect(formatBytes(147_964_211)).toBe("148 MB");
     expect(formatBytes(1_533_763_059)).toBe("1.5 GB");

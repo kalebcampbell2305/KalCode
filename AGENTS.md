@@ -2,6 +2,12 @@
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## KalVoice integration rule (owner directive 2026-10-01)
+
+Codex and Claude Code share this policy, including the release lifecycle enforced by Claude's `tooling/release/ship.mjs lifecycle hook`. Apply the same delivery requirements regardless of agent. Reuse KalVoice's existing local speech, routing, provider authentication, workspace, terminal, app-control, and release systems. Prioritize working scene awareness, natural targeting, navigation, multi-agent launching, terminal prompting, follow-up context, focus illumination, and meaningful completion callbacks. Optional voice polish must not delay validated core improvements. Preserve native provider approvals and truthful account, plan, and hardware limits. Ship through the normal gates as the next internal build of the current public version on both Windows and macOS; do not create a new public version or treat a merge as delivery.
+
+**No separate KalVoice approval layer (owner reaffirmed 2026-10-01).** This applies to every user, including Owner. A voice action uses the same authenticated account, entitlements, and canonical action path as the corresponding app action. Do not add a KalVoice permission prompt or require users to approve KalVoice itself. Existing app and provider authorization remains authoritative; voice must not impersonate an approval response or bypass a provider sign-in requirement. Target clarification selects an object or account and is not an approval gate.
+
 ## Completion requires verified delivery (owner reaffirmed 2026-09-30)
 
 **MERGED IS NOT SHIPPED. BUILT IS NOT SHIPPED. DONE means users can receive the validated update and live production has been verified.**
@@ -41,49 +47,23 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Account for both platforms during design, implementation, testing, and release verification. Report any unverified platform behavior honestly.
 - Only an explicit owner instruction can narrow a task to one platform.
 
-## Permanent release and marketing model
+## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 
-**Features ship continuously. Builds increment internally. Public versions are deliberate, owner-declared milestones.**
+**BUILD CONTINUOUSLY. SHIP CONTINUOUSLY. THE PUBLIC VERSION IS JUST AN OWNER-CONTROLLED LABEL. WHEN THE OWNER REQUESTS A VERSION CHANGE, UPDATE THE VERSION CONSISTENTLY AND CONTINUE WORKING.**
 
-There are two separate concepts: continuous product builds, and public version (marketing) milestones.
+**1. Continuous development, independent of the version number.** Features, fixes, redesigns, improvements, builds, merges, deployments and shipping happen at any time under the current public version. A finished change that passes the normal harness (implement, test, review, integrate, build, deploy/publish, verify) ships through the normal KalCode update system right away: the Owner build updates, users receive the validated build, and the website and product surfaces update where relevant. Never wait for, or hold work for, a new version number. Never say "this ships with 0.1.9" unless the owner explicitly asked to hold that change.
 
-**1. Continuous product builds.** A finished KalCode change that passes the normal harness (implement, test, review, integrate, build, deploy/publish, verify) ships automatically through the normal KalCode update system:
-- the Owner build updates;
-- users receive the validated production build;
-- the website and product surfaces update where relevant;
-- finished, useful work does not wait for the next marketing version.
+**2. Internal builds.** Distinct builds share the public version and are told apart by an internal build/revision number, commit hash or equivalent (for example KalCode 0.1.8 build 184, 185, 186). Increment whatever internal build/update metadata the updater needs on Windows and macOS so a newer build ships while the public version stays the same.
 
-Each production build is identified by an internal build/revision number (for example public 0.1.7 with builds 217, 218, 219, or equivalent metadata). The public version does not change per build. The updater must compare that internal build/revision metadata correctly, so a newer build ships while the public version stays the same.
+**3. Owner dogfooding.** Where practical, the Owner account/build receives a fully validated production candidate first: validated build, then Owner receives it, then production verification, then users receive it. This never bypasses a required safety gate, and normal users are never the first people exposed to an unverified build.
 
-**2. Owner dogfooding.** Where practical, the Owner account/build receives a fully validated production candidate first, before broad rollout. The order is: validated build, then Owner receives it, then production verification, then users receive it. This never bypasses a required safety gate, and normal users are never the first people exposed to an unverified build.
+**4. Owner-controlled version switch.** The public version changes ONLY when the owner explicitly says so, for example "Change KalCode to 0.1.9", "Switch the version to 0.1.10" or "KalCode is now 0.1.11". Never infer or automatically increment it because many features shipped, time passed, a release happened, a major feature was completed or a build was published, and never bump it to satisfy a tool or hook.
 
-**3. Public version milestones.** The public, user-facing version changes **only** when the owner explicitly declares a new milestone, for example "Make this KalCode 0.1.8", "Release 0.1.8" or "Cut 0.1.8". Until then KalCode keeps shipping validated builds while publicly staying on the current version. Never infer a public version bump, and never bump to satisfy a tool or hook.
+**5. A version change is a simple number change.** Update the canonical public version and every reference that needs it so KalCode reports the new version consistently: canonical application version, package metadata, desktop app metadata, installer/package metadata, updater metadata, website version display, About/version UI, and release/build configuration that requires it. Use one canonical version source wherever technically appropriate. The next appropriate build carries the new version through the normal gates, and development continues normally.
 
-**4. A version release is a marketing event.** When the owner declares a new version:
-1. update the public version consistently;
-2. gather everything meaningful added since the previous public version;
-3. write the What's New summary;
-4. update the changelog and release notes;
-5. update the relevant website references;
-6. prepare announcement copy, and screenshots where useful;
-7. prepare the "What's new in KalCode <version&gt;" video;
-8. prepare social-media launch content;
-9. ship and verify the milestone through the normal release pipeline.
+A version change does **not** by itself mean: creating new features, stopping current development, repeating completed testing, reopening finished work, a marketing campaign, a launch video, a large changelog or What's New, an artificial release milestone, reclassifying features, or waiting for unfinished features. Do those only when separately requested or technically required.
 
-The version number is the story around a meaningful group of improvements, not a counter for every code change.
-
-### Permanent continuous-shipping rule (owner directive)
-
-**A completed KalCode feature never waits for the next public version number.**
-
-If KalCode is publicly 0.1.7, every new feature, fix, UI change and KalCode or KalVoice change goes through build, test, merge, production artifact and ship, and **updates the current 0.1.7 users** as soon as the normal automated gates pass. For example: 0.1.7, then feature A ships, then feature B, then feature C. Users receive all of them, and it is still publicly called 0.1.7.
-
-- The public version number is **not** a feature gate. Never hold finished work for a future public version.
-- Never say "this change waits on main for the next version" or "this ships with 0.1.8" unless the owner explicitly told you to hold that change.
-- Increment whatever internal build/revision/update metadata is technically required so the updater recognizes the newer build, on Windows and macOS.
-- When the owner says "Make KalCode 0.1.8", no product feature changes or unlocks. Everything already shipped stays exactly as it is. Only the public milestone moves, with its What's New, changelog, release notes, website/version references, marketing video and social posts.
-
-**Features ship immediately after validation. Users get them in the current version. Public version numbers are owner-declared marketing milestones only.**
+**6. Versions serve the marketing cadence, not engineering.** A new public version needs no minimum number of features: 0.1.9 may carry one major feature, 0.1.10 three, 0.1.11 two. The owner changes the version whenever they want a new public marketing or update moment; never question whether a version has "enough" changes. If the owner separately asks for a launch/update video, changelog, release post or marketing assets, build them around the features shipped since the previous public version; never create them automatically just because the number changed. Cadence: BUILD → OWNER CHANGES VERSION WHEN DESIRED → OPTIONAL MARKETING/VIDEO → KEEP BUILDING.
 
 **Current capability status (keep this line accurate).** Builds ship as `X.Y.Z+N`: the checked-in public version plus build number N (the commit count of the merged `main` release commit). The release tooling stamps it (Windows version resources `X.Y.Z.N`, macOS `CFBundleVersion` N), the updater orders builds numerically, and installed 0.1.7 clients accept newer builds and versions. The UI shows the public version, plus "build N" where versions are detailed. The current public version is 0.1.8 (owner-declared 2026-10-01), and there is no separate Owner update channel yet: Owner-first means installing the validated build on the Owner machines before publishing it to the feed. Never bump the public version to ship a build. When a lifecycle hook reports unshipped desktop changes, ship them as a new internal build of the current public version.
 
@@ -93,7 +73,26 @@ If KalCode is publicly 0.1.7, every new feature, fix, UI change and KalCode or K
 
 ## Permanent zero-owner release rule (owner directive 2026-10-01)
 
-Releases, including owner-declared public milestones, complete without the owner: "you should not need me for anything." Agents run the gates, builds, signing, publication, merges, deploys and approvals themselves. QA evidence comes from automation (end-to-end tests, UI automation, gate runners on both platforms, agent review) instead of owner sittings or clicks. Never bypass signing, notarization, signature, integrity, updater or security checks. If something is physically impossible without a human, such as an operating-system consent that can only be given at the machine, make it a one-time setup, report that exact action once, and never make it a per-release step.
+Releases, including builds that carry an owner-requested version change, complete without the owner: "you should not need me for anything." Agents run the gates, builds, signing, publication, merges, deploys and approvals themselves. QA evidence comes from automation (end-to-end tests, UI automation, gate runners on both platforms, agent review) instead of owner sittings or clicks. Never bypass signing, notarization, signature, integrity, updater or security checks. If something is physically impossible without a human, such as an operating-system consent that can only be given at the machine, make it a one-time setup, report that exact action once, and never make it a per-release step.
+
+## Permanent KalCode pricing and plan roadmap (owner directive 2026-10-01)
+
+**KALCODE PRICING IS A CONTINUOUS PRODUCT SYSTEM.** Free = TRY ("Try KalCode."). Pro = BUILD ("For developers using AI every day."). MAX = ORCHESTRATE ("Serious multi-agent development.", marked MOST POPULAR). MAX 2X = AUTOMATE ("Maximum KalCode. Maximum autonomy.").
+
+| Plan | Monthly | Yearly (saves) | KalVoice Requests/month | Open terminals | Parallel agents | Workspaces | Provider accounts |
+|---|---|---|---|---|---|---|---|
+| Free | $0 | $0 | 25 | 4 | 1 | 2 | 2 |
+| Pro | $10 | $100 ($20) | 150 | 12 | 4 | 10 | 6 |
+| MAX | $25 | $250 ($50) | 500 | 18 | 10 | Unlimited | 8 |
+| MAX 2X | $50 | $500 ($100) | 1,000 | Unlimited | Unlimited | Unlimited | Unlimited |
+
+- **One source of truth.** `packages/protocol/src/plans.ts` holds every price, limit, positioning line and the plan roadmap (`PLAN_FEATURE_GROUPS`). The website, account page, desktop onboarding and settings, Account Hub, the server-signed entitlement and KalVoice metering derive from it. Native Rust mirrors carry a drift test against it. Never hardcode a price, limit, plan name or feature's plan anywhere else. Paid entitlements are enforced server-side or from the verified signed tier, never from client-only values.
+- "Unlimited" means KalCode imposes no limit of its own; hardware, OS, provider, account, API and upstream limits may still apply (`UNLIMITED_NOTE`). A KalVoice Request is one executed KalVoice command; on-device dictation and voice into terminals are never counted. Reaching a limit never closes anything; KalCode only refuses opening one more.
+- Basic product quality (Account Hub, usage visibility, exact identity, navigation, command palette, terminal rename/status/smart close, Needs You, KalTidy, Favorites, core Code/Threads/Browser, security fixes, accessibility, updates) is on every plan. Monetize scale, orchestration, autonomy and cloud capacity. Max 2X gets the strongest autonomy and the highest cloud-backed capacity.
+- **Never change prices, limits or a feature's plan without explicit owner instruction.** Existing subscribers and live Stripe prices are inspected before any billing change and never deleted blindly.
+- **Roadmap truth.** Every plan feature is `available` or `coming_soon`. A feature becomes `available` only after it is implemented, tested, merged, built, shipped, user-receivable and production-verified; `verifiedIn` records that build. Never mark unfinished work Available.
+
+**Automatic website sync (part of every feature's Definition of Done).** When implementing a feature: (1) find its entry in `PLAN_FEATURE_GROUPS`; (2) keep its plan assignment; (3) ship it through the normal lifecycle; (4) once production is verified, flip it to `available` with `verifiedIn: "<version>+<build>"` in the same release follow-up, deploy the website, and verify the live pricing page, without being reminded; (5) update account/billing/in-app plan descriptions when relevant. If a new feature has no plan entry, do not invent a pricing decision: ask the owner which plan(s) get it before changing public entitlements.
 
 ## Definition of Done
 
@@ -140,7 +139,7 @@ Run `node tooling/release/ship.mjs classify --base <ref> --head <ref>` to get th
 | Change | Lifecycle |
 |---|---|
 | Website only (`apps/website/**`) | test → merge → deploy the website → verify the live site |
-| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. Ships to current-version users as soon as the gates pass. The public version changes only at an owner-declared milestone (see the continuous-shipping rule) |
+| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed build with a new internal build number → automated release gates → Owner-first rollout → publish the build update → verify the update feed and a production install. Ships to current-version users as soon as the gates pass. The public version changes only when the owner requests it (see the version rule) |
 | Website and desktop | both pipelines |
 | Published docs (`docs/**` that the website or release notes publish) | publish the affected docs |
 | Internal (`tooling/**`, `.github/**`, tests, agent/dev files) | test → review → merge. No customer release unless a production artifact changes |

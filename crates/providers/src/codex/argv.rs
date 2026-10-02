@@ -169,17 +169,27 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
 pub enum CodexExecError {
     #[error("the model name is not valid")]
     InvalidModel,
+    #[error("the reasoning effort is not supported")]
+    InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
+}
+
+/// Codex reasoning-effort values certified for the CLI config override.
+pub const EFFORT_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+
+pub fn valid_effort_name(effort: &str) -> bool {
+    EFFORT_LEVELS.contains(&effort)
 }
 
 /// The argv (after the program) for one headless turn. The prompt is written to stdin (`-`).
 pub fn exec_args(
     mode: PermissionMode,
     model: Option<&str>,
+    effort: Option<&str>,
     resume: Option<&str>,
 ) -> Result<Vec<OsString>, CodexExecError> {
-    exec_args_with_overrides(mode, model, resume, &[])
+    exec_args_with_overrides(mode, model, effort, resume, &[])
 }
 
 /// Managed variant with already-tokenized root CLI overrides (`-c`, value pairs). The caller is
@@ -187,6 +197,7 @@ pub fn exec_args(
 pub(crate) fn exec_args_with_overrides(
     mode: PermissionMode,
     model: Option<&str>,
+    effort: Option<&str>,
     resume: Option<&str>,
     overrides: &[OsString],
 ) -> Result<Vec<OsString>, CodexExecError> {
@@ -202,6 +213,13 @@ pub(crate) fn exec_args_with_overrides(
         }
         out.push("--model".into());
         out.push(model.into());
+    }
+    if let Some(effort) = effort {
+        if !valid_effort_name(effort) {
+            return Err(CodexExecError::InvalidEffort);
+        }
+        out.push("-c".into());
+        out.push(format!("model_reasoning_effort='{effort}'").into());
     }
     if let Some(id) = resume {
         if !kalcode_contracts::ids::is_valid_id(id) {
@@ -227,7 +245,7 @@ mod tests {
     ];
 
     fn args(mode: PermissionMode, resume: Option<&str>) -> Vec<String> {
-        exec_args(mode, Some("gpt-5"), resume)
+        exec_args(mode, Some("gpt-5"), None, resume)
             .expect("args")
             .into_iter()
             .map(|a| a.into_string().expect("utf8"))
@@ -321,12 +339,30 @@ mod tests {
         assert_eq!(args[at + 1], id);
         assert_eq!(args[at + 2], "-");
         assert_eq!(
-            exec_args(PermissionMode::Approve, None, Some("--last")),
+            exec_args(PermissionMode::Approve, None, None, Some("--last")),
             Err(CodexExecError::InvalidSessionId)
         );
         assert_eq!(
-            exec_args(PermissionMode::Approve, Some("-c"), None),
+            exec_args(PermissionMode::Approve, Some("-c"), None, None),
             Err(CodexExecError::InvalidModel)
         );
+        let args = exec_args(PermissionMode::Approve, None, Some("high"), None).expect("effort");
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.into_string().expect("utf8"))
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] })
+        );
+        for effort in EFFORT_LEVELS {
+            assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
+        }
+        for effort in ["", "HIGH", "max", "ultra", "high' -c web_search='live"] {
+            assert_eq!(
+                exec_args(PermissionMode::Approve, None, Some(effort), None),
+                Err(CodexExecError::InvalidEffort)
+            );
+        }
     }
 }

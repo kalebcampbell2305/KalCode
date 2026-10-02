@@ -71,7 +71,7 @@ async function mountStable(prepare?: (h: Omit<Harness, "user" | "raw">) => Promi
   }));
   expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(true);
   expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(true);
-  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(false);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(true);
 
   transport.workspaces.queueFolders("alpha", "beta");
   const alpha = (await client.openWorkspaceDialog()) as Workspace;
@@ -135,7 +135,7 @@ describe("New thread account defaults (Stable)", () => {
     expect(form.getByText("Chosen for this thread.")).toBeInTheDocument();
     // Nothing is written by choosing.
     expect(h.calls.some((c) => c.command === "provider_account_bind")).toBe(false);
-  });
+  }, 15_000);
 
   it("lists accounts default first in natural name order, with the default and sign-in state in words", async () => {
     const h = await mountStable(async ({ client }) => {

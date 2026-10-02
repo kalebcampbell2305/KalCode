@@ -6,7 +6,7 @@
  * The JSON-LD block is a non-executing data block (`type="application/ld+json"`), which the
  * Worker's CSP `script-src` does not govern, so it needs no hash.
  */
-import { PLANS } from "@kalcode/protocol/plans";
+import { BILLING_INTERVALS, PLANS, priceFor } from "@kalcode/protocol/plans";
 import { OS_NAMES, RELEASES, type ReleaseManifest } from "./releases";
 import { CONTACT_EMAIL, SITE_NAME, SITE_ORIGIN, SOCIAL } from "./site";
 
@@ -27,16 +27,19 @@ export function structuredData(manifest: ReleaseManifest = RELEASES): Record<str
     offers: PLANS.map((plan) => ({
       "@type": "Offer",
       name: plan.name,
-      price: plan.price.amountUsd.toFixed(2),
+      description: plan.tagline,
+      price: priceFor(plan, "month").toFixed(2),
       priceCurrency: "USD",
       url: `${SITE_ORIGIN}/pricing`,
-      priceSpecification: {
+      // Monthly and yearly billing, each a recurring charge for its billing period.
+      priceSpecification: BILLING_INTERVALS.map((interval) => ({
         "@type": "UnitPriceSpecification",
-        price: plan.price.amountUsd.toFixed(2),
+        price: priceFor(plan, interval).toFixed(2),
         priceCurrency: "USD",
-        billingDuration: "P1M",
-        unitText: "MONTH",
-      },
+        billingDuration: interval === "year" ? "P1Y" : "P1M",
+        unitCode: interval === "year" ? "ANN" : "MON",
+        unitText: interval === "year" ? "YEAR" : "MONTH",
+      })),
     })),
   };
   if (operatingSystems.length > 0) {

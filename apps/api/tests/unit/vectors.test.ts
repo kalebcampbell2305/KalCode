@@ -52,7 +52,7 @@ const VECTORS_PATH = join(REPO_ROOT, "crates", "entitlements", "testdata", "vect
 const T0 = 1_790_000_000; // 2026-09-21T14:13:20Z
 const ACCOUNT = "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11";
 const FEATURE_QUERIES = ["persistentAgents", "advancedMissions", "eventAutomations", "featureAddedInTheFuture"];
-const LIMIT_QUERIES = ["concurrentThreads", "limitAddedInTheFuture"];
+const LIMIT_QUERIES = ["parallelAgents", "openTerminals", "kalvoiceRequestsPerMonth", "limitAddedInTheFuture"];
 
 type Expectation =
   | { ok: true; entitlement: Entitlement; features: Record<string, boolean>; limits: Record<string, number | null> }
@@ -248,11 +248,11 @@ async function generateVectors(): Promise<Vectors> {
   const receiptBad = (name: string, token: string, error: VerifyError, now = T0 + 60) => {
     receiptCases.push({ name, token, now, expect: { ok: false, error } });
   };
-  const proReceipt = receipt("pro", 412, 1500);
+  const proReceipt = receipt("pro", 41, 150);
   const proReceiptToken = await receiptOk("pro-receipt", proReceipt);
   await receiptOk("owner-receipt", receipt("owner", 12_345, null));
-  await receiptOk("max2x-receipt", receipt("max2x", 5_500, 10_000));
-  await receiptOk("free-receipt-exhausted", receipt("free", 75, 75));
+  await receiptOk("max2x-receipt", receipt("max2x", 550, 1_000));
+  await receiptOk("free-receipt-exhausted", receipt("free", 25, 25));
   receiptBad("pro-receipt-expired", proReceiptToken, "expired", proReceipt.expiresAt);
   receiptBad("entitlement-presented-as-receipt", ownerToken, "unsupported_header");
   cases.push({
@@ -389,7 +389,7 @@ describe("shared entitlement vectors", () => {
     expect(owner?.expect).toMatchObject({
       ok: true,
       features: { featureAddedInTheFuture: true },
-      limits: { concurrentThreads: null, limitAddedInTheFuture: null },
+      limits: { parallelAgents: null, kalvoiceRequestsPerMonth: null, limitAddedInTheFuture: null },
     });
   });
 });

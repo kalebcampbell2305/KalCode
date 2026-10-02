@@ -14,7 +14,9 @@ use kalcode_context::{
     ContextItem, ContextPackage, ContextPurpose, Firewall, FirewallPolicy, ItemKind, ItemOrigin,
     PackageOptions, PromptReview, RenderedPackage, TextOnlyDefaults, WorkspaceRoot,
 };
-use kalcode_contracts::agent::{AgentEvent, FileChange, ProviderError, ProviderId, Usage};
+use kalcode_contracts::agent::{
+    AgentEvent, FileChange, ModelInfo, ProviderError, ProviderId, Usage,
+};
 use kalcode_contracts::events::EventPayload;
 use kalcode_contracts::ids::new_id;
 use kalcode_contracts::permissions::{ApprovalDecision, PermissionMode, PolicyEffect};
@@ -117,6 +119,43 @@ fn create_starts_a_session_and_records_the_lifecycle() {
     // Event payloads never carry message text.
     let json = serde_json::to_string(&events).expect("json");
     assert!(!json.contains("OAuth callback race"));
+}
+
+#[test]
+fn claude_full_model_id_is_preserved_with_a_nonempty_alias_catalog() {
+    let h = Harness::new();
+    let model = |id: &str, display_name: &str, is_default| ModelInfo {
+        id: id.into(),
+        display_name: display_name.into(),
+        is_default,
+    };
+    let claude = FakeProvider::with_models(
+        ProviderId::CLAUDE_CODE,
+        "Claude Code",
+        vec![
+            model("default", "Account default", true),
+            model("opus", "Opus", false),
+            model("sonnet", "Sonnet", false),
+            model("haiku", "Haiku", false),
+            model("fable", "Fable", false),
+        ],
+    );
+    h.registry.register(claude.clone());
+
+    let thread = h
+        .runtime
+        .create(CreateThread {
+            provider_id: ProviderId::CLAUDE_CODE.into(),
+            model: Some("claude-sonnet-5".into()),
+            ..h.request("use the exact Claude model")
+        })
+        .expect("full Claude model id");
+
+    assert_eq!(thread.model.as_deref(), Some("claude-sonnet-5"));
+    assert_eq!(
+        claude.last_session().config.model.as_deref(),
+        Some("claude-sonnet-5")
+    );
 }
 
 #[test]
@@ -1448,6 +1487,13 @@ fn inputs_are_validated_natively() {
         },
         "invalid_model",
     );
+    bad(
+        CreateThread {
+            effort: Some("high; --model opus".into()),
+            ..h.request("x")
+        },
+        "invalid_effort",
+    );
     bad(h.request("   "), "invalid_prompt");
     bad(
         CreateThread {
@@ -1713,6 +1759,7 @@ fn crash_recovery_interrupts_threads_left_running() {
         account_label: None,
         workspace_id: workspace_id.clone(),
         model: None,
+        effort: None,
         permission_mode: PermissionMode::Approve,
         prompt: prompt.into(),
         name: None,
@@ -1798,6 +1845,7 @@ fn idle_threads_start_without_a_task() {
         account_label: None,
         workspace_id: h.workspace_id.clone(),
         model: None,
+        effort: None,
         permission_mode: PermissionMode::Approve,
         name: None,
     };
@@ -1834,6 +1882,283 @@ fn idle_threads_start_without_a_task() {
     assert_eq!(status(&h, &named.id), ThreadStatus::Active);
 }
 
+fn idle_request(h: &Harness) -> kalcode_threads::CreateIdleThread {
+    kalcode_threads::CreateIdleThread {
+        provider_id: "fake".into(),
+        provider_account_id: None,
+        account_label: None,
+        workspace_id: h.workspace_id.clone(),
+        model: None,
+        effort: None,
+        permission_mode: PermissionMode::Approve,
+        name: None,
+    }
+}
+
+#[test]
+fn exact_unused_launch_group_restarts_with_persisted_model_and_effort() {
+    let h = Harness::new();
+    let created = h
+        .runtime
+        .create_idle_threads(&idle_request(&h), 2)
+        .expect("create")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("threads");
+    let ids = created
+        .iter()
+        .map(|thread| thread.id.clone())
+        .collect::<Vec<_>>();
+    let targets = h.runtime.launch_instances(&ids).expect("instances");
+    let updated = h
+        .runtime
+        .reconfigure_idle_launch(&targets, &ProviderId::new("fake"), "fake-small", "high")
+        .expect("reconfigure");
+    assert_eq!(updated.len(), 2);
+    assert!(updated.iter().all(|thread| {
+        thread.status == ThreadStatus::Idle
+            && thread.model.as_deref() == Some("fake-small")
+            && thread.effort.as_deref() == Some("high")
+    }));
+    assert_eq!(h.provider.session_count(), 4, "both sessions restarted");
+    for session in h.provider.sessions.lock().unwrap().iter().skip(2) {
+        assert_eq!(session.config.model.as_deref(), Some("fake-small"));
+        assert_eq!(session.config.effort.as_deref(), Some("high"));
+    }
+}
+
+#[test]
+fn native_draft_refuses_the_whole_recent_launch_without_effects() {
+    let h = Harness::new();
+    let created = h
+        .runtime
+        .create_idle_threads(&idle_request(&h), 2)
+        .expect("create")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("threads");
+    let ids = created
+        .iter()
+        .map(|thread| thread.id.clone())
+        .collect::<Vec<_>>();
+    let targets = h.runtime.launch_instances(&ids).expect("instances");
+    h.provider.session(1).type_native_draft();
+    assert_code(
+        h.runtime
+            .reconfigure_idle_launch(&targets, &ProviderId::new("fake"), "fake-small", "high"),
+        "recent_launch_not_unused",
+    );
+    assert_eq!(h.provider.session_count(), 2, "nothing restarted");
+    for (index, id) in ids.iter().enumerate() {
+        let thread = h.runtime.get(id).expect("thread");
+        assert_eq!(thread.status, ThreadStatus::Idle);
+        assert_eq!(thread.model, None);
+        assert!(!h.provider.session(index).is_ended());
+    }
+}
+
+#[test]
+fn recent_launch_reconfigure_reconciles_start_and_terminate_failures() {
+    let h = Harness::new();
+    let created = h
+        .runtime
+        .create_idle_threads(&idle_request(&h), 2)
+        .expect("create")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("threads");
+    let ids = created
+        .iter()
+        .map(|thread| thread.id.clone())
+        .collect::<Vec<_>>();
+    let targets = h.runtime.launch_instances(&ids).expect("instances");
+    h.provider
+        .fail_next_start(ProviderError::Start("injected".into()));
+    let updated = h
+        .runtime
+        .reconfigure_idle_launch(&targets, &ProviderId::new("fake"), "fake-small", "high")
+        .expect("truthful partial result");
+    assert_eq!(updated.len(), 2);
+    assert!(
+        updated
+            .iter()
+            .all(|thread| thread.status != ThreadStatus::Starting)
+    );
+    assert!(
+        updated
+            .iter()
+            .any(|thread| thread.status == ThreadStatus::Failed)
+    );
+    assert!(
+        updated
+            .iter()
+            .any(|thread| thread.status == ThreadStatus::Idle)
+    );
+
+    let fresh = h
+        .runtime
+        .create_idle_threads(&idle_request(&h), 2)
+        .expect("second group")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("threads");
+    let fresh_ids = fresh
+        .iter()
+        .map(|thread| thread.id.clone())
+        .collect::<Vec<_>>();
+    let fresh_targets = h.runtime.launch_instances(&fresh_ids).expect("instances");
+    let failing_id = fresh_targets[1].thread_id.clone();
+    let session_index = fresh_ids
+        .iter()
+        .position(|id| id == &failing_id)
+        .expect("target");
+    h.provider
+        .session(h.provider.session_count() - 2 + session_index)
+        .fail_next_terminate();
+    assert_code(
+        h.runtime.reconfigure_idle_launch(
+            &fresh_targets,
+            &ProviderId::new("fake"),
+            "fake-small",
+            "max",
+        ),
+        "provider_terminate_failed",
+    );
+    for id in fresh_ids {
+        let thread = h.runtime.get(&id).expect("restored");
+        assert_ne!(thread.status, ThreadStatus::Starting);
+        assert_eq!(thread.model, None, "old configuration retained");
+        assert_eq!(thread.effort, None, "old configuration retained");
+    }
+}
+
+#[test]
+fn concurrent_stop_waits_for_recent_launch_reconfigure_and_is_not_overwritten() {
+    let h = Harness::new();
+    let created = h
+        .runtime
+        .create_idle_threads(&idle_request(&h), 1)
+        .expect("create")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("thread");
+    let id = created[0].id.clone();
+    let targets = h
+        .runtime
+        .launch_instances(std::slice::from_ref(&id))
+        .expect("instance");
+
+    let (entered_tx, entered_rx) = sync_channel(1);
+    let (release_tx, release_rx) = sync_channel(1);
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    h.provider.set_start_observer({
+        let first = first.clone();
+        let release_rx = Mutex::new(release_rx);
+        move || {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                entered_tx.send(()).expect("announce blocked start");
+                release_rx.lock().unwrap().recv().expect("release start");
+            }
+        }
+    });
+
+    let runtime = Arc::new(h.runtime);
+    let configuring = {
+        let runtime = runtime.clone();
+        std::thread::spawn(move || {
+            runtime.reconfigure_idle_launch(
+                &targets,
+                &ProviderId::new("fake"),
+                "fake-small",
+                "high",
+            )
+        })
+    };
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("reconfigure reached provider start");
+
+    let (stop_entered_tx, stop_entered_rx) = sync_channel(1);
+    let (stopped_tx, stopped_rx) = sync_channel(1);
+    let stopping = {
+        let runtime = runtime.clone();
+        let id = id.clone();
+        std::thread::spawn(move || {
+            stop_entered_tx.send(()).expect("announce stop call");
+            stopped_tx.send(runtime.stop(&id)).expect("return stop");
+        })
+    };
+    stop_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stop task reached runtime call");
+    assert!(
+        stopped_rx.recv_timeout(Duration::from_millis(75)).is_err(),
+        "stop must wait on the same live-thread authority lock"
+    );
+
+    release_tx.send(()).expect("release provider start");
+    let configured = configuring
+        .join()
+        .expect("reconfigure task")
+        .expect("reconfigure");
+    assert_eq!(configured[0].status, ThreadStatus::Idle);
+    let stopped = stopped_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stop completed")
+        .expect("stop");
+    stopping.join().expect("stop task");
+    assert_eq!(stopped.status, ThreadStatus::Interrupted);
+    assert_eq!(
+        runtime.get(&id).expect("final thread").status,
+        ThreadStatus::Interrupted
+    );
+}
+
+#[test]
+fn effort_is_normalized_persisted_and_reused_after_runtime_restart() {
+    let h = Harness::new();
+    let created = h
+        .runtime
+        .create(CreateThread {
+            effort: Some(" HIGH ".into()),
+            ..h.request("keep the selected effort")
+        })
+        .expect("create");
+    assert_eq!(created.effort.as_deref(), Some("high"));
+    assert_eq!(
+        h.provider.last_session().config.effort.as_deref(),
+        Some("high")
+    );
+    h.runtime.stop(&created.id).expect("stop");
+
+    let Harness {
+        dir,
+        core,
+        registry,
+        workspaces,
+        workspace_id,
+        gate,
+        provider,
+        runtime,
+    } = h;
+    drop(runtime);
+    let restarted = ThreadRuntime::new(core, registry, workspaces, gate).expect("restart");
+    assert_eq!(
+        restarted
+            .get(&created.id)
+            .expect("summary")
+            .effort
+            .as_deref(),
+        Some("high")
+    );
+    restarted.resume(&created.id, None).expect("resume");
+    assert_eq!(
+        provider.last_session().config.effort.as_deref(),
+        Some("high")
+    );
+    drop((dir, workspace_id));
+}
+
 #[test]
 fn selected_provider_account_survives_runtime_restart_and_default_changes() {
     let h = Harness::new();
@@ -1865,6 +2190,7 @@ fn selected_provider_account_survives_runtime_restart_and_default_changes() {
             account_label: Some("My Personal".into()),
             workspace_id: h.workspace_id.clone(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Approve,
             prompt: "keep this account".into(),
             name: None,
@@ -2015,4 +2341,111 @@ fn scoped_operations_and_search_for_non_ui_callers() {
     assert!(h.runtime.find("   ").unwrap().is_empty());
     let exact = h.runtime.find("write release notes").unwrap();
     assert_eq!(exact[0].id, b, "exact name first");
+}
+
+#[test]
+fn a_limited_plan_bounds_running_agents_without_leaving_rows_behind() {
+    use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
+    let h = Harness::new();
+    let plan: Arc<Mutex<Option<PlanLimit>>> =
+        Arc::new(Mutex::new(PlanTier::Free.limit(Limited::ParallelAgents)));
+    let source = plan.clone();
+    h.runtime
+        .set_agent_limit(Arc::new(move || *source.lock().unwrap()));
+
+    let first = started(&h, "first task");
+    let refused = h
+        .runtime
+        .create(h.request("second task"))
+        .expect_err("one agent at a time on Free");
+    assert_eq!(refused.code, "too_many_agents");
+    assert_eq!(
+        refused.message,
+        "The Free plan allows 1 coding agent at a time. Stop an agent to start another, or upgrade to Pro for 4."
+    );
+    assert_eq!(
+        h.runtime.list(None, true).expect("list").len(),
+        1,
+        "a refused create writes no thread row"
+    );
+
+    // Stopping the agent frees the slot; the running one is never stopped by a refusal.
+    h.runtime.stop(&first).expect("stop");
+    let stopped = status(&h, &first);
+    let second = started(&h, "second task");
+    let refused = h
+        .runtime
+        .resume(&first, None)
+        .expect_err("resume past the cap");
+    assert_eq!(refused.code, "too_many_agents");
+    assert_eq!(
+        status(&h, &first),
+        stopped,
+        "a refused resume never leaves the thread starting"
+    );
+    assert_eq!(status(&h, &second), ThreadStatus::Active);
+
+    // No KalCode-side cap (MAX 2X, Owner): both run.
+    *plan.lock().unwrap() = PlanTier::Max2x.limit(Limited::ParallelAgents);
+    h.runtime.resume(&first, None).expect("uncapped resume");
+    started(&h, "third task");
+}
+
+#[test]
+fn running_thread_snapshot_binds_exact_sessions_and_keeps_paused_processes() {
+    use kalcode_contracts::kalvoice::ThreadScope;
+
+    let h = Harness::new();
+    let a = started(&h, "work on frontend");
+    let b = started(&h, "work on backend");
+    h.runtime.pause(&a).expect("pause while retaining session");
+
+    let all = h
+        .runtime
+        .running_threads(&ThreadScope::All)
+        .expect("running snapshot");
+    let ids = all
+        .iter()
+        .map(|target| target.thread.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&a.as_str()), "paused session stays bound");
+    assert!(ids.contains(&b.as_str()));
+
+    let exact = h
+        .runtime
+        .running_threads(&ThreadScope::Thread {
+            thread_id: a.clone(),
+        })
+        .expect("exact running snapshot");
+    assert_eq!(exact.len(), 1);
+    assert_eq!(exact[0].thread.id, a);
+
+    let stale = h
+        .runtime
+        .running_threads(&ThreadScope::Thread {
+            thread_id: b.clone(),
+        })
+        .expect("bound backend")
+        .pop()
+        .expect("running backend");
+
+    h.runtime.stop(&b).expect("stop backend");
+    h.runtime.resume(&b, None).expect("replace backend session");
+    assert_eq!(
+        h.runtime
+            .stop_running_thread(&stale)
+            .expect_err("stale target must not stop replacement")
+            .code,
+        "thread_stop_target_changed"
+    );
+    assert!(
+        h.runtime
+            .running_threads(&ThreadScope::Thread {
+                thread_id: b.clone(),
+            })
+            .expect("replacement snapshot")
+            .iter()
+            .any(|target| target.thread.id == b),
+        "replacement session remains running"
+    );
 }

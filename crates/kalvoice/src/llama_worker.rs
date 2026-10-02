@@ -3,8 +3,9 @@
 //! Authority is deliberately narrow: a child process binds only to IPv4 loopback, requires a
 //! per-process random bearer key passed through its environment, runs offline with its Web UI,
 //! MCP proxy, slots endpoint, RPC modules, reasoning output, and logs disabled, and receives only
-//! the bounded request/workspace snapshot from [`LocalInterpretationRequest`]. No provider,
-//! credential, path discovery, browser automation, or general tool surface is exposed.
+//! the bounded request/workspace/scene snapshot from [`LocalInterpretationRequest`]. No provider
+//! runtime, credential, provider response, path discovery, browser automation, or general tool
+//! surface is exposed; scene labels contain only bounded owner-visible metadata.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -888,6 +889,7 @@ fn validate_request(request: &LocalInterpretationRequest) -> Result<(), LlamaWor
     if request.request.trim().is_empty()
         || request.request.chars().count() > MAX_LOCAL_REQUEST_CHARS
         || request.workspaces.len() > MAX_LOCAL_WORKSPACES
+        || request.grounded_actions.len() > MAX_GROUNDED_ACTION_CANDIDATES
         || request.workspace_id.as_ref().is_some_and(|current| {
             !request
                 .workspaces

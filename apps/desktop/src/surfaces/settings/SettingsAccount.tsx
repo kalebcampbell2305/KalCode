@@ -2,15 +2,17 @@ import { Button, Panel } from "@kalcode/ui/components";
 import { LogOut, UserRound } from "lucide-react";
 import { useAccount } from "../../account/AccountProvider.tsx";
 import type { AccountUiError } from "../../account/accountState.ts";
-import type { AccountSnapshot, AccountTier, AccountUsageSnapshot } from "../../ipc/account.ts";
+import { type AccountSnapshot, type AccountTier, type AccountUsageSnapshot, tierName } from "../../ipc/account.ts";
+import { usageLine } from "../../kalvoice/assistantState.ts";
 import styles from "./SettingsAccount.module.css";
 
+/** Plan names for Account Hub and Settings, from the canonical catalog. */
 export const TIER_NAMES: Record<AccountTier, string> = {
-  free: "Free",
-  pro: "Pro",
-  max: "Max",
-  max2x: "Max 2X",
-  owner: "Owner",
+  free: tierName("free"),
+  pro: tierName("pro"),
+  max: tierName("max"),
+  max2x: tierName("max2x"),
+  owner: tierName("owner"),
 };
 
 export interface SettingsAccountViewProps {
@@ -38,12 +40,7 @@ export function SettingsAccount() {
 
 export function SettingsAccountView({ account, usage, busy, error, onManage, onLogout }: SettingsAccountViewProps) {
   const paid = account.tier === "pro" || account.tier === "max" || account.tier === "max2x";
-  const usageLabel =
-    usage?.allowance === null
-      ? "Unlimited requests"
-      : usage
-        ? `${usage.used.toLocaleString()} of ${usage.allowance.toLocaleString()} requests used`
-        : "Usage unavailable";
+  const usageLabel = usage?.allowance === null ? "Unlimited requests" : usage ? usageLine(usage) : "Usage unavailable";
   return (
     <Panel
       id="kalcode-account"
@@ -71,7 +68,7 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
         </div>
         <div>
           <dt>Plan</dt>
-          <dd>{account.tier ? TIER_NAMES[account.tier] : "Not activated"}</dd>
+          <dd>{account.tier ? tierName(account.tier) : "Not activated"}</dd>
         </div>
         <div>
           <dt>KalVoice</dt>
