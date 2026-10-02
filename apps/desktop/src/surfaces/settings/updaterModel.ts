@@ -92,9 +92,9 @@ export function readyLabel(currentVersion: string | null | undefined, availableV
 }
 
 /**
- * Whether native staged the ready update (a newer build of the running public version) to
- * install silently when KalCode closes. Those get no prompt and no restart button. New public
- * versions, and any build whose silent install failed, keep the restart-and-install prompt.
+ * Whether native staged the ready update (any newer release, a new public version included) to
+ * install silently when KalCode closes. Those get no prompt and no restart button. A build whose
+ * silent install failed keeps the restart-and-install prompt.
  */
 export function installsWhenClosed(status: UpdateStatus): boolean {
   return status.phase === "ready" && status.installOnQuit;
