@@ -38,3 +38,23 @@ export const publishedManifest: ReleaseManifest = {
     },
   ],
 };
+
+/**
+ * A synthetic signed Stable `X.Y.Z+N` build manifest with exactly the shape of `base` (pass the committed
+ * releases.json): only the version-bound fields change, as publish.mjs writes them for a build: version,
+ * plus-free `KalCode_X.Y.Z_buildN_*` file names pinned under `/download/X.Y.Z+N/`, the public version's
+ * Updates entry and a publication time.
+ */
+export function syntheticBuild(base: ReleaseManifest, publicVersion: string, build: number): ReleaseManifest {
+  const manifest = structuredClone(base);
+  if (!manifest.latest) throw new Error("base manifest has no release");
+  const version = `${publicVersion}+${build}`;
+  manifest.latest.version = version;
+  manifest.latest.publishedAt = "2026-10-08T01:23:45.000Z";
+  manifest.latest.notesUrl = `/updates#release-${publicVersion.replaceAll(".", "-")}`;
+  for (const platform of manifest.latest.platforms) {
+    platform.file = platform.file.replace(/^KalCode_[^_]+(?:_build\d+)?_/, `KalCode_${publicVersion}_build${build}_`);
+    platform.pinnedUrl = `/download/${version}/${platform.file}`;
+  }
+  return manifest;
+}

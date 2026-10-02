@@ -98,7 +98,7 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
               <p class="platform__note" data-windows-update-note>
                 Windows: in-app Update and Restore previous version don&apos;t work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.
               </p>
-            )}{row.os === "windows" && (latest.version === "0.1.7" || latest.version === "0.1.8") && (
+            )}{row.os === "windows" && (latest.version === "0.1.7" || latest.version === "0.1.8" || latest.version === "0.1.9") && (
               <p class="platform__note" data-windows-update-note>
                 Windows: 0.1.6 can&apos;t update itself. If you have 0.1.6, download this installer and run it once — your data is kept. On macOS, 0.1.6 updates in the app.
               </p>
