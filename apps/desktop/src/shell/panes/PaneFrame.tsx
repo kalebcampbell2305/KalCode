@@ -27,7 +27,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef } from "react";
+import { Fragment, type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef } from "react";
 import type { PaneRenderContext, TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, type Rect } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
@@ -82,8 +82,10 @@ const SWAP: { direction: PaneDirection; label: string; icon: ReactNode }[] = [
 
 /**
  * One pane: a header with its tabs (WAI-ARIA tabs, automatic activation) and controls, and the
- * active tab's content. Inactive tabs, collapsed panes and panes hidden behind a maximized one
- * render nothing: their views are suspended while whatever they run keeps running.
+ * active tab's content. Terminal tabs (shells, provider TUIs) stay mounted once shown, hidden and
+ * throttled while another tab is in front or the pane is collapsed or behind a maximized one, so
+ * switching back never rebuilds xterm or replays scrollback. Other contents render only while in
+ * front; whatever they run keeps running.
  */
 export function PaneFrame(props: PaneFrameProps) {
   const {
@@ -131,6 +133,41 @@ export function PaneFrame(props: PaneFrameProps) {
   const seenRequest = useRef({ n: focusRequest, key: activeKey });
   if (focusRequest !== seenRequest.current.n) seenRequest.current = { n: focusRequest, key: activeKey };
   const contentFocusRequest = seenRequest.current.key === activeKey ? seenRequest.current.n : 0;
+
+  // Terminal tabs that have been in front stay mounted (see above); closed tabs are let go.
+  const shownBody = !hidden && !collapsed;
+  const keptTerminals = useRef(new Set<string>());
+  const tabKeys = new Set(leaf.tabs.map(contentKey));
+  for (const key of keptTerminals.current) if (!tabKeys.has(key)) keptTerminals.current.delete(key);
+  if (shownBody && active && activeInfo?.terminal) keptTerminals.current.add(activeKey);
+  const panel = (content: PaneContent, i: number, front: boolean) => (
+    <div
+      id={front ? panelDomId(leaf.paneId) : undefined}
+      role="tabpanel"
+      aria-labelledby={tabDomId(leaf.paneId, i)}
+      className={styles.panel}
+      hidden={!front}
+    >
+      {renderContent(content, {
+        paneId: leaf.paneId,
+        tabId: tabDomId(leaf.paneId, i),
+        focused: front && focused,
+        focusRequest: front ? contentFocusRequest : 0,
+      })}
+    </div>
+  );
+  // Keyed so the same element survives collapsing and expanding the pane.
+  const body = (
+    <div key="body" className={styles.body} data-pane-body hidden={!shownBody}>
+      {leaf.tabs.map((content, i) => {
+        const key = contentKey(content);
+        if (!keptTerminals.current.has(key)) return null;
+        return <Fragment key={key}>{panel(content, i, shownBody && i === leaf.activeTab)}</Fragment>;
+      })}
+      {shownBody && active && !keptTerminals.current.has(activeKey) ? panel(active, leaf.activeTab, true) : null}
+      {shownBody && !active ? renderEmpty(leaf.paneId) : null}
+    </div>
+  );
 
   // A focus request for this pane: terminal-like content focuses itself; otherwise the tab does.
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus moves on request changes only.
@@ -221,6 +258,7 @@ export function PaneFrame(props: PaneFrameProps) {
           {leaf.tabs.length > 1 ? <span className={styles.collapsedCount}>+{leaf.tabs.length - 1}</span> : null}
           {activeInfo?.tone ? <span className={styles.dot} data-tone={activeInfo.tone} aria-hidden="true" /> : null}
         </div>
+        {body}
       </section>
     );
   }
@@ -433,27 +471,7 @@ export function PaneFrame(props: PaneFrameProps) {
           </Tooltip>
         </div>
       </header>
-      {hidden ? null : (
-        <div className={styles.body} data-pane-body>
-          {active ? (
-            <div
-              id={panelDomId(leaf.paneId)}
-              role="tabpanel"
-              aria-labelledby={tabDomId(leaf.paneId, leaf.activeTab)}
-              className={styles.panel}
-            >
-              {renderContent(active, {
-                paneId: leaf.paneId,
-                tabId: tabDomId(leaf.paneId, leaf.activeTab),
-                focused,
-                focusRequest: contentFocusRequest,
-              })}
-            </div>
-          ) : (
-            renderEmpty(leaf.paneId)
-          )}
-        </div>
-      )}
+      {body}
     </section>
   );
 }

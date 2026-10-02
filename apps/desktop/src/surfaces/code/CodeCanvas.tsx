@@ -288,7 +288,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     titleOf,
     workspaceName: workspace.name,
   };
+  // Code stays mounted (hidden) while other pages are shown; KalVoice sees its panes only when shown.
+  const codeShown = current === "code";
   useEffect(() => {
+    if (!codeShown) return;
     const registration: VoicePaneSceneRegistration = {
       workspaceId: workspace.id,
       snapshot: () => {
@@ -432,7 +435,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       },
     };
     return registerVoicePaneScene(registration);
-  }, [workspace.id]);
+  }, [workspace.id, codeShown]);
 
   // ---------- Keep the layout in step with the runtime ----------
   const seenTerminals = useRef<Set<string> | null>(null);
@@ -459,6 +462,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
     }
   }, [terminals, controller.ready]);
+
+  // Coming back to Code puts keyboard focus back in the focused pane's terminal, as opening Code
+  // did when it was mounted afresh (a request made while hidden couldn't focus anything). Runs
+  // before the request handling below, so a request that brought the person here wins.
+  const wasShown = useRef(codeShown);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when Code is shown again.
+  useEffect(() => {
+    const returning = codeShown && !wasShown.current;
+    wasShown.current = codeShown;
+    if (!returning || !controller.ready) return;
+    const leaf = leaves(controller.layout.root).find((l) => l.paneId === controller.focusedPaneId);
+    const content = leaf?.tabs[leaf.activeTab];
+    if (leaf && (content?.kind === "terminal" || content?.kind === "thread")) controller.focusPane(leaf.paneId, true);
+  }, [codeShown]);
 
   // A terminal selected elsewhere (palette, Dashboard, KalVoice, a new terminal) comes forward.
   // The request that brought the person here (a new terminal, Dashboard "Show") runs on mount.
@@ -513,6 +530,17 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   // ---------- Contents ----------
+  // Closing a terminal's tab ends it (the shell and everything it started, owner decision). The
+  // tab leaves the layout at once; ending the process tree finishes in the background, and a
+  // failure is reported by `closeTerminal` (the terminal then stays listed in the background).
+  const closeTerminalTab = useCallback(
+    (terminalId: string) => {
+      controllerRef.current.forget(new Set([contentKey(terminalContent(terminalId))]));
+      void closeTerminal(terminalId);
+    },
+    [closeTerminal],
+  );
+
   const describe = useCallback(
     (content: PaneContent): TabInfo | null => {
       if (content.kind === "browser") return { title: "Browser", glyph: <Globe />, statusText: "Web preview" };
@@ -528,9 +556,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           statusText: describeTerminalStatus(terminal),
           terminal: true,
           running,
-          stop: running ? { label: "End terminal", run: () => void closeTerminal(terminal.id) } : undefined,
-          // Closing a terminal ends it: the shell and everything it started (owner decision).
-          onClose: () => void closeTerminal(terminal.id),
+          stop: running ? { label: "End terminal", run: () => closeTerminalTab(terminal.id) } : undefined,
+          onClose: () => closeTerminalTab(terminal.id),
         };
       }
       if (content.kind === "thread") {
@@ -554,7 +581,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminal, accountFor, stopAgent],
+    [terminalById, labels, paneById, closeTerminalTab, accountFor, stopAgent],
   );
 
   const render = useCallback(
@@ -582,7 +609,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             theme={theme}
             workspace={workspace}
             onRestart={() => void restartTerminal(terminal.id)}
-            onClose={() => void closeTerminal(terminal.id)}
+            onClose={() => closeTerminalTab(terminal.id)}
           />
         );
       }
@@ -631,7 +658,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       theme,
       workspace,
       restartTerminal,
-      closeTerminal,
+      closeTerminalTab,
       providerPanes,
       navigate,
       threadsIntent,
@@ -949,7 +976,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   const canvas = controller.ready ? (
-    <PaneCanvas controller={controller} host={host} label={`Panes in ${workspace.name}`} scope={workspace.id} />
+    <PaneCanvas
+      controller={controller}
+      host={host}
+      label={`Panes in ${workspace.name}`}
+      scope={workspace.id}
+      active={codeShown}
+    />
   ) : (
     <div className={styles.canvasLoading} role="status" aria-busy="true">
       <span className="visually-hidden">Loading the layout</span>

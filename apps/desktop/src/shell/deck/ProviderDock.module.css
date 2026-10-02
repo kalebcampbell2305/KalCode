@@ -100,6 +100,30 @@
   transform: translateY(-1px);
 }
 
+/* A thread is moving onto this account: pressed, with a spinner until the native answer lands. */
+.chip[data-busy] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  cursor: progress;
+}
+
+.spinner {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-full);
+  animation: dock-spin 700ms linear infinite;
+}
+
+@keyframes dock-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .label {
   font-weight: var(--weight-medium);
 }
@@ -203,6 +227,10 @@
 
   .chip {
     transition: none;
+  }
+
+  .spinner {
+    animation-duration: 2s;
   }
 }
 

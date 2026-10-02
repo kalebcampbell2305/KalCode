@@ -97,6 +97,15 @@
   scrollbar-gutter: auto;
 }
 
+/* Kept-mounted Code surface; the [hidden] attribute hides it while another page is shown. */
+.codeSurface {
+  height: 100%;
+}
+
+.codeSurface[hidden] {
+  display: none;
+}
+
 .skipLink {
   position: fixed;
   top: var(--space-2);

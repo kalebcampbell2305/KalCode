@@ -25,6 +25,7 @@
     "test:repeat": "node tooling/test-repeat.mjs",
     "perf": "node apps/desktop/tests/perf/run.ts",
     "perf:check": "node apps/desktop/tests/perf/check.ts",
+    "perf:interactions": "node apps/desktop/tests/perf/interactions.ts",
     "deny": "cargo deny check",
     "check:releases": "node tooling/release/check-manifest.mjs",
     "release:build": "node tooling/release/build-windows.mjs",

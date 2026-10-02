@@ -47,6 +47,17 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Account for both platforms during design, implementation, testing, and release verification. Report any unverified platform behavior honestly.
 - Only an explicit owner instruction can narrow a task to one platform.
 
+## Permanent responsiveness rule (owner directive 2026-10-02)
+
+**KALCODE MUST FEEL INSTANT. USER INTERACTION MUST NEVER WAIT ON WORK THAT CAN SAFELY HAPPEN ASYNCHRONOUSLY. EVERY CLICK SHOULD RECEIVE IMMEDIATE FEEDBACK. LATENCY IS A PRODUCT FEATURE.**
+
+- Every click, key press, switch, open, close and navigation gets visible acknowledgement within about one frame: pressed state, highlight, pane appearing, spinner or status. The user must never wonder whether a click worked.
+- Never block an interaction on network or provider calls, disk scans, Git, usage refreshes or telemetry unless the result is genuinely required first. Open the menu, pane or surface immediately, then fill it in place. Acknowledge agent actions at once and run them asynchronously.
+- Keep the UI thread free. No slow work in sync Tauri commands, which run on the main thread. Use `#[tauri::command(async)]` or `spawn_blocking`. Never hold a lock across slow work on a UI path.
+- Never recreate terminals, Browser instances or other expensive components unnecessarily. Avoid needless re-renders and app-wide state churn. Keep polling cheap and quiet when nothing has changed. Never add artificial delay or let an animation gate an action.
+- Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
+- Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
+
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 
 **BUILD CONTINUOUSLY. SHIP CONTINUOUSLY. THE PUBLIC VERSION IS JUST AN OWNER-CONTROLLED LABEL. WHEN THE OWNER REQUESTS A VERSION CHANGE, UPDATE THE VERSION CONSISTENTLY AND CONTINUE WORKING.**

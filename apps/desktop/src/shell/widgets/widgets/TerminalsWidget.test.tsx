@@ -124,16 +124,16 @@ it("Show for the displayed workspace wins over a pending switch before navigatin
   expect(view.state().focusRequest.terminalId).toBe("terminal-current");
 });
 
-it("does not navigate or select when activation of the displayed workspace fails", async () => {
+it("shows a terminal of the displayed workspace at once and still reports a failed native activation", async () => {
   const view = await mount();
   view.activate.mockRejectedValueOnce(new Error("Workspace unavailable"));
   fireEvent.click(view.show);
+  await waitFor(() => expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith("code"));
+  expect(view.select).toHaveBeenCalledWith("current", "terminal-current");
   await screen.findByText("Couldn't switch workspace");
-  expect(navigation.navigate).not.toHaveBeenCalled();
-  expect(view.select).not.toHaveBeenCalled();
 });
 
-it("does not navigate or select when a later workspace intent supersedes Show", async () => {
+it("lets a later workspace intent win after Show of the displayed workspace", async () => {
   const view = await mount();
   const gate = deferred();
   view.activate.mockImplementationOnce(async () => {
@@ -142,16 +142,18 @@ it("does not navigate or select when a later workspace intent supersedes Show", 
     return view.current;
   });
   fireEvent.click(view.show);
-  await waitFor(() => expect(view.activate).toHaveBeenCalledWith("current"));
+  // The displayed workspace needs no switch: Show doesn't wait for its native write.
+  await waitFor(() => expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith("code"));
+  expect(view.select).toHaveBeenCalledWith("current", "terminal-current");
   let latest!: Promise<boolean>;
   act(() => {
     latest = view.state().activate("away");
   });
   await act(async () => {
     gate.resolve();
-    await latest;
+    expect(await latest).toBe(true);
   });
+  expect(view.activate.mock.calls.map(([id]) => id)).toEqual(["current", "away"]);
   expect(view.persisted().id).toBe("away");
-  expect(navigation.navigate).not.toHaveBeenCalled();
-  expect(view.select).not.toHaveBeenCalled();
+  expect(view.state().active?.id).toBe("away");
 });

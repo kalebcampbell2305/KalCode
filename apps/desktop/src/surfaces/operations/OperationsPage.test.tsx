@@ -28,6 +28,7 @@ const seams = vi.hoisted(() => ({
 vi.mock("./useOperations.ts", () => ({
   useOperations: () => ({
     snapshot: seams.snapshot,
+    observedAt: seams.snapshot?.observedAt ?? null,
     loading: false,
     refreshing: false,
     error: null,

@@ -398,6 +398,12 @@
   min-height: 0;
 }
 
+/* Kept-mounted terminal tabs behind the one in front, and a collapsed pane's kept terminals. */
+.body[hidden],
+.panel[hidden] {
+  display: none;
+}
+
 /* ---------- Collapsed pane ---------- */
 
 .collapsedBar {

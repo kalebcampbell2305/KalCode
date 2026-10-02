@@ -148,6 +148,8 @@ export interface PaneCanvasProps {
   label: string;
   /** What the canvas arranges (the workspace id): scoped commands wait for this canvas. */
   scope?: string;
+  /** The surface hosting the canvas is shown. A hidden canvas ignores keyboard shortcuts. */
+  active?: boolean;
 }
 
 /** Width of the side dock, when something is docked. */
@@ -185,6 +187,7 @@ function PaneCanvasSurface({
   host,
   label,
   scope,
+  active = true,
   kalVoiceSessionId,
   kalVoiceCapturing,
   kalVoiceTarget,
@@ -206,6 +209,8 @@ function PaneCanvasSurface({
     const measure = () => {
       const width = Math.floor(element.clientWidth);
       const height = Math.floor(element.clientHeight);
+      // A hidden surface measures 0 × 0: keep the last real size for layout and commands.
+      if (width === 0 && height === 0) return;
       controller.size.current = { width, height };
       setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
     };
@@ -252,6 +257,8 @@ function PaneCanvasSurface({
   latestController.current = controller;
   const latestHost = useRef(host);
   latestHost.current = host;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useEffect(
     () =>
       listenForPaneCommands((command) => {
@@ -270,7 +277,7 @@ function PaneCanvasSurface({
   // shortcuts through); not while a dialog or menu has focus.
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || !activeRef.current) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('[role="dialog"], [role="menu"], [role="listbox"]')) return;
       if (event.key === "Escape" && dragRef.current) {

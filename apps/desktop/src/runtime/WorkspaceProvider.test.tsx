@@ -155,7 +155,7 @@ describe("WorkspaceProvider lifecycle", () => {
   });
 
   it.each(["different terminal", "different workspace", "explicit focus"] as const)(
-    "never revives pending focus after %s followed by same-target reconciliation",
+    "focuses a created terminal before its refresh, which never revives focus after %s and same-target reconciliation",
     async (change) => {
       const f = await fixture("old");
       mockActions(f.client);
@@ -179,7 +179,7 @@ describe("WorkspaceProvider lifecycle", () => {
       const focusBefore = view.result.current.focusRequest;
       await act(async () => {
         page.resolve([terminal]);
-        expect(await pending).toBeNull();
+        expect(await pending).toEqual(terminal);
       });
       expect(view.result.current.focusRequest).toEqual(focusBefore);
     },
@@ -210,7 +210,7 @@ describe("WorkspaceProvider lifecycle", () => {
     await waitFor(() => expect(f.client.listTerminals).toHaveBeenCalledTimes(2));
     await act(async () => {
       firstPage.resolve([{ ...terminal, id: "first" }]);
-      expect(await first).toBeNull();
+      expect((await first)?.id).toBe("first");
     });
     act(() => view.result.current.selectTerminal("second", false, "old"));
     await act(async () => {
@@ -587,7 +587,8 @@ describe("WorkspaceProvider lifecycle", () => {
         read.resolve(workspace("old"));
         result = await pending;
       });
-      expect(result).toBe(action === "remove" ? false : null);
+      // A created or restarted terminal is shown before the refresh; the others wait for it.
+      expect(result).toEqual(action === "remove" ? false : action === "openFolder" ? null : terminal);
       expect(view.result.current.focusRequest.terminalId).toBe("");
       expect(screen.queryByText("old removed from KalCode")).not.toBeInTheDocument();
     },
@@ -801,11 +802,12 @@ describe("WorkspaceProvider lifecycle", () => {
     const read = deferred<Workspace | null>();
     const view = await mount(old);
     vi.mocked(old.client.activeWorkspace).mockReturnValue(read.promise);
-    const terminalReads = vi.mocked(old.client.listTerminals).mock.calls.length;
     let pending!: Promise<void>;
     act(() => {
       pending = view.result.current.refresh();
     });
+    // The displayed workspace's tabs are read alongside; nothing is read once the client is obsolete.
+    const terminalReads = vi.mocked(old.client.listTerminals).mock.calls.length;
     view.replace(next);
     await waitFor(() => expect(view.result.current.active?.id).toBe("next"));
     await act(async () => {
@@ -868,6 +870,75 @@ describe("WorkspaceProvider lifecycle", () => {
       expect(await view.result.current.activate("good")).toBe(true);
     });
     expect(view.result.current.active?.id).toBe("good");
+  });
+
+  it("shows and focuses a created terminal before the refresh, and an older load can't drop it", async () => {
+    const f = await fixture("old");
+    mockActions(f.client);
+    const stale = deferred<TerminalInfo[]>();
+    const fresh = deferred<TerminalInfo[]>();
+    const view = await mount(f);
+    vi.mocked(f.client.listTerminals).mockReset().mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = view.result.current.refresh();
+    });
+    let created: TerminalInfo | null = null;
+    await act(async () => {
+      created = await view.result.current.createTerminal();
+    });
+    expect(created).toEqual(terminal);
+    expect(view.result.current.terminals).toEqual([terminal]);
+    expect(view.result.current.running).toEqual([terminal]);
+    expect(view.result.current.activeTerminalId).toBe(terminal.id);
+    expect(view.result.current.focusRequest.terminalId).toBe(terminal.id);
+    await act(async () => {
+      stale.resolve([]);
+      await refreshing;
+    });
+    expect(view.result.current.terminals).toEqual([terminal]);
+    await act(async () => {
+      fresh.resolve([terminal]);
+    });
+    await waitFor(() => expect(view.result.current.terminals).toEqual([terminal]));
+  });
+
+  it("activates the displayed workspace without waiting for its native write", async () => {
+    const f = await fixture("old");
+    const write = deferred<Workspace>();
+    const activate = vi.spyOn(f.client, "activateWorkspace").mockReturnValue(write.promise);
+    const view = await mount(f);
+    let result: boolean | null = null;
+    await act(async () => {
+      result = await view.result.current.activate("old");
+    });
+    expect(result).toBe(true);
+    expect(activate).toHaveBeenCalledExactlyOnceWith("old");
+    const reads = vi.mocked(f.client.listWorkspaces).mock.calls.length;
+    await act(async () => {
+      write.resolve(workspace("old"));
+    });
+    // The refresh after the write still runs (workspaces are ordered by last opened).
+    await waitFor(() => expect(f.client.listWorkspaces).toHaveBeenCalledTimes(reads + 1));
+  });
+
+  it("reads the displayed workspace's tabs alongside the other refresh reads", async () => {
+    const f = await fixture("old");
+    const read = deferred<Workspace | null>();
+    const view = await mount(f);
+    vi.mocked(f.client.activeWorkspace).mockReturnValue(read.promise);
+    vi.mocked(f.client.listTerminals).mockClear().mockResolvedValue([terminal]);
+    let pending!: Promise<void>;
+    act(() => {
+      pending = view.result.current.refresh();
+    });
+    expect(f.client.listTerminals).toHaveBeenCalledExactlyOnceWith("old");
+    await act(async () => {
+      read.resolve(workspace("old"));
+      await pending;
+    });
+    expect(f.client.listTerminals).toHaveBeenCalledOnce();
+    expect(view.result.current.terminals).toEqual([terminal]);
   });
 
   it("invalidates queued activations and retained callbacks when unmounted", async () => {

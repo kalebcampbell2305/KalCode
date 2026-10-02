@@ -33,7 +33,7 @@ import { type RailDialogHost, RailDialogs } from "./RailDialogs.tsx";
 import { useRail } from "./RailProvider.tsx";
 import { RailTree, WorkspaceTile } from "./RailTree.tsx";
 import { HighlightedTitle, KIND_ICON } from "./search/LocatorResults.tsx";
-import { useOptionalSearch } from "./search/SearchProvider.tsx";
+import { useOptionalSearchActions } from "./search/SearchProvider.tsx";
 import { useLocatorSearch } from "./search/useLocatorSearch.ts";
 import { useOpenLocated } from "./search/useOpenLocated.ts";
 
@@ -241,7 +241,7 @@ function RailSearch({ query, onQuery }: { query: string; onQuery: (q: string) =>
 function RailResults({ query, onClear }: { query: string; onClear: () => void }) {
   const { response, loading, error } = useLocatorSearch(query, { kinds: ["workspace", "thread"], limit: 12 });
   const open = useOpenLocated();
-  const search = useOptionalSearch();
+  const search = useOptionalSearchActions();
   const items = response?.results.items ?? [];
   const onKey = (event: KeyboardEvent<HTMLButtonElement>) => {
     const list = [

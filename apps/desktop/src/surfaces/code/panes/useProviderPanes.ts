@@ -1,7 +1,7 @@
 import type { PaneInfo, ThreadSummary, Workspace } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
-import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import { isPaneProvider, PaneChannel, type PaneProviderId, paneStartMode } from "./paneChannel.ts";
 
@@ -50,8 +50,7 @@ export interface ProviderPanes {
  */
 export function useProviderPanes(workspace: Workspace): ProviderPanes {
   const enabled = useProviderPanesEnabled() && workspace.available;
-  const { client } = useRuntime();
-  const { events } = useEvents();
+  const { client, feed } = useRuntime();
   const { settings } = usePermissions();
   const channel = useMemo(() => new PaneChannel(client), [client]);
   const [panes, setPanes] = useState<ProviderPaneEntry[]>([]);
@@ -90,7 +89,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   }, [refresh]);
 
   // PROVIDERS-2: which optional providers are usable, re-read when a provider event lands.
-  const providerSeq = events.find((e) => e.type.startsWith("provider."))?.seq ?? 0;
+  const [providerSeq, setProviderSeq] = useState(0);
   useEffect(() => {
     void providerSeq;
     if (!enabled) return;
@@ -111,24 +110,31 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   }, [client, enabled, providerSeq]);
 
   // Thread and approval events for this workspace (or its panes) refresh the list; each event
-  // is looked at once and refreshes are coalesced.
-  const lastEvent = events[0];
-  const handledSeq = useRef(0);
+  // is looked at once and refreshes are coalesced. The feed is read directly, so unrelated
+  // runtime events don't re-render the Code canvas.
   const paneIds = useRef(new Set<string>());
   paneIds.current = new Set(panes.map((p) => p.thread.id));
   const scheduled = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!enabled || !lastEvent || lastEvent.seq <= handledSeq.current) return;
-    handledSeq.current = lastEvent.seq;
-    const threadId = lastEvent.correlation.threadId;
-    const related =
-      lastEvent.correlation.workspaceId === workspace.id || (threadId !== null && paneIds.current.has(threadId));
-    if (!related || scheduled.current) return;
-    scheduled.current = setTimeout(() => {
-      scheduled.current = null;
-      void refresh();
-    }, REFRESH_DEBOUNCE_MS);
-  }, [lastEvent, refresh, workspace.id, enabled]);
+    if (!enabled) return;
+    let lastSeq = feed.getSnapshot().events[0]?.seq ?? 0;
+    return feed.subscribe(() => {
+      const { events } = feed.getSnapshot();
+      const fresh = events.filter((e) => e.seq > lastSeq);
+      lastSeq = Math.max(lastSeq, events[0]?.seq ?? 0);
+      const provider = fresh.find((e) => e.type.startsWith("provider."));
+      if (provider) setProviderSeq(provider.seq);
+      const related = fresh.some((e) => {
+        const threadId = e.correlation.threadId;
+        return e.correlation.workspaceId === workspace.id || (threadId !== null && paneIds.current.has(threadId));
+      });
+      if (!related || scheduled.current) return;
+      scheduled.current = setTimeout(() => {
+        scheduled.current = null;
+        void refresh();
+      }, REFRESH_DEBOUNCE_MS);
+    });
+  }, [feed, refresh, workspace.id, enabled]);
   useEffect(
     () => () => {
       if (scheduled.current) clearTimeout(scheduled.current);

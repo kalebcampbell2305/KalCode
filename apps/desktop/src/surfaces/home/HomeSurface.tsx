@@ -39,7 +39,7 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { badgeLabel, relativeTime } from "../../shell/rail/model.ts";
 import { useOptionalRail } from "../../shell/rail/RailProvider.tsx";
-import { useOptionalSearch } from "../../shell/rail/search/SearchProvider.tsx";
+import { useOptionalSearchActions } from "../../shell/rail/search/SearchProvider.tsx";
 import { ScopedHeading, useSurfaceScope } from "../../shell/rail/surfaceScope.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
@@ -48,6 +48,12 @@ import { dateEyebrow, summaryLine } from "./homeModel.ts";
 
 /** Events after which the summary may have changed (refreshed, greeting kept). */
 const RELEVANT = /^(thread\.|approval\.|workspace\.|settings\.changed)/;
+
+/**
+ * The last summary each client answered, so returning to Home shows it at once (no skeleton)
+ * while the fresh read for this visit is on its way; that answer replaces it.
+ */
+const lastSummary = new WeakMap<object, HomeSummary>();
 
 /**
  * The returning-user home (Z7-W2): a greeting by the Settings display name, then what needs
@@ -59,7 +65,7 @@ export function HomeSurface() {
   const { client } = useRuntime();
   const scope = useSurfaceScope();
   const { events } = useEvents();
-  const [summary, setSummary] = useState<HomeSummary | null>(null);
+  const [summary, setSummary] = useState<HomeSummary | null>(() => lastSummary.get(client) ?? null);
   const [error, setError] = useState<KalCodeError | null>(null);
   const request = useRef(0);
 
@@ -68,6 +74,7 @@ export function HomeSurface() {
       const id = ++request.current;
       try {
         const next = await client.homeSummary(visit);
+        lastSummary.set(client, next);
         if (id === request.current) {
           setSummary(next);
           setError(null);
@@ -132,7 +139,7 @@ function Hero({ summary }: { summary: HomeSummary }) {
   const workspaces = useWorkspaces();
   const { navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
-  const search = useOptionalSearch();
+  const search = useOptionalSearchActions();
   const rail = useOptionalRail();
   return (
     <header className={styles.hero}>
