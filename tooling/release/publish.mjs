@@ -324,17 +324,24 @@ if (mode !== "local") {
   }
   // Build numbers count commits along main; a build from any other history could be numbered
   // below one already published and never reach users. Publish only builds of merged main
-  // (a dry run may rehearse any build).
+  // (a dry run may rehearse any build). A pushed release branch (KALCODE_RELEASE_BRANCH=release/<name>,
+  // e.g. a same-version stepping-stone build) may stand in for main; D1 precedence still refuses any
+  // version that does not outrank the live pointer.
+  const releaseBranch = process.env.KALCODE_RELEASE_BRANCH;
+  if (releaseBranch !== undefined && !/^release\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(releaseBranch)) {
+    problems.push(`KALCODE_RELEASE_BRANCH must name a release/<name> branch, not ${JSON.stringify(releaseBranch)}`);
+  }
+  const buildRef = releaseBranch ? `origin/${releaseBranch}` : "origin/main";
   const onMain =
     mode === "dry-run" ||
     spawnSync(
       "git",
-      ["merge-base", "--is-ancestor", releaseBuild.commit, "origin/main"],
+      ["merge-base", "--is-ancestor", releaseBuild.commit, buildRef],
       releaseProcessOptions({ cwd: ROOT, stdio: "ignore", timeout: 30_000 }),
     ).status === 0;
   if (!onMain) {
     problems.push(
-      `build commit ${releaseBuild.commit.slice(0, 12)} is not on origin/main; merge it and fetch before publishing`,
+      `build commit ${releaseBuild.commit.slice(0, 12)} is not on ${buildRef}; merge it and fetch before publishing`,
     );
   }
   // Fast-lane (v3) QA: the declared data / updater-code changes must match the real live-to-candidate source diff,

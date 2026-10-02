@@ -1040,3 +1040,10 @@ test("a v3 automated QA record publishes the same signed Windows descriptor as a
     /test hook, cache seed/,
   );
 });
+
+test("publish.mjs publishes only builds of origin/main or an explicitly named pushed release branch", () => {
+  const source = readFileSync(new URL("./publish.mjs", import.meta.url), "utf8");
+  assert.match(source, /const buildRef = releaseBranch \? `origin\/\$\{releaseBranch\}` : "origin\/main";/);
+  assert.match(source, /KALCODE_RELEASE_BRANCH must name a release\/<name> branch/);
+  assert.match(source, /\["merge-base", "--is-ancestor", releaseBuild\.commit, buildRef\]/);
+});
