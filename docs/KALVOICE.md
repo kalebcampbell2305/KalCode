@@ -140,7 +140,7 @@ request (push-to-talk transcript, or typed)
   ─▶ short report (text; optional OS speech synthesis)
 ```
 
-Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 30 kinds with
+Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 31 kinds with
 `reasoning`):
 
 - **Navigation and workspaces:** navigate (surfaces this build shows; others are refused
@@ -339,6 +339,11 @@ typed, identity-only lifecycle target lets a later “Open it” focus that resu
 provider output or message text in the signal. The target is bound only after the native speech
 backend acknowledges playback start; a backend failure does not claim speech or bind an unheard
 callback.
+
+Provider sign-in reminders follow the canonical health monitor: a previously healthy or degraded
+provider becoming unavailable because it is signed out triggers a reminder. Initial discovery and
+missing, outdated or undetectable installations stay silent. Reminders name the provider without
+exposing diagnostic text or attaching an unrelated thread target.
 
 ## Events
 

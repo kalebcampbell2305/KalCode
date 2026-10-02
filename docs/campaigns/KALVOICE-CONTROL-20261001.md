@@ -502,3 +502,36 @@ exact pinned tool location and uses the existing release SDK-environment helper;
 its 16 contract tests passed. Windows gates inherit the proven four-worker
 Vitest bound, without changing any test deadline, assertion, count, or skip rule.
 Fresh full platform gates remain pending.
+
+## Completion follow-up — 2026-10-02
+
+Resumed from verified remote main `fced50d5faadbcf63ba157a291f64ea068517d5a` in an
+isolated worktree. The original checkout was 253 commits behind and had unrelated
+uncommitted film work; it was preserved. PR 67 and the control implementation are
+already merged. Earlier statements that the candidate is uncommitted describe their
+historical checkpoint, not this resumed source state.
+
+Fresh focused verification passed KalVoice frontend units `383/383` (28 files) and
+the seven functional KalVoice Chromium specs `56/56`. These are deterministic
+frontend proofs, not physical microphone or installed-package certification.
+
+Independent backend review found the sign-in callback consuming `ProviderDisconnected`,
+which has no production emitter. The canonical health monitor emits
+`ProviderHealthChanged` instead. The regression failed at event admission before
+repair. The callback now consumes known Healthy/Degraded-to-Unavailable transitions
+with the exact `signed_out` reason, retains legacy-event compatibility, ignores
+initial discovery and non-auth failures, and speaks no diagnostic text. The focused
+regression passed, and primary reproof passed all `11/11` callback tests, including
+live Core delivery without replay. The independent review accepted this correction.
+
+The inventory reproof initially failed `18/19`: Provider Dock commit `2611335c`
+had added one functional browser test without updating its registered count. The
+functional floor and exact partition now include all `288` functional plus `56`
+visual tests (`344` total). No test or skip rule changed; inventory reproof passed
+`19/19`.
+
+The frozen build-1002 release preparation and interrupted release-gate receipts remain
+preserved; they do not certify the repaired source. Another release session owns the
+B14 installer/profile and publication lane. This follow-up has not installed, staged,
+published, changed a production profile, or advanced a public version. Successor
+release identity, artifact certification and both-platform delivery remain pending.

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::events::{EventEnvelope, EventPayload};
+use kalcode_contracts::health::HealthState;
 use kalcode_contracts::operations::{OperationKind, OperationStatus};
 use kalcode_contracts::threads::{ThreadErrorKind, ThreadStatus};
 use kalcode_core::Core;
@@ -204,6 +205,7 @@ fn relevant(event: &EventEnvelope) -> bool {
             | EventPayload::ThreadStatusChanged { .. }
             | EventPayload::ApprovalRequested { .. }
             | EventPayload::ProviderDisconnected { .. }
+            | EventPayload::ProviderHealthChanged { .. }
     )
 }
 
@@ -408,6 +410,25 @@ impl Policy {
                     .without_target(),
                 )
             }
+            EventPayload::ProviderHealthChanged {
+                provider_id,
+                from: HealthState::Healthy | HealthState::Degraded,
+                to: HealthState::Unavailable,
+                reason,
+            } if reason == "signed_out" => {
+                let provider = provider_name(provider_id);
+                Some(
+                    candidate(
+                        Topic::Auth,
+                        Origin::Provider,
+                        provider_id.as_str(),
+                        event.id.clone(),
+                        format!("{provider} needs you to sign in."),
+                        event.correlation.workspace_id.clone(),
+                    )
+                    .without_target(),
+                )
+            }
             _ => None,
         }?;
         self.admit(candidate, now)
@@ -573,6 +594,7 @@ mod tests {
 
     use kalcode_contracts::agent::ProviderId;
     use kalcode_contracts::events::{Correlation, EventEnvelope, EventPayload, EventSource};
+    use kalcode_contracts::health::HealthState;
     use kalcode_contracts::operations::{OperationKind, OperationStatus};
     use kalcode_contracts::permissions::PermissionScope;
     use kalcode_contracts::threads::ThreadStatus;
@@ -963,6 +985,71 @@ mod tests {
     }
 
     #[test]
+    fn provider_health_signout_is_spoken_only_after_known_availability() {
+        let transition = |id: &str, from: HealthState, reason: &str| {
+            event(
+                id,
+                41,
+                EventPayload::ProviderHealthChanged {
+                    provider_id: ProviderId::new(ProviderId::CODEX),
+                    from,
+                    to: HealthState::Unavailable,
+                    reason: reason.into(),
+                },
+            )
+        };
+        let initial = transition("provider-initial", HealthState::Unknown, "signed_out");
+        let signed_out = transition("provider-signed-out", HealthState::Healthy, "signed_out");
+
+        assert!(
+            relevant(&signed_out),
+            "the live provider-health event must reach the callback policy"
+        );
+        let mut policy = Policy::default();
+        assert!(
+            policy.event(&initial, &Names, Instant::now()).is_none(),
+            "initial discovery must not be announced as a disconnect"
+        );
+        for (index, reason) in ["not_installed", "outdated", "detection_failed"]
+            .into_iter()
+            .enumerate()
+        {
+            let unavailable = transition(
+                &format!("provider-unavailable-{index}"),
+                HealthState::Healthy,
+                reason,
+            );
+            assert!(
+                policy.event(&unavailable, &Names, Instant::now()).is_none(),
+                "{reason} must not be announced as a sign-out"
+            );
+        }
+        let spoken = policy
+            .event(&signed_out, &Names, Instant::now())
+            .expect("known provider sign-out");
+        assert_eq!(spoken.text, "Codex needs you to sign in.");
+        assert_eq!(spoken.class, LifecycleCallbackClass::Oauth);
+        assert_eq!(spoken.target_kind, None);
+        assert_eq!(spoken.target_id, None);
+        assert!(
+            policy.event(&signed_out, &Names, Instant::now()).is_none(),
+            "one health transition must speak only once"
+        );
+
+        let degraded = transition(
+            "provider-degraded-signed-out",
+            HealthState::Degraded,
+            "signed_out",
+        );
+        assert!(
+            Policy::default()
+                .event(&degraded, &Names, Instant::now())
+                .is_some(),
+            "a degraded provider can subsequently become signed out"
+        );
+    }
+
+    #[test]
     fn delivery_requires_the_preference_and_stays_silent_during_microphone_use() {
         assert!(delivery_allowed(true, true, false, false));
         assert!(!delivery_allowed(false, true, false, false));
@@ -1050,11 +1137,13 @@ mod tests {
             })
             .expect("core"),
         );
-        let disconnected = || EventPayload::ProviderDisconnected {
+        let signed_out = || EventPayload::ProviderHealthChanged {
             provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
-            account_label: Some("Claude A".into()),
+            from: HealthState::Healthy,
+            to: HealthState::Unavailable,
+            reason: "signed_out".into(),
         };
-        core.emit(kalcode_contracts::events::NewEvent::core(disconnected()))
+        core.emit(kalcode_contracts::events::NewEvent::core(signed_out()))
             .expect("historical event");
 
         let (spoken_tx, spoken_rx) = std::sync::mpsc::channel();
@@ -1073,14 +1162,14 @@ mod tests {
             "subscribing must not query or replay the durable event log"
         );
 
-        core.emit(kalcode_contracts::events::NewEvent::core(disconnected()))
+        core.emit(kalcode_contracts::events::NewEvent::core(signed_out()))
             .expect("live event");
         assert_eq!(
             spoken_rx
                 .recv_timeout(Duration::from_secs(2))
                 .expect("live callback")
                 .text,
-            "Claude A needs you to sign in to Claude Code."
+            "Claude Code needs you to sign in."
         );
         callbacks.shutdown();
         core.shutdown();

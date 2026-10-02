@@ -48,7 +48,9 @@ use kalcode_kalvoice::speech_output::{SpeechOutput, spoken_text};
 use kalcode_kalvoice::stt::{
     ENGINE_AVAILABLE, RecognitionVocabulary, RecognizerCache, SpeechRecognizer, SttError,
 };
-use kalcode_kalvoice::voice::{RecognizerSource, VoiceController, VoiceError, VoiceResult};
+use kalcode_kalvoice::voice::{
+    RecognizerSource, VoiceController, VoiceError, VoiceResult, VoiceStart,
+};
 use kalcode_providers::ProviderRegistry;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Webview};
@@ -237,10 +239,68 @@ struct Registered {
     last: Option<(bool, Option<&'static str>, String)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PttStart {
+    source: PttSource,
+    generation: u64,
+    voice: VoiceStart,
+}
+
 #[derive(Default)]
 struct PushToTalkState {
     function: FnGesture,
     sessions: SessionOwners,
+    pending: Option<PttStart>,
+    generation: u64,
+}
+
+impl PushToTalkState {
+    fn reserve_start(&mut self, source: PttSource, voice: VoiceStart) -> Option<PttStart> {
+        if self.pending.is_some() {
+            return None;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let start = PttStart {
+            source,
+            generation: self.generation,
+            voice,
+        };
+        self.pending = Some(start.clone());
+        Some(start)
+    }
+
+    fn cancel_start(&mut self, source: PttSource) -> Option<PttStart> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|start| start.source == source)
+        {
+            self.pending.take()
+        } else {
+            None
+        }
+    }
+
+    fn cancel_any_start(&mut self) -> Option<PttStart> {
+        self.pending.take()
+    }
+
+    fn fail_start(&mut self, start: &PttStart) -> bool {
+        if self.pending.as_ref() == Some(start) {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn promote_start(&mut self, start: &PttStart, session_id: String) -> bool {
+        if !self.fail_start(start) {
+            return false;
+        }
+        self.sessions.claim(start.source, session_id);
+        true
+    }
 }
 
 pub struct KalVoiceRuntime {
@@ -1216,12 +1276,18 @@ fn foreground_changed(app: &AppHandle, trigger: &'static str) {
 }
 
 fn reset_push_to_talk(runtime: &KalVoiceRuntime) {
-    let mut push_to_talk = runtime
-        .push_to_talk
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    let _ = push_to_talk.function.focus_lost();
-    push_to_talk.sessions.clear();
+    let cancelled_start = {
+        let mut push_to_talk = runtime
+            .push_to_talk
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _ = push_to_talk.function.focus_lost();
+        push_to_talk.sessions.clear();
+        push_to_talk.cancel_any_start()
+    };
+    if let Some(start) = cancelled_start {
+        runtime.voice.cancel_start(&start.voice);
+    }
 }
 
 /// Reconciles the talk key on the main thread and returns a receiver for the result (it runs
@@ -1597,9 +1663,8 @@ pub(super) fn on_fn_input(app: &AppHandle, input: FnInput) -> bool {
                 if !ptt_capture_allowed(&runtime) {
                     return false;
                 }
-                push_to_talk
-                    .function
-                    .down(now, runtime.voice.listening().is_some())
+                let occupied = runtime.voice.busy() || push_to_talk.pending.is_some();
+                push_to_talk.function.down(now, occupied)
             }
             FnInput::Up => push_to_talk.function.up(now),
             FnInput::Other => push_to_talk.function.other_key(),
@@ -1640,34 +1705,126 @@ fn arm_fn_hold(runtime: Arc<KalVoiceRuntime>, generation: u64) {
 
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn fn_hold_elapsed(runtime: &Arc<KalVoiceRuntime>, generation: u64) {
+    let (start, pressed) = {
+        let mut push_to_talk = runtime
+            .push_to_talk
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let FnAction::Start { pressed } = push_to_talk.function.tick(generation) else {
+            return;
+        };
+        // Admission and source reservation share the lifecycle-reset lock. The slow model/device
+        // work begins only after this lock is released.
+        if runtime.voice.busy() || !ptt_capture_allowed(runtime) {
+            push_to_talk.function.start_failed_or_blocked();
+            tracing::info!(
+                event = "kalvoice.fn_ignored",
+                reason = "already_listening_or_unavailable"
+            );
+            return;
+        }
+        let voice_start = match runtime.voice.reserve_start() {
+            Ok(start) => start,
+            Err(_) => {
+                push_to_talk.function.start_failed_or_blocked();
+                return;
+            }
+        };
+        let Some(start) = push_to_talk.reserve_start(PttSource::Function, voice_start.clone())
+        else {
+            runtime.voice.abandon_start(&voice_start);
+            push_to_talk.function.start_failed_or_blocked();
+            return;
+        };
+        (start, pressed)
+    };
+    tracing::info!(event = "kalvoice.fn_down");
+    runtime.signal(&KalVoiceSignal::Reveal);
+    tracing::info!(event = "kalvoice.microphone_open_requested");
+    spawn_ptt_start(runtime.clone(), start, pressed);
+}
+
+fn fail_ptt_start(runtime: &KalVoiceRuntime, start: PttStart) {
     let mut push_to_talk = runtime
         .push_to_talk
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    let FnAction::Start { pressed } = push_to_talk.function.tick(generation) else {
+    if push_to_talk.fail_start(&start) && start.source == PttSource::Function {
+        push_to_talk.function.start_failed_or_blocked();
+    }
+}
+
+fn abandon_ptt_start(runtime: &KalVoiceRuntime, start: PttStart) {
+    runtime.voice.abandon_start(&start.voice);
+    fail_ptt_start(runtime, start);
+}
+
+fn spawn_ptt_start(runtime: Arc<KalVoiceRuntime>, start: PttStart, pressed: Instant) {
+    let Some(task) = runtime.background.start() else {
+        abandon_ptt_start(&runtime, start);
         return;
     };
-    // Admission is checked while holding the gesture lock. Focus loss and page reload reset
-    // through this lock first, so a timer cannot pass an earlier snapshot and open the mic late.
-    if !ptt_capture_allowed(runtime) || runtime.voice.listening().is_some() {
-        push_to_talk.function.start_failed_or_blocked();
-        tracing::info!(
-            event = "kalvoice.fn_ignored",
-            reason = "already_listening_or_unavailable"
-        );
-        return;
+    let worker_runtime = runtime.clone();
+    let worker_start = start.clone();
+    if std::thread::Builder::new()
+        .name("kalvoice-ptt-start".into())
+        .spawn(move || {
+            let _task = task;
+            run_ptt_start(&worker_runtime, worker_start, pressed);
+        })
+        .is_err()
+    {
+        abandon_ptt_start(&runtime, start);
+        tracing::warn!(event = "kalvoice.ptt_start_thread_unavailable");
     }
-    tracing::info!(event = "kalvoice.fn_down");
-    runtime.signal(&KalVoiceSignal::Reveal);
-    tracing::info!(event = "kalvoice.microphone_open_requested");
-    match start_listening_at(runtime, KalVoiceMode::Talk, false, pressed) {
-        Ok(id) => {
-            push_to_talk.sessions.claim(PttSource::Function, id.clone());
-            drop(push_to_talk);
-            watchdog(runtime.clone(), id);
+}
+
+fn run_ptt_start(runtime: &Arc<KalVoiceRuntime>, start: PttStart, pressed: Instant) {
+    match begin_reserved_listening_at(
+        runtime,
+        start.voice.clone(),
+        KalVoiceMode::Talk,
+        false,
+        pressed,
+    ) {
+        Ok(session_id) => {
+            // Promotion and the started signal are one short source-lock transaction: release,
+            // focus loss, and shutdown linearize entirely before or after it.
+            let promoted = {
+                let mut push_to_talk = runtime
+                    .push_to_talk
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if push_to_talk.promote_start(&start, session_id.clone()) {
+                    announce_listening_at(runtime, &session_id, KalVoiceMode::Talk, pressed);
+                    true
+                } else {
+                    false
+                }
+            };
+            if promoted {
+                watchdog(runtime.clone(), session_id);
+            } else {
+                runtime.voice.cancel(Some(&session_id));
+            }
         }
-        Err(_) => push_to_talk.function.start_failed_or_blocked(),
+        Err(_) => fail_ptt_start(runtime, start),
     }
+}
+
+fn cancel_pending_ptt_start(
+    state: &Mutex<PushToTalkState>,
+    voice: &VoiceController,
+    source: PttSource,
+) -> bool {
+    let cancelled = state
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .cancel_start(source);
+    if let Some(start) = &cancelled {
+        voice.cancel_start(&start.voice);
+    }
+    cancelled.is_some()
 }
 
 /// Snapshot the active session only after taking the source lock: a key-up may arrive while
@@ -1690,6 +1847,10 @@ fn cancel_fn_capture(
     voice: &VoiceController,
 ) -> Option<(String, KalVoiceMode)> {
     let _ = state.function.focus_lost();
+    if let Some(start) = state.cancel_start(PttSource::Function) {
+        voice.cancel_start(&start.voice);
+        return None;
+    }
     let (id, mode) = voice.listening()?;
     let owned = state
         .sessions
@@ -1698,6 +1859,9 @@ fn cancel_fn_capture(
 }
 
 fn settle_fn_session(runtime: Arc<KalVoiceRuntime>, action: FnAction, at: Instant) {
+    if cancel_pending_ptt_start(&runtime.push_to_talk, &runtime.voice, PttSource::Function) {
+        return;
+    }
     let Some((session_id, mode)) =
         take_ptt_session(&runtime.push_to_talk, &runtime.voice, PttSource::Function)
     else {
@@ -1787,36 +1951,54 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
             if fn_action == FnAction::Cancel {
                 settle_fn_session(runtime.clone(), fn_action, pressed);
             }
-            let mut push_to_talk = runtime
-                .push_to_talk
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            // Recheck after acquiring the lock used by lifecycle reset and Fn admission.
-            if !ptt_capture_allowed(&runtime) {
-                return;
-            }
-            // Key repeat and a second physical source while listening are ignored. Keeping the
-            // source lock through begin makes the later release ownership deterministic.
-            if runtime.voice.listening().is_some() {
-                tracing::info!(
-                    event = "kalvoice.ptt_callback_ignored",
-                    reason = "already_listening"
-                );
-                return;
-            }
+            let start = {
+                let mut push_to_talk = runtime
+                    .push_to_talk
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                // Recheck after acquiring the lock used by lifecycle reset and Fn admission.
+                if !ptt_capture_allowed(&runtime) || runtime.voice.busy() {
+                    tracing::info!(
+                        event = "kalvoice.ptt_callback_ignored",
+                        reason = "already_listening_or_unavailable"
+                    );
+                    return;
+                }
+                let voice_start = match runtime.voice.reserve_start() {
+                    Ok(start) => start,
+                    Err(_) => {
+                        tracing::info!(
+                            event = "kalvoice.ptt_callback_ignored",
+                            reason = "capture_lane_occupied"
+                        );
+                        return;
+                    }
+                };
+                let Some(start) =
+                    push_to_talk.reserve_start(PttSource::Fallback, voice_start.clone())
+                else {
+                    runtime.voice.abandon_start(&voice_start);
+                    tracing::info!(
+                        event = "kalvoice.ptt_callback_ignored",
+                        reason = "start_pending"
+                    );
+                    return;
+                };
+                start
+            };
             tracing::info!(event = "kalvoice.ptt_key_down");
             // Bring the widget back if it was hidden, before listening starts or fails, so the
             // listening state or the failure shows either way.
             runtime.signal(&KalVoiceSignal::Reveal);
             tracing::info!(event = "kalvoice.microphone_open_requested");
-            if let Ok(id) = start_listening_at(&runtime, KalVoiceMode::Talk, false, pressed) {
-                push_to_talk.sessions.claim(PttSource::Fallback, id.clone());
-                drop(push_to_talk);
-                watchdog(runtime.clone(), id);
-            }
+            spawn_ptt_start(runtime, start, pressed);
         }
         ShortcutState::Released => {
             tracing::info!(event = "kalvoice.ptt_key_up");
+            if cancel_pending_ptt_start(&runtime.push_to_talk, &runtime.voice, PttSource::Fallback)
+            {
+                return;
+            }
             if let Some((id, mode)) =
                 take_ptt_session(&runtime.push_to_talk, &runtime.voice, PttSource::Fallback)
             {
@@ -1871,6 +2053,21 @@ fn start_listening_at(
     quiet: bool,
     pressed: Instant,
 ) -> Result<String, VoiceError> {
+    let session_id = begin_listening_at(runtime, mode, quiet, pressed)?;
+    announce_listening_at(runtime, &session_id, mode, pressed);
+    Ok(session_id)
+}
+
+/// Performs the potentially slow model/device preparation without publishing a UI listening
+/// state. Push-to-talk promotes its exact source reservation before calling
+/// [`announce_listening_at`], so a release that won the reservation race cannot be followed by a
+/// late `ListeningStarted` signal.
+fn begin_listening_at(
+    runtime: &Arc<KalVoiceRuntime>,
+    mode: KalVoiceMode,
+    quiet: bool,
+    pressed: Instant,
+) -> Result<String, VoiceError> {
     if runtime.shutting_down.load(Ordering::SeqCst) {
         return Err(VoiceError::NotListening);
     }
@@ -1879,7 +2076,46 @@ fn start_listening_at(
     if let Some(speech) = runtime.speech.get() {
         speech.stop();
     }
-    match runtime.voice.begin_at(mode, pressed) {
+    report_begin_result(
+        runtime,
+        mode,
+        quiet,
+        pressed,
+        runtime.voice.begin_at(mode, pressed),
+    )
+}
+
+fn begin_reserved_listening_at(
+    runtime: &Arc<KalVoiceRuntime>,
+    start: VoiceStart,
+    mode: KalVoiceMode,
+    quiet: bool,
+    pressed: Instant,
+) -> Result<String, VoiceError> {
+    if runtime.shutting_down.load(Ordering::SeqCst) {
+        runtime.voice.abandon_start(&start);
+        return Err(VoiceError::NotListening);
+    }
+    if let Some(speech) = runtime.speech.get() {
+        speech.stop();
+    }
+    report_begin_result(
+        runtime,
+        mode,
+        quiet,
+        pressed,
+        runtime.voice.begin_reserved_at(start, mode, pressed),
+    )
+}
+
+fn report_begin_result(
+    runtime: &Arc<KalVoiceRuntime>,
+    mode: KalVoiceMode,
+    quiet: bool,
+    pressed: Instant,
+    result: Result<String, VoiceError>,
+) -> Result<String, VoiceError> {
+    match result {
         Ok(session_id) => {
             let key_down_to_mic_ms =
                 u64::try_from(pressed.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1893,14 +2129,6 @@ fn start_listening_at(
                 from = "ptt_down",
                 ms = pressed.elapsed().as_secs_f64() * 1000.0
             );
-            runtime.open_priority(&session_id);
-            tracing::info!(event = "kalvoice.audio_capture_started");
-            tracing::info!(event = "kalvoice.ptt_state_listening");
-            runtime.signal(&KalVoiceSignal::ListeningStarted {
-                session_id: session_id.clone(),
-                mode,
-            });
-            stream_level(runtime.clone(), session_id.clone());
             Ok(session_id)
         }
         Err(VoiceError::AlreadyListening) => {
@@ -1909,6 +2137,10 @@ fn start_listening_at(
                 code = VoiceError::AlreadyListening.code()
             );
             Err(VoiceError::AlreadyListening)
+        }
+        Err(VoiceError::NotListening) => {
+            tracing::info!(event = "kalvoice.microphone_open_cancelled");
+            Err(VoiceError::NotListening)
         }
         Err(error) => {
             tracing::info!(
@@ -1926,6 +2158,22 @@ fn start_listening_at(
             Err(error)
         }
     }
+}
+
+fn announce_listening_at(
+    runtime: &Arc<KalVoiceRuntime>,
+    session_id: &str,
+    mode: KalVoiceMode,
+    _pressed: Instant,
+) {
+    runtime.open_priority(session_id);
+    tracing::info!(event = "kalvoice.audio_capture_started");
+    tracing::info!(event = "kalvoice.ptt_state_listening");
+    runtime.signal(&KalVoiceSignal::ListeningStarted {
+        session_id: session_id.to_owned(),
+        mode,
+    });
+    stream_level(runtime.clone(), session_id.to_owned());
 }
 
 /// Sends the live input level (not audio) about 20 times a second while the session listens.
@@ -2964,6 +3212,67 @@ mod tests {
         assert!(end_orphaned_session(&voice, Unsubscribed::LastGone));
         assert_eq!(voice.listening(), None);
         assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_release_during_a_pending_start_cancels_only_its_own_reservation() {
+        let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let core = Core::open(kalcode_core::CoreConfig {
+            paths: kalcode_core::Paths::new(dir.path()),
+            app_version: "0.1.0-test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .unwrap_or_else(|error| panic!("core: {error}"));
+        let mic = HeldMic::default();
+        let stopped = mic.stopped.clone();
+        let voice = VoiceController::new(Arc::new(core), Arc::new(mic), Arc::new(ReadyModel));
+        let state = Mutex::new(PushToTalkState::default());
+
+        let reserved = voice
+            .reserve_start()
+            .unwrap_or_else(|error| panic!("reserve: {error}"));
+        let start = state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reserve_start(PttSource::Fallback, reserved)
+            .unwrap_or_else(|| panic!("source reservation"));
+        assert!(voice.busy(), "the reservation owns the capture lane");
+        assert!(
+            state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .reserve_start(PttSource::Function, start.voice.clone())
+                .is_none(),
+            "a second source cannot reserve while a start is pending"
+        );
+
+        // Fn key-up cannot cancel the fallback key's pending start; the fallback key-up can.
+        assert!(!cancel_pending_ptt_start(
+            &state,
+            &voice,
+            PttSource::Function
+        ));
+        assert!(cancel_pending_ptt_start(
+            &state,
+            &voice,
+            PttSource::Fallback
+        ));
+
+        // The worker finishes after the release: the cancelled start never opens the microphone
+        // and can no longer be promoted to a live session.
+        assert!(matches!(
+            voice.begin_reserved_at(start.voice.clone(), KalVoiceMode::Talk, Instant::now()),
+            Err(VoiceError::NotListening)
+        ));
+        assert!(
+            !state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .promote_start(&start, "late".into())
+        );
+        assert!(!voice.busy());
+        assert_eq!(voice.listening(), None);
+        assert_eq!(stopped.load(Ordering::SeqCst), 0);
     }
 
     #[test]
