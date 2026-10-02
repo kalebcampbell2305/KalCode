@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     kalvoiceLatencyRecord: vi.fn().mockResolvedValue(undefined),
     kalvoiceListenStart: vi.fn(),
     kalvoiceListenStop: vi.fn().mockResolvedValue(undefined),
+    kalvoiceListenCancel: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => ({ client: mocks.client }) }));
@@ -25,7 +26,7 @@ vi.mock("@kalcode/ui/components", () => ({ useToast: () => ({ show: vi.fn() }) }
 
 function Probe() {
   mocks.voice = useKalVoice();
-  return null;
+  return <input aria-label="Dictation target" />;
 }
 
 beforeEach(() => {
@@ -40,12 +41,13 @@ beforeEach(() => {
 it("a release before the microphone opens still stops the session it started", async () => {
   let open: (sessionId: string) => void = () => undefined;
   mocks.client.kalvoiceListenStart.mockReturnValue(new Promise<string>((resolve) => (open = resolve)));
-  render(
+  const view = render(
     <KalVoiceProvider>
       <Probe />
     </KalVoiceProvider>,
   );
   await waitFor(() => expect(mocks.signal).not.toBeNull());
+  act(() => view.getByRole("textbox", { name: "Dictation target" }).focus());
 
   let started: Promise<void> = Promise.resolve();
   let stopped: Promise<void> = Promise.resolve();
@@ -76,5 +78,52 @@ it("a failed start leaves nothing to stop", async () => {
     await mocks.voice?.stopListening();
     await started;
   });
+  expect(mocks.client.kalvoiceListenStop).not.toHaveBeenCalled();
+});
+
+it("Escape cancels native startup without stealing Escape and fences a late orb start", async () => {
+  let open: (sessionId: string) => void = () => undefined;
+  mocks.client.kalvoiceListenStart.mockReturnValue(new Promise<string>((resolve) => (open = resolve)));
+  const view = render(
+    <KalVoiceProvider>
+      <Probe />
+    </KalVoiceProvider>,
+  );
+  await waitFor(() => expect(mocks.signal).not.toBeNull());
+
+  const keyboardEscape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  act(() => window.dispatchEvent(keyboardEscape));
+  expect(keyboardEscape.defaultPrevented).toBe(false);
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenCalledOnce();
+  // Escape closing a menu while a callback is spoken must not cut the speech off: the background
+  // cancel asks native to keep speech unless it actually cancelled a capture.
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenLastCalledWith(undefined, { keepSpeech: true });
+
+  act(() => view.getByRole("textbox", { name: "Dictation target" }).focus());
+  let started: Promise<void> = Promise.resolve();
+  act(() => {
+    started = mocks.voice?.startListening() ?? started;
+  });
+  const orbEscape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  act(() => window.dispatchEvent(orbEscape));
+  expect(orbEscape.defaultPrevented).toBe(false);
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenCalledTimes(2);
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenLastCalledWith(undefined, { keepSpeech: true });
+  await act(async () => {
+    await mocks.voice?.stopListening();
+  });
+
+  act(() => mocks.signal?.({ kind: "listening_started", sessionId: "late-orb", mode: "talk" }));
+  expect(mocks.voice?.state.phase).not.toBe("listening");
+
+  await act(async () => {
+    open("late-orb");
+    await started;
+  });
+  expect(mocks.voice?.dictationTarget).toBeNull();
+  expect(mocks.voice?.state.phase).not.toBe("listening");
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenLastCalledWith("late-orb");
+  act(() => mocks.signal?.({ kind: "listening_started", sessionId: "late-orb", mode: "talk" }));
+  expect(mocks.voice?.state.phase).not.toBe("listening");
   expect(mocks.client.kalvoiceListenStop).not.toHaveBeenCalled();
 });

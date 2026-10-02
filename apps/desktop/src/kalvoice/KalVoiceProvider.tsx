@@ -57,7 +57,7 @@ import {
   submitCapturedProviderTarget,
   targetIsAlive,
 } from "./dictation.ts";
-import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
+import { type DictationCapture, type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import {
@@ -430,8 +430,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [client, status?.preferences.talkEnabled, toast]);
   const stateRef = useRef(state);
   stateRef.current = state;
-  /** The session id of the latest orb start, until a stop consumes it. */
-  const pendingStart = useRef<Promise<string | null> | null>(null);
+  /** The latest orb start, until a stop consumes it or Escape abandons it. */
+  const pendingStart = useRef<{
+    promise: Promise<string | null>;
+    capture: DictationCapture<DictationTarget>;
+    abandoned: boolean;
+    sessionId: string | null;
+  } | null>(null);
+  const abandonedStartIds = useRef(new Set<string>());
   const currentRef = useRef(current);
   currentRef.current = current;
   const width = useWindowWidth();
@@ -1268,6 +1274,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const onSignal = useCallback(
     (signal: KalVoiceSignal) => {
+      if ("sessionId" in signal && signal.sessionId && abandonedStartIds.current.has(signal.sessionId)) return;
       switch (signal.kind) {
         case "lifecycle_callback":
           lastLifecycle.current = {
@@ -1283,11 +1290,23 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           levelRef.current = signal.level;
           return;
         case "listening_started":
+          {
+            const pending = pendingStart.current;
+            if (pending?.abandoned) {
+              // Native IPC tasks can overtake each other. Wait for this abandoned request's
+              // identity before accepting a signal, so Escape never flashes late Listening.
+              void pending.promise.then((id) => {
+                if (pendingStart.current === pending) pendingStart.current = null;
+                if (signal.sessionId !== id) onSignalRef.current(signal);
+              });
+              return;
+            }
+          }
           levelRef.current = 0;
           if (!beginRequest(null)) {
             dictationSessions.current.abandonPendingCapture();
             setDictationTarget(null);
-            void client.kalvoiceListenCancel().catch(() => undefined);
+            void client.kalvoiceListenCancel(signal.sessionId).catch(() => undefined);
             return;
           }
           {
@@ -1496,7 +1515,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       setDictationTarget((current) => (current?.sessionId === now.sessionId ? null : current));
     }
     try {
-      await client.kalvoiceListenCancel();
+      await client.kalvoiceListenCancel(now.sessionId ?? undefined);
     } catch {
       // Nothing was listening.
     }
@@ -1517,13 +1536,29 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       if (now.phase === "listening" || now.phase === "transcribing" || routing) {
         event.preventDefault();
         void cancel();
+        return;
       }
+      const pending = pendingStart.current;
+      if (pending) {
+        pending.abandoned = true;
+        if (pending.sessionId) {
+          dictationSessions.current.cancel(pending.sessionId);
+          setDictationTarget((current) => (current?.sessionId === pending.sessionId ? null : current));
+        } else {
+          dictationSessions.current.abandonCapture(pending.capture);
+        }
+      }
+      // Native can still be opening the microphone while renderer state truthfully remains Ready.
+      // This is a no-op when idle and intentionally leaves dialog Escape and typed requests alone;
+      // a spoken reply keeps playing unless a pending start or session was actually cancelled.
+      void client.kalvoiceListenCancel(undefined, { keepSpeech: true }).catch(() => undefined);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [cancel]);
+  }, [cancel, client]);
 
   const startListening = useCallback(async () => {
+    if (pendingStart.current?.abandoned && pendingStart.current.sessionId === null) return;
     if (nativeRequestInFlight.current) {
       reportNativeRequestBusy();
       return;
@@ -1531,12 +1566,31 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     const capture = dictationSessions.current.captureFocusedTarget();
     const started = client.kalvoiceListenStart("talk");
     // A release can arrive before the microphone opens (a quick tap); stopListening waits for it.
-    pendingStart.current = started.catch(() => null);
+    const pending = {
+      promise: started.catch(() => null),
+      capture,
+      abandoned: false,
+      sessionId: null as string | null,
+    };
+    pendingStart.current = pending;
     try {
       const sessionId = await started;
+      pending.sessionId = sessionId;
+      if (pending.abandoned) {
+        abandonedStartIds.current.add(sessionId);
+        // Bound stale IPC delivery fencing independently of the number of takes in this window.
+        if (abandonedStartIds.current.size > 128) {
+          const oldest = abandonedStartIds.current.values().next().value;
+          if (oldest) abandonedStartIds.current.delete(oldest);
+        }
+        await client.kalvoiceListenCancel(sessionId);
+        if (pendingStart.current === pending) pendingStart.current = null;
+        return;
+      }
       const session = dictationSessions.current.open(sessionId, capture);
       setDictationTarget(session ? targetView(session.sessionId, session.target) : null);
     } catch {
+      if (pendingStart.current === pending) pendingStart.current = null;
       dictationSessions.current.abandonCapture(capture);
       setDictationTarget(null);
       // The native side reports why as a `listening_failed` signal.
@@ -1546,8 +1600,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const stopListening = useCallback(async () => {
     if (nativeRequestInFlight.current) return;
     const pending = pendingStart.current;
+    if (pending?.abandoned) return;
     pendingStart.current = null;
-    const id = stateRef.current.sessionId ?? (pending ? await pending : null);
+    const id = stateRef.current.sessionId ?? (pending ? await pending.promise : null);
     if (!id) return;
     try {
       await client.kalvoiceListenStop(id);

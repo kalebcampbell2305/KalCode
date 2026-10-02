@@ -70,6 +70,14 @@ focus while the key is held) the take finishes at that moment; a 120 s cap ends 
 Escape cancels and discards. Hiding the widget does not turn push to talk off; a separate switch
 (Settings → KalVoice → Push to talk) does.
 
+Key release, Escape, focus loss, page reload and shutdown also invalidate a microphone start
+that is still preparing. Native device startup observes cancellation without waiting for its
+eight-second failure timeout. A late device open retains exclusive capture custody until the
+driver releases it; another take reports busy rather than opening a second stream. An abandoned
+orb start is cancelled by its exact session ID, so late cleanup cannot stop a newer take or reply.
+Recognizer preparation remains synchronous; shutdown retains an unfinished runtime for retry
+when model loading or another background task has not yet drained.
+
 ## One utterance, three outcomes
 
 When the key goes up, KalVoice decides what the words were for:
@@ -140,7 +148,7 @@ request (push-to-talk transcript, or typed)
   ─▶ short report (text; optional OS speech synthesis)
 ```
 
-Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 30 kinds with
+Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 31 kinds with
 `reasoning`):
 
 - **Navigation and workspaces:** navigate (surfaces this build shows; others are refused
@@ -339,6 +347,11 @@ typed, identity-only lifecycle target lets a later “Open it” focus that resu
 provider output or message text in the signal. The target is bound only after the native speech
 backend acknowledges playback start; a backend failure does not claim speech or bind an unheard
 callback.
+
+Provider sign-in reminders follow the canonical health monitor: a previously healthy or degraded
+provider becoming unavailable because it is signed out triggers a reminder. Initial discovery and
+missing, outdated or undetectable installations stay silent. Reminders name the provider without
+exposing diagnostic text or attaching an unrelated thread target.
 
 ## Events
 

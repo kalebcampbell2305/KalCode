@@ -730,7 +730,8 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     return true;
   };
 
-  const cancel = () => {
+  const cancel = (expectedId?: string) => {
+    if (expectedId && listening?.sessionId !== expectedId) return false;
     if (!listening) return false;
     const { sessionId, mode, timers } = listening;
     for (const timer of timers) clearInterval(timer);
@@ -1064,7 +1065,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     kalvoice_listen_stop: (args) => {
       if (!finish(String(args.sessionId))) fail("not_listening", "KalVoice isn't listening.");
     },
-    kalvoice_listen_cancel: () => cancel(),
+    kalvoice_listen_cancel: (args) => cancel(typeof args.sessionId === "string" ? args.sessionId : undefined),
     kalvoice_model_download: (args) => {
       if (args.consent !== true) fail("consent_required", "Downloading a speech model needs your permission first.");
       download(String(args.modelId));
