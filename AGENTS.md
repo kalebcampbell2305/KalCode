@@ -161,6 +161,65 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
 - Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
 
+## Permanent visual quality rule (owner directive 2026-10-02)
+
+**FUNCTIONAL IS NOT ENOUGH FOR USER-FACING KALCODE. EVERYTHING USERS SEE MUST LOOK BEAUTIFUL, PREMIUM, INTENTIONAL, FAST AND UNMISTAKABLY KALCODE. NOTHING USER-FACING SHIPS BLAND. KEEP IT SIMPLE. KEEP IT BEAUTIFUL. KEEP IT FAST.**
+
+**Scope.** This covers every surface a user or the owner sees:
+- the desktop UI: Code tab, Threads, Browser, Agent Fleet, Operations, Account Hub, onboarding, settings, dialogs, menus, empty states, charts and widgets;
+- dashboards, including owner and internal ones;
+- websites, pricing and release pages;
+- marketing assets, videos, and installers where visual.
+
+It does not mean styling backend-only code, scripts, APIs or invisible infrastructure.
+
+**Standard.** Every visible surface feels premium, intentional, polished, modern and cohesive. It is information-rich without clutter, visually impressive, easy to understand, and fast.
+
+Never ship anything that looks like:
+- default framework UI, a generic SaaS dashboard, or plain Bootstrap-style cards and random rectangles;
+- unfinished developer tooling or bland enterprise software;
+- cheap gamer UI, excessive neon, or AI-generated visual slop;
+- a placeholder design.
+
+**If the first implementation works but looks bland, it is not done.**
+
+**KalCode design language.** Default to the established system:
+- **Base:** a near-black/graphite foundation, with a deep-space/midnight atmosphere where appropriate.
+- **Accent:** the signature electric-blue.
+- **Type:** bright, high-contrast typography.
+- **Surfaces:** restrained neutral borders, subtle depth, premium shadows, restrained glow, and clean glass/depth effects where useful.
+- **Shape and spacing:** radii of about 10–14px; tight, deliberate spacing.
+- **Motion:** smooth 160–260ms motion, plus subtle parallax/depth only when it genuinely helps.
+- **Provider colours:** mainly small identity indicators. KalCode owns the visual hierarchy.
+
+It should feel like a sophisticated AI engineering environment, not a bland IDE.
+
+**Hierarchy.** Not everything is equally prominent. Decide what matters most, what the user needs next, and what stays secondary. Express that with scale, spacing, typography, contrast, position, motion and depth. Important things feel important; secondary things stay quiet.
+
+**Motion makes KalCode feel alive.** Use pane transitions, hover feedback, animated state changes, subtle electric-blue focus, number/chart transitions, loading transitions, and polished open/close. Motion must communicate focus, state, movement, progress or causality, never mere decoration. It must never make the app feel slower.
+
+**Beautiful also means fast** (see the responsiveness rule). The target is CLICK → IMMEDIATE RESPONSE → BEAUTIFUL TRANSITION → RESULT, never CLICK → WAIT → ANIMATION → RESULT. Never trade responsiveness for effects.
+
+**Details matter.** Get these right:
+- typography, alignment, spacing and icon consistency;
+- button hierarchy;
+- hover, focus, loading, empty, error and disabled states;
+- tooltips, menus and scroll behaviour;
+- responsive resizing, truncation, long content and high-density layouts.
+
+A feature is not visually finished just because its happy-path screen looks good.
+
+**Don't over-engineer.** Prefer SIMPLE + BEAUTIFUL + FAST over COMPLEX + FLASHY + OVERBUILT. Use the smallest technically correct implementation at a high visual standard. Never turn a small feature into a large redesign unless it is necessary (see Scope discipline).
+
+**Final visual pass (required before user-facing work is complete).** Look at the actual rendered result: a screenshot, a Playwright run or the real app. Then ask:
+- Does it look premium and unmistakably KalCode?
+- Is anything bland or confusing?
+- Does the hierarchy make sense, and does it feel finished?
+- Is it still beautiful at realistic window sizes?
+- Does it feel fast?
+
+If any answer is no, polish it before shipping. Give subagents doing user-facing work these criteria explicitly.
+
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 
 **BUILD CONTINUOUSLY. SHIP CONTINUOUSLY. THE PUBLIC VERSION IS JUST AN OWNER-CONTROLLED LABEL. WHEN THE OWNER REQUESTS A VERSION CHANGE, UPDATE THE VERSION CONSISTENTLY AND CONTINUE WORKING.**
