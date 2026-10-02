@@ -134,10 +134,18 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    // A hidden view (a tab behind another, Code on another page) has no size of its own: it
+    // never resizes the shell, and sends its size once it is shown and fitted.
+    let sizePending = false;
     const sendSize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         resizeTimer = null;
+        if (host.clientWidth === 0 || host.clientHeight === 0) {
+          sizePending = true;
+          return;
+        }
+        sizePending = false;
         if (!disposed && runningRef.current) {
           client.resizeTerminal(terminalId, { cols: term.cols, rows: term.rows }).catch(() => undefined);
         }
@@ -165,6 +173,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       } catch {
         // Not measurable yet (fonts or layout still settling); the next resize fits it.
       }
+      if (sizePending) sendSize();
     };
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);

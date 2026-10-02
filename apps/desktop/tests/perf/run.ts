@@ -22,6 +22,7 @@ import {
   detach,
   epochNow,
   launch,
+  PERF_DIR_PREFIX,
   pageTimings,
   type Running,
   reattach,
@@ -143,7 +144,7 @@ function mapStats(stats: Stats): Stats {
 }
 
 function newDataDir(): string {
-  return mkdtempSync(join(tmpdir(), "kalcode-perf-"));
+  return mkdtempSync(join(tmpdir(), PERF_DIR_PREFIX));
 }
 
 /** Folders left by interrupted runs (only stale ones: another run may be using recent folders). */
@@ -151,7 +152,7 @@ function sweepStaleDirs(): void {
   const staleBefore = Date.now() - 30 * 60_000;
   for (const name of readdirSync(tmpdir())) {
     const dir = join(tmpdir(), name);
-    if (name.startsWith("kalcode-perf-") && statSync(dir).mtimeMs < staleBefore) removeDir(dir);
+    if (name.startsWith(PERF_DIR_PREFIX) && statSync(dir).mtimeMs < staleBefore) removeDir(dir);
   }
 }
 

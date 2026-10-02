@@ -77,6 +77,7 @@ export function FloatingAssistant() {
   const ref = useRef<HTMLElement | null>(null);
   const [size, setSize] = useState<Size>({ width: 240, height: 120 });
   const [drag, setDrag] = useState<Point | null>(null);
+  const dragPoint = useRef<Point | null>(null);
   const dragStart = useRef<{ pointer: Point; origin: Point; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const holding = useRef(false);
@@ -160,6 +161,7 @@ export function FloatingAssistant() {
     // Events from portalled menus bubble through React but aren't inside the widget.
     const target = event.target as HTMLElement;
     if (!event.currentTarget.contains(target) || target.closest("[data-no-drag]")) return;
+    dragPoint.current = null;
     dragStart.current = { pointer: { left: event.clientX, top: event.clientY }, origin: resting, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -175,24 +177,28 @@ export function FloatingAssistant() {
     const maxLeft = Math.max(minLeft, viewport.width - (area?.right ?? 0) - size.width - 16);
     const minTop = (slots?.insets.top ?? 0) + 16;
     const maxTop = Math.max(minTop, viewport.height - (slots?.insets.bottom ?? 0) - size.height - 16);
-    setDrag({
+    const next = {
       left: Math.min(maxLeft, Math.max(minLeft, start.origin.left + dx)),
       top: Math.min(maxTop, Math.max(minTop, start.origin.top + dy)),
-    });
+    };
+    dragPoint.current = next;
+    setDrag(next);
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLElement>) => {
     const start = dragStart.current;
+    const dropped = dragPoint.current;
     dragStart.current = null;
+    dragPoint.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (!start?.moved || !drag) {
+    if (!start?.moved || !dropped) {
       setDrag(null);
       return;
     }
     suppressClick.current = true;
-    setPanel(placementAt(drag, viewport, size, undefined, area));
+    setPanel(placementAt(dropped, viewport, size, undefined, area));
     setDrag(null);
   };
 

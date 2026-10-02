@@ -68,6 +68,31 @@ pub enum VoiceError {
     Capture(#[from] CaptureError),
 }
 
+/// Releases a still-pending reservation when `begin_reserved_at` unwinds.
+struct SettleStartOnPanic<'a> {
+    active: &'a Mutex<VoiceState>,
+    id: String,
+}
+
+impl Drop for SettleStartOnPanic<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        if matches!(&*active, VoiceState::Starting { id, .. } if id == &self.id) {
+            *active = VoiceState::Idle;
+        }
+    }
+}
+
+/// Opaque ownership of the one pending microphone start. Desktop push-to-talk reserves this
+/// synchronously before spawning its worker, so only that exact source can cancel the start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceStart {
+    id: String,
+}
+
 impl VoiceError {
     pub fn code(&self) -> &'static str {
         match self {
@@ -89,6 +114,17 @@ struct Session {
     recognizer: Arc<dyn SpeechRecognizer>,
 }
 
+enum VoiceState {
+    Idle,
+    /// Exactly one microphone start owns the lane until it returns, even after cancellation.
+    /// This prevents a second native device open from overlapping a slow first one.
+    Starting {
+        id: String,
+        cancelled: bool,
+    },
+    Listening(Session),
+}
+
 /// Receives live partial transcripts: `(session_id, text)`.
 pub type PartialNotifier = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
@@ -107,7 +143,8 @@ pub struct VoiceController {
     core: Arc<Core>,
     audio: Arc<dyn AudioSource>,
     recognizers: Arc<dyn RecognizerSource>,
-    active: Arc<Mutex<Option<Session>>>,
+    active: Arc<Mutex<VoiceState>>,
+    transitions: Mutex<()>,
     max: Duration,
     partials: Mutex<Option<PartialNotifier>>,
     stream_interval: Duration,
@@ -123,7 +160,8 @@ impl VoiceController {
             core,
             audio,
             recognizers,
-            active: Arc::new(Mutex::new(None)),
+            active: Arc::new(Mutex::new(VoiceState::Idle)),
+            transitions: Mutex::new(()),
             max: MAX_RECORDING,
             partials: Mutex::new(None),
             stream_interval: Duration::from_millis(300),
@@ -159,31 +197,40 @@ impl VoiceController {
 
     /// The session currently listening, if any.
     pub fn listening(&self) -> Option<(String, KalVoiceMode)> {
-        self.active
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(|s| (s.id.clone(), s.mode))
+        match &*self.active.lock().unwrap_or_else(PoisonError::into_inner) {
+            VoiceState::Listening(session) => Some((session.id.clone(), session.mode)),
+            VoiceState::Idle | VoiceState::Starting { .. } => None,
+        }
+    }
+
+    /// Whether a microphone start or listening session owns the single capture lane.
+    pub fn busy(&self) -> bool {
+        !matches!(
+            &*self.active.lock().unwrap_or_else(PoisonError::into_inner),
+            VoiceState::Idle
+        )
     }
 
     /// Live input level (0–1) of the session listening now, for the waveform.
     pub fn level(&self, session_id: &str) -> Option<f32> {
-        self.active
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .filter(|s| s.id == session_id)
-            .map(|s| s.capture.level())
+        let state = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        match &*state {
+            VoiceState::Listening(session) if session.id == session_id => {
+                Some(session.capture.level())
+            }
+            VoiceState::Idle | VoiceState::Starting { .. } | VoiceState::Listening(_) => None,
+        }
     }
 
     /// How long the session listening now has been recording.
     pub fn listening_for(&self, session_id: &str) -> Option<Duration> {
-        self.active
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .filter(|s| s.id == session_id)
-            .map(|s| s.started.elapsed())
+        let state = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        match &*state {
+            VoiceState::Listening(session) if session.id == session_id => {
+                Some(session.started.elapsed())
+            }
+            VoiceState::Idle | VoiceState::Starting { .. } | VoiceState::Listening(_) => None,
+        }
     }
 
     /// Opens the microphone now. Returns the session id.
@@ -193,29 +240,75 @@ impl VoiceController {
 
     /// Opens the microphone for a key pressed at `pressed` (for key-down → mic timing).
     pub fn begin_at(&self, mode: KalVoiceMode, pressed: Instant) -> Result<String, VoiceError> {
+        let start = self.reserve_start()?;
+        self.begin_reserved_at(start, mode, pressed)
+    }
+
+    /// Atomically reserves the single capture lane without performing slow model or device work.
+    pub fn reserve_start(&self) -> Result<VoiceStart, VoiceError> {
+        let id = new_id();
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-        if active.is_some() {
+        if !matches!(*active, VoiceState::Idle) {
             return Err(VoiceError::AlreadyListening);
         }
-        let id = new_id();
+        *active = VoiceState::Starting {
+            id: id.clone(),
+            cancelled: false,
+        };
+        Ok(VoiceStart { id })
+    }
+
+    /// Completes a previously reserved start. Cancellation keeps the lane occupied until this
+    /// call observes it, preventing overlapping native microphone opens.
+    pub fn begin_reserved_at(
+        &self,
+        start: VoiceStart,
+        mode: KalVoiceMode,
+        pressed: Instant,
+    ) -> Result<String, VoiceError> {
+        let id = start.id;
+        // A panic in model preparation or the device open (debug builds unwind) must not leave the
+        // single capture lane reserved forever; every normal path settles the reservation itself.
+        let _settle_on_panic = SettleStartOnPanic {
+            active: &self.active,
+            id: id.clone(),
+        };
+        if !self.start_is_current(&id) {
+            return Err(VoiceError::NotListening);
+        }
         let recognizer = match self.recognizers.prepare() {
             Ok(recognizer) => recognizer,
             Err(e) => {
+                if self.settle_failed_start(&id) {
+                    return Err(VoiceError::NotListening);
+                }
                 if mode == KalVoiceMode::Dictation {
                     self.emit(EventPayload::KalVoiceDictationFailed {
-                        session_id: id,
+                        session_id: id.clone(),
                         code: e.code().to_owned(),
                     });
                 }
                 return Err(e.into());
             }
         };
-        let capture = match self.audio.start(self.max) {
+        // Cancellation during model preparation must win before a native device open begins.
+        if !self.start_is_current(&id) {
+            return Err(VoiceError::NotListening);
+        }
+        let capture = match self.audio.start_cancellable(self.max, &|| {
+            !matches!(
+                &*self.active.lock().unwrap_or_else(PoisonError::into_inner),
+                VoiceState::Starting { id: current, cancelled: false } if current == &id
+            )
+        }) {
             Ok(capture) => capture,
             Err(e) => {
+                if self.settle_failed_start(&id) {
+                    return Err(VoiceError::NotListening);
+                }
                 if mode == KalVoiceMode::Dictation {
                     self.emit(EventPayload::KalVoiceDictationFailed {
-                        session_id: id,
+                        session_id: id.clone(),
                         code: e.code().to_owned(),
                     });
                 }
@@ -229,12 +322,15 @@ impl VoiceController {
             let shared = self.active.clone();
             let snapshot_id = id.clone();
             let snapshot: Snapshot = Arc::new(move || {
-                shared
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                    .filter(|s| s.id == snapshot_id)
-                    .map(|s| s.capture.snapshot())
+                let state = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                match &*state {
+                    VoiceState::Listening(session) if session.id == snapshot_id => {
+                        Some(session.capture.snapshot())
+                    }
+                    VoiceState::Idle | VoiceState::Starting { .. } | VoiceState::Listening(_) => {
+                        None
+                    }
+                }
             });
             let notifier = self
                 .partials
@@ -254,7 +350,7 @@ impl VoiceController {
                 self.stream_interval,
             )
         };
-        *active = Some(Session {
+        let session = Session {
             id: id.clone(),
             mode,
             capture,
@@ -262,7 +358,33 @@ impl VoiceController {
             key_down_to_mic,
             streamer,
             recognizer,
-        });
+        };
+        // Serialize publication and its durable event with cancellation; subscribers can still
+        // inspect `active` after its short state lock is released below.
+        let _transition = self
+            .transitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        let publish = matches!(
+            &*active,
+            VoiceState::Starting {
+                id: starting_id,
+                cancelled: false,
+            } if starting_id == &id
+        );
+        if publish {
+            *active = VoiceState::Listening(session);
+        } else {
+            if matches!(&*active, VoiceState::Starting { id: starting_id, .. } if starting_id == &id)
+            {
+                *active = VoiceState::Idle;
+            }
+            drop(active);
+            session.streamer.cancel();
+            session.capture.cancel();
+            return Err(VoiceError::NotListening);
+        }
         drop(active);
         if mode == KalVoiceMode::Dictation {
             self.emit(EventPayload::KalVoiceDictationStarted {
@@ -272,12 +394,50 @@ impl VoiceController {
         Ok(id)
     }
 
+    /// Returns whether this start was cancelled (or superseded) while a slow step failed, and
+    /// releases its lane. A normal failure returns `false` so its specific error remains visible.
+    fn settle_failed_start(&self, session_id: &str) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        let cancelled = match &*active {
+            VoiceState::Starting { id, cancelled } if id == session_id => *cancelled,
+            _ => true,
+        };
+        if matches!(&*active, VoiceState::Starting { id, .. } if id == session_id) {
+            *active = VoiceState::Idle;
+        }
+        cancelled
+    }
+
+    /// Revalidates the reservation immediately before native capture. A cancelled preparation
+    /// has finished, so it can release the lane without opening the device.
+    fn start_is_current(&self, session_id: &str) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        match &*active {
+            VoiceState::Starting {
+                id,
+                cancelled: false,
+            } if id == session_id => true,
+            VoiceState::Starting { id, .. } if id == session_id => {
+                *active = VoiceState::Idle;
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn take(&self, session_id: Option<&str>) -> Option<Session> {
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-        match (&*active, session_id) {
-            (Some(s), Some(id)) if s.id != id => None,
-            (Some(_), _) => active.take(),
-            (None, _) => None,
+        let take = match (&*active, session_id) {
+            (VoiceState::Listening(session), Some(id)) => session.id == id,
+            (VoiceState::Listening(_), None) => true,
+            (VoiceState::Idle | VoiceState::Starting { .. }, _) => false,
+        };
+        if !take {
+            return None;
+        }
+        match std::mem::replace(&mut *active, VoiceState::Idle) {
+            VoiceState::Listening(session) => Some(session),
+            VoiceState::Idle | VoiceState::Starting { .. } => unreachable!(),
         }
     }
 
@@ -297,9 +457,14 @@ impl VoiceController {
     /// As [`Self::end_timed`], for a key released at `key_up` (taken where the release was
     /// observed, before any thread hand-off, so key-up timings include that hand-off).
     pub fn end_timed_at(&self, session_id: &str, key_up: Instant) -> Result<Finished, VoiceError> {
-        let session = self
-            .take(Some(session_id))
-            .ok_or(VoiceError::NotListening)?;
+        let session = {
+            let _transition = self
+                .transitions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            self.take(Some(session_id))
+                .ok_or(VoiceError::NotListening)?
+        };
         let duration_ms = u64::try_from(session.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let id = session.id.clone();
         let mode = session.mode;
@@ -396,6 +561,19 @@ impl VoiceController {
 
     /// Stops listening and discards the audio (Escape). `None` cancels whatever is listening.
     pub fn cancel(&self, session_id: Option<&str>) -> bool {
+        let _transition = self
+            .transitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        {
+            let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+            if let VoiceState::Starting { id, cancelled } = &mut *active
+                && session_id.is_none_or(|expected| expected == id)
+            {
+                *cancelled = true;
+                return true;
+            }
+        }
         let Some(session) = self.take(session_id) else {
             return false;
         };
@@ -409,11 +587,56 @@ impl VoiceController {
         }
         true
     }
+
+    /// Cancels only this exact pending start. It cannot affect an orb/direct IPC session that
+    /// began later or a reservation owned by another physical source.
+    pub fn cancel_start(&self, start: &VoiceStart) -> bool {
+        {
+            let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+            if let VoiceState::Starting { id, cancelled } = &mut *active
+                && id == &start.id
+            {
+                *cancelled = true;
+                return true;
+            }
+        }
+        // The microphone may have committed between a source releasing its reservation and this
+        // exact cancellation. The reservation id is also the session id, so this still cannot
+        // affect a newer direct/orb take.
+        self.cancel(Some(&start.id))
+    }
+
+    /// Lifecycle reset invalidates an opening device, while an established take can still be
+    /// finished normally (for example when focus loss substitutes for a missed key release).
+    pub fn cancel_pending_start(&self) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        if let VoiceState::Starting { cancelled, .. } = &mut *active {
+            *cancelled = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Releases an exact reservation that was never handed to [`Self::begin_reserved_at`].
+    /// Callers must only use this when worker creation failed, so no slow start can still be
+    /// running for the token.
+    pub fn abandon_start(&self, start: &VoiceStart) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        if matches!(&*active, VoiceState::Starting { id, .. } if id == &start.id) {
+            *active = VoiceState::Idle;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
 
     use super::*;
     use kalcode_core::flags::BuildChannel;
@@ -445,6 +668,28 @@ mod tests {
         }
     }
 
+    /// A microphone whose open is controlled by the test. This reproduces a slow native device
+    /// without relying on a real driver, permission prompt, or wall-clock sleep inside `start`.
+    struct ControlledStartAudio {
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        result: Result<Vec<f32>, CaptureError>,
+    }
+
+    impl AudioSource for ControlledStartAudio {
+        fn start(&self, _max: Duration) -> Result<Box<dyn ActiveCapture>, CaptureError> {
+            self.entered.send(()).expect("observe microphone start");
+            self.release
+                .lock()
+                .expect("release receiver")
+                .recv()
+                .expect("release microphone start");
+            self.result
+                .clone()
+                .map(|samples| Box::new(FakeCapture(samples)) as Box<dyn ActiveCapture>)
+        }
+    }
+
     /// Test double recognizer.
     struct FakeRecognizer(Result<String, SttError>);
 
@@ -465,6 +710,31 @@ mod tests {
         }
         fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
             Ok(Arc::new(FakeRecognizer(self.text.clone())))
+        }
+    }
+
+    struct ControlledPrepareSource {
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl RecognizerSource for ControlledPrepareSource {
+        fn ready(&self) -> Result<(), SttError> {
+            Ok(())
+        }
+
+        fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            unreachable!("the controlled source overrides prepare")
+        }
+
+        fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            self.entered.send(()).expect("observe recognizer prepare");
+            self.release
+                .lock()
+                .expect("prepare release receiver")
+                .recv()
+                .expect("release recognizer prepare");
+            Ok(Arc::new(FakeRecognizer(Ok(String::new()))))
         }
     }
 
@@ -511,6 +781,91 @@ mod tests {
             .filter(|e| e.event.type_name().starts_with("kalvoice."))
             .map(|e| serde_json::to_value(&e).expect("json"))
             .collect()
+    }
+
+    #[test]
+    fn dictation_started_is_persisted_before_concurrent_cancellation() {
+        assert_started_before_terminal_transition(true);
+    }
+
+    #[test]
+    fn dictation_started_is_persisted_before_concurrent_finish() {
+        assert_started_before_terminal_transition(false);
+    }
+
+    fn assert_started_before_terminal_transition(cancel_take: bool) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, _, voice) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let voice = Arc::new(voice);
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let locked_core = core.clone();
+        let blocker = thread::spawn(move || {
+            locked_core.read(|_| {
+                locked_tx.send(()).expect("report core lock");
+                let _ = release_rx.recv();
+                Ok(())
+            })
+        });
+        locked_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("core locked");
+        let starting_voice = voice.clone();
+        let start = thread::spawn(move || starting_voice.begin(KalVoiceMode::Dictation));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while voice.listening().is_none() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        let published = voice.listening().is_some();
+        let id = voice.listening().map(|(id, _)| id).unwrap_or_default();
+        let transition_held = voice.transitions.try_lock().is_err();
+        let cancelling_voice = voice.clone();
+        let (cancel_entered_tx, cancel_entered_rx) = mpsc::channel();
+        let (cancelled_tx, cancelled_rx) = mpsc::channel();
+        let cancel = thread::spawn(move || {
+            cancel_entered_tx.send(()).expect("report cancel entry");
+            let result = if cancel_take {
+                cancelling_voice.cancel(None)
+            } else {
+                cancelling_voice.end(&id).is_ok()
+            };
+            cancelled_tx.send(result).expect("report cancellation");
+            result
+        });
+        cancel_entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancel entered");
+        let waiting = cancelled_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err();
+        let retained_until_event = voice.listening().is_some();
+        // Release the real Core lock and join every worker before asserting the failing path.
+        drop(release_tx);
+        blocker.join().expect("core blocker").expect("core read");
+        let begun = start.join().expect("begin worker");
+        let cancelled = cancel.join().expect("cancel worker");
+        assert!(published && transition_held && waiting && retained_until_event);
+        assert!(begun.is_ok() && cancelled);
+        assert_eq!(voice.listening(), None);
+        let events = kalvoice_events(&core);
+        let types: Vec<&str> = events
+            .iter()
+            .map(|e| e["type"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "kalvoice.dictation_started",
+                if cancel_take {
+                    "kalvoice.dictation_failed"
+                } else {
+                    "kalvoice.dictation_completed"
+                }
+            ]
+        );
+        if cancel_take {
+            assert_eq!(events[1]["payload"]["code"], "cancelled");
+        }
     }
 
     #[test]
@@ -588,6 +943,230 @@ mod tests {
             kalvoice_events(&core)[0]["payload"]["code"],
             "model_not_installed"
         );
+    }
+
+    #[test]
+    fn cancel_returns_promptly_while_microphone_start_is_pending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, _, _) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let voice = Arc::new(VoiceController::new(
+            core,
+            Arc::new(ControlledStartAudio {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+                result: Ok(Vec::new()),
+            }),
+            Arc::new(FakeSource {
+                ready: Ok(()),
+                text: Ok(String::new()),
+            }),
+        ));
+
+        let begin_voice = voice.clone();
+        let begin = thread::spawn(move || begin_voice.begin(KalVoiceMode::Talk));
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("begin reached microphone start");
+
+        let cancel_voice = voice.clone();
+        let (cancel_started_tx, cancel_started_rx) = mpsc::sync_channel(1);
+        let (cancelled_tx, cancelled_rx) = mpsc::sync_channel(1);
+        let cancel = thread::spawn(move || {
+            cancel_started_tx.send(()).expect("observe cancel thread");
+            cancelled_tx
+                .send(cancel_voice.cancel(None))
+                .expect("report cancel result");
+        });
+        cancel_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("cancel thread started");
+
+        let prompt_cancel = cancelled_rx.recv_timeout(Duration::from_millis(250));
+
+        // Release every controlled blocker before asserting, so a failed regression can never
+        // strand a test thread or the suite process.
+        release_tx.send(()).expect("release microphone start");
+        let begin_result = begin.join().expect("begin thread");
+        if prompt_cancel.is_err() {
+            cancelled_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("blocked cancel settled after microphone start");
+        }
+        cancel.join().expect("cancel thread");
+        let late_session = voice.listening();
+        if let Some((session_id, _)) = &late_session {
+            let _ = voice.cancel(Some(session_id));
+        }
+
+        assert_eq!(
+            prompt_cancel,
+            Ok(true),
+            "cancel must promptly invalidate a pending microphone start"
+        );
+        assert_eq!(begin_result, Err(VoiceError::NotListening));
+        assert_eq!(late_session, None, "a cancelled start cannot publish late");
+    }
+
+    #[test]
+    fn cancellation_during_recognizer_prepare_skips_microphone_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let voice = Arc::new(VoiceController::new(
+            core,
+            audio.clone(),
+            Arc::new(ControlledPrepareSource {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            }),
+        ));
+
+        let begin_voice = voice.clone();
+        let begin = thread::spawn(move || begin_voice.begin(KalVoiceMode::Talk));
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("begin reached recognizer prepare");
+        let cancel_voice = voice.clone();
+        let (cancelled_tx, cancelled_rx) = mpsc::sync_channel(1);
+        let cancel = thread::spawn(move || {
+            cancelled_tx
+                .send(cancel_voice.cancel(None))
+                .expect("report cancel result");
+        });
+        let prompt_cancel = cancelled_rx.recv_timeout(Duration::from_millis(250));
+
+        release_tx.send(()).expect("release recognizer prepare");
+        let begin_result = begin.join().expect("begin thread");
+        if prompt_cancel.is_err() {
+            cancelled_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("blocked cancel settled after recognizer prepare");
+        }
+        cancel.join().expect("cancel thread");
+
+        assert_eq!(prompt_cancel, Ok(true));
+        assert_eq!(begin_result, Err(VoiceError::NotListening));
+        assert_eq!(
+            audio.starts.load(Ordering::SeqCst),
+            0,
+            "a cancelled preparation must not open the microphone"
+        );
+    }
+
+    struct PanickingPrepareSource;
+
+    impl RecognizerSource for PanickingPrepareSource {
+        fn ready(&self) -> Result<(), SttError> {
+            Ok(())
+        }
+
+        fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            unreachable!("the panicking source overrides prepare")
+        }
+
+        fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            panic!("recognizer preparation panicked")
+        }
+    }
+
+    #[test]
+    fn a_panicking_start_releases_the_capture_lane() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let voice = Arc::new(VoiceController::new(
+            core,
+            audio.clone(),
+            Arc::new(PanickingPrepareSource),
+        ));
+        let begin_voice = voice.clone();
+        assert!(
+            thread::spawn(move || begin_voice.begin(KalVoiceMode::Talk))
+                .join()
+                .is_err(),
+            "the start panicked"
+        );
+        assert!(
+            !voice.busy(),
+            "push-to-talk must not stay dead after a panic"
+        );
+        assert!(voice.reserve_start().is_ok());
+        assert_eq!(audio.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn capture_failure_after_cancellation_is_silent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, _, _) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let voice = Arc::new(VoiceController::new(
+            core.clone(),
+            Arc::new(ControlledStartAudio {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+                result: Err(CaptureError::Busy),
+            }),
+            Arc::new(FakeSource {
+                ready: Ok(()),
+                text: Ok(String::new()),
+            }),
+        ));
+
+        let begin_voice = voice.clone();
+        let begin = thread::spawn(move || begin_voice.begin(KalVoiceMode::Dictation));
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("begin reached microphone start");
+        assert!(voice.cancel(None));
+        release_tx.send(()).expect("release microphone start");
+
+        assert_eq!(
+            begin.join().expect("begin thread"),
+            Err(VoiceError::NotListening)
+        );
+        assert_eq!(voice.listening(), None);
+        assert!(
+            kalvoice_events(&core).is_empty(),
+            "a cancelled start must not publish started or failed events"
+        );
+    }
+
+    #[test]
+    fn a_stale_start_token_cannot_cancel_a_new_direct_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, _, _) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let voice = VoiceController::new(
+            core,
+            Arc::new(FakeAudio {
+                samples: Vec::new(),
+                error: None,
+                starts: AtomicUsize::new(0),
+            }),
+            Arc::new(FakeSource {
+                ready: Ok(()),
+                text: Ok(String::new()),
+            }),
+        );
+
+        let stale = voice.reserve_start().expect("reserve push-to-talk start");
+        assert_eq!(
+            voice.begin(KalVoiceMode::Talk),
+            Err(VoiceError::AlreadyListening),
+            "a direct start cannot overtake the reserved microphone lane"
+        );
+        assert!(voice.abandon_start(&stale));
+
+        let direct = voice.begin(KalVoiceMode::Talk).expect("direct session");
+        assert!(!voice.cancel_start(&stale));
+        assert_eq!(
+            voice.listening(),
+            Some((direct.clone(), KalVoiceMode::Talk)),
+            "a stale push-to-talk release cannot cancel a newer direct session"
+        );
+        assert!(voice.cancel(Some(&direct)));
     }
 
     #[test]

@@ -1785,7 +1785,7 @@ pub fn updater_status(
     Ok(state.status())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn updater_set_channel(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,

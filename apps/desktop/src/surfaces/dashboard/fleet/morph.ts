@@ -14,7 +14,12 @@ const NAME = "fleet-agent";
  * Rendering is paused while the new state is prepared, so wait only briefly for the thread view
  * to mount; if it isn't there yet, the page cross-fades instead of morphing.
  */
-const MOUNT_WAIT_MS = 250;
+const MOUNT_WAIT_MS = 100;
+/**
+ * How long the paused page waits for `open()` (IPC) before giving up on the morph. A slower open
+ * keeps running and lands after a plain cross-fade, so the click never freezes the screen.
+ */
+const OPEN_WAIT_MS = 100;
 
 function motionReduced(): boolean {
   const root = document.documentElement;
@@ -50,7 +55,17 @@ export function morphIntoThread(card: HTMLElement | null, threadId: string, open
   const transition = start.call(document, async () => {
     // Exactly one element carries the name in each state: the card before, the thread view after.
     card.style.removeProperty("view-transition-name");
-    await open();
+    const opening = new Promise((resolve) => resolve(open()));
+    // The open keeps going past the race; its errors surface where `open` reports them.
+    opening.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const opened = await Promise.race([
+      opening.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), OPEN_WAIT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (!opened) return;
     target = await threadView(threadId);
     target?.style.setProperty("view-transition-name", NAME);
   });

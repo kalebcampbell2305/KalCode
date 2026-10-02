@@ -1,5 +1,74 @@
 # KalCode agent policy
 
+## Permanent fastest truthful release policy (owner directive 2026-10-02)
+
+**KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.**
+This directive applies to Claude Code, Codex, and future agents. It replaces older release-gate instructions wherever they impose unnecessary delay, repeated validation, arbitrary waiting, broad checklists, or release ceremony. It takes precedence over conflicting historical instructions below and in release kits, campaign documents, and automation. Keep older evidence; remove irrelevant gates from the critical path.
+
+Default lifecycle: **IMPLEMENT -> TEST WHAT CHANGED -> REVIEW -> MERGE -> BUILD -> SHIP -> VERIFY -> CLEAN UP.** Use the fastest technically safe merge, build, shipment, and production verification.
+
+### Only relevant risk may block delivery
+
+Every gate must answer: **What specific realistic failure does this gate protect against for this change?** If it has no strong answer, it must not block merge or release.
+
+Do not block on arbitrary waiting or soak periods, giant generic QA checklists, unrelated suites, repeated valid tests, inapplicable historical procedures, automatable owner steps, a new public version, unfinished unrelated features, reopening completed work, just-in-case audits, broad cross-product regression for isolated edits, or duplicate review of unchanged code.
+
+For each change, identify its affected surface and realistic failure modes, run the smallest tests that control those risks, reuse valid evidence, and ship. A small UI fix needs focused UI proof and the relevant build; a terminal change needs terminal and affected integration proof; billing needs billing/entitlement proof; updater/release changes need package/update-path and signing proof. Do not run unrelated tests merely because they exist.
+
+**Valid evidence stays valid until the change invalidates it.** Do not repeat a test, QA flow, signing/platform check, or release proof when its implementation and dependencies are materially unchanged, its environment remains valid, and no new failure evidence exists. Rerun only what was invalidated.
+
+### Merge and ship immediately
+
+When implementation is correct, reviewed proportionately, and relevant tests pass, merge through the normal PR path. Resolve actual conflicts; do not manufacture process or hold independent completed work for unrelated work. Preserve one canonical writer for conflicting surfaces.
+
+Merged is not done. User-facing work proceeds automatically through the current build, required packaging/signing, publication, updater availability, and focused production proof. Public versions are owner-controlled labels, never shipping gates. Ship internal builds under the current public version; only an explicit owner declaration changes the public version, consistently across affected surfaces.
+
+No two-session/no-commit rule may stall useful progress. Commit coherent validated units incrementally; avoid both giant uncommitted batches and arbitrary commit ceremony.
+
+### Merged to main = ship immediately (owner directive 2026-10-02)
+
+**IF USER-FACING KALCODE WORK IS MERGED TO MAIN, SHIP IT IMMEDIATELY. MERGE AND SHIPPING ARE ONE CONTINUOUS PIPELINE. DO NOT LEAVE COMPLETED USER-FACING WORK SITTING ON MAIN. SHIPPING SHOULD BE FAST, AUTOMATED, FOCUSED, AND LIMITED TO REAL RELEASE-CRITICAL WORK.**
+
+Flow: IMPLEMENT → TEST RELEVANT CHANGES → REVIEW → MERGE TO MAIN → BUILD CURRENT VERSION → PACKAGE / SIGN AS REQUIRED → PUBLISH → UPDATE FEED → USERS CAN RECEIVE IT → QUICK PRODUCTION VERIFICATION → CLEAN UP.
+
+- **Never wait for:** another feature, another public version, another owner message, a future release window, an arbitrary batch, unnecessary QA replay, unrelated testing, or release ceremony.
+- **Test before merge.** After merge, run only the release-critical proof: the build succeeds, packaging succeeds, signing/notarization succeeds, publishing succeeds, update distribution is correct, the app launches, and the changed functionality is available. Re-run nothing else unless the change invalidated it.
+- **Parallelize the release:** Windows and macOS builds, updater metadata while binaries build, website and release metadata while packaging runs, concurrent uploads, and concurrent non-conflicting smoke checks.
+- **The current public version ships.** Multiple builds may go out as the same public version, told apart by internal build identifiers. Only the owner changes the public version.
+- **Blockers:** build failure, broken package, signing/notarization failure, publish/upload failure, updater/feed failure, production regression, billing/entitlement failure (if affected), a security/integrity issue, or a genuinely required missing credential.
+
+  Handle a blocker with: FIX → RERUN ONLY WHAT WAS INVALIDATED → CONTINUE SHIPPING. Never restart the whole release.
+- **Automate the routine:** merge continuation, builds, packaging, the signing workflow, publishing, updater metadata, artifact upload, website/release references, production smoke checks and safe cleanup. Involve the owner only for a real approval, credential, ambiguity or risky irreversible action.
+- **Keep it fast.** If a release takes far longer than the underlying build, sign and publish work, investigate and simplify the release pipeline. Don't accept the delay as normal. Keep optimizing so completed work reaches users as fast as the build, signing and distribution systems allow.
+
+### Shipped means existing users receive it (owner directive 2026-10-02)
+
+For user-facing work, "shipped" means the update is actually available through KalCode's production update path: merged → build → sign/package → publish → production update feed live → the user closes KalCode → reopens it → KalCode receives and applies the new build → the new feature is available. Merging, building an installer, uploading an artifact or creating a release entry is not shipping. After every user-facing shipment, verify on Windows and macOS that an existing installed KalCode receives the new build through the normal close/reopen experience. The owner must never need to download and reinstall KalCode by hand for a normal update. If close/reopen does not deliver the build, shipping is not complete: fix the update path and continue.
+
+### Automate and parallelize safely
+
+Automate builds, tests, metadata, configured signing, publication, updater metadata, website release references, production checks, and cleanup. Do not require routine manual steps merely because old procedures did. Ask the owner only for a real decision, unavailable credential/action, irreversible risk, or ambiguity.
+
+Run useful independent work concurrently: Windows and macOS builds, release notes and tests, website and packaging, independent verification, and non-conflicting artifact preparation. Do not serialize unrelated steps. Read-only agents may review in parallel; conflicting writes have one owner.
+
+KalCode supports Windows and macOS where the feature applies. Test platform-specific behavior on the affected platform, validate shared changes appropriately on both, and reuse unchanged platform evidence instead of blindly repeating every test.
+
+### Real blockers and non-negotiable integrity
+
+Real blockers include failing relevant tests, reproducible regressions, correctness-affecting merge conflicts, missing signing/notarization capability or credentials, broken packages/deployments/update paths, billing or entitlement mismatches, security/integrity defects, and ambiguity that risks user data or production.
+
+On failure: **FAILURE -> ROOT CAUSE -> FIX -> RETEST AFFECTED SURFACE -> CONTINUE.** Fix it immediately where possible. Do not restart the whole release or run unrelated suites after a small fix.
+
+Speed never overrides code-signing integrity, notarization, credentials/secrets, billing/entitlements, updater integrity, or user-data safety. Make applicable checks fast and automated, not optional.
+
+### Focused production proof and completion
+
+Verify the smallest facts proving delivery: correct version/build served, updater can receive it, app launches, changed behavior works, and relevant backend, billing, or website surfaces work when affected. Do not add giant post-release ceremonies. Once production truth is established, finish.
+
+After shipping, preserve required artifacts/evidence and apply the permanent safe storage policy. Remove only proven-obsolete Rust/Cargo targets, packaging intermediates, temporary data, duplicate builds, and abandoned build outputs. Never delete source, current work, active worktrees, current certified artifacts, evidence, credentials/signing material, or uncertain items.
+
+**DONE = implemented + relevant tests pass + reviewed + merged + built + signed/packaged where required + published + user-receivable + focused production verification passes + safe cleanup complete.** Code written, tests passed, or merged alone is not done.
+
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
 ## KalVoice integration rule (owner directive 2026-10-01)
@@ -47,6 +116,17 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Account for both platforms during design, implementation, testing, and release verification. Report any unverified platform behavior honestly.
 - Only an explicit owner instruction can narrow a task to one platform.
 
+## Permanent responsiveness rule (owner directive 2026-10-02)
+
+**KALCODE MUST FEEL INSTANT. USER INTERACTION MUST NEVER WAIT ON WORK THAT CAN SAFELY HAPPEN ASYNCHRONOUSLY. EVERY CLICK SHOULD RECEIVE IMMEDIATE FEEDBACK. LATENCY IS A PRODUCT FEATURE.**
+
+- Every click, key press, switch, open, close and navigation gets visible acknowledgement within about one frame: pressed state, highlight, pane appearing, spinner or status. The user must never wonder whether a click worked.
+- Never block an interaction on network or provider calls, disk scans, Git, usage refreshes or telemetry unless the result is genuinely required first. Open the menu, pane or surface immediately, then fill it in place. Acknowledge agent actions at once and run them asynchronously.
+- Keep the UI thread free. No slow work in sync Tauri commands, which run on the main thread. Use `#[tauri::command(async)]` or `spawn_blocking`. Never hold a lock across slow work on a UI path.
+- Never recreate terminals, Browser instances or other expensive components unnecessarily. Avoid needless re-renders and app-wide state churn. Keep polling cheap and quiet when nothing has changed. Never add artificial delay or let an animation gate an action.
+- Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
+- Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
+
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 
 **BUILD CONTINUOUSLY. SHIP CONTINUOUSLY. THE PUBLIC VERSION IS JUST AN OWNER-CONTROLLED LABEL. WHEN THE OWNER REQUESTS A VERSION CHANGE, UPDATE THE VERSION CONSISTENTLY AND CONTINUE WORKING.**
@@ -65,7 +145,7 @@ A version change does **not** by itself mean: creating new features, stopping cu
 
 **6. Versions serve the marketing cadence, not engineering.** A new public version needs no minimum number of features: 0.1.9 may carry one major feature, 0.1.10 three, 0.1.11 two. The owner changes the version whenever they want a new public marketing or update moment; never question whether a version has "enough" changes. If the owner separately asks for a launch/update video, changelog, release post or marketing assets, build them around the features shipped since the previous public version; never create them automatically just because the number changed. Cadence: BUILD → OWNER CHANGES VERSION WHEN DESIRED → OPTIONAL MARKETING/VIDEO → KEEP BUILDING.
 
-**Current capability status (keep this line accurate).** Builds ship as `X.Y.Z+N`: the checked-in public version plus build number N (the commit count of the merged `main` release commit). The release tooling stamps it (Windows version resources `X.Y.Z.N`, macOS `CFBundleVersion` N), the updater orders builds numerically, and installed 0.1.7 clients accept newer builds and versions. The UI shows the public version, plus "build N" where versions are detailed. The current public version is 0.1.8 (owner-declared 2026-10-01), and there is no separate Owner update channel yet: Owner-first means installing the validated build on the Owner machines before publishing it to the feed. Never bump the public version to ship a build. When a lifecycle hook reports unshipped desktop changes, ship them as a new internal build of the current public version.
+**Current capability status (keep this line accurate).** Builds ship as `X.Y.Z+N`: the checked-in public version plus build number N (the commit count of the merged `main` release commit). The release tooling stamps it (Windows version resources `X.Y.Z.N`, macOS `CFBundleVersion` N), the updater orders builds numerically, and installed 0.1.7 clients accept newer builds and versions. The UI shows the public version, plus "build N" where versions are detailed. The current public version is 0.1.9 (owner-declared 2026-10-02), and there is no separate Owner update channel yet: Owner-first means installing the validated build on the Owner machines before publishing it to the feed. Never bump the public version to ship a build. When a lifecycle hook reports unshipped desktop changes, ship them as a new internal build of the current public version.
 
 ## Permanent automatic-update rule (owner directive 2026-10-01)
 

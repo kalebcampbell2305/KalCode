@@ -19,6 +19,19 @@ function invoke(memory: ReturnType<typeof createMemoryKalVoice>, name: string, a
 }
 
 describe("memory KalVoice browser parity", () => {
+  it("late exact cancellation leaves a successor microphone session alone", () => {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    const first = invoke(memory, "kalvoice_listen_start", {});
+    expect(invoke(memory, "kalvoice_listen_cancel", { sessionId: first })).toBe(true);
+    const second = invoke(memory, "kalvoice_listen_start", {});
+    try {
+      expect(invoke(memory, "kalvoice_listen_cancel", { sessionId: first })).toBe(false);
+      expect(invoke(memory, "kalvoice_listen_cancel", { sessionId: second })).toBe(true);
+    } finally {
+      invoke(memory, "kalvoice_listen_cancel", {});
+    }
+  });
+
   it("returns the same bounded browser directive as the native command path", async () => {
     const memory = createMemoryKalVoice(() => undefined, "");
     const response = (await invoke(memory, "kalvoice_request", {

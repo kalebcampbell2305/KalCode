@@ -141,6 +141,23 @@ mod microphone_permission {
 pub trait AudioSource: Send + Sync {
     /// Starts recording immediately.
     fn start(&self, max: Duration) -> Result<Box<dyn ActiveCapture>, CaptureError>;
+
+    /// Starts a take while allowing the caller to abandon device preparation.
+    fn start_cancellable(
+        &self,
+        max: Duration,
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Box<dyn ActiveCapture>, CaptureError> {
+        if cancelled() {
+            return Err(CaptureError::Interrupted);
+        }
+        let capture = self.start(max)?;
+        if cancelled() {
+            capture.cancel();
+            return Err(CaptureError::Interrupted);
+        }
+        Ok(capture)
+    }
 }
 
 /// A recording in progress.
@@ -263,7 +280,7 @@ mod mic {
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex, PoisonError};
     use std::thread::JoinHandle;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -509,11 +526,48 @@ mod mic {
 
     impl AudioSource for MicrophoneSource {
         fn start(&self, max: Duration) -> Result<Box<dyn ActiveCapture>, CaptureError> {
+            self.start_cancellable(max, &|| false)
+        }
+
+        fn start_cancellable(
+            &self,
+            max: Duration,
+            cancelled: &(dyn Fn() -> bool + Sync),
+        ) -> Result<Box<dyn ActiveCapture>, CaptureError> {
+            if cancelled() {
+                return Err(CaptureError::Interrupted);
+            }
             #[cfg(target_os = "macos")]
             super::microphone_permission::authorize_for_capture()?;
 
-            start_with(move |shared| open(shared, max), START_TIMEOUT)
-                .map(|capture| Box::new(capture) as Box<dyn ActiveCapture>)
+            let permit = CapturePermit::acquire(&CAPTURE_OCCUPIED)?;
+            start_with(
+                move |shared| open(shared, max).map(|stream| (stream, permit)),
+                START_TIMEOUT,
+                cancelled,
+            )
+            .map(|capture| Box::new(capture) as Box<dyn ActiveCapture>)
+        }
+    }
+
+    // A cancelled device open may outlive its caller. Keep native custody until the capture
+    // thread actually drops the stream, including across runtime/account generations.
+    static CAPTURE_OCCUPIED: AtomicBool = AtomicBool::new(false);
+
+    struct CapturePermit(&'static AtomicBool);
+
+    impl CapturePermit {
+        fn acquire(occupied: &'static AtomicBool) -> Result<Self, CaptureError> {
+            occupied
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map(|_| Self(occupied))
+                .map_err(|_| CaptureError::Busy)
+        }
+    }
+
+    impl Drop for CapturePermit {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
         }
     }
 
@@ -521,7 +575,11 @@ mod mic {
     const START_TIMEOUT: Duration = Duration::from_secs(8);
 
     /// Opens a stream with `open` on a dedicated capture thread and waits up to `timeout` for it.
-    fn start_with<S, F>(open: F, timeout: Duration) -> Result<MicCapture, CaptureError>
+    fn start_with<S, F>(
+        open: F,
+        timeout: Duration,
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Result<MicCapture, CaptureError>
     where
         S: 'static,
         F: FnOnce(&Arc<Shared>) -> Result<S, CaptureError> + Send + 'static,
@@ -534,14 +592,20 @@ mod mic {
         // thread until it is told to stop.
         let thread = std::thread::Builder::new()
             .name("kalvoice-capture".into())
-            .spawn(move || match open(&thread_shared) {
-                Ok(stream) => {
-                    let _ = ready_tx.send(Ok(()));
-                    let _ = stop_rx.recv();
-                    drop(stream);
-                }
-                Err(e) => {
-                    let _ = ready_tx.send(Err(e));
+            .spawn(move || {
+                match if thread_shared.interrupted.load(Ordering::SeqCst) {
+                    Err(CaptureError::Interrupted)
+                } else {
+                    open(&thread_shared)
+                } {
+                    Ok(stream) => {
+                        let _ = ready_tx.send(Ok(()));
+                        let _ = stop_rx.recv();
+                        drop(stream);
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                    }
                 }
             })
             .map_err(|e| CaptureError::Failed(e.to_string()))?;
@@ -550,23 +614,38 @@ mod mic {
             stop: Some(stop_tx),
             thread: Some(thread),
         };
-        match ready_rx.recv_timeout(timeout) {
+        let deadline = Instant::now() + timeout;
+        let ready = loop {
+            if cancelled() {
+                break Err(CaptureError::Interrupted);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break Err(CaptureError::Failed("the microphone did not start".into()));
+            }
+            match ready_rx.recv_timeout(remaining.min(Duration::from_millis(25))) {
+                Ok(result) => break Ok(result),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err(CaptureError::Failed("the microphone did not start".into()));
+                }
+            }
+        };
+        match ready {
             Ok(Ok(())) => Ok(capture),
             Ok(Err(e)) => {
                 capture.stop_thread();
                 Err(e)
             }
-            Err(_) => {
+            Err(error) => {
                 // Never wait on a device that hasn't answered: that would hold the talk key's
                 // press (and the session lock) until the driver or a privacy prompt responds.
                 // The capture thread is detached; if the device opens late, the missing stop
                 // sender makes it drop the stream at once, and nothing it hears is kept.
-                capture
-                    .shared
-                    .fail(CaptureError::Failed("the microphone did not start".into()));
+                capture.shared.fail(error.clone());
                 drop(capture.stop.take());
                 drop(capture.thread.take());
-                Err(CaptureError::Failed("the microphone did not start".into()))
+                Err(error)
             }
         }
     }
@@ -588,6 +667,7 @@ mod mic {
                     Ok(())
                 },
                 Duration::from_millis(100),
+                &|| false,
             );
             let waited = started.elapsed();
             drop(release_tx);
@@ -599,6 +679,83 @@ mod mic {
                 waited < Duration::from_secs(2),
                 "start waited {waited:?} for a stalled device instead of its timeout"
             );
+        }
+
+        #[test]
+        fn cancelled_device_start_settles_before_the_device_answers() {
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let (settled_tx, settled_rx) = mpsc::channel();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let flag = cancelled.clone();
+            let waiter = std::thread::spawn(move || {
+                let result = start_with(
+                    move |_shared| {
+                        entered_tx.send(()).unwrap();
+                        let _ = release_rx.recv();
+                        Ok(())
+                    },
+                    START_TIMEOUT,
+                    &|| flag.load(Ordering::SeqCst),
+                );
+                settled_tx
+                    .send(matches!(result, Err(CaptureError::Interrupted)))
+                    .unwrap();
+            });
+            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            cancelled.store(true, Ordering::SeqCst);
+            let settled = settled_rx.recv_timeout(Duration::from_millis(250));
+            // Always release and join the fixture, even on the regression's failing path.
+            drop(release_tx);
+            waiter.join().unwrap();
+            assert_eq!(
+                settled,
+                Ok(true),
+                "cancel must drain before the device responds"
+            );
+        }
+
+        #[test]
+        fn cancelled_late_open_keeps_native_custody_until_stream_drop() {
+            static OCCUPIED: AtomicBool = AtomicBool::new(false);
+            struct LateStream(mpsc::Sender<()>);
+            impl Drop for LateStream {
+                fn drop(&mut self) {
+                    let _ = self.0.send(());
+                }
+            }
+
+            let permit = CapturePermit::acquire(&OCCUPIED).unwrap();
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let (dropped_tx, dropped_rx) = mpsc::channel();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let flag = cancelled.clone();
+            let waiter = std::thread::spawn(move || {
+                start_with(
+                    move |_shared| {
+                        entered_tx.send(()).unwrap();
+                        let _ = release_rx.recv();
+                        Ok((LateStream(dropped_tx), permit))
+                    },
+                    START_TIMEOUT,
+                    &|| flag.load(Ordering::SeqCst),
+                )
+                .err()
+            });
+            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            cancelled.store(true, Ordering::SeqCst);
+            let result = waiter.join().unwrap();
+            let blocked = matches!(CapturePermit::acquire(&OCCUPIED), Err(CaptureError::Busy));
+            drop(release_tx);
+            dropped_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while OCCUPIED.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert_eq!(result, Some(CaptureError::Interrupted));
+            assert!(blocked, "a detached open must retain native custody");
+            assert!(CapturePermit::acquire(&OCCUPIED).is_ok());
         }
 
         #[cfg(windows)]

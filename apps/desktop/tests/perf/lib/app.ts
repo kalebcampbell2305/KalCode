@@ -9,6 +9,7 @@ import { createConnection } from "node:net";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { prepareAccountFixtureDataDir } from "../../e2e/harness.ts";
 import type { ProcessProbe } from "./platform.ts";
 
 export interface LaunchOptions {
@@ -43,6 +44,9 @@ export interface PageTimings {
   windowReadyIpcAt: number | null;
 }
 
+/** Measurement data folders: the e2e build accepts the account fixture only under this prefix. */
+export const PERF_DIR_PREFIX = "kalcode-e2e-perf-";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function epochNow(): number {
@@ -68,14 +72,19 @@ export async function launch(options: LaunchOptions): Promise<Running> {
   }
   // Start the OS-side window watcher first so its own startup never delays or races the app.
   const watcher = await probe.createWindowWatcher(timeoutMs);
+  // The e2e build opens its own DevTools port and WebView2 profile from KALCODE_E2E_CDP_PORT and
+  // the data folder, and boots straight into a ready account with the reviewed fixture (exactly as
+  // the real-app E2E harness launches it).
+  prepareAccountFixtureDataDir(dataDir);
+  const env: NodeJS.ProcessEnv = { ...process.env, KALCODE_E2E_ACCOUNT_FIXTURE: "ready-v1" };
+  for (const name of Object.keys(env)) {
+    if (/^(WEBVIEW2_|COREWEBVIEW2_|WEBKIT_INSPECTOR)/i.test(name) || name === "KALCODE_E2E_RESOURCE_FIXTURE") {
+      delete env[name];
+    }
+  }
   const spawnedAt = epochNow();
   const child = spawn(exe, [], {
-    env: {
-      ...process.env,
-      KALCODE_DATA_DIR: dataDir,
-      WEBVIEW2_USER_DATA_FOLDER: join(dataDir, "webview"),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
-    },
+    env: { ...env, KALCODE_DATA_DIR: dataDir, KALCODE_E2E_CDP_PORT: String(cdpPort) },
     stdio: "ignore",
   });
   const pid = child.pid;

@@ -37,6 +37,7 @@ import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } fr
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useNavigation } from "../../shell/navigation.tsx";
 import {
   BUILTIN_PRESETS,
   type BuiltinPreset,
@@ -57,10 +58,12 @@ import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 /** The Code surface: the active workspace as one flexible pane canvas (Z7-W1). */
 export function CodePage() {
   const { state, error, active, retry, refresh } = useWorkspaces();
-  // Folder availability can change outside KalCode; re-read it whenever Code is shown.
+  // Code stays mounted while other pages are shown (Shell). Folder availability can change
+  // outside KalCode; re-read it in the background whenever Code is shown.
+  const shown = useNavigation().current === "code";
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (shown) void refresh();
+  }, [refresh, shown]);
 
   if (state === "loading") {
     return (
@@ -177,9 +180,12 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
 function CodeShortcuts({ api }: { api: CodeCanvasApi }) {
   const latest = useRef(api);
   latest.current = api;
+  // Code stays mounted (hidden) on other pages; its shortcuts act only while it is shown.
+  const shown = useRef(true);
+  shown.current = useNavigation().current === "code";
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || !shown.current) return;
       const shortcut = codeShortcut(event);
       if (!shortcut || shortcut === "new-terminal") return; // new terminal is global (Shell)
       const { controller } = latest.current;

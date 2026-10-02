@@ -205,7 +205,7 @@ describe("UI focus intent lifecycle", () => {
     });
     expect(mocks.navigate.mock.calls).toEqual([["providers"]]);
     expect(result.current.paneFocus).toBeNull();
-    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.activate).not.toHaveBeenCalled();
   });
 
   it("does not run stale default handling after an asynchronous handler declines", async () => {
@@ -368,6 +368,24 @@ describe("UI focus intent lifecycle", () => {
     expect(mocks.navigate.mock.calls).toEqual([["threads"]]);
     expect(mocks.request).toHaveBeenCalledWith("open", "headless");
     expect(result.current.paneFocus).toBeNull();
+  });
+
+  it("probes the pane while the thread is still being read", async () => {
+    const read = deferred<typeof pane>();
+    mocks.getThread.mockReturnValueOnce(read.promise);
+    mocks.invoke.mockResolvedValue({});
+    const { result } = mount();
+    let opening!: Promise<void>;
+    act(() => {
+      opening = result.current.focus({ kind: "thread", threadId: "probe" });
+    });
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("provider_pane_info", { threadId: "probe" }));
+    await act(async () => {
+      read.resolve({ ...pane, runtimeKind: "headless", workspaceId: "workspace-b" });
+      await opening;
+    });
+    expect(mocks.activate).toHaveBeenCalledWith("workspace-b");
+    expect(result.current.paneFocus?.threadId).toBe("probe");
   });
 });
 

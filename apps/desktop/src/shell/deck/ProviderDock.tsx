@@ -51,7 +51,8 @@ export function ProviderDock() {
   const { accounts } = useDeckData();
   const { state } = useThreadSummaries();
   const threads = state.status === "ready" ? state.data : null;
-  const entries = useMemo(() => (accounts.data ? dockAccounts(accounts.data, threads ?? []) : []), [accounts, threads]);
+  const accountList = accounts.data;
+  const entries = useMemo(() => (accountList ? dockAccounts(accountList, threads ?? []) : []), [accountList, threads]);
   const selected = useSelectedThread();
   const openThread = threads?.find((thread) => thread.id === selected?.threadId) ?? null;
   const drag = useThreadDrag();
@@ -66,6 +67,8 @@ export function ProviderDock() {
   if (dropped) lastDropped.current = dropped;
   const shown = dropped ?? lastDropped.current;
   const [busy, setBusy] = useState(false);
+  // The account a thread is being moved onto, until the native answer lands (never optimistic).
+  const [moving, setMoving] = useState<string | null>(null);
   const chips = useRef(new Map<string, HTMLButtonElement>());
 
   const latest = useRef({ entries, toast });
@@ -97,6 +100,7 @@ export function ProviderDock() {
     if (inFlight.current) return false;
     inFlight.current = true;
     const target = entry.account;
+    setMoving(target.id);
     try {
       await client.rebindThreadAccount(thread.id, target.id);
       toast.show({
@@ -115,6 +119,7 @@ export function ProviderDock() {
       return false;
     } finally {
       inFlight.current = false;
+      setMoving(null);
     }
   };
 
@@ -147,6 +152,7 @@ export function ProviderDock() {
             openThread={openThread}
             drag={drag}
             suggested={suggested.has(entry.account.id)}
+            moving={moving === entry.account.id}
             onMove={(thread) => void rebind(thread, entry)}
           />
         );
@@ -179,11 +185,13 @@ interface DockChipProps {
   openThread: ThreadSummary | null;
   drag: ThreadDrag | null;
   suggested: boolean;
+  /** A thread is being moved onto this account right now. */
+  moving: boolean;
   onMove: (thread: ThreadSummary) => void;
 }
 
 const DockChip = forwardRef(function DockChip(
-  { entry, dividerBefore, openThread, drag, suggested, onMove }: DockChipProps,
+  { entry, dividerBefore, openThread, drag, suggested, moving, onMove }: DockChipProps,
   ref: Ref<HTMLButtonElement>,
 ) {
   const openProviderAccounts = useOpenProviderAccounts();
@@ -220,14 +228,20 @@ const DockChip = forwardRef(function DockChip(
               data-suggested={suggested || undefined}
               data-drop={dropState}
               data-over={over || undefined}
-              aria-label={`${accountFullLabel(account)}: ${entry.healthLabel}, ${usage}${current ? ", the open thread's account" : ""}`}
+              data-busy={moving || undefined}
+              aria-busy={moving || undefined}
+              aria-label={`${accountFullLabel(account)}: ${entry.healthLabel}, ${usage}${current ? ", the open thread's account" : ""}${moving ? ", moving a thread here" : ""}`}
             >
               <Avatar entry={entry} />
               <span className={styles.label}>
                 <span className={styles.provider}>{parts.provider} </span>
                 <span className={styles.name}>{parts.name}</span>
               </span>
-              {entry.running > 0 ? <span className={styles.count}>{entry.running}</span> : null}
+              {moving ? (
+                <span className={styles.spinner} aria-hidden="true" />
+              ) : entry.running > 0 ? (
+                <span className={styles.count}>{entry.running}</span>
+              ) : null}
             </button>
           </DropdownMenuTrigger>
         </Tooltip>

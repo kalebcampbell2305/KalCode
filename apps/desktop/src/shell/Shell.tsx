@@ -36,7 +36,7 @@ import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx
 // Z7-W2: Home, the project page, the workspace list and Git status as pane contents.
 import "./rail/paneContents.tsx";
 import { RailProvider, useRail } from "./rail/RailProvider.tsx";
-import { SearchProvider, useSearch } from "./rail/search/SearchProvider.tsx";
+import { SearchProvider, useSearchOpen } from "./rail/search/SearchProvider.tsx";
 import { useRailShortcut } from "./rail/useRailShortcut.ts";
 import { WorkspaceRail } from "./rail/WorkspaceRail.tsx";
 import styles from "./Shell.module.css";
@@ -95,7 +95,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const threadOptions = useCallback(() => client.threadOptions(), [client]);
   const providerAccounts = useCallback(() => client.listProviderAccounts(), [client]);
   // Z7-W2: the palette's open state and query are shared (search can open with a query).
-  const { open: paletteOpen, setOpen: setPaletteOpen } = useSearch();
+  const { open: paletteOpen, setOpen: setPaletteOpen } = useSearchOpen();
   const rail = useRail();
   const slots = useShellSlots();
   const voice = slots?.voice ?? null;
@@ -103,6 +103,12 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const setInsets = slots?.setInsets;
   const mainRef = useRef<HTMLElement>(null);
   const deckRef = useRef<HTMLDivElement>(null);
+  // Set on the first visit to Code and never cleared (see the Code wrapper in <main>).
+  const codeOpened = useRef(false);
+  if (current === "code") codeOpened.current = true;
+  // One element for the life of the shell, so shell re-renders (the palette opening, the rail
+  // refreshing) skip the kept-mounted Code subtree; it still updates from its own state.
+  const codePage = useMemo(() => <CodePage />, []);
   // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot), and inside the Command
   // Deck's chrome: below the top bar, above the status strip and left of the agents rail.
   useLayoutEffect(() => {
@@ -186,9 +192,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                     threadOptions={threadOptions}
                     providerAccounts={providerAccounts}
                   />
-                ) : current === "code" ? (
-                  <CodePage />
-                ) : current === "settings" ? (
+                ) : current === "code" ? null : current === "settings" ? (
                   <SettingsPage />
                 ) : current === "providers" ? (
                   <ProvidersPage />
@@ -197,6 +201,13 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                 ) : (
                   <GatedSurface id={current} />
                 )}
+                {/* Code stays mounted once opened, hidden while another page is shown: its
+                    terminals, attachments and layout survive navigation instead of rebuilding. */}
+                {codeOpened.current ? (
+                  <div className={styles.codeSurface} hidden={current !== "code"}>
+                    {codePage}
+                  </div>
+                ) : null}
               </main>
               <AgentRail />
             </div>

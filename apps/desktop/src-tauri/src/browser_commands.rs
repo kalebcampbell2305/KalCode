@@ -1557,7 +1557,7 @@ pub fn browser_hide_all(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn browser_open_external(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,

@@ -63,6 +63,18 @@ function mount() {
   };
 }
 
+it("commits the latest drag point when move and release arrive before a render", () => {
+  mount();
+  const handle = screen.getByRole("button", { name: "Move the widget" });
+  fireEvent.pointerDown(handle, { button: 0, pointerId: 23, clientX: 500, clientY: 100 });
+  act(() => {
+    fireEvent.pointerMove(handle, { pointerId: 23, clientX: 600, clientY: 300 });
+    fireEvent.pointerMove(handle, { pointerId: 23, clientX: -1000, clientY: -1000 });
+    fireEvent.pointerUp(handle, { button: 0, pointerId: 23 });
+  });
+  expect(seams.value.setPanel).toHaveBeenCalledExactlyOnceWith({ anchor: "top_left", x: 0, y: 0 });
+});
+
 describe("KalVoice orb hold", () => {
   it("ends listening when the pointer is released off the orb", () => {
     const { orb, outside, start, stop } = mount();
