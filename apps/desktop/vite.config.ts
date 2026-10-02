@@ -63,6 +63,9 @@ export default defineConfig(({ mode }) => ({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "tests/readiness/*.test.tsx"],
+    // Stable-shell integration tests mount the whole app; the self-hosted gate shares its PC with
+    // release builds, where 5 s per test isn't enough headroom. Real failures still fail.
+    testTimeout: 15_000,
     css: { modules: { classNameStrategy: "non-scoped" } },
   },
 }));

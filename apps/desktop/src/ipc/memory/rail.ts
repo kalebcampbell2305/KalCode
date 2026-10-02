@@ -1509,9 +1509,19 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
       },
       at(60 * 3),
     );
-    emit({ type: "thread.started", payload: { threadId: auth.id } }, threadCorr(auth, 50));
-    emit({ type: "file.modified", payload: { threadId: auth.id, path: "src/auth/callback.ts" } }, threadCorr(auth, 0));
-    emit({ type: "thread.completed", payload: { threadId: greeting.id } }, threadCorr(greeting, 35));
+    // Today's work stays inside the person's calendar day, even just after midnight.
+    const sinceMidnight = (() => {
+      const midnight = new Date();
+      midnight.setHours(0, 0, 0, 0);
+      return Math.floor((Date.now() - midnight.getTime()) / 60_000);
+    })();
+    const today = (minutes: number) => Math.min(minutes, Math.max(0, sinceMidnight - 1));
+    emit({ type: "thread.started", payload: { threadId: auth.id } }, threadCorr(auth, today(50)));
+    emit(
+      { type: "file.modified", payload: { threadId: auth.id, path: "src/auth/callback.ts" } },
+      threadCorr(auth, today(0)),
+    );
+    emit({ type: "thread.completed", payload: { threadId: greeting.id } }, threadCorr(greeting, today(35)));
     emit(
       {
         type: "app.started",
