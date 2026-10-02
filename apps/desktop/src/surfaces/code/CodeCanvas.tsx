@@ -1064,7 +1064,7 @@ function EmptyPane({
         </span>
         <div>
           <h2 className={styles.emptyTitle}>Empty pane</h2>
-          <p className={styles.emptyText}>Open something here. Closing a pane never stops what runs in it.</p>
+          <p className={styles.emptyText}>Open something here. Closing a pane ends what runs in it.</p>
         </div>
       </div>
       <div className={styles.emptyActions}>
