@@ -1,7 +1,7 @@
 /**
- * The Command Deck's bottom strip: builds, tests, provider health and what is shipping, each one
- * compact segment read from Operations and Provider Health. A segment says "none" rather than
- * guess when nothing has been observed.
+ * The Command Deck's bottom strip: the Provider Dock of accounts, then builds, tests, provider
+ * health and what is shipping, each one compact segment read from Operations and Provider Health.
+ * A segment says "none" rather than guess when nothing has been observed.
  */
 import type { StatusTone } from "@kalcode/protocol";
 import { Tooltip } from "@kalcode/ui/components";
@@ -25,6 +25,7 @@ import {
   SHIP_KINDS,
   TEST_KINDS,
 } from "./deckModel.ts";
+import { ProviderDock } from "./ProviderDock.tsx";
 import styles from "./StatusStrip.module.css";
 
 export function StatusStrip() {
@@ -88,6 +89,7 @@ export function StatusStrip() {
 
   return (
     <footer className={styles.strip}>
+      <ProviderDock />
       <Segment
         icon={<Hammer />}
         label="Builds"

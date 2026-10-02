@@ -1,0 +1,388 @@
+/* The Provider Dock: account chips at the start of the Command Deck's status strip. */
+.dock {
+  display: flex;
+  flex: none;
+  max-width: 55%;
+  align-items: center;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0 var(--space-2) 0 0;
+  margin-right: var(--space-1);
+  border-right: 1px solid var(--color-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dock::-webkit-scrollbar {
+  display: none;
+}
+
+.divider {
+  flex: none;
+  width: 1px;
+  height: 0.875rem;
+  margin: 0 var(--space-1);
+  background: var(--color-border);
+}
+
+/* ---- Chip ---- */
+.chip {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 1.5rem;
+  padding: 0 var(--space-2) 0 0.125rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 0;
+}
+
+.chip[data-state="open"] {
+  background: var(--color-surface-active);
+  color: var(--color-text);
+}
+
+/* The open thread's account. */
+.chip[data-current] {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+/* An account that could take the open thread when its own account is unavailable. */
+.chip[data-suggested] {
+  border-color: color-mix(in oklch, var(--color-accent) 55%, transparent);
+  border-style: dashed;
+  color: var(--color-text-secondary);
+}
+
+/* While a thread is dragged: who can take it, who can't, and the one under the pointer. */
+.chip[data-drop="ok"] {
+  border-color: color-mix(in oklch, var(--color-accent) 60%, transparent);
+  border-style: dashed;
+  color: var(--color-text-secondary);
+}
+
+.chip[data-drop="no"] {
+  opacity: 0.38;
+}
+
+.chip[data-drop="current"] {
+  opacity: 0.6;
+}
+
+.chip[data-drop="ok"][data-over] {
+  border-style: solid;
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  transform: translateY(-1px);
+}
+
+.label {
+  font-weight: var(--weight-medium);
+}
+
+.provider {
+  color: var(--color-text-faint);
+  font-weight: var(--weight-regular, 400);
+}
+
+.count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 0.875rem;
+  height: 0.875rem;
+  padding: 0 0.1875rem;
+  border-radius: var(--radius-full);
+  background: var(--status-working-soft);
+  color: var(--status-working-text);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold, 600);
+  line-height: 1;
+}
+
+/* ---- Avatar: monogram, activity ring, provider badge, health dot ---- */
+.avatar {
+  --_hue: oklch(0.68 0.13 250);
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.avatar[data-hue="0"] {
+  --_hue: oklch(0.7 0.13 250);
+}
+.avatar[data-hue="1"] {
+  --_hue: oklch(0.72 0.13 165);
+}
+.avatar[data-hue="2"] {
+  --_hue: oklch(0.74 0.13 75);
+}
+.avatar[data-hue="3"] {
+  --_hue: oklch(0.68 0.15 25);
+}
+.avatar[data-hue="4"] {
+  --_hue: oklch(0.68 0.14 300);
+}
+.avatar[data-hue="5"] {
+  --_hue: oklch(0.72 0.11 200);
+}
+.avatar[data-hue="6"] {
+  --_hue: oklch(0.7 0.14 340);
+}
+.avatar[data-hue="7"] {
+  --_hue: oklch(0.74 0.12 120);
+}
+
+.ring {
+  position: absolute;
+  inset: -0.125rem;
+  width: calc(100% + 0.25rem);
+  height: calc(100% + 0.25rem);
+  overflow: visible;
+}
+
+.ringTrack {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 1.5;
+}
+
+.ringFill {
+  fill: none;
+  stroke: var(--status-working);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--dur-slow, 320ms) var(--ease-out);
+}
+
+.ring[data-live] .ringFill {
+  animation: dock-breathe var(--dur-pulse, 2s) var(--ease-in-out) infinite;
+}
+
+@keyframes dock-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring[data-live] .ringFill {
+    animation: none;
+  }
+
+  .chip {
+    transition: none;
+  }
+}
+
+.monogram {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--_hue) 26%, var(--color-surface-2));
+  color: color-mix(in oklch, var(--_hue) 72%, var(--color-text));
+  font-size: 0.5625rem;
+  font-weight: var(--weight-semibold, 600);
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.badge {
+  position: absolute;
+  right: -0.25rem;
+  bottom: -0.25rem;
+  display: grid;
+  place-items: center;
+  width: 0.6875rem;
+  height: 0.6875rem;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-sunken, var(--color-surface-1));
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+
+/* Outranks the glyph's own size classes without !important. */
+.chip .avatar .badge > * {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+.health {
+  --_c: var(--status-muted);
+  position: absolute;
+  top: -0.1875rem;
+  right: -0.1875rem;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--_c);
+  box-shadow: 0 0 0 1.5px var(--color-bg-sunken, var(--color-surface-1));
+}
+
+.health[data-health="healthy"],
+.menuHealth[data-health="healthy"] {
+  --_c: var(--color-success);
+}
+
+.health[data-health="signed_out"],
+.menuHealth[data-health="signed_out"] {
+  --_c: var(--status-waiting);
+}
+
+.health[data-health="attention"],
+.menuHealth[data-health="attention"] {
+  --_c: var(--status-failed);
+}
+
+.hint {
+  flex: none;
+  padding: 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+  white-space: nowrap;
+}
+
+/* ---- Menu ---- */
+.menuFacts {
+  display: grid;
+  gap: 0.125rem;
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--type-small);
+}
+
+.menuIdentity {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuHealth {
+  --_c: var(--status-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-secondary);
+}
+
+.menuDot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--_c);
+}
+
+.menuUsage {
+  color: var(--color-text-muted);
+}
+
+.menuNote {
+  max-width: 19rem;
+  margin: 0;
+  padding: var(--space-1-5) var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+/* ---- Drag ghost ---- */
+.ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  max-width: 22rem;
+  padding: var(--space-1-5) var(--space-2-5, 0.625rem);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text);
+  font-size: var(--type-small);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.ghost[data-drop="ok"] {
+  border-color: var(--color-accent);
+}
+
+.ghostName {
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+}
+
+.ghostCaption {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.ghost[data-drop="ok"] .ghostCaption {
+  color: var(--color-accent-text);
+}
+
+/* Narrower windows drop the hint (the outlines and tooltips still suggest), then the provider
+   word (the badge carries it), then keep avatars only; the full name is always in the tooltip,
+   the menu and the accessible name. */
+@media (max-width: 1439px) {
+  .hint {
+    display: none;
+  }
+}
+
+@media (max-width: 1279px) {
+  .provider {
+    display: none;
+  }
+}
+
+@media (max-width: 1099px) {
+  .label {
+    display: none;
+  }
+
+  .chip {
+    padding-right: 0.125rem;
+  }
+}
+
+/* Nothing selects while a thread is being dragged. */
+:global(html[data-thread-drag]) {
+  cursor: grabbing;
+  user-select: none;
+}

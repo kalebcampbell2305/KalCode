@@ -16,6 +16,7 @@ import { useNavigation } from "../navigation.tsx";
 import styles from "./AgentRail.module.css";
 import { useDeckUi } from "./DeckUi.tsx";
 import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
+import { beginThreadDrag } from "./threadDrag.ts";
 
 export function AgentRail() {
   const { agentsOpen, setAgentsOpen } = useDeckUi();
@@ -237,6 +238,7 @@ function AgentRow({
         data-tone={meta.tone}
         data-group={meta.group}
         onClick={() => onOpen(thread)}
+        onPointerDown={(event) => beginThreadDrag(event, thread)}
         aria-label={`${thread.name}, ${meta.label}, ${thread.providerName} in ${thread.workspaceName}. Open thread`}
       >
         <span className={styles.rowGlyph} aria-hidden="true">
