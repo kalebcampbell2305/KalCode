@@ -217,11 +217,11 @@ describe("test entry point (test authenticator, otherwise production code)", () 
     });
 
     const free = await kalvoice(FREE, "req-free-e2e-1");
-    expect(free).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 75 } });
+    expect(free).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 25 } });
     const again = await kalvoice(FREE, "req-free-e2e-1");
     expect(again).toMatchObject({ allowed: true, outcome: "duplicate", usage: { used: 1 } });
 
     const usage = await fetch(`${server.origin}/v1/kalvoice/usage`, { headers: { [TEST_ACCOUNT_HEADER]: FREE } });
-    expect(await usage.json()).toMatchObject({ usage: { used: 1, allowance: 75 } });
+    expect(await usage.json()).toMatchObject({ usage: { used: 1, allowance: 25 } });
   });
 });

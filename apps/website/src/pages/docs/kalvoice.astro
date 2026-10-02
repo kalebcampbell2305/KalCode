@@ -138,8 +138,8 @@ const stable = servedStableRelease(RELEASES);
 
   <h2>KalVoice Requests</h2>
   <p>
-    Each top-level request in command mode counts as one KalVoice Request, however many steps it
-    takes. “Open a terminal” is one request. “Pause every active thread” is also one request,
+    Each KalVoice command that KalCode carries out counts as one KalVoice Request, however many
+    steps it takes. “Open a terminal” is one request. “Pause every active thread” is also one request,
     however many threads it pauses.
   </p>
   <ul>
@@ -153,7 +153,8 @@ const stable = servedStableRelease(RELEASES);
     }
   </ul>
   <p>
-    Dictation is never counted, and neither is the usage on your provider accounts. When you reach
+    Dictation and voice into terminals run on your device and are never counted, and neither is
+    the usage on your provider accounts. When you reach
     your monthly allowance, dictation and the rest of KalCode keep working; command requests pause
     until the allowance resets or you change plans. See <a href="/pricing">pricing</a> for details.
   </p>

@@ -36,7 +36,7 @@ describe("owner tier", () => {
     const ids: readonly string[] = PLANS.map((plan) => plan.id);
     expect(ids).not.toContain("owner");
     expect(
-      PLANS.some((plan) => /owner/i.test(`${plan.id} ${plan.name} ${plan.summary} ${plan.highlights.join(" ")}`)),
+      PLANS.some((plan) => /owner/i.test(`${plan.id} ${plan.name} ${plan.tagline} ${plan.cardFeatures.join(" ")}`)),
     ).toBe(false);
     // @ts-expect-error — owner is not a purchasable plan id
     expect(() => getPlan("owner")).toThrow(/Unknown plan/);
@@ -52,7 +52,7 @@ describe("owner tier", () => {
     expect(limitFor(owner, "kalvoiceRequestsPerMonth")).toBeNull();
     // The display description of OWNER in plans.ts agrees with the evaluator.
     expect(OWNER_LIMITS.kalvoiceRequestsPerMonth).toBeNull();
-    expect(OWNER_LIMITS.concurrentThreads).toBeNull();
+    expect(OWNER_LIMITS.parallelAgents).toBeNull();
     for (const feature of FEATURES) expect(hasFeature(owner, feature)).toBe(true);
     for (const limit of LIMITS) expect(limitFor(owner, limit)).toBeNull();
   });
@@ -74,14 +74,17 @@ describe("restricted tiers", () => {
     for (const plan of PLANS) {
       const grants = tierGrants(plan.id);
       expect(grants.unrestricted).toBe(false);
-      expect(limitFor(grants, "concurrentThreads")).toBe(plan.limits.concurrentThreads);
+      for (const limit of LIMITS) expect(limitFor(grants, limit)).toBe(plan.limits[limit]);
       expect(hasFeature(grants, "persistentAgents")).toBe(plan.limits.persistentAgents);
       expect(hasFeature(grants, "advancedMissions")).toBe(plan.limits.advancedMissions);
     }
-    expect(limitFor(tierGrants("free"), "kalvoiceRequestsPerMonth")).toBe(75);
-    expect(limitFor(tierGrants("pro"), "kalvoiceRequestsPerMonth")).toBe(1500);
-    expect(limitFor(tierGrants("max"), "kalvoiceRequestsPerMonth")).toBe(5000);
-    expect(limitFor(tierGrants("max2x"), "kalvoiceRequestsPerMonth")).toBe(10000);
+    expect(limitFor(tierGrants("free"), "kalvoiceRequestsPerMonth")).toBe(25);
+    expect(limitFor(tierGrants("pro"), "kalvoiceRequestsPerMonth")).toBe(150);
+    expect(limitFor(tierGrants("max"), "kalvoiceRequestsPerMonth")).toBe(500);
+    expect(limitFor(tierGrants("max2x"), "kalvoiceRequestsPerMonth")).toBe(1000);
+    expect(limitFor(tierGrants("free"), "openTerminals")).toBe(4);
+    expect(limitFor(tierGrants("max"), "workspaces")).toBeNull();
+    expect(limitFor(tierGrants("max2x"), "parallelAgents")).toBeNull();
     expect(tierGrants("free").features).toEqual([]);
     expect(tierGrants("pro").features).toEqual(["persistentAgents", "multiAgentWorkflows", "scheduledAutomations"]);
     expect(tierGrants("max").features).toEqual([...FEATURES]);

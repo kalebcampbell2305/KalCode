@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_PERMISSION_MODES,
+  CORE_LIMITS,
+  formatCoreLimit,
   formatInterval,
   formatKalVoiceAllowance,
   formatPrice,
   getPlan,
+  getPlanFeature,
   limitsFor,
   OWNER_LIMITS,
+  PLAN_FEATURE_GROUPS,
+  PLAN_FEATURES,
   PLANS,
+  planIncludes,
+  priceFor,
+  yearlySavingsUsd,
 } from "./plans.ts";
 
 describe("plans", () => {
@@ -17,63 +25,141 @@ describe("plans", () => {
     expect(JSON.stringify(PLANS).toLowerCase()).not.toContain("owner");
   });
 
-  it("uses the launch prices", () => {
-    expect(getPlan("free").price).toEqual({ amountUsd: 0, interval: "month" });
-    expect(getPlan("pro").price).toEqual({ amountUsd: 10, interval: "month" });
-    expect(getPlan("max").price).toEqual({ amountUsd: 25, interval: "month" });
-    expect(getPlan("max2x").price).toEqual({ amountUsd: 50, interval: "month" });
+  it("uses the owner's canonical monthly and yearly prices", () => {
+    expect(PLANS.map((plan) => [plan.id, plan.price.monthlyUsd, plan.price.yearlyUsd])).toEqual([
+      ["free", 0, 0],
+      ["pro", 10, 100],
+      ["max", 25, 250],
+      ["max2x", 50, 500],
+    ]);
+    expect(PLANS.map(yearlySavingsUsd)).toEqual([0, 20, 50, 100]);
+    expect(priceFor(getPlan("max"), "year")).toBe(250);
   });
 
-  it("formats prices as whole dollars per month", () => {
-    expect(formatPrice(getPlan("pro").price)).toBe("$10");
-    expect(formatInterval(getPlan("max").price)).toBe("/month");
+  it("formats whole-dollar prices per month or year", () => {
+    expect(formatPrice(getPlan("pro"))).toBe("$10");
+    expect(formatPrice(getPlan("max2x"), "year")).toBe("$500");
+    expect(formatInterval()).toBe("/month");
+    expect(formatInterval("year")).toBe("/year");
   });
 
-  it("gives Free 75, Pro 1,500, MAX 5,000, MAX 2X 10,000 KalVoice Requests and OWNER unlimited", () => {
-    expect(limitsFor("free").kalvoiceRequestsPerMonth).toBe(75);
-    expect(limitsFor("pro").kalvoiceRequestsPerMonth).toBe(1500);
-    expect(limitsFor("max").kalvoiceRequestsPerMonth).toBe(5000);
-    expect(limitsFor("max2x").kalvoiceRequestsPerMonth).toBe(10000);
-    expect(limitsFor("owner").kalvoiceRequestsPerMonth).toBeNull();
-    expect(formatKalVoiceAllowance(limitsFor("pro"))).toBe("1,500");
+  it("positions the plans TRY → BUILD → ORCHESTRATE → AUTOMATE with MAX as the one most popular plan", () => {
+    expect(PLANS.map((plan) => [plan.stage, plan.tagline])).toEqual([
+      ["TRY", "Try KalCode."],
+      ["BUILD", "For developers using AI every day."],
+      ["ORCHESTRATE", "Serious multi-agent development."],
+      ["AUTOMATE", "Maximum KalCode. Maximum autonomy."],
+    ]);
+    expect(PLANS.filter((plan) => plan.popular).map((plan) => plan.id)).toEqual(["max"]);
+  });
+
+  it("uses the owner's canonical core limits", () => {
+    const table = PLANS.map((plan) => [
+      plan.id,
+      plan.limits.kalvoiceRequestsPerMonth,
+      plan.limits.openTerminals,
+      plan.limits.parallelAgents,
+      plan.limits.workspaces,
+      plan.limits.providerAccounts,
+    ]);
+    expect(table).toEqual([
+      ["free", 25, 4, 1, 2, 2],
+      ["pro", 150, 12, 4, 10, 6],
+      ["max", 500, 18, 10, null, 8],
+      ["max2x", 1000, null, null, null, null],
+    ]);
+    expect(formatKalVoiceAllowance(limitsFor("max2x"))).toBe("1,000");
+  });
+
+  it("gives OWNER no KalCode-side limit", () => {
+    for (const limit of CORE_LIMITS) {
+      expect(OWNER_LIMITS[limit.key]).toBeNull();
+    }
     expect(formatKalVoiceAllowance(OWNER_LIMITS)).toBe("Unlimited");
   });
 
-  it("never paywalls dictation, provider connections or any permission mode", () => {
+  it("formats the plan-card limit lines", () => {
+    expect(CORE_LIMITS.map((limit) => formatCoreLimit(getPlan("free").limits, limit))).toEqual([
+      "1 agent",
+      "4 terminals",
+      "2 workspaces",
+      "2 accounts",
+      "25 KalVoice",
+    ]);
+    expect(CORE_LIMITS.map((limit) => formatCoreLimit(getPlan("max2x").limits, limit))).toEqual([
+      "Unlimited agents",
+      "Unlimited terminals",
+      "Unlimited workspaces",
+      "Unlimited accounts",
+      "1,000 KalVoice",
+    ]);
+  });
+
+  it("never paywalls dictation or any permission mode", () => {
     for (const tier of ["free", "pro", "max", "max2x", "owner"] as const) {
       const limits = limitsFor(tier);
       expect(limits.kalvoiceDictation).toBe("unlimited");
-      expect(limits.providerConnections).toBe("unlimited");
       expect([...limits.permissionModes]).toEqual(["plan", "approve", "auto", "bypass", "custom"]);
     }
     expect(ALL_PERMISSION_MODES).toHaveLength(5);
   });
 
-  it("increases concurrency through MAX; MAX 2X keeps MAX capacity and OWNER is unrestricted", () => {
-    const [free, pro, max, max2x] = PLANS.map((plan) => plan.limits.concurrentThreads ?? Number.POSITIVE_INFINITY);
-    expect(free).toBeLessThan(pro ?? 0);
-    expect(pro).toBeLessThan(max ?? 0);
-    expect(max2x).toBe(max);
-    expect(OWNER_LIMITS.concurrentThreads).toBeNull();
-    expect(OWNER_LIMITS.advancedMissions).toBe(true);
-  });
-
-  it("caps terminals per workspace on Free and Pro only; MAX, MAX 2X and OWNER are uncapped", () => {
-    expect(PLANS.map((plan) => [plan.id, plan.limits.terminalsPerWorkspace])).toEqual([
-      ["free", 12],
-      ["pro", 12],
-      ["max", null],
-      ["max2x", null],
-    ]);
-    expect(OWNER_LIMITS.terminalsPerWorkspace).toBeNull();
-  });
-
   it("never describes model tokens as KalVoice usage", () => {
     expect(JSON.stringify(PLANS).toLowerCase()).not.toMatch(/\btokens?\b/);
+    expect(JSON.stringify(PLAN_FEATURE_GROUPS).toLowerCase()).not.toMatch(/\btokens?\b/);
   });
 
   it("rejects unknown plan ids", () => {
     // @ts-expect-error — deliberately invalid id
     expect(() => getPlan("enterprise")).toThrow(/Unknown plan/);
+  });
+});
+
+describe("plan roadmap", () => {
+  it("has unique feature ids and every card feature exists", () => {
+    const ids = PLAN_FEATURES.map((feature) => feature.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const plan of PLANS) {
+      for (const id of plan.cardFeatures) {
+        expect(() => getPlanFeature(id), `${plan.id} card: ${id}`).not.toThrow();
+        expect(planIncludes(plan.id, getPlanFeature(id)), `${plan.id} card: ${id}`).toBe(true);
+      }
+    }
+  });
+
+  it("marks a feature available only with the production build it was verified in", () => {
+    for (const feature of PLAN_FEATURES) {
+      if (feature.status === "available") {
+        expect(feature.verifiedIn, feature.id).toMatch(/^\d+\.\d+\.\d+\+\d+$/);
+      } else {
+        expect(feature.verifiedIn, feature.id).toBeUndefined();
+      }
+    }
+  });
+
+  it("gives per-plan wording only to plans that include the feature", () => {
+    for (const feature of PLAN_FEATURES) {
+      for (const plan of Object.keys(feature.values ?? {}) as (keyof NonNullable<typeof feature.values>)[]) {
+        expect(planIncludes(plan, feature), `${feature.id} → ${plan}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the owner's plan assignments for the signature features", () => {
+    const from = (id: string) => getPlanFeature(id).from;
+    expect(
+      ["core-code", "core-threads", "core-browser", "kaltidy", "account-hub", "needs-you", "operations"].map(from),
+    ).toEqual(Array(7).fill("free"));
+    expect(["agent-fleet", "launch-recipes", "browser-studio", "operations-full"].map(from)).toEqual(
+      Array(4).fill("pro"),
+    );
+    expect(
+      ["squads", "handoff-chains", "agent-files", "stuck-agents", "mission-control", "deploy", "remote"].map(from),
+    ).toEqual(Array(7).fill("max"));
+    expect(["keep-working", "auto-routing", "kalvoice-live", "cloud-capacity"].map(from)).toEqual(
+      Array(4).fill("max2x"),
+    );
+    expect(planIncludes("pro", getPlanFeature("squads"))).toBe(false);
+    expect(planIncludes("max2x", getPlanFeature("squads"))).toBe(true);
   });
 });

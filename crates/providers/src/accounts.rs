@@ -11,6 +11,7 @@ use kalcode_contracts::provider_accounts::{
     MAX_ACCOUNT_LABEL_CHARS, MAX_PROVIDER_ERROR_CODE_CHARS, MAX_PROVIDER_IDENTITY_CHARS,
     ProviderAccount, ProviderAccountBinding, ProviderAccountBindingKind, ProviderAccountScopes,
 };
+use kalcode_core::plans::PlanLimit;
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::{Core, ErrorCategory, KalError, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -64,11 +65,30 @@ impl AccountStore {
     }
 
     pub fn create(&self, provider: &str, label: &str) -> Result<ProviderAccount> {
+        self.create_limited(provider, label, None)
+    }
+
+    /// [`Self::create`] under the plan's cap on connected accounts across every provider. Only
+    /// a new account is refused; existing accounts are never archived or removed.
+    pub fn create_limited(
+        &self,
+        provider: &str,
+        label: &str,
+        limit: Option<PlanLimit>,
+    ) -> Result<ProviderAccount> {
         let provider = checked_provider(provider)?;
         let label = checked_label(label)?;
         let id = kalcode_contracts::ids::new_id();
         let created_at = now_rfc3339();
         let (account, _) = self.core.transact(|tx| {
+            if let Some(limit) = limit {
+                let connected: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM provider_accounts WHERE archived_at IS NULL",
+                    [],
+                    |row| row.get(0),
+                )?;
+                limit.admit(connected)?;
+            }
             ensure_label_available(tx, provider.as_str(), &label, None)?;
             let is_default = tx.query_row(
                 "SELECT NOT EXISTS(
@@ -917,6 +937,45 @@ mod tests {
             thread_id: Some(kalcode_contracts::ids::new_id()),
             provider_profile_id: None,
         }
+    }
+
+    #[test]
+    fn a_limited_plan_bounds_connected_accounts_across_providers() {
+        use kalcode_core::plans::{Limited, PlanTier};
+        let fixture = Fixture::new();
+        let limit = PlanTier::Free.limit(Limited::ProviderAccounts);
+        let codex = fixture
+            .store
+            .create_limited("codex", "Personal", limit)
+            .expect("first");
+        fixture
+            .store
+            .create_limited("gemini-cli", "Work", limit)
+            .expect("second, another provider");
+        let refused = fixture
+            .store
+            .create_limited("codex", "Team", limit)
+            .expect_err("a third account");
+        assert_eq!(refused.code, "too_many_provider_accounts");
+        assert_eq!(
+            refused.message,
+            "The Free plan allows 2 connected provider accounts. Remove one to connect another, or upgrade to Pro for 6."
+        );
+        assert_eq!(fixture.store.list(None).expect("list").len(), 2);
+        // Removing (archiving) an account frees a slot; an uncapped plan never refuses.
+        fixture
+            .store
+            .archive(&fixture.profiles, &codex.id)
+            .expect("archive");
+        fixture
+            .store
+            .create_limited("codex", "Team", limit)
+            .expect("an archived account frees a slot");
+        fixture
+            .store
+            .create_limited("codex", "Extra", None)
+            .expect("uncapped");
+        assert_eq!(fixture.store.list(None).expect("list").len(), 3);
     }
 
     #[test]

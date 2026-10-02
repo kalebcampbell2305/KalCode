@@ -74,8 +74,11 @@ impl Grants {
             unrestricted: false,
             features: Vec::new(),
             limits: BTreeMap::from([
-                (limits::CONCURRENT_THREADS.to_owned(), Some(2)),
-                (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(75)),
+                (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(25)),
+                (limits::OPEN_TERMINALS.to_owned(), Some(4)),
+                (limits::PARALLEL_AGENTS.to_owned(), Some(1)),
+                (limits::WORKSPACES.to_owned(), Some(2)),
+                (limits::PROVIDER_ACCOUNTS.to_owned(), Some(2)),
             ]),
         }
     }
@@ -100,9 +103,16 @@ pub mod features {
 
 /// Limit ids gated by plan today (`LIMITS` in the protocol package).
 pub mod limits {
-    pub const CONCURRENT_THREADS: &str = "concurrentThreads";
     /// Top-level KalVoice assistant requests per monthly cycle (never provider tokens).
     pub const KALVOICE_REQUESTS_PER_MONTH: &str = "kalvoiceRequestsPerMonth";
+    /// Terminals open at the same time across all of KalCode.
+    pub const OPEN_TERMINALS: &str = "openTerminals";
+    /// Coding agents running at the same time.
+    pub const PARALLEL_AGENTS: &str = "parallelAgents";
+    /// Workspaces (project folders) added to KalCode.
+    pub const WORKSPACES: &str = "workspaces";
+    /// Connected provider accounts across every provider.
+    pub const PROVIDER_ACCOUNTS: &str = "providerAccounts";
 }
 
 fn evaluate_feature(unrestricted: bool, features: &[String], feature: &str) -> bool {
@@ -212,7 +222,7 @@ mod tests {
             limits: if owner {
                 BTreeMap::new()
             } else {
-                BTreeMap::from([(limits::CONCURRENT_THREADS.into(), Some(8))])
+                BTreeMap::from([(limits::PARALLEL_AGENTS.into(), Some(8))])
             },
             issued_at: 1_790_000_000,
             expires_at: 1_790_000_000 + 7 * 24 * 3600,
@@ -234,15 +244,15 @@ mod tests {
         ] {
             assert!(owner.has_feature(feature), "{feature}");
         }
-        assert_eq!(owner.limit(limits::CONCURRENT_THREADS), Limit::Unlimited);
+        assert_eq!(owner.limit(limits::PARALLEL_AGENTS), Limit::Unlimited);
         assert_eq!(owner.limit("limitAddedInTheFuture"), Limit::Unlimited);
         // Lists cannot restrict an unrestricted grant.
         let hostile = Grants {
             unrestricted: true,
             features: vec![],
-            limits: BTreeMap::from([(limits::CONCURRENT_THREADS.into(), Some(0))]),
+            limits: BTreeMap::from([(limits::PARALLEL_AGENTS.into(), Some(0))]),
         };
-        assert_eq!(hostile.limit(limits::CONCURRENT_THREADS), Limit::Unlimited);
+        assert_eq!(hostile.limit(limits::PARALLEL_AGENTS), Limit::Unlimited);
     }
 
     #[test]
@@ -252,14 +262,14 @@ mod tests {
         assert!(pro.has_feature(features::PERSISTENT_AGENTS));
         assert!(!pro.has_feature(features::ADVANCED_MISSIONS));
         assert!(!pro.has_feature("featureAddedInTheFuture"));
-        assert_eq!(pro.limit(limits::CONCURRENT_THREADS), Limit::AtMost(8));
+        assert_eq!(pro.limit(limits::PARALLEL_AGENTS), Limit::AtMost(8));
         assert_eq!(pro.limit("limitAddedInTheFuture"), Limit::AtMost(0));
         let open = Grants {
             unrestricted: false,
             features: vec![],
-            limits: BTreeMap::from([(limits::CONCURRENT_THREADS.into(), None)]),
+            limits: BTreeMap::from([(limits::PARALLEL_AGENTS.into(), None)]),
         };
-        assert_eq!(open.limit(limits::CONCURRENT_THREADS), Limit::Unlimited);
+        assert_eq!(open.limit(limits::PARALLEL_AGENTS), Limit::Unlimited);
     }
 
     #[test]
@@ -267,11 +277,15 @@ mod tests {
         let free = Grants::free();
         assert!(!free.unrestricted);
         assert!(!free.has_feature(features::PERSISTENT_AGENTS));
-        assert_eq!(free.limit(limits::CONCURRENT_THREADS), Limit::AtMost(2));
+        assert_eq!(free.limit(limits::PARALLEL_AGENTS), Limit::AtMost(1));
+        assert_eq!(free.limit(limits::OPEN_TERMINALS), Limit::AtMost(4));
+        assert_eq!(free.limit(limits::WORKSPACES), Limit::AtMost(2));
+        assert_eq!(free.limit(limits::PROVIDER_ACCOUNTS), Limit::AtMost(2));
         assert_eq!(
             free.limit(limits::KALVOICE_REQUESTS_PER_MONTH),
-            Limit::AtMost(75)
+            Limit::AtMost(25)
         );
+        assert_eq!(free.limit("concurrentThreads"), Limit::AtMost(0));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use kalcode_contracts::agent::{AuthState, DetectionState};
 use kalcode_contracts::refs::{Page, PageRequest};
 use kalcode_contracts::threads::ThreadSummary;
+use kalcode_core::plans::{Limited, PlanLimit};
 use kalcode_core::workspaces::Workspace;
 use kalcode_core::{Core, CoreConfig, ErrorCategory, IpcError, KalError};
 use kalcode_locator::{
@@ -451,11 +452,16 @@ pub async fn workspace_create(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: State<'_, AppState>,
+    account: State<'_, Arc<crate::account::runtime::AccountRuntime>>,
     name: String,
 ) -> Result<Option<Workspace>, IpcError> {
     _runtime_access.revalidate()?;
     let core = state.core()?.clone();
+    let account = account.inner().clone();
     let name = validate_folder_name(&name).map_err(|e| e.log_and_convert("workspace_create"))?;
+    // A new folder is always a new workspace: refuse past the plan's cap before the picker.
+    core.check_workspace_capacity(account.snapshot().plan_limit(Limited::Workspaces))
+        .map_err(|e| e.log_and_convert("workspace_create"))?;
     let parent: Option<PathBuf> = match crate::environment::e2e_pick_folder() {
         Some(path) => Some(path),
         None => {
@@ -486,13 +492,25 @@ pub async fn workspace_create(
         return Ok(None);
     };
     blocking(_runtime_access, "workspace_create", move || {
-        create_in(&core, &parent, &name)
+        create_in(
+            &core,
+            &parent,
+            &name,
+            account.snapshot().plan_limit(Limited::Workspaces),
+        )
     })
     .await
     .map(Some)
 }
 
-fn create_in(core: &Core, parent: &Path, name: &str) -> Result<Workspace, KalError> {
+fn create_in(
+    core: &Core,
+    parent: &Path,
+    name: &str,
+    limit: Option<PlanLimit>,
+) -> Result<Workspace, KalError> {
+    // Checked before the folder exists, so a refusal never leaves an empty folder behind.
+    core.check_workspace_capacity(limit)?;
     if !parent.is_dir() {
         return Err(KalError::new(
             ErrorCategory::Filesystem,
@@ -515,7 +533,11 @@ fn create_in(core: &Core, parent: &Path, name: &str) -> Result<Workspace, KalErr
         };
         KalError::new(ErrorCategory::Filesystem, code, message).with_source(e)
     })?;
-    core.open_workspace(&folder)
+    core.open_workspace_limited(&folder, limit)
+        .inspect_err(|_| {
+            // Only the empty folder just created; `remove_dir` never deletes contents.
+            let _ = std::fs::remove_dir(&folder);
+        })
 }
 
 #[cfg(test)]
@@ -566,13 +588,34 @@ mod tests {
         .expect("core");
         let projects = dir.path().join("projects");
         std::fs::create_dir_all(&projects).expect("projects");
-        let ws = create_in(&core, &projects, "fresh").expect("create");
+        let ws = create_in(&core, &projects, "fresh", None).expect("create");
         assert_eq!(ws.name, "fresh");
         assert!(projects.join("fresh").is_dir());
-        let err = create_in(&core, &projects, "fresh").expect_err("exists");
+        let err = create_in(&core, &projects, "fresh", None).expect_err("exists");
         assert_eq!(err.code, "folder_exists");
-        let err = create_in(&core, &projects.join("missing"), "x").expect_err("parent");
+        let err = create_in(&core, &projects.join("missing"), "x", None).expect_err("parent");
         assert_eq!(err.code, "folder_not_found");
+        core.shutdown();
+    }
+
+    #[test]
+    fn a_full_plan_refuses_a_new_workspace_without_creating_its_folder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::open(CoreConfig {
+            paths: kalcode_core::Paths::new(dir.path().join("data")),
+            app_version: "0.0.0-test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .expect("core");
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(&projects).expect("projects");
+        let limit = kalcode_core::plans::PlanTier::Free.limit(Limited::Workspaces);
+        create_in(&core, &projects, "one", limit).expect("first");
+        create_in(&core, &projects, "two", limit).expect("second");
+        let err = create_in(&core, &projects, "three", limit).expect_err("full");
+        assert_eq!(err.code, "too_many_workspaces");
+        assert!(!projects.join("three").exists(), "no folder is created");
+        create_in(&core, &projects, "three", None).expect("uncapped");
         core.shutdown();
     }
 }

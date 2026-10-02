@@ -68,7 +68,7 @@ async function installAccountNetworkFence(page: Page, tier: Tier) {
         ok: true,
         usage: {
           used: tier === "owner" ? 7 : 3,
-          allowance: tier === "owner" ? null : 75,
+          allowance: tier === "owner" ? null : 25,
           resetsAt: "2026-10-01T00:00:00.000Z",
         },
       };
@@ -137,7 +137,9 @@ test.describe("Checkout-enabled account release gate", () => {
         origin: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
       },
     ]);
-    expect(network.checkoutBodies).toEqual([{ tier: "pro", requestId: expect.stringMatching(/^[a-f0-9]{32}$/u) }]);
+    expect(network.checkoutBodies).toEqual([
+      { tier: "pro", interval: "month", requestId: expect.stringMatching(/^[a-f0-9]{32}$/u) },
+    ]);
     expect(network.mutationRequests).toEqual([{ method: "POST", path: "/v1/billing/checkout" }]);
     const observedCheckout = observedFetches.find(({ url }) => url.endsWith("/v1/billing/checkout"));
     expect(observedCheckout).toEqual({

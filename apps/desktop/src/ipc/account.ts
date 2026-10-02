@@ -1,3 +1,5 @@
+import { getPlan, PLANS, type PlanStage, yearlySavingsUsd } from "@kalcode/protocol";
+
 export type AccountPhase =
   | "bootstrapping"
   | "signed_out"
@@ -73,12 +75,37 @@ export interface AccountTransport {
   invoke(command: AccountCommandName, args?: Record<string, unknown>): Promise<unknown>;
 }
 
-export const PLAN_CATALOG = [
-  { tier: "free", name: "Free", requests: 75, monthlyPriceUsd: 0, action: "activate_free" },
-  { tier: "pro", name: "Pro", requests: 1_500, monthlyPriceUsd: 10, action: "checkout" },
-  { tier: "max", name: "Max", requests: 5_000, monthlyPriceUsd: 25, action: "checkout" },
-  { tier: "max2x", name: "Max 2X", requests: 10_000, monthlyPriceUsd: 50, action: "checkout" },
-] as const;
+export interface PlanCatalogEntry {
+  tier: Exclude<AccountTier, "owner">;
+  name: string;
+  stage: PlanStage;
+  tagline: string;
+  popular: boolean;
+  /** KalVoice Requests a month; `null` = unlimited. */
+  requests: number | null;
+  monthlyPriceUsd: number;
+  yearlyPriceUsd: number;
+  /** What yearly billing saves against twelve monthly payments. */
+  yearlySavingsUsd: number;
+}
+
+/** The public plans, derived from the canonical catalog (`@kalcode/protocol` `PLANS`). */
+export const PLAN_CATALOG: readonly PlanCatalogEntry[] = PLANS.map((plan) => ({
+  tier: plan.id,
+  name: plan.name,
+  stage: plan.stage,
+  tagline: plan.tagline,
+  popular: plan.popular,
+  requests: plan.limits.kalvoiceRequestsPerMonth,
+  monthlyPriceUsd: plan.price.monthlyUsd,
+  yearlyPriceUsd: plan.price.yearlyUsd,
+  yearlySavingsUsd: yearlySavingsUsd(plan),
+}));
+
+/** The display name of a verified tier ("MAX 2X"); Owner is private and never a public plan. */
+export function tierName(tier: AccountTier): string {
+  return tier === "owner" ? "Owner" : getPlan(tier).name;
+}
 
 const PHASES = new Set<AccountPhase>([
   "bootstrapping",

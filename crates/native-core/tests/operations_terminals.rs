@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_core::events::EventPayload;
 use kalcode_core::flags::BuildChannel;
-use kalcode_core::workspaces::{TerminalLimit, TerminalStatus};
+use kalcode_core::plans::{Limited, PlanLimit, PlanTier};
+use kalcode_core::workspaces::TerminalStatus;
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_pty::TerminalSize;
 
@@ -245,9 +246,10 @@ fn operation_terminal_counts_toward_the_plan_terminal_limit() {
     let project = tempfile::tempdir().expect("project");
     let core = open(data.path());
     let workspace = core.open_workspace(project.path()).expect("workspace");
-    let limit = Some(TerminalLimit {
+    let limit = Some(PlanLimit {
+        tier: PlanTier::Free,
+        kind: Limited::OpenTerminals,
         max: 1,
-        plan: "Free",
     });
     let ordinary = core
         .create_terminal(&workspace.id, None, size(), limit)
@@ -258,7 +260,39 @@ fn operation_terminal_counts_toward_the_plan_terminal_limit() {
         .create_operation_terminal(&workspace.id, &operation_id, "echo capped", size(), limit)
         .expect_err("a capped plan refuses another terminal");
     assert_eq!(refused.code, "too_many_terminals");
-    assert!(refused.message.contains("Free plan allows up to 1"));
+    assert!(
+        refused
+            .message
+            .starts_with("The Free plan allows 1 open terminal.")
+    );
+
+    // A finished operation terminal is only the run's log: it doesn't count as open.
+    core.close_terminal(&ordinary.id).expect("close ordinary");
+    let finished_id = uuid::Uuid::now_v7().to_string();
+    let finished = core
+        .create_operation_terminal(&workspace.id, &finished_id, "exit 0", size(), limit)
+        .expect("the only terminal fits the plan");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while core
+        .terminals(&workspace.id)
+        .expect("list")
+        .iter()
+        .any(|t| t.id == finished.id && t.ended_at.is_none())
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "operation never finished"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let ordinary = core
+        .create_terminal(&workspace.id, None, size(), limit)
+        .expect("a finished operation terminal leaves room");
+    // Running the finished operation again needs room like a new terminal.
+    let again = core
+        .create_operation_terminal(&workspace.id, &finished_id, "exit 0", size(), limit)
+        .expect_err("rerunning a finished operation is admitted like a new terminal");
+    assert_eq!(again.code, "too_many_terminals");
 
     // No numeric cap (Owner, MAX, MAX 2X) never refuses an operation terminal.
     core.create_operation_terminal(&workspace.id, &operation_id, "echo uncapped", size(), None)

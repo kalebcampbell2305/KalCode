@@ -5,7 +5,6 @@
  * prints a prompt and understands a handful of commands, so UI tests exercise real flows.
  */
 import type { EventPayload, IpcError, ShellOption, TerminalInfo, TerminalStatus, Workspace } from "@kalcode/protocol";
-import { getPlan } from "@kalcode/protocol";
 
 export type EmitWithWorkspace = (event: EventPayload, workspaceId: string) => void;
 
@@ -32,8 +31,9 @@ export interface MemoryWorkspaces {
   runningProcessCount(): number;
 }
 
-// The in-memory backend has no verified plan, so it applies the Free cap, as native does.
-const FREE_TERMINALS_PER_WORKSPACE = getPlan("free").limits.terminalsPerWorkspace;
+// Plan limits (open terminals across every workspace) are enforced natively from the verified plan
+// and tested in Rust (crates/native-core/src/plans.rs). This in-memory dev/test backend sets no cap,
+// so UI tests that open many panes are not limited by the Free plan.
 const MAX_WRITE_BYTES = 64 * 1024;
 const SCROLLBACK_BYTES = 512 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -448,14 +448,6 @@ export function createMemoryWorkspaces({
       }
       const workspace = workspaceOr404(workspaceId);
       if (!workspace.available) fail(folderMissing());
-      if (FREE_TERMINALS_PER_WORKSPACE !== null && tabsOf(workspaceId).length >= FREE_TERMINALS_PER_WORKSPACE) {
-        fail(
-          validation(
-            "too_many_terminals",
-            `The Free plan allows up to ${FREE_TERMINALS_PER_WORKSPACE} terminals per workspace. Close one to open another, or upgrade to MAX for unlimited terminals.`,
-          ),
-        );
-      }
       const tab = addTab(workspace, shell.id);
       startSession(tab);
       return tab.info;

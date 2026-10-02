@@ -181,42 +181,59 @@ fn snapshots_expose_only_truthful_authority_phases() {
 }
 
 #[test]
-fn terminal_limits_follow_the_verified_plan() {
-    use account::model::{AccountTier, PLAN_TERMINALS_PER_WORKSPACE};
+fn plan_limits_follow_the_verified_plan() {
+    use account::model::AccountTier;
+    use kalcode_core::plans::{Limited, PlanTier};
     let active = |tier| AccountSnapshot {
         tier: Some(tier),
         phase: AccountPhase::Ready,
         ..AccountSnapshot::signed_out()
     };
-    let capped = |plan| {
-        Some(kalcode_core::workspaces::TerminalLimit {
-            max: PLAN_TERMINALS_PER_WORKSPACE,
-            plan,
-        })
-    };
-    assert_eq!(active(AccountTier::Free).terminal_limit(), capped("Free"));
-    assert_eq!(active(AccountTier::Pro).terminal_limit(), capped("Pro"));
-    for tier in [AccountTier::Max, AccountTier::Max2x, AccountTier::Owner] {
+    let max = |snapshot: &AccountSnapshot, kind| snapshot.plan_limit(kind).map(|limit| limit.max);
+    let free = active(AccountTier::Free);
+    assert_eq!(free.terminal_limit().map(|limit| limit.max), Some(4));
+    assert_eq!(max(&free, Limited::ParallelAgents), Some(1));
+    assert_eq!(max(&free, Limited::Workspaces), Some(2));
+    assert_eq!(max(&free, Limited::ProviderAccounts), Some(2));
+    assert_eq!(max(&free, Limited::QueuedTasks), Some(3));
+    let pro = active(AccountTier::Pro);
+    assert_eq!(pro.terminal_limit().map(|limit| limit.max), Some(12));
+    assert_eq!(max(&pro, Limited::ParallelAgents), Some(4));
+    assert_eq!(max(&pro, Limited::QueuedTasks), None);
+    // MAX is capped at 18 terminals now; only MAX 2X and Owner are uncapped.
+    let max_plan = active(AccountTier::Max);
+    assert_eq!(max_plan.terminal_limit().map(|limit| limit.max), Some(18));
+    assert_eq!(max(&max_plan, Limited::Workspaces), None);
+    for tier in [AccountTier::Max2x, AccountTier::Owner] {
         assert_eq!(active(tier).terminal_limit(), None, "{tier:?}");
+        assert_eq!(
+            max(&active(tier), Limited::ParallelAgents),
+            None,
+            "{tier:?}"
+        );
     }
     // Offline grace keeps the verified plan.
     let owner_offline = AccountSnapshot {
         phase: AccountPhase::OfflineGrace,
         ..active(AccountTier::Owner)
     };
+    assert_eq!(owner_offline.plan_tier(), PlanTier::Owner);
     assert_eq!(owner_offline.terminal_limit(), None);
-    // No active verified plan: the Free cap (fail closed), even with a stale tier.
-    assert_eq!(
-        AccountSnapshot::signed_out().terminal_limit(),
-        capped("Free")
-    );
-    assert_eq!(
-        AccountSnapshot::bootstrapping().terminal_limit(),
-        capped("Free")
-    );
+    // No active verified plan: Free limits (fail closed), even with a stale tier.
+    assert_eq!(AccountSnapshot::signed_out().plan_tier(), PlanTier::Free);
+    assert_eq!(AccountSnapshot::bootstrapping().plan_tier(), PlanTier::Free);
     let degraded_owner = AccountSnapshot {
         phase: AccountPhase::Degraded,
         ..active(AccountTier::Owner)
     };
-    assert_eq!(degraded_owner.terminal_limit(), capped("Free"));
+    assert_eq!(degraded_owner.plan_tier(), PlanTier::Free);
+    assert_eq!(
+        degraded_owner.terminal_limit(),
+        PlanTier::Free.limit(Limited::OpenTerminals)
+    );
+    let unactivated = AccountSnapshot {
+        phase: AccountPhase::AuthenticatedUnactivated,
+        ..active(AccountTier::Max2x)
+    };
+    assert_eq!(unactivated.plan_tier(), PlanTier::Free);
 }

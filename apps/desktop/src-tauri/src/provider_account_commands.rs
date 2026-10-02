@@ -70,12 +70,16 @@ pub fn provider_accounts_list(
 pub fn provider_account_create(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
+    account: State<'_, std::sync::Arc<crate::account::runtime::AccountRuntime>>,
     provider_id: String,
     display_name: String,
 ) -> Result<ProviderAccount, IpcError> {
     _runtime_access.revalidate()?;
+    let limit = account
+        .snapshot()
+        .plan_limit(kalcode_core::plans::Limited::ProviderAccounts);
     AccountStore::new(state.core()?.clone())
-        .create(&provider_id, &display_name)
+        .create_limited(&provider_id, &display_name, limit)
         .map_err(|error| error.log_and_convert("provider_account_create"))
 }
 

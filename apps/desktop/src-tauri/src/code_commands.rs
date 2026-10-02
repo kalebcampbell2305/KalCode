@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use kalcode_core::plans::Limited;
 use kalcode_core::workspaces::{
     AttachmentId, ShellOption, TerminalInfo, TerminalSize, Workspace, validate_id,
 };
@@ -136,9 +137,11 @@ pub async fn workspace_open_dialog(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: State<'_, AppState>,
+    account: State<'_, Arc<AccountRuntime>>,
 ) -> Result<Option<Workspace>, IpcError> {
     _runtime_access.revalidate()?;
     let core = state.core()?.clone();
+    let account = account.inner().clone();
     let folder: Option<PathBuf> = match environment::e2e_pick_folder() {
         // Test builds only: the E2E suite cannot click a native dialog.
         Some(path) => Some(path),
@@ -167,7 +170,9 @@ pub async fn workspace_open_dialog(
     };
     tauri::async_runtime::spawn_blocking(move || {
         _runtime_access.revalidate_core()?;
-        core.open_workspace(&folder)
+        // Reopening an existing workspace is never refused; only a new one counts.
+        let limit = account.snapshot().plan_limit(Limited::Workspaces);
+        core.open_workspace_limited(&folder, limit)
     })
     .await
     .map_err(|e| blocking_failed("workspace_open_dialog", e))?

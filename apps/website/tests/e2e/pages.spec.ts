@@ -260,9 +260,19 @@ test.describe("every page", () => {
     const data = JSON.parse(raw ?? "{}") as { "@graph": Record<string, unknown>[] };
     const byType = (type: string) => data["@graph"].find((node) => node["@type"] === type);
     expect(byType("Organization")?.sameAs).toEqual([SOCIAL.official.url]);
-    const app = byType("SoftwareApplication") as { offers: { name: string; price: string }[] };
+    const app = byType("SoftwareApplication") as {
+      offers: { name: string; price: string; priceSpecification: { price: string; billingDuration: string }[] }[];
+    };
     expect(app.offers.map((offer) => [offer.name, Number(offer.price)])).toEqual(
-      PLANS.map((plan) => [plan.name, plan.price.amountUsd]),
+      PLANS.map((plan) => [plan.name, plan.price.monthlyUsd]),
+    );
+    expect(
+      app.offers.map((offer) => offer.priceSpecification.map((spec) => [spec.billingDuration, Number(spec.price)])),
+    ).toEqual(
+      PLANS.map((plan) => [
+        ["P1M", plan.price.monthlyUsd],
+        ["P1Y", plan.price.yearlyUsd],
+      ]),
     );
     expect(raw).not.toMatch(/aggregateRating|review/i);
   });

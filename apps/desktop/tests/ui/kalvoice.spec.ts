@@ -82,7 +82,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(shown(page).getByText("Opened Settings.")).toHaveCount(0);
 
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("1 / 75 used · 74 remaining · renews")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("1 / 25 used · resets")).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command")).toBeVisible();
@@ -99,7 +99,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await talk(page);
     await expect(box).toHaveValue("Please add a unit test for the parser");
     await expect(shown(page).getByText("Inserted 31 characters.")).toBeVisible();
-    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
   });
 
   test("a clear command wins in a text box; Type it instead types the words and refunds", async ({ page }) => {
@@ -113,7 +113,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(page.getByRole("heading", { level: 1, name: "KalVoice" })).toBeVisible();
     await expect(pageRequestBox(page)).toHaveValue("go to settings");
     await expect(shown(page).getByText("Typed instead.")).toBeVisible();
-    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
   });
 
   test("unavailable local interpretation never falls back to a provider and is not counted", async ({ page }) => {
@@ -126,7 +126,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await widget(page).getByRole("button", { name: "Open KalVoice settings" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
   });
 
   test("key repeat doesn't restart listening", async ({ page }) => {
@@ -139,7 +139,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await page.keyboard.up("F8");
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("1 / 75 used · 74 remaining · renews")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("1 / 25 used · resets")).toBeVisible();
   });
 
   test("losing the window mid-hold finishes the take (missed release)", async ({ page }) => {
@@ -271,7 +271,7 @@ test.describe("Immediate app control", () => {
     await box.focus();
     await talk(page);
     await expect(box).toHaveValue("write the release notes");
-    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
     await expect(widget(page).getByRole("button", { name: /Approve|Deny/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
   });
@@ -436,7 +436,7 @@ test.describe("KalVoice voice widget", () => {
     await page.keyboard.press("Enter");
     await expect(w).toHaveAttribute("data-view", "expanded");
     await expect(shown(page).getByText("Hold F8 to talk to KalVoice.")).toBeVisible();
-    await expect(shown(page).getByText("0 / 75 used · 75 remaining · renews", { exact: false })).toBeVisible();
+    await expect(shown(page).getByText("25 remaining · 0 / 25 used · resets", { exact: false })).toBeVisible();
     await w.getByRole("button", { name: "Show less" }).focus();
     await page.keyboard.press("Enter");
     await expect(w).toHaveAttribute("data-view", "compact");

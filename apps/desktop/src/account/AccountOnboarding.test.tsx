@@ -45,6 +45,38 @@ function actions() {
 }
 
 describe("AccountOnboarding", () => {
+  it("shows each catalog plan with its monthly and yearly price, stage and KalVoice allowance", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding
+        snapshot={snapshot("authenticated_unactivated")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      />,
+    );
+    const card = (name: string) => {
+      const article = screen.getByRole("heading", { name }).closest("article");
+      if (!article) throw new Error(`${name} card missing`);
+      return article;
+    };
+    expect(card("Free")).toHaveTextContent("TRY");
+    expect(card("Free")).toHaveTextContent("25 KalVoice Requests a month");
+    expect(card("Free")).not.toHaveTextContent("/year");
+    expect(card("Pro")).toHaveTextContent("$10per month");
+    expect(card("Pro")).toHaveTextContent("or $100/year · save $20");
+    expect(card("Pro")).toHaveTextContent("150 KalVoice Requests a month");
+    expect(card("MAX")).toHaveTextContent("ORCHESTRATE");
+    expect(card("MAX")).toHaveTextContent("or $250/year · save $50");
+    expect(card("MAX 2X")).toHaveTextContent("1,000 KalVoice Requests a month");
+    expect(card("MAX 2X")).toHaveTextContent("or $500/year · save $100");
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose MAX" }));
+    expect(accountActions.checkout).toHaveBeenCalledWith("max");
+    await userEvent.click(screen.getByRole("button", { name: "Continue with Free" }));
+    expect(accountActions.activateFree).toHaveBeenCalledOnce();
+  });
+
   it("offers an explicit retry when native session restoration times out", async () => {
     const accountActions = actions();
     render(

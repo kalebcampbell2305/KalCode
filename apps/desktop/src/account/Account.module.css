@@ -207,6 +207,9 @@
   background: var(--color-surface-2);
   box-shadow: var(--shadow-panel);
 }
+.plan > div:first-child {
+  flex: 1;
+}
 .plan[data-featured="true"] {
   border-color: var(--color-border-lit-soft);
   box-shadow: var(--shadow-lit);
@@ -224,6 +227,22 @@
   font-family: var(--font-mono);
   font-size: var(--type-kpi);
   font-variant-numeric: tabular-nums;
+}
+.plan .stage {
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+}
+.plan .yearly {
+  margin-top: var(--space-1);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.plan .tagline {
+  margin-top: var(--space-3);
+  line-height: var(--leading-snug);
 }
 .plan .allowance {
   padding-top: var(--space-4);

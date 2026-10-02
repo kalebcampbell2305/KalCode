@@ -75,6 +75,25 @@ A version change does **not** by itself mean: creating new features, stopping cu
 
 Releases, including builds that carry an owner-requested version change, complete without the owner: "you should not need me for anything." Agents run the gates, builds, signing, publication, merges, deploys and approvals themselves. QA evidence comes from automation (end-to-end tests, UI automation, gate runners on both platforms, agent review) instead of owner sittings or clicks. Never bypass signing, notarization, signature, integrity, updater or security checks. If something is physically impossible without a human, such as an operating-system consent that can only be given at the machine, make it a one-time setup, report that exact action once, and never make it a per-release step.
 
+## Permanent KalCode pricing and plan roadmap (owner directive 2026-10-01)
+
+**KALCODE PRICING IS A CONTINUOUS PRODUCT SYSTEM.** Free = TRY ("Try KalCode."). Pro = BUILD ("For developers using AI every day."). MAX = ORCHESTRATE ("Serious multi-agent development.", marked MOST POPULAR). MAX 2X = AUTOMATE ("Maximum KalCode. Maximum autonomy.").
+
+| Plan | Monthly | Yearly (saves) | KalVoice Requests/month | Open terminals | Parallel agents | Workspaces | Provider accounts |
+|---|---|---|---|---|---|---|---|
+| Free | $0 | $0 | 25 | 4 | 1 | 2 | 2 |
+| Pro | $10 | $100 ($20) | 150 | 12 | 4 | 10 | 6 |
+| MAX | $25 | $250 ($50) | 500 | 18 | 10 | Unlimited | 8 |
+| MAX 2X | $50 | $500 ($100) | 1,000 | Unlimited | Unlimited | Unlimited | Unlimited |
+
+- **One source of truth.** `packages/protocol/src/plans.ts` holds every price, limit, positioning line and the plan roadmap (`PLAN_FEATURE_GROUPS`). The website, account page, desktop onboarding and settings, Account Hub, the server-signed entitlement and KalVoice metering derive from it. Native Rust mirrors carry a drift test against it. Never hardcode a price, limit, plan name or feature's plan anywhere else. Paid entitlements are enforced server-side or from the verified signed tier, never from client-only values.
+- "Unlimited" means KalCode imposes no limit of its own; hardware, OS, provider, account, API and upstream limits may still apply (`UNLIMITED_NOTE`). A KalVoice Request is one executed KalVoice command; on-device dictation and voice into terminals are never counted. Reaching a limit never closes anything; KalCode only refuses opening one more.
+- Basic product quality (Account Hub, usage visibility, exact identity, navigation, command palette, terminal rename/status/smart close, Needs You, KalTidy, Favorites, core Code/Threads/Browser, security fixes, accessibility, updates) is on every plan. Monetize scale, orchestration, autonomy and cloud capacity. Max 2X gets the strongest autonomy and the highest cloud-backed capacity.
+- **Never change prices, limits or a feature's plan without explicit owner instruction.** Existing subscribers and live Stripe prices are inspected before any billing change and never deleted blindly.
+- **Roadmap truth.** Every plan feature is `available` or `coming_soon`. A feature becomes `available` only after it is implemented, tested, merged, built, shipped, user-receivable and production-verified; `verifiedIn` records that build. Never mark unfinished work Available.
+
+**Automatic website sync (part of every feature's Definition of Done).** When implementing a feature: (1) find its entry in `PLAN_FEATURE_GROUPS`; (2) keep its plan assignment; (3) ship it through the normal lifecycle; (4) once production is verified, flip it to `available` with `verifiedIn: "<version>+<build>"` in the same release follow-up, deploy the website, and verify the live pricing page, without being reminded; (5) update account/billing/in-app plan descriptions when relevant. If a new feature has no plan entry, do not invent a pricing decision: ask the owner which plan(s) get it before changing public entitlements.
+
 ## Definition of Done
 
 Writing code is not the end of a task. Unless the owner explicitly says "do not ship", "local only", "prototype only" or equivalent, every completed engineering task continues through its whole lifecycle:

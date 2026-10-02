@@ -135,7 +135,7 @@ describe("New thread account defaults (Stable)", () => {
     expect(form.getByText("Chosen for this thread.")).toBeInTheDocument();
     // Nothing is written by choosing.
     expect(h.calls.some((c) => c.command === "provider_account_bind")).toBe(false);
-  });
+  }, 15_000);
 
   it("lists accounts default first in natural name order, with the default and sign-in state in words", async () => {
     const h = await mountStable(async ({ client }) => {

@@ -132,6 +132,19 @@ impl RuntimeBundle {
             health.monitor(),
             resources.clone(),
         ));
+        if let Ok(runtime) = threads.runtime() {
+            // The plan's cap on agents running at once, read from the verified account at every
+            // start. Weak: the thread runtime must not keep the account runtime alive.
+            let plan = Arc::downgrade(&account);
+            runtime.set_agent_limit(Arc::new(move || {
+                plan.upgrade()
+                    .map_or_else(
+                        crate::account::model::AccountSnapshot::signed_out,
+                        |account| account.snapshot(),
+                    )
+                    .plan_limit(kalcode_core::plans::Limited::ParallelAgents)
+            }));
+        }
         bundle.threads = Some(threads.clone());
         check!();
         let locator = Arc::new(LocatorState::start(

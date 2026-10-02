@@ -228,12 +228,23 @@ export function limitReached(usage: KalVoiceUsage): boolean {
   return usage.allowance !== null && usage.used >= usage.allowance;
 }
 
-/** "482 / 1,500 used · 1,018 remaining · renews Oct 1" / "… · Unlimited". */
-export function usageLine(usage: KalVoiceUsage): string {
+/** KalVoice Requests left this cycle (`null` = unlimited), from the authoritative usage. */
+export function remainingRequests(usage: KalVoiceUsage): number | null {
+  return usage.allowance === null ? null : Math.max(0, usage.allowance - usage.used);
+}
+
+/** "18 / 25 used" after the remaining count: "7 / 25 used · resets Oct 1" / "7 used this month". */
+export function usedLine(usage: KalVoiceUsage): string {
   const used = usage.used.toLocaleString("en-US");
-  if (usage.allowance === null) return `${used} KalVoice Requests used · Unlimited`;
-  const remaining = Math.max(0, usage.allowance - usage.used).toLocaleString("en-US");
-  return `${used} / ${usage.allowance.toLocaleString("en-US")} used · ${remaining} remaining · renews ${formatDay(usage.resetsAt)}`;
+  if (usage.allowance === null) return `${used} used this month`;
+  return `${used} / ${usage.allowance.toLocaleString("en-US")} used · resets ${formatDay(usage.resetsAt)}`;
+}
+
+/** Remaining first: "18 remaining · 7 / 25 used · resets Oct 1" / "Unlimited · 7 used this month". */
+export function usageLine(usage: KalVoiceUsage): string {
+  const remaining = remainingRequests(usage);
+  const lead = remaining === null ? "Unlimited" : `${remaining.toLocaleString("en-US")} remaining`;
+  return `${lead} · ${usedLine(usage)}`;
 }
 
 export function formatBytes(bytes: number): string {

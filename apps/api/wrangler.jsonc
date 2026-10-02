@@ -39,7 +39,11 @@
     // Verified live monthly USD catalog, provisioned 2026-09-25.
     "STRIPE_PRICE_PRO": "price_1UJg7nK2Cbd8I5MGRbyJcBiy",
     "STRIPE_PRICE_MAX": "price_1UJg7oK2Cbd8I5MGK9THeqLP",
-    "STRIPE_PRICE_MAX_2X": "price_1UJg7pK2Cbd8I5MGxQFg9YUU"
+    "STRIPE_PRICE_MAX_2X": "price_1UJg7pK2Cbd8I5MGxQFg9YUU",
+    // Verified live yearly USD catalog (interval year), provisioned 2026-10-01.
+    "STRIPE_PRICE_PRO_YEARLY": "price_1ULw9QK2Cbd8I5MGfN23Kq2e",
+    "STRIPE_PRICE_MAX_YEARLY": "price_1ULw9RK2Cbd8I5MGrvdu8NJF",
+    "STRIPE_PRICE_MAX_2X_YEARLY": "price_1ULw9RK2Cbd8I5MGuCNbLac9"
     // GitHub OAuth and Google/Microsoft OIDC remain disabled until their registered clients are configured.
   },
   "observability": {

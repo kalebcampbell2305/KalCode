@@ -22,7 +22,7 @@ describe("paid-plan copy", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("keeps the closed copy until checkout is open", async () => {
-    expect(await render(Pricing, "/pricing")).toContain("nothing is for sale today");
+    expect(await render(Pricing, "/pricing")).toContain("Paid plans open soon · start on Free today");
     expect(await render(Home, "/")).toContain("Nothing is for sale today.");
     const privacy = await render(Privacy, "/privacy");
     expect(privacy).not.toContain(PRIVACY_LINE);
@@ -33,11 +33,11 @@ describe("paid-plan copy", () => {
     const closedPrivacy = await render(Privacy, "/privacy");
     vi.stubEnv("PUBLIC_CHECKOUT_ENABLED", "true");
     const pricing = await render(Pricing, "/pricing");
-    expect(pricing).toContain("Paid plans are open · subscribe from your account");
+    expect(pricing).toContain("Paid plans are open · monthly or yearly");
     expect(pricing).toContain("How do I buy a plan?");
     expect(pricing).not.toMatch(/for sale today|Billing is not open yet/);
     const home = await render(Home, "/");
-    expect(home).toContain("Paid plans are open. Subscribe from your account.");
+    expect(home).toContain("Paid plans are open, monthly or yearly.");
     expect(home).not.toContain("Nothing is for sale today.");
     const privacy = await render(Privacy, "/privacy");
     expect(privacy).toContain(PRIVACY_LINE);

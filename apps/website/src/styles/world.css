@@ -535,9 +535,9 @@
   gap: var(--space-5);
 }
 
-@media (min-width: 52rem) {
+@media (min-width: 36rem) {
   .plan-cards {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: stretch;
   }
 }
@@ -566,15 +566,9 @@
     0 40px 80px -50px rgb(0 0 0 / 0.95);
 }
 
-@media (min-width: 52rem) {
-  .plan-card--featured {
-    transform: translateY(-0.75rem);
-  }
-}
-
 .plan-card__name {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
   color: var(--color-text);
@@ -585,7 +579,16 @@
   text-transform: uppercase;
 }
 
+.plan-card__stage {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--color-accent-text);
+  font-size: 0.625rem;
+  letter-spacing: 0.22em;
+}
+
 .plan-card__tag {
+  flex: none;
   padding: 0.25rem 0.625rem;
   border-radius: var(--radius-full);
   background: rgb(var(--world-blue) / 0.18);
@@ -596,6 +599,7 @@
 }
 
 .plan-card__price {
+  white-space: nowrap;
   color: var(--color-text);
   font-family: var(--font-display);
   font-size: clamp(2.5rem, 2rem + 1.5vw, 3.25rem);
@@ -641,6 +645,24 @@
 
 .plan-card .button {
   width: 100%;
+}
+
+.plan-strip {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.plan-strip__note {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
+}
+
+.plan-card__points sup {
+  color: var(--color-accent-text);
+}
+
+.plan-card__link {
+  font-size: var(--site-text-small);
 }
 
 /* ---------- Final CTA over the horizon ---------- */

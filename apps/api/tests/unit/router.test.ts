@@ -29,6 +29,7 @@ const NOW_S = NOW.getTime() / 1000;
 const OWNER_ACCOUNT = "acct-owner";
 const PRO_ACCOUNT = "acct-pro";
 const FREE_ACCOUNT = "acct-free";
+const YEARLY_ACCOUNT = "acct-max-yearly";
 const CREATED = "2026-01-31T10:00:00.000Z";
 
 type TestKey = Awaited<ReturnType<typeof generateSigningKey>>;
@@ -55,6 +56,10 @@ function fakeStore(): FakeStore {
       { tier: "pro", source: "billing", grantedAt: "2026-09-10T08:00:00.000Z", expiresAt: "2026-10-10T08:00:00.000Z" },
     ],
     [FREE_ACCOUNT]: [],
+    // A yearly MAX subscription: the grant runs a year, KalVoice cycles stay monthly.
+    [YEARLY_ACCOUNT]: [
+      { tier: "max", source: "billing", grantedAt: "2026-03-15T09:30:00.000Z", expiresAt: "2027-03-15T09:30:00.000Z" },
+    ],
   };
   const ledger: LedgerRow[] = [];
   const count = (accountId: string, from: string, to: string) =>
@@ -346,14 +351,14 @@ describe("KalVoice Requests", () => {
     const d = deps();
     const first = await post(d, FREE_ACCOUNT, { requestId: "req-00000001" });
     expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 75 } });
+    expect(first.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 25 } });
     const retry = await post(d, FREE_ACCOUNT, { requestId: "req-00000001" });
     expect(retry.body).toMatchObject({ allowed: true, outcome: "duplicate", usage: { used: 1 } });
     expect(ledgerOf(d)).toHaveLength(1);
     const receipt = await verifyUsageReceipt(retry.body.receipt, signer.trusted, NOW_S);
     expect(receipt).toMatchObject({
       ok: true,
-      receipt: { accountId: FREE_ACCOUNT, tier: "free", used: 1, allowance: 75 },
+      receipt: { accountId: FREE_ACCOUNT, tier: "free", used: 1, allowance: 25 },
     });
   });
 
@@ -366,22 +371,40 @@ describe("KalVoice Requests", () => {
     });
     const pro = await post(d, PRO_ACCOUNT, { requestId: "req-pro-00001" });
     expect(pro.body.usage).toMatchObject({
-      allowance: 1500,
+      allowance: 150,
       periodStart: "2026-09-10T08:00:00.000Z",
       resetsAt: "2026-10-10T08:00:00.000Z",
     });
   });
 
+  it("keeps monthly KalVoice cycles from the billing anchor on a yearly subscription", async () => {
+    const d = deps();
+    const yearly = await post(d, YEARLY_ACCOUNT, { requestId: "req-yearly-001" });
+    expect(yearly.body).toMatchObject({ allowed: true, outcome: "recorded" });
+    // Anchor 2026-03-15 09:30; now 2026-09-24 → the seventh monthly cycle, not the yearly period.
+    expect(yearly.body.usage).toEqual({
+      used: 1,
+      allowance: 500,
+      periodStart: "2026-09-15T09:30:00.000Z",
+      resetsAt: "2026-10-15T09:30:00.000Z",
+    });
+    const receipt = await verifyUsageReceipt(yearly.body.receipt, signer.trusted, NOW_S);
+    expect(receipt).toMatchObject({
+      ok: true,
+      receipt: { tier: "max", allowance: 500, resetsAt: "2026-10-15T09:30:00.000Z" },
+    });
+  });
+
   it("denies online requests once the allowance is used, without counting them", async () => {
     const d = deps();
-    seed(d, FREE_ACCOUNT, 75);
-    const denied = await post(d, FREE_ACCOUNT, { requestId: "req-00000076" });
-    expect(denied.body).toMatchObject({ allowed: false, outcome: "denied", usage: { used: 75, allowance: 75 } });
-    expect(ledgerOf(d)).toHaveLength(75);
+    seed(d, FREE_ACCOUNT, 25);
+    const denied = await post(d, FREE_ACCOUNT, { requestId: "req-00000026" });
+    expect(denied.body).toMatchObject({ allowed: false, outcome: "denied", usage: { used: 25, allowance: 25 } });
+    expect(ledgerOf(d)).toHaveLength(25);
     expect(d.logs).toContainEqual({ level: "info", event: "kalvoice.allowance_exhausted", tier: "free" });
     // A request already served offline (within the device's signed allowance) is still recorded.
     const replay = await post(d, FREE_ACCOUNT, { requestId: "req-offline-01", mode: "offline" });
-    expect(replay.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 76 } });
+    expect(replay.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 26 } });
   });
 
   it("never denies OWNER", async () => {
@@ -436,7 +459,7 @@ describe("KalVoice Requests", () => {
     const body = (await response.json()) as UsageBody;
     expect(body.usage).toEqual({
       used: 2,
-      allowance: 1500,
+      allowance: 150,
       periodStart: "2026-09-10T08:00:00.000Z",
       resetsAt: "2026-10-10T08:00:00.000Z",
     });

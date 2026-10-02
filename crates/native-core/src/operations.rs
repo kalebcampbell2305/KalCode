@@ -16,6 +16,7 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params, params_f
 
 use crate::Core;
 use crate::error::{ErrorCategory, KalError, Result};
+use crate::plans::PlanLimit;
 use crate::redact::PlaceholderStyle;
 use crate::redact::secrets::{self, ScanContext};
 use crate::time::now_rfc3339;
@@ -443,14 +444,28 @@ impl OperationsStore {
     }
 
     pub fn enqueue(&self, spec: OperationSpec) -> Result<OperationRecord> {
+        self.enqueue_limited(spec, None)
+    }
+
+    /// Refuses queueing one more task once the plan's `limit` tasks are waiting.
+    pub fn check_queue_capacity(&self, limit: Option<PlanLimit>) -> Result<()> {
+        let Some(limit) = limit else { return Ok(()) };
+        self.core.read(|conn| limit.admit(pending_count(conn)?))
+    }
+
+    /// [`Self::enqueue`] under the plan's cap on waiting (queued, paused or blocked) tasks.
+    pub fn enqueue_limited(
+        &self,
+        spec: OperationSpec,
+        limit: Option<PlanLimit>,
+    ) -> Result<OperationRecord> {
         let spec = normalize_spec(spec)?;
         let id = new_id();
         self.write(|tx| {
-            let pending: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM operations WHERE status IN ('queued', 'paused', 'blocked')",
-                [],
-                |row| row.get(0),
-            )?;
+            let pending = pending_count(tx)?;
+            if let Some(limit) = limit {
+                limit.admit(pending)?;
+            }
             if pending >= MAX_PENDING {
                 return Err(KalError::validation(
                     "operations_queue_full",
@@ -1628,6 +1643,15 @@ fn load_stored_rows(
     Ok(stmt
         .query_map(params, stored_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// Tasks waiting in the queue: queued, paused or blocked.
+fn pending_count(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM operations WHERE status IN ('queued', 'paused', 'blocked')",
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 fn load_snapshot_records(conn: &Connection) -> Result<Vec<OperationRecord>> {

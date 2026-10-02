@@ -318,12 +318,12 @@ the next candidate; see the campaign doc.
 - One top-level request to the assistant counts once, however many internal steps it takes
   ("Pause every active thread" = 1; "Have Claude implement this, Codex review it, then run the
   tests" = 1).
-- Allowances per monthly cycle: Free 75 · Pro 1,500 · MAX 5,000 · MAX 2X 10,000 · OWNER unlimited
+- Allowances per monthly cycle: Free 25 · Pro 150 · MAX 500 · MAX 2X 1,000 · OWNER unlimited
   (`packages/protocol/src/plans.ts`). Dictation is never counted. Provider tokens are never counted.
 - The server-side usage ledger is authoritative (docs/BILLING.md): idempotent per client request
   id, reset per the account's plan cycle. Before accounts exist, and briefly offline, the app keeps
   a provisional local count with the plan's allowance and reconciles with the ledger when it can.
-  A finite plan displays, for example, "482 / 1,500 used · 1,018 remaining · renews October 1."
+  A finite plan displays, for example, "118 remaining · 32 / 150 used · resets October 1."
 - User-facing unit: **KalVoice Requests** — never "tokens".
 
 ## Speech output
@@ -372,7 +372,7 @@ speech models) still require the owner's consent in their download dialog.
 | `grammar` | Compiled deterministic text → `KalVoiceIntent` with a confidence (high / low). Whole-utterance patterns after politeness words; negations ("don't…") and compound requests ("… and then …") are never commands (→ `Reasoning`). Counts: digits or one–twenty, at most 16 threads (`thread_count_too_large`), 0 refused, anything else never guessed. Hears "codecs"/"code x" as Codex and "for"/"to" as counts where speech recognition does. |
 | `ledger` | Provisional monthly count (table `kalvoice_requests`): one row per client request id (idempotent), atomic allowance check, period from the cycle anchor day (1st, UTC) to the same day next month, refund for "Type it instead" on reversible commands within two minutes. Rows hold ids, input kind and intent name only. |
 | `schema` | Migration **v6** (`crates/native-core/migrations/0006_kalvoice.sql`), registered in `kalcode_core::db::MIGRATIONS` after the event platform's v5 (embedded, checksummed, backed up before it runs). Upgrades v4 → v6 and v5 → v6 are tested in `crates/kalvoice/tests/schema.rs` and end to end in `apps/desktop/tests/e2e/integrity.spec.ts`. |
-| `plan` | Allowance per tier (Free 75, Pro 1,500, MAX 5,000, MAX 2X 10,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
+| `plan` | Allowance per tier (Free 25, Pro 150, MAX 500, MAX 2X 1,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
 | `orchestrator` | Allowance check ? deterministic grammar or local interpretation ? validated workspace/runtime action ? atomic request ledger ? execution. Duplicate request IDs never execute or count twice. Unavailable or invalid interpretations remain uncounted. Workspace controls use no extra approval; coding sessions keep provider-native permissions. Events publish only after committed state and contain no transcript. |
 | `voice`, `streaming`, `audio`, `stt` | One take at a time. Engine and model are checked **before** the microphone opens; capture of the default input (cpal) into memory (mono, 120 s cap), windowed-sinc resampling to 16 kHz, streaming partials, tail reuse, whisper.cpp (`whisper` feature) with a persistent decoder state, then the audio is zeroed and dropped. Only a 0–1 input level leaves the capture. |
 | `latency` | Five stage timings per take, rolling p50/p95/p99. |

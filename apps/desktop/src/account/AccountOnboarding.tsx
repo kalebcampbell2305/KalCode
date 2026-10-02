@@ -180,19 +180,28 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             </div>
             <div className={styles.plans}>
               {PLAN_CATALOG.map((plan) => (
-                <article className={styles.plan} key={plan.tier} data-featured={plan.tier === "pro" || undefined}>
+                <article className={styles.plan} key={plan.tier} data-featured={plan.popular || undefined}>
                   <div>
+                    <p className={styles.stage}>{plan.stage}</p>
                     <h2>{plan.name}</h2>
-                    <p className={styles.price}>{plan.monthlyPriceUsd === 0 ? "$0" : `$${plan.monthlyPriceUsd}`}</p>
+                    <p className={styles.price}>${plan.monthlyPriceUsd.toLocaleString("en-US")}</p>
                     <p>{plan.monthlyPriceUsd === 0 ? "No checkout" : "per month"}</p>
+                    {plan.yearlyPriceUsd > 0 ? (
+                      <p className={styles.yearly}>
+                        or ${plan.yearlyPriceUsd.toLocaleString("en-US")}/year · save $
+                        {plan.yearlySavingsUsd.toLocaleString("en-US")}
+                      </p>
+                    ) : null}
+                    <p className={styles.tagline}>{plan.tagline}</p>
                   </div>
-                  <p className={styles.allowance}>{plan.requests.toLocaleString()} KalVoice requests</p>
+                  <p className={styles.allowance}>
+                    {plan.requests === null ? "Unlimited" : plan.requests.toLocaleString("en-US")} KalVoice Requests a
+                    month
+                  </p>
                   <Button
-                    variant={plan.tier === "pro" ? "primary" : "secondary"}
+                    variant={plan.popular ? "primary" : "secondary"}
                     busy={busy}
-                    onClick={() =>
-                      void (plan.action === "activate_free" ? actions.activateFree() : actions.checkout(plan.tier))
-                    }
+                    onClick={() => void (plan.tier === "free" ? actions.activateFree() : actions.checkout(plan.tier))}
                   >
                     {plan.tier === "free" ? "Continue with Free" : `Choose ${plan.name}`}
                   </Button>
