@@ -147,13 +147,7 @@ impl UtilityState {
     }
 
     fn hub(&self) -> Result<Arc<UtilityHub>, IpcError> {
-        let hub = self.0.clone().ok_or_else(|| {
-            KalError::internal(
-                "utilities_unavailable",
-                "The Utility Dock isn't available right now. Restart KalCode; if this keeps happening, export diagnostics.",
-            )
-            .to_ipc()
-        })?;
+        let hub = self.available_hub()?;
         if !hub.enabled {
             return Err(KalError::validation(
                 "not_in_this_build",
@@ -162,6 +156,18 @@ impl UtilityState {
             .to_ipc());
         }
         Ok(hub)
+    }
+
+    /// The hub even where the Dock itself is gated. Only read-only reads of KalCode's own state
+    /// use it (KalTidy's scan of what runs in KalCode's terminals).
+    fn available_hub(&self) -> Result<Arc<UtilityHub>, IpcError> {
+        self.0.clone().ok_or_else(|| {
+            KalError::internal(
+                "utilities_unavailable",
+                "The Utility Dock isn't available right now. Restart KalCode; if this keeps happening, export diagnostics.",
+            )
+            .to_ipc()
+        })
     }
 
     /// The hub for KalVoice (port answers, the response count); `None` when unavailable.
@@ -793,7 +799,16 @@ pub async fn utility_processes(
     utilities: RuntimeState<UtilityState>,
     scope: ProcessScope,
 ) -> Result<ProcessList, IpcError> {
-    let hub = command_hub(&runtime_access, &utilities)?;
+    // KalTidy (stop idle terminals) ships on every channel and reads what runs in KalCode's
+    // terminals through the `related` scope: read-only, names only, never a signal. The full
+    // machine list stays with the Utility Dock and its gate.
+    let hub = if scope == ProcessScope::Related {
+        runtime_access.revalidate()?;
+        utilities.revalidate()?;
+        utilities.available_hub()?
+    } else {
+        command_hub(&runtime_access, &utilities)?
+    };
     blocking(runtime_access, utilities, "utility_processes", move || {
         // Port owners count as related; a missing port tool only loses that hint.
         let raw = ports::list_raw().map(|(raw, _)| raw).ok();

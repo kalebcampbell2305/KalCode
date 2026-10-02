@@ -16,6 +16,7 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../shell/panes/outputScheduler.ts";
 import styles from "./Code.module.css";
+import { noteTerminalInput, noteTerminalOutput } from "./kaltidy/activity.ts";
 import { suppressReplayQueries } from "./replayQueries.ts";
 import { isTerminalShortcut } from "./shortcuts.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "./terminalTheme.ts";
@@ -110,7 +111,11 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     let replaying = false;
     const disposeReplayQueries = suppressReplayQueries(term, () => replaying);
     const input = createOrderedInputQueue(
-      (data) => client.writeTerminal(terminalId, data),
+      (data) => {
+        // KalTidy: every key, paste and dictation reaches the shell here.
+        noteTerminalInput(terminalId, data);
+        return client.writeTerminal(terminalId, data);
+      },
       (error) => {
         // An ended terminal refuses input; its status updates through events.
         if (import.meta.env.DEV && toKalCodeError(error).code !== "terminal_not_running") {
@@ -222,6 +227,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
             });
             return;
           }
+          noteTerminalOutput(terminalId);
           writer.push(bytes);
         })
         .then((id) => {

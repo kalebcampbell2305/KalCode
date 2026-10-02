@@ -20,10 +20,12 @@ import {
   Tooltip,
 } from "@kalcode/ui/components";
 import {
+  BroomSparkles,
   ChevronDown,
   Equal,
   FolderOpen,
   LayoutGrid,
+  ListChecks,
   Minimize2,
   Plus,
   Save,
@@ -47,6 +49,7 @@ import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
 import styles from "./Code.module.css";
 import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
+import { useKalTidy } from "./kaltidy/kalTidyContext.ts";
 import { providerIdentity } from "./panes/paneLabels.ts";
 import { CODE_SHORTCUT_LABELS, codeShortcut } from "./shortcuts.ts";
 import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
@@ -344,6 +347,7 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      <KalTidyActions />
       {providerPanes.enabled ? (
         <Button
           size="sm"
@@ -466,6 +470,59 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
         </DropdownMenu>
       ) : null}
     </>
+  );
+}
+
+/** KalTidy in Code: one click stops idle terminals; the menu offers the review first. */
+function KalTidyActions() {
+  const kalTidy = useKalTidy();
+  const [tidying, setTidying] = useState(false);
+  if (!kalTidy) return null;
+  const stopIdle = async () => {
+    setTidying(true);
+    try {
+      await kalTidy.stopIdle();
+    } finally {
+      setTidying(false);
+    }
+  };
+  return (
+    <div className={styles.toolGroup}>
+      <Tooltip content="KalTidy: Stop idle terminals">
+        <IconButton
+          size="sm"
+          label="KalTidy: Stop idle terminals"
+          icon={<BroomSparkles />}
+          busy={tidying}
+          onClick={() => void stopIdle()}
+        />
+      </Tooltip>
+      <DropdownMenu>
+        <Tooltip content="More KalTidy actions">
+          <DropdownMenuTrigger asChild>
+            <IconButton size="sm" label="More KalTidy actions" icon={<ChevronDown />} />
+          </DropdownMenuTrigger>
+        </Tooltip>
+        <DropdownMenuContent align="end" minWidth={17}>
+          <DropdownMenuLabel>KalTidy</DropdownMenuLabel>
+          <DropdownMenuItem
+            icon={<BroomSparkles />}
+            description="Only terminals that are idle and safe to close"
+            disabled={tidying}
+            onSelect={() => void stopIdle()}
+          >
+            Stop idle terminals
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            icon={<ListChecks />}
+            description="See every terminal and choose what stops"
+            onSelect={() => kalTidy.openReview()}
+          >
+            Review terminals…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
