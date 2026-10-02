@@ -1,13 +1,14 @@
 # KalCode 0.1.9 (build {{BUILD}})
 
-KalCode 0.1.9 adds the Command Deck, Agent Fleet, the Provider Dock and KalVoice control of your workspace and agents. It also brings KalTidy, the Account Hub, a new account list, plan limits with monthly or yearly plans, and a set of fixes. It updates KalCode's data to save each thread's reasoning effort, after first making its usual backup. Once 0.1.9 has updated your data, Restore previous version can't go back to 0.1.8.
+KalCode 0.1.9 adds the Command Deck, Agent Fleet, the Provider Dock and KalVoice control of your workspace and agents. It also brings KalTidy, the Account Hub, a new account list, plan limits with monthly or yearly plans, and a set of fixes. KalCode saves each thread's reasoning effort, so Restore previous version only goes back to builds that can open that data.
 
 ## Upgrading
 
-- **From 0.1.8 or 0.1.7:** KalCode offers 0.1.9 as an update. Install it from inside the app with Restart to update or Settings > Updates. You can also download the installer (Windows) or DMG (macOS) from kalcoded.com/download and install it over your current copy. Your workspaces, threads, settings and sign-ins are kept.
+- **From the latest 0.1.8 build:** 0.1.9 downloads and is verified in the background, then installs without a prompt when you close KalCode, so the next launch runs it. Your workspaces, threads, settings and sign-ins are kept.
+- **From an earlier 0.1.8 build or 0.1.7:** KalCode offers 0.1.9 as an update. Install it with Restart to update or Settings > Updates, or install the download from kalcoded.com/download over your current copy. Your data is kept.
 - **Windows, from 0.1.6:** KalCode 0.1.6 can't install updates on Windows. Download the installer from kalcoded.com/download and run it once over your current copy; your data is kept.
 - **macOS, from 0.1.6:** update from inside the app with Restart to update or Settings > Updates.
-- **Later builds of 0.1.9** download and are verified in the background, then install without a prompt when you close KalCode, so the next launch runs them.
+- **Later updates:** every update, including a new version, downloads and is verified in the background and installs when you close KalCode.
 - **Version numbers:** KalCode shows version 0.1.9. Settings > Updates and other detailed views add the build number, for example "0.1.9 build {{BUILD}}". Version 0.1.2 with a build number is only for a private test build and is never offered as an update.
 - **Going back:** KalCode records the build that last updated its data and offers Restore previous version only for a build that can open it. A restore that would reach an older build stops with "The previous version can't open data saved by this version, so it can't be restored. Your data has not been changed."
 

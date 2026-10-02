@@ -60,4 +60,9 @@ Internal only (not user-facing): #62, #69 and #73 (tests), #72 and #74 (policy d
 
 ## Data and rollback
 
-#67 adds migration 0021 (`threads.effort`). After 0.1.9 updates the data, Restore previous version can't go back to 0.1.8 builds.
+#67 adds migration 0021 (`threads.effort`). It first ships in the stepping-stone 0.1.8+N build. After it updates the data, Restore previous version only goes back to builds that can open it.
+
+## Delivery (owner decision 2026-10-02)
+
+- A stepping-stone **0.1.8+N** build ships first. It carries every feature above (#79, #82, #83 included) plus the silent-for-all updater, and is cut from release/0.1.8-stepping.
+- **0.1.9** is then cut from main. Clients already on 0.1.8+N get it when they close KalCode. Clients on an earlier 0.1.8 build or 0.1.7 get one prompted update straight to 0.1.9. After that, every update installs on close.
