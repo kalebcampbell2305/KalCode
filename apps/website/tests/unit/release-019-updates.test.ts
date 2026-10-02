@@ -102,19 +102,23 @@ describe("the Updates page for 0.1.9", () => {
   });
 
   it("announces no 0.1.9 while the manifest selects 0.1.8 or a 0.1.8 build", async () => {
+    // Fixed 0.1.8 manifests: COMMITTED becomes 0.1.9+N once the assemble step writes the 0.1.9 releases.json.
     for (const manifest of [
       signedStableBuild("0.1.8", 923),
-      COMMITTED,
+      signedStableBuild("0.1.8", 944),
       (() => {
-        const plain = structuredClone(COMMITTED);
+        const plain = signedStableBuild("0.1.8", 944);
         if (plain.latest) plain.latest.version = "0.1.8";
         return plain;
       })(),
     ]) {
       select(manifest);
       const html = await render(Updates, "/updates");
+      // The footer's buildStatus() reads the module's own RELEASES (the committed releases.json), not the mock.
+      const main = html.match(/<main[\s\S]*<\/main>/)?.[0] ?? "";
+      expect(main).not.toBe("");
       expect(html).not.toContain("release-0-1-9");
-      expect(html).not.toContain("0.1.9");
+      expect(main).not.toContain("0.1.9");
       expect(html).toMatch(/<article class="update update--featured" id="release-0-1-8"/);
       expect(html.match(/update--featured/g)).toHaveLength(1);
     }

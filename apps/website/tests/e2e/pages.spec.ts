@@ -188,7 +188,8 @@ test.describe("every page", () => {
     await expect(page.locator("#release-website-2026-09-24")).toBeVisible();
     await expect(page.locator("#release-kalvoice")).toBeVisible();
     await expect(page.locator("#milestone-foundation")).toBeVisible();
-    await expect(page.locator("main")).not.toContainText("commit");
+    // No commit hashes in product news ("committed" and "Commit changes" are product copy in the 0.1.9 entry).
+    await expect(page.locator("main")).not.toContainText(/\bcommit [0-9a-f]{7}|\b[0-9a-f]{40}\b/);
   });
 
   test("Updates stays inside the viewport on desktop and mobile", async ({ page }) => {
