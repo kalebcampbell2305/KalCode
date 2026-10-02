@@ -41,6 +41,10 @@ Flow: IMPLEMENT → TEST RELEVANT CHANGES → REVIEW → MERGE TO MAIN → BUILD
 - **Automate the routine:** merge continuation, builds, packaging, the signing workflow, publishing, updater metadata, artifact upload, website/release references, production smoke checks and safe cleanup. Involve the owner only for a real approval, credential, ambiguity or risky irreversible action.
 - **Keep it fast.** If a release takes far longer than the underlying build, sign and publish work, investigate and simplify the release pipeline. Don't accept the delay as normal. Keep optimizing so completed work reaches users as fast as the build, signing and distribution systems allow.
 
+### Shipped means existing users receive it (owner directive 2026-10-02)
+
+For user-facing work, "shipped" means the update is actually available through KalCode's production update path: merged → build → sign/package → publish → production update feed live → the user closes KalCode → reopens it → KalCode receives and applies the new build → the new feature is available. Merging, building an installer, uploading an artifact or creating a release entry is not shipping. After every user-facing shipment, verify on Windows and macOS that an existing installed KalCode receives the new build through the normal close/reopen experience. The owner must never need to download and reinstall KalCode by hand for a normal update. If close/reopen does not deliver the build, shipping is not complete: fix the update path and continue.
+
 ### Automate and parallelize safely
 
 Automate builds, tests, metadata, configured signing, publication, updater metadata, website release references, production checks, and cleanup. Do not require routine manual steps merely because old procedures did. Ask the owner only for a real decision, unavailable credential/action, irreversible risk, or ambiguity.
