@@ -31,10 +31,7 @@ test("refuses a relative repo or a non-commit", () => {
 
 test("the warm compile mirrors the signed build's invocation and leaves no guardian behind", () => {
   const warm = readFileSync(new URL("./warm-windows.mjs", import.meta.url), "utf8");
-  assert.match(
-    warm,
-    /"tauri",\s*"build",\s*"--bundles",\s*"nsis",\s*"--features",\s*"kalvoice-whisper",\s*"--no-sign"/,
-  );
+  assert.match(warm, /"tauri",\s*"build",\s*"--bundles",\s*"nsis",\s*"--features",\s*"kalvoice-whisper",\s*"--no-sign"/);
   assert.match(warm, /releaseVersionOverlay\(releaseVersion\(\)\)/);
   assert.equal((warm.match(/clearStaleGuardian\(TARGET_DIR\)/g) ?? []).length, 2);
 });
