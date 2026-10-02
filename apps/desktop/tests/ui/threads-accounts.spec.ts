@@ -36,17 +36,17 @@ async function geminiThreadWithTwoAccounts(page: Page) {
 
   await primary.getByRole("button", { name: "Providers" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  const add = page.getByRole("region", { name: "Add provider account" });
-  await add.getByLabel("Provider").selectOption("gemini-cli");
-  await add.getByLabel("Account name").fill("Gemini B");
-  await add.getByRole("button", { name: "Add account" }).click();
-  await expect(page.getByRole("region", { name: "Gemini CLI account Gemini B" })).toBeVisible();
+  await page.getByRole("button", { name: "Add account", exact: true }).click();
+  await page.getByLabel("Provider", { exact: true }).selectOption("gemini-cli");
+  await page.getByLabel("Name for the new Gemini CLI account").fill("Gemini B");
+  await page.getByRole("button", { name: "Add and sign in" }).click();
+  await expect(page.getByRole("region", { name: "Gemini CLI · Gemini B" })).toBeVisible();
 
   await primary.getByRole("button", { name: "Threads" }).click();
   await page.getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
   await form.getByLabel("Provider").selectOption("gemini-cli");
-  await form.getByLabel("Account", { exact: true }).selectOption({ label: "Personal (default)" });
+  await form.getByLabel("Account", { exact: true }).selectOption({ label: "Personal · Default · Not checked" });
   await form.getByLabel("Task").fill("tighten the release notes wording");
   await form.getByLabel("Name").fill("Release notes pass");
   await form.getByRole("button", { name: "Start thread" }).click();
@@ -101,7 +101,7 @@ test.describe("thread accounts", () => {
     await dialog.getByRole("button", { name: "Switch to Gemini B" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(accountButton(page, "Gemini B")).toBeVisible();
-    await expect(page.getByText("Switched to Gemini B")).toBeVisible();
+    await expect(page.getByText("Switched to Gemini B (Gemini CLI)")).toBeVisible();
     await expect(row).toContainText("Gemini CLI · Gemini B · ");
 
     // The past conversation is still there.

@@ -42,7 +42,7 @@ async function openAccounts(page: Page) {
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Providers" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await expect(page.getByRole("region", { name: "Codex account Personal" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Codex · Personal" })).toBeVisible();
 }
 
 async function openNewThread(page: Page) {
@@ -54,9 +54,21 @@ async function openNewThread(page: Page) {
   return form;
 }
 
-/** The value of a labelled usage row on an account card. */
+/** The value of a labelled row in an account's details. */
 const usage = (card: ReturnType<Page["getByRole"]>, term: string) =>
   card.locator("dt", { hasText: term }).locator("xpath=following-sibling::dd[1]");
+
+/** Opens an account row's details (thread use, workspace defaults) unless already open. */
+async function openDetails(card: ReturnType<Page["getByRole"]>, name: string) {
+  const toggle = card.getByRole("button", { name: `Account details for ${name}` });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+}
+
+/** Chooses one item from an account row's "More actions" menu. */
+async function rowAction(page: Page, card: ReturnType<Page["getByRole"]>, name: string, item: string) {
+  await card.getByRole("button", { name: `More actions for ${name}` }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: item }).click();
+}
 
 async function expectNoSeriousA11yViolations(page: Page) {
   // Toasts are checked by their own suite; clear them so this checks the account UI.
@@ -68,9 +80,7 @@ async function expectNoSeriousA11yViolations(page: Page) {
 }
 
 test.describe("switch accounts: accounts view and workspace defaults", () => {
-  test("Accounts shows thread use and workspace defaults, and connects another account per provider", async ({
-    page,
-  }) => {
+  test("Accounts shows thread use and workspace defaults, and adds another account per provider", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await openFolders(page, "kalcode", "kalcoded.com");
@@ -85,37 +95,43 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
     await expect(page.getByText("New Codex threads in kalcoded.com use Personal")).toBeVisible();
 
     await openAccounts(page);
-    const codex = page.getByRole("region", { name: "Codex account Personal" });
+    const codex = page.getByRole("region", { name: "Codex · Personal" });
+    await openDetails(codex, "Personal");
     await expect(usage(codex, "Active threads")).toHaveText(/^1( · 1 running)?$/);
     await expect(usage(codex, "Workspace default in")).toHaveText("kalcoded.com");
     await expect(codex.getByText("Default", { exact: true })).toBeVisible();
     await expect(codex.getByText("Signed in", { exact: true })).toBeVisible();
-    const work = page.getByRole("region", { name: "Codex account Work" });
+    const work = page.getByRole("region", { name: "Codex · Work" });
+    await openDetails(work, "Work");
     await expect(usage(work, "Active threads")).toHaveText("None");
     await expect(usage(work, "Workspace default in")).toHaveText("None");
-    await expect(work.getByRole("button", { name: "Set Work as default" })).toBeVisible();
     await expect(work.getByRole("button", { name: "Sign in Work" })).toBeVisible();
+    await work.getByRole("button", { name: "More actions for Work" }).click();
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "Set Work as default" })).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // Every provider offers another account through the same add-then-official-sign-in flow.
     for (const name of ["Claude Code", "Codex", "Gemini CLI"]) {
-      await expect(page.getByRole("button", { name: `Connect another ${name} account` })).toBeVisible();
+      await expect(page.getByRole("button", { name: `Add ${name} account` })).toBeVisible();
     }
     await page.getByRole("button", { name: "Dismiss notification" }).first().click();
-    await page.getByRole("region", { name: /^Codex\s*\d+$/ }).evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await page
+      .getByRole("region", { name: "Codex", exact: true })
+      .evaluate((el) => el.scrollIntoView({ block: "start" }));
     await shot(page, "sa-lane3-accounts-view");
-    await page.getByRole("button", { name: "Connect another Gemini CLI account" }).click();
+    await page.getByRole("button", { name: "Add Gemini CLI account" }).click();
     await page.getByLabel("Name for the new Gemini CLI account").fill("Work");
     await page.getByRole("button", { name: "Add and sign in" }).click();
-    const geminiWork = page.getByRole("region", { name: "Gemini CLI account Work" });
+    const geminiWork = page.getByRole("region", { name: "Gemini CLI · Work" });
     await expect(geminiWork.getByText("Signed in", { exact: true })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Gemini CLI account Personal" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Gemini CLI · Personal" })).toBeVisible();
     await expect(page.locator("[data-provider-pane]")).toHaveCount(0);
     await expectNoSeriousA11yViolations(page);
 
     // Existing threads keep their account when the default changes.
     await work.getByRole("button", { name: "Sign in Work" }).click();
     await expect(work.getByText("Signed in", { exact: true })).toBeVisible();
-    await work.getByRole("button", { name: "Set Work as default" }).click();
+    await rowAction(page, work, "Work", "Set Work as default");
     await expect(work.getByText("Default", { exact: true })).toBeVisible();
     await expect(usage(codex, "Active threads")).toHaveText(/^1( · 1 running)?$/);
     // kalcoded.com still remembers Personal: its New thread keeps Personal, not the new default.
@@ -130,11 +146,14 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await openFolders(page, "kalcode", "kalcoded.com");
     await openAccounts(page);
-    const add = page.getByRole("region", { name: "Add provider account" });
-    await add.getByLabel("Provider").selectOption("claude-code");
-    await add.getByLabel("Account name").fill("Work");
-    await add.getByRole("button", { name: "Add account" }).click();
-    await expect(page.getByRole("region", { name: "Claude Code account Work" })).toBeVisible();
+    // The toolbar's Add account adds the account, then runs Claude Code's own sign-in for it.
+    await page.getByRole("button", { name: "Add account", exact: true }).click();
+    await page.getByLabel("Provider", { exact: true }).selectOption("claude-code");
+    await page.getByLabel("Name for the new Claude Code account").fill("Work");
+    await page.getByRole("button", { name: "Add and sign in" }).click();
+    await expect(
+      page.getByRole("region", { name: "Claude Code · Work" }).getByText("Signed in", { exact: true }),
+    ).toBeVisible();
 
     // kalcoded.com is active (opened last). Unchecked: the pick is used for this thread only.
     let form = await openNewThread(page);
@@ -148,7 +167,7 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
 
     form = await openNewThread(page);
     await expect(form.getByLabel("Account", { exact: true }).locator("option:checked")).toHaveText(
-      "Personal (default)",
+      "Personal · Default",
     );
     await expect(form.getByText("Default account.")).toBeVisible();
 
@@ -171,7 +190,7 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
     form = await openNewThread(page);
     await expect(form.getByLabel("Workspace", { exact: true }).locator("option:checked")).toHaveText("kalcode");
     await expect(form.getByLabel("Account", { exact: true }).locator("option:checked")).toHaveText(
-      "Personal (default)",
+      "Personal · Default",
     );
     await expect(form.getByText("Default account.")).toBeVisible();
 
@@ -184,11 +203,12 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
 
     // The Accounts view agrees: two threads on Work, remembered by kalcoded.com only.
     await openAccounts(page);
-    const work = page.getByRole("region", { name: "Claude Code account Work" });
+    const work = page.getByRole("region", { name: "Claude Code · Work" });
+    await openDetails(work, "Work");
     await expect(usage(work, "Active threads")).toHaveText(/^2( · [12] running)?$/);
     await expect(usage(work, "Workspace default in")).toHaveText("kalcoded.com");
-    await expect(
-      usage(page.getByRole("region", { name: "Claude Code account Personal" }), "Workspace default in"),
-    ).toHaveText("None");
+    const personal = page.getByRole("region", { name: "Claude Code · Personal" });
+    await openDetails(personal, "Personal");
+    await expect(usage(personal, "Workspace default in")).toHaveText("None");
   });
 });

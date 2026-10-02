@@ -137,6 +137,21 @@ describe("New thread account defaults (Stable)", () => {
     expect(h.calls.some((c) => c.command === "provider_account_bind")).toBe(false);
   });
 
+  it("lists accounts default first in natural name order, with the default and sign-in state in words", async () => {
+    const h = await mountStable(async ({ client }) => {
+      await client.createProviderAccount("claude-code", "Claude 10");
+      await client.createProviderAccount("claude-code", "Claude 2");
+    });
+    const form = await openNewThread(h.user);
+    const options = within(account(form)).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Personal · Default",
+      "Claude 2 · Not checked",
+      "Claude 10 · Not checked",
+      "Work · Not checked",
+    ]);
+  });
+
   it("follows the active workspace A → B → A and restores each workspace's account", async () => {
     const h = await mountStable(async ({ client, alpha, claudeWork }) => {
       await client.bindProviderAccount("claude-code", "workspace", alpha.id, claudeWork);

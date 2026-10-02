@@ -7,6 +7,7 @@ import type {
   TalkRoute,
 } from "@kalcode/protocol";
 import { formatVersion } from "../platform/version.ts";
+import { accountFullLabel } from "../surfaces/providers/accountIdentity.ts";
 
 export type EventTone = "live" | "success" | "waiting" | "danger" | "idle";
 
@@ -40,6 +41,14 @@ const PROVIDER_NAMES: Record<string, string> = {
 /** A provider's display name; unknown ids are shown as-is. */
 export function providerName(id: string): string {
   return PROVIDER_NAMES[id] ?? id;
+}
+
+/** "Claude Code · Personal" (the shared account label), or just the provider when no account is named. */
+function providerAccountDetail(payload: { providerId: string; accountLabel?: string | null }): string {
+  const account = payload.accountLabel?.trim();
+  return account
+    ? accountFullLabel({ providerId: payload.providerId, displayName: account })
+    : providerName(payload.providerId);
 }
 
 export function formatDuration(ms: number): string {
@@ -223,13 +232,13 @@ export function describeEvent(event: EventEnvelope): EventDescription {
     case "provider.connected":
       return {
         title: "Provider connected",
-        detail: event.payload.accountLabel ?? providerName(event.payload.providerId),
+        detail: providerAccountDetail(event.payload),
         tone: "success",
       };
     case "provider.disconnected":
       return {
         title: "Provider disconnected",
-        detail: event.payload.accountLabel ?? providerName(event.payload.providerId),
+        detail: providerAccountDetail(event.payload),
         tone: "waiting",
       };
     case "provider.error":

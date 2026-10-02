@@ -1,8 +1,9 @@
 .root {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-4);
   min-width: 0;
+  container: accounts / inline-size;
 }
 
 .loading {
@@ -10,75 +11,100 @@
   gap: var(--space-3);
 }
 
-.safety {
-  background: radial-gradient(28rem 10rem at 0% 0%, var(--color-accent-soft), transparent 72%), var(--color-surface-1);
+/* ---------------- Toolbar: summary, safety note, filter and Add account ---------------- */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
 }
 
-.note,
-.empty {
-  max-width: 76ch;
-  color: var(--color-text-secondary);
+.toolbarText {
+  display: flex;
+  flex: 1 1 28rem;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.summary {
+  color: var(--color-text);
   font-size: var(--type-ui);
+  font-weight: var(--type-title-weight);
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  max-width: 92ch;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
   line-height: var(--leading-normal);
 }
 
-.addForm {
-  display: grid;
-  grid-template-columns: minmax(10rem, 0.6fr) minmax(14rem, 1fr) auto;
-  align-items: end;
-  gap: var(--space-3);
+.note svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.125rem;
+  color: var(--color-accent-text);
 }
 
-.provider {
-  overflow: hidden;
-}
-
-.accounts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.account {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-  padding: var(--space-3-5);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: linear-gradient(145deg, var(--color-surface-2), var(--color-surface-1));
-}
-
-.accountTop {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.accountIdentity {
-  min-width: 0;
-}
-
-.accountIdentity h3 {
-  overflow: hidden;
-  font-size: var(--type-title);
+.note strong {
+  color: var(--color-text-secondary);
   font-weight: var(--type-title-weight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.accountIdentity p {
-  margin-top: var(--space-0-5);
-  overflow: hidden;
+.toolbarActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.filter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 15rem;
+  max-width: 100%;
+}
+
+.filter > svg {
+  position: absolute;
+  left: var(--space-2);
+  width: 0.875rem;
+  height: 0.875rem;
   color: var(--color-text-muted);
-  font-size: var(--type-small);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  pointer-events: none;
 }
 
-.badges,
+.filter > input {
+  width: 100%;
+  padding-left: var(--space-7);
+}
+
+/* ---------------- Add form ---------------- */
+
+.connectForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.connectForm > :nth-last-child(2) {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -86,96 +112,216 @@
   gap: var(--space-2);
 }
 
-.renameForm {
+/* ---------------- Provider section ---------------- */
+
+.section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
 }
 
-.loginState,
-.confirm {
+.section > .connectForm {
+  margin: var(--space-3) var(--panel-px) 0;
+}
+
+.sectionHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-lit-soft);
-  border-radius: var(--radius-sm);
-  background: var(--color-accent-soft);
-  color: var(--color-text-secondary);
-  font-size: var(--type-small);
-}
-
-.confirm {
-  align-items: flex-start;
-  flex-direction: column;
-  min-width: 0;
-  margin: 0;
-  border-color: var(--status-failed-line);
-  background: var(--status-failed-soft);
-}
-
-@media (max-width: 980px) {
-  .accounts,
-  .addForm {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .addForm > button {
-    justify-self: start;
-  }
-}
-
-@media (max-width: 600px) {
-  .accountTop,
-  .loginState {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
-/* What uses the account: labelled counts, never colour alone. */
-.usage {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2) var(--space-3);
-  margin: 0;
-  padding: var(--space-2) 0;
-  border-block: 1px solid var(--color-border-subtle);
-  font-size: var(--type-small);
+  min-height: var(--panel-header-h);
+  padding: var(--space-1-5) var(--panel-px);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
-.usage > div {
+.sectionHeading {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
   min-width: 0;
 }
 
-.usage dt {
+.sectionTitle {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+  letter-spacing: var(--type-title-tracking);
+  line-height: 1.3;
+}
+
+.sectionMeta {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Provider-wide limit: amber dot plus words, on the section, never on one account. */
+.limit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-0-5) var(--space-2-5);
+  border: 1px solid var(--status-waiting-line);
+  border-radius: var(--radius-full);
+  background: var(--status-waiting-soft);
+  color: var(--color-text);
+  font-size: var(--type-small);
+}
+
+.limitScope {
   color: var(--color-text-muted);
 }
 
-.usage dd {
-  margin: 0;
+.sectionHeader > button {
+  margin-left: auto;
+}
+
+.empty {
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  line-height: var(--leading-normal);
+}
+
+.emptyRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--panel-px);
+}
+
+/* ---------------- Rows: aligned columns on wide widths, wrapping when narrow ---------------- */
+
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.columns,
+.rowMain {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1.6fr) minmax(7.5rem, 1fr) minmax(7.5rem, 1fr) 11.25rem;
+  align-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--panel-px);
+}
+
+.columns {
+  padding-block: var(--space-1-5) var(--space-1);
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.row {
+  min-width: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.columns + .row {
+  border-top-color: transparent;
+}
+
+.row:hover,
+.row[data-expanded] {
+  background: var(--color-surface-hover);
+}
+
+.rowMain {
+  min-height: 3rem;
+  padding-block: var(--space-1-5);
+}
+
+.cellName,
+.cellStatus,
+.cellUsage {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.125rem;
+  min-width: 0;
+  font-size: var(--type-small);
+  line-height: 1.35;
+}
+
+.nameLine {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.name {
   overflow: hidden;
   color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--type-title-weight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.manage {
+/* The default account: a quiet accent dot and word, never a filled badge. */
+.defaultTag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3125rem;
+  color: var(--color-accent-text);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+}
+
+.defaultTag::before {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  content: "";
+}
+
+.identity,
+.muted,
+.sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity {
+  color: var(--color-text-secondary);
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.sub {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cellActions {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px dashed var(--color-border-subtle);
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
 }
 
 .chevron,
 .chevronOpen {
-  width: 0.875rem;
-  height: 0.875rem;
   transition: transform var(--dur-fast) var(--ease-standard);
 }
 
@@ -183,19 +329,137 @@
   transform: rotate(180deg);
 }
 
-.connectForm {
+/* ---------------- Details ---------------- */
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0 var(--panel-px) var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--type-small);
+}
+
+.facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.facts dt {
+  color: var(--color-text-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+}
+
+.facts dd.muted,
+.facts dd .muted {
+  color: var(--color-text-muted);
+  white-space: normal;
+}
+
+.facts code {
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+}
+
+.inlineForm {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--color-border-lit-soft);
-  border-radius: var(--radius-md);
-  background: var(--color-accent-soft);
 }
 
-.connectForm > :first-child {
-  flex: 1 1 18rem;
+.inlineForm > :first-child {
+  flex: 1 1 16rem;
   min-width: 0;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--status-failed-line);
+  border-radius: var(--radius-sm);
+  background: var(--status-failed-soft);
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+}
+
+/* Medium: name and actions on the first line, health and usage under them. */
+@container accounts (max-width: 700px) {
+  .columns {
+    display: none;
+  }
+
+  .rowMain {
+    /* Two equal columns, so health and usage line up on every row whatever the actions. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "name actions"
+      "status usage";
+    row-gap: var(--space-1);
+  }
+
+  .cellName {
+    grid-area: name;
+  }
+
+  .cellStatus {
+    grid-area: status;
+  }
+
+  .cellUsage {
+    grid-area: usage;
+  }
+
+  /* Each fact and its detail share one line here, keeping rows compact. */
+  .cellStatus,
+  .cellUsage {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: flex-start;
+    column-gap: var(--space-2);
+  }
+
+  .cellActions {
+    grid-area: actions;
+  }
+}
+
+/* Narrow: everything stacks; actions wrap under the facts. */
+@container accounts (max-width: 440px) {
+  .rowMain {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name"
+      "status"
+      "usage"
+      "actions";
+  }
+
+  .cellActions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
 }

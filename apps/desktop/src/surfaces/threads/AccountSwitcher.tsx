@@ -14,6 +14,7 @@ import {
 import { ChevronDown, Plus, Settings2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { accountInlineLabel, accountName } from "../providers/accountIdentity.ts";
 import { useOpenProviderAccounts } from "../providers/providersTab.ts";
 import styles from "./AccountSwitcher.module.css";
 import { consumeRebindRequest, useRebindRequest } from "./accountIntent.ts";
@@ -93,13 +94,13 @@ export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcher
       onRebound(next);
       toast.show({
         tone: "success",
-        title: `Switched to ${target.displayName}`,
-        description: `Future messages use ${target.displayName}. Past history is unchanged.`,
+        title: `Switched to ${accountInlineLabel(target)}`,
+        description: `Future messages use ${accountName(target)}. Past history is unchanged.`,
       });
     } catch (error) {
       submitting.current = false;
       const failure = describeRebindError(error, {
-        target: target.displayName,
+        target: accountName(target),
         providerName: thread.providerName,
         thread,
       });
@@ -144,7 +145,7 @@ export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcher
         return;
       }
       if (account.id === current) {
-        toast.show({ tone: "info", title: `This thread already uses ${account.displayName}` });
+        toast.show({ tone: "info", title: `This thread already uses ${accountInlineLabel(account)}` });
         return;
       }
       openDialog(account);
@@ -199,10 +200,11 @@ export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcher
                   value={account.id}
                   disabled={!accountStatus(account.authenticationState).usable}
                   description={describeAccount(account)}
-                  textValue={account.displayName}
+                  textValue={accountName(account)}
                 >
                   <span className={styles.itemName}>
-                    <span className={styles.itemLabel}>{account.displayName}</span>
+                    <span className={styles.itemLabel}>{accountName(account)}</span>
+                    {account.isDefault ? <span className={styles.default}>Default</span> : null}
                     {active ? (
                       <Badge tone="accent" className={styles.active}>
                         Active
@@ -231,7 +233,7 @@ export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcher
       <RebindThreadDialog
         open={target !== null}
         from={label}
-        to={target?.displayName ?? ""}
+        to={target ? accountName(target) : ""}
         busy={busy}
         blocker={rebindBlocker(thread, archived)}
         signInRequired={signInRequired}

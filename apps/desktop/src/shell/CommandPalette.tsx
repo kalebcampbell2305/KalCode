@@ -40,6 +40,7 @@ import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
+import { accountInlineLabel, accountName, accountSignIn, sortAccounts } from "../surfaces/providers/accountIdentity.ts";
 import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
 import { requestRebind, useSelectedThread } from "../surfaces/threads/accountIntent.ts";
@@ -179,13 +180,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     };
   }, [client, open]);
   const accountPhrase = parseAccountCommand(search.query);
-  const accountMatches = accountPhrase ? matchAccounts(accounts, accountPhrase) : [];
+  const accountMatches = accountPhrase ? sortAccounts(matchAccounts(accounts, accountPhrase)) : [];
   const activeWorkspace = workspaces.active?.available ? workspaces.active : null;
   const signInFirst = (account: ProviderAccount) => {
     toast.show({
       tone: "danger",
-      title: `Sign in to ${account.displayName} first`,
-      description: `${account.displayName} (${accountProviderName(account.providerId)}) isn't signed in. Sign in on the Providers Accounts tab, then try again.`,
+      title: `Sign in to ${accountInlineLabel(account)} first`,
+      description: `${accountInlineLabel(account)} isn't signed in. Sign in on the Providers Accounts tab, then try again.`,
     });
     requestProvidersTab("accounts");
     navigate("providers");
@@ -205,7 +206,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         await client.bindProviderAccount(account.providerId, "workspace", workspace.id, account.id);
         toast.show({
           tone: "success",
-          title: `New ${provider} threads in ${workspace.name} use ${account.displayName}`,
+          title: `New ${provider} threads in ${workspace.name} use ${accountName(account)}`,
           description: "Existing threads keep their accounts.",
         });
       } catch (error) {
@@ -399,9 +400,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         {accountMatches.length > 0 && (selectedThread || activeWorkspace) ? (
           <Command.Group heading="Accounts" className={styles.group}>
             {accountMatches.flatMap((account) => {
-              const name = `${account.displayName} (${accountProviderName(account.providerId)})`;
+              const name = accountInlineLabel(account);
               const keywords = [...accountKeywords(account), search.query.trim()];
-              const signedOut = account.authenticationState === "not_authenticated" ? "Signed out" : undefined;
+              // The default marker, then any sign-in caveat ("Default · Signed out").
+              const state = [
+                account.isDefault ? "Default" : null,
+                account.authenticationState === "authenticated" ? null : accountSignIn(account).label,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              const badge = state || undefined;
               const items = [];
               if (selectedThread && selectedThread.providerId === account.providerId) {
                 const current = selectedThread.providerAccountId === account.id;
@@ -411,14 +419,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     icon={<UserRoundCheck />}
                     onSelect={
                       current
-                        ? run(() =>
-                            toast.show({ tone: "info", title: `This thread already uses ${account.displayName}` }),
-                          )
+                        ? run(() => toast.show({ tone: "info", title: `This thread already uses ${name}` }))
                         : rebindThread(account, selectedThread.threadId)
                     }
                     keywords={keywords}
                     current={current}
-                    badge={signedOut}
+                    badge={badge}
                   >
                     {`Use ${name} for this thread`}
                   </Item>,
@@ -431,7 +437,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     icon={<UserRoundCog />}
                     onSelect={setWorkspaceDefault(account, activeWorkspace)}
                     keywords={keywords}
-                    badge={signedOut}
+                    badge={badge}
                   >
                     {`Use ${name} in this workspace`}
                   </Item>,
@@ -619,7 +625,7 @@ interface ItemProps {
   keywords?: string[];
   shortcut?: string;
   current?: boolean;
-  /** A short state shown after the label ("Signed out"). */
+  /** A short state shown after the label ("Default", "Signed out"). */
   badge?: string | undefined;
   /** cmdk's value when the label alone isn't unique (defaults to the label). */
   value?: string;

@@ -57,7 +57,8 @@ export function ProvidersPage() {
   const lastChecked = latestCheck(statuses);
   const request = useProvidersTabRequest();
   const [tab, setTab] = useState<ProvidersTab>(request?.tab ?? "setup");
-  const health = useProviderHealth(tab === "health");
+  // Accounts reads it too, for provider-wide rate limits on each provider's section.
+  const health = useProviderHealth(tab === "health" || tab === "accounts");
   const { refresh: refreshHealth } = health;
 
   // "Health details" on the Dashboard (or any other place) asked for a tab.
@@ -135,7 +136,7 @@ export function ProvidersPage() {
         </TabsContent>
         <TabsContent value="accounts" className={styles.tabPanel}>
           <section aria-label="Provider accounts" className={styles.tabPanel}>
-            <ProviderAccountsView enabled={tab === "accounts"} statuses={statuses} />
+            <ProviderAccountsView enabled={tab === "accounts"} statuses={statuses} health={health.list} />
           </section>
         </TabsContent>
         <TabsContent value="health" className={styles.tabPanel}>
