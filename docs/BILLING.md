@@ -11,13 +11,28 @@ reaches the desktop app. Prices and plan limits live in one place:
 
 ## 1. Plans and business rules
 
-| Plan | Price | KalVoice Requests / cycle | Public |
-| --- | --- | --- | --- |
-| **Free** | $0 | 75 | yes |
-| **Pro** | $10 / month | 1,500 | yes |
-| **MAX** | $25 / month | 5,000 | yes |
-| **MAX 2X** | $50 / month | 10,000 | yes |
-| **OWNER** | $0, forever | unlimited | **no** — private, never listed, never purchasable |
+| Plan | Monthly | Yearly | KalVoice Requests / monthly cycle | Public |
+| --- | --- | --- | --- | --- |
+| **Free** | $0 | $0 | 25 | yes |
+| **Pro** | $10 / month | $100 / year | 150 | yes |
+| **MAX** | $25 / month | $250 / year | 500 | yes |
+| **MAX 2X** | $50 / month | $500 / year | 1,000 | yes |
+| **OWNER** | $0, forever | — | unlimited | **no** — private, never listed, never purchasable |
+
+Signed plan limits (`LIMITS` in `packages/protocol/src/entitlements.ts`; `null` = no KalCode-side
+limit). Every entitlement document carries all five for a restricted tier:
+
+| Limit | Free | Pro | MAX | MAX 2X | OWNER |
+| --- | --- | --- | --- | --- | --- |
+| `kalvoiceRequestsPerMonth` | 25 | 150 | 500 | 1,000 | unlimited |
+| `openTerminals` | 4 | 12 | 18 | unlimited | unlimited |
+| `parallelAgents` | 1 | 4 | 10 | unlimited | unlimited |
+| `workspaces` | 2 | 10 | unlimited | unlimited | unlimited |
+| `providerAccounts` | 2 | 6 | 8 | unlimited | unlimited |
+
+The billing interval changes only how often Stripe charges. Monthly and yearly Prices for a plan
+resolve to the same tier and the same limits; KalVoice Request allowances reset monthly on both
+(§7).
 
 Rules (owner decisions, encoded in `plans.ts` and enforced by the code below):
 
@@ -29,8 +44,9 @@ Rules (owner decisions, encoded in `plans.ts` and enforced by the code below):
   bindings, no AI SDKs).
 - **Never paywalled, on every plan:** connecting providers, every permission mode (Plan, Approve,
   Auto, Bypass, Custom), and local KalVoice dictation (on-device, never metered).
-- Plans differ by **KalVoice Requests** and KalCode features (concurrency, persistent agents,
-  multi-agent workflows, automations, advanced missions) — never by safety controls.
+- Plans differ by **KalVoice Requests**, the plan limits above (open terminals, parallel agents,
+  workspaces, provider accounts) and KalCode features (persistent agents, multi-agent workflows,
+  automations, advanced missions) — never by safety controls.
 - The user-facing unit is **KalVoice Requests**, never "tokens". Provider model tokens are not
   KalVoice Requests and are never counted anywhere.
 
@@ -198,7 +214,9 @@ timestamp — never request text, transcripts, audio or provider output.
 **Cycles.** Allowances reset every monthly cycle, counted from an anchor (UTC):
 
 - when an active **paid subscription** (billing grant) decides the tier → the subscription's start
-  (`granted_at` of that billing grant; Z13 sets it to Stripe's billing-cycle anchor);
+  (`granted_at` of that billing grant; Z13 sets it to Stripe's billing-cycle anchor). This holds
+  for **yearly** subscriptions too: the grant runs to Stripe's `current_period_end` a year out,
+  but KalVoice cycles still reset every month from the anchor;
 - otherwise — **Free**, OWNER, operator paid-tier grants → the **account's creation time**.
 
 Cycle *k* runs from anchor + *k* months to anchor + *k*+1 months; a day that does not exist in a
@@ -224,7 +242,7 @@ periodStart, resetsAt }, receipt }` (`usage` matches the `KalVoiceUsage` contrac
 **Receipts.** Every usage response carries a signed receipt (`typ kalcode-usage.v1`) with
 `accountId, tier, used, allowance, periodStart, resetsAt, issuedAt, expiresAt, keyId`. It is valid
 for 72 hours or until the cycle resets, whichever is sooner (verifiers reject claims beyond 7
-days). The desktop can show "412 / 1,500 used; 1,088 remaining; renews October 10" from it.
+days). The desktop can show "41 / 150 used; 109 remaining; renews October 10" from it.
 
 **Offline allowance and reconciliation** (`EffectiveEntitlement::kalvoice_decision` in Rust):
 
@@ -233,7 +251,7 @@ days). The desktop can show "412 / 1,500 used; 1,088 remaining; renews October 1
    `receipt.used + unsynced < min(receipt.allowance, entitlement allowance)`, where `unsynced` is
    the number of requests served on this device since that receipt was issued.
 3. Without a valid receipt (never synced, receipt expired, not signed in): the device's
-   provisional count for its cycle is checked against the entitlement's allowance (Free's 75
+   provisional count for its cycle is checked against the entitlement's allowance (Free's 25
    when there is no valid entitlement document).
 4. Each request served offline keeps its client request id; when the device is online again it
    reports them with `mode: "offline"`. Idempotency makes replays safe to repeat; the fresh
@@ -273,8 +291,8 @@ fail-closed until that runtime is integrated and the production public key is pi
 | Activation gate | `worker/lib/router.ts`, `account-store.ts` | A newly verified account must explicitly activate Free or receive an active/trialing paid subscription webhook before entitlement and usage routes unlock. Checkout success alone never unlocks a paid tier. |
 | Website account flow | `apps/website/src/pages/account.astro` | Uses the API's secure host cookie, never browser token storage. Shows plan and usage, activates Free, opens Stripe-hosted Checkout/Portal, signs out, and starts verified account deletion. The private page is `noindex`. |
 | Desktop account flow | `crates/entitlements` + native account IPC | Desktop tokens remain in the OS credential store. The native layer fetches `/v1/entitlement` and `/v1/kalvoice/usage`, verifies and caches signed documents, calls `effective_entitlement` / `kalvoice_decision`, and exposes only non-secret account state to the WebView. |
-| Stripe price catalog | `worker/lib/billing-plans.ts` | Fail-closed mapping from configured Stripe Price ids to Pro/MAX/MAX 2X. Missing, malformed or duplicate ids disable resolution. Free and OWNER have no price. |
-| Stripe checkout and portal | `worker/lib/billing-routes.ts`, `stripe.ts` | Authenticated callers select only Pro/MAX/MAX 2X. Customer, Price, quantity and fixed return URLs are server-owned. A stable D1 idempotency key prevents duplicate customers after retries. After Stripe creates a session, a D1 compare-and-set binds its id to the exact still-authorized intent; if the account became subscribed, OWNER, deleted or otherwise lost the fence, the API expires the remote session and returns no URL. Replacing an expired reservation clears every prior session handle before reuse. An OWNER grant is refused while a finalized, unexpired public Checkout is still usable. Portal and Checkout use Stripe-hosted pages; Free and OWNER cannot be purchased. |
+| Stripe price catalog | `worker/lib/billing-plans.ts` | Fail-closed mapping between six configured Stripe Price ids (monthly and yearly for each of Pro/MAX/MAX 2X) and their tier and interval. Every id maps back to its tier, so a yearly subscription grants exactly what the monthly one does. Any missing, malformed or duplicate id (including a monthly id reused as yearly) disables resolution. Free and OWNER have no price. |
+| Stripe checkout and portal | `worker/lib/billing-routes.ts`, `stripe.ts` | `POST /v1/billing/checkout` takes `{ tier, requestId, interval? }`. Authenticated callers select only Pro/MAX/MAX 2X; `interval` is optional and must be exactly `"month"` or `"year"` (absent = `"month"`), anything else is a 400 before any billing effect. Customer, Price (chosen from the catalog by tier and interval), quantity and fixed return URLs are server-owned. The interval is part of the reservation's request hash (monthly keeps its original hash), so a live checkout reserved for one interval is never reused for the other: a request for the other interval gets `409 checkout_in_progress` until the reservation expires. A stable D1 idempotency key prevents duplicate customers after retries. After Stripe creates a session, a D1 compare-and-set binds its id to the exact still-authorized intent; if the account became subscribed, OWNER, deleted or otherwise lost the fence, the API expires the remote session and returns no URL. Replacing an expired reservation clears every prior session handle before reuse. An OWNER grant is refused while a finalized, unexpired public Checkout is still usable. Portal and Checkout use Stripe-hosted pages; Free and OWNER cannot be purchased. |
 | Stripe webhook | `worker/lib/billing-routes.ts`, `billing-store.ts` | Reads the untouched bounded request body, verifies Stripe's timestamped HMAC, deduplicates event ids, and retrieves the current subscription because event delivery is unordered. Exactly one known Price at quantity one is required. D1 applies the current snapshot only under an unexpired versioned fencing lease; active/trialing grants are inserted or renewed and every other status revokes. Before subscription activation removes a finalized Checkout intent, its session id is committed to a durable invalidation outbox. The event stays unfinished until Stripe reports that session terminal and the outbox row is atomically completed, so crashes and ambiguous responses retry cleanup. A stale worker cannot overwrite a newer snapshot. |
 | Deployment | `apps/api/wrangler.jsonc` | `wrangler d1 create kalcode-api` (real `database_id`), `wrangler d1 migrations apply kalcode-api --remote`, signing key (§6), public key into `keys.rs`, route (e.g. `api.kalcoded.com`), deploy. |
 | Account deletion | `worker/lib/email-auth.ts`, `account-store.ts` | A fresh one-time email proof authorizes soft deletion. Immutable grants and audit history remain for integrity, while the email is replaced with a non-identifying tombstone and all sessions are revoked. |
@@ -297,9 +315,19 @@ owner provisions the following through the providers' supported dashboards/secre
    `https://kalcoded.com/account`, independent of request headers.
 2. A random Worker secret `AUTH_RATE_LIMIT_KEY` (at least 32 characters). It HMACs client network
    buckets; never put it in source or chat.
-3. Stripe monthly recurring Prices for Pro, MAX and MAX 2X; set their ids as `STRIPE_PRICE_PRO`,
-   `STRIPE_PRICE_MAX`, and `STRIPE_PRICE_MAX_2X`. Missing, malformed or duplicate values disable
-   billing.
+3. Stripe recurring USD Prices for Pro, MAX and MAX 2X, monthly and yearly. Their ids are the
+   Worker vars (`apps/api/wrangler.jsonc`):
+
+   | Var | Plan | Interval | Amount |
+   | --- | --- | --- | --- |
+   | `STRIPE_PRICE_PRO` | Pro | month | $10 |
+   | `STRIPE_PRICE_MAX` | MAX | month | $25 |
+   | `STRIPE_PRICE_MAX_2X` | MAX 2X | month | $50 |
+   | `STRIPE_PRICE_PRO_YEARLY` | Pro | year | $100 |
+   | `STRIPE_PRICE_MAX_YEARLY` | MAX | year | $250 |
+   | `STRIPE_PRICE_MAX_2X_YEARLY` | MAX 2X | year | $500 |
+
+   All six are required. A missing, malformed or duplicate value disables billing entirely.
 4. Worker secrets `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, plus a Stripe webhook endpoint
    at `https://api.kalcoded.com/v1/billing/webhook` for
    `customer.subscription.created`, `.updated`, and `.deleted`. Configure the Stripe customer
@@ -339,7 +367,7 @@ are configuration checks, not proof of authentication or sufficient permissions.
 | A user forges or edits a signed document | Ed25519 `verify_strict` over the exact bytes; header and payload are both signed; vectors include tampered payloads and flipped signature bits. |
 | A document is copied to another machine or account | `effective_entitlement` requires the document's `accountId` to equal the signed-in account; documents expire within 7 days. |
 | An old document is replayed after revocation | Documents expire (≤ 7 days as issued, ≤ 14 days accepted); revocation is effective server-side immediately. |
-| An API client asks for a higher tier | Checkout accepts only a public plan id and resolves it through the server Price catalog. Entitlement resolution never accepts a client tier, Price, customer or account id. |
+| An API client asks for a higher tier | Checkout accepts only a public plan id and an optional `month`/`year` interval and resolves both through the server Price catalog; a client-supplied Price is rejected. Entitlement resolution never accepts a client tier, Price, customer or account id. |
 | Login CSRF, intercepted link/callback or replay | Website sessions are set only by the fixed API origin in HttpOnly, Secure, SameSite=Lax cookies. Desktop email sign-in requires both the email proof and S256 PKCE verifier; the verifier is checked before atomic consume. Optional GitHub OAuth also uses 256-bit state and S256 PKCE. All attempts expire after ten minutes. |
 | Account enumeration or email-link theft | Start and delete-start responses are neutral. Tokens are high entropy, stored only as SHA-256 hashes, single-use and short-lived. The email proof stays in a URL fragment, so website/CDN request logs never receive it. A desktop link alone cannot complete without its native-only PKCE verifier. |
 | Account takeover by email reuse | Passwordless identity is created only after control of the mailbox is proven. Optional GitHub identities bind to a stable numeric subject, and matching email alone never links a second GitHub subject. Deleted accounts cannot authenticate or be silently restored. |

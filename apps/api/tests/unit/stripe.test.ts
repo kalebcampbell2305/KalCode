@@ -6,6 +6,9 @@ const catalog = billingPriceCatalog({
   STRIPE_PRICE_PRO: "price_pro_123",
   STRIPE_PRICE_MAX: "price_max_456",
   STRIPE_PRICE_MAX_2X: "price_max2x_789",
+  STRIPE_PRICE_PRO_YEARLY: "price_pro_year_123",
+  STRIPE_PRICE_MAX_YEARLY: "price_max_year_456",
+  STRIPE_PRICE_MAX_2X_YEARLY: "price_max2x_year_789",
 });
 if (!catalog.ok) throw new Error("test catalog invalid");
 
@@ -57,6 +60,38 @@ describe("Stripe subscription authority", () => {
       tier: "max",
       periodStart: "2023-11-14T22:13:20.000Z",
       periodEnd: "2023-12-14T22:13:20.000Z",
+    });
+  });
+
+  it.each([
+    ["price_pro_year_123", "pro"],
+    ["price_max_year_456", "max"],
+    ["price_max2x_year_789", "max2x"],
+  ] as const)("maps yearly price %s to %s with a period ending a year out", (priceId, tier) => {
+    // 2023-11-14T22:13:20Z → 2024-11-14T22:13:20Z (366 days: 2024 is a leap year).
+    const yearEnd = 1_700_000_000 + 366 * 24 * 60 * 60;
+    expect(
+      parseStripeSubscription(
+        {
+          id: "sub_123",
+          livemode: true,
+          customer: "cus_123",
+          status: "active",
+          items: {
+            data: [
+              { quantity: 1, price: { id: priceId }, current_period_start: 1_700_000_000, current_period_end: yearEnd },
+            ],
+          },
+        },
+        catalog,
+      ),
+    ).toEqual({
+      id: "sub_123",
+      customerId: "cus_123",
+      status: "active",
+      tier,
+      periodStart: "2023-11-14T22:13:20.000Z",
+      periodEnd: "2024-11-14T22:13:20.000Z",
     });
   });
 
