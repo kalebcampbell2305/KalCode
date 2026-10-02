@@ -1,4 +1,4 @@
-import { formatInterval, formatPrice, getPlan, type BillingInterval, type PlanId } from "@kalcode/protocol/plans";
+import { type BillingInterval, formatInterval, formatPrice, getPlan, type PlanId } from "@kalcode/protocol/plans";
 import { expect, type Page, test } from "@playwright/test";
 
 /**

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PLANS, formatPrice } from "@kalcode/protocol/plans";
+import { formatPrice, PLANS } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
 import { ACCOUNT_PAGE, EMAIL_ACTION_PAGES, FOOTER_NAV, isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";

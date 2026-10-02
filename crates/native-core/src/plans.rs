@@ -299,10 +299,14 @@ mod tests {
             .collect();
         assert_eq!(names, PUBLIC_PLANS.map(PlanTier::name));
 
-        let queue = source
+        // The row's `values` line, whether the formatter keeps the row on one line or splits it.
+        let row = &source[source
+            .find("id: \"operations-queue\"")
+            .expect("operations-queue row")..];
+        let queue = row
             .lines()
-            .find(|line| line.contains("id: \"operations-queue\""))
-            .expect("operations-queue row");
+            .find(|line| line.contains("values:"))
+            .expect("operations-queue values");
         for (id, tier) in ["free", "pro", "max", "max2x"]
             .into_iter()
             .zip(PUBLIC_PLANS)

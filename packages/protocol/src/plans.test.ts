@@ -147,14 +147,18 @@ describe("plan roadmap", () => {
 
   it("keeps the owner's plan assignments for the signature features", () => {
     const from = (id: string) => getPlanFeature(id).from;
-    expect(["core-code", "core-threads", "core-browser", "kaltidy", "account-hub", "needs-you", "operations"].map(from)).toEqual(
-      Array(7).fill("free"),
+    expect(
+      ["core-code", "core-threads", "core-browser", "kaltidy", "account-hub", "needs-you", "operations"].map(from),
+    ).toEqual(Array(7).fill("free"));
+    expect(["agent-fleet", "launch-recipes", "browser-studio", "operations-full"].map(from)).toEqual(
+      Array(4).fill("pro"),
     );
-    expect(["agent-fleet", "launch-recipes", "browser-studio", "operations-full"].map(from)).toEqual(Array(4).fill("pro"));
-    expect(["squads", "handoff-chains", "agent-files", "stuck-agents", "mission-control", "deploy", "remote"].map(from)).toEqual(
-      Array(7).fill("max"),
+    expect(
+      ["squads", "handoff-chains", "agent-files", "stuck-agents", "mission-control", "deploy", "remote"].map(from),
+    ).toEqual(Array(7).fill("max"));
+    expect(["keep-working", "auto-routing", "kalvoice-live", "cloud-capacity"].map(from)).toEqual(
+      Array(4).fill("max2x"),
     );
-    expect(["keep-working", "auto-routing", "kalvoice-live", "cloud-capacity"].map(from)).toEqual(Array(4).fill("max2x"));
     expect(planIncludes("pro", getPlanFeature("squads"))).toBe(false);
     expect(planIncludes("max2x", getPlanFeature("squads"))).toBe(true);
   });
