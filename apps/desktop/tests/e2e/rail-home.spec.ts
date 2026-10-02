@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir, test } from "./harness.ts";
+import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDir, test } from "./harness.ts";
 
 /**
  * Z7-W2 end to end against the real app: workspaces made from the rail, pinned, renamed in the
@@ -52,7 +52,8 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-w2-"));
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-w2-projects-"));
   // New workspaces are created inside the folder the (test-build) picker returns.
-  const env = { KALCODE_E2E_PICK_FOLDER: root };
+  // Several workspaces: a verified Pro account (Free allows two).
+  const env = { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN, KALCODE_E2E_PICK_FOLDER: root };
 
   try {
     // ---- First session: build up the rail.
