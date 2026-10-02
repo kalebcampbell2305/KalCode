@@ -7,7 +7,8 @@ Posting is manual; nothing here posts automatically.
 1. https://kalcoded.com/releases/updater/stable.json serves `0.1.9+N`, and kalcode-e6 has reported its live verification.
 2. https://kalcoded.com/download offers `KalCode_0.1.9_buildN_x64-setup.exe` and `KalCode_0.1.9_buildN_arm64.dmg`.
 3. https://kalcoded.com/updates#release-0-1-9 opens the 0.1.9 entry.
-4. Re-run the accuracy table below against e6's packaged-app QA. Drop any line that QA didn't prove, from the copy and the posts. The film needs a re-cut only if it shows that line.
+4. **KalVoice agent launch: PENDING** until kalcode-e6 reports the stepping-stone production check (typed KalVoice "start a codex agent" starts a Codex session pane in the installed app). Don't publish the film or any "KalVoice starts agents" copy before then.
+5. Re-run the accuracy table below against e6's packaged-app QA. Drop any line that QA didn't prove, from the copy and the posts. The film needs a re-cut only if it shows that line.
 
 ## Files
 
@@ -47,7 +48,7 @@ Videos (local, not committed), from the film in `C:/kc-019-film/film-0.1.9/out/`
 | Command Deck | AVAILABLE IN 0.1.9 | #68 |
 | Agent Fleet: worktree per agent, Ready to merge, Commit changes | AVAILABLE IN 0.1.9 | #76 |
 | Provider Dock: chips, health, menu move, drag + confirm | AVAILABLE IN 0.1.9 | #75 |
-| KalVoice: open/focus scene targets, "open it"/"that one", launch agents with account/model/effort, prompt an agent, chooser, spoken callbacks | AVAILABLE IN 0.1.9 (packaged-app QA by e6 required) | #67, #79 |
+| KalVoice: open/focus scene targets, "open it"/"that one", launch agents with account/model/effort, prompt an agent, chooser, spoken callbacks | AVAILABLE IN 0.1.9. Agent launch is **PENDING**: e6's stepping-stone production check (typed "start a codex agent" in the installed app on macOS) must pass before the film ("SAY IT. KALCODE STARTS IT.") or any launch claim is published | #67, #79 |
 | KalTidy, Account Hub, Accounts list | AVAILABLE IN 0.1.9 (first shipped in 0.1.8+944) | #63, #64, #61 |
 | Effort saved per thread | AVAILABLE IN 0.1.9 | #67 |
 | Close ends terminal/agent; F8 refocus | AVAILABLE IN 0.1.9 (first shipped in 0.1.8+923) | #55, #57 |
