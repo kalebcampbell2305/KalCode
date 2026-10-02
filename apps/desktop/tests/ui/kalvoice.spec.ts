@@ -389,6 +389,7 @@ test.describe("KalVoice voice widget", () => {
     await page.mouse.down();
     await page.mouse.move(1, 1, { steps: 8 });
     await page.mouse.up();
+    await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     box = await widgetBox(page);
     const main = await page.locator("main").boundingBox();
     if (!main) throw new Error("no main");
@@ -396,7 +397,6 @@ test.describe("KalVoice voice widget", () => {
     expect(box.x).toBeLessThan(main.x + 40);
     expect(box.y).toBeGreaterThanOrEqual(await deckTop(page));
     expect(box.y + box.height).toBeLessThanOrEqual(main.y + 1);
-    await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
 
     // The placement survives hiding and the key bringing it back.
     await page.waitForTimeout(400); // the placement is saved shortly after a move
