@@ -494,3 +494,11 @@ code and both >=40ms / <2s assertions are unchanged. A controlled late-worker
 probe measured 10.38ms before synchronization and 50.45ms afterward; primary
 standalone compilation and the exact regression passed. Full registered proof
 is still required before integration; these focused results are not shipment.
+
+The feature-enabled Mac gate exposed a missing CMake prerequisite before lint
+or tests could run. The official signed universal CMake 4.4.3 distribution was
+provisioned outside the isolated PR account. The workflow now discovers that
+exact pinned tool location and uses the existing release SDK-environment helper;
+its 16 contract tests passed. Windows gates inherit the proven four-worker
+Vitest bound, without changing any test deadline, assertion, count, or skip rule.
+Fresh full platform gates remain pending.
