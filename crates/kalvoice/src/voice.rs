@@ -126,6 +126,7 @@ pub struct VoiceController {
     audio: Arc<dyn AudioSource>,
     recognizers: Arc<dyn RecognizerSource>,
     active: Arc<Mutex<VoiceState>>,
+    transitions: Mutex<()>,
     max: Duration,
     partials: Mutex<Option<PartialNotifier>>,
     stream_interval: Duration,
@@ -142,6 +143,7 @@ impl VoiceController {
             audio,
             recognizers,
             active: Arc::new(Mutex::new(VoiceState::Idle)),
+            transitions: Mutex::new(()),
             max: MAX_RECORDING,
             partials: Mutex::new(None),
             stream_interval: Duration::from_millis(300),
@@ -269,7 +271,12 @@ impl VoiceController {
         if !self.start_is_current(&id) {
             return Err(VoiceError::NotListening);
         }
-        let capture = match self.audio.start(self.max) {
+        let capture = match self.audio.start_cancellable(self.max, &|| {
+            !matches!(
+                &*self.active.lock().unwrap_or_else(PoisonError::into_inner),
+                VoiceState::Starting { id: current, cancelled: false } if current == &id
+            )
+        }) {
             Ok(capture) => capture,
             Err(e) => {
                 if self.settle_failed_start(&id) {
@@ -328,6 +335,12 @@ impl VoiceController {
             streamer,
             recognizer,
         };
+        // Serialize publication and its durable event with cancellation; subscribers can still
+        // inspect `active` after its short state lock is released below.
+        let _transition = self
+            .transitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
         let publish = matches!(
             &*active,
@@ -420,9 +433,14 @@ impl VoiceController {
     /// As [`Self::end_timed`], for a key released at `key_up` (taken where the release was
     /// observed, before any thread hand-off, so key-up timings include that hand-off).
     pub fn end_timed_at(&self, session_id: &str, key_up: Instant) -> Result<Finished, VoiceError> {
-        let session = self
-            .take(Some(session_id))
-            .ok_or(VoiceError::NotListening)?;
+        let session = {
+            let _transition = self
+                .transitions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            self.take(Some(session_id))
+                .ok_or(VoiceError::NotListening)?
+        };
         let duration_ms = u64::try_from(session.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let id = session.id.clone();
         let mode = session.mode;
@@ -519,6 +537,10 @@ impl VoiceController {
 
     /// Stops listening and discards the audio (Escape). `None` cancels whatever is listening.
     pub fn cancel(&self, session_id: Option<&str>) -> bool {
+        let _transition = self
+            .transitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         {
             let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
             if let VoiceState::Starting { id, cancelled } = &mut *active
@@ -558,6 +580,18 @@ impl VoiceController {
         // exact cancellation. The reservation id is also the session id, so this still cannot
         // affect a newer direct/orb take.
         self.cancel(Some(&start.id))
+    }
+
+    /// Lifecycle reset invalidates an opening device, while an established take can still be
+    /// finished normally (for example when focus loss substitutes for a missed key release).
+    pub fn cancel_pending_start(&self) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        if let VoiceState::Starting { cancelled, .. } = &mut *active {
+            *cancelled = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// Releases an exact reservation that was never handed to [`Self::begin_reserved_at`].
@@ -723,6 +757,91 @@ mod tests {
             .filter(|e| e.event.type_name().starts_with("kalvoice."))
             .map(|e| serde_json::to_value(&e).expect("json"))
             .collect()
+    }
+
+    #[test]
+    fn dictation_started_is_persisted_before_concurrent_cancellation() {
+        assert_started_before_terminal_transition(true);
+    }
+
+    #[test]
+    fn dictation_started_is_persisted_before_concurrent_finish() {
+        assert_started_before_terminal_transition(false);
+    }
+
+    fn assert_started_before_terminal_transition(cancel_take: bool) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, _, voice) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let voice = Arc::new(voice);
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let locked_core = core.clone();
+        let blocker = thread::spawn(move || {
+            locked_core.read(|_| {
+                locked_tx.send(()).expect("report core lock");
+                let _ = release_rx.recv();
+                Ok(())
+            })
+        });
+        locked_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("core locked");
+        let starting_voice = voice.clone();
+        let start = thread::spawn(move || starting_voice.begin(KalVoiceMode::Dictation));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while voice.listening().is_none() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        let published = voice.listening().is_some();
+        let id = voice.listening().map(|(id, _)| id).unwrap_or_default();
+        let transition_held = voice.transitions.try_lock().is_err();
+        let cancelling_voice = voice.clone();
+        let (cancel_entered_tx, cancel_entered_rx) = mpsc::channel();
+        let (cancelled_tx, cancelled_rx) = mpsc::channel();
+        let cancel = thread::spawn(move || {
+            cancel_entered_tx.send(()).expect("report cancel entry");
+            let result = if cancel_take {
+                cancelling_voice.cancel(None)
+            } else {
+                cancelling_voice.end(&id).is_ok()
+            };
+            cancelled_tx.send(result).expect("report cancellation");
+            result
+        });
+        cancel_entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancel entered");
+        let waiting = cancelled_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err();
+        let retained_until_event = voice.listening().is_some();
+        // Release the real Core lock and join every worker before asserting the failing path.
+        drop(release_tx);
+        blocker.join().expect("core blocker").expect("core read");
+        let begun = start.join().expect("begin worker");
+        let cancelled = cancel.join().expect("cancel worker");
+        assert!(published && transition_held && waiting && retained_until_event);
+        assert!(begun.is_ok() && cancelled);
+        assert_eq!(voice.listening(), None);
+        let events = kalvoice_events(&core);
+        let types: Vec<&str> = events
+            .iter()
+            .map(|e| e["type"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "kalvoice.dictation_started",
+                if cancel_take {
+                    "kalvoice.dictation_failed"
+                } else {
+                    "kalvoice.dictation_completed"
+                }
+            ]
+        );
+        if cancel_take {
+            assert_eq!(events[1]["payload"]["code"], "cancelled");
+        }
     }
 
     #[test]

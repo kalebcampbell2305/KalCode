@@ -437,6 +437,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     abandoned: boolean;
     sessionId: string | null;
   } | null>(null);
+  const abandonedStartIds = useRef(new Set<string>());
   const currentRef = useRef(current);
   currentRef.current = current;
   const width = useWindowWidth();
@@ -1273,6 +1274,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const onSignal = useCallback(
     (signal: KalVoiceSignal) => {
+      if ("sessionId" in signal && signal.sessionId && abandonedStartIds.current.has(signal.sessionId)) return;
       switch (signal.kind) {
         case "lifecycle_callback":
           lastLifecycle.current = {
@@ -1288,11 +1290,23 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           levelRef.current = signal.level;
           return;
         case "listening_started":
+          {
+            const pending = pendingStart.current;
+            if (pending?.abandoned) {
+              // Native IPC tasks can overtake each other. Wait for this abandoned request's
+              // identity before accepting a signal, so Escape never flashes late Listening.
+              void pending.promise.then((id) => {
+                if (pendingStart.current === pending) pendingStart.current = null;
+                if (signal.sessionId !== id) onSignalRef.current(signal);
+              });
+              return;
+            }
+          }
           levelRef.current = 0;
           if (!beginRequest(null)) {
             dictationSessions.current.abandonPendingCapture();
             setDictationTarget(null);
-            void client.kalvoiceListenCancel().catch(() => undefined);
+            void client.kalvoiceListenCancel(signal.sessionId).catch(() => undefined);
             return;
           }
           {
@@ -1501,7 +1515,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       setDictationTarget((current) => (current?.sessionId === now.sessionId ? null : current));
     }
     try {
-      await client.kalvoiceListenCancel();
+      await client.kalvoiceListenCancel(now.sessionId ?? undefined);
     } catch {
       // Nothing was listening.
     }
@@ -1526,7 +1540,6 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       }
       const pending = pendingStart.current;
       if (pending) {
-        pendingStart.current = null;
         pending.abandoned = true;
         if (pending.sessionId) {
           dictationSessions.current.cancel(pending.sessionId);
@@ -1544,6 +1557,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [cancel, client]);
 
   const startListening = useCallback(async () => {
+    if (pendingStart.current?.abandoned && pendingStart.current.sessionId === null) return;
     if (nativeRequestInFlight.current) {
       reportNativeRequestBusy();
       return;
@@ -1561,7 +1575,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     try {
       const sessionId = await started;
       pending.sessionId = sessionId;
-      if (pending.abandoned) return;
+      if (pending.abandoned) {
+        abandonedStartIds.current.add(sessionId);
+        // Bound stale IPC delivery fencing independently of the number of takes in this window.
+        if (abandonedStartIds.current.size > 128) {
+          const oldest = abandonedStartIds.current.values().next().value;
+          if (oldest) abandonedStartIds.current.delete(oldest);
+        }
+        await client.kalvoiceListenCancel(sessionId);
+        if (pendingStart.current === pending) pendingStart.current = null;
+        return;
+      }
       const session = dictationSessions.current.open(sessionId, capture);
       setDictationTarget(session ? targetView(session.sessionId, session.target) : null);
     } catch {
@@ -1575,6 +1599,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const stopListening = useCallback(async () => {
     if (nativeRequestInFlight.current) return;
     const pending = pendingStart.current;
+    if (pending?.abandoned) return;
     pendingStart.current = null;
     const id = stateRef.current.sessionId ?? (pending ? await pending.promise : null);
     if (!id) return;

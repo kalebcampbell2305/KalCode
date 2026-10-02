@@ -535,3 +535,53 @@ preserved; they do not certify the repaired source. Another release session owns
 B14 installer/profile and publication lane. This follow-up has not installed, staged,
 published, changed a production profile, or advanced a public version. Successor
 release identity, artifact certification and both-platform delivery remain pending.
+
+## Resumed cancellation completion — 2026-10-02
+
+Fresh preflight found the nine saved changes already committed and pushed as `027002c9`
+(PR 79) above `fced50d5`, rather than the dirty state in the stopping checkpoint. The backup
+patch was not reapplied. Root-checkout work and B14/B15 artifacts remain preserved. The
+primary is the sole integration writer; eight independent agents reviewed native start,
+shutdown, frontend, macOS, release ownership, test inventory, callback security, and completion.
+
+The native audio regression first failed because cancellation could not settle its start
+waiter before the controlled device answered. Cooperative polling now observes the exact
+reservation every 25 ms. A process-wide capture permit stays in the native capture thread
+through stream drop, including a detached late open; retries cannot overlap that capture.
+A counted-worker regression proves cancellation drains before the device is released.
+
+Independent review also found direct start/cancel ordering gaps. Direct admission, lifecycle
+reset, final session validation and UI announcement now share the existing source lock, with
+slow model/device work outside it. Durable dictation Started precedes concurrent cancel or
+finish. Escape that overtakes an asynchronous IPC start performs exact-session cleanup when
+that start resolves; stale cleanup cannot cancel a successor microphone or stop its speech.
+The Escape fixture now focuses its target before the deferred take. Its new exact-cleanup
+assertion was observed failing before repair and passed afterward. No generated protocol,
+command name, permission, schema, migration, public version or dependency changed.
+
+Fresh local evidence: frontend KalVoice 384/384 in 28 files; memory transport 8/8; adjacent
+Escape/boundary/KalTidy 22/22; seven Chromium KalVoice specs 56/56, two workers, isolated port
+1467; native audio regressions pass; focused Voice 17/17; desktop KalVoice 179 passed with
+one existing optional signed-component ignore; full KalVoice library before the last two
+ordering regressions 327 passed with two existing optional ignores. Strict Clippy on KalVoice
+and desktop all targets, TypeScript and Biome passed. Inventory remains 288 functional plus
+56 visual (344 established tests), with 19/19 inventory tests. No suite or skip policy weakened.
+The fresh exact-head canonical Windows/macOS gates remain required after this follow-up commit;
+027002c9 gate success does not certify the follow-up. Physical signed-package and update proof
+remain release gates, not claims made from these deterministic tests.
+
+Accepted findings: device-start shutdown mismatch, discriminating Escape fixture, command
+start/cancel overtaking, durable event ordering, and lifecycle invalidation. Callback security
+review approved the saved health-event repair. The proposed extra VoiceState teardown state
+was unnecessary because native CapturePermit enforces custody through actual stream release.
+Recognizer preparation remains synchronous/noncooperative; this repair does not promise that
+all background work always finishes within five seconds.
+
+Rollback: preserve `027002c9` as the pre-follow-up source checkpoint and revert the follow-up
+commit through a gated PR if required; preserve subsequent commits and use a newer internal
+build for delivery. No production memory/profile mutation, archive import, paid-provider call,
+installation, signing, staging or publication was performed by this source-repair pass.
+Public version remains 0.1.8. The refreshed B14 handoff request is
+`target/kalvoice-release-handoff-request-20261002T174506Z.json`; its response is still required
+before taking any shared install/publication lane. New source requires a newly pinned successor;
+B15/fced build1002 and prior KV17 evidence are preserved but cannot certify this repair.

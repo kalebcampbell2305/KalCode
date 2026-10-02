@@ -1268,25 +1268,38 @@ fn foreground_changed(app: &AppHandle, trigger: &'static str) {
         // linearizes focus loss before a pending timer can open it.
         reset_push_to_talk(&runtime);
         if let Some((id, mode)) = runtime.voice.listening() {
-            // The key-up may go to another app: finish with what was said so far.
-            finish_listening(runtime.clone(), id, mode);
+            let announced = runtime
+                .priority_spans
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(&id);
+            if announced {
+                // The key-up may go to another app: finish with what was said so far.
+                finish_listening(runtime.clone(), id, mode);
+            } else {
+                // A slow direct start committed before its UI announcement. Focus loss must
+                // discard it, not publish Transcribing for a take the page never accepted.
+                runtime.voice.cancel(Some(&id));
+            }
         }
     }
     sync_talk_key(app, &runtime, trigger);
 }
 
 fn reset_push_to_talk(runtime: &KalVoiceRuntime) {
+    reset_capture_source(&runtime.push_to_talk, &runtime.voice);
+}
+
+fn reset_capture_source(source: &Mutex<PushToTalkState>, voice: &VoiceController) {
     let cancelled_start = {
-        let mut push_to_talk = runtime
-            .push_to_talk
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut push_to_talk = source.lock().unwrap_or_else(PoisonError::into_inner);
         let _ = push_to_talk.function.focus_lost();
         push_to_talk.sessions.clear();
+        voice.cancel_pending_start();
         push_to_talk.cancel_any_start()
     };
     if let Some(start) = cancelled_start {
-        runtime.voice.cancel_start(&start.voice);
+        voice.cancel_start(&start.voice);
     }
 }
 
@@ -2054,8 +2067,41 @@ fn start_listening_at(
     pressed: Instant,
 ) -> Result<String, VoiceError> {
     let session_id = begin_listening_at(runtime, mode, quiet, pressed)?;
-    announce_listening_at(runtime, &session_id, mode, pressed);
+    announce_current_session(
+        &runtime.push_to_talk,
+        &runtime.voice,
+        &session_id,
+        mode,
+        || {
+            !runtime.shutting_down.load(Ordering::SeqCst)
+                && runtime.signals.connected()
+                && kalcode_foreground()
+        },
+        || {
+            announce_listening_at(runtime, &session_id, mode, pressed);
+        },
+    )?;
     Ok(session_id)
+}
+
+fn announce_current_session(
+    source: &Mutex<PushToTalkState>,
+    voice: &VoiceController,
+    session_id: &str,
+    mode: KalVoiceMode,
+    allowed: impl FnOnce() -> bool,
+    announce: impl FnOnce(),
+) -> Result<(), VoiceError> {
+    let _source = source.lock().unwrap_or_else(PoisonError::into_inner);
+    if !allowed() {
+        voice.cancel(Some(session_id));
+        return Err(VoiceError::NotListening);
+    }
+    if voice.listening() != Some((session_id.to_owned(), mode)) {
+        return Err(VoiceError::NotListening);
+    }
+    announce();
+    Ok(())
 }
 
 /// Performs the potentially slow model/device preparation without publishing a UI listening
@@ -2068,21 +2114,20 @@ fn begin_listening_at(
     quiet: bool,
     pressed: Instant,
 ) -> Result<String, VoiceError> {
-    if runtime.shutting_down.load(Ordering::SeqCst) {
-        return Err(VoiceError::NotListening);
-    }
-    // The microphone always wins. This also closes the speaking signal through SpeechOutput's
-    // completion callback, so no system voice can feed back into a new recording.
-    if let Some(speech) = runtime.speech.get() {
-        speech.stop();
-    }
-    report_begin_result(
-        runtime,
-        mode,
-        quiet,
-        pressed,
-        runtime.voice.begin_at(mode, pressed),
-    )
+    let start = {
+        let _source = runtime
+            .push_to_talk
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if runtime.shutting_down.load(Ordering::SeqCst)
+            || !runtime.signals.connected()
+            || !kalcode_foreground()
+        {
+            return Err(VoiceError::NotListening);
+        }
+        runtime.voice.reserve_start()?
+    };
+    begin_reserved_listening_at(runtime, start, mode, quiet, pressed)
 }
 
 fn begin_reserved_listening_at(
@@ -2853,14 +2898,21 @@ pub fn kalvoice_listen_stop(
 pub fn kalvoice_listen_cancel(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
+    session_id: Option<String>,
 ) -> Result<bool, IpcError> {
     _runtime_access.revalidate()?;
     let runtime = state.runtime()?;
-    if let Some(speech) = runtime.speech.get() {
+    let _source = runtime
+        .push_to_talk
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let listening = runtime.voice.listening();
+    let cancelled = runtime.voice.cancel(session_id.as_deref());
+    if (session_id.is_none() || cancelled)
+        && let Some(speech) = runtime.speech.get()
+    {
         speech.stop();
     }
-    let listening = runtime.voice.listening();
-    let cancelled = runtime.voice.cancel(None);
     if let (true, Some((session_id, mode))) = (cancelled, listening) {
         runtime.close_priority(&session_id);
         runtime.signal(&KalVoiceSignal::Cancelled { session_id, mode });
@@ -3212,6 +3264,153 @@ mod tests {
         assert!(end_orphaned_session(&voice, Unsubscribed::LastGone));
         assert_eq!(voice.listening(), None);
         assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lifecycle_reset_invalidates_pending_fn_fallback_and_direct_starts() {
+        for source in [Some(PttSource::Function), Some(PttSource::Fallback), None] {
+            let dir = tempfile::tempdir().unwrap();
+            let (voice, _) = held_session(dir.path());
+            assert!(voice.cancel(None));
+            let state = Mutex::new(PushToTalkState::default());
+            let start = voice.reserve_start().unwrap();
+            if let Some(source) = source {
+                state
+                    .lock()
+                    .unwrap()
+                    .reserve_start(source, start.clone())
+                    .unwrap();
+            }
+            reset_capture_source(&state, &voice);
+            assert!(state.lock().unwrap().pending.is_none());
+            assert_eq!(
+                voice.begin_reserved_at(start, KalVoiceMode::Talk, Instant::now()),
+                Err(VoiceError::NotListening)
+            );
+            assert!(!voice.busy());
+        }
+    }
+
+    #[test]
+    fn a_direct_start_cancelled_before_announcement_cannot_signal_listening() {
+        let dir = tempfile::tempdir().unwrap();
+        let (voice, _) = held_session(dir.path());
+        let (id, mode) = voice.listening().unwrap();
+        let source = Mutex::new(PushToTalkState::default());
+        let mut announced = false;
+        {
+            let _source = source.lock().unwrap();
+            assert!(voice.cancel(Some(&id)));
+        }
+        assert_eq!(
+            announce_current_session(&source, &voice, &id, mode, || true, || announced = true),
+            Err(VoiceError::NotListening)
+        );
+        assert!(!announced);
+        let next = voice.begin(mode).unwrap();
+        assert!(
+            !voice.cancel(Some(&id)),
+            "late cleanup must not cancel a successor"
+        );
+        assert!(
+            announce_current_session(&source, &voice, &next, mode, || true, || announced = true)
+                .is_ok()
+        );
+        assert!(announced);
+        assert!(voice.cancel(Some(&next)));
+        let disconnected = voice.begin(mode).unwrap();
+        announced = false;
+        assert_eq!(
+            announce_current_session(
+                &source,
+                &voice,
+                &disconnected,
+                mode,
+                || false,
+                || announced = true
+            ),
+            Err(VoiceError::NotListening)
+        );
+        assert!(!announced);
+        assert_eq!(voice.listening(), None);
+    }
+
+    #[test]
+    fn shutdown_drains_a_cancelled_microphone_start_before_device_release() {
+        struct PendingMic {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+        impl kalcode_kalvoice::audio::AudioSource for PendingMic {
+            fn start(
+                &self,
+                max: Duration,
+            ) -> Result<
+                Box<dyn kalcode_kalvoice::audio::ActiveCapture>,
+                kalcode_kalvoice::audio::CaptureError,
+            > {
+                self.start_cancellable(max, &|| false)
+            }
+            fn start_cancellable(
+                &self,
+                _max: Duration,
+                cancelled: &(dyn Fn() -> bool + Sync),
+            ) -> Result<
+                Box<dyn kalcode_kalvoice::audio::ActiveCapture>,
+                kalcode_kalvoice::audio::CaptureError,
+            > {
+                self.entered.send(()).unwrap();
+                let release = self.release.lock().unwrap();
+                while !cancelled() {
+                    if !matches!(
+                        release.recv_timeout(Duration::from_millis(5)),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                    ) {
+                        break;
+                    }
+                }
+                Err(kalcode_kalvoice::audio::CaptureError::Interrupted)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open(kalcode_core::CoreConfig {
+            paths: kalcode_core::Paths::new(dir.path()),
+            app_version: "0.1.0-test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let voice = Arc::new(VoiceController::new(
+            Arc::new(core),
+            Arc::new(PendingMic {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            }),
+            Arc::new(ReadyModel),
+        ));
+        let background = Arc::new(BackgroundTasks::default());
+        let task = background.start().unwrap();
+        let start = voice.reserve_start().unwrap();
+        let worker_voice = voice.clone();
+        let worker_start = start.clone();
+        let worker = std::thread::spawn(move || {
+            let _task = task;
+            worker_voice.begin_reserved_at(worker_start, KalVoiceMode::Talk, Instant::now())
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        background.stop();
+        assert!(voice.cancel_start(&start));
+        let drained = background.wait_until(Instant::now() + Duration::from_millis(250));
+        // Cleanup remains unconditional on the failing path so the test cannot strand a worker.
+        drop(release_tx);
+        let result = worker.join().unwrap();
+        assert!(
+            drained,
+            "shutdown must not wait for the device's eight-second timeout"
+        );
+        assert_eq!(result, Err(VoiceError::NotListening));
+        assert!(!voice.busy());
     }
 
     #[test]

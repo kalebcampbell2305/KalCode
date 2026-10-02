@@ -345,8 +345,8 @@ export class KalCodeClient {
     return this.call("kalvoice_listen_stop", { sessionId });
   }
 
-  kalvoiceListenCancel(): Promise<boolean> {
-    return this.call("kalvoice_listen_cancel");
+  kalvoiceListenCancel(sessionId?: string): Promise<boolean> {
+    return this.call("kalvoice_listen_cancel", sessionId ? { sessionId } : undefined);
   }
 
   kalvoiceFnInput(input: "down" | "up" | "other"): Promise<boolean> {

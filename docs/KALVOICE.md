@@ -70,6 +70,14 @@ focus while the key is held) the take finishes at that moment; a 120 s cap ends 
 Escape cancels and discards. Hiding the widget does not turn push to talk off; a separate switch
 (Settings → KalVoice → Push to talk) does.
 
+Key release, Escape, focus loss, page reload and shutdown also invalidate a microphone start
+that is still preparing. Native device startup observes cancellation without waiting for its
+eight-second failure timeout. A late device open retains exclusive capture custody until the
+driver releases it; another take reports busy rather than opening a second stream. An abandoned
+orb start is cancelled by its exact session ID, so late cleanup cannot stop a newer take or reply.
+Recognizer preparation remains synchronous; shutdown retains an unfinished runtime for retry
+when model loading or another background task has not yet drained.
+
 ## One utterance, three outcomes
 
 When the key goes up, KalVoice decides what the words were for:
