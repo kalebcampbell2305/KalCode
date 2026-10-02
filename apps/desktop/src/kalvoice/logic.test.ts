@@ -443,13 +443,13 @@ describe("assistant state", () => {
 
   it("formats usage and sizes", () => {
     expect(usageLine({ used: 482, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "482 / 1,500 used · 1,018 remaining · renews Oct 1",
+      "1,018 remaining · 482 / 1,500 used · resets Oct 1",
     );
     expect(usageLine({ used: 1501, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "1,501 / 1,500 used · 0 remaining · renews Oct 1",
+      "0 remaining · 1,501 / 1,500 used · resets Oct 1",
     );
     expect(usageLine({ used: 9, allowance: null, periodStart: "", resetsAt: "" })).toBe(
-      "9 KalVoice Requests used · Unlimited",
+      "Unlimited · 9 used this month",
     );
     expect(formatBytes(147_964_211)).toBe("148 MB");
     expect(formatBytes(1_533_763_059)).toBe("1.5 GB");

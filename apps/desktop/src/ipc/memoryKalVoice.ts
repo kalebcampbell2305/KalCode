@@ -45,10 +45,12 @@ import type {
   TalkRoute,
   UiDirective,
 } from "@kalcode/protocol";
+import { getPlan } from "@kalcode/protocol";
 import { checkReserved, isTalkKey } from "../kalvoice/shortcutModel.ts";
 import { normalizeBrowserAddress } from "../surfaces/browser/browserModel.ts";
 
-const FREE_KALVOICE_ALLOWANCE = 75;
+// The in-memory backend has no verified plan: the Free allowance from the plan catalog.
+const FREE_KALVOICE_ALLOWANCE = getPlan("free").limits.kalvoiceRequestsPerMonth ?? 0;
 
 export const KALVOICE_SCENARIOS = [
   "kalvoice-limit",

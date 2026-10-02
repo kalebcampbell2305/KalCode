@@ -88,7 +88,7 @@ describe("kalcodeIdentity (the hub's name and initials)", () => {
 describe("planLabel", () => {
   it("names the verified plan and says when access is offline", () => {
     expect(planLabel("pro", "ready")).toBe("Pro plan");
-    expect(planLabel("max2x", "ready")).toBe("Max 2X plan");
+    expect(planLabel("max2x", "ready")).toBe("MAX 2X plan");
     expect(planLabel("owner", "ready")).toBe("Owner");
     expect(planLabel("free", "offline_grace")).toBe("Free plan · Offline");
     expect(planLabel(null, "authenticated_unactivated")).toBeNull();

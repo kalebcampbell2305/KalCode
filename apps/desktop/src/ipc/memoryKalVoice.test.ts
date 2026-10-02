@@ -47,7 +47,7 @@ describe("memory KalVoice browser parity", () => {
   it("uses the current Free allowance and does not execute unsafe URL schemes", async () => {
     const limited = createMemoryKalVoice(() => undefined, "kalvoice-limit");
     const status = invoke(limited, "kalvoice_status", {}) as { usage: { used: number; allowance: number | null } };
-    expect(status.usage).toEqual(expect.objectContaining({ used: 75, allowance: 75 }));
+    expect(status.usage).toEqual(expect.objectContaining({ used: 25, allowance: 25 }));
 
     const events: unknown[] = [];
     const memory = createMemoryKalVoice((event) => events.push(event), "");

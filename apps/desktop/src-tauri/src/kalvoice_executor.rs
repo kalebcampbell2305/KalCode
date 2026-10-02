@@ -71,8 +71,8 @@ pub struct DesktopExecutor {
     /// off (Stable), voice Search is refused and the locator is never read.
     pub session_locator_enabled: bool,
     pub core: Arc<Core>,
-    /// The signed-in account, whose verified plan caps terminals per workspace. `None` (tests
-    /// only) applies the Free cap.
+    /// The signed-in account, whose verified plan caps open terminals. `None` (tests only)
+    /// applies the Free cap.
     pub account: Option<Arc<crate::account::runtime::AccountRuntime>>,
     /// `None` when the thread runtime didn't start (then thread commands explain why).
     pub threads: Option<Arc<ThreadRuntime>>,

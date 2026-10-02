@@ -2,6 +2,7 @@
  * Deterministic account adapter for the explicit UI-test memory transport.
  * It has no credentials, browser launches, email, payment, or network effects.
  */
+import { limitsFor } from "@kalcode/protocol";
 import {
   type AccountCommandName,
   type AccountOpenResult,
@@ -178,16 +179,9 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
       return snapshot;
     },
     async account_usage() {
-      const allowances: Record<AccountTier, number | null> = {
-        free: 75,
-        pro: 1_500,
-        max: 5_000,
-        max2x: 10_000,
-        owner: null,
-      };
       return {
         used: 0,
-        allowance: snapshot.tier === null ? 0 : allowances[snapshot.tier],
+        allowance: snapshot.tier === null ? 0 : limitsFor(snapshot.tier).kalvoiceRequestsPerMonth,
         periodStart: "2030-01-01T00:00:00.000Z",
         resetsAt: "2030-02-01T00:00:00.000Z",
       };

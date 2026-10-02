@@ -32,8 +32,10 @@ export interface MemoryWorkspaces {
   runningProcessCount(): number;
 }
 
-// The in-memory backend has no verified plan, so it applies the Free cap, as native does.
-const FREE_TERMINALS_PER_WORKSPACE = getPlan("free").limits.terminalsPerWorkspace;
+// The in-memory backend has no verified plan, so it applies the Free cap, as native does: a total
+// of open terminals across every workspace.
+const FREE_OPEN_TERMINALS = getPlan("free").limits.openTerminals;
+const PRO_OPEN_TERMINALS = getPlan("pro").limits.openTerminals;
 const MAX_WRITE_BYTES = 64 * 1024;
 const SCROLLBACK_BYTES = 512 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -448,11 +450,11 @@ export function createMemoryWorkspaces({
       }
       const workspace = workspaceOr404(workspaceId);
       if (!workspace.available) fail(folderMissing());
-      if (FREE_TERMINALS_PER_WORKSPACE !== null && tabsOf(workspaceId).length >= FREE_TERMINALS_PER_WORKSPACE) {
+      if (FREE_OPEN_TERMINALS !== null && tabs.size >= FREE_OPEN_TERMINALS) {
         fail(
           validation(
             "too_many_terminals",
-            `The Free plan allows up to ${FREE_TERMINALS_PER_WORKSPACE} terminals per workspace. Close one to open another, or upgrade to MAX for unlimited terminals.`,
+            `The Free plan allows ${FREE_OPEN_TERMINALS} open terminals. Close one to open another, or upgrade to Pro for ${PRO_OPEN_TERMINALS ?? "unlimited"}.`,
           ),
         );
       }

@@ -224,8 +224,8 @@ pub struct OperationsState {
     store: OperationsStore,
     threads: Arc<ThreadsState>,
     git: Arc<GitCore>,
-    /// The signed-in account whose verified plan caps terminals per workspace. `None` applies
-    /// the signed-out (Free) cap.
+    /// The signed-in account whose verified plan caps open terminals and queued tasks. `None`
+    /// applies the signed-out (Free) caps.
     account: Option<Arc<AccountRuntime>>,
     /// Serializes claims, confirmations, edits and effects; never held on the UI thread.
     gate: Mutex<()>,
@@ -389,7 +389,7 @@ impl OperationsState {
 
     fn prune_finished_terminals(&self, rows: &[OperationRecord]) -> Result<()> {
         // Finished command output belongs to the durable run. Keep four recent terminal tabs
-        // per workspace, leaving space under the existing twelve-tab limit for new work.
+        // per workspace; until pruned they count toward the plan's open-terminal cap.
         for workspace in self.core.workspaces()? {
             let mut finished = self
                 .core

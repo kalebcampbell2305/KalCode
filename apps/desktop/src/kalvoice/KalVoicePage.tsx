@@ -6,7 +6,7 @@ import { useNavigation } from "../shell/navigation.tsx";
 import { Page } from "../shell/Page.tsx";
 import { useProviderPanesEnabled } from "../surfaces/code/panes/useProviderPanes.ts";
 import { Examples, LimitNotice, RequestForm, ResultView } from "./Assistant.tsx";
-import { limitReached, usageLine } from "./assistantState.ts";
+import { limitReached, remainingRequests, usedLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { LatencyDiagnostics } from "./LatencyDiagnostics.tsx";
@@ -160,12 +160,8 @@ export function KalVoicePage() {
               <p className={styles.tileTitle}>This month</p>
               {limitReached(status.usage) ? <Badge tone="waiting">Limit reached</Badge> : null}
               <p className={styles.tileFigure}>
-                {status.usage.used.toLocaleString("en-US")}
-                <span>
-                  {status.usage.allowance === null
-                    ? " requests"
-                    : ` of ${status.usage.allowance.toLocaleString("en-US")}`}
-                </span>
+                {remainingRequests(status.usage)?.toLocaleString("en-US") ?? "Unlimited"}
+                <span>{status.usage.allowance === null ? " requests" : " remaining"}</span>
               </p>
               {status.usage.allowance !== null ? (
                 <div className={styles.meter} aria-hidden="true">
@@ -176,7 +172,7 @@ export function KalVoicePage() {
                   />
                 </div>
               ) : null}
-              <p className={styles.tileMeta}>{usageLine(status.usage)}</p>
+              <p className={styles.tileMeta}>{usedLine(status.usage)}</p>
               <p className={styles.tileMeta}>Local Dictation: Unlimited</p>
               <p className={styles.tileMeta}>Provider usage: Handled by your connected provider</p>
             </li>

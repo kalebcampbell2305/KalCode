@@ -156,16 +156,19 @@ describe("KalVoice usage", () => {
     };
   }
 
-  it("shows the usage line once, in the This month card", () => {
-    usage(3, 75);
+  it("shows requests remaining first, then the usage line once, in the This month card", () => {
+    usage(3, 25);
     render(<KalVoicePage />);
-    expect(screen.getAllByText(/3 \/ 75 used/)).toHaveLength(1);
+    const month = screen.getByText("This month").closest("li");
+    if (!month) throw new Error("This month card missing");
+    expect(month).toHaveTextContent("22 remaining");
+    expect(screen.getAllByText("3 / 25 used · resets Oct 1")).toHaveLength(1);
     expect(screen.queryByText("Limit reached")).not.toBeInTheDocument();
     expect(screen.queryByText(/Monthly limit reached/)).not.toBeInTheDocument();
   });
 
   it("says the monthly limit is reached, when it renews, and that dictation keeps working", () => {
-    usage(75, 75);
+    usage(25, 25);
     render(<KalVoicePage />);
     const month = screen.getByText("This month").closest("li");
     if (!month) throw new Error("This month card missing");
