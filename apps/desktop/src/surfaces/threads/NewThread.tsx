@@ -221,7 +221,7 @@ function NewThreadForm({
   const [model, setModel] = useState("");
   const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
   const [remember, setRemember] = useState(false);
-  // Agent Fleet: each agent gets its own worktree and branch unless the person opts out.
+  // Each thread gets its own worktree and branch unless the person opts out.
   const [isolate, setIsolate] = useState(true);
   const repository = useIsRepository(workspaceId);
   // The saved default (Settings → Permissions) when a thread can start in it, else Approve; until
@@ -541,12 +541,12 @@ function NewThreadForm({
           </label>
           <p id={`${id}-isolate-hint`} className={styles.hint}>
             {repository === false
-              ? `${workspace?.name ?? "This workspace"} isn't a Git repository, so the agent works in the folder itself.`
+              ? `${workspace?.name ?? "This workspace"} isn't a Git repository, so the thread works in the folder itself.`
               : repository === null
                 ? "Checking the workspace's Git repository…"
                 : isolate
-                  ? "The agent works on its own branch in a separate folder, so parallel agents never collide."
-                  : "The agent works directly in the workspace folder."}
+                  ? "The thread works on its own branch in a separate folder, so parallel threads never collide."
+                  : "The thread works directly in the workspace folder."}
           </p>
         </div>
 

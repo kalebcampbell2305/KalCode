@@ -1,17 +1,20 @@
 /**
- * The Command Deck's right rail: every running agent, grouped by what it needs — agents waiting on
- * the person first, then working, then blocked; idle agents fold away and the last few that
- * finished stay briefly. Each row opens its thread. Collapses to a narrow strip of live counts.
+ * The Command Deck's right rail: every coding agent (Claude Code, Codex or Gemini CLI in a Code
+ * terminal pane), grouped by what it needs — agents waiting on the person first, then working,
+ * then blocked; idle agents fold away and the last few that finished stay briefly. Each row opens
+ * the agent's terminal in Code. Chat threads live in Threads, not here. Collapses to a narrow
+ * strip of live counts.
  */
 import type { ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
 import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { useArchivedThreads, useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
+import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
+import { useArchivedCodingAgents, useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
-import { useThreadsIntent } from "../../surfaces/threads/intent.tsx";
 import { useNavigation } from "../navigation.tsx";
 import styles from "./AgentRail.module.css";
 import { useDeckUi } from "./DeckUi.tsx";
@@ -20,10 +23,10 @@ import { beginThreadDrag } from "./threadDrag.ts";
 
 export function AgentRail() {
   const { agentsOpen, setAgentsOpen } = useDeckUi();
-  const { state, reload } = useThreadSummaries();
+  const { state, reload } = useCodingAgents();
   const now = useNow(30_000);
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
-  const archived = useArchivedThreads().state;
+  const archived = useArchivedCodingAgents().state;
   // The same call signs as the Fleet (archived agents keep their letters).
   const handles = useMemo(
     () =>
@@ -122,13 +125,15 @@ function AgentList({
   handles: ReadonlyMap<string, string>;
 }) {
   const { navigate } = useNavigation();
-  const threadsIntent = useThreadsIntent();
+  const intents = useOptionalUiIntents();
+  const launchAgent = useLaunchAgent();
   const [showIdle, setShowIdle] = useState(false);
   const idleId = useId();
   const running = runningAgentCount(sections);
+  // An agent opens its own terminal pane in Code (the focus intent finds and focuses it).
   const open = (thread: ThreadSummary) => {
-    navigate("threads");
-    threadsIntent.request("open", thread.id);
+    if (intents) void intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+    else navigate("code");
   };
 
   if (running === 0 && sections.finished.length === 0 && sections.idle.length === 0) {
@@ -138,17 +143,11 @@ function AgentList({
           <Bot />
         </span>
         <p className={styles.emptyTitle}>No agents running</p>
-        <p className={styles.emptyText}>Start a thread and its agent shows up here while it works.</p>
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={<Plus />}
-          onClick={() => {
-            navigate("threads");
-            threadsIntent.request("new");
-          }}
-        >
-          Start a thread
+        <p className={styles.emptyText}>
+          Launch a Claude Code or Codex agent in Code and it shows up here while it works.
+        </p>
+        <Button size="sm" variant="secondary" icon={<Plus />} onClick={launchAgent}>
+          Launch an agent
         </Button>
       </div>
     );
@@ -239,7 +238,7 @@ function AgentRow({
         data-group={meta.group}
         onClick={() => onOpen(thread)}
         onPointerDown={(event) => beginThreadDrag(event, thread)}
-        aria-label={`${thread.name}, ${meta.label}, ${thread.providerName} in ${thread.workspaceName}. Open thread`}
+        aria-label={`${thread.name}, ${meta.label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
       >
         <span className={styles.rowGlyph} aria-hidden="true">
           <ProviderGlyph provider={thread.providerId} size="sm" />

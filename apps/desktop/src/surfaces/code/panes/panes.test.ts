@@ -99,7 +99,7 @@ describe("pane labels", () => {
 
   it("labels the pane region and the model", () => {
     const thread = { name: "Fix login", providerId: "claude-code", providerName: "Claude Code", model: null };
-    expect(paneLabel(thread as ThreadSummary)).toBe("Fix login, Claude Code pane");
+    expect(paneLabel(thread as ThreadSummary)).toBe("Fix login, Claude Code agent");
     expect(modelLabel(thread as ThreadSummary)).toBe("Account default");
     expect(modelLabel({ ...thread, providerId: "codex" } as ThreadSummary)).toBe("Provider default");
   });

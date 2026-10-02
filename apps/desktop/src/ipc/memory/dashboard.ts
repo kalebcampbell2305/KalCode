@@ -647,7 +647,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         archivedAt: allArchived ? ago(Math.max(0, seed.lastMinAgo - 1)) : null,
         resumable: false,
         permissionProfileId: null,
-        runtimeKind: null,
+        // Every fixture is a coding agent (a provider pane), as on the real Dashboard.
+        runtimeKind: "interactive_pty",
         terminalId: null,
         archived: allArchived,
       });

@@ -105,6 +105,28 @@ After shipping, preserve required artifacts/evidence and apply the permanent saf
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## Permanent definition: AGENT means a coding agent (owner directive 2026-10-02)
+
+"IN KALCODE, AN AGENT IS A REAL CODING AGENT RUNNING IN A CODING TERMINAL/PANE.
+
+AGENT IS NOT A THREAD.
+
+'START SIX CLAUDE CODE AGENTS' MEANS LAUNCH SIX CLAUDE CODE CODING TERMINALS.
+
+'START THREE CODEX AGENTS' MEANS LAUNCH THREE CODEX CODING TERMINALS.
+
+THE AGENTS TAB / AGENT FLEET REPRESENTS THESE REAL CODING AGENTS AND OPENS THEIR ACTUAL CODE TERMINALS.
+
+THREADS REMAIN A SEPARATE PRODUCT CONCEPT."
+
+This applies to Claude Code, Codex and every future agent, in product code, UI copy, KalVoice and orchestration.
+
+- **Agent** = a real provider coding session (Claude Code, Codex, Gemini CLI) running in its own terminal pane in Code, with a provider, account, exact model, effort, workspace, worktree/branch where relevant, live status and current task. N agents = N panes.
+- **Thread** = the chat-oriented surface in Threads. Never implement, list, count or open an agent as a Thread, and never call a thread an agent.
+- In code, an agent is a thread record whose `runtimeKind` is `interactive_pty` (native stamps it from the provider-pane marker on `thread_list`/`thread_get`; `isCodingAgent` in `apps/desktop/src/surfaces/dashboard/data/agents.ts`). Agent surfaces read `useCodingAgents()`; opening an agent goes through `uiIntents.focus({ kind: "thread", ... })`, which focuses its Code pane.
+- Code's **New agent** launcher (+) chooses provider → account (only when there are several) → exact model → effort → count, and starts that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on the Dashboard; "the agent that just finished" means the latest finished coding agent.
+- Agents rail, Agent Fleet, Needs You counts, widgets, Squads, Handoffs, Queue, Runs and future automation use this same definition. Do not create an alternate one.
+
 ## KalVoice integration rule (owner directive 2026-10-01)
 
 Codex and Claude Code share this policy, including the release lifecycle enforced by Claude's `tooling/release/ship.mjs lifecycle hook`. Apply the same delivery requirements regardless of agent. Reuse KalVoice's existing local speech, routing, provider authentication, workspace, terminal, app-control, and release systems. Prioritize working scene awareness, natural targeting, navigation, multi-agent launching, terminal prompting, follow-up context, focus illumination, and meaningful completion callbacks. Optional voice polish must not delay validated core improvements. Preserve native provider approvals and truthful account, plan, and hardware limits. Ship through the normal gates as the next internal build of the current public version on both Windows and macOS; do not create a new public version or treat a merge as delivery.

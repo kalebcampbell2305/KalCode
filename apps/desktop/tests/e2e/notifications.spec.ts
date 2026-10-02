@@ -88,7 +88,11 @@ test("a pane's permission request and completion reach the notification center, 
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "notify-site" })).toBeVisible();
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New Claude Code pane" }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("button", { name: "Launch Claude Code agent" })
+      .click();
     await expect(pane(page)).toBeVisible({ timeout: 30_000 });
     await expectPaneText(page, FAKE_BANNER, 30_000); // safety gate: the fake, not a real provider
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });

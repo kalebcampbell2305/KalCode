@@ -59,7 +59,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
 test.describe("a fresh session", () => {
   test("says so honestly and never shows sample data", async ({ page }) => {
     await open(page);
-    await expect(board(page).getByRole("heading", { name: "No sessions yet" })).toBeVisible();
+    await expect(board(page).getByRole("heading", { name: "No agents yet" })).toBeVisible();
     await expect(chips(page)).toHaveCount(0);
     await expect(dock(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
     await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();
@@ -206,14 +206,6 @@ test.describe("cards", () => {
     );
     const migration = card(page, "Write invoices migration");
     await expect(migration.getByRole("group", { name: "Run pnpm prisma migrate dev" })).toBeVisible();
-  });
-
-  test("clicking a card focuses its thread", async ({ page }) => {
-    await open(page, "busy");
-    await card(page, "Fix flaky checkout test")
-      .getByRole("button", { name: "Fix flaky checkout test", exact: true })
-      .click();
-    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   });
 
   test("pause, resume, retry and archive go through the thread commands", async ({ page }) => {
@@ -462,18 +454,21 @@ test.describe("states", () => {
 
   test("empty: guides the person to start work", async ({ page }) => {
     await open(page, "empty");
-    await expect(board(page).getByRole("heading", { name: "No sessions yet" })).toBeVisible();
-    // New Session leads; this build (provider panes on) also offers Code.
-    await expect(board(page).getByRole("button")).toHaveText(["New Session", "Open Code"]);
+    await expect(board(page).getByRole("heading", { name: "No agents yet" })).toBeVisible();
+    // Agents are coding terminals: the one action launches one from Code (never a Thread).
+    await expect(board(page).getByRole("button")).toHaveText(["Launch an agent"]);
     await expect(board(page).getByText(/A CLI you type into a plain terminal isn't tracked here/)).toBeVisible();
-    await board(page).getByRole("button", { name: "New Session" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+    await board(page).getByRole("button", { name: "Launch an agent" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
+    await expect(
+      page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   test("archived only: says so, shows the archived sessions read-only and restores one", async ({ page }) => {
     await open(page, "archived");
-    await expect(board(page).getByRole("heading", { name: "All 3 sessions are archived" })).toBeVisible();
-    await expect(board(page).getByRole("heading", { name: "No sessions yet" })).toHaveCount(0);
+    await expect(board(page).getByRole("heading", { name: "All 3 agents are archived" })).toBeVisible();
+    await expect(board(page).getByRole("heading", { name: "No agents yet" })).toHaveCount(0);
     await expect(cards(page)).toHaveCount(0);
     const toggle = board(page).getByRole("button", { name: "Show archived" });
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
@@ -490,7 +485,7 @@ test.describe("states", () => {
     await deploy.getByRole("button", { name: "Unarchive Deploy preview build" }).click();
     await expect(chip(page, "All")).toHaveAccessibleName("All, 1");
     await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 1");
-    await expect(board(page).getByRole("heading", { name: /sessions are archived/ })).toHaveCount(0);
+    await expect(board(page).getByRole("heading", { name: /agents are archived/ })).toHaveCount(0);
     await expect(archived.getByRole("article")).toHaveCount(2);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Thread restored")).toBeVisible();
   });
@@ -519,7 +514,7 @@ test.describe("sidebar", () => {
     const nav = page
       .getByRole("navigation", { name: "Primary" })
       .getByRole("button", { name: "Dashboard", exact: true });
-    await expect(board(page).getByRole("heading", { name: "No sessions yet" })).toBeVisible();
+    await expect(board(page).getByRole("heading", { name: "No agents yet" })).toBeVisible();
     await expect(nav).toHaveText("Dashboard");
     await expect(nav).not.toHaveAttribute("aria-describedby");
   });

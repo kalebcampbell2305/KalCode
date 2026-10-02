@@ -735,7 +735,7 @@ export function createThreadsMemory(
       error(
         "git",
         "worktree_unavailable",
-        "This workspace isn't a Git repository, so the agent can't get its own worktree.",
+        "This workspace isn't a Git repository, so the thread can't get its own worktree.",
       );
     return { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name, isolate };
   };
@@ -1116,7 +1116,12 @@ export function createThreadsMemory(
     },
     streamCount: (threadId) => streams.get(threadId)?.size ?? 0,
     createPaneThread(args, onStop) {
-      const { thread: t } = insertThread(planThread(args, null), "interactive_pty");
+      // An untitled coding agent is a "New agent" (native `create_idle`).
+      const plan = planThread(args, null);
+      const named = args.name != null && String(args.name).trim() !== "";
+      const { thread: t } = insertThread(named ? plan : { ...plan, name: "New agent" }, "interactive_pty");
+      const effort = typeof args.effort === "string" ? args.effort.trim().toLowerCase() : "";
+      if (effort && effort !== "default") t.summary = { ...t.summary, effort };
       t.paneStop = onStop;
       t.live = true;
       t.providerSessionId = `session-${t.summary.id.slice(0, 8)}`;

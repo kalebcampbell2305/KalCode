@@ -79,6 +79,12 @@ function invalid(code: string, message: string): never {
 type PaneKind = "claude-code" | "codex" | "gemini-cli";
 
 const PANE_PROVIDERS: readonly PaneKind[] = ["claude-code", "codex", "gemini-cli"];
+/** Provider-native efforts a pane accepts (mirrors native `pane_effort`; Gemini CLI has none). */
+const PANE_EFFORTS: Record<PaneKind, readonly string[]> = {
+  "claude-code": ["low", "medium", "high", "xhigh", "max"],
+  codex: ["minimal", "low", "medium", "high", "xhigh"],
+  "gemini-cli": [],
+};
 const PROVIDER_NAMES: Record<PaneKind, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
@@ -142,7 +148,7 @@ export function createPanesMemory(options: {
     const id = args.threadId;
     if (typeof id !== "string" || !UUID.test(id)) invalid("invalid_thread", "That thread id isn't valid.");
     const found = panes.get(id as string);
-    if (!found) invalid("pane_not_running", "This pane's provider has ended. Resume the thread to start it again.");
+    if (!found) invalid("pane_not_running", "This agent's provider has ended. Resume the agent to start it again.");
     return found as Pane;
   };
 
@@ -234,7 +240,7 @@ export function createPanesMemory(options: {
     if (!p.titled) {
       p.titled = true;
       const current = threads.handlers.thread_get({ threadId: p.thread.id }) as ThreadSummary;
-      if (current.name === "New thread")
+      if (current.name === "New agent" || current.name === "New thread")
         p.thread = threads.handlers.thread_rename({
           threadId: p.thread.id,
           name: nameFromPrompt(line),
@@ -290,6 +296,9 @@ export function createPanesMemory(options: {
       await options.beforeCreate?.();
       const kind = args.providerId as PaneKind;
       if (!PANE_PROVIDERS.includes(kind)) invalid("provider_pane_unsupported", "That provider can't run in a pane.");
+      const effort = typeof args.effort === "string" ? args.effort.trim().toLowerCase() : "";
+      if (effort && effort !== "default" && !PANE_EFFORTS[kind].includes(effort))
+        invalid("invalid_effort", "That provider doesn't support this effort level.");
       const mode = args.permissionMode as PermissionMode;
       if (mode === "bypass" && args.confirmBypass !== true)
         invalid("bypass_not_confirmed", "Bypass needs your explicit confirmation.");
@@ -345,7 +354,7 @@ export function createPanesMemory(options: {
       if (typeof data !== "string" || new TextEncoder().encode(data).length > MAX_WRITE)
         invalid("provider_pane_failed", "That input is too large.");
       if (!p.running)
-        invalid("pane_not_running", "This pane's provider has ended. Resume the thread to start it again.");
+        invalid("pane_not_running", "This agent's provider has ended. Resume the agent to start it again.");
       if (args.voice === true && args.instanceId !== p.instanceId) {
         invalid("provider_target_changed", "That provider pane restarted before voice input was delivered.");
       }

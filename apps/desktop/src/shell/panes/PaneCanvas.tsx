@@ -661,6 +661,7 @@ export function runCommand(
       return { handled: true };
     case "arrange-providers":
     case "open-provider-panes":
+    case "open-agent-launcher":
     case "control-pane":
       return { handled: false, message: "Provider panes aren't available here." };
     case "browser-control":

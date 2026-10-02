@@ -4,6 +4,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
+import { isCodingAgent } from "./agents.ts";
 import { chipCounts } from "./board.ts";
 import { type DashboardResource, RefreshTracker } from "./refresh.ts";
 import { type Resource, type ResourceState, useResource } from "./resource.ts";
@@ -289,6 +290,30 @@ export function useThreadSummaries() {
 export function useArchivedThreads() {
   const { archived, pendingActions, runAction } = useDashboardData();
   return { ...archived, pendingActions, runAction };
+}
+
+function useAgentsOnly(state: ResourceState<ThreadSummary[]>): ResourceState<ThreadSummary[]> {
+  return useMemo(
+    () => (state.status === "ready" ? { ...state, data: state.data.filter(isCodingAgent) } : state),
+    [state],
+  );
+}
+
+/**
+ * Open coding agents only (Claude Code, Codex or Gemini CLI in a Code terminal pane): what the
+ * Agents rail, the Agent Fleet and agent counts show. Chat threads stay in Threads.
+ */
+export function useCodingAgents() {
+  const threads = useThreadSummaries();
+  const state = useAgentsOnly(threads.state);
+  return { ...threads, state };
+}
+
+/** Archived coding agents (the Fleet's archived view; call signs stay stable across both). */
+export function useArchivedCodingAgents() {
+  const archived = useArchivedThreads();
+  const state = useAgentsOnly(archived.state);
+  return { ...archived, state };
 }
 
 /**

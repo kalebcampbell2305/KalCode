@@ -348,10 +348,10 @@ fn filter_summary(chip: DashboardChip, counts: Option<(usize, usize)>) -> String
             "{} waiting for you.",
             plural(count, "agent is", "agents are")
         ),
-        DashboardChip::Done if count == 0 => "No threads have completed yet.".into(),
+        DashboardChip::Done if count == 0 => "No agents have completed yet.".into(),
         DashboardChip::Done => format!(
             "Showing {count} completed {}.",
-            if count == 1 { "thread" } else { "threads" }
+            if count == 1 { "agent" } else { "agents" }
         ),
         DashboardChip::Idle if count == 0 => "No agents are idle.".into(),
         DashboardChip::Idle => format!(
@@ -2572,17 +2572,27 @@ impl Executor for DesktopExecutor {
             KalVoiceIntent::StatusReport => self.status_report(),
             KalVoiceIntent::Search { query } => self.search(query),
             KalVoiceIntent::FilterDashboard { chip } => {
-                // Counting is best effort: the filter works even without the thread runtime.
+                // Counting is best effort: the filter works even without the thread runtime. The
+                // Fleet shows coding agents (provider panes), not chat threads, so only those count.
+                let sessions = self.core.paths().data_dir.join("sessions");
                 let counts = self
                     .threads
                     .as_ref()
                     .and_then(|runtime| runtime.list(None, false).ok())
                     .map(|threads| {
-                        let count = threads
+                        let agents: Vec<_> = threads
+                            .iter()
+                            .filter(|t| {
+                                kalcode_providers::interactive::provider::marked_interactive(
+                                    &sessions, &t.id,
+                                )
+                            })
+                            .collect();
+                        let count = agents
                             .iter()
                             .filter(|t| *chip == DashboardChip::All || t.status.chip() == *chip)
                             .count();
-                        (count, threads.len())
+                        (count, agents.len())
                     });
                 Ok(Executed {
                     summary: filter_summary(*chip, counts),
@@ -3199,7 +3209,7 @@ mod tests {
         );
         assert_eq!(
             filter_summary(DashboardChip::Done, Some((3, 21))),
-            "Showing 3 completed threads."
+            "Showing 3 completed agents."
         );
         assert_eq!(
             filter_summary(DashboardChip::All, Some((21, 21))),

@@ -31,7 +31,7 @@ import { forwardRef, type ReactNode, useMemo } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { WorkspaceMenuContent } from "../../surfaces/code/WorkspaceMenu.tsx";
-import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { focusSection, useNow } from "../../surfaces/dashboard/useNow.ts";
 import { MODE_DESCRIPTIONS, MODE_LABELS, START_MODES } from "../../surfaces/permissions/labels.ts";
 import { usePermissions } from "../../surfaces/permissions/PermissionsProvider.tsx";
@@ -280,7 +280,7 @@ function ModeChip() {
 // ---- Signals ----
 
 function Signals() {
-  const { state } = useThreadSummaries();
+  const { state } = useCodingAgents();
   const { pending, setPanelOpen } = usePermissions();
   const { navigate } = useNavigation();
   const { revealAgents } = useDeckUi();

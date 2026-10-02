@@ -45,14 +45,38 @@ test("the deck answers what is working, what needs me and what is shipping", asy
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
 });
 
-test("an agent row opens its thread", async ({ page }) => {
+test("an agent row opens its coding terminal in Code, and a chat thread is never an agent", async ({ page }) => {
+  // The threads scenario has chat threads only: none of them is an agent.
   await open(page, "threads");
   await toOperations(page);
-  await agents(page)
-    .getByRole("button", { name: /^Fix OAuth Callback Race, / })
+  await expect(agents(page).getByText("No agents running")).toBeVisible();
+  await expect(agents(page).getByRole("button", { name: /^Fix OAuth Callback Race, / })).toHaveCount(0);
+
+  // Launch a Claude Code agent from Code's + launcher.
+  await page.evaluate(() =>
+    (window as unknown as { __kalcodeMemory: { queueFolders: (...f: string[]) => void } }).__kalcodeMemory.queueFolders(
+      "deck-agent",
+    ),
+  );
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
+  await page.getByRole("button", { name: "Open folder…" }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: "deck-agent" })).toBeVisible();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "New agent" })
+    .getByRole("button", { name: "Launch Claude Code agent" })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Thread", exact: true })).toContainText("Fix OAuth Callback Race");
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
+
+  // It shows in the rail and opens its own terminal pane, not Threads.
+  await toOperations(page);
+  await agents(page).getByRole("button", { name: /^Idle/ }).click();
+  await agents(page)
+    .getByRole("button", { name: /^New agent, .*Claude Code in deck-agent\. Open agent$/ })
+    .click();
+  await expect(page.getByRole("heading", { level: 1, name: "deck-agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
+  await expect(page.locator("[data-provider-pane]")).toBeVisible();
 });
 
 test("the agents rail hides to a strip of live counts and is remembered", async ({ page }) => {

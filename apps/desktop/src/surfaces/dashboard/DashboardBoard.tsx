@@ -15,8 +15,8 @@ import { flushSync } from "react-dom";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useProviderPanesEnabled } from "../code/panes/useProviderPanes.ts";
+import { useLaunchAgent } from "../code/useLaunchAgent.ts";
 import { usePermissions } from "../permissions/PermissionsProvider.tsx";
-import { useThreadsIntent } from "../threads/intent.tsx";
 import { AgentCard } from "./AgentCard.tsx";
 import styles from "./DashboardBoard.module.css";
 import {
@@ -32,7 +32,7 @@ import {
   summaryLine,
   type ThreadGroup,
 } from "./data/board.ts";
-import { useArchivedThreads, useThreadSummaries } from "./data/DashboardData.tsx";
+import { useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
 import { fleetHandles, mergeReadiness } from "./fleet/fleetModel.ts";
 import { morphIntoThread } from "./fleet/morph.ts";
 import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
@@ -98,18 +98,19 @@ export interface DashboardBoardProps {
 }
 
 /**
- * The live board of agents (threads): filter chips with real counts, search, grouping, and a
- * virtualized grid of cards that gains columns on wide windows instead of stretching. The same
- * board renders in the Dashboard surface and in a Dashboard pane.
+ * Agent Fleet: the live board of coding agents (Claude Code, Codex or Gemini CLI in Code terminal
+ * panes; chat threads stay in Threads): filter chips with real counts, search, grouping, and a
+ * virtualized grid of cards that gains columns on wide windows instead of stretching. A card opens
+ * its agent's terminal in Code. The same board renders in the Dashboard surface and in a pane.
  */
 export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
-  const { state, reload, pendingActions, runAction } = useThreadSummaries();
-  const archivedThreads = useArchivedThreads();
+  const { state, reload, pendingActions, runAction } = useCodingAgents();
+  const archivedThreads = useArchivedCodingAgents();
   const permissions = usePermissions();
   const intents = useOptionalUiIntents();
-  const threadsIntent = useThreadsIntent();
+  const launchAgent = useLaunchAgent();
   const { navigate } = useNavigation();
-  // Provider panes (gated on Stable) are the only way a CLI started from Code becomes a session.
+  // Provider panes are how a coding agent runs: a real CLI in a Code terminal pane.
   const providerPanes = useProviderPanesEnabled();
   const now = useNow(30_000);
   const [showArchived, setShowArchived] = useState(false);
@@ -187,12 +188,11 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
       morphIntoThread(card, thread.id, () => {
         if (intents) return intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
         flushSync(() => {
-          navigate("threads");
-          threadsIntent.request("open", thread.id);
+          navigate("code");
         });
       });
     },
-    [intents, navigate, threadsIntent],
+    [intents, navigate],
   );
 
   // Agent Fleet: call signs, worktree facts and merge readiness for every card.
@@ -310,31 +310,23 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
         actions={<Button onClick={reload}>Try again</Button>}
         className={styles.state}
       >
-        <p>{state.error.message} Your threads keep running; this only affects what the Dashboard shows.</p>
+        <p>{state.error.message} Your agents keep running; this only affects what the Dashboard shows.</p>
       </ErrorState>
     );
   } else if (counts.all === 0) {
-    const newSession = (
-      <Button
-        variant="primary"
-        onClick={() => {
-          navigate("threads");
-          threadsIntent.request("new");
-        }}
-      >
-        New Session
+    const newAgent = providerPanes ? (
+      <Button variant="primary" onClick={launchAgent}>
+        Launch an agent
       </Button>
-    );
+    ) : null;
     body =
       archived.length > 0 ? (
         <EmptyState
-          title={
-            archived.length === 1 ? "Your only session is archived" : `All ${archived.length} sessions are archived`
-          }
+          title={archived.length === 1 ? "Your only agent is archived" : `All ${archived.length} agents are archived`}
           className={styles.state}
           actions={
             <>
-              {newSession}
+              {newAgent}
               <Button
                 aria-pressed={showArchived}
                 aria-controls={showArchived ? archivedId : undefined}
@@ -345,31 +337,18 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
             </>
           }
         >
-          <p>Archived sessions stay off the Dashboard. Show them to look back, or unarchive one to bring it back.</p>
+          <p>Archived agents stay off the Dashboard. Show them to look back, or unarchive one to bring it back.</p>
         </EmptyState>
       ) : (
-        <EmptyState
-          title="No sessions yet"
-          className={styles.state}
-          actions={
-            <>
-              {newSession}
-              {providerPanes ? <Button onClick={() => navigate("code")}>Open Code</Button> : null}
-            </>
-          }
-        >
+        <EmptyState title="No agents yet" className={styles.state} actions={newAgent}>
           {providerPanes ? (
             <p>
-              Start a session, or open <ProviderMark provider="claude-code" size="sm" />,{" "}
-              <ProviderMark provider="codex" size="sm" /> or{" "}
-              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> in a provider pane from Code. A CLI you
-              type into a plain terminal isn't tracked here.
+              Launch a <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" /> or{" "}
+              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> agent from Code and it shows up here with
+              what it's doing and whether it needs you. A CLI you type into a plain terminal isn't tracked here.
             </p>
           ) : (
-            <p>
-              Start a session and it shows up here with what it's doing and whether it needs you. This build tracks
-              sessions started from Threads; a CLI you run yourself in a Code terminal isn't tracked.
-            </p>
+            <p>Coding agents aren't part of this build. Threads keep their own list in Threads.</p>
           )}
         </EmptyState>
       );

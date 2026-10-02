@@ -70,7 +70,8 @@ import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
-import type { PaneProviderId } from "./panes/paneChannel.ts";
+import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
+import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
 import "./paneContents.tsx";
 import {
@@ -126,8 +127,8 @@ export interface CodeCanvasApi {
   providerPanes: ProviderPanes;
   shells: readonly ShellOption[];
   newTerminal: (shellId: string | null) => void;
-  /** Claude Code by default; Codex / Gemini CLI when `providerPanes.offered` lists them. */
-  newProviderPane: (providerId?: PaneProviderId) => Promise<void>;
+  /** Opens the + launcher for coding agents (Claude Code by default; Codex / Gemini CLI when offered). */
+  openAgentLauncher: (providerId?: PaneProviderId) => void;
   titleOf: (content: PaneContent) => string;
 }
 
@@ -515,16 +516,41 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [createTerminal],
   );
 
-  const newProviderPane = useCallback(
-    async (providerId?: PaneProviderId) => {
-      const thread = await providerPanes.create(providerId);
-      if (!thread) return;
+  // Coding agents (AGENTS.md): each one is a real provider CLI in its own terminal pane, so a
+  // launch of N agents starts N panes and lays them out together.
+  const [launcher, setLauncher] = useState<{ providerId: PaneProviderId; paneId: string | null } | null>(null);
+  const openAgentLauncher = useCallback(
+    (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => setLauncher({ providerId, paneId }),
+    [],
+  );
+  const launchAgents = useCallback(
+    async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null) => {
+      const created: string[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const thread = await providerPanes.create(providerId, launch);
+        if (!thread) break;
+        created.push(thread.id);
+      }
       const current = controllerRef.current;
-      const focused = leaves(current.layout.root).find((l) => l.paneId === current.focusedPaneId);
-      current.show(threadContent(thread.id), {
-        focus: true,
-        placement: focused && focused.tabs.length > 0 ? "split" : "tab",
-      });
+      if (paneId) current.focusPane(paneId, false);
+      const [first] = created;
+      if (created.length === 1 && first) {
+        const focused = leaves(current.layout.root).find((l) => l.paneId === current.focusedPaneId);
+        current.show(threadContent(first), {
+          focus: true,
+          placement: focused && focused.tabs.length > 0 ? "split" : "tab",
+        });
+      } else if (created.length > 1 && first) {
+        const next = arrangeContents(current.layout, created.map(threadContent));
+        if (next) {
+          current.replace(next, `Arranged ${created.length} agents.`);
+          const shown = findContent(next, contentKey(threadContent(first)));
+          if (shown) current.focusPane(shown.paneId);
+        } else {
+          for (const id of created) current.show(threadContent(id), { focus: id === first, placement: "tab" });
+        }
+      }
+      return created.length === count;
     },
     [providerPanes],
   );
@@ -718,11 +744,11 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         background={background}
         gitTeaser={gitTeaser}
         onTerminal={() => newTerminal(null)}
-        onProviderPane={() => void newProviderPane()}
+        onProviderPane={() => openAgentLauncher("claude-code", paneId)}
         onShow={(content) => controllerRef.current.show(content, { paneId, focus: true })}
       />
     ),
-    [shell, providerPanes, background, gitTeaser, newTerminal, newProviderPane],
+    [shell, providerPanes, background, gitTeaser, newTerminal, openAgentLauncher],
   );
 
   // Z7-W2's widgets stay registered (saved layouts restore them) but are offered only when their
@@ -767,13 +793,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         {providerPanes.enabled ? (
           <DropdownMenuItem
             icon={<ProviderGlyph provider="claude-code" size="xs" />}
-            description="The real Claude Code, checked by KalCode"
-            onSelect={() => {
-              controllerRef.current.focusPane(paneId, false);
-              void newProviderPane();
-            }}
+            description="A coding agent: the real Claude Code, checked by KalCode"
+            onSelect={() => openAgentLauncher("claude-code", paneId)}
           >
-            Claude Code pane
+            Claude Code agent
           </DropdownMenuItem>
         ) : null}
         {providerPanes.enabled
@@ -781,13 +804,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
               <DropdownMenuItem
                 key={providerId}
                 icon={<ProviderGlyph provider={providerId} size="xs" />}
-                description={`The real ${providerIdentity(providerId).name}; approvals in its own prompt`}
-                onSelect={() => {
-                  controllerRef.current.focusPane(paneId, false);
-                  void newProviderPane(providerId);
-                }}
+                description={`A coding agent: the real ${providerIdentity(providerId).name}; approvals in its own prompt`}
+                onSelect={() => openAgentLauncher(providerId, paneId)}
               >
-                {`${providerIdentity(providerId).name} pane`}
+                {`${providerIdentity(providerId).name} agent`}
               </DropdownMenuItem>
             ))
           : null}
@@ -847,7 +867,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       providerPanes.offered,
       background,
       newTerminal,
-      newProviderPane,
+      openAgentLauncher,
       paneById,
       addableWidgets,
       gitTeaser,
@@ -857,6 +877,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const onCommand = useCallback(
     (command: PaneCommand): PaneCommandResult | null => {
       const current = controllerRef.current;
+      if (command.kind === "open-agent-launcher") {
+        if (!providerPanes.enabled) return { handled: false, message: "Coding agents aren't available in this build." };
+        const providerId = command.providerId ?? "claude-code";
+        openAgentLauncher(isPaneProvider(providerId) ? providerId : "claude-code");
+        return { handled: true };
+      }
       if (command.kind === "browser-control") {
         const action = command.command;
         const target = resolveBrowserTarget(
@@ -967,7 +993,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       return null;
     },
-    [paneById, providerPanes, navigate, threadsIntent, titleOf, browserBridge],
+    [paneById, providerPanes, navigate, threadsIntent, titleOf, browserBridge, openAgentLauncher],
   );
 
   const host: PaneHost = useMemo(
@@ -992,7 +1018,18 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   return (
     <>
       <UtilityDockRegistration />
-      {children({ controller, background, providerPanes, shells, newTerminal, newProviderPane, titleOf }, canvas)}
+      {children({ controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf }, canvas)}
+      {launcher ? (
+        <NewAgentDialog
+          workspace={workspace}
+          offered={providerPanes.offered}
+          initialProvider={launcher.providerId}
+          busy={providerPanes.creating}
+          error={providerPanes.error}
+          onLaunch={(spec) => launchAgents(spec, launcher.paneId)}
+          onClose={() => setLauncher(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -1114,7 +1151,7 @@ function EmptyPane({
             busy={providerPanes.creating}
             onClick={onProviderPane}
           >
-            Start Claude Code here
+            Launch an agent
           </Button>
         ) : null}
       </div>

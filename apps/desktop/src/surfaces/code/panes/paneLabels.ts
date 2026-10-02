@@ -99,8 +99,8 @@ export function paneInfoCopy(providerId: string, info: PaneInfo | null, provider
         `${name}'s own network traffic to its service.`,
       ],
       footer: codex
-        ? "KalCode starts Codex with a sandbox no broader than this thread's permission mode (read-only unless Bypass, never full access), but it can't block a single command here."
-        : "KalCode starts Gemini CLI in an approval mode no broader than this thread's permission mode (never yolo), but it can't block a single tool call here.",
+        ? "KalCode starts Codex with a sandbox no broader than this agent's permission mode (read-only unless Bypass, never full access), but it can't block a single command here."
+        : "KalCode starts Gemini CLI in an approval mode no broader than this agent's permission mode (never yolo), but it can't block a single tool call here.",
     };
   }
   const answers = info?.kalcodeAnswersApprovals ?? false;
@@ -133,5 +133,5 @@ export function modelLabel(thread: ThreadSummary): string {
 
 /** The region's accessible name. */
 export function paneLabel(thread: ThreadSummary): string {
-  return `${thread.name}, ${providerIdentity(thread.providerId, thread.providerName).name} pane`;
+  return `${thread.name}, ${providerIdentity(thread.providerId, thread.providerName).name} agent`;
 }

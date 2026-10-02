@@ -44,6 +44,8 @@ export interface VoiceSceneTarget {
   visible?: boolean;
   focused?: boolean;
   rect?: VoiceSceneRect | null;
+  /** A coding agent: a provider CLI in a Code terminal pane (not a chat thread). */
+  codingAgent?: boolean;
 }
 
 export type VoiceSceneReference =
@@ -52,8 +54,9 @@ export type VoiceSceneReference =
   | { kind: "last_target" }
   | { kind: "other"; query: string; kinds?: readonly VoiceSceneKind[] }
   | { kind: "beside_current" }
-  | { kind: "latest_completed" }
-  | { kind: "latest_failed" };
+  /** `agents`: the person said "agent", so only coding agents count (AGENTS.md). */
+  | { kind: "latest_completed"; agents?: boolean }
+  | { kind: "latest_failed"; agents?: boolean };
 
 export interface VoiceSceneContext {
   targets: readonly VoiceSceneTarget[];
@@ -273,9 +276,9 @@ export function resolveVoiceSceneTarget(
     case "beside_current":
       return besideCurrent(targets);
     case "latest_completed":
-      return latestWithStatus(targets, COMPLETED);
+      return latestWithStatus(reference.agents ? targets.filter((t) => t.codingAgent) : targets, COMPLETED);
     case "latest_failed":
-      return latestWithStatus(targets, FAILED);
+      return latestWithStatus(reference.agents ? targets.filter((t) => t.codingAgent) : targets, FAILED);
     case "named":
       return resolveNamed(reference.query, targets);
   }

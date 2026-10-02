@@ -20,6 +20,7 @@ import {
   Tooltip,
 } from "@kalcode/ui/components";
 import {
+  Bot,
   BroomSparkles,
   ChevronDown,
   Equal,
@@ -51,7 +52,6 @@ import styles from "./Code.module.css";
 import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
 import { useKalTidy } from "./kaltidy/kalTidyContext.ts";
-import { providerIdentity } from "./panes/paneLabels.ts";
 import { CODE_SHORTCUT_LABELS, codeShortcut } from "./shortcuts.ts";
 import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 
@@ -355,30 +355,10 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
       </div>
       <KalTidyActions />
       {providerPanes.enabled ? (
-        <Button
-          size="sm"
-          icon={<ProviderGlyph provider="claude-code" size="xs" />}
-          busy={providerPanes.creatingProvider === "claude-code"}
-          disabled={providerPanes.creating && providerPanes.creatingProvider !== "claude-code"}
-          onClick={() => void api.newProviderPane()}
-        >
-          New Claude Code pane
+        <Button size="sm" icon={<Bot />} busy={providerPanes.creating} onClick={() => api.openAgentLauncher()}>
+          New agent
         </Button>
       ) : null}
-      {providerPanes.enabled
-        ? providerPanes.offered.map((providerId) => (
-            <Button
-              key={providerId}
-              size="sm"
-              icon={<ProviderGlyph provider={providerId} size="xs" />}
-              busy={providerPanes.creatingProvider === providerId}
-              disabled={providerPanes.creating && providerPanes.creatingProvider !== providerId}
-              onClick={() => void api.newProviderPane(providerId)}
-            >
-              {`New ${providerIdentity(providerId).name} pane`}
-            </Button>
-          ))
-        : null}
       {providerPanes.error ? (
         <span className={styles.toolError} role="alert">
           {providerPanes.error}
