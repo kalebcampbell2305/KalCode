@@ -75,3 +75,24 @@ test("clicking a fleet card opens its thread", async ({ page }) => {
     .click();
   await expect(page.getByRole("region", { name: "Thread", exact: true })).toContainText("Fix OAuth Callback Race");
 });
+
+test("KalCode commits an isolated agent's leftover changes on its branch when asked", async ({ page }) => {
+  await page.goto("/?scenario=busy");
+  const failed = card(page, "Deploy preview build");
+  // Agents still working, or waiting on an approval or a reply, offer no commit.
+  await expect(card(page, "Write invoices migration").getByRole("button", { name: /^Commit / })).toHaveCount(0);
+  await expect(card(page, "Refactor auth middleware").getByRole("button", { name: /^Commit / })).toHaveCount(0);
+
+  await failed.getByRole("button", { name: "Commit 5 changes from Deploy preview build" }).click();
+  const form = failed.getByRole("form", { name: "Commit Deploy preview build's changes" });
+  const message = form.getByLabel(/Commit message/);
+  await expect(message).toHaveValue("Deploy preview build");
+  await expect(message).toBeFocused();
+  await message.fill("Preview build: retry-safe deploy script");
+  await form.getByRole("button", { name: "Commit", exact: true }).click();
+
+  await expect(page.getByText("Committed to release/preview")).toBeVisible();
+  await expect(form).toHaveCount(0);
+  await expect(failed.getByRole("button", { name: /^Commit / })).toHaveCount(0);
+  await expect(failed).toContainText("commits ahead 1");
+});

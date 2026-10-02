@@ -536,6 +536,14 @@ export class KalCodeClient {
   }
 
   /**
+   * Commits everything an isolated agent changed in its own worktree, on its branch, when the
+   * person asks (agents may not be able to commit from their sandbox). Refused while it works.
+   */
+  commitThreadWorktree(threadId: string, message: string): Promise<ThreadWorktreeState> {
+    return this.call("thread_worktree_commit", { threadId, message });
+  }
+
+  /**
    * Resolves a session name the way KalVoice does (explicit id, exact name in the current
    * workspace, exact name anywhere, provider/account + name, "this/it", provider only, then
    * fuzzy only when exactly one fits). Never guesses: more than one fit is `ambiguous` with at

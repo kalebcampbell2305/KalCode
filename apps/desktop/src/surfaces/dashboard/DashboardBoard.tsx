@@ -198,7 +198,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   // Agent Fleet: call signs, worktree facts and merge readiness for every card.
   // Archived agents keep their letters, so a call sign never moves to another agent.
   const handles = useMemo(() => fleetHandles([...(threads ?? []), ...archived]), [threads, archived]);
-  const worktrees = useWorktreeStates(threads);
+  const { states: worktrees, apply: applyWorktree } = useWorktreeStates(threads);
   const onReviewApprovals = useCallback(() => permissions.setPanelOpen(true), [permissions.setPanelOpen]);
 
   const [measureRef, columns] = useColumns();
@@ -272,6 +272,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
             handle={handles.get(thread.id)}
             worktree={worktrees.get(thread.id)}
             readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
+            onCommitted={applyWorktree}
           />
         ))}
       </div>

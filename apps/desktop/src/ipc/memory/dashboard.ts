@@ -808,6 +808,38 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   };
 
   const handlers: DashboardHandlers = {
+    thread_worktree_commit: (args) => {
+      const thread = requireThread(args);
+      const facts = worktreeFacts.get(thread.id);
+      if (!facts || !thread.worktreeId || !thread.branch)
+        fail({
+          category: "git",
+          code: "worktree_unavailable",
+          message: "This agent doesn't run in its own worktree.",
+          retryable: false,
+        });
+      if (facts.changed === 0)
+        fail({
+          category: "validation",
+          code: "nothing_to_commit",
+          message: "There are no changes to commit.",
+          retryable: false,
+        });
+      worktreeFacts.set(thread.id, { ...facts, ahead: facts.ahead + 1, changed: 0 });
+      const next = worktreeFacts.get(thread.id) as NonNullable<ThreadSeed["worktree"]>;
+      return {
+        threadId: thread.id,
+        worktreeId: thread.worktreeId,
+        branch: thread.branch,
+        baseBranch: "main",
+        ahead: next.ahead,
+        behind: 0,
+        changed: 0,
+        untracked: 0,
+        conflicts: next.conflicts,
+        observedAt: new Date().toISOString(),
+      };
+    },
     thread_worktree_states: read((args) => {
       const ids = Array.isArray(args.threadIds) ? (args.threadIds as string[]) : [];
       return ids.flatMap((id) => {

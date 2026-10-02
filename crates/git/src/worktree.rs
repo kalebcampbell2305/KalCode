@@ -279,6 +279,134 @@ pub fn remove(git: &Git, repo: &Repo, path: &Path, mode: RemoveMode) -> Result<(
     Ok(())
 }
 
+/// Longest commit message [`commit_all`] accepts, in characters.
+pub const MAX_COMMIT_MESSAGE_CHARS: usize = 2_000;
+
+/// A commit message KalCode may pass to git: trimmed, non-empty, at most
+/// [`MAX_COMMIT_MESSAGE_CHARS`] characters, and no control characters other than newline and
+/// tab. Returns the trimmed message.
+pub fn validate_commit_message(message: &str) -> Result<String> {
+    let trimmed = message.trim();
+    let ok = !trimmed.is_empty()
+        && trimmed.chars().count() <= MAX_COMMIT_MESSAGE_CHARS
+        && !trimmed
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t');
+    if ok {
+        Ok(trimmed.to_owned())
+    } else {
+        Err(KalError::validation(
+            "invalid_commit_message",
+            format!(
+                "Write a commit message of 1 to {MAX_COMMIT_MESSAGE_CHARS} characters, without control characters."
+            ),
+        ))
+    }
+}
+
+/// Commits everything in a KalCode-managed linked worktree on its own branch: `git add -A`, then
+/// `git commit -F -` with `message`, in the worktree folder, through KalCode's hardened runner
+/// (hooks disabled, no signing). Never amends; refuses the repository's main folder and a
+/// worktree whose checked-out branch isn't `branch`, so no other branch or the main checkout is
+/// touched. Returns the new commit id.
+///
+/// Errors: `nothing_to_commit` when the worktree has no changes; `git_identity_missing` when Git
+/// has no committer name or email.
+pub fn commit_all(
+    git: &Git,
+    repo: &Repo,
+    path: &Path,
+    branch: &str,
+    message: &str,
+) -> Result<String> {
+    let message = validate_commit_message(message)?;
+    validate_branch_name(branch)?;
+    let target = std::fs::canonicalize(path).map_err(|e| {
+        git_error("worktree_missing", "That worktree folder no longer exists.").with_source(e)
+    })?;
+    let listed = list(git, repo)?;
+    let entry = listed
+        .iter()
+        .find(|wt| std::fs::canonicalize(&wt.path).is_ok_and(|p| p == target))
+        .ok_or_else(|| {
+            git_error(
+                "worktree_unknown",
+                "That folder isn't a worktree of this repository.",
+            )
+        })?;
+    if entry.main {
+        return Err(git_error(
+            "worktree_is_main",
+            "KalCode only commits in an agent's own worktree.",
+        ));
+    }
+    if entry.branch.as_deref() != Some(branch) {
+        return Err(git_error(
+            "worktree_branch_changed",
+            "The agent's worktree is no longer on its own branch, so KalCode won't commit there.",
+        ));
+    }
+    if dirty_state(git, repo, &target)?.is_clean() {
+        return Err(nothing_to_commit());
+    }
+    let in_worktree = || {
+        git.cmd()
+            .configs(repo.overrides().iter().cloned())
+            .current_dir(&target)
+    };
+    in_worktree()
+        .args(["add", "-A", "--", "."])
+        .timeout(std::time::Duration::from_secs(300))
+        .run_ok("worktree")?;
+    let out = in_worktree()
+        .args(["commit", "--quiet", "--file=-", "--cleanup=strip"])
+        .stdin(message.into_bytes())
+        .timeout(std::time::Duration::from_secs(300))
+        .run()?;
+    if !out.status.success() {
+        let text = format!("{}\n{}", out.stderr, out.stdout_text()).to_ascii_lowercase();
+        // Logs git's own message; the user sees the mapped one.
+        let failure = crate::runner::classify_failure("commit", &out);
+        return Err(if is_identity_missing(&text) {
+            git_error(
+                "git_identity_missing",
+                "Set your Git name and email (git config user.name / user.email), then try again.",
+            )
+        } else if text.contains("nothing to commit") || text.contains("nothing added to commit") {
+            nothing_to_commit()
+        } else {
+            failure
+        });
+    }
+    let head = in_worktree()
+        .args(["rev-parse", "--verify", "HEAD"])
+        .read_only()
+        .run_ok("worktree")?
+        .stdout_text()
+        .trim()
+        .to_owned();
+    if !is_object_id(&head) {
+        return Err(git_error(
+            "commit_failed",
+            "Git didn't report the new commit.",
+        ));
+    }
+    Ok(head)
+}
+
+fn nothing_to_commit() -> KalError {
+    git_error("nothing_to_commit", "There are no changes to commit.")
+}
+
+/// Git's messages when it has no usable committer identity.
+pub(crate) fn is_identity_missing(lower: &str) -> bool {
+    lower.contains("please tell me who you are")
+        || lower.contains("empty ident name")
+        || lower.contains("unable to auto-detect email address")
+        || lower.contains("no email was given")
+        || lower.contains("no name was given")
+}
+
 /// A KalCode-managed worktree created by [`create_managed`], ready to be recorded in
 /// `git_worktrees` (see [`crate::store::insert_worktree`]).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -580,6 +580,7 @@ fn operation_code(operation: &'static str) -> &'static str {
         "branches" => "branches_failed",
         "worktree" => "worktree_failed",
         "checkpoint" => "checkpoint_failed",
+        "commit" => "commit_failed",
         "restore" => "restore_failed",
         "discover" => "discover_failed",
         _ => "git_failed",

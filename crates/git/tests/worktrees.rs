@@ -406,3 +406,111 @@ fn a_failed_create_leaves_nothing_behind_and_keeps_existing_branches() {
         &["rev-parse", "--verify", "--quiet", "refs/heads/kal/new"]
     ));
 }
+
+#[test]
+fn commit_all_commits_on_the_worktree_branch_only() {
+    let fx = Fixture::repo();
+    let repo = Repo::discover(&fx.git, &fx.ws)
+        .expect("discover")
+        .expect("repo");
+    let new = worktree::create_managed(
+        &fx.git,
+        &repo,
+        &fx.data.join("worktrees"),
+        "kal/agent-3",
+        None,
+        WorktreePurpose::Thread,
+        None,
+    )
+    .expect("create");
+    let main_head = fx.git_plain(&["rev-parse", "HEAD"]);
+
+    // Nothing changed yet.
+    assert_eq!(
+        worktree::commit_all(&fx.git, &repo, &new.path, "kal/agent-3", "x")
+            .expect_err("clean")
+            .code,
+        "nothing_to_commit"
+    );
+
+    std::fs::write(new.path.join("new.txt"), "agent work\n").expect("write");
+    std::fs::write(new.path.join("README.md"), "edited\n").expect("write");
+    let oid = worktree::commit_all(
+        &fx.git,
+        &repo,
+        &new.path,
+        "kal/agent-3",
+        "  Agent work\n\nDetails\tok  ",
+    )
+    .expect("commit");
+    assert_eq!(
+        fx.git_plain(&["rev-parse", "refs/heads/kal/agent-3"])
+            .trim(),
+        oid
+    );
+    assert_eq!(
+        fx.git_plain(&["log", "-1", "--format=%B", "kal/agent-3"])
+            .trim(),
+        "Agent work\n\nDetails\tok"
+    );
+    assert_eq!(
+        fx.git_plain(&["rev-parse", "kal/agent-3~1"]),
+        main_head,
+        "a new commit on top of the start, never an amend"
+    );
+    // The main checkout and its branch are untouched.
+    assert_eq!(fx.git_plain(&["rev-parse", "HEAD"]), main_head);
+    assert_eq!(fx.read("README.md"), b"hello\n");
+    assert!(!fx.exists("new.txt"));
+    assert!(
+        worktree::dirty_state(&fx.git, &repo, &new.path)
+            .expect("dirty")
+            .is_clean()
+    );
+    assert_eq!(
+        worktree::commit_all(&fx.git, &repo, &new.path, "kal/agent-3", "again")
+            .expect_err("clean")
+            .code,
+        "nothing_to_commit"
+    );
+
+    // Never the main folder, nor a worktree on another branch, nor a bad message.
+    fx.write("main-change.txt", "x");
+    assert_eq!(
+        worktree::commit_all(&fx.git, &repo, &fx.root, "main", "m")
+            .expect_err("main")
+            .code,
+        "worktree_is_main"
+    );
+    std::fs::write(new.path.join("more.txt"), "x").expect("write");
+    assert_eq!(
+        worktree::commit_all(&fx.git, &repo, &new.path, "kal/other", "m")
+            .expect_err("branch")
+            .code,
+        "worktree_branch_changed"
+    );
+    for bad in ["", "   ", "nul\0byte", "bell\u{7}", &"x".repeat(2_001)] {
+        assert_eq!(
+            worktree::commit_all(&fx.git, &repo, &new.path, "kal/agent-3", bad)
+                .expect_err("invalid")
+                .code,
+            "invalid_commit_message",
+            "{bad:?}"
+        );
+    }
+    assert!(worktree::validate_commit_message(&"x".repeat(2_000)).is_ok());
+
+    // No committer identity: a clear, typed error and no commit.
+    fx.git_plain(&["config", "user.name", ""]);
+    let before = fx.git_plain(&["rev-parse", "refs/heads/kal/agent-3"]);
+    assert_eq!(
+        worktree::commit_all(&fx.git, &repo, &new.path, "kal/agent-3", "who am I")
+            .expect_err("identity")
+            .code,
+        "git_identity_missing"
+    );
+    assert_eq!(
+        fx.git_plain(&["rev-parse", "refs/heads/kal/agent-3"]),
+        before
+    );
+}

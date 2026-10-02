@@ -22,6 +22,7 @@ import type {
   ThreadOptions,
   ThreadStatus,
   ThreadSummary,
+  ThreadWorktreeState,
   ToolCallRecord,
   WorkspaceOption,
 } from "@kalcode/protocol";
@@ -820,6 +821,33 @@ export function createThreadsMemory(
     return { thread: t, prompt };
   };
 
+  // Agent Fleet worktree facts: a fresh worktree is level with main and merges cleanly; the agent's
+  // edits are uncommitted until the person commits them (the memory runtime's agents don't commit).
+  const committed = new Map<string, { ahead: number; files: number }>();
+  const worktreeFacts = (t: MemThread) => {
+    const done = committed.get(t.summary.id);
+    return {
+      ahead: done?.ahead ?? 0,
+      changed: Math.max(0, (t.summary.filesChanged ?? 0) - (done?.files ?? 0)),
+    };
+  };
+  const worktreeState = (t: MemThread): ThreadWorktreeState | null => {
+    if (!t.summary.worktreeId || !t.summary.branch) return null;
+    const facts = worktreeFacts(t);
+    return {
+      threadId: t.summary.id,
+      worktreeId: t.summary.worktreeId,
+      branch: t.summary.branch,
+      baseBranch: "main",
+      ahead: facts.ahead,
+      behind: 0,
+      changed: facts.changed,
+      untracked: 0,
+      conflicts: false,
+      observedAt: now(),
+    };
+  };
+
   const handlers: Record<ThreadCommand, Handler> = {
     thread_options: (): ThreadOptions => {
       requireCore();
@@ -895,22 +923,22 @@ export function createThreadsMemory(
         invalid("invalid_thread_ids", "Those thread references aren't valid.");
       return ids.flatMap((id) => {
         const t = threads.get(id as string);
-        if (!t?.summary.worktreeId || !t.summary.branch) return [];
-        return [
-          {
-            threadId: t.summary.id,
-            worktreeId: t.summary.worktreeId,
-            branch: t.summary.branch,
-            baseBranch: "main",
-            ahead: 0,
-            behind: 0,
-            changed: t.summary.filesChanged ?? 0,
-            untracked: 0,
-            conflicts: false,
-            observedAt: now(),
-          },
-        ];
+        return t ? (worktreeState(t) ?? []) : [];
       });
+    },
+    // Like native: KalCode commits the isolated agent's changes on its branch, never while it works.
+    thread_worktree_commit: (args) => {
+      requireCore();
+      const t = get(args);
+      const message = typeof args.message === "string" ? args.message.trim() : "";
+      if (!message || message.length > 2000) invalid("invalid_commit_message", "Write a commit message first.");
+      if (!worktreeState(t)) error("git", "worktree_unavailable", "This agent doesn't run in its own worktree.");
+      if (t.live && LIVE.has(t.summary.status))
+        invalid("thread_busy", "Stop or wait for the agent before committing its work.");
+      const facts = worktreeFacts(t);
+      if (facts.changed === 0) invalid("nothing_to_commit", "There are no changes to commit.");
+      committed.set(t.summary.id, { ahead: facts.ahead + 1, files: t.summary.filesChanged ?? 0 });
+      return worktreeState(t);
     },
     thread_interrupt: (args) => {
       const t = get(args);

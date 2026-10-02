@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-worktree-commit"
+description = "Enables the thread_worktree_commit command without any pre-configured scope."
+commands.allow = ["thread_worktree_commit"]
+
+[[permission]]
+identifier = "deny-thread-worktree-commit"
+description = "Denies the thread_worktree_commit command without any pre-configured scope."
+commands.deny = ["thread_worktree_commit"]

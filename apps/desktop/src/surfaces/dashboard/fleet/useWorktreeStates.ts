@@ -1,5 +1,5 @@
 import type { ThreadSummary, ThreadWorktreeState } from "@kalcode/protocol";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 
 /** Git facts change with commits and edits; a fleet card doesn't need them faster than this. */
@@ -15,7 +15,13 @@ const MAX_IDS = 64;
  * thread, file and Git events settle. Only one read is in flight at a time (each one runs Git in
  * every worktree). A failed read keeps the last facts rather than inventing new ones.
  */
-export function useWorktreeStates(threads: readonly ThreadSummary[] | null): Map<string, ThreadWorktreeState> {
+export interface WorktreeStates {
+  states: Map<string, ThreadWorktreeState>;
+  /** Applies facts the caller just observed (e.g. after a commit) without waiting for a read. */
+  apply: (state: ThreadWorktreeState) => void;
+}
+
+export function useWorktreeStates(threads: readonly ThreadSummary[] | null): WorktreeStates {
   const { client } = useRuntime();
   const { events } = useEvents();
   const ids = useMemo(
@@ -87,5 +93,9 @@ export function useWorktreeStates(threads: readonly ThreadSummary[] | null): Map
     if (trigger > 0) reader.current?.request();
   }, [trigger]);
 
-  return states;
+  const apply = useCallback(
+    (state: ThreadWorktreeState) => setStates((current) => new Map(current).set(state.threadId, state)),
+    [],
+  );
+  return useMemo(() => ({ states, apply }), [states, apply]);
 }

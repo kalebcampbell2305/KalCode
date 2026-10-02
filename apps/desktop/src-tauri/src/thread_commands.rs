@@ -2922,5 +2922,108 @@ mod tests {
             );
         }
         assert!(crate::command_registry::COMMANDS.contains(&"thread_worktree_states"));
+        assert!(crate::command_registry::COMMANDS.contains(&"thread_worktree_commit"));
+    }
+
+    #[test]
+    fn committing_an_agents_worktree_validates_refuses_and_records_the_commit() {
+        use crate::git_commands::commit_thread_worktree;
+        let fixture = FleetFixture::new(true);
+        let commit = |thread_id: &str, message: &str| {
+            commit_thread_worktree(
+                &fixture.accounts.core,
+                &fixture.git,
+                &fixture.runtime,
+                thread_id,
+                message,
+            )
+        };
+        let code = |result: kalcode_core::Result<
+            kalcode_contracts::threads::ThreadWorktreeState,
+        >| { result.expect_err("refused").code };
+
+        // Argument validation comes first.
+        assert_eq!(code(commit("not-an-id", "m")), "invalid_thread_id");
+        let unknown = kalcode_contracts::ids::new_id();
+        for bad in ["", "  \n ", "a\0b", "esc\u{1b}[0m", &"x".repeat(2_001)] {
+            assert_eq!(code(commit(&unknown, bad)), "invalid_commit_message");
+        }
+        assert_eq!(code(commit(&unknown, "m")), "thread_not_found");
+
+        // A thread running in the workspace folder has no worktree to commit.
+        let shared = fixture
+            .runtime
+            .create(fixture.request(Some("Shared"), None))
+            .expect("shared thread");
+        assert_eq!(code(commit(&shared.id, "m")), "worktree_unknown");
+
+        let thread = fixture
+            .create(fixture.request(Some("Commit me"), None))
+            .expect("isolated thread");
+        let branch = thread.branch.clone().expect("branch");
+        let folder = std::path::PathBuf::from(&fixture.spy.starts()[1].working_directory);
+        assert_eq!(code(commit(&thread.id, "m")), "nothing_to_commit");
+
+        // Never while the agent may still be changing files.
+        std::fs::write(folder.join("feature.txt"), "agent work\n").expect("write");
+        let set_status = |status: ThreadStatus| {
+            fixture
+                .accounts
+                .core
+                .write_with_events(|tx| {
+                    kalcode_threads::store::set_status(tx, &thread.id, status, None, "t")?;
+                    Ok(((), Vec::new()))
+                })
+                .expect("status");
+        };
+        for busy in [
+            ThreadStatus::Thinking,
+            ThreadStatus::WaitingForPermission,
+            ThreadStatus::Paused,
+        ] {
+            set_status(busy);
+            let error = commit(&thread.id, "m").expect_err("busy");
+            assert_eq!(error.code, "thread_busy");
+            assert_eq!(
+                error.message,
+                "Stop or wait for the agent before committing its work."
+            );
+        }
+        set_status(ThreadStatus::Idle);
+
+        let main_head = git_output(fixture.root.path(), &["rev-parse", "HEAD"]).stdout;
+        let state = commit(&thread.id, "Add the feature").expect("commit");
+        assert_eq!(state.branch, branch);
+        assert_eq!((state.ahead, state.behind), (Some(1), Some(0)));
+        assert_eq!((state.changed, state.untracked), (0, 0));
+        assert_eq!(state.conflicts, Some(false));
+        assert_eq!(
+            git_output(fixture.root.path(), &["rev-parse", "HEAD"]).stdout,
+            main_head,
+            "the main checkout is untouched"
+        );
+        assert!(!fixture.root.path().join("feature.txt").exists());
+        let events = fixture
+            .accounts
+            .core
+            .recent_events(50, None)
+            .expect("events");
+        let recorded = events
+            .iter()
+            .find(|e| e.event.type_name() == "git.commit_created")
+            .expect("git.commit_created");
+        assert_eq!(
+            recorded.correlation.thread_id.as_deref(),
+            Some(thread.id.as_str())
+        );
+        assert_eq!(
+            recorded.correlation.workspace_id.as_deref(),
+            Some(fixture.accounts.workspace_id.as_str())
+        );
+        assert_eq!(code(commit(&thread.id, "again")), "nothing_to_commit");
+
+        // A worktree folder that is gone.
+        std::fs::remove_dir_all(&folder).expect("delete");
+        assert_eq!(code(commit(&thread.id, "m")), "worktree_missing");
     }
 }

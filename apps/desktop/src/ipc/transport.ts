@@ -90,6 +90,7 @@ export type CommandName =
   | "thread_list"
   | "thread_get"
   | "thread_worktree_states"
+  | "thread_worktree_commit"
   | "thread_messages"
   | "thread_tool_calls"
   | "thread_options"
