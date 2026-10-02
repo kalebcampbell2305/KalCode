@@ -1,5 +1,54 @@
 # KalCode agent policy
 
+## Permanent fastest truthful release policy (owner directive 2026-10-02)
+
+**KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.**
+This directive applies to Claude Code, Codex, and future agents. It replaces older release-gate instructions wherever they impose unnecessary delay, repeated validation, arbitrary waiting, broad checklists, or release ceremony. It takes precedence over conflicting historical instructions below and in release kits, campaign documents, and automation. Keep older evidence; remove irrelevant gates from the critical path.
+
+Default lifecycle: **IMPLEMENT -> TEST WHAT CHANGED -> REVIEW -> MERGE -> BUILD -> SHIP -> VERIFY -> CLEAN UP.** Use the fastest technically safe merge, build, shipment, and production verification.
+
+### Only relevant risk may block delivery
+
+Every gate must answer: **What specific realistic failure does this gate protect against for this change?** If it has no strong answer, it must not block merge or release.
+
+Do not block on arbitrary waiting or soak periods, giant generic QA checklists, unrelated suites, repeated valid tests, inapplicable historical procedures, automatable owner steps, a new public version, unfinished unrelated features, reopening completed work, just-in-case audits, broad cross-product regression for isolated edits, or duplicate review of unchanged code.
+
+For each change, identify its affected surface and realistic failure modes, run the smallest tests that control those risks, reuse valid evidence, and ship. A small UI fix needs focused UI proof and the relevant build; a terminal change needs terminal and affected integration proof; billing needs billing/entitlement proof; updater/release changes need package/update-path and signing proof. Do not run unrelated tests merely because they exist.
+
+**Valid evidence stays valid until the change invalidates it.** Do not repeat a test, QA flow, signing/platform check, or release proof when its implementation and dependencies are materially unchanged, its environment remains valid, and no new failure evidence exists. Rerun only what was invalidated.
+
+### Merge and ship immediately
+
+When implementation is correct, reviewed proportionately, and relevant tests pass, merge through the normal PR path. Resolve actual conflicts; do not manufacture process or hold independent completed work for unrelated work. Preserve one canonical writer for conflicting surfaces.
+
+Merged is not done. User-facing work proceeds automatically through the current build, required packaging/signing, publication, updater availability, and focused production proof. Public versions are owner-controlled labels, never shipping gates. Ship internal builds under the current public version; only an explicit owner declaration changes the public version, consistently across affected surfaces.
+
+No two-session/no-commit rule may stall useful progress. Commit coherent validated units incrementally; avoid both giant uncommitted batches and arbitrary commit ceremony.
+
+### Automate and parallelize safely
+
+Automate builds, tests, metadata, configured signing, publication, updater metadata, website release references, production checks, and cleanup. Do not require routine manual steps merely because old procedures did. Ask the owner only for a real decision, unavailable credential/action, irreversible risk, or ambiguity.
+
+Run useful independent work concurrently: Windows and macOS builds, release notes and tests, website and packaging, independent verification, and non-conflicting artifact preparation. Do not serialize unrelated steps. Read-only agents may review in parallel; conflicting writes have one owner.
+
+KalCode supports Windows and macOS where the feature applies. Test platform-specific behavior on the affected platform, validate shared changes appropriately on both, and reuse unchanged platform evidence instead of blindly repeating every test.
+
+### Real blockers and non-negotiable integrity
+
+Real blockers include failing relevant tests, reproducible regressions, correctness-affecting merge conflicts, missing signing/notarization capability or credentials, broken packages/deployments/update paths, billing or entitlement mismatches, security/integrity defects, and ambiguity that risks user data or production.
+
+On failure: **FAILURE -> ROOT CAUSE -> FIX -> RETEST AFFECTED SURFACE -> CONTINUE.** Fix it immediately where possible. Do not restart the whole release or run unrelated suites after a small fix.
+
+Speed never overrides code-signing integrity, notarization, credentials/secrets, billing/entitlements, updater integrity, or user-data safety. Make applicable checks fast and automated, not optional.
+
+### Focused production proof and completion
+
+Verify the smallest facts proving delivery: correct version/build served, updater can receive it, app launches, changed behavior works, and relevant backend, billing, or website surfaces work when affected. Do not add giant post-release ceremonies. Once production truth is established, finish.
+
+After shipping, preserve required artifacts/evidence and apply the permanent safe storage policy. Remove only proven-obsolete Rust/Cargo targets, packaging intermediates, temporary data, duplicate builds, and abandoned build outputs. Never delete source, current work, active worktrees, current certified artifacts, evidence, credentials/signing material, or uncertain items.
+
+**DONE = implemented + relevant tests pass + reviewed + merged + built + signed/packaged where required + published + user-receivable + focused production verification passes + safe cleanup complete.** Code written, tests passed, or merged alone is not done.
+
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
 ## KalVoice integration rule (owner directive 2026-10-01)
