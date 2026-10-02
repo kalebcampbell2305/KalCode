@@ -460,3 +460,14 @@ the feature-enabled proof remains pending. Windows trusted verification stopped
 at website-unit exit 1 with suppressed child output despite the same commit's
 local 600-test pass. This is unresolved pending diagnostic output and reproof;
 neither a partial gate nor default-feature success certifies delivery.
+
+## Command Deck integration regression
+
+Integrated main `81db65cb` at `97455bd7`, preserving both sets of UI tests.
+Independent review reproduced the collapsed-widget push-to-talk activity bar
+overlapping the new status strip by 12 pixels. The activity now consumes the
+existing ShellSlots bottom inset for both active and disconnected states.
+The regression failed before repair and passed at ordinary and smaller window
+sizes afterward; neighboring UI 3/3 and focused units 18/18 passed. The new test
+raises functional UI inventory to 282 and the combined established suite to 338.
+Final integrated gates, merge, signed packages, and delivery remain pending.
