@@ -1,0 +1,95 @@
+name: Update from live verify (self-hosted)
+
+# Fast-lane automated update-from-live check (owner fast-lane policy 2026-10-02; QA record v3, #85). Same account and trust
+# model as clean-install-verify.yml: the low-privilege kalcode-ci gate account, a profile that has never run KalCode, no
+# repository code (the pinned script comes from a SHA256SUMS-pinned packet), no secrets, fail closed on any leftover.
+# The packet folder C:\Users\Public\Documents\KalCode-QA\windows\ufl-<version> holds: win-update-from-live.ps1, the candidate
+# installer, SHA256SUMS. Dispatch from main:
+#   gh workflow run update-from-live-verify.yml --ref main -f packet=... -f sums_sha256=... -f script_sha256=...
+#     -f live_url=... -f live_sha256=... -f live_version=... -f candidate_version=... -f candidate_sha256=...
+#     -f expect_schema=21 -f changes_data=true
+# Then: gh run download <id> -n update-from-live-<id> -D target/recovery-B19-fast/receipts/ufl-<id>
+
+run-name: Update from live ${{ inputs.live_version }} -> ${{ inputs.candidate_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      packet: { description: Packet folder under C:\Users\Public\Documents\KalCode-QA\windows (ufl-*), required: true, type: string }
+      sums_sha256: { description: Pinned SHA-256 of the packet's SHA256SUMS, required: true, type: string }
+      script_sha256: { description: Pinned SHA-256 of win-update-from-live.ps1, required: true, type: string }
+      live_url: { description: https://kalcoded.com/ installer URL of the live Stable build, required: true, type: string }
+      live_sha256: { description: SHA-256 of the live installer, required: true, type: string }
+      live_version: { description: Live version X.Y.Z+N, required: true, type: string }
+      candidate_version: { description: Candidate version X.Y.Z+N, required: true, type: string }
+      candidate_sha256: { description: SHA-256 of the signed candidate installer, required: true, type: string }
+      expect_schema: { description: Highest migration number in the candidate commit, required: true, type: string }
+      changes_data: { description: true when the candidate adds a migration (restoreGuard), required: true, type: choice, options: ["true", "false"] }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-install-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Update from live (kalcode-ci)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Windows, kalcode-gate]
+    timeout-minutes: 45
+    env:
+      PACKET: ${{ inputs.packet }}
+      SUMS_SHA256: ${{ inputs.sums_sha256 }}
+      SCRIPT_SHA256: ${{ inputs.script_sha256 }}
+      LIVE_URL: ${{ inputs.live_url }}
+      LIVE_SHA256: ${{ inputs.live_sha256 }}
+      LIVE_VERSION: ${{ inputs.live_version }}
+      CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+      CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+      EXPECT_SCHEMA: ${{ inputs.expect_schema }}
+      CHANGES_DATA: ${{ inputs.changes_data }}
+    steps:
+      - name: Copy the pinned packet and run the update-from-live check
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          if ($elevated -or $id.Name -notmatch '\\kalcode-ci$') { throw "REFUSED: runs only as the non-elevated kalcode-ci account (got $($id.Name))" }
+          if ($env:PACKET -notmatch '^C:\\Users\\Public\\Documents\\KalCode-QA\\windows\\ufl-[A-Za-z0-9._+-]{1,120}$') { throw 'REFUSED: packet must be a ufl-* folder' }
+          foreach ($k in 'SUMS_SHA256', 'SCRIPT_SHA256', 'LIVE_SHA256', 'CANDIDATE_SHA256') { if ([Environment]::GetEnvironmentVariable($k) -cnotmatch '^[0-9a-f]{64}$') { throw "REFUSED: $k must be a lowercase SHA-256" } }
+          if ($env:EXPECT_SCHEMA -notmatch '^[1-9][0-9]{0,3}$') { throw 'REFUSED: expect_schema' }
+          function Sha([string]$p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
+          $sums = Join-Path $env:PACKET 'SHA256SUMS'
+          if ((Sha $sums) -ne $env:SUMS_SHA256) { throw 'REFUSED: SHA256SUMS is not pinned' }
+          $work = Join-Path $env:RUNNER_TEMP ('ufl-' + $env:GITHUB_RUN_ID); $out = Join-Path $env:RUNNER_TEMP 'ufl-out'
+          foreach ($d in $work, $out) { if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }; New-Item -ItemType Directory -Path $d | Out-Null }
+          $inst = $null
+          foreach ($line in [IO.File]::ReadAllLines($sums)) {
+            if (-not $line.Trim()) { continue }
+            if ($line -notmatch '^([0-9a-f]{64}) \*([A-Za-z0-9._+-]{1,160})$') { throw "REFUSED: bad SHA256SUMS line: $line" }
+            $dst = Join-Path $work $Matches[2]; Copy-Item -LiteralPath (Join-Path $env:PACKET $Matches[2]) -Destination $dst
+            if ((Sha $dst) -ne $Matches[1]) { throw "REFUSED: $($Matches[2]) does not match SHA256SUMS" }
+            if ($Matches[2] -like '*_x64-setup.exe') { $inst = $dst }
+          }
+          $script = Join-Path $work 'win-update-from-live.ps1'
+          if ((Sha $script) -ne $env:SCRIPT_SHA256) { throw 'REFUSED: script is not pinned' }
+          if (-not $inst -or (Sha $inst) -ne $env:CANDIDATE_SHA256) { throw 'REFUSED: candidate installer is not pinned' }
+          $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script, '-LiveUrl', $env:LIVE_URL, '-LiveSha256', $env:LIVE_SHA256,
+            '-LiveVersion', $env:LIVE_VERSION, '-CandidateInstaller', $inst, '-CandidateSha256', $env:CANDIDATE_SHA256,
+            '-CandidateVersion', $env:CANDIDATE_VERSION, '-ExpectSchema', $env:EXPECT_SCHEMA, '-OutDir', $out)
+          if ($env:CHANGES_DATA -eq 'true') { $a += '-ChangesData' }
+          $p = Start-Process -FilePath powershell.exe -ArgumentList $a -NoNewWindow -Wait -PassThru
+          $r = Get-Content -Raw -LiteralPath (Join-Path $out 'update-from-live-receipt.json') | ConvertFrom-Json
+          $r | Add-Member -NotePropertyName github -NotePropertyValue ([ordered]@{ runId = [int64]$env:GITHUB_RUN_ID; sha = $env:GITHUB_SHA; workflowRef = $env:GITHUB_WORKFLOW_REF; packetSums = $env:SUMS_SHA256; scriptSha256 = $env:SCRIPT_SHA256 })
+          [IO.File]::WriteAllText((Join-Path $out 'update-from-live-receipt.json'), ($r | ConvertTo-Json -Depth 8) + "`n")
+          if ($p.ExitCode -ne 0 -or $r.status -ne 'PASS') { throw "update-from-live FAILED (exit $($p.ExitCode), status $($r.status)): $($r.error)" }
+      - name: Upload the receipt and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-from-live-${{ github.run_id }}
+          path: ${{ runner.temp }}/ufl-out
+          if-no-files-found: error
