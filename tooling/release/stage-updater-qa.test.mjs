@@ -461,3 +461,73 @@ test("stage executable has no pointer-write or mutable-feed publication capabili
   assert.match(source, /buildQaVersionClaimStatement/);
   assert.match(source, /Stable pointer changed/);
 });
+
+// ---- Fast lane (owner policy 2026-10-02): candidate-only staging, no private lower baseline ----
+test("a candidate stages alone, claims only its immutable version, and keeps the Stable pointer", async () => {
+  const candidate = release(CANDIDATE_VERSION, "5", CANDIDATE_COMMIT);
+  const pointer = pointerRow();
+  const receipt = createQaStageReceipt({ baseline: null, candidate, pointerRows: [pointer] });
+  assert.equal(receipt.baseline, null);
+  const remote = remoteFixture(pointer);
+  const result = await runQaStagePublication({ baseline: null, candidate, receipt, remote });
+  assert.deepEqual(result.pointerRows, [pointer]);
+  assert.deepEqual(result.versions, [CANDIDATE_VERSION]);
+  assert.equal(remote.versions.size, 1);
+  assert.deepEqual(exactPublicationRowProblems(remote.versions.get(CANDIDATE_VERSION), candidate.candidate), []);
+  const resumed = await runQaStagePublication({ candidate, receipt, remote });
+  assert.deepEqual(resumed.versions, [CANDIDATE_VERSION]);
+  assert.equal(remote.versions.size, 1);
+});
+
+test("a candidate staged alone must still outrank the live pointer and fail closed on collisions and races", async () => {
+  const candidate = release(CANDIDATE_VERSION, "5", CANDIDATE_COMMIT);
+  const newer = pointerRow("1.2.4");
+  await assert.rejects(
+    runQaStagePublication({
+      candidate,
+      receipt: createQaStageReceipt({ baseline: null, candidate, pointerRows: [newer] }),
+      remote: remoteFixture(newer),
+    }),
+    /older release than the staged candidate/,
+  );
+  const pointer = pointerRow();
+  const collision = remoteFixture(pointer);
+  collision.objects.set(candidate.objects[0].key, Buffer.from(candidate.objects[0].bytes));
+  await assert.rejects(runQaStagePublication({ candidate, receipt: null, remote: collision }), /durable receipt/);
+  const raced = remoteFixture(pointer);
+  const claim = raced.claimVersion;
+  raced.claimVersion = async (value) => {
+    const result = await claim(value);
+    raced.setPointer({ channel: "stable", version: "9.9.9", precedence_key: "race" });
+    return result;
+  };
+  await assert.rejects(
+    runQaStagePublication({
+      candidate,
+      receipt: createQaStageReceipt({ baseline: null, candidate, pointerRows: [pointer] }),
+      remote: raced,
+    }),
+    /pointer changed/,
+  );
+});
+
+test("CLI accepts a candidate-only stage and refuses a half-specified baseline", () => {
+  const root = resolve("C:/qa");
+  const argv = [
+    "--candidate-source",
+    join(root, "candidate-source"),
+    "--candidate-staging",
+    join(root, "candidate-stage"),
+    "--receipt",
+    join(root, "receipt.json"),
+    "--dry-run",
+  ];
+  const parsed = parseQaStageArguments(argv);
+  assert.equal(parsed.baselineSource, null);
+  assert.equal(parsed.baselineStaging, null);
+  assert.throws(
+    () => parseQaStageArguments(["--baseline-source", join(root, "baseline-source"), ...argv]),
+    /together or not at all/,
+  );
+  assert.throws(() => parseQaStageArguments(argv.with(3, join(root, "candidate-source"))), /distinct/);
+});

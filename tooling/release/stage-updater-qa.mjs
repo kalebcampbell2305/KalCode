@@ -193,8 +193,9 @@ export function validateBaselineSourceSnapshot(snapshot) {
   return problems;
 }
 
-function flagValue(args, name) {
+function flagValue(args, name, optional = false) {
   const positions = args.flatMap((value, index) => (value === name ? [index] : []));
+  if (optional && positions.length === 0) return null;
   if (positions.length !== 1) throw new Error(`${name} must be specified exactly once`);
   const value = args[positions[0] + 1];
   if (!value || value.startsWith("--")) throw new Error(`${name} requires a path`);
@@ -220,25 +221,28 @@ export function parseQaStageArguments(args) {
   if (modes.length > 1) throw new Error("updater QA staging modes are mutually exclusive");
   const parsed = {
     mode: modes[0].slice(2),
-    baselineSource: flagValue(args, "--baseline-source"),
-    baselineStaging: flagValue(args, "--baseline-staging"),
+    // Fast lane (owner policy 2026-10-02): a candidate may be staged alone, without a private lower baseline.
+    baselineSource: flagValue(args, "--baseline-source", true),
+    baselineStaging: flagValue(args, "--baseline-staging", true),
     candidateSource: flagValue(args, "--candidate-source"),
     candidateStaging: flagValue(args, "--candidate-staging"),
     receiptPath: flagValue(args, "--receipt"),
   };
-  for (const [key, value] of Object.entries(parsed)) {
-    if (key !== "mode" && !isAbsolute(value)) throw new Error(`${key} must be an absolute path`);
+  if ((parsed.baselineSource === null) !== (parsed.baselineStaging === null)) {
+    throw new Error("--baseline-source and --baseline-staging must be given together or not at all");
   }
-  const unique = new Set(
-    [
-      parsed.baselineSource,
-      parsed.baselineStaging,
-      parsed.candidateSource,
-      parsed.candidateStaging,
-      parsed.receiptPath,
-    ].map((value) => resolve(value).toLowerCase()),
-  );
-  if (unique.size !== 5) throw new Error("updater QA source, staging, and receipt paths must be distinct");
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key !== "mode" && value !== null && !isAbsolute(value)) throw new Error(`${key} must be an absolute path`);
+  }
+  const paths = [
+    parsed.baselineSource,
+    parsed.baselineStaging,
+    parsed.candidateSource,
+    parsed.candidateStaging,
+    parsed.receiptPath,
+  ].filter((value) => value !== null);
+  const unique = new Set(paths.map((value) => resolve(value).toLowerCase()));
+  if (unique.size !== paths.length) throw new Error("updater QA source, staging, and receipt paths must be distinct");
   return parsed;
 }
 
@@ -257,7 +261,7 @@ export function createQaStageReceipt({ baseline, candidate, pointerRows, created
   const identity = {
     schemaVersion: 1,
     channel: "stable",
-    baseline: receiptRelease(baseline),
+    baseline: baseline ? receiptRelease(baseline) : null,
     candidate: receiptRelease(candidate),
     pointerRows,
   };
@@ -403,16 +407,17 @@ export function canonicalQaObjectPutArguments(object) {
  * Linearizes only immutable object uploads and immutable version-row claims. `remote` intentionally
  * has no pointer-write method, and the Stable pointer is compared before every claim and afterward.
  */
-export async function runQaStagePublication({ baseline, candidate, receipt, remote }) {
-  assertRelease(baseline, "baseline");
+export async function runQaStagePublication({ baseline = null, candidate, receipt, remote }) {
+  if (baseline) assertRelease(baseline, "baseline");
   assertRelease(candidate, "candidate");
-  if (semverPrecedenceKey(baseline.version) >= semverPrecedenceKey(candidate.version)) {
+  if (baseline && semverPrecedenceKey(baseline.version) >= semverPrecedenceKey(candidate.version)) {
     throw new Error("QA baseline must be lower than the candidate");
   }
+  const releases = baseline ? [baseline, candidate] : [candidate];
   if (!receipt) throw new Error("a durable receipt is required before updater QA stage writes");
   const pointerRows = await preflightQaStagePublication({ baseline, candidate, receipt, remote });
 
-  for (const release of [baseline, candidate]) {
+  for (const release of releases) {
     for (const object of release.objects) {
       if (objectResult(await remote.readObject(object.key)) === null) await remote.putObject(object);
       const readback = objectResult(await remote.readObject(object.key));
@@ -422,7 +427,7 @@ export async function runQaStagePublication({ baseline, candidate, receipt, remo
     }
   }
 
-  for (const release of [baseline, candidate]) {
+  for (const release of releases) {
     if (!pointerRowsEqual(await remote.readPointer(), pointerRows)) {
       throw new Error("Stable pointer changed during updater QA staging");
     }
@@ -445,13 +450,15 @@ export async function runQaStagePublication({ baseline, candidate, receipt, remo
   }
   const pointerAfter = await remote.readPointer();
   if (!pointerRowsEqual(pointerAfter, pointerRows)) throw new Error("Stable pointer changed during updater QA staging");
-  return { pointerRows: pointerAfter, versions: [baseline.version, candidate.version] };
+  return { pointerRows: pointerAfter, versions: releases.map((release) => release.version) };
 }
 
 /** Read-only collision/pointer preflight. A missing receipt requires every planned key and row to be unused. */
-export async function preflightQaStagePublication({ baseline, candidate, receipt, remote }) {
-  assertRelease(baseline, "baseline");
+export async function preflightQaStagePublication({ baseline = null, candidate, receipt, remote }) {
+  if (baseline) assertRelease(baseline, "baseline");
   assertRelease(candidate, "candidate");
+  // The lowest staged version (the baseline, or the candidate staged alone) must rank above the live pointer.
+  const lowest = baseline ?? candidate;
   const pointerRows = await remote.readPointer();
   if (!Array.isArray(pointerRows) || pointerRows.length > 1) throw new Error("Stable pointer readback is invalid");
   if (pointerRows.length === 1) {
@@ -465,18 +472,22 @@ export async function preflightQaStagePublication({ baseline, candidate, receipt
     if (
       pointer?.channel !== "stable" ||
       pointer?.precedence_key !== precedence ||
-      precedence >= semverPrecedenceKey(baseline.version)
+      precedence >= semverPrecedenceKey(lowest.version)
     ) {
-      throw new Error("Stable pointer is not an exact older release than the private QA baseline");
+      throw new Error(
+        baseline
+          ? "Stable pointer is not an exact older release than the private QA baseline"
+          : "Stable pointer is not an exact older release than the staged candidate",
+      );
     }
   }
   // Validate the entire joined pointer/version authority before any object write. The same exact
   // snapshot is embedded into each later version-claim statement to close the preflight gap.
-  buildQaVersionClaimStatement(baseline.candidate, pointerRows[0] ?? null);
+  buildQaVersionClaimStatement(lowest.candidate, pointerRows[0] ?? null);
   const receiptErrors = receipt ? receiptProblems(receipt, baseline, candidate, pointerRows) : [];
   if (receiptErrors.length > 0) throw new Error(receiptErrors.join("; "));
 
-  for (const release of [baseline, candidate]) {
+  for (const release of baseline ? [baseline, candidate] : [candidate]) {
     const rows = await remote.readVersion("stable", release.version);
     if (!Array.isArray(rows) || rows.length > 1)
       throw new Error(`${release.version} immutable version readback is invalid`);
@@ -577,7 +588,7 @@ function createWranglerRemote(websiteDir) {
 
 function usageError() {
   return new Error(
-    "usage: stage-updater-qa --baseline-source ABS --baseline-staging ABS --candidate-source ABS --candidate-staging ABS --receipt ABS (--dry-run|--remote)",
+    "usage: stage-updater-qa [--baseline-source ABS --baseline-staging ABS] --candidate-source ABS --candidate-staging ABS --receipt ABS (--dry-run|--remote)",
   );
 }
 
@@ -593,7 +604,7 @@ async function main() {
   const bundle = await assembleUpdaterQaStage(options);
   if (options.mode === "dry-run") {
     console.log(
-      `Verified updater QA stage ${bundle.baseline.version} -> ${bundle.candidate.version}; ${bundle.baseline.objects.length + bundle.candidate.objects.length} immutable objects planned. No external effect occurred.`,
+      `Verified updater QA stage ${bundle.baseline ? `${bundle.baseline.version} -> ` : "(candidate only) "}${bundle.candidate.version}; ${(bundle.baseline?.objects.length ?? 0) + bundle.candidate.objects.length} immutable objects planned. No external effect occurred.`,
     );
     return;
   }
@@ -612,7 +623,7 @@ async function main() {
     }
     await runQaStagePublication({ ...bundle, receipt, remote });
     console.log(
-      `Staged immutable updater QA versions ${bundle.baseline.version} and ${bundle.candidate.version}; Stable pointer unchanged.`,
+      `Staged immutable updater QA version${bundle.baseline ? `s ${bundle.baseline.version} and` : ""} ${bundle.candidate.version}; Stable pointer unchanged.`,
     );
   } finally {
     remote.dispose();

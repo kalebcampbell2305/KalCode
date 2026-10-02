@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseUpdaterDescriptor } from "../../apps/website/worker/updater-descriptor.ts";
-import { createPlatformUpdaterManifest, createUpdaterManifest } from "./updater-manifest.mjs";
+import {
+  createPlatformUpdaterManifest,
+  createUpdaterManifest,
+  qaChangeDeclarationProblems,
+  updaterQaProblems,
+} from "./updater-manifest.mjs";
 
 const commit = "a".repeat(40);
 const artifactBytes = Buffer.from("updater artifact");
@@ -885,4 +890,160 @@ test("Mac Beta and Dev publication retain exact channel-bound final QA", async (
       /channel does not match/,
     );
   }
+});
+
+// ---- Fast-lane automated QA (schemaVersion 3, owner policy 2026-10-02) ----
+function automatedQa(target = "windows-x86_64", { changesData = false, changesUpdater = false, guard } = {}) {
+  const live = { version: "1.2.2", commit: baselineCommit, sha256: baselineSha256 };
+  const candidate = { version: "1.2.3", commit, sha256: artifactSha256 };
+  const roundTrip = changesUpdater && !changesData;
+  return {
+    schemaVersion: 3,
+    status: "passed",
+    target,
+    channel: "stable",
+    release: { ...candidate },
+    safeguards: {
+      testHooks: false,
+      cacheSeeded: false,
+      authenticationBypassed: false,
+      tlsBypassed: false,
+      fixtureOnly: false,
+    },
+    checks: {
+      install: true,
+      cleanInstall: true,
+      launch: true,
+      updateFromLive: true,
+      dataKept: true,
+      ...((guard ?? changesData) && { restoreGuard: true }),
+    },
+    updateTrial: {
+      method: "automated-update-from-live-v1",
+      live: { ...live },
+      candidate: { ...candidate },
+      changesData,
+      changesUpdater,
+      outcomes: [
+        { step: "update", from: { ...live }, to: { ...candidate }, passed: true },
+        ...(roundTrip
+          ? [
+              { step: "rollback", from: { ...candidate }, to: { ...live }, passed: true },
+              { step: "reupdate", from: { ...live }, to: { ...candidate }, passed: true },
+            ]
+          : []),
+      ],
+    },
+  };
+}
+
+const automatedExpected = (target = "windows-x86_64") => ({
+  target,
+  channel: "stable",
+  release: { version: "1.2.3", commit, sha256: artifactSha256 },
+});
+
+test("v3 automated QA is accepted for update-from-live, data-changing and updater-changing builds", () => {
+  assert.deepEqual(updaterQaProblems(automatedQa(), automatedExpected(), "final"), []);
+  assert.deepEqual(updaterQaProblems(automatedQa(undefined, { changesData: true }), automatedExpected(), "final"), []);
+  assert.deepEqual(
+    updaterQaProblems(automatedQa(undefined, { changesUpdater: true }), automatedExpected(), "final"),
+    [],
+  );
+  assert.deepEqual(
+    updaterQaProblems(
+      automatedQa(undefined, { changesData: true, changesUpdater: true }),
+      automatedExpected(),
+      "final",
+    ),
+    [],
+  );
+  const pending = { ...automatedQa(), status: "preliminary-passed", updateTrial: null };
+  assert.deepEqual(updaterQaProblems(pending, automatedExpected(), "preliminary"), []);
+  assert.match(updaterQaProblems(pending, automatedExpected(), "final").join("\n"), /completed/);
+});
+
+test("v3 automated QA refuses any safeguard, a missing check, or a missing restore guard on a data change", () => {
+  for (const key of ["testHooks", "cacheSeeded", "authenticationBypassed", "tlsBypassed", "fixtureOnly"]) {
+    const record = automatedQa();
+    record.safeguards[key] = true;
+    assert.match(updaterQaProblems(record, automatedExpected(), "final").join("\n"), /test hook, cache seed/);
+  }
+  for (const key of ["install", "cleanInstall", "launch", "updateFromLive", "dataKept"]) {
+    const record = automatedQa();
+    record.checks[key] = false;
+    assert.match(updaterQaProblems(record, automatedExpected(), "final").join("\n"), /checks are incomplete/);
+  }
+  const unguarded = automatedQa(undefined, { changesData: true, guard: false });
+  assert.match(updaterQaProblems(unguarded, automatedExpected(), "final").join("\n"), /restoreGuard/);
+  const falseGuard = automatedQa(undefined, { changesData: true });
+  falseGuard.checks.restoreGuard = false;
+  assert.notDeepEqual(updaterQaProblems(falseGuard, automatedExpected(), "final"), []);
+  const strayGuard = automatedQa(undefined, { guard: true });
+  assert.match(updaterQaProblems(strayGuard, automatedExpected(), "final").join("\n"), /only to a data-changing/);
+  const noRoundTrip = automatedQa(undefined, { changesUpdater: true });
+  noRoundTrip.updateTrial.outcomes = noRoundTrip.updateTrial.outcomes.slice(0, 1);
+  assert.match(updaterQaProblems(noRoundTrip, automatedExpected(), "final").join("\n"), /rollback, and re-update/);
+  for (const mutate of [
+    (record) => (record.release.sha256 = "9".repeat(64)),
+    (record) => (record.updateTrial.method = "public-unlisted-immutable-version-v1"),
+    (record) => (record.updateTrial.live.version = "1.2.3"),
+    (record) => (record.updateTrial.outcomes[0].passed = false),
+    (record) => (record.updateTrial.outcomes[0].from.commit = "e".repeat(40)),
+    (record) => delete record.updateTrial.changesData,
+    (record) => (record.checks.auth = true),
+    (record) => (record.target = "darwin-aarch64"),
+  ]) {
+    const record = automatedQa();
+    mutate(record);
+    assert.notDeepEqual(updaterQaProblems(record, automatedExpected(), "final"), []);
+  }
+});
+
+test("v3 change declarations must match the live-to-candidate source diff", () => {
+  const data = automatedQa(undefined, { changesData: true });
+  assert.deepEqual(qaChangeDeclarationProblems(data, ["crates/native-core/migrations/0021_threads_effort.sql"]), []);
+  assert.match(
+    qaChangeDeclarationProblems(automatedQa(), ["crates/native-core/migrations/0021_x.sql"]).join(),
+    /changesData/,
+  );
+  assert.match(qaChangeDeclarationProblems(data, ["apps/desktop/src/App.tsx"]).join(), /changesData/);
+  assert.match(qaChangeDeclarationProblems(automatedQa(), ["crates/updater/src/lib.rs"]).join(), /changesUpdater/);
+  assert.deepEqual(
+    qaChangeDeclarationProblems(automatedQa(undefined, { changesUpdater: true }), ["crates/updater/src/lib.rs"]),
+    [],
+  );
+  assert.deepEqual(
+    qaChangeDeclarationProblems(qaEvidence("windows-x86_64"), ["crates/native-core/migrations/x.sql"]),
+    [],
+  );
+});
+
+test("a v3 automated QA record publishes the same signed Windows descriptor as a v2 record", async () => {
+  const input = fixture();
+  input.signaturePath = `${input.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    input.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const common = { requestedChannel: "stable", publishedAt: "2026-09-25T12:00:00.000Z", notes: "Update." };
+  const v2 = await createPlatformUpdaterManifest({ ...common, artifacts: [{ ...input, target: "windows-x86_64" }] });
+  const v3 = await createPlatformUpdaterManifest({
+    ...common,
+    artifacts: [{ ...input, qa: automatedQa("windows-x86_64", { changesData: true }), target: "windows-x86_64" }],
+  });
+  assert.equal(JSON.stringify(v3), JSON.stringify(v2));
+  const unsafe = automatedQa("windows-x86_64");
+  unsafe.safeguards.testHooks = true;
+  await assert.rejects(
+    createPlatformUpdaterManifest({ ...common, artifacts: [{ ...input, qa: unsafe, target: "windows-x86_64" }] }),
+    /test hook, cache seed/,
+  );
+});
+
+test("publish.mjs publishes only builds of origin/main or an explicitly named pushed release branch", () => {
+  const source = readFileSync(new URL("./publish.mjs", import.meta.url), "utf8");
+  assert.match(source, /const buildRef = releaseBranch \? `origin\/\$\{releaseBranch\}` : "origin\/main";/);
+  assert.match(source, /KALCODE_RELEASE_BRANCH must name a release\/<name> branch/);
+  assert.match(source, /\["merge-base", "--is-ancestor", releaseBuild\.commit, buildRef\]/);
 });
