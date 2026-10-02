@@ -3232,7 +3232,9 @@ mod tests {
     /// An in-memory provider: tests exercise real runtime state without starting a CLI.
     struct IdleProvider(&'static str, bool);
 
-    struct ProbeSession;
+    struct ProbeSession {
+        _sink: Box<dyn kalcode_contracts::agent::AgentEventSink>,
+    }
 
     impl kalcode_contracts::agent::AgentSession for ProbeSession {
         fn provider_session_id(&self) -> Option<String> {
@@ -3297,7 +3299,7 @@ mod tests {
         fn start_session(
             &self,
             _config: kalcode_contracts::agent::SessionConfig,
-            _sink: Box<dyn kalcode_contracts::agent::AgentEventSink>,
+            sink: Box<dyn kalcode_contracts::agent::AgentEventSink>,
         ) -> Result<
             Box<dyn kalcode_contracts::agent::AgentSession>,
             kalcode_contracts::agent::ProviderError,
@@ -3305,9 +3307,44 @@ mod tests {
             if self.1 {
                 Err(kalcode_contracts::agent::ProviderError::Unsupported)
             } else {
-                Ok(Box::new(ProbeSession))
+                Ok(Box::new(ProbeSession { _sink: sink }))
             }
         }
+    }
+
+    #[test]
+    fn idle_provider_fixture_retains_the_event_sink_for_the_session_lifetime() {
+        let retained = Arc::new(());
+        let weak = Arc::downgrade(&retained);
+        let sink_retained = retained.clone();
+        let sink: Box<dyn kalcode_contracts::agent::AgentEventSink> =
+            Box::new(move |_| drop(sink_retained.clone()));
+        drop(retained);
+
+        let provider = IdleProvider(ProviderId::CODEX, false);
+        let session = kalcode_contracts::agent::AgentProvider::start_session(
+            &provider,
+            kalcode_contracts::agent::SessionConfig {
+                thread_id: "fixture-thread".into(),
+                workspace_id: "fixture-workspace".into(),
+                provider_account_id: None,
+                working_directory: String::new(),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::Approve,
+                resume_session_id: None,
+                secret_ref: None,
+            },
+            sink,
+        )
+        .expect("probe session");
+
+        assert!(weak.upgrade().is_some(), "session dropped its event sink");
+        drop(session);
+        assert!(
+            weak.upgrade().is_none(),
+            "session did not release its event sink"
+        );
     }
 
     struct AccountsFixture {
@@ -3317,6 +3354,12 @@ mod tests {
         store: AccountStore,
         workspace_id: String,
         runtime: Arc<ThreadRuntime>,
+    }
+
+    impl Drop for AccountsFixture {
+        fn drop(&mut self) {
+            self.runtime.shutdown();
+        }
     }
 
     /// Stable-like thread runtime with every provider available through the shipped pane canvas.

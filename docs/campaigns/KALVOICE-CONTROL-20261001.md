@@ -428,3 +428,24 @@ setup now returns its I/O error to the actual test, which still fails with the s
 production behavior and test assertions are unchanged. Windows desktop all-target Clippy
 passed. The local gate had passed tooling, packages, API, and website units/build; it was
 stopped at website E2E so final verification can start from the corrected immutable commit.
+
+## Current-main integration and physical Mac fixture repair
+
+Merged B14 main `6378ce65` into the feature as `fa3ec10b`. The sole conflict was KalVoice
+routing; both scene controls and KalTidy were retained. KalTidy execution shares the native
+exclusive lease and scoped result reporting. Primary integrated tests `151/151`, KalTidy
+`6/6`, inventory `19/19`, typecheck, and independent interaction review passed.
+
+The physical Mac passed full-workspace Clippy, then exposed the idle provider fixture
+dropping its event sink before its session ended. The runtime correctly classified the
+disconnected session as failed. The fixture now owns its sink and shuts down its runtime
+on drop. A deterministic lifetime regression failed before repair and passed afterward;
+launch tests passed `4/4` after cleanup and `20/20` across repeated earlier runs. Independent
+review and desktop all-target Clippy passed. No production provider logic changed.
+
+Unchanged-lane local proofs passed tooling `439`, API `293`, website units `600`, website
+E2E `151` with eight registered skips, and checkout E2E `3`, all zero flaky. A two-worker
+desktop run exceeded the existing 300-second suite deadline; its orphan child was identified
+and stopped, evidence preserved, and the unchanged suite restarted with four workers. No
+timeout, assertion, skip policy, or test count was weakened. Final exact-commit gates and
+publication remain pending.
