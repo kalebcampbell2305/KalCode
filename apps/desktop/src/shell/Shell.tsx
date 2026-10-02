@@ -12,6 +12,7 @@ import { CodePage } from "../surfaces/code/CodePage.tsx";
 import { KalTidyProvider } from "../surfaces/code/kaltidy/KalTidyProvider.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
+import { DashboardDataBoundary } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { focusSection } from "../surfaces/dashboard/useNow.ts";
 import { FolderSurface } from "../surfaces/folder/FolderSurface.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
@@ -24,6 +25,11 @@ import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
 import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
+import { AgentRail } from "./deck/AgentRail.tsx";
+import { CommandBar } from "./deck/CommandBar.tsx";
+import { DeckDataProvider } from "./deck/DeckData.tsx";
+import { DeckUiProvider } from "./deck/DeckUi.tsx";
+import { StatusStrip } from "./deck/StatusStrip.tsx";
 import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
 import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
@@ -94,17 +100,35 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const slots = useShellSlots();
   const voice = slots?.voice ?? null;
   const setMainLeft = slots?.setMainLeft;
+  const setInsets = slots?.setInsets;
   const mainRef = useRef<HTMLElement>(null);
-  // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot).
+  const deckRef = useRef<HTMLDivElement>(null);
+  // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot), and inside the Command
+  // Deck's chrome: below the top bar, above the status strip and left of the agents rail.
   useLayoutEffect(() => {
     const main = mainRef.current;
-    if (!main || !setMainLeft) return;
-    const measure = () => setMainLeft(main.getBoundingClientRect().left);
+    const deck = deckRef.current;
+    if (!main || !deck || !setMainLeft) return;
+    const measure = () => {
+      const page = main.getBoundingClientRect();
+      const body = deck.getBoundingClientRect();
+      setMainLeft(page.left);
+      setInsets?.({
+        top: body.top,
+        right: Math.max(0, window.innerWidth - page.right),
+        bottom: Math.max(0, window.innerHeight - body.bottom),
+      });
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(main);
-    return () => observer.disconnect();
-  }, [setMainLeft]);
+    observer.observe(deck);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [setMainLeft, setInsets]);
 
   useShortcuts({
     openPalette: () => setPaletteOpen(true),
@@ -120,57 +144,74 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   }, [navigate]);
 
   return (
-    <div
-      className={styles.shell}
-      data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
-      data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
-      data-voice-slot={voice?.edge}
-      style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
-    >
-      <a className={styles.skipLink} href="#main">
-        Skip to content
-      </a>
-      <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
-      {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
-      <WorkspaceRail />
-      <main
-        ref={mainRef}
-        id="main"
-        className={styles.main}
-        tabIndex={-1}
-        aria-label={destinationMeta(current).label}
-        data-surface={current}
-      >
-        {current === "home" ? (
-          <HomeSurface />
-        ) : current === "folder" ? (
-          <FolderSurface />
-        ) : current === "kalvoice" && kalvoice ? (
-          <KalVoicePage />
-        ) : current === "dashboard" ? (
-          <Dashboard />
-        ) : current === "operations" ? (
-          <OperationsPage client={operationsClient} threadOptions={threadOptions} providerAccounts={providerAccounts} />
-        ) : current === "code" ? (
-          <CodePage />
-        ) : current === "settings" ? (
-          <SettingsPage />
-        ) : current === "providers" ? (
-          <ProvidersPage />
-        ) : current === "threads" ? (
-          <ThreadsSurface />
-        ) : (
-          <GatedSurface id={current} />
-        )}
-      </main>
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-      {kalvoice ? <FloatingAssistant /> : null}
-      {kalvoice ? <PushToTalkActivity /> : null}
-      {kalvoice ? <SessionChoicePanel /> : null}
-      <ApprovalsPanel />
-      <ApprovalAnnouncer />
-      <NotificationCenter />
-      <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
-    </div>
+    <DashboardDataBoundary>
+      <DeckUiProvider>
+        <DeckDataProvider>
+          <div className={styles.frame}>
+            <a className={styles.skipLink} href="#main">
+              Skip to content
+            </a>
+            {/* Command Deck: top bar · (projects · page · agents) · status strip. */}
+            <CommandBar onOpenPalette={() => setPaletteOpen(true)} sidebarCollapsed={settings.sidebarCollapsed} />
+            <div
+              ref={deckRef}
+              className={styles.shell}
+              data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
+              data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
+              data-voice-slot={voice?.edge}
+              style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
+            >
+              <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
+              {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
+              <WorkspaceRail />
+              <main
+                ref={mainRef}
+                id="main"
+                className={styles.main}
+                tabIndex={-1}
+                aria-label={destinationMeta(current).label}
+                data-surface={current}
+              >
+                {current === "home" ? (
+                  <HomeSurface />
+                ) : current === "folder" ? (
+                  <FolderSurface />
+                ) : current === "kalvoice" && kalvoice ? (
+                  <KalVoicePage />
+                ) : current === "dashboard" ? (
+                  <Dashboard />
+                ) : current === "operations" ? (
+                  <OperationsPage
+                    client={operationsClient}
+                    threadOptions={threadOptions}
+                    providerAccounts={providerAccounts}
+                  />
+                ) : current === "code" ? (
+                  <CodePage />
+                ) : current === "settings" ? (
+                  <SettingsPage />
+                ) : current === "providers" ? (
+                  <ProvidersPage />
+                ) : current === "threads" ? (
+                  <ThreadsSurface />
+                ) : (
+                  <GatedSurface id={current} />
+                )}
+              </main>
+              <AgentRail />
+            </div>
+            <StatusStrip />
+            <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+            {kalvoice ? <FloatingAssistant /> : null}
+            {kalvoice ? <PushToTalkActivity /> : null}
+            {kalvoice ? <SessionChoicePanel /> : null}
+            <ApprovalsPanel />
+            <ApprovalAnnouncer />
+            <NotificationCenter />
+            <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
+          </div>
+        </DeckDataProvider>
+      </DeckUiProvider>
+    </DashboardDataBoundary>
   );
 }

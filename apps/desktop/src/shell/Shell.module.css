@@ -1,14 +1,32 @@
-.shell {
+/*
+ * The Command Deck frame: the top bar (workspace, branch, environment, mode, command), the deck
+ * body, and the status strip (builds, tests, provider health, deployment).
+ */
+.frame {
   display: grid;
-  /* Sidebar · workspace rail (Z7-W2; `auto`: its own width, 0 when the build has none) · page. */
-  grid-template-columns: var(--sidebar-w) auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   background: var(--app-backdrop), var(--color-bg);
+}
+
+.shell {
+  display: grid;
+  /* Sidebar (projects) · workspace rail (Z7-W2; `auto`: its own width, 0 when the build has
+     none) · page · agents rail (`auto`: open or its strip). */
+  grid-template-columns: var(--sidebar-w) auto minmax(0, 1fr) auto;
+  min-height: 0;
   transition: grid-template-columns var(--dur-base) var(--ease-out);
 }
 
 .shell[data-sidebar="collapsed"] {
-  grid-template-columns: var(--sidebar-w-collapsed) auto minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-w-collapsed) auto minmax(0, 1fr) auto;
+}
+
+/* The agents rail is the last column, full height like the sidebar. */
+.shell > [data-deck-agents] {
+  grid-column: 4;
+  grid-row: 1 / -1;
+  min-height: 0;
 }
 
 /*
