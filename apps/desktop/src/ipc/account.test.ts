@@ -126,6 +126,33 @@ describe("AccountClient", () => {
     expect(JSON.stringify(calls)).not.toMatch(/token|verifier/i);
   });
 
+  it("sends monthly checkout exactly as before and adds only the yearly interval", async () => {
+    const calls: Array<{ command: AccountCommandName; args?: Record<string, unknown> }> = [];
+    const confirming = {
+      ...signedOut,
+      phase: "confirming_plan",
+      account: { id: "acct_01", email: "owner@example.com", activatedAt: null },
+    };
+    const client = new AccountClient({
+      invoke: vi.fn(async (command, args) => {
+        calls.push({ command, args });
+        return confirming;
+      }),
+    });
+
+    await client.checkout("pro");
+    await client.checkout("max", "month");
+    await client.checkout("max2x", "year");
+    await expect(client.checkout("pro", "week" as never)).rejects.toThrow("Choose monthly or yearly billing.");
+
+    expect(calls).toEqual([
+      { command: "account_checkout", args: { tier: "pro" } },
+      { command: "account_checkout", args: { tier: "max" } },
+      { command: "account_checkout", args: { tier: "max2x", interval: "year" } },
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/price/i);
+  });
+
   it("derives the plan catalog from the canonical protocol plans", () => {
     expect(
       PLAN_CATALOG.map(({ tier, name, requests, monthlyPriceUsd, yearlyPriceUsd, yearlySavingsUsd }) => ({

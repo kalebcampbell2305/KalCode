@@ -5,10 +5,12 @@ use crate::account;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use account::api::{BillingInterval, PaidTier};
 use account::model::{PendingAuthSecret, PublicAccount, SessionSecret};
 use account::session_store::{
-    ACCOUNT_SESSION_KEY, ACCOUNT_USAGE_RECEIPT_KEY, AccountSessionStore, CachedAccountSecret,
-    SessionStoreError, SignedUsageReceipt,
+    ACCOUNT_CHECKOUT_INTERVAL_KEY, ACCOUNT_SESSION_KEY, ACCOUNT_USAGE_RECEIPT_KEY,
+    AccountSessionStore, CachedAccountSecret, PendingCheckoutSecret, SessionStoreError,
+    SignedUsageReceipt,
 };
 use account::social::SocialProvider;
 use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretString};
@@ -454,5 +456,166 @@ fn social_pending_round_trips_in_v2_and_legacy_email_v1_remains_readable() {
     assert_eq!(
         legacy.pending().expect("pending").email(),
         Some("owner@example.com")
+    );
+}
+
+fn raw_value(backend: &TestStore, key: &str) -> Option<String> {
+    backend
+        .values
+        .lock()
+        .expect("values")
+        .get(key)
+        .map(|value| value.expose_secret().to_owned())
+}
+
+fn checkout_session() -> SessionSecret {
+    SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session")
+}
+
+/// The exact envelope every shipped 0.1.8 build writes and strictly parses for a pending checkout.
+fn shipped_checkout_envelope(request_id: &str, tier: &str) -> String {
+    format!(
+        r#"{{"version":2,"session":{{"token":"kcs_{}","expiresAt":1900000000}},"pending":null,"cached":null,"usageReceipt":null,"checkout":{{"requestId":"{request_id}","tier":"{tier}"}}}}"#,
+        "a".repeat(43)
+    )
+}
+
+#[test]
+fn monthly_pending_checkout_record_is_byte_identical_to_the_shipped_format() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let checkout = PendingCheckoutSecret::new(
+        "request-month-0001".into(),
+        PaidTier::Max,
+        BillingInterval::Month,
+    )
+    .expect("checkout");
+    store
+        .save_complete(Some(&checkout_session()), None, None, None, Some(&checkout))
+        .expect("save");
+
+    assert_eq!(
+        raw_value(&backend, ACCOUNT_SESSION_KEY).as_deref(),
+        Some(shipped_checkout_envelope("request-month-0001", "max").as_str())
+    );
+    assert!(raw_value(&backend, ACCOUNT_CHECKOUT_INTERVAL_KEY).is_none());
+    let loaded = store.load().expect("load").expect("session");
+    assert_eq!(loaded.checkout(), Some(&checkout));
+}
+
+#[test]
+fn yearly_pending_checkout_round_trips_without_changing_the_rollback_readable_envelope() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let checkout = PendingCheckoutSecret::new(
+        "request-year-0001".into(),
+        PaidTier::Pro,
+        BillingInterval::Year,
+    )
+    .expect("checkout");
+    store
+        .save_complete(Some(&checkout_session()), None, None, None, Some(&checkout))
+        .expect("save");
+
+    // An older strict build reads this envelope unchanged, so a rollback keeps the session.
+    assert_eq!(
+        raw_value(&backend, ACCOUNT_SESSION_KEY).as_deref(),
+        Some(shipped_checkout_envelope("request-year-0001", "pro").as_str())
+    );
+    let loaded = store.load().expect("load").expect("session");
+    assert!(loaded.session().is_some());
+    assert_eq!(loaded.checkout(), Some(&checkout));
+    assert_eq!(
+        loaded.checkout().expect("checkout").interval(),
+        BillingInterval::Year
+    );
+
+    store.clear().expect("clear");
+    assert!(backend.values.lock().expect("values").is_empty());
+}
+
+#[test]
+fn yearly_marker_applies_only_to_its_own_checkout_and_never_blocks_the_session() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let session = checkout_session();
+    let yearly = PendingCheckoutSecret::new(
+        "request-year-0002".into(),
+        PaidTier::Max2x,
+        BillingInterval::Year,
+    )
+    .expect("checkout");
+    store
+        .save_complete(Some(&session), None, None, None, Some(&yearly))
+        .expect("save yearly");
+
+    // A later monthly checkout cannot inherit the earlier yearly marker.
+    let monthly = PendingCheckoutSecret::new(
+        "request-month-0002".into(),
+        PaidTier::Max2x,
+        BillingInterval::Month,
+    )
+    .expect("checkout");
+    store
+        .save_complete(Some(&session), None, None, None, Some(&monthly))
+        .expect("save monthly");
+    assert_eq!(
+        store
+            .load()
+            .expect("load")
+            .expect("session")
+            .checkout()
+            .expect("checkout")
+            .interval(),
+        BillingInterval::Month
+    );
+
+    // An unreadable or malformed marker degrades to monthly; the session always survives.
+    store
+        .save_complete(Some(&session), None, None, None, Some(&yearly))
+        .expect("save yearly again");
+    *backend.reject_get.lock().expect("reject get") = Some(ACCOUNT_CHECKOUT_INTERVAL_KEY.into());
+    let loaded = store.load().expect("load").expect("session");
+    assert!(loaded.session().is_some());
+    assert_eq!(
+        loaded.checkout().expect("checkout").interval(),
+        BillingInterval::Month
+    );
+    *backend.reject_get.lock().expect("reject get") = None;
+    backend
+        .set(
+            &SecretKey::new(ACCOUNT_CHECKOUT_INTERVAL_KEY).expect("key"),
+            &SecretString::new("not json"),
+        )
+        .expect("corrupt marker");
+    let loaded = store.load().expect("load").expect("session");
+    assert!(loaded.session().is_some());
+    assert_eq!(
+        loaded.checkout().expect("checkout").interval(),
+        BillingInterval::Month
+    );
+
+    // A failed marker write fails the save, leaving the previous envelope authoritative.
+    *backend.reject_key.lock().expect("reject key") = Some(ACCOUNT_CHECKOUT_INTERVAL_KEY.into());
+    let other = PendingCheckoutSecret::new(
+        "request-year-0003".into(),
+        PaidTier::Max2x,
+        BillingInterval::Year,
+    )
+    .expect("checkout");
+    assert!(
+        store
+            .save_complete(Some(&session), None, None, None, Some(&other))
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .load()
+            .expect("load")
+            .expect("session")
+            .checkout()
+            .expect("checkout")
+            .request_id(),
+        "request-year-0002"
     );
 }

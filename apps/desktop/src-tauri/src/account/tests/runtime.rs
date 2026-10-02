@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use account::api::{
-    AccountApi, ApiAccount, ApiError, BrowserUrlResponse, EmailStartResponse, EntitlementResponse,
-    PaidTier, PollResponse, SignedInResponse, SocialCompleteResponse, SocialStartResponse,
-    UsageResponse,
+    AccountApi, ApiAccount, ApiError, BillingInterval, BrowserUrlResponse, EmailStartResponse,
+    EntitlementResponse, PaidTier, PollResponse, SignedInResponse, SocialCompleteResponse,
+    SocialStartResponse, UsageResponse,
 };
 use account::model::{
     AccountAuthority, AccountPhase, AccountTier, PendingAuthSecret, PublicAccount,
@@ -124,6 +124,7 @@ struct FakeApi {
     activate_calls: AtomicUsize,
     checkout_calls: AtomicUsize,
     checkout_request_ids: Mutex<Vec<String>>,
+    checkout_intervals: Mutex<Vec<BillingInterval>>,
     account_calls: AtomicUsize,
 }
 
@@ -253,9 +254,14 @@ impl AccountApi for FakeApi {
         &self,
         _: &str,
         _: PaidTier,
+        interval: BillingInterval,
         request_id: &str,
     ) -> Result<BrowserUrlResponse, ApiError> {
         self.checkout_calls.fetch_add(1, Ordering::SeqCst);
+        self.checkout_intervals
+            .lock()
+            .expect("checkout intervals")
+            .push(interval);
         self.checkout_request_ids
             .lock()
             .expect("checkout ids")
@@ -773,7 +779,9 @@ fn checkout_redirect_never_unlocks_before_live_server_confirmation() {
         }),
     ]);
 
-    let launch = runtime.start_checkout(PaidTier::Max2x).expect("checkout");
+    let launch = runtime
+        .start_checkout(PaidTier::Max2x, BillingInterval::Month)
+        .expect("checkout");
     assert_eq!(launch.snapshot.phase, AccountPhase::ConfirmingPlan);
     assert_eq!(launch.snapshot.tier, None);
     assert_eq!(
@@ -2082,7 +2090,7 @@ fn browser_launch_is_revalidated_at_the_effect_boundary() {
             url: "https://checkout.stripe.com/c/pay/test".into(),
         }));
     let launch = runtime
-        .start_checkout(PaidTier::Pro)
+        .start_checkout(PaidTier::Pro, BillingInterval::Month)
         .expect("checkout launch");
     runtime.logout().expect("logout");
     let opened = AtomicUsize::new(0);
@@ -2096,4 +2104,72 @@ fn browser_launch_is_revalidated_at_the_effect_boundary() {
 
     assert_eq!(error.code, "account_request_cancelled");
     assert_eq!(opened.load(Ordering::SeqCst), 0);
+}
+
+fn queue_checkout_url(api: &FakeApi) {
+    api.checkouts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(BrowserUrlResponse {
+            url: "https://checkout.stripe.com/c/pay/test".into(),
+        }));
+}
+
+#[test]
+fn yearly_checkout_sends_the_year_interval_and_persists_it_for_retries() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let runtime = runtime(api.clone(), store.clone());
+    sign_in_unactivated(&runtime, &api);
+    queue_checkout_url(&api);
+    queue_checkout_url(&api);
+
+    runtime
+        .start_checkout(PaidTier::Max, BillingInterval::Year)
+        .expect("yearly checkout");
+    runtime
+        .start_checkout(PaidTier::Max, BillingInterval::Year)
+        .expect("same yearly checkout resumes");
+
+    assert_eq!(
+        *api.checkout_intervals.lock().expect("intervals"),
+        vec![BillingInterval::Year, BillingInterval::Year]
+    );
+    let request_ids = api
+        .checkout_request_ids
+        .lock()
+        .expect("checkout ids")
+        .clone();
+    assert_eq!(request_ids.len(), 2);
+    assert_eq!(request_ids[0], request_ids[1]);
+    let stored = AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .load()
+        .expect("load")
+        .expect("session");
+    let pending = stored.checkout().expect("pending checkout");
+    assert_eq!(pending.interval(), BillingInterval::Year);
+    assert_eq!(pending.request_id(), request_ids[0]);
+}
+
+#[test]
+fn pending_checkout_is_never_reused_for_a_different_interval() {
+    let api = Arc::new(FakeApi::default());
+    let runtime = runtime(api.clone(), Arc::new(TestStore::default()));
+    sign_in_unactivated(&runtime, &api);
+    queue_checkout_url(&api);
+
+    runtime
+        .start_checkout(PaidTier::Pro, BillingInterval::Month)
+        .expect("monthly checkout");
+    let refused = runtime
+        .start_checkout(PaidTier::Pro, BillingInterval::Year)
+        .expect_err("interval switch must not reuse the monthly checkout");
+
+    assert_eq!(refused.code, "checkout_in_progress");
+    assert_eq!(api.checkout_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *api.checkout_intervals.lock().expect("intervals"),
+        vec![BillingInterval::Month]
+    );
 }

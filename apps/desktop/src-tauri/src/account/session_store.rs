@@ -3,7 +3,7 @@ use std::fmt;
 use kalcode_secure_store::{SecretKey, SecretStore, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::api::PaidTier;
+use super::api::{BillingInterval, PaidTier};
 use super::model::{PendingAuthSecret, PublicAccount, SessionSecret};
 use super::social::SocialProvider;
 
@@ -11,6 +11,12 @@ const MAX_SIGNED_TOKEN_LENGTH: usize = 8192;
 
 pub const ACCOUNT_SESSION_KEY: &str = "kalcode-account-session";
 pub const ACCOUNT_USAGE_RECEIPT_KEY: &str = "kalcode-account-usage-receipt";
+/// A yearly pending checkout's interval lives beside the session envelope, never inside it.
+/// Every shipped 0.1.8 build parses the envelope with `deny_unknown_fields` and clears the
+/// whole signed-in session when it cannot, so an extra checkout field would sign people out
+/// after an updater rollback. Older builds never read this item; it is bound to the checkout's
+/// request id, so a stale or orphaned value can never apply to another checkout.
+pub const ACCOUNT_CHECKOUT_INTERVAL_KEY: &str = "kalcode-account-checkout-interval";
 const ENVELOPE_VERSION: u32 = 2;
 const LEGACY_ENVELOPE_VERSION: u32 = 1;
 
@@ -18,6 +24,7 @@ pub struct AccountSessionStore<'a> {
     backend: &'a dyn SecretStore,
     key: SecretKey,
     usage_key: SecretKey,
+    interval_key: SecretKey,
 }
 
 impl<'a> AccountSessionStore<'a> {
@@ -25,10 +32,13 @@ impl<'a> AccountSessionStore<'a> {
         let key = SecretKey::new(ACCOUNT_SESSION_KEY).map_err(|_| SessionStoreError::Backend)?;
         let usage_key =
             SecretKey::new(ACCOUNT_USAGE_RECEIPT_KEY).map_err(|_| SessionStoreError::Backend)?;
+        let interval_key = SecretKey::new(ACCOUNT_CHECKOUT_INTERVAL_KEY)
+            .map_err(|_| SessionStoreError::Backend)?;
         Ok(Self {
             backend,
             key,
             usage_key,
+            interval_key,
         })
     }
 
@@ -87,7 +97,8 @@ impl<'a> AccountSessionStore<'a> {
                     "max2x" => PaidTier::Max2x,
                     _ => return Err(SecretValidationError),
                 };
-                PendingCheckoutSecret::new(value.request_id, tier)
+                let interval = self.checkout_interval(&value.request_id);
+                PendingCheckoutSecret::new(value.request_id, tier, interval)
             })
             .transpose()
             .map_err(|_| SessionStoreError::Corrupt)?;
@@ -196,6 +207,20 @@ impl<'a> AccountSessionStore<'a> {
                 .delete(&self.usage_key)
                 .map_err(|_| SessionStoreError::Backend)?;
         }
+        // Written before the envelope: an interrupted save leaves only an orphan bound to a
+        // request id the envelope does not hold. Monthly checkouts write nothing here.
+        if let Some(checkout) = checkout.filter(|value| value.interval() == BillingInterval::Year) {
+            let marker = StoredCheckoutInterval {
+                version: 1,
+                request_id: checkout.request_id().to_owned(),
+                interval: BillingInterval::Year,
+            };
+            let marker_json =
+                serde_json::to_string(&marker).map_err(|_| SessionStoreError::Corrupt)?;
+            self.backend
+                .set(&self.interval_key, &SecretString::new(marker_json))
+                .map_err(|_| SessionStoreError::Backend)?;
+        }
         self.backend
             .set(&self.key, &SecretString::new(json))
             .map_err(|_| SessionStoreError::Backend)
@@ -204,9 +229,32 @@ impl<'a> AccountSessionStore<'a> {
     pub fn clear(&self) -> Result<bool, SessionStoreError> {
         let session = self.backend.delete(&self.key);
         let receipt = self.backend.delete(&self.usage_key);
+        // Best effort: the marker is request-bound, so a leftover can never apply elsewhere.
+        let _ = self.backend.delete(&self.interval_key);
         Ok(session.map_err(|_| SessionStoreError::Backend)?
             | receipt.map_err(|_| SessionStoreError::Backend)?)
     }
+
+    /// The interval of the stored pending checkout. Absent, unreadable, or stale markers mean
+    /// monthly; the server keys reservations by (tier, interval, request id), so a misread can
+    /// only be refused as `checkout_in_progress`, never charged at the other interval.
+    fn checkout_interval(&self, request_id: &str) -> BillingInterval {
+        let Ok(Some(secret)) = self.backend.get(&self.interval_key) else {
+            return BillingInterval::Month;
+        };
+        match serde_json::from_str::<StoredCheckoutInterval>(secret.expose_secret()) {
+            Ok(marker) if marker.version == 1 && marker.request_id == request_id => marker.interval,
+            _ => BillingInterval::Month,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredCheckoutInterval {
+    version: u32,
+    request_id: String,
+    interval: BillingInterval,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -251,10 +299,15 @@ impl StoredSession {
 pub struct PendingCheckoutSecret {
     request_id: String,
     tier: PaidTier,
+    interval: BillingInterval,
 }
 
 impl PendingCheckoutSecret {
-    pub fn new(request_id: String, tier: PaidTier) -> Result<Self, SecretValidationError> {
+    pub fn new(
+        request_id: String,
+        tier: PaidTier,
+        interval: BillingInterval,
+    ) -> Result<Self, SecretValidationError> {
         let valid = (8..=128).contains(&request_id.len())
             && request_id
                 .bytes()
@@ -262,7 +315,11 @@ impl PendingCheckoutSecret {
         if !valid {
             return Err(SecretValidationError);
         }
-        Ok(Self { request_id, tier })
+        Ok(Self {
+            request_id,
+            tier,
+            interval,
+        })
     }
 
     pub fn request_id(&self) -> &str {
@@ -272,6 +329,10 @@ impl PendingCheckoutSecret {
     pub fn tier(&self) -> PaidTier {
         self.tier
     }
+
+    pub fn interval(&self) -> BillingInterval {
+        self.interval
+    }
 }
 
 impl fmt::Debug for PendingCheckoutSecret {
@@ -279,6 +340,7 @@ impl fmt::Debug for PendingCheckoutSecret {
         formatter
             .debug_struct("PendingCheckoutSecret")
             .field("tier", &self.tier)
+            .field("interval", &self.interval)
             .field("request_id", &"[IDEMPOTENCY_KEY]")
             .finish()
     }

@@ -1,7 +1,14 @@
-import { Button, TextInput } from "@kalcode/ui/components";
+import { Button, SegmentedControl, TextInput } from "@kalcode/ui/components";
 import { Check, Circle, Mail, ShieldCheck } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import { type AccountSnapshot, PLAN_CATALOG, type PurchasableTier, SESSION_EXPIRED_REASON } from "../ipc/account.ts";
+import {
+  type AccountSnapshot,
+  type BillingInterval,
+  PLAN_CATALOG,
+  type PlanCatalogEntry,
+  type PurchasableTier,
+  SESSION_EXPIRED_REASON,
+} from "../ipc/account.ts";
 import { Mark } from "../shell/Brand.tsx";
 import styles from "./Account.module.css";
 import type { SocialProvider } from "./AccountProvider.tsx";
@@ -14,7 +21,7 @@ export interface AccountOnboardingActions {
   pollEmail(): Promise<void>;
   cancelAuth(): Promise<void>;
   activateFree(): Promise<void>;
-  checkout(tier: PurchasableTier): Promise<void>;
+  checkout(tier: PurchasableTier, interval: BillingInterval): Promise<void>;
   retry(): Promise<void>;
 }
 
@@ -27,6 +34,23 @@ export interface AccountOnboardingProps {
 
 type EntryMode = "sign_in" | "create" | null;
 const FLOW = ["Sign in", "Verify", "Plan", "Ready"] as const;
+const BILLING_OPTIONS = [
+  { value: "month", label: "Monthly" },
+  { value: "year", label: "Yearly" },
+] as const satisfies readonly { value: BillingInterval; label: string }[];
+
+function usd(value: number): string {
+  return `$${value.toLocaleString("en-US")}`;
+}
+
+/** The price a plan card shows for the chosen interval; Free never changes. */
+function planPrice(plan: PlanCatalogEntry, interval: BillingInterval): { amount: string; detail: string } {
+  if (plan.monthlyPriceUsd === 0) return { amount: usd(0), detail: "No checkout" };
+  if (interval === "year") {
+    return { amount: usd(plan.yearlyPriceUsd), detail: `per year · save ${usd(plan.yearlySavingsUsd)}` };
+  }
+  return { amount: usd(plan.monthlyPriceUsd), detail: "per month" };
+}
 
 function activeStep(phase: AccountSnapshot["phase"]): number {
   switch (phase) {
@@ -65,6 +89,7 @@ function AccountCircuit({ phase }: { phase: AccountSnapshot["phase"] }) {
 export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnboardingProps) {
   const [mode, setMode] = useState<EntryMode>(null);
   const [email, setEmail] = useState("");
+  const [billing, setBilling] = useState<BillingInterval>("month");
   const emailId = useId();
   const submitEmail = async (event: FormEvent) => {
     event.preventDefault();
@@ -177,36 +202,43 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
               <p className={styles.eyebrow}>Account verified</p>
               <h1 id="account-title">Choose your plan</h1>
               <p>Dictation is unlimited on every plan.</p>
+              <SegmentedControl<BillingInterval>
+                aria-label="Billing interval"
+                className={styles.billing}
+                value={billing}
+                onValueChange={setBilling}
+                disabled={busy}
+                options={BILLING_OPTIONS}
+              />
             </div>
             <div className={styles.plans}>
-              {PLAN_CATALOG.map((plan) => (
-                <article className={styles.plan} key={plan.tier} data-featured={plan.popular || undefined}>
-                  <div>
-                    <p className={styles.stage}>{plan.stage}</p>
-                    <h2>{plan.name}</h2>
-                    <p className={styles.price}>${plan.monthlyPriceUsd.toLocaleString("en-US")}</p>
-                    <p>{plan.monthlyPriceUsd === 0 ? "No checkout" : "per month"}</p>
-                    {plan.yearlyPriceUsd > 0 ? (
-                      <p className={styles.yearly}>
-                        or ${plan.yearlyPriceUsd.toLocaleString("en-US")}/year · save $
-                        {plan.yearlySavingsUsd.toLocaleString("en-US")}
-                      </p>
-                    ) : null}
-                    <p className={styles.tagline}>{plan.tagline}</p>
-                  </div>
-                  <p className={styles.allowance}>
-                    {plan.requests === null ? "Unlimited" : plan.requests.toLocaleString("en-US")} KalVoice Requests a
-                    month
-                  </p>
-                  <Button
-                    variant={plan.popular ? "primary" : "secondary"}
-                    busy={busy}
-                    onClick={() => void (plan.tier === "free" ? actions.activateFree() : actions.checkout(plan.tier))}
-                  >
-                    {plan.tier === "free" ? "Continue with Free" : `Choose ${plan.name}`}
-                  </Button>
-                </article>
-              ))}
+              {PLAN_CATALOG.map((plan) => {
+                const price = planPrice(plan, billing);
+                return (
+                  <article className={styles.plan} key={plan.tier} data-featured={plan.popular || undefined}>
+                    <div>
+                      <p className={styles.stage}>{plan.stage}</p>
+                      <h2>{plan.name}</h2>
+                      <p className={styles.price}>{price.amount}</p>
+                      <p>{price.detail}</p>
+                      <p className={styles.tagline}>{plan.tagline}</p>
+                    </div>
+                    <p className={styles.allowance}>
+                      {plan.requests === null ? "Unlimited" : plan.requests.toLocaleString("en-US")} KalVoice Requests a
+                      month
+                    </p>
+                    <Button
+                      variant={plan.popular ? "primary" : "secondary"}
+                      busy={busy}
+                      onClick={() =>
+                        void (plan.tier === "free" ? actions.activateFree() : actions.checkout(plan.tier, billing))
+                      }
+                    >
+                      {plan.tier === "free" ? "Continue with Free" : `Choose ${plan.name}`}
+                    </Button>
+                  </article>
+                );
+              })}
             </div>
           </div>
         ) : snapshot.phase === "confirming_plan" ? (

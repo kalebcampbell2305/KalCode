@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
-use crate::account::api::PaidTier;
+use crate::account::api::{BillingInterval, PaidTier};
 use crate::account::model::{AccountSnapshot, AccountUsageSnapshot};
 use crate::account::runtime::{AccountRuntime, AccountRuntimeError};
 use crate::account::social::SocialProvider;
@@ -115,10 +115,12 @@ pub async fn account_checkout(
     _admission: crate::runtime_coordinator::AccountMutation,
     runtime: State<'_, Arc<AccountRuntime>>,
     tier: String,
+    interval: Option<String>,
 ) -> Result<AccountSnapshot, AccountRuntimeError> {
     let tier = paid_tier(&tier)?;
+    let interval = billing_interval(interval.as_deref())?;
     blocking_mutation(runtime.inner().clone(), _admission, move |runtime| {
-        let launch = runtime.start_checkout(tier)?;
+        let launch = runtime.start_checkout(tier, interval)?;
         runtime.commit_browser_launch(&launch, |url| {
             tauri_plugin_opener::open_url(url, None::<&str>).map_err(|_| browser_error())
         })?;
@@ -185,6 +187,19 @@ pub async fn account_usage(
     runtime: State<'_, Arc<AccountRuntime>>,
 ) -> Result<AccountUsageSnapshot, AccountRuntimeError> {
     blocking(runtime.inner().clone(), AccountRuntime::usage).await
+}
+
+/// Absent means monthly, matching the API contract and older frontends.
+fn billing_interval(value: Option<&str>) -> Result<BillingInterval, AccountRuntimeError> {
+    match value {
+        None | Some("month") => Ok(BillingInterval::Month),
+        Some("year") => Ok(BillingInterval::Year),
+        Some(_) => Err(AccountRuntimeError {
+            code: "invalid_plan",
+            message: "Choose monthly or yearly billing.",
+            retryable: false,
+        }),
+    }
 }
 
 fn paid_tier(value: &str) -> Result<PaidTier, AccountRuntimeError> {
@@ -261,6 +276,21 @@ mod tests {
         for invalid in ["", "free", "owner", "MAX", "max2x "] {
             assert_eq!(
                 paid_tier(invalid).expect_err("must reject").code,
+                "invalid_plan"
+            );
+        }
+    }
+
+    #[test]
+    fn billing_interval_defaults_to_monthly_and_rejects_unknown_values() {
+        assert_eq!(billing_interval(None), Ok(BillingInterval::Month));
+        assert_eq!(billing_interval(Some("month")), Ok(BillingInterval::Month));
+        assert_eq!(billing_interval(Some("year")), Ok(BillingInterval::Year));
+        for invalid in ["", "yearly", "Year", "annual", "week"] {
+            assert_eq!(
+                billing_interval(Some(invalid))
+                    .expect_err("must reject")
+                    .code,
                 "invalid_plan"
             );
         }

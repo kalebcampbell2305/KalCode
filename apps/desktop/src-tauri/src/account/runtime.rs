@@ -11,9 +11,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::api::{
-    AccountApi, ApiAccount, ApiError, BrowserDestination, EntitlementResponse, PaidTier, PkcePair,
-    PollResponse, RetryClass, SocialCompleteResponse, UsageResponse, retry_delay,
-    validate_browser_destination,
+    AccountApi, ApiAccount, ApiError, BillingInterval, BrowserDestination, EntitlementResponse,
+    PaidTier, PkcePair, PollResponse, RetryClass, SocialCompleteResponse, UsageResponse,
+    retry_delay, validate_browser_destination,
 };
 use super::model::{
     AccountAuthority, AccountPhase, AccountSnapshot, AccountTier, AccountUsageSnapshot,
@@ -811,7 +811,11 @@ impl AccountRuntime {
         }
     }
 
-    pub fn start_checkout(&self, tier: PaidTier) -> Result<BrowserLaunch, AccountRuntimeError> {
+    pub fn start_checkout(
+        &self,
+        tier: PaidTier,
+        interval: BillingInterval,
+    ) -> Result<BrowserLaunch, AccountRuntimeError> {
         let generation = self.generation.load(Ordering::SeqCst);
         let _lane = self.lock_lane()?;
         if !self.is_current(generation) {
@@ -822,7 +826,8 @@ impl AccountRuntime {
         let checkout = {
             let mut state = self.lock_state();
             if let Some(existing) = state.checkout.clone() {
-                if existing.tier() != tier {
+                // A pending checkout is never silently reused for another plan or interval.
+                if existing.tier() != tier || existing.interval() != interval {
                     return Err(AccountRuntimeError {
                         code: "checkout_in_progress",
                         message: "KalCode is confirming your existing checkout.",
@@ -831,7 +836,7 @@ impl AccountRuntime {
                 }
                 existing
             } else {
-                let created = PendingCheckoutSecret::new(request_id()?, tier)
+                let created = PendingCheckoutSecret::new(request_id()?, tier, interval)
                     .map_err(|_| invalid_response())?;
                 state.checkout = Some(created.clone());
                 self.persist_locked(&state)?;
@@ -853,8 +858,12 @@ impl AccountRuntime {
             self.notify_authority_locked(&mut state, generation);
         }
         let response = self.retry(generation, RetryClass::CheckoutSameRequest, || {
-            self.api
-                .checkout(&token, checkout.tier(), checkout.request_id())
+            self.api.checkout(
+                &token,
+                checkout.tier(),
+                checkout.interval(),
+                checkout.request_id(),
+            )
         });
         let (response, expected_destination) = match response {
             Ok(response) => (response, BrowserDestination::Checkout),
