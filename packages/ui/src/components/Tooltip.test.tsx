@@ -85,4 +85,21 @@ describe("Tooltip", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(trigger).not.toHaveAttribute("aria-describedby");
   });
+
+  it("stays closed while hidden", async () => {
+    const user = userEvent.setup();
+    const view = (hidden: boolean) => (
+      <TooltipProvider>
+        <Tooltip content="Account details" hidden={hidden}>
+          <button type="button">Account</button>
+        </Tooltip>
+      </TooltipProvider>
+    );
+    const { rerender } = render(view(true));
+    await user.tab();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Account" })).not.toHaveAttribute("aria-describedby");
+    rerender(view(false));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Account details");
+  });
 });
