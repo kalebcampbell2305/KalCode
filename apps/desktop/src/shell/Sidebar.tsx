@@ -1,18 +1,18 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
-import { Bell, BellDot, PanelLeftClose, PanelLeftOpen, Search, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Bell, BellDot, PanelLeftClose, PanelLeftOpen, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useId } from "react";
 import { publicVersion } from "../platform/version.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { DashboardDataBoundary, useWaitingForYouCount } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
 import { AccountHub, useAccountHubShown } from "./AccountHub.tsx";
-import { Mark, Wordmark } from "./Brand.tsx";
+import { ProjectList } from "./deck/ProjectList.tsx";
 import { type Destination, destinationMeta, PRIMARY_ORDER, useNavigation, viewVisible } from "./navigation.tsx";
 import { useNotifications } from "./notifications/NotificationsProvider.tsx";
+import { useRail } from "./rail/RailProvider.tsx";
 import styles from "./Sidebar.module.css";
 import { MOD_LABEL } from "./shortcuts.ts";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher.tsx";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -21,6 +21,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
   const { info, updateSettings } = useRuntime();
+  const rail = useRail();
   const flags = new Map(info.flags.surfaces.map((flag) => [flag.id, flag]));
   const visible = (id: SurfaceId) => flags.get(id)?.visible ?? false;
 
@@ -33,26 +34,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
 
   return (
     <nav className={styles.sidebar} aria-label="Primary" data-collapsed={collapsed || undefined}>
-      <div className={styles.brand}>
-        <Mark size={22} />
-        {collapsed ? null : <Wordmark className={styles.wordmark} />}
-      </div>
-
-      <div className={styles.workspace}>
-        <WorkspaceSwitcher collapsed={collapsed} />
-      </div>
-
-      <div className={styles.search}>
-        <SidebarButton
-          collapsed={collapsed}
-          label="Search"
-          hint={`${MOD_LABEL} K`}
-          icon={<Search />}
-          onClick={onOpenPalette}
-          className={styles.searchButton}
-        />
-      </div>
-
+      {/* Command Deck: the brand, workspace and search live in the top bar. */}
       <ul className={styles.list}>
         {viewVisible("home", info.flags.features) ? <NavItem id="home" collapsed={collapsed} /> : null}
         {available.map((id) =>
@@ -80,6 +62,9 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
           </ul>
         </div>
       ) : null}
+
+      {/* The workspace rail, when the build has it, is the projects list instead. */}
+      {rail.enabled ? null : <ProjectList collapsed={collapsed} />}
 
       <div className={styles.footer}>
         <ul className={styles.list}>

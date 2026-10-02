@@ -425,6 +425,7 @@ fn a_crash_while_waiting_recovers_without_phantom_waits() {
         account_label: None,
         workspace_id: workspace_id.clone(),
         model: None,
+        effort: None,
         permission_mode: kalcode_contracts::permissions::PermissionMode::Approve,
         prompt: "resume me".into(),
         name: None,

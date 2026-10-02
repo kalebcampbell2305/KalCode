@@ -41,6 +41,7 @@ pub struct ThreadRow {
     pub provider_id: ProviderId,
     pub provider_name: String,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub provider_account_id: Option<String>,
     pub account_label: Option<String>,
     pub workspace_id: String,
@@ -100,7 +101,7 @@ const THREAD_COLUMNS: &str =
     (SELECT COUNT(*) FROM thread_messages m
        WHERE m.thread_id = t.id AND m.role = 'assistant' AND m.seq > t.last_read_seq),
     (SELECT COUNT(*) FROM thread_files f WHERE f.thread_id = t.id),
-    t.permission_profile_id";
+    t.permission_profile_id, t.effort";
 
 fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
     Ok(ThreadRow {
@@ -127,6 +128,7 @@ fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
         unread_messages: row.get(20)?,
         files_changed: row.get(21)?,
         permission_profile_id: row.get(22)?,
+        effort: row.get(23)?,
     })
 }
 
@@ -136,6 +138,7 @@ pub struct NewThreadRow<'a> {
     pub provider_id: &'a ProviderId,
     pub provider_name: &'a str,
     pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
     pub provider_account_id: Option<&'a str>,
     pub account_label: Option<&'a str>,
     pub workspace_id: &'a str,
@@ -148,8 +151,8 @@ pub struct NewThreadRow<'a> {
 pub fn insert_thread(conn: &Connection, t: &NewThreadRow<'_>) -> Result<()> {
     conn.execute(
         "INSERT INTO threads (id, name, provider_id, provider_name, model, provider_account_id, account_label,
-            workspace_id, workspace_name, cwd, permission_mode, status, created_at, last_activity_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'starting', ?12, ?12)",
+            workspace_id, workspace_name, cwd, permission_mode, status, created_at, last_activity_at, effort)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'starting', ?12, ?12, ?13)",
         params![
             t.id,
             t.name,
@@ -163,6 +166,7 @@ pub fn insert_thread(conn: &Connection, t: &NewThreadRow<'_>) -> Result<()> {
             t.cwd,
             enum_str(t.permission_mode),
             t.now,
+            t.effort,
         ],
     )?;
     Ok(())
@@ -246,6 +250,33 @@ pub fn set_provider_session(
         params![id, session_id, model],
     )?;
     Ok(())
+}
+
+/// Changes only the launch-time model and effort for an existing thread. Runtime callers hold
+/// the thread authority lock and perform their all-target readiness check before this write.
+pub fn set_launch_configuration(
+    conn: &Connection,
+    id: &str,
+    model: &str,
+    effort: &str,
+) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE threads SET model = ?2, effort = ?3 WHERE id = ?1",
+        params![id, model, effort],
+    )?;
+    if changed == 0 {
+        return Err(thread_not_found());
+    }
+    Ok(())
+}
+
+/// Whether this thread has ever received or produced conversation content.
+pub fn has_messages(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM thread_messages WHERE thread_id = ?1)",
+        [id],
+        |row| row.get(0),
+    )?)
 }
 
 /// Rebinds a thread to another provider account: the account id and its owner-visible label
@@ -960,6 +991,7 @@ mod tests {
                 provider_id: &ProviderId::new("fake"),
                 provider_name: "Fake",
                 model: None,
+                effort: None,
                 provider_account_id: None,
                 account_label: None,
                 workspace_id,

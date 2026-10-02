@@ -31,6 +31,13 @@ Mac gate runner (one `sudo` run on the Mac; it logs to `/tmp/kalcode-gate-setup.
 sudo bash tooling/runners/macos/setup-gate-runner.sh <registration-token>
 ```
 
+The Mac gate also requires the official CMake 4.4.3 universal distribution at
+`/Users/Shared/KalCode-gate-tools/cmake-4.4.3-macos-universal/CMake.app`.
+Provision and verify it outside PR jobs; `kalcodeci` must be able to read and
+execute it, but must not be able to replace its files or ancestor directories.
+The gate fails if it is missing and uses the release packager's selected-SDK
+environment for the production Whisper feature. PR jobs do not install tools.
+
 macOS release work keeps the existing path: the release runner on Windows drives the Mac over SSH (`ship.mjs` phases `bundle-mac` and `package-mac`), so the Developer ID identity and notary profile stay in the owner's Mac session. Use Windows OpenSSH (`C:\Windows\System32\OpenSSH\ssh.exe`); the release key is held by the Windows `ssh-agent`.
 
 The guard is copied next to the runner and wired as `ACTIONS_RUNNER_HOOK_JOB_STARTED` in the runner's `.env`. A job can't change either file, and a job the guard refuses fails before any of its steps run. Re-run the setup script after changing the guard.

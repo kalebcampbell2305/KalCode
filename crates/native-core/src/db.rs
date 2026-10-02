@@ -73,6 +73,7 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0019_kalvoice_account_usage.sql"),
     },
     OPERATIONS_MIGRATION,
+    THREADS_EFFORT_MIGRATION,
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -172,6 +173,13 @@ pub const OPERATIONS_MIGRATION: Migration = Migration {
     version: 20,
     name: "operations",
     sql: include_str!("../migrations/0020_operations.sql"),
+};
+
+/// Durable provider-native reasoning effort for thread launch and restart.
+pub const THREADS_EFFORT_MIGRATION: Migration = Migration {
+    version: 21,
+    name: "threads_effort",
+    sql: include_str!("../migrations/0021_threads_effort.sql"),
 };
 
 /// How many pre-migration backups to keep.

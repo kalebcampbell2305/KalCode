@@ -52,6 +52,17 @@ pub const MAX_WRITE_BYTES: usize = 64 * 1024;
 
 const ANSWER_IN_PROVIDER: &str = "Answer in Claude Code";
 
+/// Fixed reasons an automated voice submit cannot enter a provider PTY. Provider output is never
+/// included: callers can safely map these variants to stable UI errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneVoiceWriteError {
+    SessionEnded,
+    TargetChanged,
+    ProviderPrompt,
+    Unverified,
+    Io,
+}
+
 /// What differs between the providers a pane can run (PROVIDERS-2). Claude Code is the default:
 /// hooks, and KalCode answers approvals with engine routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +119,8 @@ struct HookState {
 struct LifecycleState {
     events: VecDeque<AgentEvent>,
     draining: bool,
+    input_writes: u64,
+    reconfigure_reserved: bool,
 }
 
 const CHANNEL_WAITING: u8 = 0;
@@ -118,6 +131,7 @@ const CHANNEL_ENDED: u8 = 3;
 pub(crate) struct Shared {
     pub(crate) ctx: ActionContext,
     pub(crate) provider_id: String,
+    instance_id: String,
     routing: DecisionRouting,
     sink: Box<dyn AgentEventSink>,
     pub(crate) pty: OnceLock<PtySession>,
@@ -157,6 +171,7 @@ impl Shared {
         Arc::new(Self {
             ctx: parts.ctx,
             provider_id: parts.provider_id,
+            instance_id: new_id(),
             routing: parts.routing,
             sink: parts.sink,
             pty: OnceLock::new(),
@@ -210,6 +225,59 @@ impl Shared {
 
     fn is_terminal(&self) -> bool {
         self.ended.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn write(&self, data: &[u8]) -> Result<(), ProviderError> {
+        let mut lifecycle = lock(&self.lifecycle);
+        let protocol_reply = terminal_protocol_reply(data);
+        if self.is_terminal() {
+            return Err(ProviderError::SessionEnded);
+        }
+        if lifecycle.reconfigure_reserved && !protocol_reply {
+            return Err(ProviderError::Io(
+                "The pane is restarting with new settings.".into(),
+            ));
+        }
+        let pty = self.pty().ok_or(ProviderError::SessionEnded)?;
+        pty.write(data)
+            .map_err(|error| ProviderError::Io(error.to_string()))?;
+        if !protocol_reply {
+            lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reserve_if_unused(&self) -> Result<bool, ProviderError> {
+        let mut lifecycle = lock(&self.lifecycle);
+        if self.is_terminal() {
+            return Err(ProviderError::SessionEnded);
+        }
+        if lifecycle.input_writes != 0 || lifecycle.reconfigure_reserved {
+            return Ok(false);
+        }
+        lifecycle.reconfigure_reserved = true;
+        Ok(true)
+    }
+
+    pub(crate) fn cancel_unused_reservation(&self) {
+        lock(&self.lifecycle).reconfigure_reserved = false;
+    }
+
+    fn terminate_reserved(&self) -> Result<(), ProviderError> {
+        {
+            let mut lifecycle = lock(&self.lifecycle);
+            if self.is_terminal() || !lifecycle.reconfigure_reserved {
+                return Err(ProviderError::SessionEnded);
+            }
+            lifecycle.reconfigure_reserved = false;
+            self.stopping.store(true, Ordering::SeqCst);
+            lock(&self.pending).clear();
+        }
+        if let Some(pty) = self.pty() {
+            pty.kill()
+                .map_err(|error| ProviderError::Io(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Queues events while the caller holds `lifecycle`, returning whether it became the drainer.
@@ -274,6 +342,7 @@ impl Shared {
         PaneInfo {
             thread_id: self.ctx.thread_id.clone(),
             provider_id: self.provider_id.clone(),
+            instance_id: Some(self.instance_id.clone()),
             hook_channel: channel,
             decision_routing: self.routing,
             kalcode_answers_approvals: self.profile().kalcode_answers
@@ -830,6 +899,188 @@ impl Shared {
     pub(crate) fn pty(&self) -> Option<&PtySession> {
         self.pty.get()
     }
+
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    fn voice_submit_blocker_locked(&self) -> Option<PaneVoiceWriteError> {
+        if self.is_terminal() {
+            return Some(PaneVoiceWriteError::SessionEnded);
+        }
+        if !lock(&self.pending).is_empty() {
+            return Some(PaneVoiceWriteError::ProviderPrompt);
+        }
+        let provider_prompt =
+            lock(&self.state)
+                .last_status
+                .as_ref()
+                .is_some_and(|(status, detail)| {
+                    *status == ThreadStatus::WaitingForPermission
+                        || (*status == ThreadStatus::WaitingForUser
+                            && detail.as_deref() == Some(self.profile().answer_in))
+                });
+        if provider_prompt {
+            return Some(PaneVoiceWriteError::ProviderPrompt);
+        }
+        // Claude must establish its authenticated lifecycle hook before an automated submit.
+        // Codex and Gemini keep provider-native input authority, matching manual pane typing;
+        // only their structured prompt signals can block a write.
+        if self.provider_id == "claude-code" && self.channel_state() != HookChannelState::Active {
+            return Some(PaneVoiceWriteError::Unverified);
+        }
+        None
+    }
+
+    /// Writes voice input while the lifecycle lock prevents a permission/auth transition from
+    /// racing a trusted Enter. Insert-only text is safe to draft before readiness is established;
+    /// any submit byte is guarded.
+    pub(crate) fn write_voice(&self, data: &[u8]) -> Result<(), PaneVoiceWriteError> {
+        let mut lifecycle = lock(&self.lifecycle);
+        let protocol_reply = terminal_protocol_reply(data);
+        if self.is_terminal() {
+            return Err(PaneVoiceWriteError::SessionEnded);
+        }
+        if lifecycle.reconfigure_reserved && !protocol_reply {
+            return Err(PaneVoiceWriteError::SessionEnded);
+        }
+        if data.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
+            && let Some(blocked) = self.voice_submit_blocker_locked()
+        {
+            return Err(blocked);
+        }
+        let pty = self.pty().ok_or(PaneVoiceWriteError::SessionEnded)?;
+        pty.write(data).map_err(|_| PaneVoiceWriteError::Io)?;
+        if !protocol_reply {
+            lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+        }
+        Ok(())
+    }
+}
+
+/// Exact, bounded terminal-emulator replies generated in response to a provider query. These
+/// bytes are written through xterm's ordinary input callback but are not human input. The
+/// classification is deliberately narrow and does not include keys, paste framing, or text.
+fn terminal_protocol_reply(data: &[u8]) -> bool {
+    if data.len() < 3 || data.len() > 256 || data[0] != 0x1b {
+        return false;
+    }
+    if matches!(data, b"\x1b[I" | b"\x1b[O") {
+        return true;
+    }
+    if data[1] == b'[' {
+        if matches!(
+            data,
+            b"\x1b[?1;2c" | b"\x1b[?6c" | b"\x1b[>0;276;0c" | b"\x1b[0n"
+        ) {
+            return true;
+        }
+        let body = &data[2..];
+        if let Some(position) = body.strip_suffix(b"R") {
+            let position = position.strip_prefix(b"?").unwrap_or(position);
+            let mut coordinates = position.split(|byte| *byte == b';');
+            return coordinates.next().is_some_and(ascii_number)
+                && coordinates.next().is_some_and(ascii_number)
+                && coordinates.next().is_none();
+        }
+        if let Some(mode) = body.strip_suffix(b"$y") {
+            let mode = mode.strip_prefix(b"?").unwrap_or(mode);
+            let mut values = mode.split(|byte| *byte == b';');
+            return values.next().is_some_and(ascii_number)
+                && values
+                    .next()
+                    .is_some_and(|value| matches!(value, b"0" | b"1" | b"2" | b"3" | b"4"))
+                && values.next().is_none();
+        }
+        if let Some(window) = body.strip_suffix(b"t") {
+            let mut values = window.split(|byte| *byte == b';');
+            return values
+                .next()
+                .is_some_and(|value| matches!(value, b"4" | b"6" | b"8"))
+                && values.next().is_some_and(ascii_number)
+                && values.next().is_some_and(ascii_number)
+                && values.next().is_none();
+        }
+        return false;
+    }
+    if data[1] == b'P' {
+        let Some(body) = data[2..].strip_suffix(b"\x1b\\") else {
+            return false;
+        };
+        let Some(report) = body
+            .strip_prefix(b"0$r")
+            .or_else(|| body.strip_prefix(b"1$r"))
+        else {
+            return false;
+        };
+        if matches!(report, b"" | b"0m" | b"61;1\"p") {
+            return true;
+        }
+        if let Some(value) = report.strip_suffix(b" q") {
+            return matches!(value, b"1" | b"2" | b"3" | b"4" | b"5" | b"6");
+        }
+        if let Some(value) = report.strip_suffix(b"\"q") {
+            return matches!(value, b"0" | b"1");
+        }
+        if let Some(margins) = report.strip_suffix(b"r") {
+            let mut values = margins.split(|byte| *byte == b';');
+            return values.next().is_some_and(ascii_number)
+                && values.next().is_some_and(ascii_number)
+                && values.next().is_none();
+        }
+        return false;
+    }
+    if data[1] == b']' {
+        let body = data[2..]
+            .strip_suffix(b"\x07")
+            .or_else(|| data[2..].strip_suffix(b"\x1b\\"));
+        return body.is_some_and(color_report);
+    }
+    false
+}
+
+fn ascii_number(value: &[u8]) -> bool {
+    !value.is_empty() && value.iter().all(u8::is_ascii_digit)
+}
+
+fn color_report(body: &[u8]) -> bool {
+    let mut fields = body.split(|byte| *byte == b';');
+    let Some(identifier) = fields.next() else {
+        return false;
+    };
+    let color = if identifier == b"4" {
+        let Some(index) = fields.next() else {
+            return false;
+        };
+        if !ascii_number(index)
+            || std::str::from_utf8(index)
+                .ok()
+                .and_then(|index| index.parse::<u16>().ok())
+                .is_none_or(|index| index > 255)
+        {
+            return false;
+        }
+        fields.next()
+    } else if matches!(identifier, b"10" | b"11" | b"12") {
+        fields.next()
+    } else {
+        return false;
+    };
+    let Some(color) = color else {
+        return false;
+    };
+    if fields.next().is_some() {
+        return false;
+    }
+    let Some(channels) = color.strip_prefix(b"rgb:") else {
+        return false;
+    };
+    let mut channels = channels.split(|byte| *byte == b'/');
+    (0..3).all(|_| {
+        channels
+            .next()
+            .is_some_and(|channel| channel.len() == 4 && channel.iter().all(u8::is_ascii_hexdigit))
+    }) && channels.next().is_none()
 }
 
 /// Tool calls whose shape the permission classifier can't judge fully yet
@@ -954,6 +1205,18 @@ impl AgentSession for InteractiveSession {
             pty.kill().map_err(|e| ProviderError::Io(e.to_string()))?;
         }
         Ok(())
+    }
+
+    fn reserve_if_unused(&self) -> Result<bool, ProviderError> {
+        self.shared.reserve_if_unused()
+    }
+
+    fn cancel_unused_reservation(&self) {
+        self.shared.cancel_unused_reservation();
+    }
+
+    fn terminate_reserved(&self) -> Result<(), ProviderError> {
+        self.shared.terminate_reserved()
     }
 
     fn respond_to_approval(
@@ -1208,6 +1471,67 @@ mod tests {
             matches!(&events[0], AgentEvent::Error { code, recoverable: true, .. } if code == "provider_rate_limit")
         );
         assert_eq!(events[1], AgentEvent::TurnCompleted { ok: false });
+    }
+
+    #[test]
+    fn voice_submit_guard_uses_authenticated_lifecycle_state() {
+        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        {
+            let _lifecycle = lock(&s.lifecycle);
+            assert_eq!(
+                s.voice_submit_blocker_locked(),
+                Some(PaneVoiceWriteError::Unverified),
+                "Claude startup without its authenticated SessionStart hook is not submit-ready"
+            );
+        }
+
+        s.hooks_overdue();
+        drain(&rx);
+        {
+            let _lifecycle = lock(&s.lifecycle);
+            assert_eq!(s.channel_state(), HookChannelState::Limited);
+            assert_eq!(
+                s.voice_submit_blocker_locked(),
+                Some(PaneVoiceWriteError::Unverified),
+                "Claude limited status cannot certify that Enter will not answer a native prompt"
+            );
+        }
+
+        let provider_session_id = lock(&s.provider_session_id).clone().expect("session id");
+        s.handle(record(
+            HookEvent::SessionStart,
+            json!({"session_id": provider_session_id, "source": "startup"}),
+        ));
+        drain(&rx);
+        {
+            let _lifecycle = lock(&s.lifecycle);
+            assert_eq!(s.voice_submit_blocker_locked(), None);
+        }
+
+        s.handle(record(
+            HookEvent::UserPromptSubmit,
+            json!({"prompt": "work"}),
+        ));
+        drain(&rx);
+        {
+            let _lifecycle = lock(&s.lifecycle);
+            assert_eq!(
+                s.voice_submit_blocker_locked(),
+                None,
+                "active providers accept native TUI steering"
+            );
+        }
+
+        s.handle(record(
+            HookEvent::Notification,
+            json!({"notification_type": "permission_prompt"}),
+        ));
+        drain(&rx);
+        let _lifecycle = lock(&s.lifecycle);
+        assert_eq!(
+            s.voice_submit_blocker_locked(),
+            Some(PaneVoiceWriteError::ProviderPrompt)
+        );
     }
 
     #[test]
@@ -1815,5 +2139,35 @@ mod tests {
             let text = serde_json::to_string(&event).expect("json");
             assert!(!text.contains("flaky"), "{text}");
         }
+    }
+}
+#[test]
+fn only_terminal_protocol_replies_are_exempt_from_input_use() {
+    for reply in [
+        b"\x1b[0n".as_slice(),
+        b"\x1b[1;12R",
+        b"\x1b[?1;2c",
+        b"\x1b[>0;276;0c",
+        b"\x1b[4;1$y",
+        b"\x1bP1$r0m\x1b\\",
+        b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+        b"\x1b[I",
+        b"\x1b[O",
+    ] {
+        assert!(terminal_protocol_reply(reply), "{reply:?}");
+    }
+    for input in [
+        b"draft".as_slice(),
+        b"draft\r",
+        b"\x1b[A",
+        b"\x1b[200~draft\x1b[201~",
+        b"\x03",
+        b"\x1b]52;copied secret\x07",
+        b"\x1bPhello$rdiscard me\x1b\\",
+        b"\x1b[123c",
+        b"\x1b[999n",
+        b"\x1b[1;2;3R",
+    ] {
+        assert!(!terminal_protocol_reply(input), "{input:?}");
     }
 }

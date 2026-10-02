@@ -56,24 +56,29 @@ function describeSubmit(outcome: ComposerSubmitOutcome, name: string, blocked: s
 }
 
 /** Runs one composer's own Send, refusing what voice must never do (resume, blocked threads). */
-async function sendThrough(registration: ComposerRegistration): Promise<DirectiveReport> {
+async function sendThrough(registration: ComposerRegistration, signal?: AbortSignal): Promise<DirectiveReport | null> {
+  if (signal?.aborted) return null;
   const { handle } = registration;
   const name = handle.identity().threadName;
   const mode = handle.mode();
   if (mode === "blocked") return describeSubmit("blocked", name, handle.blockedReason());
   if (mode === "resume") return { ok: false, message: notResuming(name) };
   if (!handle.hasText()) return describeSubmit("empty", name, null);
-  return describeSubmit(await handle.submit(), name, handle.blockedReason());
+  const outcome = await handle.submit();
+  if (signal?.aborted) return null;
+  return describeSubmit(outcome, name, handle.blockedReason());
 }
 
 /** `submit_composer`: presses that thread's own Send. */
 export async function submitComposer(deps: ComposerDirectiveDeps, threadId: string): Promise<void> {
+  if (deps.signal?.aborted) return;
   const registration = composerForThread(threadId);
   if (!registration?.handle.element()?.isConnected) {
     deps.report({ ok: false, message: "That thread's message box isn't open. Nothing was sent." });
     return;
   }
-  deps.report(await sendThrough(registration));
+  const result = await sendThrough(registration, deps.signal);
+  if (result && !deps.signal?.aborted) deps.report(result);
 }
 
 /**
@@ -83,6 +88,7 @@ export async function submitComposer(deps: ComposerDirectiveDeps, threadId: stri
  * nothing. Never sends.
  */
 export function clearComposer(deps: ComposerDirectiveDeps, threadId: string): void {
+  if (deps.signal?.aborted) return;
   const element = composerForThread(threadId)?.handle.element() ?? null;
   if (!element?.isConnected) {
     deps.report({ ok: false, message: "That thread's message box isn't open. Nothing was cleared." });
@@ -114,6 +120,7 @@ export async function composeInThread(
   deps: ComposerDirectiveDeps,
   { threadId, text, submit }: { threadId: string; text: string; submit: boolean },
 ): Promise<void> {
+  if (deps.signal?.aborted) return;
   deps.openThread(threadId);
   const waited = await waitForComposer(threadId, {
     timeoutMs: deps.waitMs ?? 3000,
@@ -149,6 +156,7 @@ export async function composeInThread(
     deps.report({ ok: false, message: `${quoted(name)}'s message box couldn't take the text. Nothing was sent.` });
     return;
   }
+  if (deps.signal?.aborted) return;
   if (!submit) {
     deps.report({ ok: true, message: `Added to ${quoted(name)}. Nothing was sent.` });
     return;
@@ -167,7 +175,8 @@ export async function composeInThread(
     });
     return;
   }
-  deps.report(await sendThrough(registration));
+  const result = await sendThrough(registration, deps.signal);
+  if (result && !deps.signal?.aborted) deps.report(result);
 }
 
 /** A clarification's follow-up for the session the person picked. */
@@ -176,12 +185,11 @@ export async function followUpChoice(
   choice: SessionCandidate,
   followUp: SessionFollowUp,
 ): Promise<void> {
+  if (deps.signal?.aborted) return;
   if (followUp.kind === "open") {
     deps.focusThread(choice.threadId);
-    deps.report({ ok: true, message: `Opened ${quoted(choice.name)}.` });
+    if (!deps.signal?.aborted) deps.report({ ok: true, message: `Opened ${quoted(choice.name)}.` });
     return;
   }
-  // Say which session the answer picked before anything is sent (still through its own Send).
-  if (followUp.submit) deps.report({ ok: true, message: `Sending to ${choice.label}.` });
   await composeInThread(deps, { threadId: choice.threadId, text: followUp.text, submit: followUp.submit });
 }

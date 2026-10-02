@@ -18,9 +18,10 @@ const mocks = vi.hoisted(() => ({
   },
   toast: { show: vi.fn() },
 }));
-vi.mock("../runtime/RuntimeProvider.tsx", () => ({
-  useRuntime: () => ({ client: { ...mocks.client, kalvoiceRequest: mocks.request } }),
-}));
+vi.mock("../runtime/RuntimeProvider.tsx", () => {
+  const client = { ...mocks.client, kalvoiceRequest: mocks.request };
+  return { useRuntime: () => ({ client }) };
+});
 vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => ({ active: { id: "workspace" } }) }));
 vi.mock("../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: mocks.focus }) }));
 vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ current: "code", navigate: mocks.navigate }) }));

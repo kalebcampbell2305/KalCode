@@ -93,6 +93,7 @@ impl FakeInstall {
             provider_account_id: None,
             working_directory: self.work.path().display().to_string(),
             model: None,
+            effort: None,
             permission_mode: mode,
             resume_session_id: resume.map(str::to_owned),
             secret_ref: None,

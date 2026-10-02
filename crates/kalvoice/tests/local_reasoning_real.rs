@@ -711,6 +711,7 @@ fn request(text: &str) -> LocalInterpretationRequest {
             id: WORKSPACE_ID.into(),
             name: "KalCode".into(),
         }],
+        grounded_actions: Vec::new(),
     }
 }
 

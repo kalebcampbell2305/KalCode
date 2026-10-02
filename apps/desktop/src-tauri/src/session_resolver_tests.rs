@@ -29,6 +29,7 @@ fn summary(
         provider_id: ProviderId::new(provider),
         provider_name: provider_name.into(),
         model: None,
+        effort: None,
         provider_account_id: account.map(|_| format!("acct-{key}")),
         account_label: account.map(str::to_owned),
         workspace_id: workspace.0.into(),
@@ -266,6 +267,130 @@ fn account_words_alone_never_pick_the_other_account() {
             ..
         }
     ));
+}
+
+#[test]
+fn live_task_context_resolves_natural_scene_phrases_without_reading_messages() {
+    let mut website = summary(
+        "01",
+        "Website refresh",
+        (ProviderId::CLAUDE_CODE, "Claude Code"),
+        Some("Claude A"),
+        ws1(),
+        ThreadStatus::Testing,
+        false,
+    );
+    website.model = Some("claude-opus-4-1".into());
+    website.effort = Some("high".into());
+    website.current_activity = Some("Running frontend tests for the website".into());
+    website.branch = Some("feature/navigation".into());
+    let mut api = summary(
+        "02",
+        "API release",
+        (ProviderId::CLAUDE_CODE, "Claude Code"),
+        Some("Claude B"),
+        ws1(),
+        ThreadStatus::Active,
+        false,
+    );
+    api.current_activity = Some("Refactoring authentication middleware".into());
+
+    for query in [
+        "find Claude working on the website",
+        "open the terminal running frontend tests",
+        "show me the feature navigation agent",
+        "show me the high Claude website agent",
+    ] {
+        assert!(
+            matches!(
+                resolve(&[website.clone(), api.clone()], query, &ResolveContext::default()),
+                SessionResolution::Resolved {
+                    ref target,
+                    tier: SessionMatchTier::Fuzzy,
+                } if target.thread_id == website.id
+            ),
+            "{query}"
+        );
+    }
+    assert!(matches!(
+        resolve(
+            &[website, api.clone()],
+            "the one working on auth",
+            &ResolveContext::default(),
+        ),
+        SessionResolution::Resolved { ref target, .. } if target.thread_id == api.id
+    ));
+}
+
+#[test]
+fn live_task_context_keeps_equal_matches_ambiguous_and_other_excludes_focus() {
+    let mut first = summary(
+        "01",
+        "Browser one",
+        (ProviderId::CODEX, "Codex"),
+        None,
+        ws1(),
+        ThreadStatus::Active,
+        false,
+    );
+    first.current_activity = Some("Implementing Browser controls".into());
+    let mut second = summary(
+        "02",
+        "Browser two",
+        (ProviderId::CODEX, "Codex"),
+        None,
+        ws1(),
+        ThreadStatus::Active,
+        false,
+    );
+    second.current_activity = Some("Reviewing Browser controls".into());
+
+    assert!(matches!(
+        resolve(
+            &[first.clone(), second.clone()],
+            "open the Codex terminal working on Browser",
+            &ResolveContext::default(),
+        ),
+        SessionResolution::Ambiguous { total: 2, .. }
+    ));
+    assert!(matches!(
+        resolve(
+            &[first.clone(), second.clone()],
+            "open the other Codex session",
+            &ResolveContext {
+                focused_thread_id: Some(&first.id),
+                ..ResolveContext::default()
+            },
+        ),
+        SessionResolution::Resolved { ref target, .. } if target.thread_id == second.id
+    ));
+}
+
+#[test]
+fn task_context_requires_a_locating_phrase_and_all_meaningful_words() {
+    let mut thread = summary(
+        "01",
+        "Website refresh",
+        (ProviderId::CLAUDE_CODE, "Claude Code"),
+        None,
+        ws1(),
+        ThreadStatus::Testing,
+        false,
+    );
+    thread.current_activity = Some("Running website tests".into());
+
+    for query in [
+        "refactor the website and run tests",
+        "find Claude working on the payments service",
+    ] {
+        assert!(
+            matches!(
+                resolve(&[thread.clone()], query, &ResolveContext::default()),
+                SessionResolution::NotFound { .. }
+            ),
+            "{query}"
+        );
+    }
 }
 
 #[test]

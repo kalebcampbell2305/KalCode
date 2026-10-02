@@ -660,6 +660,227 @@ fn prove_established_server_owner(
     Err(GuardedWorkerError::Unsupported)
 }
 
+#[cfg(all(
+    test,
+    any(
+        all(windows, target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )
+))]
+mod local_reasoner_live_test {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use kalcode_contracts::kalvoice::KalVoiceIntent;
+    use kalcode_contracts::threads::WorkspaceOption;
+    use kalcode_kalvoice::component_catalog::{
+        CatalogContract, CatalogRole, WHISPER_GGML_ABI, verify_catalog,
+    };
+    use kalcode_kalvoice::component_store::{
+        ComponentStore, TrustedComponentDirectory, host_local_reasoning_contract,
+    };
+    use kalcode_kalvoice::llama_worker::{LlamaWorker, LlamaWorkerLimits};
+    use kalcode_kalvoice::local_reasoning::{
+        LocalActionGrounding, LocalInterpretation, LocalInterpretationCancellation,
+        LocalInterpretationRequest,
+    };
+    use kalcode_providers::guardian::GuardianRuntime;
+    use tempfile::TempDir;
+
+    #[cfg(windows)]
+    const WINDOWS_RUNTIME_SHA256: &str =
+        "e72f5ea3c771844320c19f0e0fc3cbbe32e4b61ea2112cf0e5be3d06a69d8404";
+    #[cfg(target_os = "macos")]
+    const MACOS_RUNTIME_SOURCE_SHA256: &str =
+        "1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711";
+    const MODEL_SHA256: &str = "37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f";
+    const WEBSITE_THREAD_ID: &str = "0199a914-5ea1-7db0-b36b-aee1bdc846d8";
+
+    fn required_path(name: &str) -> PathBuf {
+        PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required")))
+    }
+
+    fn private_test_directory(path: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
+        #[cfg(windows)]
+        let _ = path;
+        Ok(())
+    }
+
+    /// Opt-in trusted-machine proof. It either opens `KALCODE_COMPONENT_TEST_ROOT`, which must be
+    /// an isolated component-store copy, or installs the production-signed catalog's reasoning
+    /// entries from the three `KALCODE_COMPONENT_TEST_*` input files into an ephemeral store.
+    /// Production app data is never read or mutated by this test.
+    #[test]
+    #[ignore = "requires production-signed pinned components and the native guardian helper"]
+    fn guarded_qwen_selects_a_live_scene_action() {
+        let helper = required_path("KALCODE_PROVIDER_GUARDIAN");
+        let contract = host_local_reasoning_contract().expect("supported host");
+        let verifier = crate::kalvoice_component_trust::production_verifier()
+            .expect("embedded production component trust");
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let component_stage = std::env::var_os("KALCODE_COMPONENT_TEST_ROOT")
+            .is_none()
+            .then(|| TempDir::new().expect("ephemeral component store"));
+        if let Some(stage) = &component_stage {
+            private_test_directory(stage.path()).expect("private component test directory");
+        }
+        let component_root = std::env::var_os("KALCODE_COMPONENT_TEST_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                component_stage
+                    .as_ref()
+                    .expect("ephemeral component store")
+                    .path()
+                    .to_owned()
+            });
+        let store = ComponentStore::new(
+            TrustedComponentDirectory::open_existing(&component_root)
+                .expect("isolated component authority"),
+            verifier.clone(),
+            [contract.runtime_policy],
+        )
+        .expect("isolated production component store");
+        if component_stage.is_some() {
+            let catalog_token = fs::read_to_string(required_path("KALCODE_COMPONENT_TEST_CATALOG"))
+                .expect("signed production catalog");
+            let catalog = verify_catalog(
+                &verifier,
+                catalog_token.trim(),
+                now,
+                CatalogContract {
+                    channel: "stable",
+                    platform: contract.runtime.platform,
+                    arch: contract.runtime.arch,
+                    reasoning_runtime_id: &contract.runtime.component_id,
+                    reasoning_model_id: &contract.model.component_id,
+                    reasoning_abi: &contract.runtime.runtime_abi,
+                    speech_model_ids: &crate::kalvoice_components::SPEECH_COMPONENT_IDS,
+                    default_speech_model_id: crate::kalvoice_components::SPEECH_COMPONENT_IDS[0],
+                    speech_model_abi: WHISPER_GGML_ABI,
+                },
+            )
+            .expect("production catalog and nested manifests");
+            let runtime_entry = catalog
+                .entry(CatalogRole::ReasoningRuntime)
+                .expect("reasoning runtime entry");
+            let model_entry = catalog
+                .entry(CatalogRole::ReasoningModel)
+                .expect("reasoning model entry");
+            store
+                .install_from_file(
+                    runtime_entry.token(),
+                    &required_path("KALCODE_COMPONENT_TEST_RUNTIME"),
+                    now,
+                )
+                .expect("verified runtime staging");
+            store
+                .install_from_file(
+                    model_entry.token(),
+                    &required_path("KALCODE_COMPONENT_TEST_MODEL"),
+                    now,
+                )
+                .expect("verified model staging");
+        }
+        let runtime = store
+            .acquire(&contract.runtime, now)
+            .expect("runtime lease");
+        let model = store.acquire(&contract.model, now).expect("model lease");
+        assert_eq!(
+            runtime.manifest().component_id,
+            contract.runtime.component_id
+        );
+        assert_eq!(runtime.manifest().version, "0.5.0-b11146");
+        assert_eq!(
+            runtime.manifest().provenance.source_revision,
+            "7fe450e19305b828c199d602c23a8337aaa1f03b"
+        );
+        #[cfg(windows)]
+        assert_eq!(runtime.manifest().sha256, WINDOWS_RUNTIME_SHA256);
+        // The notarized Mac ZIP is independently signed and therefore has a release-specific
+        // digest. Its production-signed receipt binds that digest; the immutable upstream input
+        // is additionally pinned here so this proof cannot silently select another runtime.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            runtime.manifest().provenance.source_integrity_sha256,
+            MACOS_RUNTIME_SOURCE_SHA256
+        );
+        assert_eq!(model.manifest().sha256, MODEL_SHA256);
+
+        let guardian_data = TempDir::new().expect("isolated guardian data");
+        let guardian = GuardianRuntime::launch(&helper, guardian_data.path())
+            .expect("native guardian startup");
+        let launcher = Arc::new(super::KalVoiceGuardianLauncher::new(
+            guardian.probe_guardian().expect("probe guardian"),
+        ));
+        let worker = LlamaWorker::new(
+            runtime,
+            model,
+            LlamaWorkerLimits::default(),
+            launcher.clone(),
+        )
+        .expect("compatible pinned components");
+        let start_started = Instant::now();
+        worker
+            .start(Duration::from_secs(90))
+            .expect("guarded local worker startup");
+        let cold_start = start_started.elapsed();
+
+        let inference_started = Instant::now();
+        let result = worker
+            .interpret_with_control(
+                LocalInterpretationRequest {
+                    request: "find the high effort Claude agent working on the website".into(),
+                    workspace_id: Some("workspace-kalcode".into()),
+                    workspaces: vec![WorkspaceOption {
+                        id: "workspace-kalcode".into(),
+                        name: "KalCode".into(),
+                    }],
+                    grounded_actions: vec![
+                        LocalActionGrounding {
+                            label: "Open Website refresh, Claude Code, KalCode, High effort, running frontend tests".into(),
+                            intent: KalVoiceIntent::OpenThread {
+                                query: WEBSITE_THREAD_ID.into(),
+                            },
+                        },
+                        LocalActionGrounding {
+                            label: "Open API release, Claude Code, KalCode, Low effort, refactoring authentication".into(),
+                            intent: KalVoiceIntent::OpenThread {
+                                query: "0199a914-5ea1-7db0-b36b-aee1bdc846d9".into(),
+                            },
+                        },
+                    ],
+                },
+                Instant::now() + Duration::from_millis(1_500),
+                &LocalInterpretationCancellation::default(),
+            )
+            .expect("guarded local inference");
+        let inference = inference_started.elapsed();
+        eprintln!(
+            "guarded local reasoner cold_start_ms={} warm_inference_ms={}",
+            cold_start.as_millis(),
+            inference.as_millis()
+        );
+        assert_eq!(
+            result,
+            LocalInterpretation::Action(KalVoiceIntent::OpenThread {
+                query: WEBSITE_THREAD_ID.into(),
+            })
+        );
+
+        worker.stop().expect("worker cleanup");
+        assert_eq!(launcher.retained_processes(), 0);
+        guardian.seal_and_drain().expect("guardian clean proof");
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use std::io::Read as _;

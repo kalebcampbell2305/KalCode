@@ -89,13 +89,12 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::FailureAutopsy
         | FeatureId::WorkspaceHome
         | FeatureId::WorkspaceRail
-        | FeatureId::ProviderPanes
         | FeatureId::ContextFirewall
         | FeatureId::HostKeyVerification
         | FeatureId::SafeRestore
         | FeatureId::AutomationKillSwitch => SurfaceState::Gated,
-        // Z7-W1: the pane canvas is the Code surface.
-        FeatureId::PaneSystem => SurfaceState::Available,
+        // Z7-W1: the pane canvas and its governed provider terminals are the Code surface.
+        FeatureId::PaneSystem | FeatureId::ProviderPanes => SurfaceState::Available,
         // 0.1.5 zero-setup (E1-E3, E7): these ship unconditionally on Stable (Providers › Health
         // and Accounts, the Notifications panel, the sign-in gate); nothing gates on the flag.
         FeatureId::ProviderHealth
@@ -222,10 +221,12 @@ mod tests {
 
     #[test]
     fn every_feature_has_one_flag_and_advanced_features_are_gated() {
-        // Shipped in every channel: the pane system (Z7-W1) and the 0.1.5 features whose UI is
-        // unconditional (provider health and accounts, notifications, KalCode sign-in).
-        const AVAILABLE: [FeatureId; 5] = [
+        // Shipped in every channel: the pane system and provider terminals (Z7-W1), plus the
+        // 0.1.5 features whose UI is unconditional (provider health/accounts, notifications,
+        // KalCode sign-in).
+        const AVAILABLE: [FeatureId; 6] = [
             FeatureId::PaneSystem,
+            FeatureId::ProviderPanes,
             FeatureId::ProviderHealth,
             FeatureId::ProviderProfiles,
             FeatureId::NotificationCenter,

@@ -62,16 +62,15 @@ const dashboardNav = () =>
   within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Dashboard" });
 
 describe("Stable Dashboard", () => {
-  it("empty: says no sessions yet, leads with New Session and doesn't promise terminal CLIs", async () => {
+  it("empty: says no sessions yet and offers both tracked session paths", async () => {
     const { user } = await mount("empty");
     const agents = board();
     await agents.findByRole("heading", { name: "No sessions yet" });
     const actions = agents.getAllByRole("button").map((button) => button.textContent);
-    expect(actions).toEqual(["New Session"]);
-    expect(agents.queryByRole("button", { name: "Open Code" })).toBeNull();
+    expect(actions).toEqual(["New Session", "Open Code"]);
     expect(agents.queryByRole("button", { name: "Show archived" })).toBeNull();
-    const copy = screen.getByText(/This build tracks sessions started from Threads/);
-    expect(copy.textContent).toMatch(/a CLI you run yourself in a Code terminal isn't tracked/);
+    const copy = screen.getByText(/in a provider pane from Code/);
+    expect(copy.textContent).toMatch(/A CLI you type into a plain terminal isn't tracked here/);
     expect(screen.queryByText(/No active sessions/)).toBeNull();
 
     await user.click(agents.getByRole("button", { name: "New Session" }));

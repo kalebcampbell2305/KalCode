@@ -54,7 +54,7 @@ export type AssistantEvent =
   | { type: "dictation_blocked"; message: string }
   | { type: "typed_instead"; message: string }
   /** The UI finished (or refused) what a directive asked for: a send, a clear, a choice. */
-  | { type: "action_result"; ok: boolean; message: string }
+  | { type: "action_result"; requestId: string; ok: boolean; message: string }
   | { type: "dismiss" }
   | { type: "settle" };
 
@@ -128,6 +128,7 @@ export function reduce(state: AssistantState, event: AssistantEvent): AssistantS
     case "typed_instead":
       return { ...state, phase: "done", message: event.message, code: null, lastTalk: null };
     case "action_result":
+      if (state.requestId !== event.requestId) return state;
       return {
         ...state,
         phase: event.ok ? "done" : "error",
@@ -152,6 +153,7 @@ function onSignal(state: AssistantState, signal: KalVoiceSignal): AssistantState
       return {
         ...state,
         phase: "listening",
+        requestId: null,
         mode: signal.mode,
         sessionId: signal.sessionId,
         partial: null,

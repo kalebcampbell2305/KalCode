@@ -26,6 +26,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::account::model::AccountSnapshot;
 use crate::account::runtime::AccountRuntime;
+use crate::kalvoice_callbacks::{OperationAnnouncer, OperationCallback};
 use crate::native_confirm::TauriConfirmer;
 use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
 use crate::thread_commands::ThreadsState;
@@ -237,14 +238,18 @@ pub struct OperationsState {
     commits: Mutex<Option<(Instant, Vec<OperationActivity>)>>,
     /// Final artifact handoffs are checked once per process; transient collector errors retry.
     artifact_checked: Mutex<HashSet<String>>,
+    /// Live-only optional speech sink. Operations remains the durable source of completion
+    /// metadata; this is invoked only after its final write commits.
+    voice_callback: Option<OperationAnnouncer>,
 }
 
 impl OperationsState {
-    pub fn start(
+    pub(crate) fn start(
         core: Arc<Core>,
         threads: Arc<ThreadsState>,
         git: Arc<GitCore>,
         account: Arc<AccountRuntime>,
+        voice_callback: Option<OperationAnnouncer>,
         app: &AppHandle,
     ) -> Result<Arc<Self>> {
         let store = OperationsStore::new(core.clone());
@@ -262,6 +267,7 @@ impl OperationsState {
             observations: Mutex::new(None),
             commits: Mutex::new(None),
             artifact_checked: Mutex::new(HashSet::new()),
+            voice_callback,
         });
         let weak = Arc::downgrade(&state);
         let stop = state.stop.clone();
@@ -507,18 +513,13 @@ impl OperationsState {
                                 outcome.push_str(note);
                             }
                             if let Some(ended_at) = terminal.ended_at.as_deref() {
-                                self.store.finish_at(
-                                    &row.id,
-                                    status,
-                                    outcome.as_str(),
-                                    ended_at,
-                                )?;
+                                self.finish_run_at(&row.id, status, outcome.as_str(), ended_at)?;
                             } else {
-                                self.store.finish(&row.id, status, outcome.as_str())?;
+                                self.finish_run(&row.id, status, outcome.as_str())?;
                             }
                         }
                     }
-                    Err(error) if error.code == "not_found" => self.store.finish(
+                    Err(error) if error.code == "not_found" => self.finish_run(
                         &row.id,
                         OperationStatus::Interrupted,
                         "The terminal is no longer available; completion was not observed.",
@@ -558,8 +559,7 @@ impl OperationsState {
                             "The provider reported an unsuccessful task.",
                         )
                     };
-                    self.store
-                        .finish_at(&row.id, status, outcome, &event.occurred_at)?;
+                    self.finish_run_at(&row.id, status, outcome, &event.occurred_at)?;
                     continue;
                 }
                 let thread = match self
@@ -572,7 +572,7 @@ impl OperationsState {
                     // Reconcile runs under the gate, so no launch is between reserving this
                     // identity and creating its thread: a missing thread was removed.
                     Err(error) if error.code == "thread_not_found" => {
-                        self.store.finish(
+                        self.finish_run(
                             &row.id,
                             OperationStatus::Interrupted,
                             "The provider thread is no longer available; completion was not observed.",
@@ -588,7 +588,7 @@ impl OperationsState {
                         | OperationStatus::Failed
                         | OperationStatus::Interrupted
                 ) {
-                    self.store.finish(
+                    self.finish_run(
                         &row.id,
                         status,
                         thread
@@ -602,6 +602,50 @@ impl OperationsState {
         Ok(())
     }
 
+    fn finish_run<'a>(
+        &self,
+        id: &str,
+        status: OperationStatus,
+        outcome: impl Into<Option<&'a str>>,
+    ) -> Result<()> {
+        self.store.finish(id, status, outcome)?;
+        self.announce_finished(id);
+        Ok(())
+    }
+
+    fn finish_run_at<'a>(
+        &self,
+        id: &str,
+        status: OperationStatus,
+        outcome: impl Into<Option<&'a str>>,
+        ended_at: &str,
+    ) -> Result<()> {
+        self.store.finish_at(id, status, outcome, ended_at)?;
+        self.announce_finished(id);
+        Ok(())
+    }
+
+    fn announce_finished(&self, id: &str) {
+        let Some(announce) = &self.voice_callback else {
+            return;
+        };
+        match self.store.get(id) {
+            Ok(run) => announce(OperationCallback {
+                id: run.id,
+                name: run.spec.name,
+                kind: run.spec.kind,
+                status: run.status,
+                thread_id: run.thread_id,
+                workspace_id: Some(run.spec.workspace_id),
+            }),
+            Err(error) => tracing::warn!(
+                event = "operations.voice_callback_skipped",
+                operation_id = id,
+                code = error.code
+            ),
+        }
+    }
+
     fn launch(&self, row: OperationRecord, lease: &RuntimeState<Self>) -> Result<()> {
         let consent = self
             .authorized
@@ -611,7 +655,7 @@ impl OperationsState {
         let revision = match self.revision(&row.spec.workspace_id) {
             Ok(revision) => revision,
             Err(error) => {
-                self.store.finish(
+                self.finish_run(
                     &row.id,
                     OperationStatus::Failed,
                     "Workspace revision could not be verified; execution did not start.",
@@ -622,7 +666,7 @@ impl OperationsState {
         if !consent
             .is_some_and(|consent| consent.matches(&row.spec) && consent.revision == revision)
         {
-            self.store.finish(
+            self.finish_run(
                 &row.id,
                 OperationStatus::Interrupted,
                 "Execution consent expired. Queue the task again.",
@@ -731,7 +775,7 @@ impl OperationsState {
                 let _ = self.store.set_paused(true);
                 return Err(error);
             }
-            self.store.finish(
+            self.finish_run(
                 &row.id,
                 OperationStatus::Failed,
                 safe(&error.message).as_str(),
@@ -2200,6 +2244,7 @@ mod tests {
                 observations: Mutex::new(None),
                 commits: Mutex::new(None),
                 artifact_checked: Mutex::new(HashSet::new()),
+                voice_callback: None,
             },
             resources,
         )
@@ -2248,6 +2293,7 @@ mod tests {
                 observations: Mutex::new(None),
                 commits: Mutex::new(None),
                 artifact_checked: Mutex::new(HashSet::new()),
+                voice_callback: None,
             },
             resources,
         )
@@ -2288,6 +2334,70 @@ mod tests {
         let redacted = full_safe(&message);
         assert!(!redacted.contains(&secret));
         assert!(redacted.contains("[REDACTED:high_entropy_string]"));
+    }
+
+    #[test]
+    fn voice_callback_runs_only_after_a_final_operation_write_commits() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.8-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let (mut state, resources) = fixture(core.clone(), data.path());
+        let callbacks = Arc::new(Mutex::new(Vec::<OperationCallback>::new()));
+        let recorded = callbacks.clone();
+        state.voice_callback = Some(Arc::new(move |callback| {
+            recorded.lock().expect("callback lock").push(callback);
+        }));
+
+        assert!(
+            state
+                .finish_run(
+                    "missing-operation",
+                    OperationStatus::Succeeded,
+                    "not written"
+                )
+                .is_err()
+        );
+        assert!(callbacks.lock().expect("callback lock").is_empty());
+
+        let mut spec = observed_spec(
+            "Production deploy".into(),
+            workspace.id.clone(),
+            OperationKind::Deploy,
+        );
+        spec.command = Some("deploy".into());
+        let operation = state.store.enqueue(spec).expect("enqueue");
+        assert!(
+            state
+                .finish_run(&operation.id, OperationStatus::Succeeded, "premature")
+                .is_err(),
+            "a queued partial run cannot report success"
+        );
+        assert!(callbacks.lock().expect("callback lock").is_empty());
+
+        state
+            .store
+            .claim(Some(&operation.id))
+            .expect("claim")
+            .expect("available");
+        state
+            .finish_run(&operation.id, OperationStatus::Failed, "deploy failed")
+            .expect("durable failure");
+        let callbacks = callbacks.lock().expect("callback lock");
+        assert_eq!(callbacks.len(), 1);
+        assert_eq!(callbacks[0].status, OperationStatus::Failed);
+        assert_eq!(callbacks[0].name, "Production deploy");
+
+        assert!(state.shutdown_checked());
+        assert!(resources.shutdown_checked());
+        core.shutdown();
     }
 
     #[test]
@@ -2571,6 +2681,7 @@ mod tests {
                             provider_id: &provider,
                             provider_name: "Fixture",
                             model: Some("fixture-model"),
+                            effort: None,
                             provider_account_id: None,
                             account_label: None,
                             workspace_id: &workspace.id,
@@ -2716,6 +2827,7 @@ mod tests {
                         provider_id: &provider,
                         provider_name: "Fixture",
                         model: Some("fixture-model"),
+                        effort: None,
                         provider_account_id: None,
                         account_label: None,
                         workspace_id: &workspace.id,
@@ -3004,6 +3116,7 @@ mod tests {
                     provider_id: &provider,
                     provider_name: "Fixture",
                     model: Some("fixture-model"),
+                    effort: None,
                     provider_account_id: None,
                     account_label: Some("Fixture account"),
                     workspace_id: &workspace.id,

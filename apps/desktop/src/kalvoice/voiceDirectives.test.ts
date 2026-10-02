@@ -238,29 +238,32 @@ describe("clarification follow-up", () => {
     label: "Authentication · Claude Code · Work",
   };
 
-  it("echoes “Sending to Name · Provider · Account” before sending through the composer", async () => {
+  it("reports only the actual send outcome after the composer finishes", async () => {
     const { handle } = composer("send");
     const d = deps();
     const order: string[] = [];
+    let finishSubmit!: (outcome: ComposerSubmitOutcome) => void;
     const report = d.report;
     d.report = (result) => {
       order.push(`report:${result.message}`);
       report(result);
     };
-    (handle.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+    (handle.submit as ReturnType<typeof vi.fn>).mockImplementation(() => {
       order.push("submit");
-      return "sent";
+      return new Promise<ComposerSubmitOutcome>((resolve) => {
+        finishSubmit = resolve;
+      });
     });
-    await followUpChoice({ ...d, focusThread: () => undefined }, choice, {
+    const pending = followUpChoice({ ...d, focusThread: () => undefined }, choice, {
       kind: "compose",
       text: "run the linter",
       submit: true,
     });
-    expect(order).toEqual([
-      "report:Sending to Authentication · Claude Code · Work.",
-      "submit",
-      "report:Sent to “Authentication”.",
-    ]);
+    await vi.waitFor(() => expect(order).toEqual(["submit"]));
+    expect(d.reports).toEqual([]);
+    finishSubmit("sent");
+    await pending;
+    expect(order).toEqual(["submit", "report:Sent to “Authentication”."]);
   });
 
   it("no echo when the follow-up only fills the box", async () => {
@@ -272,5 +275,24 @@ describe("clarification follow-up", () => {
       submit: false,
     });
     expect(d.reports.map((r) => r.message)).toEqual(["Added to “Authentication”. Nothing was sent."]);
+  });
+
+  it("cancels while the chosen composer is opening without inserting, sending, or reporting", async () => {
+    const controller = new AbortController();
+    const d = { ...deps(), signal: controller.signal };
+    const pending = followUpChoice({ ...d, focusThread: () => undefined }, choice, {
+      kind: "compose",
+      text: "run the linter",
+      submit: true,
+    });
+    expect(d.opened).toEqual([THREAD]);
+
+    controller.abort();
+    const { element, handle } = composer("send");
+    await pending;
+
+    expect(element.value).toBe("");
+    expect(handle.submit).not.toHaveBeenCalled();
+    expect(d.reports).toEqual([]);
   });
 });

@@ -72,7 +72,7 @@ async function mountStable({ openAccounts = true }: { openAccounts?: boolean } =
   }));
   expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(true);
   expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(true);
-  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(false);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(true);
 
   transport.workspaces.queueFolders("beta", "alpha");
   const beta = (await client.openWorkspaceDialog()) as Workspace;

@@ -15,6 +15,7 @@ function threadFixture(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
     providerId: "codex",
     providerName: "Codex",
     model: null,
+    effort: null,
     providerAccountId: ids.account,
     accountLabel: "Personal",
     workspaceId: ids.workspace,

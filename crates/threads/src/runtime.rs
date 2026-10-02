@@ -13,7 +13,7 @@
 //! - Approval decisions arrive as `approval.*` events on the event bus. The bus subscriber
 //!   forwards them to a dispatcher thread that applies them to the owning thread.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 use std::time::Instant;
@@ -23,7 +23,8 @@ use kalcode_context::{
     RenderedPackage, WorkspaceRoot,
 };
 use kalcode_contracts::agent::{
-    AgentEvent, AgentInput, AgentSession, FileChange, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentInput, AgentSession, FileChange, ModelInfo, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
@@ -275,8 +276,47 @@ struct NewThread<'a> {
     account_label: Option<&'a str>,
     workspace_id: &'a str,
     model: Option<&'a str>,
+    effort: Option<&'a str>,
     permission_mode: PermissionMode,
     name: String,
+}
+
+/// Normalizes an inert provider-native effort name before it reaches persistence. Individual
+/// adapters remain authoritative for which values they support.
+fn normalize_effort(effort: Option<&str>) -> Result<Option<String>> {
+    let Some(effort) = effort.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let effort = effort.to_ascii_lowercase();
+    if effort.len() <= 32
+        && effort.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+    {
+        Ok(Some(effort))
+    } else {
+        Err(KalError::validation(
+            "invalid_effort",
+            "That reasoning effort isn't valid.",
+        ))
+    }
+}
+
+/// Whether one already syntax-validated model is accepted by the provider's declared catalog.
+/// Claude Code also documents full model ids and bracketed aliases that cannot be exhaustively
+/// listed in the static catalog; keep that exception identical for create and reconfigure.
+fn provider_accepts_model(provider_id: &ProviderId, models: &[ModelInfo], model: &str) -> bool {
+    models.is_empty()
+        || models.iter().any(|available| available.id == model)
+        || (provider_id.as_str() == ProviderId::CLAUDE_CODE
+            && model.len() <= validate::MAX_MODEL_CHARS
+            && model
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:[]-".contains(&byte))
+            && (model.starts_with("claude-")
+                || model.split_once('[').is_some_and(|(alias, suffix)| {
+                    matches!(alias, "opus" | "sonnet" | "haiku" | "fable") && suffix.ends_with(']')
+                })))
 }
 
 struct AdmittedPrompt {
@@ -431,6 +471,32 @@ pub struct ThreadRuntime {
     subscription: SubscriptionId,
 }
 
+/// One exact live provider session (or resource-admission wait) selected for a consequential
+/// bulk action. The generation fields stay private so callers cannot forge or retarget it.
+#[derive(Debug, Clone)]
+pub struct RunningThreadTarget {
+    pub thread: ThreadSummary,
+    generation: u64,
+    waiting_ticket: Option<u64>,
+}
+
+/// Generation-bound identity of one provider session created by a launch. Callers may retain
+/// this briefly for a follow-up; any stop, resume, exit, or replacement invalidates it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadLaunchInstance {
+    pub thread_id: String,
+    pub generation: u64,
+}
+
+impl RunningThreadTarget {
+    /// Whether two fresh snapshots still name the same runtime-owned execution object.
+    pub fn is_same_session(&self, other: &Self) -> bool {
+        self.thread.id == other.thread.id
+            && self.generation == other.generation
+            && self.waiting_ticket == other.waiting_ticket
+    }
+}
+
 impl Drop for ThreadRuntime {
     fn drop(&mut self) {
         self.inner.core.unsubscribe(self.subscription);
@@ -534,6 +600,309 @@ impl ThreadRuntime {
     pub fn get(&self, thread_id: &str) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         self.inner.summary(thread_id)
+    }
+
+    /// Captures the exact in-process generation of each newly created provider thread. A
+    /// follow-up can use these opaque identities without guessing from recency or names.
+    pub fn launch_instances(&self, thread_ids: &[String]) -> Result<Vec<ThreadLaunchInstance>> {
+        if thread_ids.is_empty() || thread_ids.len() > 16 {
+            return Err(KalError::validation(
+                "launch_instances_invalid",
+                "The launch session set is invalid.",
+            ));
+        }
+        let mut seen = HashSet::new();
+        thread_ids
+            .iter()
+            .map(|thread_id| {
+                validate::thread_id(thread_id)?;
+                if !seen.insert(thread_id.as_str()) {
+                    return Err(KalError::validation(
+                        "launch_instances_invalid",
+                        "The launch session set contains a duplicate.",
+                    ));
+                }
+                let live = self.inner.existing_live(thread_id).ok_or_else(|| {
+                    KalError::validation(
+                        "launch_instance_stale",
+                        "One of those sessions is no longer the session KalVoice launched.",
+                    )
+                })?;
+                let generation = live.lock().generation;
+                Ok(ThreadLaunchInstance {
+                    thread_id: thread_id.clone(),
+                    generation,
+                })
+            })
+            .collect()
+    }
+
+    /// Reconfigures and restarts exactly one recent launch group. Every target is generation
+    /// checked, idle, unused, and locked before any provider is stopped. This deliberately does
+    /// not provide a general active-session mutation API.
+    pub fn reconfigure_idle_launch(
+        &self,
+        targets: &[ThreadLaunchInstance],
+        provider_id: &ProviderId,
+        model: &str,
+        effort: &str,
+    ) -> Result<Vec<ThreadSummary>> {
+        if targets.is_empty() || targets.len() > 16 {
+            return Err(KalError::validation(
+                "recent_launch_missing",
+                "Launch the sessions first, then change their model and effort.",
+            ));
+        }
+        let model = validate::model(Some(model))?.ok_or_else(|| {
+            KalError::validation("invalid_model", "Choose a model for those sessions.")
+        })?;
+        let effort = normalize_effort(Some(effort))?.ok_or_else(|| {
+            KalError::validation(
+                "invalid_effort",
+                "Choose an effort level for those sessions.",
+            )
+        })?;
+        let mut ordered = targets.to_vec();
+        ordered.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
+        if ordered
+            .windows(2)
+            .any(|pair| pair[0].thread_id == pair[1].thread_id)
+        {
+            return Err(KalError::validation(
+                "recent_launch_invalid",
+                "The recent launch session set is invalid.",
+            ));
+        }
+        for target in &ordered {
+            validate::thread_id(&target.thread_id)?;
+        }
+
+        let lives = ordered
+            .iter()
+            .map(|target| {
+                self.inner
+                    .existing_live(&target.thread_id)
+                    .ok_or_else(recent_launch_changed)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut states = lives.iter().map(|live| live.lock()).collect::<Vec<_>>();
+        let rows = self.inner.core.read(|conn| {
+            ordered
+                .iter()
+                .map(|target| {
+                    let row = store::get(conn, &target.thread_id)?;
+                    Ok((row, store::has_messages(conn, &target.thread_id)?))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        for (((target, live), state), (row, has_messages)) in
+            ordered.iter().zip(&lives).zip(&states).zip(&rows)
+        {
+            if live.ctx.thread_id != target.thread_id || state.generation != target.generation {
+                return Err(recent_launch_changed());
+            }
+            if &row.provider_id != provider_id {
+                return Err(KalError::validation(
+                    "recent_launch_provider_mismatch",
+                    "Those sessions are not all using the requested provider. Nothing was changed.",
+                ));
+            }
+            if row.archived_at.is_some()
+                || row.status != ThreadStatus::Idle
+                || *has_messages
+                || state.session.is_none()
+                || state.waiting.is_some()
+                || !state.pending.is_empty()
+                || !state.buffers.is_empty()
+                || !state.tools.is_empty()
+            {
+                return Err(KalError::validation(
+                    "recent_launch_not_idle",
+                    "Those sessions are no longer fresh and idle. Nothing was changed.",
+                ));
+            }
+        }
+
+        let entry = self
+            .inner
+            .providers
+            .get(provider_id)
+            .ok_or_else(|| provider_unavailable(provider_id.as_str()))?;
+        let models = entry.provider.capabilities().models;
+        if !provider_accepts_model(provider_id, &models, &model) {
+            return Err(KalError::validation(
+                "invalid_model",
+                "That model isn't available for this provider.",
+            ));
+        }
+
+        let mut reserved = 0usize;
+        for state in &states {
+            let Some(session) = state.session.as_ref() else {
+                return Err(recent_launch_changed());
+            };
+            match session.reserve_if_unused() {
+                Ok(true) => reserved += 1,
+                Ok(false) => {
+                    for state in &states[..reserved] {
+                        if let Some(session) = &state.session {
+                            session.cancel_unused_reservation();
+                        }
+                    }
+                    return Err(KalError::validation(
+                        "recent_launch_not_unused",
+                        "One of those sessions already has typed input. Nothing was changed.",
+                    ));
+                }
+                Err(error) => {
+                    for state in &states[..reserved] {
+                        if let Some(session) = &state.session {
+                            session.cancel_unused_reservation();
+                        }
+                    }
+                    return Err(KalError::new(
+                        ErrorCategory::Provider,
+                        "recent_launch_unavailable",
+                        "KalCode couldn't reserve every session for the settings change. Nothing was changed.",
+                    )
+                    .retryable()
+                    .with_source(error));
+                }
+            }
+        }
+        for index in 0..states.len() {
+            let session = states[index]
+                .session
+                .as_ref()
+                .ok_or_else(recent_launch_changed)?;
+            if let Err(error) = session.terminate_reserved() {
+                for state in &states[index + 1..] {
+                    if let Some(session) = &state.session {
+                        session.cancel_unused_reservation();
+                    }
+                }
+                // Interactive termination closes input authority before killing the PTY. If
+                // kill then fails, detach and restore that unusable current handle as well.
+                for state in &mut states[..=index] {
+                    state.session.take();
+                    state.generation += 1;
+                }
+                let restore = rows[..=index]
+                    .iter()
+                    .map(|(row, _)| row.clone())
+                    .collect::<Vec<_>>();
+                self.mark_detached_for_restore(&restore)?;
+                self.launch_detached_locked(&restore, &lives[..=index], &mut states[..=index])?;
+                drop(states);
+                return Err(KalError::new(
+                    ErrorCategory::Provider,
+                    "provider_terminate_failed",
+                    "KalCode couldn't safely restart every session. It kept the existing settings and restored each affected session where possible. Open or launch a fresh group before changing its model and effort.",
+                )
+                .with_source(error));
+            }
+        }
+        for state in &mut states {
+            state.session.take();
+            state.generation += 1;
+            state.turn_failed = false;
+            state.halted = false;
+        }
+
+        let now = now_rfc3339();
+        let update = self.inner.core.write_with_events(|tx| {
+            let mut events = Vec::new();
+            for (row, _) in &rows {
+                store::set_launch_configuration(tx, &row.id, &model, &effort)?;
+                let from = store::set_status(
+                    tx,
+                    &row.id,
+                    ThreadStatus::Starting,
+                    Some("Applying model and effort"),
+                    &now,
+                )?;
+                events.extend(Ctx::from_row(row).status_changed(
+                    EventSource::Core,
+                    from,
+                    ThreadStatus::Starting,
+                    Some("Applying model and effort"),
+                ));
+            }
+            Ok(((), events))
+        });
+        if let Err(error) = update {
+            let restore = rows.iter().map(|(row, _)| row.clone()).collect::<Vec<_>>();
+            self.mark_detached_for_restore(&restore)?;
+            self.launch_detached_locked(&restore, &lives, &mut states)?;
+            drop(states);
+            return Err(error);
+        }
+        let configured = rows
+            .iter()
+            .map(|(row, _)| self.inner.row(&row.id))
+            .collect::<Result<Vec<_>>>()?;
+        self.launch_detached_locked(&configured, &lives, &mut states)?;
+        drop(states);
+        let summaries = configured
+            .iter()
+            .map(|row| self.inner.summary(&row.id))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(summaries)
+    }
+
+    fn mark_detached_for_restore(&self, rows: &[ThreadRow]) -> Result<()> {
+        let now = now_rfc3339();
+        self.inner
+            .core
+            .write_with_events(|tx| {
+                let mut events = Vec::new();
+                for old in rows {
+                    let current = store::get(tx, &old.id)?;
+                    let from = store::set_status(
+                        tx,
+                        &old.id,
+                        ThreadStatus::Starting,
+                        Some("Restoring session"),
+                        &now,
+                    )?;
+                    events.extend(Ctx::from_row(&current).status_changed(
+                        EventSource::Core,
+                        from,
+                        ThreadStatus::Starting,
+                        Some("Restoring session"),
+                    ));
+                }
+                Ok(((), events))
+            })
+            .map(|_| ())
+    }
+
+    fn launch_detached_locked(
+        &self,
+        rows: &[ThreadRow],
+        lives: &[Arc<LiveThread>],
+        states: &mut [MutexGuard<'_, LiveState>],
+    ) -> Result<()> {
+        for ((row, live), state) in rows.iter().zip(lives).zip(states) {
+            let start = self.inner.providers.get(&row.provider_id).map_or_else(
+                || Err(provider_unavailable(&row.provider_name)),
+                |entry| {
+                    let resume_id = entry
+                        .provider
+                        .capabilities()
+                        .resume
+                        .then(|| row.provider_session_id.clone())
+                        .flatten();
+                    self.inner
+                        .launch(live, state, row, &entry, resume_id, None, None, None)
+                },
+            );
+            if let Err(error) = start {
+                self.inner
+                    .fail_idle_thread(&Ctx::from_row(row), error.code, &error.message)?;
+            }
+        }
+        Ok(())
     }
 
     /// Up to `limit` messages before `before` (a message id), oldest first. Reading the newest
@@ -760,6 +1129,7 @@ impl ThreadRuntime {
                 account_label: request.account_label.as_deref(),
                 workspace_id: &request.workspace_id,
                 model: request.model.as_deref(),
+                effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
             },
@@ -785,6 +1155,7 @@ impl ThreadRuntime {
                 account_label: request.account_label.as_deref(),
                 workspace_id: &request.workspace_id,
                 model: request.model.as_deref(),
+                effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
             },
@@ -1102,6 +1473,57 @@ impl ThreadRuntime {
         )
     }
 
+    /// A point-in-time, read-only snapshot of the exact sessions a scoped stop would affect.
+    /// Status alone is insufficient: idle and paused threads can still own provider processes.
+    /// Callers bind these stable ids, then re-read this snapshot before stopping each id
+    /// individually so a newly started session is never swept into the action.
+    pub fn running_threads(&self, scope: &ThreadScope) -> Result<Vec<RunningThreadTarget>> {
+        let running: HashMap<String, (u64, Option<u64>)> =
+            self.inner.running_targets().into_iter().collect();
+        if let ThreadScope::Thread { thread_id } = scope {
+            let thread = self.get(thread_id)?;
+            return Ok(running
+                .get(thread_id)
+                .map(|(generation, waiting_ticket)| RunningThreadTarget {
+                    thread,
+                    generation: *generation,
+                    waiting_ticket: *waiting_ticket,
+                })
+                .into_iter()
+                .collect());
+        }
+        let workspace_id = match scope {
+            ThreadScope::Workspace { workspace_id } => Some(workspace_id.as_str()),
+            ThreadScope::All | ThreadScope::Thread { .. } => None,
+        };
+        Ok(self
+            .list(workspace_id, false)?
+            .into_iter()
+            .filter_map(|thread| {
+                running
+                    .get(&thread.id)
+                    .map(|(generation, waiting_ticket)| RunningThreadTarget {
+                        thread,
+                        generation: *generation,
+                        waiting_ticket: *waiting_ticket,
+                    })
+            })
+            .collect())
+    }
+
+    /// Stops only the exact execution object represented by `target`. If that thread ended and
+    /// resumed after target resolution, this fails closed and leaves it running.
+    pub fn stop_running_thread(&self, target: &RunningThreadTarget) -> Result<ThreadSummary> {
+        validate::thread_id(&target.thread.id)?;
+        self.inner.stop_bound(
+            &target.thread.id,
+            STOPPED_ACTIVITY,
+            target.generation,
+            target.waiting_ticket,
+        )?;
+        self.inner.summary(&target.thread.id)
+    }
+
     pub fn pause_all(&self) -> Vec<BulkOutcome> {
         self.pause_threads(&ThreadScope::All)
     }
@@ -1254,6 +1676,20 @@ fn not_running() -> KalError {
     KalError::validation(
         "thread_not_running",
         "This thread isn't running. Resume it to continue.",
+    )
+}
+
+fn stop_target_changed() -> KalError {
+    KalError::validation(
+        "thread_stop_target_changed",
+        "That agent session changed after KalCode resolved it, so KalCode left it running. Try again.",
+    )
+}
+
+fn recent_launch_changed() -> KalError {
+    KalError::validation(
+        "recent_launch_changed",
+        "One of those sessions changed after KalVoice launched it. Nothing was changed.",
     )
 }
 
@@ -1497,6 +1933,31 @@ impl Inner {
             .collect()
     }
 
+    fn running_targets(&self) -> Vec<(String, (u64, Option<u64>))> {
+        let all: Vec<Arc<LiveThread>> = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        all.into_iter()
+            .filter_map(|live| {
+                let state = live.lock();
+                if state.session.is_some() {
+                    Some((live.ctx.thread_id.clone(), (state.generation, None)))
+                } else {
+                    state.waiting.as_ref().map(|waiting| {
+                        (
+                            live.ctx.thread_id.clone(),
+                            (state.generation, Some(waiting.ticket)),
+                        )
+                    })
+                }
+            })
+            .collect()
+    }
+
     fn row(&self, thread_id: &str) -> Result<ThreadRow> {
         self.core.read(|conn| store::get(conn, thread_id))
     }
@@ -1532,6 +1993,7 @@ impl Inner {
             provider_id: row.provider_id,
             provider_name,
             model: row.model,
+            effort: row.effort,
             provider_account_id: row.provider_account_id,
             account_label: row.account_label,
             workspace_id: row.workspace_id,
@@ -1617,6 +2079,7 @@ impl Inner {
         let provider_id = validate::provider_id(request.provider_id)?;
         validate::workspace_id(request.workspace_id)?;
         let model = validate::model(request.model)?;
+        let effort = normalize_effort(request.effort)?;
         let mode = validate::creation_mode(request.permission_mode)?;
         let name = request.name;
         let entry = self
@@ -1629,7 +2092,7 @@ impl Inner {
             .and(request.account_label.or(entry.account_label.as_deref()));
         if let Some(model) = &model {
             let models = entry.provider.capabilities().models;
-            if !models.is_empty() && !models.iter().any(|m| &m.id == model) {
+            if !provider_accepts_model(&provider_id, &models, model) {
                 return Err(KalError::validation(
                     "invalid_model",
                     format!("That model isn't available for {provider_name}."),
@@ -1648,6 +2111,7 @@ impl Inner {
             provider_id: &provider_id,
             provider_name: &provider_name,
             model: model.as_deref(),
+            effort: effort.as_deref(),
             provider_account_id: request.provider_account_id,
             account_label,
             workspace_id: &workspace.id,
@@ -1759,6 +2223,7 @@ impl Inner {
             provider_account_id: row.provider_account_id.clone(),
             working_directory: row.cwd.clone(),
             model: row.model.clone(),
+            effort: row.effort.clone(),
             permission_mode: row.permission_mode,
             resume_session_id: resume_session_id.clone(),
             secret_ref: entry.secret_ref.clone(),
@@ -3051,9 +3516,44 @@ impl Inner {
     }
 
     fn stop(&self, thread_id: &str, activity: &'static str) -> Result<()> {
+        self.stop_inner(thread_id, activity, None)
+    }
+
+    fn stop_bound(
+        &self,
+        thread_id: &str,
+        activity: &'static str,
+        generation: u64,
+        waiting_ticket: Option<u64>,
+    ) -> Result<()> {
+        self.stop_inner(thread_id, activity, Some((generation, waiting_ticket)))
+    }
+
+    fn stop_inner(
+        &self,
+        thread_id: &str,
+        activity: &'static str,
+        expected: Option<(u64, Option<u64>)>,
+    ) -> Result<()> {
         let row = self.row(thread_id)?;
         if let Some(live) = self.existing_live(thread_id) {
             let mut state = live.lock();
+            if let Some((generation, waiting_ticket)) = expected {
+                let same = state.generation == generation
+                    && match waiting_ticket {
+                        Some(ticket) => {
+                            state.session.is_none()
+                                && state
+                                    .waiting
+                                    .as_ref()
+                                    .is_some_and(|wait| wait.ticket == ticket)
+                        }
+                        None => state.session.is_some(),
+                    };
+                if !same {
+                    return Err(stop_target_changed());
+                }
+            }
             // Stopping ends a wait for system resources: its waiter sees no current ticket. The
             // held message stays recorded and marked, so Resume sends it.
             if state.waiting.take().is_some() {
@@ -3072,6 +3572,8 @@ impl Inner {
             if state.session.is_some() {
                 return self.end_session(&live, &mut state, EndReason::Stopped { activity });
             }
+        } else if expected.is_some() {
+            return Err(stop_target_changed());
         }
         if row.status.is_terminal() {
             return Err(not_running());

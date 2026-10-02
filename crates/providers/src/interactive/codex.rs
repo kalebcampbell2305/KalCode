@@ -60,6 +60,7 @@ pub struct CodexArgs<'a> {
     pub mode: PermissionMode,
     pub workspace: &'a Path,
     pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
     pub resume_session_id: Option<&'a str>,
     /// The helper and its `codex-notify` arguments.
     pub hook_program: &'a Path,
@@ -75,6 +76,8 @@ pub enum CodexArgsError {
     UnsafePath,
     #[error("the model name is not valid")]
     InvalidModel,
+    #[error("the reasoning effort is not supported")]
+    InvalidEffort,
     #[error("the session id is not valid")]
     InvalidSessionId,
 }
@@ -111,6 +114,13 @@ pub fn interactive_args_with_overrides(
         }
         out.push("-m".into());
         out.push(model.into());
+    }
+    if let Some(effort) = args.effort {
+        if !crate::codex::argv::valid_effort_name(effort) {
+            return Err(CodexArgsError::InvalidEffort);
+        }
+        out.push("-c".into());
+        out.push(format!("model_reasoning_effort='{effort}'").into());
     }
     let program = args
         .hook_program
@@ -248,6 +258,7 @@ mod tests {
             mode,
             workspace: Path::new("C:/work/repo"),
             model: Some("gpt-5"),
+            effort: Some("high"),
             resume_session_id: resume,
             hook_program: Path::new(r"C:\Program Files\KalCode\kalcode-hook.exe"),
             hook_prefix_args: &[],
@@ -311,6 +322,7 @@ mod tests {
             mode: PermissionMode::Approve,
             workspace: Path::new("C:/w"),
             model: None,
+            effort: None,
             resume_session_id: None,
             hook_program: Path::new("C:/it's/kalcode-hook.exe"),
             hook_prefix_args: &[],
@@ -326,6 +338,10 @@ mod tests {
         let args = args(PermissionMode::Approve, Some(id));
         assert_eq!(args[0], "resume");
         assert_eq!(args.last().map(String::as_str), Some(id));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-c", "model_reasoning_effort='high'"])
+        );
     }
 
     #[test]
@@ -420,6 +436,7 @@ mod tests {
             mode: PermissionMode::Plan,
             workspace: Path::new("C:/work/repo.with.dots"),
             model: None,
+            effort: None,
             resume_session_id: None,
             hook_program: Path::new("C:/kalcode-hook.exe"),
             hook_prefix_args: &[],
@@ -432,5 +449,11 @@ mod tests {
         ];
         let args = interactive_args_with_overrides(&base, &overrides).expect("args");
         assert!(args.windows(2).any(|pair| pair == overrides));
+        let mut invalid = base.clone();
+        invalid.effort = Some("ultra");
+        assert_eq!(
+            interactive_args_with_overrides(&invalid, &[]),
+            Err(CodexArgsError::InvalidEffort)
+        );
     }
 }

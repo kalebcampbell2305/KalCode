@@ -9,6 +9,143 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 
+/// Product words that should be stable even before KalCode has a workspace open.
+#[cfg(any(test, feature = "whisper"))]
+const PRODUCT_VOCABULARY: &[&str] = &[
+    "KalCode",
+    "KalVoice",
+    "Dashboard",
+    "Operations",
+    "Runs",
+    "Queue",
+    "Services",
+    "Environments",
+    "Activity",
+    "Code",
+    "terminal",
+    "thread",
+    "agent",
+    "Agent Fleet",
+    "workspace",
+    "provider account",
+    "model",
+    "effort",
+    "Browser",
+    "Favorites",
+    "Squads",
+    "Recipes",
+    "Handoffs",
+    "Needs You",
+    "Settings",
+    "Claude Code",
+    "Codex",
+    "Gemini CLI",
+    "Opus",
+    "Sonnet",
+    "Low effort",
+    "Medium effort",
+    "High effort",
+    "XHigh effort",
+    "Max effort",
+    "localhost",
+    "frontend",
+    "backend",
+    "tests",
+    "review",
+    "production",
+];
+
+/// The decoder prompt stays small enough for the tiny speech model. Scene names are ordered by
+/// relevance by the caller, so the least relevant tail is discarded deterministically.
+const MAX_VOCABULARY_TERMS: usize = 64;
+const MAX_VOCABULARY_TERM_CHARS: usize = 64;
+#[cfg(any(test, feature = "whisper"))]
+const MAX_VOCABULARY_PROMPT_BYTES: usize = 768;
+
+/// A bounded, inert set of names used only to bias on-device speech recognition.
+///
+/// This does not rewrite a transcript. Callers may supply workspace, terminal, thread, account,
+/// model, branch, and indexed file names already present in their in-memory scene snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecognitionVocabulary {
+    terms: Vec<String>,
+}
+
+impl RecognitionVocabulary {
+    pub fn from_terms<T, S>(terms: T) -> Self
+    where
+        T: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut accepted = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for raw in terms {
+            let Some(term) = sanitize_vocabulary_term(raw.as_ref()) else {
+                continue;
+            };
+            let key = term.to_lowercase();
+            if seen.insert(key) {
+                accepted.push(term);
+            }
+            if accepted.len() == MAX_VOCABULARY_TERMS {
+                break;
+            }
+        }
+        Self { terms: accepted }
+    }
+
+    pub fn terms(&self) -> &[String] {
+        &self.terms
+    }
+
+    #[cfg(any(test, feature = "whisper"))]
+    fn prompt(&self) -> String {
+        let mut prompt = String::new();
+        let mut seen = std::collections::HashSet::new();
+        for term in PRODUCT_VOCABULARY
+            .iter()
+            .copied()
+            .chain(self.terms.iter().map(String::as_str))
+        {
+            let key = term.to_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            let addition = term.len() + usize::from(!prompt.is_empty()) * 2 + 1;
+            if prompt.len() + addition > MAX_VOCABULARY_PROMPT_BYTES {
+                break;
+            }
+            if !prompt.is_empty() {
+                prompt.push_str(", ");
+            }
+            prompt.push_str(term);
+        }
+        if !prompt.is_empty() {
+            prompt.push('.');
+        }
+        prompt
+    }
+}
+
+fn sanitize_vocabulary_term(raw: &str) -> Option<String> {
+    let term = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if term.is_empty()
+        || term.chars().count() > MAX_VOCABULARY_TERM_CHARS
+        || !term.chars().any(char::is_alphanumeric)
+        || !term.chars().all(|character| {
+            character.is_alphanumeric()
+                || character.is_whitespace()
+                || matches!(
+                    character,
+                    '-' | '_' | '.' | '/' | '\\' | '+' | '#' | '@' | ':' | '\'' | '&'
+                )
+        })
+    {
+        return None;
+    }
+    Some(term)
+}
+
 /// Whether this build includes the whisper.cpp engine.
 pub const ENGINE_AVAILABLE: bool = cfg!(feature = "whisper");
 
@@ -38,6 +175,10 @@ impl SttError {
 /// Turns 16 kHz mono audio into text, on the device.
 pub trait SpeechRecognizer: Send + Sync {
     fn transcribe(&self, audio: &[f32]) -> Result<String, SttError>;
+
+    /// Updates decoder-only recognition hints without reloading the speech model. Engines that
+    /// do not support hints keep their existing behavior.
+    fn configure_vocabulary(&self, _vocabulary: &RecognitionVocabulary) {}
 
     /// As [`Self::transcribe`], but stops early once `cancel` is set; a pass stopped that way
     /// returns an error and its text must never be used. Engines that cannot stop mid-pass run
@@ -278,10 +419,12 @@ mod whisper {
         FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
     };
 
-    use super::{SpeechRecognizer, SttError, clean_transcript, decode_budget};
+    use super::{
+        RecognitionVocabulary, SpeechRecognizer, SttError, clean_transcript, decode_budget,
+    };
 
-    const VOCABULARY: &str =
-        "KalCode, KalVoice, Claude Code, Codex, Gemini CLI, threads, workspace, terminal.";
+    const MAX_PROMPT_TOKENS: usize = 224;
+    const MAX_TOKENIZED_PROMPT: usize = 1_024;
 
     thread_local! {
         /// The cancel flag of the pass this thread is running, when that pass can be cancelled.
@@ -350,6 +493,12 @@ mod whisper {
         /// on every partial). Built once, they stay valid for as long as any clone can hand
         /// whisper.cpp a pointer to them.
         params: FullParams<'static, 'static>,
+        vocabulary: Mutex<VocabularyTokens>,
+    }
+
+    struct VocabularyTokens {
+        prompt: String,
+        tokens: Vec<i32>,
     }
 
     impl WhisperRecognizer {
@@ -365,10 +514,16 @@ mod whisper {
             let threads = std::thread::available_parallelism()
                 .map(|n| n.get().saturating_sub(2).clamp(1, 12))
                 .unwrap_or(4);
+            let prompt = RecognitionVocabulary::default().prompt();
+            let mut tokens = context
+                .tokenize(&prompt, MAX_TOKENIZED_PROMPT)
+                .map_err(|e| SttError::ModelLoadFailed(e.to_string()))?;
+            tokens.truncate(MAX_PROMPT_TOKENS);
             Ok(Self {
                 context,
                 state: Mutex::new(Some(state)),
                 params: base_params(english_only, i32::try_from(threads).unwrap_or(4)),
+                vocabulary: Mutex::new(VocabularyTokens { prompt, tokens }),
             })
         }
 
@@ -386,7 +541,14 @@ mod whisper {
                 return Err(SttError::Failed("cancelled".into()));
             }
             let budget = decode_budget(audio.len());
-            let mut params = self.params.clone();
+            let vocabulary = self
+                .vocabulary
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            // Shorten the clone's token lifetime to this guard. whisper.cpp only reads the
+            // borrowed slice during `full`, and configuration waits on the same mutex.
+            let mut params: FullParams<'static, '_> = self.params.clone();
+            params.set_tokens(&vocabulary.tokens);
             // Short utterances don't need whisper's 30 s window: a context sized to the audio
             // cuts the encoder cost several times; the token cap stops repetition loops.
             params.set_audio_ctx(budget.audio_ctx);
@@ -394,6 +556,7 @@ mod whisper {
             let scope = CancelScope::enter(cancel.cloned());
             let outcome = state.full(params, audio);
             drop(scope);
+            drop(vocabulary);
             outcome.map_err(|e| SttError::Failed(e.to_string()))?;
             let mut text = String::new();
             for segment in state.as_iter() {
@@ -422,13 +585,27 @@ mod whisper {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        // Primes the model with KalCode's vocabulary (product and provider names).
-        params.set_initial_prompt(VOCABULARY);
         params.set_abort_callback_safe(capture_free(cancel_requested));
         params
     }
 
     impl SpeechRecognizer for WhisperRecognizer {
+        fn configure_vocabulary(&self, vocabulary: &RecognitionVocabulary) {
+            let prompt = vocabulary.prompt();
+            let mut configured = self
+                .vocabulary
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if configured.prompt == prompt {
+                return;
+            }
+            let Ok(mut tokens) = self.context.tokenize(&prompt, MAX_TOKENIZED_PROMPT) else {
+                return;
+            };
+            tokens.truncate(MAX_PROMPT_TOKENS);
+            *configured = VocabularyTokens { prompt, tokens };
+        }
+
         fn transcribe(&self, audio: &[f32]) -> Result<String, SttError> {
             self.run(audio, None)
         }
@@ -469,6 +646,55 @@ mod whisper {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognition_vocabulary_is_sanitized_deduplicated_and_code_aware() {
+        let vocabulary = RecognitionVocabulary::from_terms([
+            " KalCode ",
+            "kalcode",
+            "kalvoice_commands.rs",
+            "feature/voice-control",
+            "@scope/package",
+            "C++",
+            "Kaleb's R&D",
+            "Release\nMac",
+            "unsafe,separator",
+            "hidden\u{202e}name",
+            "---",
+        ]);
+
+        assert_eq!(
+            vocabulary.terms(),
+            [
+                "KalCode",
+                "kalvoice_commands.rs",
+                "feature/voice-control",
+                "@scope/package",
+                "C++",
+                "Kaleb's R&D",
+                "Release Mac",
+            ]
+        );
+        let prompt = vocabulary.prompt();
+        assert!(prompt.starts_with("KalCode, KalVoice, Dashboard"));
+        assert_eq!(prompt.matches("KalCode").count(), 1);
+        assert!(prompt.contains("kalvoice_commands.rs"));
+        assert!(prompt.ends_with('.'));
+    }
+
+    #[test]
+    fn recognition_vocabulary_prompt_is_bounded_and_keeps_most_relevant_names() {
+        let terms: Vec<String> = (0..200)
+            .map(|index| format!("workspace-{index:03}-with-a-real-name"))
+            .collect();
+        let vocabulary = RecognitionVocabulary::from_terms(&terms);
+        let prompt = vocabulary.prompt();
+
+        assert_eq!(vocabulary.terms().len(), MAX_VOCABULARY_TERMS);
+        assert!(prompt.len() <= MAX_VOCABULARY_PROMPT_BYTES);
+        assert!(prompt.contains("workspace-000-with-a-real-name"));
+        assert!(!prompt.contains("workspace-199-with-a-real-name"));
+    }
 
     #[test]
     fn silence_and_clicks_are_not_speech() {

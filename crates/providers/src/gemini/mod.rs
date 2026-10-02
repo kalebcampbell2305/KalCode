@@ -529,6 +529,7 @@ mod tests {
                 provider_account_id: None,
                 working_directory: workspace.display().to_string(),
                 model: None,
+                effort: None,
                 permission_mode: PermissionMode::Approve,
                 resume_session_id: None,
                 secret_ref: None,

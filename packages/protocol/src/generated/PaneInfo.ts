@@ -5,7 +5,11 @@ import type { HookChannelState } from "./HookChannelState.ts";
 /**
  * What the pane header and info panel show about one interactive session.
  */
-export type PaneInfo = { threadId: string, providerId: string, hookChannel: HookChannelState, decisionRouting: DecisionRouting,
+export type PaneInfo = { threadId: string, providerId: string,
+/**
+ * Opaque identity of this exact provider process/PTY instance. Changes on resume/restart.
+ */
+instanceId: string | null, hookChannel: HookChannelState, decisionRouting: DecisionRouting,
 /**
  * `true` only when KalCode answers approvals (engine routing) and hooks are active.
  */

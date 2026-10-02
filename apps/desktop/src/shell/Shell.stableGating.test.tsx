@@ -80,14 +80,8 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
     await user.click(primary().getByRole("button", { name: "KalVoice" }));
     const examples = within(await screen.findByRole("list", { name: "Examples" }));
     const commandsCopy = await screen.findByText(/KalCode acts the moment you let go/);
-    if (stable) {
-      expect(examples.queryByRole("button", { name: /Codex/ })).toBeNull();
-      expect(commandsCopy.textContent).not.toMatch(/Codex/);
-      expect(examples.getByRole("button", { name: "Open Dashboard" })).toBeInTheDocument();
-    } else {
-      expect(examples.getByRole("button", { name: "Open four Codex threads" })).toBeInTheDocument();
-      expect(commandsCopy.textContent).toMatch(/Open four Codex terminals/);
-    }
+    expect(examples.getByRole("button", { name: "Open four Codex threads" })).toBeInTheDocument();
+    expect(commandsCopy.textContent).toMatch(/Open four Codex terminals/);
   });
 
   it("offers Git status in a pane only when Git is in the build (E6)", async () => {

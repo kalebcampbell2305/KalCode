@@ -79,6 +79,7 @@ fn idle_thread_on_a(h: &Harness, accounts: &Accounts) -> String {
             account_label: Some("Gemini A".into()),
             workspace_id: h.workspace_id.clone(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Approve,
             prompt: "summarize the repo".into(),
             name: None,

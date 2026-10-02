@@ -141,8 +141,9 @@ export function FloatingAssistant() {
   const area: PanelArea | undefined = slots
     ? {
         left: slots.mainLeft,
-        top: slotEdge === "top" ? VOICE_SLOT_GAP : EDGE_MARGIN,
-        bottom: slotEdge === "bottom" ? VOICE_SLOT_GAP : EDGE_MARGIN,
+        top: slots.insets.top + (slotEdge === "top" ? VOICE_SLOT_GAP : EDGE_MARGIN),
+        bottom: slots.insets.bottom + (slotEdge === "bottom" ? VOICE_SLOT_GAP : EDGE_MARGIN),
+        right: slots.insets.right,
       }
     : undefined;
 
@@ -171,11 +172,12 @@ export function FloatingAssistant() {
     if (!start.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
     start.moved = true;
     const minLeft = (area?.left ?? 0) + 16;
-    const maxLeft = Math.max(minLeft, viewport.width - size.width - 16);
-    const maxTop = Math.max(16, viewport.height - size.height - 16);
+    const maxLeft = Math.max(minLeft, viewport.width - (area?.right ?? 0) - size.width - 16);
+    const minTop = (slots?.insets.top ?? 0) + 16;
+    const maxTop = Math.max(minTop, viewport.height - (slots?.insets.bottom ?? 0) - size.height - 16);
     setDrag({
       left: Math.min(maxLeft, Math.max(minLeft, start.origin.left + dx)),
-      top: Math.min(maxTop, Math.max(16, start.origin.top + dy)),
+      top: Math.min(maxTop, Math.max(minTop, start.origin.top + dy)),
     });
   };
 

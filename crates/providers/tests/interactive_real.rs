@@ -80,6 +80,7 @@ fn real_claude_interactive_smoke() {
                 provider_account_id: None,
                 working_directory: work.path().display().to_string(),
                 model: None,
+                effort: None,
                 permission_mode: PermissionMode::Approve,
                 resume_session_id: None,
                 secret_ref: None,

@@ -123,6 +123,7 @@ function tree(kind: Kind, running = true, id = "session") {
     <PaneTerminal
       channel={channel}
       threadId={id}
+      instanceId="replay-fencing-instance"
       providerId="claude-code"
       providerAccountId={null}
       status={running ? "idle" : "completed"}

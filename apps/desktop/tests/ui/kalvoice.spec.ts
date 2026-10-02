@@ -299,6 +299,13 @@ test.describe("Commands that open other parts of KalCode", () => {
   });
 });
 
+/** The bottom edge of the Command Deck's top bar: the widget never covers it. */
+async function deckTop(page: Page): Promise<number> {
+  const bar = await page.getByRole("banner").boundingBox();
+  if (!bar) throw new Error("no top bar");
+  return bar.y + bar.height;
+}
+
 test.describe("KalVoice voice widget", () => {
   test("compact: orb, KALVOICE and the state on one line at the top; no text box", async ({ page }) => {
     await open(page);
@@ -306,13 +313,41 @@ test.describe("KalVoice voice widget", () => {
     await expect(w).toHaveAttribute("data-view", "compact");
     await expect(w).toHaveAttribute("data-anchor", "top");
     const box = await widgetBox(page);
-    expect(box.y).toBeLessThan(24);
+    // At the top of the page column: just under the Command Deck's top bar.
+    expect(box.y - (await deckTop(page))).toBeLessThan(24);
     expect(box.height).toBeLessThan(56);
     await expect(w.getByRole("img", { name: "KalVoice" })).toBeVisible();
     await expectState(page, "Ready");
     await expect(w.getByRole("textbox")).toHaveCount(0);
     await expect(w.getByRole("button", { name: /send/i })).toHaveCount(0);
     await expect(w.getByRole("button", { name: "Hold to talk" })).toBeVisible();
+  });
+
+  test("push-to-talk activity stays above the Command Deck status strip", async ({ page }) => {
+    for (const viewport of [
+      { width: 1360, height: 860 },
+      { width: 1024, height: 700 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await open(page, "?scenario=kalvoice-slow&transcript=go%20to%20settings");
+      const w = widget(page);
+      await expectState(page, "Ready");
+      if ((await w.getAttribute("data-view")) !== "orb") {
+        await w.getByRole("button", { name: "Collapse to the orb" }).click();
+      }
+      await expect(w).toHaveAttribute("data-view", "orb");
+
+      await page.keyboard.down("F8");
+      const activity = page.getByRole("status", { name: "Push to talk" });
+      await expect(activity).toBeVisible();
+      const activityBox = await activity.boundingBox();
+      const statusStripBox = await page.getByRole("contentinfo").boundingBox();
+      if (!activityBox || !statusStripBox) throw new Error("no activity or status strip layout");
+      expect(activityBox.y + activityBox.height).toBeLessThanOrEqual(statusStripBox.y);
+
+      await page.keyboard.press("Escape");
+      await page.keyboard.up("F8");
+    }
   });
 
   test("hiding keeps push to talk; the key and the palette bring it back", async ({ page }) => {
@@ -359,7 +394,7 @@ test.describe("KalVoice voice widget", () => {
     if (!main) throw new Error("no main");
     expect(box.x).toBeGreaterThanOrEqual(main.x + 16);
     expect(box.x).toBeLessThan(main.x + 40);
-    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(await deckTop(page));
     expect(box.y + box.height).toBeLessThanOrEqual(main.y + 1);
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
 
@@ -378,7 +413,7 @@ test.describe("KalVoice voice widget", () => {
     await page.getByRole("menuitemradio", { name: "Top left" }).click();
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     const topLeft = await widgetBox(page);
-    expect(topLeft.y).toBeLessThan(40);
+    expect(topLeft.y - (await deckTop(page))).toBeLessThan(40);
     await page.waitForTimeout(400);
 
     await page.setViewportSize({ width: 1024, height: 700 });

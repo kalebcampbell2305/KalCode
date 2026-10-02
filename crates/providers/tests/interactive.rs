@@ -149,6 +149,7 @@ impl Rig {
             provider_account_id: None,
             working_directory: self.work.path().to_string_lossy().into_owned(),
             model: None,
+            effort: None,
             permission_mode: mode,
             resume_session_id: None,
             secret_ref: None,

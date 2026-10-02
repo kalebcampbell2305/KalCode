@@ -50,6 +50,8 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+          # API tests spawn Wrangler/workerd children; bound their fan-out on the shared PC.
+          VITEST_MAX_WORKERS: "4"
         # Release tooling expects Cargo's default target/ (checkout-local; the runner keeps it).
         run: |
           Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
@@ -72,6 +74,31 @@ jobs:
       - name: Select isolated Dev identity for Rust debug gates
         shell: bash
         run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_ENV, "TAURI_CONFIG=" + JSON.stringify(JSON.parse(fs.readFileSync("apps/desktop/src-tauri/tauri.dev.conf.json", "utf8"))) + "\n");'
+      - name: Prepare production speech build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_root=/Users/Shared/KalCode-gate-tools
+          cmake_version_dir="$tool_root/cmake-4.4.3-macos-universal"
+          cmake_dir="$cmake_version_dir/CMake.app/Contents/bin"
+          for tool_path in "$tool_root" "$cmake_version_dir" "$cmake_version_dir/CMake.app" "$cmake_version_dir/CMake.app/Contents" "$cmake_dir" "$cmake_dir/cmake"; do
+            test ! -L "$tool_path"
+            test ! -w "$tool_path"
+          done
+          test -x "$cmake_dir/cmake"
+          cmake_version="$("$cmake_dir/cmake" --version)"
+          test "${cmake_version%%$'\n'*}" = "cmake version 4.4.3"
+          printf '%s\n' "$cmake_dir" >> "$GITHUB_PATH"
+          printf 'CMAKE=%s/cmake\n' "$cmake_dir" >> "$GITHUB_ENV"
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          import { macSdkBuildEnvironment } from "./tooling/release/macos-contract.mjs";
+          const sdk = execFileSync("xcrun", ["--show-sdk-path"], { encoding: "utf8" });
+          for (const [key, value] of Object.entries(macSdkBuildEnvironment({}, sdk))) {
+            appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          }
+          NODE
       - name: Build real macOS Tauri sidecars for Rust gates
         shell: bash
         run: |
@@ -99,5 +126,5 @@ jobs:
           security default-keychain -d user -s "$kc"
           security unlock-keychain -p kalcode-gate "$kc"
           security set-keychain-settings "$kc"
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --features kalcode-desktop/kalvoice-whisper -- -D warnings
+      - run: cargo test --workspace --features kalcode-desktop/kalvoice-whisper

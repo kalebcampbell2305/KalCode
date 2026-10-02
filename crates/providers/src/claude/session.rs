@@ -54,6 +54,7 @@ pub struct LaunchSpec {
     pub env: BTreeMap<OsString, OsString>,
     pub working_directory: String,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub mode: kalcode_contracts::permissions::PermissionMode,
     pub resume_session_id: Option<String>,
     pub timeouts: SessionTimeouts,
@@ -327,6 +328,7 @@ impl ClaudeSession {
         };
         let args = session_args(&SessionArgs {
             model: spec.model,
+            effort: spec.effort,
             mode: spec.mode,
             start,
         })

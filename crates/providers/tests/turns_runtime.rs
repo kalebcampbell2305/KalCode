@@ -144,6 +144,7 @@ impl Stack {
                 account_label: None,
                 workspace_id: self.workspace_id.clone(),
                 model: None,
+                effort: None,
                 permission_mode: PermissionMode::Approve,
                 prompt: prompt.into(),
                 name: None,
