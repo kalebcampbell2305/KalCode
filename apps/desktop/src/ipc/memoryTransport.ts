@@ -231,17 +231,19 @@ export function createMemoryTransport(
   { detectDelayMs = 400 }: MemoryTransportOptions = {},
 ): MemoryTransport {
   const startedAt = Date.now();
+  // `?channel=stable` previews the Stable build: gated surfaces and features are hidden.
+  const stable = readChannel() === "stable";
   const info: AppInfo = {
     name: "KalCode",
     version: "0.1.0",
-    channel: "development",
+    channel: stable ? "stable" : "development",
     platform: "windows",
     arch: "x86_64",
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
         state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
-        visible: true,
+        visible: !stable || AVAILABLE_SURFACES.has(id),
       })),
       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
       // development builds show gated features. Available everywhere, as in flags.rs: the pane
@@ -254,7 +256,7 @@ export function createMemoryTransport(
           (scenario === "threads-context" && (id === "context_drop" || id === "context_firewall"))
             ? "available"
             : "gated",
-        visible: true,
+        visible: !stable || AVAILABLE_FEATURES.has(id),
       })),
     },
   };
@@ -806,6 +808,11 @@ let shared: MemoryTransport | null = null;
 export function sharedMemoryTransport(): MemoryTransport {
   shared ??= createMemoryTransport();
   return shared;
+}
+
+function readChannel(): string | null {
+  if (typeof location === "undefined") return null;
+  return new URLSearchParams(location.search).get("channel");
 }
 
 function readScenario(): MemoryScenario {

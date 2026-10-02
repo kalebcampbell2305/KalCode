@@ -1,0 +1,390 @@
+/* The Command Deck top bar: brand over the sidebar, context chips, the command field, signals. */
+.bar {
+  position: relative;
+  z-index: var(--z-sticky);
+  display: grid;
+  grid-template-columns: var(--deck-brand-w, var(--sidebar-w)) auto minmax(14rem, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--titlebar-h);
+  padding-right: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  background:
+    radial-gradient(40rem 5rem at 18% 0%, var(--color-accent-soft), transparent 70%),
+    linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken));
+}
+
+/* A lit hairline along the bottom edge under the brand, fading right. */
+.bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 22rem;
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-border-lit), transparent);
+  pointer-events: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  height: 100%;
+  padding: 0 var(--space-4);
+  border-right: 1px solid var(--color-border);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+.brand > :first-child {
+  flex: none;
+  filter: drop-shadow(0 0 6px var(--color-glow));
+}
+
+.wordmark {
+  height: 0.62rem;
+  flex: none;
+}
+
+/* Collapsed sidebar: just the mark, centred over the icon column. */
+.bar[data-sidebar="collapsed"] {
+  --deck-brand-w: var(--sidebar-w-collapsed);
+}
+
+.bar[data-sidebar="collapsed"] .brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.bar[data-sidebar="collapsed"] .wordmark {
+  display: none;
+}
+
+/* ---- Context chips ---- */
+
+.context {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-left: var(--space-1);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-md);
+  max-width: 15rem;
+  padding: 0 var(--space-2-5) 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover:not(:disabled),
+.chip[data-state="open"] {
+  border-color: var(--color-border);
+  background: var(--color-surface-hover);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.chip:disabled {
+  opacity: 0.6;
+}
+
+.chipIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.chipIcon svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  stroke-width: 1.75;
+}
+
+.chip[data-tone="failed"] .chipIcon {
+  color: var(--status-failed);
+}
+
+.chipText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.chipCaption {
+  color: var(--color-text-faint);
+  font-family: var(--font-label);
+  font-size: 0.5625rem;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.chipValue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip[data-tone="muted"] .chipValue,
+.chip[data-empty] .chipValue {
+  color: var(--color-text-muted);
+  font-weight: var(--weight-regular);
+}
+
+.chip[data-tone="failed"] .chipValue {
+  color: var(--color-danger-text);
+}
+
+.chipChevron {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--color-text-faint);
+}
+
+.branchName {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--type-mono);
+  text-overflow: ellipsis;
+}
+
+.delta {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.delta svg {
+  width: 0.6875rem;
+  height: 0.6875rem;
+}
+
+.toneDot {
+  --_c: var(--status-muted);
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--_c);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--_c) 16%, transparent);
+}
+
+.toneDot[data-tone="working"] {
+  --_c: var(--status-working);
+}
+
+.toneDot[data-tone="failed"] {
+  --_c: var(--status-failed);
+}
+
+.toneDot[data-tone="recovering"] {
+  --_c: var(--status-recovering);
+}
+
+/* ---- Command field ---- */
+
+.center {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 34rem;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-1-5) 0 var(--space-2-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  box-shadow: var(--shadow-well);
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+  text-align: left;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.command:hover {
+  border-color: var(--color-border-lit-soft);
+}
+
+.command:focus-visible {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow:
+    var(--shadow-well),
+    0 0 0 3px var(--color-accent-soft);
+}
+
+.commandIcon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.commandText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbd {
+  flex: none;
+  padding: 0.0625rem var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-1);
+  color: var(--color-text-faint);
+  font-family: var(--font-sans);
+  font-size: var(--type-label);
+}
+
+/* ---- Signals ---- */
+
+.signals {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.signal {
+  --_c: var(--status-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.signal:hover {
+  background: var(--color-surface-hover);
+}
+
+.signal:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.signal[data-tone="working"] {
+  --_c: var(--status-working);
+  border-color: color-mix(in srgb, var(--_c) 32%, transparent);
+  color: var(--color-text);
+}
+
+.signal[data-tone="waiting"] {
+  --_c: var(--status-waiting);
+  border-color: color-mix(in srgb, var(--_c) 45%, transparent);
+  background: color-mix(in srgb, var(--_c) 12%, transparent);
+  color: var(--color-text);
+}
+
+.signalDot {
+  position: relative;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--_c);
+}
+
+.signalDot[data-pulse]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--_c);
+  animation: signal-pulse var(--dur-pulse) var(--ease-out) infinite;
+}
+
+@keyframes signal-pulse {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  70%,
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signalDot[data-pulse]::after {
+    animation: none;
+  }
+}
+
+.signalCount {
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Narrow windows: drop captions, then labels; the values stay. ---- */
+
+@media (max-width: 1320px) {
+  .chipCaption {
+    display: none;
+  }
+
+  .chip {
+    max-width: 11rem;
+  }
+}
+
+@media (max-width: 1140px) {
+  .commandText,
+  .signalLabel {
+    display: none;
+  }
+
+  .center {
+    justify-content: flex-start;
+  }
+
+  .command {
+    width: auto;
+  }
+}

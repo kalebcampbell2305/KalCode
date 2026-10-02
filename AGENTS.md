@@ -180,3 +180,41 @@ The owner operates only the `Kaleb` Windows account and the `kalebcampbell` Mac 
 ## Reporting
 
 "Complete" means production has been verified, not merely that the code compiles or a PR is open. The final report states what shipped, where it is live (version, URL, commit), what was verified, and any known issues that remain.
+
+## Permanent storage hygiene and Cargo priority (owner directive 2026-10-01)
+
+**KALCODE AGENTS CLEAN UP AFTER THEMSELVES. Storage hygiene is part of DONE.** This shared policy applies to both Claude Code and Codex; `CLAUDE.md` imports this file. Do not rely on conversation memory.
+
+Before storage-intensive work (Rust compilation, desktop/release builds, Windows or macOS packaging, installer generation, large dependency installs, or multiple worktree builds), check available disk space. If space is dangerously low, reclaim proven disposable storage first, preserve active work, then continue. Do not wait for a disk-full build failure.
+
+After significant implementation, building, testing, merging, packaging, release-candidate work, shipping, production verification, QA, or temporary-worktree use, perform conservative post-task storage review. Preserve required artifacts and evidence before cleaning. Inspect artifacts the task created or made obsolete, classify each large candidate as **SAFE TO DELETE / KEEP / UNSURE**, and automatically delete only **SAFE TO DELETE**. Never delete an item merely because it is large. Keep uncertain items. Prefer your own disposable artifacts first; ordinary safe cleanup must not be delegated back to the owner.
+
+Safe candidates, only after proving they are unnecessary, include obsolete build directories and intermediates, superseded unsigned/test builds, duplicate installers/packages, temporary extractions, abandoned task caches and QA scratch directories, disposable logs/screenshots, stale Vite/Next/webpack caches, obsolete node_modules/dist/build outputs in retired copies, safe package/application/installer temp files, and obsolete crash dumps. Evidence-bearing logs/screenshots are not disposable.
+
+Never delete, reset, overwrite, clean, prune, or disturb current source, uncommitted work, active branches/worktrees, current release branches, useful active Rust caches, current release packages, certified builds, signing material, credentials, provider authentication/session data, required QA evidence/receipts/screenshots, release records, production handoffs, deployment evidence, shipping/rollback artifacts, or anything unclear. Do not invalidate completed validation or redo valid work merely because cleanup occurred.
+
+Before removing any worktree, prove all of the following: no active process uses it; no agent is working there; no uncommitted changes exist; no unique branch/work would be stranded; no release/QA evidence depends on it; and its useful changes are merged or preserved. Age, size, or an apparently finished task is not proof. If uncertain, **KEEP IT**.
+
+### Rust / Cargo priority
+
+Cargo/Rust artifacts are expected to be a major recurring storage consumer. After major Rust builds, packaging, release work, or worktree retirement, inspect target directories and Cargo caches, including old worktrees, retired branches, duplicate repo copies, obsolete builds, and abandoned QA/build directories. Aggressively remove obsolete incremental/debug/release artifacts only when proven unnecessary.
+
+Cleanup priority:
+
+1. **STALE TARGET TREES** from inactive, obsolete worktrees/repo copies.
+2. **OBSOLETE INCREMENTAL ARTIFACTS**.
+3. **DUPLICATE BUILD OUTPUTS**.
+4. **OLD RELEASE/DEBUG OUTPUTS** no longer required.
+5. **CARGO REGISTRY/GIT CACHE ONLY IF STILL NEEDED**; these are regenerable, but clearing them can slow future builds.
+
+Preserve the **ACTIVE KalCode target/** when useful for current development and when removal would force a costly rebuild. Do **not** routinely run broad `cargo clean` against the active tree. Active-cache cleanup requires demonstrated storage pressure/reason, substantial benefit, preserved current work/evidence, and an acceptable rebuild cost. Involve the owner if recovery requires sacrificing useful active caches, meaningful work, credentials/keys/evidence, or current release/QA state. Prefer stale outputs first. The goal is minimum storage bloat without constant expensive rebuilds, not deleting every cache after each task.
+
+### Release order, broader audits, and reporting
+
+Shipping and verification come before release cleanup: **BUILD -> TEST -> SIGN -> PACKAGE -> VERIFY -> SHIP -> VERIFY USERS CAN RECEIVE IT -> PRESERVE REQUIRED RELEASE ARTIFACTS/EVIDENCE -> CLEAN OBSOLETE INTERMEDIATES**. Never remove anything still needed to finish or prove a release. Coordinate with an already active cleanup owner; do not run competing cleanup.
+
+When storage is meaningfully constrained, broaden the audit to drive free space, largest directories, KalCode repo copies/worktrees, Rust targets, node_modules/package caches, temp/QA directories, and release artifacts. Reclaim the largest proven SAFE items first; never make speculative deletions. Keep the process simple.
+
+Routine reports should state storage reclaimed, important active caches/releases/evidence preserved, and remaining free space. For major cleanup, also report free space before/after, largest removals, important large items intentionally kept, whether active Rust caches were preserved, and whether future builds will take longer.
+
+For significant work, DONE means: **IMPLEMENT -> TEST -> REVIEW -> MERGE -> BUILD -> SHIP WHEN REQUIRED -> VERIFY -> PRESERVE REQUIRED ARTIFACTS/EVIDENCE -> CLEAN SAFE DISPOSABLE ARTIFACTS -> LEAVE ADEQUATE DISK SPACE FOR THE NEXT TASK**. Cleanup must never alter project truth.

@@ -15,14 +15,33 @@ import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "./paneIds.ts";
 import { InPane } from "./surfaceScope.tsx";
 import { WorkspacesPane } from "./WorkspaceRail.tsx";
 
-/** A scrolling pane body that takes focus when the canvas asks it to. */
-function PaneScroll({ context, fill, children }: { context: PaneRenderContext; fill?: boolean; children: ReactNode }) {
+/**
+ * A scrolling pane body that takes focus when the canvas asks it to. A read-only body (nothing
+ * focusable inside) is a tab stop itself, so the keyboard can scroll it.
+ */
+function PaneScroll({
+  context,
+  fill,
+  readOnly,
+  children,
+}: {
+  context: PaneRenderContext;
+  fill?: boolean;
+  readOnly?: string;
+  children: ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (context.focusRequest > 0) ref.current?.focus({ preventScroll: true });
   }, [context.focusRequest]);
-  return (
-    <div ref={ref} className={fill ? styles.fill : styles.scroll} tabIndex={-1} data-pane-surface>
+  const className = fill ? styles.fill : styles.scroll;
+  return readOnly ? (
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region with nothing focusable inside must take focus to scroll.
+    <section ref={ref} className={className} tabIndex={0} aria-label={readOnly} data-pane-surface>
+      <InPane>{children}</InPane>
+    </section>
+  ) : (
+    <div ref={ref} className={className} tabIndex={-1} data-pane-surface>
       <InPane>{children}</InPane>
     </div>
   );
@@ -58,7 +77,7 @@ registerPaneWidget(WORKSPACES_WIDGET, {
 registerPaneContent("git", {
   describe: () => ({ title: "Git", glyph: <GitCommitHorizontal />, statusText: "Read-only status" }),
   render: (content, context) => (
-    <PaneScroll context={context}>
+    <PaneScroll context={context} readOnly="Git status">
       <GitPane workspaceId={content.workspaceId} />
     </PaneScroll>
   ),

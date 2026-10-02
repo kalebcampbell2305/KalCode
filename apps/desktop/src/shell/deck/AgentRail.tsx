@@ -1,0 +1,234 @@
+/**
+ * The Command Deck's right rail: every running agent, grouped by what it needs — agents waiting on
+ * the person first, then working, then blocked; idle agents fold away and the last few that
+ * finished stay briefly. Each row opens its thread. Collapses to a narrow strip of live counts.
+ */
+import type { ThreadSummary } from "@kalcode/protocol";
+import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
+import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
+import { useNow } from "../../surfaces/dashboard/useNow.ts";
+import { useThreadsIntent } from "../../surfaces/threads/intent.tsx";
+import { useNavigation } from "../navigation.tsx";
+import styles from "./AgentRail.module.css";
+import { useDeckUi } from "./DeckUi.tsx";
+import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
+
+export function AgentRail() {
+  const { agentsOpen, setAgentsOpen } = useDeckUi();
+  const { state, reload } = useThreadSummaries();
+  const now = useNow(30_000);
+  const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
+
+  if (!agentsOpen) {
+    return (
+      <aside className={styles.strip} aria-label="Agents (collapsed)" data-deck-agents>
+        <Tooltip content="Show agents" side="left">
+          <IconButton size="sm" label="Show agents" icon={<PanelRightOpen />} onClick={() => setAgentsOpen(true)} />
+        </Tooltip>
+        {sections ? <StripCounts sections={sections} onOpen={() => setAgentsOpen(true)} /> : null}
+      </aside>
+    );
+  }
+
+  const running = sections ? runningAgentCount(sections) : 0;
+  return (
+    <aside
+      id="deck-agents"
+      className={styles.rail}
+      aria-labelledby="deck-agents-heading"
+      tabIndex={-1}
+      data-deck-agents
+    >
+      <div className={styles.header}>
+        <h2 className={styles.heading} id="deck-agents-heading">
+          Agents
+          {running > 0 ? <span className={styles.headingCount}>{running}</span> : null}
+        </h2>
+        <Tooltip content="Hide agents" side="left">
+          <IconButton size="sm" label="Hide agents" icon={<PanelRightClose />} onClick={() => setAgentsOpen(false)} />
+        </Tooltip>
+      </div>
+      <div className={styles.body}>
+        {state.status === "loading" ? (
+          <div className={styles.loading} aria-busy="true">
+            <Skeleton width="80%" />
+            <Skeleton width="62%" />
+            <Skeleton width="70%" />
+          </div>
+        ) : state.status === "error" ? (
+          <div className={styles.problem} role="alert">
+            <p>Agents couldn't load. {state.error.message}</p>
+            <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
+              Try again
+            </Button>
+          </div>
+        ) : sections ? (
+          <AgentList sections={sections} now={now} />
+        ) : (
+          <p className={styles.quiet}>Agents aren't part of this build.</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: () => void }) {
+  const counts = [
+    { tone: "waiting", value: sections.needsYou.length, label: "need you" },
+    { tone: "working", value: sections.working.length, label: "working" },
+    { tone: "muted", value: sections.blocked.length, label: "blocked" },
+  ].filter((c) => c.value > 0);
+  return (
+    <div className={styles.stripCounts}>
+      {counts.map((c) => (
+        <Tooltip key={c.label} content={`${c.value} ${c.label}`} side="left">
+          <button
+            type="button"
+            className={styles.stripCount}
+            data-tone={c.tone}
+            onClick={onOpen}
+            aria-label={`${c.value} ${c.value === 1 && c.label === "need you" ? "needs you" : c.label}. Show agents`}
+          >
+            {c.value}
+          </button>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+function AgentList({ sections, now }: { sections: AgentSections; now: number }) {
+  const { navigate } = useNavigation();
+  const threadsIntent = useThreadsIntent();
+  const [showIdle, setShowIdle] = useState(false);
+  const idleId = useId();
+  const running = runningAgentCount(sections);
+  const open = (thread: ThreadSummary) => {
+    navigate("threads");
+    threadsIntent.request("open", thread.id);
+  };
+
+  if (running === 0 && sections.finished.length === 0 && sections.idle.length === 0) {
+    return (
+      <div className={styles.empty}>
+        <span className={styles.emptyArt} aria-hidden="true">
+          <Bot />
+        </span>
+        <p className={styles.emptyTitle}>No agents running</p>
+        <p className={styles.emptyText}>Start a thread and its agent shows up here while it works.</p>
+        <Button
+          size="sm"
+          variant="secondary"
+          icon={<Plus />}
+          onClick={() => {
+            navigate("threads");
+            threadsIntent.request("new");
+          }}
+        >
+          Start a thread
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
+      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} />
+      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} />
+      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} />
+      {sections.idle.length > 0 ? (
+        <section className={styles.group}>
+          <button
+            type="button"
+            className={styles.foldToggle}
+            aria-expanded={showIdle}
+            aria-controls={idleId}
+            onClick={() => setShowIdle((v) => !v)}
+          >
+            <ChevronRight className={styles.foldIcon} data-open={showIdle || undefined} aria-hidden="true" />
+            Idle
+            <span className={styles.groupCount}>{sections.idle.length}</span>
+          </button>
+          {showIdle ? (
+            <ul id={idleId} className={styles.list}>
+              {sections.idle.map((thread) => (
+                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} />
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
+      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} />
+    </>
+  );
+}
+
+interface GroupProps {
+  title: string;
+  tone: string;
+  threads: ThreadSummary[];
+  now: number;
+  onOpen: (thread: ThreadSummary) => void;
+}
+
+function Group({ title, tone, threads, now, onOpen }: GroupProps) {
+  const headingId = useId();
+  if (threads.length === 0) return null;
+  return (
+    <section className={styles.group} aria-labelledby={headingId} data-tone={tone}>
+      <h3 className={styles.groupTitle} id={headingId}>
+        {title}
+        <span className={styles.groupCount}>{threads.length}</span>
+      </h3>
+      <ul className={styles.list}>
+        {threads.map((thread) => (
+          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function AgentRow({ thread, now, onOpen }: { thread: ThreadSummary; now: number; onOpen: (t: ThreadSummary) => void }) {
+  const meta = STATUS_META[thread.status];
+  const since = Date.parse(thread.lastActivityAt);
+  const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
+  const live = meta.group === "working";
+  const detail = meta.group === "working" && thread.currentActivity ? thread.currentActivity : meta.label;
+  return (
+    <li>
+      <button
+        type="button"
+        className={styles.row}
+        data-tone={meta.tone}
+        data-group={meta.group}
+        onClick={() => onOpen(thread)}
+        aria-label={`${thread.name}, ${meta.label}, ${thread.providerName} in ${thread.workspaceName}. Open thread`}
+      >
+        <span className={styles.rowGlyph} aria-hidden="true">
+          <ProviderGlyph provider={thread.providerId} size="sm" />
+          <span className={styles.rowDot} data-pulse={live || undefined} />
+        </span>
+        <span className={styles.rowText}>
+          <span className={styles.rowTop}>
+            <span className={styles.rowName}>{thread.name}</span>
+            {elapsed ? <span className={styles.rowTime}>{elapsed}</span> : null}
+          </span>
+          <span className={styles.rowDetail}>{detail}</span>
+          <span className={styles.rowMeta}>
+            {thread.providerName} · {thread.workspaceName}
+            {thread.pendingApprovals > 0 && thread.status !== "waiting_for_permission" ? (
+              <span className={styles.rowFlag}>
+                {thread.pendingApprovals} {thread.pendingApprovals === 1 ? "approval" : "approvals"}
+              </span>
+            ) : null}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}

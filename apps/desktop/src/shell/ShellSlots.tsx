@@ -21,7 +21,18 @@ interface ShellSlotsValue {
   /** Left edge of the main column (right of the sidebar), in pixels. */
   mainLeft: number;
   setMainLeft: (left: number) => void;
+  /** Space the shell chrome takes at the other window edges (top bar, agents rail, status strip). */
+  insets: ShellInsets;
+  setInsets: (insets: ShellInsets) => void;
 }
+
+export interface ShellInsets {
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const NO_INSETS: ShellInsets = { top: 0, right: 0, bottom: 0 };
 
 const ShellSlotsContext = createContext<ShellSlotsValue | null>(null);
 
@@ -31,6 +42,7 @@ export const VOICE_SLOT_GAP = 6;
 export function ShellSlotsProvider({ children }: { children: ReactNode }) {
   const [voice, setVoiceState] = useState<VoiceSlot | null>(null);
   const [mainLeft, setMainLeftState] = useState(0);
+  const [insets, setInsetsState] = useState<ShellInsets>(NO_INSETS);
   // Stable setters: consumers can depend on them in effects without re-running every change.
   const setVoice = useCallback(
     (slot: VoiceSlot | null) =>
@@ -43,9 +55,20 @@ export function ShellSlotsProvider({ children }: { children: ReactNode }) {
     (left: number) => setMainLeftState((prev) => (Math.abs(prev - left) < 1 ? prev : left)),
     [],
   );
+  const setInsets = useCallback(
+    (next: ShellInsets) =>
+      setInsetsState((prev) =>
+        Math.abs(prev.top - next.top) < 1 &&
+        Math.abs(prev.right - next.right) < 1 &&
+        Math.abs(prev.bottom - next.bottom) < 1
+          ? prev
+          : next,
+      ),
+    [],
+  );
   const value = useMemo<ShellSlotsValue>(
-    () => ({ voice, setVoice, mainLeft, setMainLeft }),
-    [voice, setVoice, mainLeft, setMainLeft],
+    () => ({ voice, setVoice, mainLeft, setMainLeft, insets, setInsets }),
+    [voice, setVoice, mainLeft, setMainLeft, insets, setInsets],
   );
   return <ShellSlotsContext.Provider value={value}>{children}</ShellSlotsContext.Provider>;
 }

@@ -41,6 +41,8 @@ export interface PanelArea {
   left: number;
   top: number;
   bottom: number;
+  /** Pixels kept clear at the right edge (the Command Deck's agents rail); default 0. */
+  right?: number;
 }
 
 const WHOLE_WINDOW: PanelArea = { left: 0, top: EDGE_MARGIN, bottom: EDGE_MARGIN };
@@ -51,7 +53,7 @@ function bounds(viewport: Size, panel: Size, area: PanelArea = WHOLE_WINDOW): Bo
   return {
     minLeft,
     minTop,
-    maxLeft: Math.max(minLeft, viewport.width - panel.width - EDGE_MARGIN),
+    maxLeft: Math.max(minLeft, viewport.width - (area.right ?? 0) - panel.width - EDGE_MARGIN),
     maxTop: Math.max(minTop, viewport.height - panel.height - area.bottom),
   };
 }
