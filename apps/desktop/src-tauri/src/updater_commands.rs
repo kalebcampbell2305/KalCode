@@ -16,7 +16,7 @@ use kalcode_updater::{
     ArtifactFormat, Candidate, InstallAttempt, InstallBinding, InstallKind, InstallOutcome,
     JournalState, MAX_UPDATE_BYTES, MacSwapAttempt, MacSwapPhase, OperationToken, RollbackCache,
     UpdateChannel, UpdateError, UpdateJournal, UpdateMachine, UpdatePhase, UpdateStatus,
-    UpdateTarget, same_public_build, validate_candidate_for_target,
+    UpdateTarget, installs_when_closed, validate_candidate_for_target,
     validate_retained_candidate_for_target, verify_download, verify_signature_for_metadata,
 };
 use reqwest::header::ACCEPT;
@@ -66,7 +66,7 @@ struct PreparedUpdate {
     candidate: Candidate,
     bytes: Vec<u8>,
     signature: String,
-    /// A newer build of the running public version, already verified and staged. It installs
+    /// A newer release (build or public version), already verified and staged. It installs
     /// when KalCode closes (`install_staged_on_exit`); dropping it removes the staged files.
     installer: Option<PreparedInstaller>,
 }
@@ -177,7 +177,7 @@ impl Runtime {
         Ok((token, prepared))
     }
 
-    /// Admits the install of a staged same-version build as KalCode closes. Refuses, changing
+    /// Admits the install of a staged update as KalCode closes. Refuses, changing
     /// nothing, unless an installer is staged for the Ready release.
     fn admit_exit_install(
         &mut self,
@@ -285,7 +285,7 @@ struct Inner {
     before_exit: BeforeUpdaterExit,
     preparation: crate::update_preparation::UpdatePreparation,
     preparation_ready: bool,
-    /// See `silent_fallback`: same-version builds whose silent install failed.
+    /// See `silent_fallback`: updates whose silent install failed.
     silent_record: Mutex<Option<SilentInstallRecord>>,
     /// A staging failure counts once per session.
     staging_failure_counted: std::sync::atomic::AtomicBool,
@@ -656,10 +656,11 @@ impl DesktopUpdaterState {
                 },
             )
             .await?;
-        // A newer build of the running public version installs when KalCode closes, with no
-        // prompt. Stage it now, while KalCode runs, so closing only has to start it. A build
-        // whose silent install already failed is offered with the restart prompt instead.
-        let silent = same_public_build(&self.0.current_version, &candidate.version)
+        // Every newer release, a new public version as well as a newer build of the running
+        // one, installs when KalCode closes, with no prompt. Stage it now, while KalCode runs, so
+        // closing only has to start it. A build whose silent install already failed is offered
+        // with the restart prompt instead.
+        let silent = installs_when_closed(&self.0.current_version, &candidate.version)
             && !silent_fallback::prompt_instead(self.silent_record().as_ref(), &candidate.version);
         let (bytes, installer) = if silent {
             match self.stage_for_exit(token, candidate.clone(), bytes).await {
@@ -706,7 +707,7 @@ impl DesktopUpdaterState {
         Ok(runtime.status())
     }
 
-    /// Stages a verified same-version build for `install_staged_on_exit`, off the async
+    /// Stages a verified update for `install_staged_on_exit`, off the async
     /// executor. Staging holds the preparation gate, so quitting cancels it (and waits for its
     /// cleanup); a staged build holds nothing, so quitting never waits on it.
     async fn stage_for_exit(
@@ -750,7 +751,7 @@ impl DesktopUpdaterState {
     }
 
     /// Called once from `RunEvent::Exit`, only after a proven clean drain (see `lib.rs`).
-    /// Starts the staged same-version build's installer (Windows) or swap helper (macOS), which
+    /// Starts the staged update's installer (Windows) or swap helper (macOS), which
     /// applies it after KalCode exits, silently, and leaves KalCode closed. Without a staged
     /// build this does nothing. A failure leaves the current build installed and is logged; the
     /// update downloads again on the next launch.
@@ -1701,7 +1702,7 @@ pub(crate) fn guard_forward_only_schema_upgrade(
 }
 
 /// Fences the helper's rollback in both of its modes: a restart apply waits for this build's
-/// health with the attempt `Launched`; a no-relaunch apply (a same-version build installed when
+/// health with the attempt `Launched`; a no-relaunch apply (an update installed when
 /// KalCode closed) probes it with the attempt `Swapped`, and this build can be opened during
 /// that probe. Either helper compares the whole attempt before it swaps back, so once this build
 /// may migrate the data, neither can restore the build that would refuse it.
@@ -2371,13 +2372,26 @@ mod tests {
         );
     }
 
-    /// A same-version build applied after KalCode closed (macOS `--no-relaunch`) leaves the
+    /// An update applied after KalCode closed (macOS `--no-relaunch`) leaves the
     /// attempt `Swapped` while the helper probes it. If that build is opened during the probe and
     /// must migrate the database, it raises the rollback floor and fences the attempt before Core
     /// opens, so the helper's rollback fails closed; its healthy startup then acknowledges the
     /// install and removes the previous bundle the helper left behind.
     #[test]
     fn a_no_relaunch_apply_is_fenced_and_floored_before_its_migration() {
+        no_relaunch_apply_is_fenced_and_floored("0.1.8+5", "0.1.8+6");
+    }
+
+    /// A new public version installs when KalCode closes too (0.1.8 to 0.1.9). Its migration
+    /// still raises the rollback floor before Core opens, so the 0.1.8 build is never offered
+    /// back over data 0.1.9 has migrated.
+    #[test]
+    fn a_new_public_version_installed_on_close_is_fenced_and_floored_before_its_migration() {
+        assert!(installs_when_closed("0.1.8+944", "0.1.9+1050"));
+        no_relaunch_apply_is_fenced_and_floored("0.1.8+944", "0.1.9+1050");
+    }
+
+    fn no_relaunch_apply_is_fenced_and_floored(from: &str, to: &str) {
         let data_dir = tempfile::tempdir().unwrap();
         let update_dir = data_dir.path().join("updates");
         let journal_path = update_dir.join("updater.json");
@@ -2385,8 +2399,8 @@ mod tests {
         journal
             .record_install_attempt(InstallAttempt {
                 kind: InstallKind::Upgrade,
-                from_version: "0.1.8+5".into(),
-                to_version: "0.1.8+6".into(),
+                from_version: from.into(),
+                to_version: to.into(),
                 sha256: "a".repeat(64),
                 binding: Some(InstallBinding {
                     target: UpdateTarget::DarwinAarch64,
@@ -2410,9 +2424,9 @@ mod tests {
         drop(journal);
 
         // `guard_forward_only_schema_upgrade` fences only on macOS; run both of its steps here.
-        guard_forward_only_schema_upgrade(data_dir.path(), "0.1.8+6", true).unwrap();
-        fence_swapped_macos_upgrade(&update_dir, "0.1.8+6").unwrap();
-        assert_eq!(read_rollback_floor(&update_dir).as_deref(), Some("0.1.8+6"));
+        guard_forward_only_schema_upgrade(data_dir.path(), to, true).unwrap();
+        fence_swapped_macos_upgrade(&update_dir, to).unwrap();
+        assert_eq!(read_rollback_floor(&update_dir).as_deref(), Some(to));
         let mut reopened = UpdateJournal::load(&journal_path).unwrap();
         let fenced = reopened.state().install_attempt.clone().unwrap();
         assert_ne!(
@@ -2424,14 +2438,14 @@ mod tests {
             MacSwapPhase::Swapped
         );
 
-        let superseded = superseded_mac_bundle(reopened.state(), "0.1.8+6");
-        let (_, outcome) = reconcile_after_cleanup(&mut reopened, Ok(true), true, true, "0.1.8+6");
+        let superseded = superseded_mac_bundle(reopened.state(), to);
+        let (_, outcome) = reconcile_after_cleanup(&mut reopened, Ok(true), true, true, to);
         assert_eq!(outcome.unwrap(), Some(InstallOutcome::Updated));
         assert_eq!(superseded, fenced.mac_swap);
         // The previous build can never be offered back over the migrated data.
         assert!(!schema_compatible_recovery(
-            "0.1.8+6",
-            "0.1.8+5",
+            to,
+            from,
             read_rollback_floor(&update_dir).as_deref()
         ));
     }

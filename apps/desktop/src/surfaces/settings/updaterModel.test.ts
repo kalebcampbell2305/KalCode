@@ -54,7 +54,7 @@ describe("updatePresentation", () => {
       progress: 100,
     });
     expect(installsWhenClosed(staged)).toBe(true);
-    // A build whose silent install failed, and a new public version, keep the prompt.
+    // A build whose silent install failed (native leaves it unstaged) keeps the prompt.
     for (const prompt of [
       { ...staged, installOnQuit: false },
       { ...staged, availableVersion: "0.1.9+801", installOnQuit: false },
@@ -63,6 +63,22 @@ describe("updatePresentation", () => {
       expect(updatePresentation(prompt).detail).toBe("Your work stays open until you choose to restart and install.");
     }
     expect(installsWhenClosed({ ...staged, phase: "installing" })).toBe(false);
+  });
+
+  it("says a staged new public version also installs when KalCode closes", () => {
+    const staged = {
+      ...base,
+      currentVersion: "0.1.8+944",
+      phase: "ready" as const,
+      availableVersion: "0.1.9+1050",
+      installOnQuit: true,
+    };
+    expect(updatePresentation(staged)).toEqual({
+      label: "KalCode 0.1.9 build 1050 is ready",
+      detail: "Installs when you close KalCode.",
+      progress: 100,
+    });
+    expect(installsWhenClosed(staged)).toBe(true);
   });
 
   it("bounds download progress and keeps unknown totals indeterminate", () => {

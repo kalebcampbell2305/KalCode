@@ -75,8 +75,12 @@ describe("the Updates page for 0.1.9", () => {
     expect(html).toContain('<time datetime="2026-09-30T18:25:35.409Z"');
     expect(html).toContain('<time datetime="2026-09-30T02:34:07.332Z"');
     expect(copy).toContain("KalCode 0.1.9 puts every agent, account and terminal in one command deck.");
-    expect(copy).toContain("From the latest 0.1.8 build: 0.1.9 downloads in the background and installs when you close KalCode.");
-    expect(copy).toContain("From an earlier 0.1.8 build or 0.1.7: update in the app with Restart to update or Settings > Updates.");
+    expect(copy).toContain(
+      "From the latest 0.1.8 build: 0.1.9 downloads in the background and installs when you close KalCode.",
+    );
+    expect(copy).toContain(
+      "From an earlier 0.1.8 build or 0.1.7: update in the app with Restart to update or Settings > Updates.",
+    );
     expect(copy).toContain("From then on, every update, including a new version, installs when you close KalCode.");
     expect(copy).toContain(
       "Windows: 0.1.6 can't update itself. Download the 0.1.9 installer from the download page and run it once — your data is kept.",

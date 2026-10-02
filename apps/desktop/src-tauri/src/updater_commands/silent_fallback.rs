@@ -22,7 +22,7 @@ const STAGING_FAILURE_LIMIT: u8 = 2;
 /// is offered with the prompt.
 const SKIPPED_EXIT_LIMIT: u8 = 2;
 
-/// What the silent path has done for one same-version build.
+/// What the silent path has done for one update.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SilentInstallRecord {
