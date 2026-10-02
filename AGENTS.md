@@ -67,6 +67,18 @@ This supersedes older release-gate behavior that delays publication.
 - **Versions are labels, not gates.** Public version numbers are owner-controlled **marketing labels**. They never control building, merging or shipping, and many builds can ship under the same label. "Change KalCode to 0.1.10" is a simple, consistent version-label switch (app, package, installer and updater metadata, About, website, release metadata). Then keep building, with no rebuilt features, re-run QA, reopened work or release ceremony. Never question whether there are "enough changes" for a version.
 - **Release history.** Keep lightweight, truthful release history (git history, docs/releases, notes) so "what did we add for 0.1.10?" or a launch video can be answered from real history. It is metadata, never a gate. Never invent features.
 
+### Automatic merge rule (owner directive 2026-10-02)
+
+**Owner approval is NOT required for normal validated KalCode work.** Once the requested work is complete, the relevant change is tested, the implementation is confirmed correct, relevant failures are resolved and no blocker is known, **MERGE TO MAIN AUTOMATICALLY**. Never ask "Should I merge this?".
+
+The flow is OWNER REQUESTS → BUILD → TEST → REVIEW INTERNALLY → MERGE AUTOMATICALLY → SHIP AUTOMATICALLY → VERIFY USERS CAN RECEIVE IT → CLEAN UP. Merging and shipping are part of completing the task.
+
+Stop before merging only for a real reason:
+- conflicting requirements, or destructive or irreversible ambiguity;
+- failing relevant tests, or an unresolved merge conflict;
+- a security or data-integrity concern, or a missing required credential;
+- real uncertainty about whether the requested behavior is desired.
+
 ### Automate and parallelize safely
 
 Automate builds, tests, metadata, configured signing, publication, updater metadata, website release references, production checks, and cleanup. Do not require routine manual steps merely because old procedures did. Ask the owner only for a real decision, unavailable credential/action, irreversible risk, or ambiguity.
