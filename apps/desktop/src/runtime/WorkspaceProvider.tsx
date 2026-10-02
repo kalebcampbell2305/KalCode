@@ -81,8 +81,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       pickers: 0,
       generation: 0,
       activation: 0,
+      /** Activations waiting for or running their native write. */
+      activating: 0,
       focusIntent: 0,
-      pendingFocus: null as { intent: number; epoch: number; terminalId: string; workspaceId: string } | null,
       workspaceId: null as string | null,
       tail: Promise.resolve(),
     }),
@@ -107,37 +108,52 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       lifecycle.mounted = false;
       lifecycle.epoch += 1;
       lifecycle.pickers = 0;
-      lifecycle.pendingFocus = null;
       lifecycle.generation += 1;
       lifecycle.activation += 1;
     };
   }, [lifecycle]);
 
-  const load = useCallback(async (): Promise<void> => {
-    if (!isCurrent()) return;
-    const id = ++lifecycle.generation;
-    const [workspaces, active, running] = await Promise.all([
-      client.listWorkspaces(),
-      client.activeWorkspace(),
-      client.runningTerminals(),
-    ]);
-    if (!isCurrent() || id !== lifecycle.generation) return;
-    const terminals = active ? await client.listTerminals(active.id) : [];
-    // A slower, older refresh must never overwrite a newer one.
-    if (!isCurrent() || id !== lifecycle.generation) return;
-    if (lifecycle.workspaceId !== (active?.id ?? null)) lifecycle.focusIntent += 1;
-    lifecycle.workspaceId = active?.id ?? null;
-    setSnapshot({ workspaces, active, terminals, running });
-  }, [client, lifecycle, isCurrent]);
+  const load = useCallback(
+    async (expected: string | null = lifecycle.workspaceId): Promise<void> => {
+      if (!isCurrent()) return;
+      const id = ++lifecycle.generation;
+      // The tabs of the workspace expected to be active are read alongside the other reads;
+      // when another workspace turns out to be active, its tabs are read after.
+      const early = expected ? client.listTerminals(expected) : null;
+      early?.catch(() => undefined);
+      const [workspaces, active, running] = await Promise.all([
+        client.listWorkspaces(),
+        client.activeWorkspace(),
+        client.runningTerminals(),
+      ]);
+      if (!isCurrent() || id !== lifecycle.generation) return;
+      const terminals = !active
+        ? []
+        : early && active.id === expected
+          ? await early
+          : await client.listTerminals(active.id);
+      // A slower, older refresh must never overwrite a newer one.
+      if (!isCurrent() || id !== lifecycle.generation) return;
+      if (lifecycle.workspaceId !== (active?.id ?? null)) lifecycle.focusIntent += 1;
+      lifecycle.workspaceId = active?.id ?? null;
+      setSnapshot({ workspaces, active, terminals, running });
+    },
+    [client, lifecycle, isCurrent],
+  );
 
-  const refresh = useCallback(async () => {
-    try {
-      await load();
-    } catch (err) {
-      // A live refresh failing keeps the last good state; the next event retries.
-      if (isCurrent() && import.meta.env.DEV) console.warn("workspace refresh failed", err);
-    }
-  }, [load, isCurrent]);
+  /** `refresh`, reading the tabs of `expected` (a workspace being activated) up front. */
+  const reload = useCallback(
+    async (expected?: string) => {
+      try {
+        await load(expected);
+      } catch (err) {
+        // A live refresh failing keeps the last good state; the next event retries.
+        if (isCurrent() && import.meta.env.DEV) console.warn("workspace refresh failed", err);
+      }
+    },
+    [load, isCurrent],
+  );
+  const refresh = useCallback(() => reload(), [reload]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the initial load on retry.
   useEffect(() => {
@@ -230,32 +246,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const activate = useCallback(
     async (workspaceId: string) => {
       if (!isCurrent()) return false;
+      // Already the displayed workspace with no switch queued: nothing to wait for. The native
+      // write (it orders workspaces by last opened) and the refresh still run, in the background.
+      const already = lifecycle.activating === 0 && lifecycle.workspaceId === workspaceId;
       lifecycle.focusIntent += 1;
       const id = ++lifecycle.activation;
       const latest = () => isCurrent() && id === lifecycle.activation;
       // Native writes cannot be undone by a UI generation check. Finish the dispatched
       // write before sending the latest queued intent; obsolete queued intents do no IPC.
+      lifecycle.activating += 1;
       const result = lifecycle.tail.then(async () => {
-        if (!latest()) return false;
         try {
+          if (!latest()) return false;
           await client.activateWorkspace(workspaceId);
           return latest();
         } catch (err) {
           if (latest()) fail("Couldn't switch workspace", err);
           return false;
+        } finally {
+          lifecycle.activating -= 1;
         }
       });
       lifecycle.tail = result.then(
         () => undefined,
         () => undefined,
       );
+      if (already) {
+        void result.then((ok) => (ok ? reload(workspaceId) : undefined));
+        return true;
+      }
       // Reads are outside the write queue: a slow obsolete refresh must not delay
       // the next workspace switch. The load generation still fences its snapshot.
       if (!(await result) || !latest()) return false;
-      await refresh();
+      await reload(workspaceId);
       return latest();
     },
-    [client, refresh, fail, lifecycle, isCurrent],
+    [client, reload, fail, lifecycle, isCurrent],
   );
 
   const remove = useCallback(
@@ -284,16 +310,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const selectTerminal = useCallback(
     (terminalId: string, focus = false, workspaceId: string | undefined = active?.id) => {
       if (!isCurrent() || !workspaceId) return;
-      const pending = lifecycle.pendingFocus;
-      // The canvas synchronizes its newly displayed tab before a mutation's refresh
-      // settles. That same-target, non-focusing report belongs to the pending intent.
-      const reconcilesPending =
-        !focus &&
-        pending?.intent === lifecycle.focusIntent &&
-        pending.epoch === lifecycle.epoch &&
-        pending.workspaceId === workspaceId &&
-        pending.terminalId === terminalId;
-      if (!reconcilesPending) lifecycle.focusIntent += 1;
+      // A create or restart selects and focuses its terminal as soon as it exists, so a later
+      // selection (even the canvas reporting that same tab) is a newer intent.
+      lifecycle.focusIntent += 1;
       setSelected({ workspaceId, terminalId });
       recordFocus({ kind: "terminal", terminalId, workspaceId });
       if (focus) requestFocus(terminalId);
@@ -303,34 +322,53 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [client, active, requestFocus, isCurrent, lifecycle],
   );
 
+  // A created or restarted terminal joins the snapshot directly (when its workspace is still the
+  // active one). Loads already in flight started before it existed, so they are superseded.
+  const showTerminal = useCallback(
+    (terminal: TerminalInfo) => {
+      lifecycle.generation += 1;
+      const upsert = (list: TerminalInfo[]) =>
+        list.some((t) => t.id === terminal.id)
+          ? list.map((t) => (t.id === terminal.id ? terminal : t))
+          : [...list, terminal];
+      setSnapshot((s) =>
+        s.active?.id !== terminal.workspaceId
+          ? s
+          : {
+              ...s,
+              terminals: upsert(s.terminals),
+              running: terminal.status === "running" ? upsert(s.running) : s.running,
+            },
+      );
+    },
+    [lifecycle],
+  );
+
   const createTerminal = useCallback(
     async (shellId: string | null = null, workspaceId: string | undefined = active?.id) => {
       const current = captureLifetime();
       if (!current() || !workspaceId) return null;
       const intent = ++lifecycle.focusIntent;
       const mayFocus = () => current() && intent === lifecycle.focusIntent && lifecycle.workspaceId === workspaceId;
+      let terminal: TerminalInfo;
       try {
-        const terminal = await client.createTerminal(workspaceId, shellId, lastSize.current);
-        if (!current()) return null;
-        const pending = { intent, epoch: lifecycle.epoch, terminalId: terminal.id, workspaceId };
-        if (mayFocus()) lifecycle.pendingFocus = pending;
-        // Keep the native session visible in history without overriding a newer
-        // workspace or terminal choice while creation/refresh was pending.
-        try {
-          await refresh();
-          if (!mayFocus()) return null;
-          setSelected({ workspaceId, terminalId: terminal.id });
-          requestFocus(terminal.id);
-          return terminal;
-        } finally {
-          if (lifecycle.pendingFocus === pending) lifecycle.pendingFocus = null;
-        }
+        terminal = await client.createTerminal(workspaceId, shellId, lastSize.current);
       } catch (err) {
         if (mayFocus()) fail("Couldn't start a terminal", err);
         return null;
       }
+      if (!current()) return null;
+      // The tab exists as soon as its shell does; the refresh fills in the rest in the background.
+      // Keep the native session visible without overriding a newer workspace or terminal choice
+      // made while creation was pending.
+      showTerminal(terminal);
+      void refresh();
+      if (!mayFocus()) return null;
+      setSelected({ workspaceId, terminalId: terminal.id });
+      requestFocus(terminal.id);
+      return terminal;
     },
-    [client, active?.id, refresh, fail, requestFocus, captureLifetime, lifecycle],
+    [client, active?.id, refresh, fail, requestFocus, captureLifetime, lifecycle, showTerminal],
   );
 
   const closeTerminal = useCallback(
@@ -359,25 +397,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (!current()) return null;
       const intent = ++lifecycle.focusIntent;
       const mayFocus = () => current() && intent === lifecycle.focusIntent;
+      let terminal: TerminalInfo;
       try {
-        const terminal = await client.restartTerminal(terminalId, lastSize.current);
-        if (!current()) return null;
-        const pending = { intent, epoch: lifecycle.epoch, terminalId: terminal.id, workspaceId: terminal.workspaceId };
-        if (mayFocus() && lifecycle.workspaceId === terminal.workspaceId) lifecycle.pendingFocus = pending;
-        try {
-          await refresh();
-          if (!mayFocus() || lifecycle.workspaceId !== terminal.workspaceId) return null;
-          requestFocus(terminal.id);
-          return terminal;
-        } finally {
-          if (lifecycle.pendingFocus === pending) lifecycle.pendingFocus = null;
-        }
+        terminal = await client.restartTerminal(terminalId, lastSize.current);
       } catch (err) {
         if (mayFocus()) fail("Couldn't restart the terminal", err);
         return null;
       }
+      if (!current()) return null;
+      // The restarted shell shows at once; the refresh follows in the background.
+      showTerminal(terminal);
+      void refresh();
+      if (!mayFocus() || lifecycle.workspaceId !== terminal.workspaceId) return null;
+      requestFocus(terminal.id);
+      return terminal;
     },
-    [client, refresh, fail, requestFocus, captureLifetime, lifecycle],
+    [client, refresh, fail, requestFocus, captureLifetime, lifecycle, showTerminal],
   );
 
   const retry = useCallback(() => {

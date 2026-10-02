@@ -7,15 +7,19 @@ import { Announcer } from "./Announcer.tsx";
 import styles from "./Dashboard.module.css";
 import { DashboardBoard } from "./DashboardBoard.tsx";
 import { activityBuckets, chipCounts, summaryLine } from "./data/board.ts";
-import { DashboardDataProvider, useThreadSummaries } from "./data/DashboardData.tsx";
+import { DashboardDataBoundary, useThreadSummaries } from "./data/DashboardData.tsx";
 import { useNow } from "./useNow.ts";
 
-/** The Dashboard surface (Z7-W3): the live board of agents beside the widget dock. */
+/**
+ * The Dashboard surface (Z7-W3): the live board of agents beside the widget dock. It reuses the
+ * shell's always-on board data (no reload from scratch on each visit) and only creates its own
+ * provider when rendered without one.
+ */
 export function Dashboard() {
   return (
-    <DashboardDataProvider>
+    <DashboardDataBoundary>
       <DashboardPage />
-    </DashboardDataProvider>
+    </DashboardDataBoundary>
   );
 }
 
@@ -73,11 +77,11 @@ function ActivityTrend() {
  */
 export function DashboardPane() {
   return (
-    <DashboardDataProvider>
+    <DashboardDataBoundary>
       <div className={styles.pane} data-dashboard-pane>
         <DashboardBoard inPane />
       </div>
       <Announcer />
-    </DashboardDataProvider>
+    </DashboardDataBoundary>
   );
 }

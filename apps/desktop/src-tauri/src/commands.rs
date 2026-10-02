@@ -201,7 +201,7 @@ fn open_native_dir(
 }
 
 /// Opens KalCode's log folder. The path is resolved natively; the WebView cannot choose it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn diagnostics_open_log_dir(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -210,7 +210,7 @@ pub fn diagnostics_open_log_dir(
 }
 
 /// Opens KalCode's data folder (used by the startup-error screen).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn diagnostics_open_data_dir(
     window: WebviewWindow,
     state: State<'_, AppState>,

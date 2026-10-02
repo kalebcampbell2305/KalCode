@@ -30,6 +30,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { type HTMLAttributes, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useOpenInPane } from "../panes/useOpenInPane.ts";
 import { globalShortcut, isRailToggleShortcut } from "../shortcuts.ts";
 import {
@@ -75,6 +76,9 @@ export function RailTree({
   label?: string;
 }) {
   const rail = useRail();
+  // The highlight follows the workspace switch as soon as it lands, not the rail's later re-read.
+  const activeId = useWorkspaces().active?.id;
+  const isActive = (entry: WorkspaceRailEntry) => (activeId ? entry.workspaceId === activeId : entry.active);
   const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<string>>(new Set());
   const nodes = useMemo(
     () => (rail.rail ? visibleNodes(rail.rail, collapsedProviders) : []),
@@ -94,7 +98,7 @@ export function RailTree({
   }, []);
 
   // The focused row: the remembered one if still visible, else the active workspace, else the first.
-  const activeKey = nodes.find((n) => n.kind === "workspace" && n.entry.active)?.key;
+  const activeKey = nodes.find((n) => n.kind === "workspace" && isActive(n.entry))?.key;
   const tabKey = nodes.some((n) => n.key === focusKey) ? focusKey : (activeKey ?? nodes[0]?.key ?? null);
 
   const focusRow = (key: string | undefined) => {
@@ -283,17 +287,18 @@ export function RailTree({
         if (node.kind === "workspace") {
           const { entry } = node;
           const badges = badgeLabel(entry);
+          const active = isActive(entry);
           return (
             <TreeItem
               key={node.key}
               {...common}
               className={styles.workspaceRow}
-              selected={entry.active}
-              data-active={entry.active || undefined}
+              selected={active}
+              data-active={active || undefined}
               data-missing={!entry.available || undefined}
               aria-label={[
                 entry.name,
-                entry.active ? "active workspace" : null,
+                active ? "active workspace" : null,
                 entry.available ? null : "folder missing",
                 badges || null,
               ]

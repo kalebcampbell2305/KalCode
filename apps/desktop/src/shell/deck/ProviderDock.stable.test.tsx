@@ -61,12 +61,15 @@ interface Mounted {
   codex: ThreadSummary;
 }
 
-async function mountStable(options: { codexPersonalFailing?: boolean } = {}): Promise<Mounted> {
+async function mountStable(
+  options: { codexPersonalFailing?: boolean; rebindGate?: Promise<void> } = {},
+): Promise<Mounted> {
   const transport = createMemoryTransport("threads", { detectDelayMs: 0 });
   const original = transport.invoke.bind(transport);
   const counts = new Map<string, number>();
   vi.spyOn(transport, "invoke").mockImplementation(async (command, args) => {
     counts.set(command, (counts.get(command) ?? 0) + 1);
+    if (command === "thread_rebind_account" && options.rebindGate) await options.rebindGate;
     const result = await original(command, args);
     if (command === "provider_accounts_list" && options.codexPersonalFailing) {
       return (result as ProviderAccount[]).map((account) =>
@@ -160,6 +163,28 @@ describe("Provider Dock on Stable", () => {
     await waitFor(() => expect(calls("thread_rebind_account")).toBe(1));
     expect(await screen.findByText("Moved “Gemini docs pass” to Gemini B (Gemini CLI)")).toBeInTheDocument();
     await waitFor(async () => expect(await chip("Gemini CLI · Gemini B")).toHaveAttribute("data-current", "true"));
+  });
+
+  it("marks the target chip busy while the move is in flight, and clears it when it lands", async () => {
+    let release!: () => void;
+    const rebindGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { user, calls } = await mountStable({ rebindGate });
+    await openThread(user, "Gemini docs pass");
+    await user.click(await chip("Gemini CLI · Gemini B"));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: /Move “Gemini docs pass” here/ }));
+    await waitFor(() => expect(calls("thread_rebind_account")).toBe(1));
+    const target = await chip("Gemini CLI · Gemini B");
+    expect(target).toHaveAttribute("aria-busy", "true");
+    expect(target).toHaveAttribute("data-busy", "true");
+    expect(target).toHaveAccessibleName(/moving a thread here$/);
+    // Not optimistic: the open thread still belongs to its old account until the answer lands.
+    expect(await chip("Gemini CLI · Personal")).toHaveAttribute("data-current", "true");
+    release();
+    expect(await screen.findByText("Moved “Gemini docs pass” to Gemini B (Gemini CLI)")).toBeInTheDocument();
+    await waitFor(async () => expect(await chip("Gemini CLI · Gemini B")).not.toHaveAttribute("aria-busy"));
   });
 
   it("says why a chip can't take the open thread and offers nothing to click", async () => {

@@ -643,7 +643,7 @@ pub fn provider_pane_resize(
         .map_err(provider_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn provider_pane_info(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,

@@ -381,7 +381,7 @@ fn workspace(core: &Core, workspace_id: &str) -> Result<Workspace, KalError> {
 
 /// Shows a workspace's folder in the OS file manager. The WebView names the workspace by id;
 /// its folder is resolved natively.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_reveal(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,

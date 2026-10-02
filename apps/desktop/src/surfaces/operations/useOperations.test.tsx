@@ -98,4 +98,49 @@ describe("useOperations", () => {
     await act(async () => resolveOld(snapshot(1)));
     expect(result.current.snapshot?.revision).toBe(3);
   });
+
+  it("never shows a background poll as refreshing; a manual refresh does", async () => {
+    let resolve!: (value: OperationsSnapshot) => void;
+    const read = vi.fn(
+      () =>
+        new Promise<OperationsSnapshot>((done) => {
+          resolve = done;
+        }),
+    );
+    const client = api(read);
+    const { result } = renderHook(() => useOperations(client));
+    expect(result.current.refreshing).toBe(false);
+    await act(async () => resolve(snapshot(1)));
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(result.current.refreshing).toBe(false);
+
+    // A manual refresh joining the poll in flight shows until that answer lands.
+    act(() => void result.current.refresh());
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(result.current.refreshing).toBe(true);
+    await act(async () => resolve(snapshot(2)));
+    expect(result.current.refreshing).toBe(false);
+    expect(result.current.snapshot?.revision).toBe(2);
+  });
+
+  it("keeps an unchanged snapshot while the observation time moves on", async () => {
+    let observedAt = "2026-09-30T12:00:01Z";
+    const read = vi.fn(async () => ({ ...snapshot(1), observedAt }));
+    const client = api(read);
+    const { result } = renderHook(() => useOperations(client));
+    await act(async () => Promise.resolve());
+    const first = result.current.snapshot;
+    expect(result.current.observedAt).toBe("2026-09-30T12:00:01Z");
+
+    observedAt = "2026-09-30T12:00:04Z";
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(result.current.snapshot).toBe(first);
+    expect(result.current.observedAt).toBe("2026-09-30T12:00:04Z");
+
+    read.mockResolvedValue({ ...snapshot(1), paused: false, observedAt: "2026-09-30T12:00:07Z" });
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(result.current.snapshot).not.toBe(first);
+    expect(result.current.snapshot?.paused).toBe(false);
+  });
 });

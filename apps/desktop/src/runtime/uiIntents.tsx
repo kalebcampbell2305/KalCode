@@ -169,17 +169,19 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
           let isPane = false;
           if (panesOn) {
             try {
-              const thread = await client.getThread(target.threadId);
-              if (!isCurrent()) return;
-              workspaceId = thread.workspaceId;
-              isPane =
-                thread.runtimeKind === "interactive_pty" ||
-                thread.terminalId !== null ||
-                (await client.transport
+              // The thread read and the pane probe run together (one round trip, not two); the
+              // probe only decides when the thread itself doesn't already say it is a pane.
+              const [thread, probed] = await Promise.all([
+                client.getThread(target.threadId),
+                client.transport
                   .invoke("provider_pane_info", { threadId: target.threadId })
                   // `null`: not a provider-pane thread (native answers None for headless threads).
                   .then((info) => info !== null && info !== undefined)
-                  .catch(() => false));
+                  .catch(() => false),
+              ]);
+              if (!isCurrent()) return;
+              workspaceId = thread.workspaceId;
+              isPane = thread.runtimeKind === "interactive_pty" || thread.terminalId !== null || probed;
             } catch {
               isPane = false;
             }

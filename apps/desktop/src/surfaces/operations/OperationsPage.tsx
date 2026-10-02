@@ -338,7 +338,8 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
       try {
         await action();
         if (success) toast.show({ tone: "success", title: success });
-        await state.refresh();
+        // The action has landed: release the controls now; the fresh snapshot follows.
+        void state.refresh();
         return true;
       } catch (error) {
         toast.show({
@@ -457,7 +458,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
         <span className={failed > 0 ? styles.failedMetric : undefined}>
           <strong>{failed}</strong> failed
         </span>
-        <span className={styles.observed}>Observed {timeLabel(snapshot.observedAt)}</span>
+        <span className={styles.observed}>Observed {timeLabel(state.observedAt ?? snapshot.observedAt)}</span>
       </section>
 
       {state.error ? (
@@ -555,7 +556,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           snapshot={snapshot}
           busy={busy}
           mutate={mutate}
-          refreshKey={`${snapshot.revision}:${snapshot.observedAt}`}
+          refreshKey={`${snapshot.revision}:${state.observedAt ?? snapshot.observedAt}`}
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
