@@ -78,7 +78,8 @@ describe("buildEntitlement", () => {
     });
     expect(parseEntitlement(doc).ok).toBe(true);
     expect(hasFeature(doc, "anythingAddedLater")).toBe(true);
-    expect(limitFor(doc, "concurrentThreads")).toBeNull();
+    expect(limitFor(doc, "parallelAgents")).toBeNull();
+    expect(limitFor(doc, "kalvoiceRequestsPerMonth")).toBeNull();
   });
 
   it("issues the catalog grants for paid and free tiers", () => {
@@ -88,7 +89,9 @@ describe("buildEntitlement", () => {
       NOW,
       "k1",
     );
-    expect(limitFor(max2x, "kalvoiceRequestsPerMonth")).toBe(10_000);
+    expect(limitFor(max2x, "kalvoiceRequestsPerMonth")).toBe(1_000);
+    expect(limitFor(max2x, "parallelAgents")).toBeNull();
+    expect(limitFor(max2x, "openTerminals")).toBeNull();
     expect(hasFeature(max2x, "advancedMissions")).toBe(true);
     const max = buildEntitlement(
       ACCOUNT,
@@ -97,11 +100,32 @@ describe("buildEntitlement", () => {
       "k1",
     );
     expect(max.unrestricted).toBe(false);
-    expect(limitFor(max, "concurrentThreads")).toBe(20);
+    expect(max.limits).toEqual({
+      kalvoiceRequestsPerMonth: 500,
+      openTerminals: 18,
+      parallelAgents: 10,
+      workspaces: null,
+      providerAccounts: 8,
+    });
     expect(hasFeature(max, "advancedMissions")).toBe(true);
     const free = buildEntitlement(ACCOUNT, { tier: "free", grantExpiresAt: null, billingAnchor: null }, NOW, "k1");
     expect(free.features).toEqual([]);
-    expect(limitFor(free, "concurrentThreads")).toBe(2);
+    expect(free.limits).toEqual({
+      kalvoiceRequestsPerMonth: 25,
+      openTerminals: 4,
+      parallelAgents: 1,
+      workspaces: 2,
+      providerAccounts: 2,
+    });
+    expect(limitFor(free, "concurrentThreads")).toBe(0);
+    const pro = buildEntitlement(
+      ACCOUNT,
+      { tier: "pro", grantExpiresAt: "2027-01-01T00:00:00.000Z", billingAnchor: GRANTED },
+      NOW,
+      "k1",
+    );
+    expect(limitFor(pro, "kalvoiceRequestsPerMonth")).toBe(150);
+    expect(limitFor(pro, "parallelAgents")).toBe(4);
   });
 
   it("does not outlive the paid period it reflects", () => {

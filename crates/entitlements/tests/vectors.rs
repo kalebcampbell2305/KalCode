@@ -241,7 +241,7 @@ fn effective_entitlement_applies_owner_only_for_the_signed_in_account() {
         effective.status,
         EntitlementStatus::Rejected(VerifyError::Expired)
     );
-    assert_eq!(effective.limit("concurrentThreads"), Limit::AtMost(2));
+    assert_eq!(effective.limit("parallelAgents"), Limit::AtMost(1));
 
     // Production builds do not trust the test key.
     let production = kalcode_entitlements::effective_entitlement(Some(&mine), at(owner.now));
@@ -349,32 +349,32 @@ fn kalvoice_allowance_decisions_offline() {
         .expect("account")
         .to_owned();
 
-    // Pro: 412 used of 1,500 per the signed receipt.
+    // Pro: 41 used of 150 per the signed receipt.
     let pro = effective("pro", &account);
     let pro_receipt = receipt("pro-receipt");
     assert_eq!(
         pro.kalvoice_decision(Some(&pro_receipt), 0),
         KalVoiceDecision::Allowed {
-            remaining: Some(1500 - 412 - 1)
+            remaining: Some(150 - 41 - 1)
         }
     );
     assert_eq!(
-        pro.kalvoice_decision(Some(&pro_receipt), 1500 - 412 - 1),
+        pro.kalvoice_decision(Some(&pro_receipt), 150 - 41 - 1),
         KalVoiceDecision::Allowed { remaining: Some(0) }
     );
     assert_eq!(
-        pro.kalvoice_decision(Some(&pro_receipt), 1500 - 412),
+        pro.kalvoice_decision(Some(&pro_receipt), 150 - 41),
         KalVoiceDecision::Denied {
             resets_at: Some("2026-10-10T08:00:00.000Z".into())
         }
     );
     // Without a receipt the provisional local count is checked against the plan allowance.
     assert_eq!(
-        pro.kalvoice_decision(None, 1499),
+        pro.kalvoice_decision(None, 149),
         KalVoiceDecision::Allowed { remaining: Some(0) }
     );
     assert_eq!(
-        pro.kalvoice_decision(None, 1500),
+        pro.kalvoice_decision(None, 150),
         KalVoiceDecision::Denied { resets_at: None }
     );
 
@@ -392,17 +392,17 @@ fn kalvoice_allowance_decisions_offline() {
         );
     }
 
-    // Free fallback (no valid document): 75 per cycle, exhausted receipts are not trusted
+    // Free fallback (no valid document): 25 per cycle, exhausted receipts are not trusted
     // without a verified account, so only the local count applies.
     let free = verifier.effective_entitlement(None, at(v.cases[0].now));
     assert_eq!(
         free.kalvoice_decision(Some(&exhausted), 0),
         KalVoiceDecision::Allowed {
-            remaining: Some(74)
+            remaining: Some(24)
         }
     );
     assert_eq!(
-        free.kalvoice_decision(None, 75),
+        free.kalvoice_decision(None, 25),
         KalVoiceDecision::Denied { resets_at: None }
     );
     let signed_free = effective("free", &account);
@@ -419,7 +419,7 @@ fn kalvoice_allowance_decisions_offline() {
     assert_eq!(
         pro.kalvoice_decision(Some(&foreign), 0),
         KalVoiceDecision::Allowed {
-            remaining: Some(1499)
+            remaining: Some(149)
         }
     );
 }

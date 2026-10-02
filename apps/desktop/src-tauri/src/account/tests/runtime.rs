@@ -454,9 +454,9 @@ fn verified_owner_usage_survives_windows_storage_and_offline_restart() {
 fn kalvoice_paid_owner_and_empty_offline_authority_use_signed_limits_and_exact_cycle() {
     use kalcode_kalvoice::accounting::RequestAccounting;
     for (tier, receipt, allowance, used) in [
-        ("pro", Some("pro-receipt"), Some(1500), 412),
+        ("pro", Some("pro-receipt"), Some(150), 41),
         ("owner", Some("owner-receipt"), None, 12345),
-        ("free", Some("free-receipt-exhausted"), Some(75), 75),
+        ("free", Some("free-receipt-exhausted"), Some(25), 25),
     ] {
         let api = Arc::new(FakeApi::default());
         let account = metering_account(api.clone(), tier, receipt, true);
