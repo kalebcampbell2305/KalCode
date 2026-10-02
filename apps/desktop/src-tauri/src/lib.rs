@@ -462,7 +462,7 @@ fn drain_on_exit_event(
     }
 }
 
-/// A staged same-version build installs on this exit only after a proven clean drain of the
+/// A staged update installs on this exit only after a proven clean drain of the
 /// whole runtime, never when the updater already owns the exit (an install or restore the user
 /// chose), and never on a restart.
 fn installs_staged_update_on_exit(

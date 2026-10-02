@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use kalcode_updater::{
     ArtifactFormat, Candidate, FeedMetadata, UpdateChannel, UpdateError, UpdateMachine,
-    UpdatePhase, UpdateTarget, same_public_build, validate_candidate,
+    UpdatePhase, UpdateTarget, installs_when_closed, same_public_build, validate_candidate,
     validate_candidate_for_target, validate_retained_candidate, verify_download,
 };
 use serde_json::json;
@@ -262,7 +262,29 @@ fn build_numbers_order_numerically_after_the_plain_public_version() {
 }
 
 #[test]
-fn only_a_build_of_the_running_public_version_installs_when_kalcode_closes() {
+fn every_newer_release_installs_when_kalcode_closes_including_a_new_public_version() {
+    for (current, next) in [
+        ("0.1.8", "0.1.8+1"),
+        ("0.1.8+5", "0.1.8+6"),
+        ("0.1.8+944", "0.1.9+1050"),
+        ("0.1.8+5", "0.1.9"),
+        ("0.1.8", "0.2.0+1"),
+        ("v0.1.8+944", "0.1.9+1050"),
+    ] {
+        assert!(installs_when_closed(current, next), "{current} -> {next}");
+    }
+    for (current, next) in [
+        ("0.1.8+6", "0.1.8+6"),
+        ("0.1.9+1050", "0.1.8+944"),
+        ("not-a-version", "0.1.9+1"),
+        ("0.1.8", "not-a-version"),
+    ] {
+        assert!(!installs_when_closed(current, next), "{current} -> {next}");
+    }
+}
+
+#[test]
+fn only_a_build_of_the_running_public_version_is_labelled_a_build() {
     for (current, next) in [
         ("0.1.8", "0.1.8+1"),
         ("0.1.8+5", "0.1.8+6"),
@@ -272,7 +294,7 @@ fn only_a_build_of_the_running_public_version_installs_when_kalcode_closes() {
     ] {
         assert!(same_public_build(current, next), "{current} -> {next}");
     }
-    // A new public version (or a build without a plain build number) keeps the prompt.
+    // A new public version (or a build without a plain build number) is labelled a version.
     for (current, next) in [
         ("0.1.8+5", "0.1.9"),
         ("0.1.8+5", "0.1.9+6"),

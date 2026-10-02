@@ -72,6 +72,7 @@ describe("UpdateReadyNotice", () => {
   it.each([
     ["0.1.8", "0.1.8+780"],
     ["0.1.8+779", "0.1.8+780"],
+    ["0.1.8+944", "0.1.9+1050"],
   ])("never announces a build staged to install when KalCode closes (%s to %s)", async (current, next) => {
     const client = fakeClient(async () => ({
       ...ready,
@@ -97,7 +98,7 @@ describe("UpdateReadyNotice", () => {
     await waitFor(() => expect(client.updaterInstall).toHaveBeenCalledOnce());
   });
 
-  it("still announces a new public version, with its restart prompt", async () => {
+  it("offers a new public version whose silent install failed through the restart prompt", async () => {
     const client = fakeClient(async () => ({ ...ready, currentVersion: "0.1.8+780", availableVersion: "0.1.9+801" }));
     renderNotice(client);
     expect(await findNotice()).toHaveTextContent("KalCode 0.1.9 is ready to install.");

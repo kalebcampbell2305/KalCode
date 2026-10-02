@@ -1127,8 +1127,8 @@ pub struct UpdateStatus {
 
 /// Whether `next` is an internal build of `current`'s public version (`X.Y.Z` or `X.Y.Z+N` to
 /// `X.Y.Z+M`): the same major, minor, patch and pre-release, and a plain numeric build number on
-/// `next`. Callers have already proved `next` is newer. Such builds install silently when KalCode
-/// closes; any other update is a new public version and keeps the in-app prompt. Mirrors
+/// `next`. Callers have already proved `next` is newer. Only labels the update ("a new 0.1.8
+/// build"); whether it installs when KalCode closes is `installs_when_closed`. Mirrors
 /// `sameVersionBuild` in the desktop UI.
 #[must_use]
 pub fn same_public_build(current: &str, next: &str) -> bool {
@@ -1143,6 +1143,20 @@ pub fn same_public_build(current: &str, next: &str) -> bool {
         && (1..=16).contains(&build.len())
         && !build.starts_with('0')
         && build.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Whether the verified update `next` installs, without a prompt, when KalCode closes. Every
+/// newer stable release does, a new public version (0.1.8 to 0.1.9) as well as a newer build of
+/// the running one: users get updates by closing and reopening KalCode. Callers have already
+/// proved `next` is newer and verified it. Installing still keeps every safety of the exit
+/// install (journal, the rollback floor raised before a migration, the macOS launch check), and a
+/// build whose silent install failed falls back to the restart prompt.
+#[must_use]
+pub fn installs_when_closed(current: &str, next: &str) -> bool {
+    matches!(
+        (parse_version(current), parse_version(next)),
+        (Ok(current), Ok(next)) if next > current
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
