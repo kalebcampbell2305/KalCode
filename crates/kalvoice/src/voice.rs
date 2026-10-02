@@ -68,6 +68,24 @@ pub enum VoiceError {
     Capture(#[from] CaptureError),
 }
 
+/// Releases a still-pending reservation when `begin_reserved_at` unwinds.
+struct SettleStartOnPanic<'a> {
+    active: &'a Mutex<VoiceState>,
+    id: String,
+}
+
+impl Drop for SettleStartOnPanic<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        if matches!(&*active, VoiceState::Starting { id, .. } if id == &self.id) {
+            *active = VoiceState::Idle;
+        }
+    }
+}
+
 /// Opaque ownership of the one pending microphone start. Desktop push-to-talk reserves this
 /// synchronously before spawning its worker, so only that exact source can cancel the start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +267,12 @@ impl VoiceController {
         pressed: Instant,
     ) -> Result<String, VoiceError> {
         let id = start.id;
+        // A panic in model preparation or the device open (debug builds unwind) must not leave the
+        // single capture lane reserved forever; every normal path settles the reservation itself.
+        let _settle_on_panic = SettleStartOnPanic {
+            active: &self.active,
+            id: id.clone(),
+        };
         if !self.start_is_current(&id) {
             return Err(VoiceError::NotListening);
         }
@@ -1030,6 +1054,46 @@ mod tests {
             0,
             "a cancelled preparation must not open the microphone"
         );
+    }
+
+    struct PanickingPrepareSource;
+
+    impl RecognizerSource for PanickingPrepareSource {
+        fn ready(&self) -> Result<(), SttError> {
+            Ok(())
+        }
+
+        fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            unreachable!("the panicking source overrides prepare")
+        }
+
+        fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            panic!("recognizer preparation panicked")
+        }
+    }
+
+    #[test]
+    fn a_panicking_start_releases_the_capture_lane() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (core, audio, _) = setup(dir.path(), Vec::new(), None, Ok(()), Ok(String::new()));
+        let voice = Arc::new(VoiceController::new(
+            core,
+            audio.clone(),
+            Arc::new(PanickingPrepareSource),
+        ));
+        let begin_voice = voice.clone();
+        assert!(
+            thread::spawn(move || begin_voice.begin(KalVoiceMode::Talk))
+                .join()
+                .is_err(),
+            "the start panicked"
+        );
+        assert!(
+            !voice.busy(),
+            "push-to-talk must not stay dead after a panic"
+        );
+        assert!(voice.reserve_start().is_ok());
+        assert_eq!(audio.starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]

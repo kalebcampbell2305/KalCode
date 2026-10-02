@@ -1050,6 +1050,36 @@ mod tests {
     }
 
     #[test]
+    fn a_sign_out_reported_by_both_provider_events_is_spoken_once() {
+        let provider_id = ProviderId::new(ProviderId::CODEX);
+        let disconnected = event(
+            "provider-disconnected",
+            42,
+            EventPayload::ProviderDisconnected {
+                provider_id: provider_id.clone(),
+                account_label: None,
+            },
+        );
+        let signed_out = event(
+            "provider-health-signed-out",
+            43,
+            EventPayload::ProviderHealthChanged {
+                provider_id,
+                from: HealthState::Healthy,
+                to: HealthState::Unavailable,
+                reason: "signed_out".into(),
+            },
+        );
+        let mut policy = Policy::default();
+        let now = Instant::now();
+        assert!(policy.event(&disconnected, &Names, now).is_some());
+        assert!(
+            policy.event(&signed_out, &Names, now).is_none(),
+            "the auth topic dedupes the same provider across both events"
+        );
+    }
+
+    #[test]
     fn delivery_requires_the_preference_and_stays_silent_during_microphone_use() {
         assert!(delivery_allowed(true, true, false, false));
         assert!(!delivery_allowed(false, true, false, false));

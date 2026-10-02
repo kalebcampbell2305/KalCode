@@ -1549,8 +1549,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         }
       }
       // Native can still be opening the microphone while renderer state truthfully remains Ready.
-      // This is a no-op when idle and intentionally leaves dialog Escape and typed requests alone.
-      void client.kalvoiceListenCancel().catch(() => undefined);
+      // This is a no-op when idle and intentionally leaves dialog Escape and typed requests alone;
+      // a spoken reply keeps playing unless a pending start or session was actually cancelled.
+      void client.kalvoiceListenCancel(undefined, { keepSpeech: true }).catch(() => undefined);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);

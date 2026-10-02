@@ -1772,6 +1772,20 @@ fn abandon_ptt_start(runtime: &KalVoiceRuntime, start: PttStart) {
     fail_ptt_start(runtime, start);
 }
 
+/// Releases the source reservation if the start worker unwinds, so push-to-talk keeps working.
+struct SettlePttStartOnPanic {
+    runtime: Arc<KalVoiceRuntime>,
+    start: PttStart,
+}
+
+impl Drop for SettlePttStartOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            abandon_ptt_start(&self.runtime, self.start.clone());
+        }
+    }
+}
+
 fn spawn_ptt_start(runtime: Arc<KalVoiceRuntime>, start: PttStart, pressed: Instant) {
     let Some(task) = runtime.background.start() else {
         abandon_ptt_start(&runtime, start);
@@ -1783,6 +1797,10 @@ fn spawn_ptt_start(runtime: Arc<KalVoiceRuntime>, start: PttStart, pressed: Inst
         .name("kalvoice-ptt-start".into())
         .spawn(move || {
             let _task = task;
+            let _settle = SettlePttStartOnPanic {
+                runtime: worker_runtime.clone(),
+                start: worker_start.clone(),
+            };
             run_ptt_start(&worker_runtime, worker_start, pressed);
         })
         .is_err()
@@ -2893,12 +2911,20 @@ pub fn kalvoice_listen_stop(
     }
 }
 
+/// Whether a cancel also stops a spoken reply. The renderer's background Escape (`keep_speech`,
+/// sent when KalVoice is not visibly listening, e.g. Escape closing a menu) stops speech only if
+/// it actually cancelled a pending start or a session; an explicit cancel always stops it.
+fn cancel_stops_speech(session_id: Option<&str>, keep_speech: bool, cancelled: bool) -> bool {
+    cancelled || (session_id.is_none() && !keep_speech)
+}
+
 /// Escape: discards the recording (if any) and stops a spoken reply.
 #[tauri::command(async)]
 pub fn kalvoice_listen_cancel(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
     session_id: Option<String>,
+    keep_speech: Option<bool>,
 ) -> Result<bool, IpcError> {
     _runtime_access.revalidate()?;
     let runtime = state.runtime()?;
@@ -2908,8 +2934,11 @@ pub fn kalvoice_listen_cancel(
         .unwrap_or_else(PoisonError::into_inner);
     let listening = runtime.voice.listening();
     let cancelled = runtime.voice.cancel(session_id.as_deref());
-    if (session_id.is_none() || cancelled)
-        && let Some(speech) = runtime.speech.get()
+    if cancel_stops_speech(
+        session_id.as_deref(),
+        keep_speech.unwrap_or(false),
+        cancelled,
+    ) && let Some(speech) = runtime.speech.get()
     {
         speech.stop();
     }
@@ -3411,6 +3440,19 @@ mod tests {
         );
         assert_eq!(result, Err(VoiceError::NotListening));
         assert!(!voice.busy());
+    }
+
+    #[test]
+    fn background_escape_keeps_speech_unless_it_cancelled_a_capture() {
+        // Escape closing a menu while KalVoice reads a callback aloud: nothing to cancel.
+        assert!(!cancel_stops_speech(None, true, false));
+        // The same Escape during a pending start (or a session the renderer hasn't seen yet).
+        assert!(cancel_stops_speech(None, true, true));
+        // The explicit cancel while listening/transcribing/routing always stops speech.
+        assert!(cancel_stops_speech(None, false, false));
+        assert!(cancel_stops_speech(Some("s1"), false, true));
+        // A stale targeted cancel leaves speech alone.
+        assert!(!cancel_stops_speech(Some("s1"), false, false));
     }
 
     #[test]

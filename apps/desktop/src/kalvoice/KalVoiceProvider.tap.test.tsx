@@ -95,6 +95,9 @@ it("Escape cancels native startup without stealing Escape and fences a late orb 
   act(() => window.dispatchEvent(keyboardEscape));
   expect(keyboardEscape.defaultPrevented).toBe(false);
   expect(mocks.client.kalvoiceListenCancel).toHaveBeenCalledOnce();
+  // Escape closing a menu while a callback is spoken must not cut the speech off: the background
+  // cancel asks native to keep speech unless it actually cancelled a capture.
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenLastCalledWith(undefined, { keepSpeech: true });
 
   act(() => view.getByRole("textbox", { name: "Dictation target" }).focus());
   let started: Promise<void> = Promise.resolve();
@@ -105,6 +108,7 @@ it("Escape cancels native startup without stealing Escape and fences a late orb 
   act(() => window.dispatchEvent(orbEscape));
   expect(orbEscape.defaultPrevented).toBe(false);
   expect(mocks.client.kalvoiceListenCancel).toHaveBeenCalledTimes(2);
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenLastCalledWith(undefined, { keepSpeech: true });
   await act(async () => {
     await mocks.voice?.stopListening();
   });
