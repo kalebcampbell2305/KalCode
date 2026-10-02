@@ -11,12 +11,10 @@ const sha = "a".repeat(40);
 test("a first warm pass adds the persistent worktree at the commit, installs from the lockfile, then warms", () => {
   const { worktree, steps } = warmPlan({ repo, commit: sha, worktreeExists: false });
   assert.equal(worktree, join(repo, WARM_WORKTREE));
-  assert.deepEqual(steps.map((s) => `${s.cmd === process.execPath ? "node" : s.cmd} ${s.args[0]}`), [
-    "git fetch",
-    "git worktree",
-    "pnpm install",
-    `node ${join(worktree, "tooling", "release", "warm-windows.mjs")}`,
-  ]);
+  assert.deepEqual(
+    steps.map((s) => `${s.cmd === process.execPath ? "node" : s.cmd} ${s.args[0]}`),
+    ["git fetch", "git worktree", "pnpm install", `node ${join(worktree, "tooling", "release", "warm-windows.mjs")}`],
+  );
   assert.ok(steps[2].args.includes("--frozen-lockfile"));
 });
 
@@ -33,7 +31,7 @@ test("refuses a relative repo or a non-commit", () => {
 
 test("the warm compile mirrors the signed build's invocation and leaves no guardian behind", () => {
   const warm = readFileSync(new URL("./warm-windows.mjs", import.meta.url), "utf8");
-  assert.match(warm, /"tauri", "build", "--bundles", "nsis", "--features", "kalvoice-whisper", "--no-sign"/);
+  assert.match(warm, /"tauri",\s*"build",\s*"--bundles",\s*"nsis",\s*"--features",\s*"kalvoice-whisper",\s*"--no-sign"/);
   assert.match(warm, /releaseVersionOverlay\(releaseVersion\(\)\)/);
   assert.equal((warm.match(/clearStaleGuardian\(TARGET_DIR\)/g) ?? []).length, 2);
 });
