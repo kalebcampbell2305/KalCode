@@ -345,6 +345,7 @@ export type { ThreadRuntimeKind } from "./ThreadRuntimeKind.ts";
 export type { ThreadScope } from "./ThreadScope.ts";
 export type { ThreadStatus } from "./ThreadStatus.ts";
 export type { ThreadSummary } from "./ThreadSummary.ts";
+export type { ThreadWorktreeState } from "./ThreadWorktreeState.ts";
 export type { ThreadsStatusSummary } from "./ThreadsStatusSummary.ts";
 export type { ToolCallRecord } from "./ToolCallRecord.ts";
 export type { ToolCallStatus } from "./ToolCallStatus.ts";

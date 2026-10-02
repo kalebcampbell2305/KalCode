@@ -31,6 +31,7 @@ function thread(accountLabel: string | null): ThreadSummary {
     permissionProfileId: null,
     runtimeKind: null,
     terminalId: null,
+    worktreeId: null,
   };
 }
 

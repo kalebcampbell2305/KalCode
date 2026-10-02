@@ -5,6 +5,7 @@ import {
   DISPLAY_STATUS_TONE,
   displayStatusOf,
   type ThreadSummary,
+  type ThreadWorktreeState,
 } from "@kalcode/protocol";
 import {
   Badge,
@@ -17,7 +18,18 @@ import {
   ProviderMark,
   StatusChip,
 } from "@kalcode/ui/components";
-import { Archive, CircleCheck, FileDiff, GitBranch, Hourglass, MoreHorizontal, ShieldAlert } from "lucide-react";
+import {
+  Archive,
+  ArrowUp,
+  CircleCheck,
+  FileDiff,
+  FolderGit2,
+  GitBranch,
+  GitMerge,
+  Hourglass,
+  MoreHorizontal,
+  ShieldAlert,
+} from "lucide-react";
 import { type MouseEvent, memo, useEffect, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { MODE_LABELS } from "../permissions/labels.ts";
@@ -25,6 +37,7 @@ import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
 import { formatElapsed } from "./data/format.ts";
+import type { MergeReadiness } from "./fleet/fleetModel.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
 
 export interface AgentCardProps {
@@ -46,6 +59,12 @@ export interface AgentCardProps {
    */
   archived?: boolean;
   headingLevel?: 3 | 4;
+  /** Agent Fleet call sign, e.g. "Claude A" (the provider's name when absent). */
+  handle?: string;
+  /** Git facts of the agent's own worktree, when it has one. */
+  worktree?: ThreadWorktreeState;
+  /** Whether the agent's worktree is ready to merge, and why not. */
+  readiness?: MergeReadiness;
 }
 
 /** "Started 18 min ago" from the thread's real creation time; null when it can't be read. */
@@ -88,6 +107,9 @@ export const AgentCard = memo(function AgentCard({
   onViewChanges,
   archived = false,
   headingLevel = 3,
+  handle,
+  worktree,
+  readiness,
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
   // The runtime holds this thread's launch for system resources (its `waiting_for_resources`
@@ -117,10 +139,11 @@ export const AgentCard = memo(function AgentCard({
     ? []
     : (availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
   const request = archived ? undefined : approvals[0];
-  const done = !archived && display.status === "done";
+  const ready = !archived && readiness?.ready === true;
+  const done = !archived && !ready && display.status === "done";
   const actionNeeded = !archived && display.status === "permission_required";
   const failed = display.status === "failed";
-  const canViewChanges = done && onViewChanges !== undefined && (thread.filesChanged ?? 0) > 0;
+  const canViewChanges = (done || ready) && onViewChanges !== undefined && (thread.filesChanged ?? 0) > 0;
   const started = startedText(thread.createdAt, now);
 
   const onCardClick = (event: MouseEvent<HTMLElement>) => {
@@ -139,6 +162,7 @@ export const AgentCard = memo(function AgentCard({
       data-status={display.status}
       data-changed={changed || undefined}
       data-archived={archived || undefined}
+      data-ready={ready || undefined}
       aria-busy={pendingAction ? true : undefined}
       onClick={onCardClick}
     >
@@ -152,6 +176,14 @@ export const AgentCard = memo(function AgentCard({
               {formatRelative(thread.archivedAt, now)}
             </time>
           ) : null}
+        </p>
+      ) : ready && readiness?.ready ? (
+        <p className={styles.band} data-kind="ready">
+          <GitMerge aria-hidden="true" className={styles.bandGlyph} />
+          <span>Ready to merge</span>
+          <span className={styles.bandDetail}>
+            {readiness.ahead} {readiness.ahead === 1 ? "commit" : "commits"} ahead of {readiness.base ?? "base"}
+          </span>
         </p>
       ) : done ? (
         <p className={styles.band} data-kind="done">
@@ -169,13 +201,13 @@ export const AgentCard = memo(function AgentCard({
       <header className={styles.head}>
         <ProviderMark
           provider={thread.providerId}
-          name={thread.providerName}
+          name={handle ?? thread.providerName}
           detail={thread.model ?? undefined}
           size="sm"
           tile
           className={styles.provider}
         />
-        {done || actionNeeded ? null : (
+        {done || actionNeeded || ready ? null : (
           <StatusChip
             status={display.status}
             qualifier={resourceWait ? null : display.qualifier}
@@ -209,10 +241,21 @@ export const AgentCard = memo(function AgentCard({
           </span>
         ) : null}
         {thread.branch ? (
-          <span className={styles.branch}>
-            <GitBranch aria-hidden="true" className={styles.branchGlyph} />
-            <span className="visually-hidden">branch </span>
+          <span className={styles.branch} title={thread.worktreeId ? "Its own worktree and branch" : undefined}>
+            {thread.worktreeId ? (
+              <FolderGit2 aria-hidden="true" className={styles.branchGlyph} />
+            ) : (
+              <GitBranch aria-hidden="true" className={styles.branchGlyph} />
+            )}
+            <span className="visually-hidden">{thread.worktreeId ? "worktree branch " : "branch "}</span>
             {thread.branch}
+          </span>
+        ) : null}
+        {worktree?.ahead ? (
+          <span className={styles.ahead} title={`${worktree.ahead} commits ahead of ${worktree.baseBranch ?? "base"}`}>
+            <ArrowUp aria-hidden="true" />
+            <span className="visually-hidden">commits ahead </span>
+            {worktree.ahead}
           </span>
         ) : null}
       </p>
@@ -220,6 +263,14 @@ export const AgentCard = memo(function AgentCard({
       <p className={styles.activity} data-failed={failed || undefined} title={activityLine(thread)}>
         {activityLine(thread)}
       </p>
+
+      {/* A finished agent in its own worktree says what still stands between it and a merge. */}
+      {!archived && readiness && !readiness.ready && (display.status === "done" || display.status === "idle") ? (
+        <p className={styles.mergeNote}>
+          <GitMerge aria-hidden="true" />
+          <span>Not ready to merge: {readiness.reason}</span>
+        </p>
+      ) : null}
 
       {actionNeeded && request ? (
         <InlineApproval
@@ -242,7 +293,7 @@ export const AgentCard = memo(function AgentCard({
             Unarchive
           </Button>
         </div>
-      ) : done ? (
+      ) : done || ready ? (
         <div className={styles.followUps}>
           <Button size="sm" variant="secondary" onClick={() => onFocus(thread)}>
             Open

@@ -41,6 +41,7 @@ function thread(status: ThreadStatus, overrides: Partial<ThreadSummary> = {}): T
     permissionProfileId: null,
     runtimeKind: null,
     terminalId: null,
+    worktreeId: null,
     ...overrides,
   };
 }

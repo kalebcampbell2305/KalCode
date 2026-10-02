@@ -123,6 +123,7 @@
     "allow-thread-list",
     "allow-session-resolve",
     "allow-thread-get",
+    "allow-thread-worktree-states",
     "allow-thread-messages",
     "allow-thread-tool-calls",
     "allow-thread-options",

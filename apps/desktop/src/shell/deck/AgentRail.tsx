@@ -7,8 +7,9 @@ import type { ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
 import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useArchivedThreads, useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
+import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useThreadsIntent } from "../../surfaces/threads/intent.tsx";
 import { useNavigation } from "../navigation.tsx";
@@ -21,6 +22,16 @@ export function AgentRail() {
   const { state, reload } = useThreadSummaries();
   const now = useNow(30_000);
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
+  const archived = useArchivedThreads().state;
+  // The same call signs as the Fleet (archived agents keep their letters).
+  const handles = useMemo(
+    () =>
+      fleetHandles([
+        ...(state.status === "ready" ? state.data : []),
+        ...(archived.status === "ready" ? archived.data : []),
+      ]),
+    [state, archived],
+  );
 
   if (!agentsOpen) {
     return (
@@ -66,7 +77,7 @@ export function AgentRail() {
             </Button>
           </div>
         ) : sections ? (
-          <AgentList sections={sections} now={now} />
+          <AgentList sections={sections} now={now} handles={handles} />
         ) : (
           <p className={styles.quiet}>Agents aren't part of this build.</p>
         )}
@@ -100,7 +111,15 @@ function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: ()
   );
 }
 
-function AgentList({ sections, now }: { sections: AgentSections; now: number }) {
+function AgentList({
+  sections,
+  now,
+  handles,
+}: {
+  sections: AgentSections;
+  now: number;
+  handles: ReadonlyMap<string, string>;
+}) {
   const { navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
   const [showIdle, setShowIdle] = useState(false);
@@ -137,9 +156,9 @@ function AgentList({ sections, now }: { sections: AgentSections; now: number }) 
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} />
-      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} />
-      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} />
+      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} handles={handles} />
+      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} handles={handles} />
+      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
       {sections.idle.length > 0 ? (
         <section className={styles.group}>
           <button
@@ -156,13 +175,13 @@ function AgentList({ sections, now }: { sections: AgentSections; now: number }) 
           {showIdle ? (
             <ul id={idleId} className={styles.list}>
               {sections.idle.map((thread) => (
-                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} />
+                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} handle={handles.get(thread.id)} />
               ))}
             </ul>
           ) : null}
         </section>
       ) : null}
-      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} />
+      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} handles={handles} />
     </>
   );
 }
@@ -173,9 +192,10 @@ interface GroupProps {
   threads: ThreadSummary[];
   now: number;
   onOpen: (thread: ThreadSummary) => void;
+  handles: ReadonlyMap<string, string>;
 }
 
-function Group({ title, tone, threads, now, onOpen }: GroupProps) {
+function Group({ title, tone, threads, now, onOpen, handles }: GroupProps) {
   const headingId = useId();
   if (threads.length === 0) return null;
   return (
@@ -186,14 +206,24 @@ function Group({ title, tone, threads, now, onOpen }: GroupProps) {
       </h3>
       <ul className={styles.list}>
         {threads.map((thread) => (
-          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} />
+          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} handle={handles.get(thread.id)} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AgentRow({ thread, now, onOpen }: { thread: ThreadSummary; now: number; onOpen: (t: ThreadSummary) => void }) {
+function AgentRow({
+  thread,
+  now,
+  onOpen,
+  handle,
+}: {
+  thread: ThreadSummary;
+  now: number;
+  onOpen: (t: ThreadSummary) => void;
+  handle?: string;
+}) {
   const meta = STATUS_META[thread.status];
   const since = Date.parse(thread.lastActivityAt);
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
@@ -220,7 +250,7 @@ function AgentRow({ thread, now, onOpen }: { thread: ThreadSummary; now: number;
           </span>
           <span className={styles.rowDetail}>{detail}</span>
           <span className={styles.rowMeta}>
-            {thread.providerName} · {thread.workspaceName}
+            {handle ?? thread.providerName} · {thread.workspaceName}
             {thread.pendingApprovals > 0 && thread.status !== "waiting_for_permission" ? (
               <span className={styles.rowFlag}>
                 {thread.pendingApprovals} {thread.pendingApprovals === 1 ? "approval" : "approvals"}

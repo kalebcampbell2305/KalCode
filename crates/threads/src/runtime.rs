@@ -14,8 +14,9 @@
 //!   forwards them to a dispatcher thread that applies them to the owning thread.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, mpsc};
 use std::time::Instant;
 
 use kalcode_context::{
@@ -279,6 +280,31 @@ struct NewThread<'a> {
     effort: Option<&'a str>,
     permission_mode: PermissionMode,
     name: String,
+    /// Prepares the folder the session runs in instead of the workspace root (a thread's own
+    /// Git worktree). Runs after every other check, just before the thread is recorded.
+    cwd: Option<PrepareFolder<'a>>,
+}
+
+/// See [`NewThread::cwd`].
+type PrepareFolder<'a> = Box<dyn FnOnce() -> Result<PathBuf> + 'a>;
+
+/// The desktop's management of threads' own Git worktrees (Agent Fleet), which this crate can't
+/// do itself (no Git here).
+pub trait ThreadWorktrees: Send + Sync {
+    /// The isolated thread's worktree folder is gone: check its branch out into a fresh managed
+    /// worktree, bind that to the thread (`git_worktrees`) and return the folder the session runs
+    /// in (absolute, existing). An error means the thread can't run anywhere safe.
+    fn reattach(&self, thread_id: &str) -> Result<PathBuf>;
+    /// The thread was archived: best effort, free its worktree folder when it holds no
+    /// uncommitted work. The branch is kept, so resuming later re-attaches it.
+    fn release(&self, thread_id: &str);
+}
+
+fn thread_folder_unavailable() -> KalError {
+    KalError::validation(
+        "thread_folder_unavailable",
+        "This agent's worktree folder is gone and KalCode couldn't restore it from its branch.",
+    )
 }
 
 /// Normalizes an inert provider-native effort name before it reaches persistence. Individual
@@ -462,6 +488,8 @@ struct Inner {
     /// Caps how many agents may run at once; unset (tests, no account) imposes none.
     agent_limit: Mutex<Option<AgentLimitSource>>,
     self_ref: Weak<Inner>,
+    /// See [`ThreadRuntime::set_thread_worktrees`].
+    worktrees: OnceLock<Arc<dyn ThreadWorktrees>>,
 }
 
 /// The thread runtime. One per `Core`. Every method validates its input natively and is safe to
@@ -524,6 +552,7 @@ impl ThreadRuntime {
             shutting_down: AtomicBool::new(false),
             agent_limit: Mutex::new(None),
             self_ref: weak.clone(),
+            worktrees: OnceLock::new(),
         });
 
         let (decisions, receiver) = mpsc::channel::<(String, Resolution)>();
@@ -1088,7 +1117,7 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
-        self.create_reviewed_with_id(request, review_id, None)
+        self.create_reviewed_with_id(request, review_id, None, None)
     }
 
     /// Creates a reviewed Operations thread using the scheduler's durable operation id. The
@@ -1101,7 +1130,31 @@ impl ThreadRuntime {
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(operation_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(operation_id))
+        self.create_reviewed_with_id(request, review_id, Some(operation_id), None)
+    }
+
+    /// Creates a reviewed thread with a caller-chosen id whose session runs in `cwd` (an
+    /// existing absolute folder, the thread's own Git worktree) instead of the workspace root.
+    /// `prepare` creates that folder and records the worktree binding (`git_worktrees`, owner =
+    /// `thread_id`); it runs only after the prompt is admitted and the provider, model and
+    /// workspace are validated, so a request that would fail costs no checkout. The returned
+    /// summary carries the branch. Resume keeps the folder while the binding is active and the
+    /// folder exists, and otherwise re-attaches it ([`ThreadWorktrees::reattach`]).
+    pub fn create_reviewed_in(
+        &self,
+        thread_id: &str,
+        request: CreateThread,
+        review_id: Option<&str>,
+        prepare: impl FnOnce() -> Result<PathBuf>,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.create_reviewed_with_id(request, review_id, Some(thread_id), Some(Box::new(prepare)))
+    }
+
+    /// Lets the runtime re-attach and release threads' own worktrees. Set once; later calls are
+    /// ignored. Without it, an isolated thread whose folder is gone refuses to resume.
+    pub fn set_thread_worktrees(&self, worktrees: Arc<dyn ThreadWorktrees>) {
+        let _ = self.inner.worktrees.set(worktrees);
     }
 
     fn create_reviewed_with_id(
@@ -1109,6 +1162,7 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
         thread_id: Option<&str>,
+        cwd: Option<PrepareFolder<'_>>,
     ) -> Result<ThreadSummary> {
         let prompt = validate::prompt(&request.prompt)?;
         let target = create_prompt_target(&request)?;
@@ -1132,6 +1186,7 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
+                cwd,
             },
             Some(AdmittedPrompt {
                 text: prompt,
@@ -1158,6 +1213,7 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
+                cwd: None,
             },
             None,
             None,
@@ -1379,6 +1435,11 @@ impl ThreadRuntime {
     pub fn archive(&self, thread_id: &str) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         self.inner.archive(thread_id)?;
+        if let Some(hooks) = self.inner.worktrees.get()
+            && self.inner.row(thread_id)?.worktree_id.is_some()
+        {
+            hooks.release(thread_id);
+        }
         self.inner.summary(thread_id)
     }
 
@@ -2006,7 +2067,7 @@ impl Inner {
             pending_approvals: row.pending_approvals,
             unread_messages: row.unread_messages,
             files_changed: Some(row.files_changed),
-            branch: None,
+            branch: row.worktree_branch,
             error: row
                 .error_code
                 .zip(row.error_message)
@@ -2016,6 +2077,7 @@ impl Inner {
             permission_profile_id: row.permission_profile_id,
             runtime_kind: None,
             terminal_id: None,
+            worktree_id: row.worktree_id,
         }
     }
 
@@ -2100,9 +2162,21 @@ impl Inner {
             }
         }
         let workspace = self.workspaces.resolve(request.workspace_id)?;
-        let cwd = workspace.root.to_string_lossy().into_owned();
-
+        // The plan's agent cap is checked before the folder is prepared, so a refused agent
+        // leaves no worktree or branch behind.
         self.admit_agent()?;
+        let cwd = match request.cwd {
+            Some(prepare) => {
+                let cwd = prepare()?;
+                if !(cwd.is_absolute() && cwd.is_dir()) {
+                    return Err(thread_folder_unavailable());
+                }
+                cwd
+            }
+            None => workspace.root.clone(),
+        };
+        let cwd = cwd.to_string_lossy().into_owned();
+
         let id = thread_id.map(str::to_owned).unwrap_or_else(new_id);
         let now = now_rfc3339();
         let row = NewThreadRow {
@@ -3623,7 +3697,23 @@ impl Inner {
             .get(&row.provider_id)
             .ok_or_else(|| provider_unavailable(&row.provider_name))?;
         let workspace = self.workspaces.resolve(&row.workspace_id)?;
-        let cwd = workspace.root.to_string_lossy().into_owned();
+        // A thread with its own worktree never runs in the workspace folder: it keeps its folder
+        // while that exists, and otherwise gets it back from its branch, or doesn't start.
+        let cwd = if !row.isolated {
+            workspace.root.to_string_lossy().into_owned()
+        } else if row.worktree_id.is_some() && Path::new(&row.cwd).is_dir() {
+            row.cwd.clone()
+        } else {
+            let hooks = self.worktrees.get().ok_or_else(thread_folder_unavailable)?;
+            let cwd = hooks.reattach(thread_id).map_err(|error| {
+                tracing::warn!(event = "thread.worktree_reattach_failed", thread_id, error = %error.diagnostic());
+                thread_folder_unavailable()
+            })?;
+            if !(cwd.is_absolute() && cwd.is_dir()) {
+                return Err(thread_folder_unavailable());
+            }
+            cwd.to_string_lossy().into_owned()
+        };
         let capabilities = entry.provider.capabilities();
         let has_history = self
             .core

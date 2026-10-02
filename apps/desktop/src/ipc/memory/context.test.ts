@@ -35,6 +35,7 @@ function threadFixture(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
     permissionProfileId: null,
     runtimeKind: "headless",
     terminalId: null,
+    worktreeId: null,
     ...overrides,
   };
 }

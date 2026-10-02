@@ -66,6 +66,12 @@ impl Actor {
 /// Resolves a workspace id to its root folder. Implemented by the workspace runtime (Z1).
 pub trait WorkspaceRoots: Send + Sync {
     fn root(&self, workspace_id: &str) -> Option<PathBuf>;
+
+    /// The folder a thread's actions are contained in: its own Git worktree when it runs in one,
+    /// otherwise the workspace root.
+    fn thread_root(&self, workspace_id: &str, _thread_id: &str) -> Option<PathBuf> {
+        self.root(workspace_id)
+    }
 }
 
 /// The thread runtime's (Z3) storage of each thread's permission mode.
@@ -121,6 +127,58 @@ impl WorkspaceRoots for CoreWorkspaceRoots {
         let stored = PathBuf::from(&workspace.root_path);
         let root = kalcode_core::workspaces::canonical_folder(&stored).ok()?;
         (root == stored).then_some(root)
+    }
+
+    /// A thread with its own KalCode-managed worktree (`git_worktrees`, purpose `thread`, owned
+    /// by the thread) is contained in its stored folder inside its active worktree,
+    /// re-canonicalized like a workspace root. Fails closed: when the lookup fails, or the thread
+    /// has a worktree that isn't active, isn't in this workspace or doesn't resolve, there is no
+    /// root (everything is outside). Only a thread provably without a worktree uses the
+    /// workspace root.
+    fn thread_root(&self, workspace_id: &str, thread_id: &str) -> Option<PathBuf> {
+        if !is_valid_id(thread_id) {
+            return self.root(workspace_id);
+        }
+        let bound = self.core.read(|conn| {
+            use rusqlite::OptionalExtension as _;
+            let worktree: Option<(String, String, String)> = conn
+                .query_row(
+                    "SELECT path, status, workspace_id FROM git_worktrees
+                     WHERE purpose = 'thread' AND owner_ref = ?1
+                     ORDER BY (status = 'active') DESC, created_at DESC, id DESC LIMIT 1",
+                    [thread_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some(worktree) = worktree else {
+                return Ok(None);
+            };
+            let cwd: Option<String> = conn
+                .query_row(
+                    "SELECT cwd FROM threads WHERE id = ?1 AND workspace_id = ?2",
+                    [thread_id, workspace_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(Some((worktree, cwd)))
+        });
+        let ((path, status, worktree_workspace), cwd) = match bound {
+            Ok(None) => return self.root(workspace_id),
+            Ok(Some(bound)) => bound,
+            Err(error) => {
+                tracing::warn!(event = "permissions.thread_root_lookup_failed", error = %error.diagnostic());
+                return None;
+            }
+        };
+        if status != "active" || worktree_workspace != workspace_id {
+            return None;
+        }
+        let stored = PathBuf::from(cwd?);
+        let canonical =
+            |path: &std::path::Path| kalcode_core::workspaces::canonical_folder(path).ok();
+        let root = canonical(&stored)?;
+        let worktree = canonical(std::path::Path::new(&path))?;
+        (root == stored && root.starts_with(&worktree)).then_some(root)
     }
 }
 
@@ -484,6 +542,16 @@ impl PermissionService {
         Workspace::new(root.as_deref())
     }
 
+    /// The containment root for a thread's action: its own worktree when it runs in one.
+    fn thread_workspace(&self, workspace_id: &str, thread_id: &str) -> Workspace {
+        let root = if is_valid_id(workspace_id) {
+            self.workspaces.thread_root(workspace_id, thread_id)
+        } else {
+            None
+        };
+        Workspace::new(root.as_deref())
+    }
+
     fn profile_for(&self, thread_id: &str) -> Option<PermissionProfile> {
         let id = self.threads.custom_profile_id(thread_id).or_else(|| {
             self.core
@@ -514,7 +582,7 @@ impl PermissionService {
         action: &NormalizedAction,
         mode: PermissionMode,
     ) -> (Classification, PolicyDecision) {
-        let workspace = self.workspace(&action.workspace_id);
+        let workspace = self.thread_workspace(&action.workspace_id, &action.thread_id);
         let c = classify(&action.action, &workspace);
         let now_ms = self.clock.now_ms();
         let grants: Vec<Grant> = self

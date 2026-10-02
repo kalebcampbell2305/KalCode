@@ -128,6 +128,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "thread_list",
     "session_resolve",
     "thread_get",
+    // Agent Fleet: Git facts for threads in their own worktrees (read-only).
+    "thread_worktree_states",
     "thread_messages",
     "thread_tool_calls",
     "thread_options",

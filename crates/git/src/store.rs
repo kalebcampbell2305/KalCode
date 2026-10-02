@@ -121,6 +121,54 @@ pub fn list_worktrees(
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
+/// The active worktree a thread runs in (purpose `thread`, `owner_ref` = the thread id) and its
+/// native folder; the newest when there are several.
+pub fn active_thread_worktree(
+    conn: &Connection,
+    thread_id: &str,
+) -> Result<Option<(Worktree, std::path::PathBuf)>> {
+    check_id(thread_id)?;
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT {WORKTREE_COLUMNS}, path FROM git_worktrees
+                 WHERE purpose = 'thread' AND owner_ref = ?1 AND status = 'active'
+                 ORDER BY created_at DESC, id DESC LIMIT 1"
+            ),
+            [thread_id],
+            |row| {
+                let path: String = row.get(9)?;
+                Ok((row_to_worktree(row)?, std::path::PathBuf::from(path)))
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// A thread's own worktree whatever its status: the active one, else the newest (to re-attach
+/// its branch after the folder was freed or lost).
+pub fn latest_thread_worktree(
+    conn: &Connection,
+    thread_id: &str,
+) -> Result<Option<(Worktree, std::path::PathBuf)>> {
+    check_id(thread_id)?;
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT {WORKTREE_COLUMNS}, path FROM git_worktrees
+                 WHERE purpose = 'thread' AND owner_ref = ?1
+                 ORDER BY (status = 'active') DESC, created_at DESC, id DESC LIMIT 1"
+            ),
+            [thread_id],
+            |row| {
+                let path: String = row.get(9)?;
+                Ok((row_to_worktree(row)?, std::path::PathBuf::from(path)))
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
 pub fn set_worktree_status(
     conn: &Connection,
     id: &str,

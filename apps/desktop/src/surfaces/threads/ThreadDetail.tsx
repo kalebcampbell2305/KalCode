@@ -142,7 +142,7 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: T
   const problem = presentProblem(thread);
 
   return (
-    <article className={styles.detail} aria-labelledby="thread-title">
+    <article className={styles.detail} aria-labelledby="thread-title" data-thread-detail={thread.id}>
       <header className={styles.header}>
         <div className={styles.titleRow}>
           <ThreadTitle

@@ -21,7 +21,9 @@ mod context_commands;
 pub mod environment;
 mod files_commands;
 // Z6a: only the read-only `git_status`, `git_log` and `git_branches` are registered (Z7-W2's
-// folder surface); the worktree and checkpoint commands wait for v7 and the lead's wiring.
+// folder surface), plus Agent Fleet's read-only `thread_worktree_states`; the general worktree
+// and checkpoint commands wait for the lead's wiring (thread worktrees are created natively by
+// `thread_create` with `isolate`).
 mod doctor_commands;
 #[allow(dead_code)]
 mod git_commands;
@@ -856,6 +858,8 @@ pub fn run(removed_overrides: Vec<String>) {
                 // Z6a read-only (folder surface).
                 files_commands::files_list,
                 git_commands::git_status,
+                // Agent Fleet: Git facts for threads in their own worktrees (read-only).
+                git_commands::thread_worktree_states,
                 resource_commands::resource_report,
                 resource_commands::resource_set_mode,
                 resource_commands::resource_set_view_open,

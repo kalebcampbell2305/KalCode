@@ -156,6 +156,14 @@ impl RuntimeBundle {
         check!();
         bundle.git = Some(Arc::new(GitState::new(&state.paths.data_dir)));
         check!();
+        // Agent Fleet: threads with their own worktree re-attach and release it through Git.
+        if let (Some(runtime), Some(git), Some(core)) =
+            (threads.runtime_handle(), &bundle.git, state.core.clone())
+        {
+            runtime.set_thread_worktrees(Arc::new(
+                crate::thread_commands::DesktopThreadWorktrees::new(core, Arc::clone(&git.0)),
+            ));
+        }
         if let Some(git) = &bundle.git {
             bundle.utilities = Some(Arc::new(crate::utility_commands::UtilityState::start(
                 state,

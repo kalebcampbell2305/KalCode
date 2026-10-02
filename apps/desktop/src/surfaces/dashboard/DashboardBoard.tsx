@@ -11,6 +11,7 @@ import {
 } from "@kalcode/ui/components";
 import { ChevronDown, Search, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useProviderPanesEnabled } from "../code/panes/useProviderPanes.ts";
@@ -32,6 +33,9 @@ import {
   type ThreadGroup,
 } from "./data/board.ts";
 import { useArchivedThreads, useThreadSummaries } from "./data/DashboardData.tsx";
+import { fleetHandles, mergeReadiness } from "./fleet/fleetModel.ts";
+import { morphIntoThread } from "./fleet/morph.ts";
+import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
 import { useNow } from "./useNow.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
 
@@ -179,14 +183,22 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
 
   const onFocus = useCallback(
     (thread: ThreadSummary) => {
-      if (intents) void intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
-      else {
-        navigate("threads");
-        threadsIntent.request("open", thread.id);
-      }
+      const card = document.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(thread.id)}"]`);
+      morphIntoThread(card, thread.id, () => {
+        if (intents) return intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+        flushSync(() => {
+          navigate("threads");
+          threadsIntent.request("open", thread.id);
+        });
+      });
     },
     [intents, navigate, threadsIntent],
   );
+
+  // Agent Fleet: call signs, worktree facts and merge readiness for every card.
+  // Archived agents keep their letters, so a call sign never moves to another agent.
+  const handles = useMemo(() => fleetHandles([...(threads ?? []), ...archived]), [threads, archived]);
+  const worktrees = useWorktreeStates(threads);
   const onReviewApprovals = useCallback(() => permissions.setPanelOpen(true), [permissions.setPanelOpen]);
 
   const [measureRef, columns] = useColumns();
@@ -257,6 +269,9 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
             onAction={runAction}
             onDecide={permissions.decide}
             onReviewApprovals={onReviewApprovals}
+            handle={handles.get(thread.id)}
+            worktree={worktrees.get(thread.id)}
+            readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
           />
         ))}
       </div>

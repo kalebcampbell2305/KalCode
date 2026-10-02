@@ -258,6 +258,7 @@ pub fn thread(
         permission_profile_id: None,
         runtime_kind: None,
         terminal_id: None,
+        worktree_id: None,
     }
 }
 

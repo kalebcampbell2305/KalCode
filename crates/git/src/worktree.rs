@@ -294,7 +294,9 @@ pub struct NewWorktree {
 
 /// Creates a worktree with a new branch in `<worktrees_root>/<workspace-id>/<worktree-id>`.
 /// Git runs before any database write (never while holding the writer lock); the caller records
-/// the result and removes the worktree again if recording fails.
+/// the result and removes the worktree again if recording fails. If `git worktree add` fails
+/// partway (a timeout, a path Windows can't check out), its partial folder and registration are
+/// removed, and so is the branch when this call created it and nothing was committed on it.
 pub fn create_managed(
     git: &Git,
     repo: &Repo,
@@ -305,17 +307,38 @@ pub fn create_managed(
     owner_ref: Option<String>,
 ) -> Result<NewWorktree> {
     validate_branch_name(branch)?;
+    let branch_ref = format!("refs/heads/{branch}");
+    let existed = resolve_commit(git, repo, &branch_ref)?.is_some();
+    let start = start.unwrap_or("HEAD");
+    validate_revision(start)?;
+    let start_oid = resolve_commit(git, repo, start)?.ok_or_else(|| {
+        git_error(
+            "unknown_revision",
+            "Git doesn't know that commit or branch.",
+        )
+    })?;
     let id = new_id();
     let path = worktrees_root.join(repo.workspace().id()).join(&id);
-    let base_commit = add(
+    let added = add(
         git,
         repo,
         &path,
         &WorktreeStart::NewBranch {
             name: branch.to_owned(),
-            start: start.map(str::to_owned),
+            start: Some(start_oid.clone()),
         },
-    )?;
+    );
+    let base_commit = match added {
+        Ok(base_commit) => base_commit,
+        Err(error) => {
+            undo_partial_add(git, repo, &path);
+            if !existed {
+                // Fails harmlessly when git never created the branch.
+                let _ = discard_new_branch(git, repo, branch, &start_oid);
+            }
+            return Err(error);
+        }
+    };
     Ok(NewWorktree {
         id,
         workspace_id: repo.workspace().id().to_owned(),
@@ -324,6 +347,237 @@ pub fn create_managed(
         base_commit,
         purpose,
         owner_ref,
+    })
+}
+
+/// Checks an **existing** branch out into a new managed worktree (`git worktree add <path>
+/// <branch>`, no new branch), for example to bring back a thread's worktree whose folder is gone.
+/// Git refuses when the branch is checked out in another worktree. A partial folder and
+/// registration are removed on failure; the branch is never touched.
+pub fn attach_managed(
+    git: &Git,
+    repo: &Repo,
+    worktrees_root: &Path,
+    branch: &str,
+    purpose: WorktreePurpose,
+    owner_ref: Option<String>,
+) -> Result<NewWorktree> {
+    validate_branch_name(branch)?;
+    if resolve_commit(git, repo, &format!("refs/heads/{branch}"))?.is_none() {
+        return Err(git_error("branch_missing", "That branch no longer exists."));
+    }
+    let id = new_id();
+    let path = worktrees_root.join(repo.workspace().id()).join(&id);
+    let base_commit = match add(
+        git,
+        repo,
+        &path,
+        &WorktreeStart::ExistingBranch {
+            name: branch.to_owned(),
+        },
+    ) {
+        Ok(head) => head,
+        Err(error) => {
+            undo_partial_add(git, repo, &path);
+            return Err(error);
+        }
+    };
+    Ok(NewWorktree {
+        id,
+        workspace_id: repo.workspace().id().to_owned(),
+        path,
+        branch: branch.to_owned(),
+        base_commit,
+        purpose,
+        owner_ref,
+    })
+}
+
+/// The commit `rev` names, `None` when it names none. Read-only.
+fn resolve_commit(git: &Git, repo: &Repo, rev: &str) -> Result<Option<String>> {
+    validate_revision(rev)?;
+    let out = repo
+        .cmd(git)
+        .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+        .arg(format!("{rev}^{{commit}}"))
+        .read_only()
+        .run()?;
+    let oid = out.stdout_text().trim().to_owned();
+    Ok((out.status.success() && is_object_id(&oid)).then_some(oid))
+}
+
+/// The commit checked out in the workspace's main folder (`None` before the first commit).
+/// Comparisons use it rather than the branch name, which may hold characters
+/// [`validate_revision`] refuses. Read-only.
+pub fn head_commit(git: &Git, repo: &Repo) -> Result<Option<String>> {
+    resolve_commit(git, repo, "HEAD")
+}
+
+/// Removes what a failed `git worktree add` left: the new folder (KalCode's own, under its data
+/// folder, holding nothing of the user's) and its registration.
+fn undo_partial_add(git: &Git, repo: &Repo, path: &Path) {
+    if path.exists() {
+        let removed = repo
+            .cmd(git)
+            .args(["worktree", "remove", "--force"])
+            .arg(plain(path))
+            .run_ok("worktree")
+            .is_ok();
+        if !removed {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+    if let Err(error) = forget_missing(git, repo, path) {
+        tracing::warn!(event = "git.worktree_cleanup_failed", error = %error.diagnostic());
+    }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let text = plain(p).to_string_lossy().replace('\\', "/");
+        let text = text.trim_end_matches('/').to_owned();
+        if cfg!(windows) {
+            text.to_lowercase()
+        } else {
+            text
+        }
+    };
+    norm(a) == norm(b)
+}
+
+/// Drops git's registration of a worktree whose folder no longer exists, so its branch can be
+/// checked out again. Targets that one worktree (`git worktree remove --force` on a missing
+/// folder loses nothing); only if git still lists it afterwards does it fall back to
+/// `git worktree prune`, which clears registrations of missing folders (locked ones are kept).
+/// Does nothing when the folder exists or git doesn't list it.
+pub fn forget_missing(git: &Git, repo: &Repo, path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    let listed = |git: &Git| -> Result<bool> {
+        Ok(list(git, repo)?
+            .iter()
+            .any(|wt| !wt.main && same_path(&wt.path, path)))
+    };
+    if !listed(git)? {
+        return Ok(());
+    }
+    let _ = repo
+        .cmd(git)
+        .args(["worktree", "remove", "--force"])
+        .arg(plain(path))
+        .run();
+    if listed(git)? {
+        repo.cmd(git)
+            .args(["worktree", "prune"])
+            .run_ok("worktree")?;
+    }
+    Ok(())
+}
+
+/// Undoes the branch [`create_managed`] created, for a worktree being rolled back: deletes
+/// `refs/heads/<branch>` only while it still points at `expected` (nothing was committed on it),
+/// atomically (`git update-ref -d <ref> <old>`). Call after the worktree itself is removed.
+pub fn discard_new_branch(git: &Git, repo: &Repo, branch: &str, expected: &str) -> Result<()> {
+    validate_branch_name(branch)?;
+    if !is_object_id(expected) {
+        return Err(KalError::validation(
+            "invalid_revision",
+            "That commit or branch name isn't valid.",
+        ));
+    }
+    repo.cmd(git)
+        .args(["update-ref", "-d"])
+        .arg(format!("refs/heads/{branch}"))
+        .arg(expected)
+        .run_ok("worktree")?;
+    Ok(())
+}
+
+/// The branch checked out in the workspace's main folder (the repository top level), `None` on
+/// a detached HEAD. Read-only.
+pub fn current_branch(git: &Git, repo: &Repo) -> Result<Option<String>> {
+    let out = repo
+        .cmd(git)
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .read_only()
+        .run()?;
+    if out.status.success() {
+        let name = out.stdout_text().trim().to_owned();
+        return Ok((!name.is_empty()).then_some(name));
+    }
+    // `--quiet`: exit 1 with no message means HEAD is detached.
+    if out.status.code() == Some(1) && out.stderr.trim().is_empty() {
+        return Ok(None);
+    }
+    Err(crate::runner::classify_failure("branches", &out))
+}
+
+/// Commits only on `base` and only on `branch` (`(behind, ahead)` of `branch` relative to
+/// `base`), from `git rev-list --left-right --count base...branch`. Read-only.
+pub fn ahead_behind(git: &Git, repo: &Repo, base: &str, branch: &str) -> Result<(u32, u32)> {
+    validate_revision(base)?;
+    validate_revision(branch)?;
+    let out = repo
+        .cmd(git)
+        .args(["rev-list", "--left-right", "--count"])
+        .arg(format!("{base}...{branch}"))
+        .arg("--")
+        .read_only()
+        .run_ok("log")?;
+    parse_left_right(&out.stdout_text())
+        .ok_or_else(|| git_error("log_failed", "Git didn't report how the branches differ."))
+}
+
+/// Parses `<left> <right>` (tab-separated) from `rev-list --left-right --count`.
+pub(crate) fn parse_left_right(text: &str) -> Option<(u32, u32)> {
+    let mut parts = text.split_whitespace();
+    let left = parts.next()?.parse().ok()?;
+    let right = parts.next()?.parse().ok()?;
+    parts.next().is_none().then_some((left, right))
+}
+
+/// `merge-tree --write-tree` needs Git 2.38.
+const MERGE_TREE_WRITE_TREE: GitVersion = GitVersion {
+    major: 2,
+    minor: 38,
+    patch: 0,
+};
+
+/// Predicts whether merging `branch` into `base` would conflict, without touching any work tree,
+/// index or ref: `git merge-tree --write-tree` (exit 0 clean, 1 conflicts). It may add
+/// unreachable objects (the would-be merge trees) to the object store, which `git gc` prunes.
+/// `None` when the answer is unknown: Git older than 2.38, a merge driver defined by the
+/// repository's own config (an arbitrary command KalCode won't run), or any other outcome
+/// (for example unrelated histories).
+pub fn merge_conflicts(git: &Git, repo: &Repo, base: &str, branch: &str) -> Result<Option<bool>> {
+    validate_revision(base)?;
+    validate_revision(branch)?;
+    if git.version() < MERGE_TREE_WRITE_TREE || repo.defines_merge_driver() {
+        return Ok(None);
+    }
+    let out = repo
+        .cmd(git)
+        .args([
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            base,
+            branch,
+        ])
+        .run()?;
+    Ok(match out.status.code() {
+        Some(0) => Some(false),
+        Some(1) => Some(true),
+        code => {
+            tracing::warn!(
+                event = "git.merge_prediction_unknown",
+                exit_code = code,
+                stderr = %out.stderr
+            );
+            None
+        }
     })
 }
 
@@ -346,5 +600,21 @@ mod tests {
         assert_eq!(list[1].path, PathBuf::from("/data/with space"));
         assert_eq!(list[1].branch.as_deref(), Some("kal/x"));
         assert!(list[1].prunable);
+    }
+
+    #[test]
+    fn parses_left_right_counts() {
+        assert_eq!(
+            parse_left_right(
+                "3	5
+"
+            ),
+            Some((3, 5))
+        );
+        assert_eq!(parse_left_right("0	0"), Some((0, 0)));
+        assert_eq!(parse_left_right(""), None);
+        assert_eq!(parse_left_right("1"), None);
+        assert_eq!(parse_left_right("1	2	3"), None);
+        assert_eq!(parse_left_right("x	2"), None);
     }
 }

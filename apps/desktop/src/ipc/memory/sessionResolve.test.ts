@@ -75,6 +75,7 @@ function summary(t: CasesFile["threads"][number]): ThreadSummary {
     permissionProfileId: null,
     runtimeKind: null,
     terminalId: null,
+    worktreeId: null,
   };
 }
 

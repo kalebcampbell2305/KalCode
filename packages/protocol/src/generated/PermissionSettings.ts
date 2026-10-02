@@ -4,11 +4,11 @@ import type { PermissionMode } from "./PermissionMode.ts";
 /**
  * Permission preferences.
  */
-export type PermissionSettings = {
+export type PermissionSettings = { 
 /**
  * The mode new threads start in. Every mode is available on every plan.
  */
-defaultMode: PermissionMode,
+defaultMode: PermissionMode, 
 /**
  * The Custom profile new threads use when `default_mode` is Custom.
  */

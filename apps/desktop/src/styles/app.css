@@ -49,3 +49,21 @@ pre,
     animation-duration: 1ms;
   }
 }
+
+/* Agent Fleet: the clicked card morphs into the thread view (see surfaces/dashboard/fleet/morph.ts). */
+::view-transition-group(fleet-agent) {
+  animation-duration: var(--dur-slow);
+  animation-timing-function: var(--ease-expo);
+}
+
+::view-transition-old(fleet-agent),
+::view-transition-new(fleet-agent) {
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-base);
+}
