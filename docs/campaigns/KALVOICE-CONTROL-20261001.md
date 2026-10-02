@@ -449,3 +449,14 @@ desktop run exceeded the existing 300-second suite deadline; its orphan child wa
 and stopped, evidence preserved, and the unchanged suite restarted with four workers. No
 timeout, assertion, skip policy, or test count was weakened. Final exact-commit gates and
 publication remain pending.
+
+## Production-feature gate correction
+
+Physical Mac default-feature Clippy and workspace tests passed at `339fde9d`
+(2645 passed, 23 intentional ignores). Independent review found that the trusted
+Mac workflow omitted the production Whisper feature required by the registered
+Rust suite. Both Mac commands now enable `kalcode-desktop/kalvoice-whisper`;
+the feature-enabled proof remains pending. Windows trusted verification stopped
+at website-unit exit 1 with suppressed child output despite the same commit's
+local 600-test pass. This is unresolved pending diagnostic output and reproof;
+neither a partial gate nor default-feature success certifies delivery.

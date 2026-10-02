@@ -99,5 +99,5 @@ jobs:
           security default-keychain -d user -s "$kc"
           security unlock-keychain -p kalcode-gate "$kc"
           security set-keychain-settings "$kc"
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --features kalcode-desktop/kalvoice-whisper -- -D warnings
+      - run: cargo test --workspace --features kalcode-desktop/kalvoice-whisper
