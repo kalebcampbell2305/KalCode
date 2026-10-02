@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
   type AccountSnapshot,
+  type BillingInterval,
   type PurchasableTier,
   type RuntimeStatus,
   SESSION_EXPIRED_REASON,
@@ -39,13 +40,13 @@ function actions() {
     pollEmail: vi.fn<() => Promise<void>>(async () => undefined),
     cancelAuth: vi.fn<() => Promise<void>>(async () => undefined),
     activateFree: vi.fn<() => Promise<void>>(async () => undefined),
-    checkout: vi.fn<(tier: PurchasableTier) => Promise<void>>(async () => undefined),
+    checkout: vi.fn<(tier: PurchasableTier, interval: BillingInterval) => Promise<void>>(async () => undefined),
     retry: vi.fn<() => Promise<void>>(async () => undefined),
   } satisfies AccountOnboardingActions;
 }
 
 describe("AccountOnboarding", () => {
-  it("shows each catalog plan with its monthly and yearly price, stage and KalVoice allowance", async () => {
+  it("shows each catalog plan with its monthly price, stage and KalVoice allowance by default", async () => {
     const accountActions = actions();
     render(
       <AccountOnboarding
@@ -62,19 +63,58 @@ describe("AccountOnboarding", () => {
     };
     expect(card("Free")).toHaveTextContent("TRY");
     expect(card("Free")).toHaveTextContent("25 KalVoice Requests a month");
-    expect(card("Free")).not.toHaveTextContent("/year");
+    expect(card("Free")).toHaveTextContent("$0No checkout");
+    expect(card("Free")).not.toHaveTextContent("per year");
+    expect(screen.getByRole("radio", { name: "Monthly" })).toBeChecked();
     expect(card("Pro")).toHaveTextContent("$10per month");
-    expect(card("Pro")).toHaveTextContent("or $100/year · save $20");
+    expect(card("Pro")).not.toHaveTextContent("per year");
     expect(card("Pro")).toHaveTextContent("150 KalVoice Requests a month");
     expect(card("MAX")).toHaveTextContent("ORCHESTRATE");
-    expect(card("MAX")).toHaveTextContent("or $250/year · save $50");
+    expect(card("MAX")).toHaveTextContent("$25per month");
     expect(card("MAX 2X")).toHaveTextContent("1,000 KalVoice Requests a month");
-    expect(card("MAX 2X")).toHaveTextContent("or $500/year · save $100");
+    expect(card("MAX 2X")).toHaveTextContent("$50per month");
 
     await userEvent.click(screen.getByRole("button", { name: "Choose MAX" }));
-    expect(accountActions.checkout).toHaveBeenCalledWith("max");
+    expect(accountActions.checkout).toHaveBeenCalledWith("max", "month");
     await userEvent.click(screen.getByRole("button", { name: "Continue with Free" }));
     expect(accountActions.activateFree).toHaveBeenCalledOnce();
+  });
+
+  it("switches paid prices to yearly and checks out the yearly plan, leaving Free unchanged", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding
+        snapshot={snapshot("authenticated_unactivated")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      />,
+    );
+    const card = (name: string) => {
+      const article = screen.getByRole("heading", { name }).closest("article");
+      if (!article) throw new Error(`${name} card missing`);
+      return article;
+    };
+    const billing = screen.getByRole("radiogroup", { name: "Billing interval" });
+    expect(billing).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: "Yearly" }));
+    expect(screen.getByRole("radio", { name: "Yearly" })).toBeChecked();
+    expect(card("Pro")).toHaveTextContent("$100per year · save $20");
+    expect(card("MAX")).toHaveTextContent("$250per year · save $50");
+    expect(card("MAX 2X")).toHaveTextContent("$500per year · save $100");
+    expect(card("MAX")).not.toHaveTextContent("per month");
+    expect(card("Free")).toHaveTextContent("$0No checkout");
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose MAX 2X" }));
+    expect(accountActions.checkout).toHaveBeenCalledWith("max2x", "year");
+    await userEvent.click(screen.getByRole("button", { name: "Continue with Free" }));
+    expect(accountActions.activateFree).toHaveBeenCalledOnce();
+
+    await userEvent.click(screen.getByRole("radio", { name: "Monthly" }));
+    expect(card("MAX")).toHaveTextContent("$25per month");
+    await userEvent.click(screen.getByRole("button", { name: "Choose Pro" }));
+    expect(accountActions.checkout).toHaveBeenLastCalledWith("pro", "month");
   });
 
   it("offers an explicit retry when native session restoration times out", async () => {

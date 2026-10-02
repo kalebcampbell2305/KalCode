@@ -14,6 +14,8 @@ export type AccountPhase =
 export type RuntimePhase = "signed_out" | "starting" | "ready" | "draining" | "blocked_unclean" | "app_exiting";
 export type AccountTier = "free" | "pro" | "max" | "max2x" | "owner";
 export type PurchasableTier = Exclude<AccountTier, "free" | "owner">;
+/** How often a paid plan bills. The server picks the Stripe price from (tier, interval). */
+export type BillingInterval = "month" | "year";
 
 export interface PublicAccount {
   id: string;
@@ -319,8 +321,12 @@ export class AccountClient {
     return this.snapshot("account_activate_free");
   }
 
-  checkout(tier: PurchasableTier): Promise<AccountSnapshot> {
-    return this.snapshot("account_checkout", { tier });
+  checkout(tier: PurchasableTier, interval: BillingInterval = "month"): Promise<AccountSnapshot> {
+    if (interval !== "month" && interval !== "year") {
+      return Promise.reject(new Error("Choose monthly or yearly billing."));
+    }
+    // Monthly sends exactly the arguments older builds sent; absent means monthly natively.
+    return this.snapshot("account_checkout", interval === "year" ? { tier, interval } : { tier });
   }
 
   async portal(): Promise<AccountOpenResult> {

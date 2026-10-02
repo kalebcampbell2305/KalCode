@@ -279,6 +279,25 @@ impl PaidTier {
     }
 }
 
+/// How often a paid plan bills. The server chooses the Stripe price from (tier, interval);
+/// the desktop never sends a price id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BillingInterval {
+    #[default]
+    Month,
+    Year,
+}
+
+impl BillingInterval {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Month => "month",
+            Self::Year => "year",
+        }
+    }
+}
+
 pub trait AccountApi: Send + Sync {
     fn start_email(
         &self,
@@ -313,6 +332,7 @@ pub trait AccountApi: Send + Sync {
         &self,
         bearer: &str,
         tier: PaidTier,
+        interval: BillingInterval,
         request_id: &str,
     ) -> Result<BrowserUrlResponse, ApiError>;
     fn portal(&self, bearer: &str, request_id: &str) -> Result<BrowserUrlResponse, ApiError>;
@@ -555,16 +575,14 @@ impl AccountApi for HttpAccountApi {
         &self,
         bearer: &str,
         tier: PaidTier,
+        interval: BillingInterval,
         request_id: &str,
     ) -> Result<BrowserUrlResponse, ApiError> {
         let wire: UrlWire = self
             .post(
                 "/v1/billing/checkout",
                 Some(bearer),
-                Some(&CheckoutRequest {
-                    tier: tier.as_str(),
-                    request_id,
-                }),
+                Some(&CheckoutRequest::new(tier, interval, request_id)),
             )?
             .ok_or(ApiError::InvalidResponse)?;
         if !wire.ok || validate_browser_destination(&wire.url)? != BrowserDestination::Checkout {
@@ -771,6 +789,56 @@ struct SocialCompleteRequest<'a> {
 struct CheckoutRequest<'a> {
     tier: &'static str,
     request_id: &'a str,
+    /// Absent means monthly, so a monthly request stays byte-identical to older builds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval: Option<&'static str>,
+}
+
+impl<'a> CheckoutRequest<'a> {
+    fn new(tier: PaidTier, interval: BillingInterval, request_id: &'a str) -> Self {
+        Self {
+            tier: tier.as_str(),
+            request_id,
+            interval: match interval {
+                BillingInterval::Month => None,
+                BillingInterval::Year => Some(interval.as_str()),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod checkout_request_tests {
+    use super::*;
+
+    #[test]
+    fn monthly_checkout_body_is_unchanged() {
+        let body = serde_json::to_string(&CheckoutRequest::new(
+            PaidTier::Max,
+            BillingInterval::Month,
+            "request-0001",
+        ))
+        .expect("serialize checkout request");
+        assert_eq!(body, r#"{"tier":"max","requestId":"request-0001"}"#);
+    }
+
+    #[test]
+    fn yearly_checkout_body_sends_year_interval_and_never_a_price() {
+        let body = serde_json::to_value(CheckoutRequest::new(
+            PaidTier::Pro,
+            BillingInterval::Year,
+            "request-0002",
+        ))
+        .expect("serialize checkout request");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "tier": "pro",
+                "requestId": "request-0002",
+                "interval": "year",
+            })
+        );
+    }
 }
 
 #[derive(Serialize)]

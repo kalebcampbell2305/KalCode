@@ -13,6 +13,7 @@ import type {
   AccountOpenResult,
   AccountSnapshot,
   AccountUsageSnapshot,
+  BillingInterval,
   PurchasableTier,
   RuntimeStatus,
 } from "../ipc/account.ts";
@@ -36,7 +37,7 @@ export interface AccountOperations {
   pollEmail(): Promise<AccountSnapshot>;
   cancelAuth(): Promise<AccountSnapshot>;
   activateFree(): Promise<AccountSnapshot>;
-  checkout(tier: PurchasableTier): Promise<AccountSnapshot>;
+  checkout(tier: PurchasableTier, interval?: BillingInterval): Promise<AccountSnapshot>;
   portal(): Promise<AccountOpenResult>;
   refresh(): Promise<AccountSnapshot>;
   logout(): Promise<AccountSnapshot>;
@@ -49,7 +50,7 @@ export interface AccountActions {
   pollEmail(): Promise<void>;
   cancelAuth(): Promise<void>;
   activateFree(): Promise<void>;
-  checkout(tier: PurchasableTier): Promise<void>;
+  checkout(tier: PurchasableTier, interval?: BillingInterval): Promise<void>;
   portal(): Promise<void>;
   refresh(): Promise<void>;
   logout(): Promise<void>;
@@ -375,7 +376,7 @@ export function AccountProvider({
       pollEmail: () => runSnapshot(() => client.pollEmail()),
       cancelAuth: () => runSnapshot(() => client.cancelAuth()),
       activateFree: () => runSnapshot(() => client.activateFree()),
-      checkout: (tier) => runSnapshot(() => client.checkout(tier), true),
+      checkout: (tier, interval) => runSnapshot(() => client.checkout(tier, interval), true),
       portal: () =>
         runSnapshot(async () => {
           await client.portal();

@@ -15,8 +15,8 @@ use kalcode_entitlements::Verifier;
 use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretString};
 
 use super::api::{
-    AccountApi, ApiAccount, ApiError, BrowserUrlResponse, EmailStartResponse, EntitlementResponse,
-    PaidTier, PkcePair, PollResponse, SignedInResponse, UsageResponse,
+    AccountApi, ApiAccount, ApiError, BillingInterval, BrowserUrlResponse, EmailStartResponse,
+    EntitlementResponse, PaidTier, PkcePair, PollResponse, SignedInResponse, UsageResponse,
 };
 use super::model::{AccountUsageSnapshot, SessionSecret};
 use super::runtime::{AccountRuntime, Clock};
@@ -459,7 +459,13 @@ impl AccountApi for E2eAccountApi {
         Ok(())
     }
 
-    fn checkout(&self, _: &str, _: PaidTier, _: &str) -> Result<BrowserUrlResponse, ApiError> {
+    fn checkout(
+        &self,
+        _: &str,
+        _: PaidTier,
+        _: BillingInterval,
+        _: &str,
+    ) -> Result<BrowserUrlResponse, ApiError> {
         Err(ApiError::Local("e2e_paid_effect_disabled"))
     }
 
@@ -578,7 +584,7 @@ mod tests {
         runtime.bootstrap().expect("bootstrap");
         assert_eq!(sign_in(&runtime), AccountPhase::AuthenticatedUnactivated);
         let error = runtime
-            .start_checkout(PaidTier::Pro)
+            .start_checkout(PaidTier::Pro, BillingInterval::Year)
             .expect_err("paid effect disabled");
         assert_eq!(error.code, "invalid_account_response");
     }
