@@ -106,6 +106,9 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   // Set on the first visit to Code and never cleared (see the Code wrapper in <main>).
   const codeOpened = useRef(false);
   if (current === "code") codeOpened.current = true;
+  // One element for the life of the shell, so shell re-renders (the palette opening, the rail
+  // refreshing) skip the kept-mounted Code subtree; it still updates from its own state.
+  const codePage = useMemo(() => <CodePage />, []);
   // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot), and inside the Command
   // Deck's chrome: below the top bar, above the status strip and left of the agents rail.
   useLayoutEffect(() => {
@@ -202,7 +205,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                     terminals, attachments and layout survive navigation instead of rebuilding. */}
                 {codeOpened.current ? (
                   <div className={styles.codeSurface} hidden={current !== "code"}>
-                    <CodePage />
+                    {codePage}
                   </div>
                 ) : null}
               </main>

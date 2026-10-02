@@ -120,6 +120,48 @@ load-sensitive; memory and database size are stable.
 - **WebView2 dominates memory.** `kalcode.exe` is ~31 MB of the ~389 MB tree; the rest is the
   WebView2 runtime's browser, GPU, renderer and utility processes.
 
+### Interaction latency (2026-10-02 responsiveness pass)
+
+`apps/desktop/tests/perf/interactions.ts` (`pnpm perf:interactions [--runs 20]`) drives real
+clicks and key presses over the DevTools protocol against the same e2e binary. The setup opens a
+throwaway project, starts three terminals and prints about 200 KB of history into each. It
+records two figures per interaction:
+
+- **input → next paint:** the first frame after every handler ran, i.e. the acknowledgement.
+- **input → visible:** the first frame in which the target state is on screen: the page
+  heading, the menu, or the terminal showing its history again.
+
+Before = `main` at `fced50d5`; after = the responsiveness pass. Both were measured on the same
+machine, alternating runs, 20 samples per interaction per run, values in ms.
+
+| Interaction (input → visible) | Before p50 / p95 | After p50 / p95 |
+| --- | ---: | ---: |
+| Return to Code (terminals and history back on screen) | 63 / 76–80 | 13 / 14 |
+| Switch terminal tab | 47 / 51–63 | 13 / 14 |
+| New terminal tab (bounded by the shell starting) | 47–105 / 115–494 | 47–130 / 97–484 |
+| Open Dashboard, Settings, Threads | 12–13 / 13–16 | 12–13 / 13–14 |
+| Open Account Hub, shell chooser menus | 13 / 14 | 13 / 14–21 |
+| Open command palette, type in it | 8–14 / 16–28 | 8–11 / 16–21 |
+
+The two big wins are structural:
+
+- Code stays mounted once opened.
+- Terminal tabs stay mounted once shown.
+
+Returning to Code and switching tabs therefore no longer rebuild xterm or replay scrollback. Both
+now complete within one frame (~13 ms at 75 Hz).
+
+Many improvements in the same pass don't show in this fixture because it has no providers,
+threads or agent traffic. These are covered by unit tests:
+
+- terminals appear before the refresh
+- the palette no longer re-renders the shell
+- Operations polls no longer disable Refresh
+- the Dashboard reuses loaded data
+- slow native commands moved off the main thread
+
+Windows only for now, like the rest of the harness. macOS needs a WebKit driver.
+
 ## 4. Budgets
 
 `apps/desktop/tests/perf/budgets.json`. A metric fails `pnpm perf:check` when it breaks its
