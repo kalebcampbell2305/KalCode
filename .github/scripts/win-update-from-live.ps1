@@ -17,7 +17,7 @@ Writes <OutDir>\update-from-live-receipt.json (+ evidence). Exit 0 = PASS.
   -SelfTest: parses arguments, checks the account rule and the receipt shape with no install (used by the dry run).
 #>
 param(
-  [string]$LiveUrl = '', [string]$LiveSha256 = '', [string]$LiveVersion = '',
+  [string]$LiveUrl = '', [string]$LiveSha256 = '', [string]$LiveVersion = '', [string]$LiveInstaller = '',
   [string]$CandidateInstaller = '', [string]$CandidateSha256 = '', [string]$CandidateVersion = '',
   [int]$ExpectSchema = 0, [switch]$ChangesData,
   [Parameter(Mandatory)][string]$OutDir,
@@ -34,7 +34,7 @@ $Db = Join-Path $AppData 'kalcode.db'
 $receipt = [ordered]@{
   schema = 'kalcode-fast-update-from-live/v1'; platform = 'windows-x86_64'; status = 'FAILED'
   account = $id.Name; session = $me; startedAt = [DateTime]::UtcNow.ToString('o')
-  live = [ordered]@{ version = $LiveVersion; url = $LiveUrl; sha256 = $LiveSha256 }
+  live = [ordered]@{ version = $LiveVersion; url = $LiveUrl; sha256 = $LiveSha256; source = $(if ($LiveInstaller) { 'packet' } else { 'public-url' }); installer = $(if ($LiveInstaller) { [IO.Path]::GetFileName($LiveInstaller) } else { $null }) }
   candidate = [ordered]@{ version = $CandidateVersion; sha256 = $CandidateSha256 }
   changesData = [bool]$ChangesData; expectSchema = $ExpectSchema
   checks = [ordered]@{ install = $false; launch = $false; updateFromLive = $false; dataKept = $false; restoreGuard = $null }
@@ -109,9 +109,10 @@ c = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
 out = {"schema": c.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0], "tables": {}}
 for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"):
     cols = [r[1] for r in c.execute(f'PRAGMA table_info("{name}")')]
-    h = hashlib.sha256(); n = 0
-    for row in c.execute(f'SELECT * FROM "{name}" ORDER BY rowid' if name != "schema_migrations" else f'SELECT * FROM "{name}" ORDER BY 1'):
-        h.update(json.dumps(row, default=str).encode()); n += 1
+    # Order-independent (some tables are WITHOUT ROWID): hash the sorted row encodings.
+    rows = sorted(json.dumps(row, default=str) for row in c.execute(f'SELECT * FROM "{name}"'))
+    h = hashlib.sha256(); n = len(rows)
+    for r in rows: h.update(r.encode())
     out["tables"][name] = {"columns": cols, "rows": n, "sha256": h.hexdigest()}
 print(json.dumps(out, sort_keys=True))
 '@
@@ -158,7 +159,8 @@ try {
   if ($id.Name -match '\\Kaleb$') { Refuse 'never on the owner account: run as the kalcode-ci gate account (fast-lane rule)' }
   foreach ($k in 'LiveSha256', 'CandidateSha256') { if ((Get-Variable $k).Value -cnotmatch '^[0-9a-f]{64}$') { Refuse "$k must be a lowercase SHA-256" } }
   foreach ($k in 'LiveVersion', 'CandidateVersion') { if ((Get-Variable $k).Value -notmatch '^[0-9]+\.[0-9]+\.[0-9]+\+[1-9][0-9]*$') { Refuse "$k must be X.Y.Z+N" } }
-  if ($LiveUrl -notmatch '^https://kalcoded\.com/(download|releases)/[A-Za-z0-9._+%/-]{1,200}\.exe$') { Refuse 'LiveUrl must be a kalcoded.com installer URL' }
+  if (-not $LiveInstaller -and $LiveUrl -notmatch '^https://kalcoded\.com/(download|releases)/[A-Za-z0-9._+%/-]{1,200}\.exe$') { Refuse 'LiveUrl must be a kalcoded.com installer URL' }
+  if ($LiveInstaller -and -not (Test-Path -LiteralPath $LiveInstaller -PathType Leaf)) { Refuse 'LiveInstaller is not a file' }
   if ($ExpectSchema -lt 1) { Refuse 'ExpectSchema (the highest migration number in C) is required' }
   if ($SelfTest) { $receipt.status = 'SELFTEST'; Save; Write-Host 'SELFTEST PASS'; exit 0 }
   $pre = Leftovers; $receipt.preCheck = $pre
@@ -172,9 +174,16 @@ try {
   $sig = Get-AuthenticodeSignature -LiteralPath $CandidateInstaller; if ($sig.Status -ne 'Valid') { Refuse "candidate Authenticode $($sig.Status)" }
 
   # 1. live
-  $live = Join-Path $OutDir ('live-' + [IO.Path]::GetFileName(([Uri]$LiveUrl).AbsolutePath))
-  Invoke-WebRequest -UseBasicParsing -Uri $LiveUrl -OutFile $live -TimeoutSec 900
-  if ((Sha $live) -ne $LiveSha256) { Refuse "the public live installer is $(Sha $live), not $LiveSha256" }
+  if ($LiveInstaller) {
+    # Pre-publish: the live build is the pinned packet installer (exactly the bytes that go live), not a download.
+    $live = Join-Path $OutDir ('live-' + [IO.Path]::GetFileName($LiveInstaller).Replace('live-', ''))
+    Copy-Item -LiteralPath $LiveInstaller -Destination $live -Force
+    if ((Sha $live) -ne $LiveSha256) { Refuse "the packet live installer is $(Sha $live), not $LiveSha256" }
+  } else {
+    $live = Join-Path $OutDir ('live-' + [IO.Path]::GetFileName(([Uri]$LiveUrl).AbsolutePath))
+    Invoke-WebRequest -UseBasicParsing -Uri $LiveUrl -OutFile $live -TimeoutSec 900
+    if ((Sha $live) -ne $LiveSha256) { Refuse "the public live installer is $(Sha $live), not $LiveSha256" }
+  }
   Run-Installer $live @('/S'); Note "installed live $LiveVersion into $(InstallDir)"
   $null = Launch $LiveVersion; $null = Close-App
   $pre = Db-Snapshot 'db-live'; $floorPre = if (Test-Path -LiteralPath $Floor) { (Read-Shared $Floor).Trim() } else { $null }
