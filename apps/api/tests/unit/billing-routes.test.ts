@@ -60,6 +60,9 @@ function fakeStripe(overrides: Record<string, unknown> = {}): StripeClient {
     createCheckout: vi.fn(async () => ({ id: "cs_123", url: "https://checkout.stripe.com/c/pay/cs_123" })),
     expireCheckout: vi.fn(async () => undefined),
     retireCheckout: vi.fn(async () => undefined),
+    listSubscriptions: vi.fn(async () => []),
+    listCharges: vi.fn(async () => []),
+    listRefunds: vi.fn(async () => []),
     createPortal: vi.fn(async () => ({ url: "https://billing.stripe.com/p/session_123" })),
     retrieveSubscription: vi.fn(async () => ({
       id: "sub_12345678",

@@ -172,7 +172,37 @@ export function stripeClient({ secretKey, fetcher = fetch }: StripeClientOptions
       throw new Error("billing provider unavailable");
     }
   };
+  /** Read-only, paginated list of a Stripe collection. Bounded so one call can never run away. */
+  const listAll = async (path: string, parameters: Record<string, string>, maxPages = 20): Promise<unknown[]> => {
+    const items: unknown[] = [];
+    let startingAfter: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const query = new URLSearchParams({ ...parameters, limit: "100" });
+      if (startingAfter) query.set("starting_after", startingAfter);
+      const value = (await stripeJson(fetcher, secretKey, `${path}?${query}`)) as {
+        object?: unknown;
+        data?: unknown;
+        has_more?: unknown;
+      };
+      if (value.object !== "list" || !Array.isArray(value.data)) throw new Error("billing provider unavailable");
+      items.push(...value.data);
+      const last = value.data.at(-1) as { id?: unknown } | undefined;
+      if (value.has_more !== true || typeof last?.id !== "string") return items;
+      startingAfter = last.id;
+    }
+    throw new Error("billing list too large");
+  };
   return {
+    /** Every subscription (all statuses), with discounts expanded, for owner revenue reporting. */
+    listSubscriptions(): Promise<unknown[]> {
+      return listAll("/subscriptions", { status: "all", "expand[]": "data.discounts" });
+    },
+    listCharges(createdGteSeconds: number): Promise<unknown[]> {
+      return listAll("/charges", { "created[gte]": String(createdGteSeconds) });
+    },
+    listRefunds(createdGteSeconds: number): Promise<unknown[]> {
+      return listAll("/refunds", { "created[gte]": String(createdGteSeconds) });
+    },
     async createCustomer(input: { email: string; accountId: string; idempotencyKey: string }): Promise<{ id: string }> {
       const value = (await post(
         "/customers",

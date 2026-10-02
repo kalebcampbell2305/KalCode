@@ -36,7 +36,15 @@ describe("Worker source", () => {
     expect(writes.length).toBeGreaterThan(10);
     for (const write of writes) {
       const file = write.file.replaceAll("\\", "/");
-      expect(["worker/lib/account-store.ts", "worker/lib/billing-store.ts", "worker/lib/store.ts"]).toContain(file);
+      expect([
+        "worker/lib/account-store.ts",
+        "worker/lib/billing-store.ts",
+        "worker/lib/owner-metrics-store.ts",
+        "worker/lib/store.ts",
+      ]).toContain(file);
+      // The owner dashboard writes only its own aggregate snapshots, never accounts or grants.
+      if (file === "worker/lib/owner-metrics-store.ts")
+        expect(write.sql).toMatch(/^INSERT INTO owner_metric_snapshots /);
       if (file === "worker/lib/store.ts") expect(write.sql).toMatch(/\bkalvoice_requests\b/);
       if (file === "worker/lib/account-store.ts") {
         expect(write.sql).toMatch(
@@ -132,7 +140,15 @@ describe("zero company AI cost", () => {
     expect(config).toContain('"service": "kalcode-website"');
     expect(config).toContain('"entrypoint": "AccountMailEntrypoint"');
     expect(config.match(/"services"\s*:/g)).toHaveLength(1);
-    expect(config.match(/"service"\s*:/g)).toHaveLength(1);
+    // Exactly two service bindings, both internal named entrypoints of our own website Worker.
+    expect(config.match(/"service"\s*:\s*"[^"]*"/g)).toEqual([
+      '"service": "kalcode-website"',
+      '"service": "kalcode-website"',
+    ]);
+    expect(config.match(/"entrypoint"\s*:\s*"[^"]*"/g)).toEqual([
+      '"entrypoint": "AccountMailEntrypoint"',
+      '"entrypoint": "DistributionStatsEntrypoint"',
+    ]);
     for (const file of workerFiles) {
       expect(read(file), relative(API_DIR, file)).not.toMatch(
         /(ANTHROPIC|OPENAI|GEMINI|GOOGLE_AI|ELEVENLABS|DEEPGRAM)\w*KEY|env\.AI\b/,
