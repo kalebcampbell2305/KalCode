@@ -51,16 +51,19 @@ test.describe("KalVoice pane intents", () => {
     expect(right.x).toBeGreaterThan(left.x + left.width - 1);
     await expect(page.getByRole("separator").first()).toHaveAttribute("aria-valuenow", "50");
 
+    // Splitting focuses the new pane, and Code keeps that focus while KalVoice's page is shown, so
+    // "this pane" is the new (right) one: it grows, moving the divider left.
     await ask(page, "make this pane bigger");
     await expect
       .poll(async () => Number(await page.getByRole("separator").first().getAttribute("aria-valuenow")))
-      .toBeGreaterThan(50);
+      .toBeLessThan(50);
 
     await ask(page, "split the pane top and bottom");
     await expect(panes(page)).toHaveCount(3);
-    const top = await box(pane(page, 0));
-    const below = await box(pane(page, 1));
-    expect(below.y).toBeGreaterThan(top.y + 20);
+    const boxes = await Promise.all([0, 1, 2].map((i) => box(pane(page, i))));
+    // The focused (right) pane now holds two panes, one below the other.
+    const stacked = boxes.some((a) => boxes.some((b) => Math.abs(a.x - b.x) < 2 && b.y > a.y + 20));
+    expect(stacked).toBe(true);
 
     // Splitting and resizing never stop anything; closing a pane ends the terminals it held.
     expect(await running(page)).toBe(processes);
