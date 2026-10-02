@@ -30,8 +30,9 @@ export interface DistributionEvent {
 }
 
 /** `KalCode/0.1.9` (updater_commands.rs USER_AGENT). Exact match: nothing else counts. */
-const UPDATER_AGENT =
-  /^KalCode\/((?:0|[1-9]\d{0,4})\.(?:0|[1-9]\d{0,4})\.(?:0|[1-9]\d{0,4})(?:-[0-9A-Za-z.-]{1,20})?)$/;
+const UPDATER_AGENT = /^KalCode\/((?:0|[1-9]\d?)\.(?:0|[1-9]\d?)\.(?:0|[1-9]\d?))$/;
+/** Forged User-Agents cannot grow the counters without bound: at most this many rows per day and kind. */
+export const MAX_DAILY_ROWS_PER_EVENT = 64;
 const BROWSER_AGENT = /^Mozilla\/5\.0 \(/;
 const NOT_A_PERSON =
   /bot|crawl|spider|slurp|headless|lighthouse|preview|monitor|uptime|pingdom|scanner|python|curl|wget|electron/i;
@@ -107,10 +108,21 @@ export async function recordDistribution(db: D1Database, event: DistributionEven
     db
       .prepare(
         `INSERT INTO distribution_daily (day, event, platform, arch, version, from_version, count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 1
+         WHERE EXISTS (SELECT 1 FROM distribution_daily WHERE day = ?1 AND event = ?2 AND platform = ?3
+                         AND arch = ?4 AND version = ?5 AND from_version = ?6)
+            OR (SELECT count(*) FROM distribution_daily WHERE day = ?1 AND event = ?2) < ?7
          ON CONFLICT (day, event, platform, arch, version, from_version) DO UPDATE SET count = count + 1`,
       )
-      .bind(now.toISOString().slice(0, 10), event.kind, event.platform, event.arch, event.version, event.fromVersion),
+      .bind(
+        now.toISOString().slice(0, 10),
+        event.kind,
+        event.platform,
+        event.arch,
+        event.version,
+        event.fromVersion,
+        MAX_DAILY_ROWS_PER_EVENT,
+      ),
   ];
   if (event.kind !== "update_check") {
     statements.push(

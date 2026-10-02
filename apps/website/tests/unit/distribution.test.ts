@@ -11,6 +11,7 @@ import {
   countServedRequest,
   distributionStats,
   localDayStart,
+  MAX_DAILY_ROWS_PER_EVENT,
   purgeDistributionEvents,
   recordDistribution,
 } from "../../worker/distribution";
@@ -112,6 +113,8 @@ describe("classifyDistribution", () => {
       {},
     ],
     ["forged agent", "/releases/updater/stable.json", "KalCode/0.1.9 extra", {}],
+    ["prerelease agent", "/releases/updater/stable.json", "KalCode/0.1.9-rc.1", {}],
+    ["oversized version", "/releases/updater/stable.json", "KalCode/0.1.99999", {}],
     ["site page", "/download", CHROME, {}],
   ] as const)("never counts a %s", (_name, path, agent, init) => {
     expect(served(path, agent, init)).toBeNull();
@@ -317,6 +320,32 @@ describe("recording and the owner summary (local D1)", () => {
     const s = await distributionStats(db, { range: "7d", tzOffsetMinutes: 0 }, NOW);
     expect(s.latest).toEqual({ version: "0.1.9+1038", publicVersion: "0.1.9" });
     expect(s.adoption.latestShare).toBe(0.75);
+  });
+
+  it("bounds the distinct counter rows a day can gain, but keeps counting existing ones", async () => {
+    const check = (version: string) =>
+      recordDistribution(
+        db,
+        { kind: "update_check", platform: "unknown", arch: "unknown", version, fromVersion: "" },
+        NOW,
+      );
+    for (let i = 0; i < MAX_DAILY_ROWS_PER_EVENT + 10; i++) await check(`0.${Math.floor(i / 10)}.${i % 10}`);
+    await check("0.0.0");
+    const rows = await db
+      .prepare("SELECT version, count FROM distribution_daily WHERE event = 'update_check'")
+      .all<{ version: string; count: number }>();
+    expect(rows.results).toHaveLength(MAX_DAILY_ROWS_PER_EVENT);
+    expect(rows.results.find((r) => r.version === "0.0.0")?.count).toBe(2);
+    // Other kinds have their own budget.
+    await recordDistribution(
+      db,
+      { kind: "download", platform: "windows", arch: "x64", version: "0.1.9", fromVersion: "" },
+      NOW,
+    );
+    expect(
+      (await db.prepare("SELECT count(*) AS n FROM distribution_daily WHERE event = 'download'").first<{ n: number }>())
+        ?.n,
+    ).toBe(1);
   });
 
   it("keeps 90 days of activity and every daily counter", async () => {
