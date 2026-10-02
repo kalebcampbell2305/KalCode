@@ -60,6 +60,13 @@ pub struct ThreadRow {
     pub unread_messages: u32,
     pub files_changed: u32,
     pub permission_profile_id: Option<String>,
+    /// The thread's own active Git worktree (`git_worktrees`, purpose `thread`), if any.
+    pub worktree_id: Option<String>,
+    /// That worktree's branch.
+    pub worktree_branch: Option<String>,
+    /// The thread was created with its own worktree (a `git_worktrees` row of any status names
+    /// it). Such a thread never runs in the workspace folder.
+    pub isolated: bool,
 }
 
 /// One durable user turn, bounded by the exact event-log sequence numbers that started and
@@ -101,7 +108,14 @@ const THREAD_COLUMNS: &str =
     (SELECT COUNT(*) FROM thread_messages m
        WHERE m.thread_id = t.id AND m.role = 'assistant' AND m.seq > t.last_read_seq),
     (SELECT COUNT(*) FROM thread_files f WHERE f.thread_id = t.id),
-    t.permission_profile_id, t.effort";
+    t.permission_profile_id, t.effort, w.id, w.branch, w.status";
+
+/// `threads t` with the thread's own Git worktree `w` (`git_worktrees`, purpose `thread`, owned
+/// by the thread): the active one, else the newest. `NULL` columns for a thread without one.
+const THREAD_FROM: &str = "threads t LEFT JOIN git_worktrees w ON w.id = (
+    SELECT w2.id FROM git_worktrees w2
+     WHERE w2.purpose = 'thread' AND w2.owner_ref = t.id
+     ORDER BY (w2.status = 'active') DESC, w2.created_at DESC, w2.id DESC LIMIT 1)";
 
 fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
     Ok(ThreadRow {
@@ -129,6 +143,19 @@ fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
         files_changed: row.get(21)?,
         permission_profile_id: row.get(22)?,
         effort: row.get(23)?,
+        worktree_id: None,
+        worktree_branch: None,
+        isolated: false,
+    })
+    .and_then(|mut thread| {
+        let id: Option<String> = row.get(24)?;
+        let active = row.get::<_, Option<String>>(26)?.as_deref() == Some("active");
+        thread.isolated = id.is_some();
+        if active {
+            thread.worktree_id = id;
+            thread.worktree_branch = row.get(25)?;
+        }
+        Ok(thread)
     })
 }
 
@@ -174,7 +201,7 @@ pub fn insert_thread(conn: &Connection, t: &NewThreadRow<'_>) -> Result<()> {
 
 pub fn get(conn: &Connection, id: &str) -> Result<ThreadRow> {
     conn.query_row(
-        &format!("SELECT {THREAD_COLUMNS} FROM threads t WHERE t.id = ?1"),
+        &format!("SELECT {THREAD_COLUMNS} FROM {THREAD_FROM} WHERE t.id = ?1"),
         [id],
         row_to_thread,
     )
@@ -189,7 +216,7 @@ pub fn list(
     include_archived: bool,
 ) -> Result<Vec<ThreadRow>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {THREAD_COLUMNS} FROM threads t
+        "SELECT {THREAD_COLUMNS} FROM {THREAD_FROM}
          WHERE (?1 IS NULL OR t.workspace_id = ?1) AND (?2 OR t.archived_at IS NULL)
          ORDER BY t.last_activity_at DESC, t.id DESC LIMIT 2000"
     ))?;
@@ -445,7 +472,7 @@ pub fn usage(conn: &Connection, id: &str) -> Result<(u64, u64, u64)> {
 /// Threads a previous KalCode process left running (not archived, not in a final state).
 pub fn unfinished(conn: &Connection) -> Result<Vec<ThreadRow>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {THREAD_COLUMNS} FROM threads t
+        "SELECT {THREAD_COLUMNS} FROM {THREAD_FROM}
          WHERE t.archived_at IS NULL AND t.status NOT IN ('completed', 'failed', 'interrupted')"
     ))?;
     let rows = stmt.query_map([], row_to_thread)?;

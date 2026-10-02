@@ -2449,3 +2449,185 @@ fn running_thread_snapshot_binds_exact_sessions_and_keeps_paused_processes() {
         "replacement session remains running"
     );
 }
+
+#[test]
+fn a_thread_bound_to_its_own_worktree_runs_and_resumes_there() {
+    let h = Harness::new();
+    let worktree = h.dir.path().join("worktrees").join("wt-1");
+    let cwd = worktree.join("sub");
+    std::fs::create_dir_all(&cwd).expect("worktree folder");
+    let (thread_id, worktree_id) = (new_id(), new_id());
+    let bind = |core: &Core, id: &str, path: &std::path::Path, owner: &str| {
+        core.transact(|tx| {
+            tx.execute(
+                "INSERT INTO git_worktrees (id, workspace_id, path, branch, base_commit, purpose,
+                    owner_ref, status, created_at)
+                 VALUES (?1, ?2, ?3, 'kal/agent-12345678', ?4, 'thread', ?5, 'active', 't')",
+                (
+                    id,
+                    &h.workspace_id,
+                    path.to_string_lossy().into_owned(),
+                    "a".repeat(40),
+                    owner,
+                ),
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("binding");
+    };
+
+    // Request checks run before the folder is prepared: a failing request costs no checkout.
+    let mut bad = h.request("x");
+    bad.provider_id = "missing".into();
+    let prepared = std::cell::Cell::new(false);
+    assert!(
+        h.runtime
+            .create_reviewed_in(&new_id(), bad, None, || {
+                prepared.set(true);
+                Ok(cwd.clone())
+            })
+            .is_err()
+    );
+    assert!(!prepared.get());
+    // The prepared folder must be an existing absolute path.
+    assert_code(
+        h.runtime
+            .create_reviewed_in(&new_id(), h.request("x"), None, || {
+                Ok(h.dir.path().join("missing"))
+            }),
+        "thread_folder_unavailable",
+    );
+    assert_eq!(h.provider.session_count(), 0);
+
+    let thread = h
+        .runtime
+        .create_reviewed_in(&thread_id, h.request("work alone"), None, || {
+            // The caller records the binding while preparing the folder.
+            bind(&h.core, &worktree_id, &worktree, &thread_id);
+            Ok(cwd.clone())
+        })
+        .expect("create");
+    assert_eq!(thread.id, thread_id);
+    assert_eq!(thread.branch.as_deref(), Some("kal/agent-12345678"));
+    assert_eq!(thread.worktree_id.as_deref(), Some(worktree_id.as_str()));
+    let folder = cwd.to_string_lossy().into_owned();
+    assert_eq!(h.provider.last_session().config.working_directory, folder);
+    let listed = h.runtime.list(None, false).expect("list");
+    assert_eq!(listed[0].worktree_id.as_deref(), Some(worktree_id.as_str()));
+
+    // Resume keeps the worktree folder (an unbound thread would re-resolve the workspace root).
+    h.runtime.stop(&thread_id).expect("stop");
+    h.runtime.resume(&thread_id, Some("go on")).expect("resume");
+    assert_eq!(h.provider.session_count(), 2);
+    assert_eq!(h.provider.last_session().config.working_directory, folder);
+
+    // When the worktree folder is gone, resume never falls back to the workspace folder:
+    // without a way to re-attach it, it refuses and the thread keeps its folder.
+    h.runtime.stop(&thread_id).expect("stop");
+    std::fs::remove_dir_all(&worktree).expect("remove worktree folder");
+    assert_code(
+        h.runtime.resume(&thread_id, Some("again")),
+        "thread_folder_unavailable",
+    );
+    assert_eq!(h.provider.session_count(), 2);
+    let stored = h
+        .core
+        .read(|conn| kalcode_threads::store::get(conn, &thread_id))
+        .expect("row");
+    assert_eq!(stored.cwd, folder);
+
+    // With re-attachment, the branch comes back in a fresh worktree and the thread runs there.
+    type Bind = dyn Fn(&Core, &str, &std::path::Path, &str) + Send + Sync;
+    struct Reattach {
+        core: Arc<Core>,
+        folder: std::path::PathBuf,
+        bind: Box<Bind>,
+        released: Mutex<Vec<String>>,
+    }
+    impl kalcode_threads::ThreadWorktrees for Reattach {
+        fn reattach(&self, thread_id: &str) -> kalcode_core::Result<std::path::PathBuf> {
+            std::fs::create_dir_all(&self.folder).expect("fresh worktree");
+            self.core.transact(|tx| {
+                tx.execute(
+                    "UPDATE git_worktrees SET status = 'removed', removed_at = 't'
+                     WHERE owner_ref = ?1",
+                    [thread_id],
+                )?;
+                Ok(((), Vec::new()))
+            })?;
+            (self.bind)(&self.core, &new_id(), &self.folder, thread_id);
+            Ok(self.folder.clone())
+        }
+        fn release(&self, thread_id: &str) {
+            self.released.lock().unwrap().push(thread_id.to_owned());
+        }
+    }
+    let fresh = h.dir.path().join("worktrees").join("wt-2");
+    let workspace_id = h.workspace_id.clone();
+    let hooks = Arc::new(Reattach {
+        core: h.core.clone(),
+        folder: fresh.clone(),
+        bind: Box::new(move |core, id, path, owner| {
+            core.transact(|tx| {
+                tx.execute(
+                    "INSERT INTO git_worktrees (id, workspace_id, path, branch, base_commit,
+                        purpose, owner_ref, status, created_at)
+                     VALUES (?1, ?2, ?3, 'kal/agent-12345678', ?4, 'thread', ?5, 'active', 't2')",
+                    (
+                        id,
+                        &workspace_id,
+                        path.to_string_lossy().into_owned(),
+                        "a".repeat(40),
+                        owner,
+                    ),
+                )?;
+                Ok(((), Vec::new()))
+            })
+            .expect("rebind");
+        }),
+        released: Mutex::new(Vec::new()),
+    });
+    h.runtime.set_thread_worktrees(hooks.clone());
+    let resumed = h.runtime.resume(&thread_id, Some("again")).expect("resume");
+    assert_eq!(
+        h.provider.last_session().config.working_directory,
+        fresh.to_string_lossy()
+    );
+    assert_eq!(resumed.branch.as_deref(), Some("kal/agent-12345678"));
+    assert_ne!(resumed.worktree_id.as_deref(), Some(worktree_id.as_str()));
+
+    // Archiving lets the desktop free the folder (the branch stays for a later resume).
+    h.runtime.stop(&thread_id).expect("stop");
+    h.runtime.archive(&thread_id).expect("archive");
+    assert_eq!(
+        *hooks.released.lock().unwrap(),
+        std::slice::from_ref(&thread_id)
+    );
+
+    // A thread without a worktree keeps reporting none.
+    let plain = h.runtime.create(h.request("shared folder")).expect("plain");
+    assert_eq!((plain.branch, plain.worktree_id), (None, None));
+}
+
+#[test]
+fn the_agent_cap_is_checked_before_an_agents_worktree_is_prepared() {
+    use kalcode_core::plans::{Limited, PlanTier};
+    let h = Harness::new();
+    h.runtime
+        .set_agent_limit(Arc::new(|| PlanTier::Free.limit(Limited::ParallelAgents)));
+    let _first = started(&h, "first task");
+    let prepared = std::cell::Cell::new(false);
+    let refused = h
+        .runtime
+        .create_reviewed_in(&new_id(), h.request("isolated"), None, || {
+            prepared.set(true);
+            Ok(h.dir.path().to_path_buf())
+        })
+        .expect_err("one agent at a time on Free");
+    assert_eq!(refused.code, "too_many_agents");
+    assert!(
+        !prepared.get(),
+        "no worktree is created for a refused agent"
+    );
+    assert_eq!(h.runtime.list(None, true).expect("list").len(), 1);
+}

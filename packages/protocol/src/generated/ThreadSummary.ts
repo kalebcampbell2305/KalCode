@@ -26,8 +26,8 @@ accountLabel: string | null, workspaceId: string, workspaceName: string, permiss
  */
 currentActivity: string | null, createdAt: string, lastActivityAt: string, pendingApprovals: number, unreadMessages: number, filesChanged: number | null,
 /**
- * The Git branch the thread works on. Not stored yet: `threads` has no branch column (the
- * worktree binding arrives with L-2, migration v12), so the runtime reports `null`.
+ * The Git branch of the thread's own worktree (see `worktree_id`); `null` for a thread that
+ * runs in the workspace folder.
  */
 branch: string | null, error: ThreadError | null,
 /**
@@ -50,4 +50,10 @@ runtimeKind: ThreadRuntimeKind | null,
 /**
  * The PTY terminal of an interactive provider pane (L-2 / Z7-W4).
  */
-terminalId: string | null, };
+terminalId: string | null,
+/**
+ * The KalCode-managed Git worktree the thread runs in (`git_worktrees` row with purpose
+ * `thread`, owned by this thread, still active). `null`: the thread runs in the workspace
+ * folder.
+ */
+worktreeId: string | null, };

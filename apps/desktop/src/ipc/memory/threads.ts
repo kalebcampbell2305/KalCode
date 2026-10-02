@@ -22,6 +22,7 @@ import type {
   ThreadOptions,
   ThreadStatus,
   ThreadSummary,
+  ThreadWorktreeState,
   ToolCallRecord,
   WorkspaceOption,
 } from "@kalcode/protocol";
@@ -674,6 +675,8 @@ export function createThreadsMemory(
     mode: PermissionMode;
     prompt: string | null;
     name: string;
+    /** Agent Fleet: run in the thread's own worktree and branch. */
+    isolate: boolean;
   }
 
   /** Validates and resolves a create request without writing thread or provider state. */
@@ -725,7 +728,16 @@ export function createThreadsMemory(
           ? "New thread"
           : nameFromPrompt(prompt)
         : validName(args.name);
-    return { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name };
+    const isolate = args.isolate === true;
+    // Like native: a folder outside Git can't host a worktree (memory git_status treats "notes"
+    // and "scratch" workspaces as plain folders).
+    if (isolate && (workspace.name.includes("notes") || workspace.name.includes("scratch")))
+      error(
+        "git",
+        "worktree_unavailable",
+        "This workspace isn't a Git repository, so the agent can't get its own worktree.",
+      );
+    return { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name, isolate };
   };
 
   const createTarget = (plan: CreationPlan): PromptTarget => ({
@@ -747,11 +759,18 @@ export function createThreadsMemory(
     plan: CreationPlan,
     runtimeKind: ThreadSummary["runtimeKind"] = null,
   ): { thread: MemThread; prompt: string | null } => {
-    const { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name } = plan;
+    const { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name, isolate } = plan;
     const created = now();
+    const id = uuid();
+    const slug =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 32) || "agent";
     const t: MemThread = {
       summary: {
-        id: uuid(),
+        id,
         name,
         providerId: provider.id,
         providerName: provider.displayName,
@@ -771,7 +790,8 @@ export function createThreadsMemory(
         pendingApprovals: 0,
         unreadMessages: 0,
         filesChanged: 0,
-        branch: null,
+        branch: isolate ? `kal/${slug}-${id.slice(-8)}` : null,
+        worktreeId: isolate ? uuid() : null,
         error: null,
         archivedAt: null,
         resumable: false,
@@ -799,6 +819,33 @@ export function createThreadsMemory(
       corr(t),
     );
     return { thread: t, prompt };
+  };
+
+  // Agent Fleet worktree facts: a fresh worktree is level with main and merges cleanly; the agent's
+  // edits are uncommitted until the person commits them (the memory runtime's agents don't commit).
+  const committed = new Map<string, { ahead: number; files: number }>();
+  const worktreeFacts = (t: MemThread) => {
+    const done = committed.get(t.summary.id);
+    return {
+      ahead: done?.ahead ?? 0,
+      changed: Math.max(0, (t.summary.filesChanged ?? 0) - (done?.files ?? 0)),
+    };
+  };
+  const worktreeState = (t: MemThread): ThreadWorktreeState | null => {
+    if (!t.summary.worktreeId || !t.summary.branch) return null;
+    const facts = worktreeFacts(t);
+    return {
+      threadId: t.summary.id,
+      worktreeId: t.summary.worktreeId,
+      branch: t.summary.branch,
+      baseBranch: "main",
+      ahead: facts.ahead,
+      behind: 0,
+      changed: facts.changed,
+      untracked: 0,
+      conflicts: false,
+      observedAt: now(),
+    };
   };
 
   const handlers: Record<ThreadCommand, Handler> = {
@@ -866,6 +913,32 @@ export function createThreadsMemory(
     },
     thread_send: (args) => {
       return sendExisting(args.threadId, args.text, args.text, args.promptReviewId);
+    },
+    // Agent Fleet: a fresh worktree is clean, level with main and merges cleanly; the agent's
+    // edits show as uncommitted changes (the memory runtime doesn't commit).
+    thread_worktree_states: (args) => {
+      requireCore();
+      const ids = Array.isArray(args.threadIds) ? (args.threadIds as unknown[]) : [];
+      if (ids.length > 64 || ids.some((id) => typeof id !== "string" || !UUID.test(id)))
+        invalid("invalid_thread_ids", "Those thread references aren't valid.");
+      return ids.flatMap((id) => {
+        const t = threads.get(id as string);
+        return t ? (worktreeState(t) ?? []) : [];
+      });
+    },
+    // Like native: KalCode commits the isolated agent's changes on its branch, never while it works.
+    thread_worktree_commit: (args) => {
+      requireCore();
+      const t = get(args);
+      const message = typeof args.message === "string" ? args.message.trim() : "";
+      if (!message || message.length > 2000) invalid("invalid_commit_message", "Write a commit message first.");
+      if (!worktreeState(t)) error("git", "worktree_unavailable", "This agent doesn't run in its own worktree.");
+      if (t.live && LIVE.has(t.summary.status))
+        invalid("thread_busy", "Stop or wait for the agent before committing its work.");
+      const facts = worktreeFacts(t);
+      if (facts.changed === 0) invalid("nothing_to_commit", "There are no changes to commit.");
+      committed.set(t.summary.id, { ahead: facts.ahead + 1, files: t.summary.filesChanged ?? 0 });
+      return worktreeState(t);
     },
     thread_interrupt: (args) => {
       const t = get(args);
@@ -1077,7 +1150,7 @@ export function createThreadsMemory(
         live: false,
         timers: [],
         buffers: new Map(),
-        providerSessionId: fixture.resumable ? `session-${id.slice(0, 8)}` : null,
+        providerSessionId: fixture.resumable ? `session-${id.slice(-8)}` : null,
         readThrough: conversation.length,
         archived: fixture.archivedAt !== null,
         resumeStatus: null,
@@ -1125,6 +1198,7 @@ function seed(threads: Map<string, MemThread>) {
         unreadMessages: 0,
         filesChanged: 0,
         branch: null,
+        worktreeId: null,
         error: null,
         archivedAt: archived ? minutesAgo(minutes) : null,
         resumable: false,
@@ -1144,7 +1218,7 @@ function seed(threads: Map<string, MemThread>) {
       live,
       timers: [],
       buffers: new Map(),
-      providerSessionId: live ? `session-${id.slice(0, 8)}` : null,
+      providerSessionId: live ? `session-${id.slice(-8)}` : null,
       readThrough: 0,
       archived,
       resumeStatus: null,

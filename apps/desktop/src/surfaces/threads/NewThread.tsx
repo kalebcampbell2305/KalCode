@@ -221,6 +221,9 @@ function NewThreadForm({
   const [model, setModel] = useState("");
   const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
   const [remember, setRemember] = useState(false);
+  // Agent Fleet: each agent gets its own worktree and branch unless the person opts out.
+  const [isolate, setIsolate] = useState(true);
+  const repository = useIsRepository(workspaceId);
   // The saved default (Settings → Permissions) when a thread can start in it, else Approve; until
   // the settings load, the runtime's answer (`thread_options` applies the same rule natively).
   const { settings: permissionSettings } = usePermissions();
@@ -303,6 +306,7 @@ function NewThreadForm({
       name: name.trim() || null,
       confirmBypass: false,
       profileId: null,
+      isolate: isolate && repository === true,
     };
     // Captured now: the choice the person confirmed, not whatever the form shows later.
     const rememberFor =
@@ -521,6 +525,31 @@ function NewThreadForm({
           ) : null}
         </div>
 
+        <div className={styles.remember}>
+          <label className={styles.rememberToggle}>
+            <input
+              type="checkbox"
+              checked={isolate && repository === true}
+              disabled={repository !== true}
+              aria-describedby={`${id}-isolate-hint`}
+              onChange={(event) => {
+                confirmation.cancel();
+                setIsolate(event.target.checked);
+              }}
+            />
+            Run in its own worktree
+          </label>
+          <p id={`${id}-isolate-hint`} className={styles.hint}>
+            {repository === false
+              ? `${workspace?.name ?? "This workspace"} isn't a Git repository, so the agent works in the folder itself.`
+              : repository === null
+                ? "Checking the workspace's Git repository…"
+                : isolate
+                  ? "The agent works on its own branch in a separate folder, so parallel agents never collide."
+                  : "The agent works directly in the workspace folder."}
+          </p>
+        </div>
+
         <div className={styles.field}>
           <p id={`${id}-mode-label`} className={styles.label}>
             Permissions
@@ -645,4 +674,26 @@ function accountOption(account: ProviderAccount): string {
   if (account.isDefault) parts.push("Default");
   if (account.authenticationState !== "authenticated") parts.push(accountSignIn(account).label);
   return parts.join(" · ");
+}
+
+/** Whether a workspace folder is in a Git repository (null while checking or when unknown). */
+function useIsRepository(workspaceId: string): boolean | null {
+  const { client } = useRuntime();
+  const [state, setState] = useState<{ id: string; repository: boolean | null }>({ id: "", repository: null });
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    client.gitStatus(workspaceId, 1).then(
+      (r) => {
+        if (!cancelled) setState({ id: workspaceId, repository: r.repository });
+      },
+      () => {
+        if (!cancelled) setState({ id: workspaceId, repository: null });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId]);
+  return state.id === workspaceId ? state.repository : null;
 }

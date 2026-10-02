@@ -52,6 +52,7 @@ export function thread(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
     permissionProfileId: null,
     runtimeKind: null,
     terminalId: null,
+    worktreeId: null,
     ...overrides,
   };
 }

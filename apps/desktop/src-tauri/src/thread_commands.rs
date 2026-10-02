@@ -987,6 +987,9 @@ pub fn thread_create(
     confirm_bypass: Option<bool>,
     profile_id: Option<String>,
     prompt_review_id: Option<String>,
+    // Agent Fleet: `true` runs the thread in its own Git worktree and branch.
+    isolate: Option<bool>,
+    git: crate::runtime_coordinator::RuntimeState<crate::git_commands::GitState>,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     validate_create_controls(permission_mode, confirm_bypass, profile_id.as_deref())?;
@@ -1002,10 +1005,275 @@ pub fn thread_create(
     )
     .map_err(|error| error.log_and_convert("thread_create_account"))?;
     state.ensure_providers(app.core.as_ref());
+    if isolate == Some(true) {
+        let root = crate::git_commands::workspace_root(&app, &request.workspace_id)
+            .map_err(|e| e.log_and_convert("thread_create_worktree"))?;
+        return create_thread_in_worktree(
+            app.core()?,
+            &git.0,
+            state.runtime()?,
+            &root,
+            request,
+            prompt_review_id.as_deref(),
+        )
+        .map_err(|e| e.log_and_convert("thread_create"));
+    }
     state
         .runtime()?
         .create_reviewed(request, prompt_review_id.as_deref())
         .map_err(|e| e.log_and_convert("thread_create"))
+}
+
+fn worktree_unavailable() -> KalError {
+    KalError::new(
+        ErrorCategory::Git,
+        "worktree_unavailable",
+        "This workspace isn't a Git repository, so the agent can't get its own worktree.",
+    )
+}
+
+/// The branch of a thread's own worktree: `kal/<slug of the name, or "agent">-<8 hex>`. The
+/// suffix is the end of the thread id, its random part (a v7 id starts with a timestamp that
+/// threads created in the same minute share).
+fn thread_branch_name(name: Option<&str>, thread_id: &str) -> String {
+    let mut slug = String::new();
+    for c in name.unwrap_or_default().chars() {
+        if slug.len() >= 32 {
+            break;
+        }
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    let slug = if slug.is_empty() { "agent" } else { slug };
+    let hex: String = thread_id.chars().filter(char::is_ascii_hexdigit).collect();
+    let suffix = &hex[hex.len().saturating_sub(8)..];
+    format!("kal/{slug}-{suffix}")
+}
+
+/// Creates a thread that runs in its own KalCode-managed Git worktree on a new branch from the
+/// workspace's HEAD, so parallel agents never share a folder. The checkout happens only after
+/// the runtime admitted the prompt and validated the provider, model and workspace; the worktree
+/// is recorded in `git_worktrees` (purpose `thread`, owner = the thread id) before the thread, so
+/// the returned summary carries its branch. If the thread can't be created, the worktree and
+/// its still-empty branch are rolled back (the row is marked removed only when the folder really
+/// was removed); a thread that was recorded (for example one whose provider then failed to
+/// start) keeps its worktree.
+pub(crate) fn create_thread_in_worktree(
+    core: &Arc<Core>,
+    git: &kalcode_git::GitCore,
+    runtime: &ThreadRuntime,
+    root: &kalcode_git::WorkspaceRoot,
+    request: CreateThread,
+    review_id: Option<&str>,
+) -> kalcode_core::Result<ThreadSummary> {
+    use kalcode_git::store as git_store;
+    use kalcode_git::types::WorktreePurpose;
+    use kalcode_git::worktree;
+
+    let exe = git.git()?;
+    let repo = git.repo(root)?.ok_or_else(worktree_unavailable)?;
+    let thread_id = kalcode_contracts::ids::new_id();
+    let branch = thread_branch_name(request.name.as_deref(), &thread_id);
+    let made = std::cell::RefCell::new(None);
+    let recorded = std::cell::RefCell::new(None);
+    let created = runtime.create_reviewed_in(&thread_id, request, review_id, || {
+        let new = worktree::create_managed(
+            exe,
+            &repo,
+            git.worktrees_root(),
+            &branch,
+            None,
+            WorktreePurpose::Thread,
+            Some(thread_id.clone()),
+        )?;
+        *made.borrow_mut() = Some(new.clone());
+        let (row, _) =
+            core.write_with_events(|tx| Ok((git_store::insert_worktree(tx, &new)?, Vec::new())))?;
+        tracing::info!(event = "thread.worktree_created", thread_id = %thread_id, worktree_id = %row.id);
+        *recorded.borrow_mut() = Some(row.id);
+        thread_folder(&repo, &new.path)
+    });
+    match created {
+        Ok(summary) => Ok(summary),
+        Err(error) => {
+            if let Some(new) = made.into_inner()
+                && runtime.get(&thread_id).is_err()
+            {
+                roll_back_thread_worktree(core, exe, &repo, &new, recorded.into_inner().as_deref());
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Undoes a new thread worktree whose thread was never created. The row (when recorded) becomes
+/// `removed` only if the folder was removed, otherwise `abandoned`, so it is never mistaken for
+/// a live binding nor claimed gone while its folder still exists.
+fn roll_back_thread_worktree(
+    core: &Core,
+    git: &kalcode_git::Git,
+    repo: &kalcode_git::repo::Repo,
+    new: &kalcode_git::worktree::NewWorktree,
+    row_id: Option<&str>,
+) {
+    use kalcode_git::types::WorktreeStatus;
+    use kalcode_git::worktree::{self, RemoveMode};
+
+    let status = match worktree::remove(git, repo, &new.path, RemoveMode::Safe) {
+        Ok(()) => {
+            if let Err(error) =
+                worktree::discard_new_branch(git, repo, &new.branch, &new.base_commit)
+            {
+                tracing::warn!(event = "thread.worktree_branch_kept", error = %error.diagnostic());
+            }
+            WorktreeStatus::Removed
+        }
+        Err(error) => {
+            tracing::warn!(event = "thread.worktree_rollback_failed", error = %error.diagnostic());
+            WorktreeStatus::Abandoned
+        }
+    };
+    if let Some(id) = row_id
+        && let Err(error) = core.write_with_events(|tx| {
+            kalcode_git::store::set_worktree_status(tx, id, status)?;
+            Ok(((), Vec::new()))
+        })
+    {
+        tracing::warn!(event = "thread.worktree_rollback_failed", error = %error.diagnostic());
+    }
+}
+
+/// The folder a thread runs in inside its worktree: the worktree itself, or for a workspace that
+/// is a subfolder of a larger repository, the same subfolder of the worktree. Canonical.
+fn thread_folder(
+    repo: &kalcode_git::repo::Repo,
+    worktree: &std::path::Path,
+) -> kalcode_core::Result<std::path::PathBuf> {
+    let folder = repo
+        .prefix()
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(worktree.to_path_buf(), |path, part| path.join(part));
+    std::fs::create_dir_all(&folder).map_err(|e| {
+        KalError::new(
+            ErrorCategory::Filesystem,
+            "worktree_folder_unavailable",
+            "KalCode couldn't create the worktree folder.",
+        )
+        .with_source(e)
+    })?;
+    kalcode_core::workspaces::canonical_folder(&folder)
+}
+
+/// Agent Fleet's [`kalcode_threads::ThreadWorktrees`]: brings back an isolated thread's worktree
+/// from its branch, and frees the folder of an archived one.
+pub(crate) struct DesktopThreadWorktrees {
+    core: Arc<Core>,
+    git: Arc<kalcode_git::GitCore>,
+}
+
+impl DesktopThreadWorktrees {
+    pub(crate) fn new(core: Arc<Core>, git: Arc<kalcode_git::GitCore>) -> Self {
+        Self { core, git }
+    }
+
+    fn repo(
+        &self,
+        workspace_id: &str,
+    ) -> kalcode_core::Result<(&kalcode_git::Git, kalcode_git::repo::Repo)> {
+        let root = crate::git_commands::workspace_root_in(&self.core, workspace_id)?;
+        let exe = self.git.git()?;
+        let repo = self.git.repo(&root)?.ok_or_else(worktree_unavailable)?;
+        Ok((exe, repo))
+    }
+}
+
+impl kalcode_threads::ThreadWorktrees for DesktopThreadWorktrees {
+    fn reattach(&self, thread_id: &str) -> kalcode_core::Result<std::path::PathBuf> {
+        use kalcode_git::store as git_store;
+        use kalcode_git::types::{WorktreePurpose, WorktreeStatus};
+        use kalcode_git::worktree::{self, RemoveMode};
+
+        let (row, old_path) = self
+            .core
+            .read(|conn| git_store::latest_thread_worktree(conn, thread_id))?
+            .ok_or_else(|| {
+                KalError::validation("worktree_unknown", "That worktree no longer exists.")
+            })?;
+        let (exe, repo) = self.repo(&row.workspace_id)?;
+        if row.status == WorktreeStatus::Active && old_path.is_dir() {
+            return thread_folder(&repo, &old_path);
+        }
+        // The folder is gone: check the branch (with everything committed on it) out again.
+        worktree::forget_missing(exe, &repo, &old_path)?;
+        let new = worktree::attach_managed(
+            exe,
+            &repo,
+            self.git.worktrees_root(),
+            &row.branch,
+            WorktreePurpose::Thread,
+            Some(thread_id.to_owned()),
+        )?;
+        let recorded = self.core.write_with_events(|tx| {
+            if row.status == WorktreeStatus::Active {
+                git_store::set_worktree_status(tx, &row.id, WorktreeStatus::Removed)?;
+            }
+            Ok((git_store::insert_worktree(tx, &new)?, Vec::new()))
+        });
+        match recorded {
+            Ok((new_row, _)) => {
+                tracing::info!(event = "thread.worktree_reattached", thread_id, worktree_id = %new_row.id);
+                thread_folder(&repo, &new.path)
+            }
+            Err(error) => {
+                let _ = worktree::remove(exe, &repo, &new.path, RemoveMode::Safe);
+                Err(error)
+            }
+        }
+    }
+
+    fn release(&self, thread_id: &str) {
+        use kalcode_git::store as git_store;
+        use kalcode_git::types::WorktreeStatus;
+        use kalcode_git::worktree::{self, RemoveMode};
+
+        let released = (|| -> kalcode_core::Result<bool> {
+            let Some((row, path)) = self
+                .core
+                .read(|conn| git_store::active_thread_worktree(conn, thread_id))?
+            else {
+                return Ok(false);
+            };
+            if !path.exists() {
+                // Nothing to free; a later resume re-attaches the branch.
+                return Ok(false);
+            }
+            let (exe, repo) = self.repo(&row.workspace_id)?;
+            // Refuses while anything is uncommitted: then the folder (and work) stays.
+            worktree::remove(exe, &repo, &path, RemoveMode::Safe)?;
+            self.git.forget_workspace(&row.id);
+            self.core.write_with_events(|tx| {
+                git_store::set_worktree_status(tx, &row.id, WorktreeStatus::Removed)?;
+                Ok(((), Vec::new()))
+            })?;
+            Ok(true)
+        })();
+        match released {
+            Ok(true) => tracing::info!(event = "thread.worktree_released", thread_id),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::info!(
+                    event = "thread.worktree_kept",
+                    thread_id,
+                    error_code = error.code
+                );
+            }
+        }
+    }
 }
 
 #[tauri::command(async)]
@@ -2206,5 +2474,556 @@ mod tests {
                 .code,
             "provider_account_unknown"
         );
+    }
+
+    // ---------------------------------------------------------------- Agent Fleet worktrees
+
+    fn git_output(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+        let mut command = std::process::Command::new("git");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            command.creation_flags(0x0800_0000);
+        }
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("spawn git")
+    }
+
+    fn plain_git(dir: &std::path::Path, args: &[&str]) {
+        let out = git_output(dir, args);
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    struct FleetFixture {
+        accounts: AccountFixture,
+        spy: Arc<StartSpy>,
+        runtime: ThreadRuntime,
+        git: Arc<kalcode_git::GitCore>,
+        root: kalcode_git::WorkspaceRoot,
+    }
+
+    impl FleetFixture {
+        fn new(repository: bool) -> Self {
+            let accounts = AccountFixture::new();
+            let folder = accounts._temp.path().join("workspace");
+            std::fs::create_dir_all(&folder).expect("workspace folder");
+            if repository {
+                plain_git(&folder, &["init", "-q", "-b", "main"]);
+                for (key, value) in [
+                    ("user.name", "Test User"),
+                    ("user.email", "test@example.invalid"),
+                    ("commit.gpgSign", "false"),
+                    ("core.autocrlf", "false"),
+                ] {
+                    plain_git(&folder, &["config", key, value]);
+                }
+                std::fs::write(folder.join("README.md"), "hello\n").expect("readme");
+                plain_git(&folder, &["add", "-A"]);
+                plain_git(&folder, &["commit", "-q", "--no-verify", "-m", "initial"]);
+            }
+            let root = kalcode_git::WorkspaceRoot::new(&accounts.workspace_id, &folder)
+                .expect("workspace root");
+            let spy = Arc::new(StartSpy::default());
+            let registry = Arc::new(ProviderRegistry::new());
+            registry.register(spy.clone());
+            let runtime = ThreadRuntime::new(
+                accounts.core.clone(),
+                registry,
+                Arc::new(OneWorkspace(kalcode_threads::ResolvedWorkspace {
+                    id: accounts.workspace_id.clone(),
+                    name: "Fixture".into(),
+                    root: root.path().to_path_buf(),
+                })),
+                Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+            )
+            .expect("runtime");
+            let git = Arc::new(kalcode_git::GitCore::new(
+                &accounts._temp.path().join("data"),
+            ));
+            runtime.set_thread_worktrees(Arc::new(DesktopThreadWorktrees::new(
+                accounts.core.clone(),
+                git.clone(),
+            )));
+            Self {
+                accounts,
+                spy,
+                runtime,
+                git,
+                root,
+            }
+        }
+
+        fn request(&self, name: Option<&str>, model: Option<&str>) -> CreateThread {
+            CreateThread {
+                provider_id: ProviderId::CODEX.into(),
+                provider_account_id: None,
+                account_label: None,
+                workspace_id: self.accounts.workspace_id.clone(),
+                model: model.map(str::to_owned),
+                effort: None,
+                permission_mode: PermissionMode::Approve,
+                prompt: "fix the login bug".into(),
+                name: name.map(str::to_owned),
+            }
+        }
+
+        fn create(&self, request: CreateThread) -> kalcode_core::Result<ThreadSummary> {
+            create_thread_in_worktree(
+                &self.accounts.core,
+                &self.git,
+                &self.runtime,
+                &self.root,
+                request,
+                None,
+            )
+        }
+
+        fn worktrees(&self) -> Vec<kalcode_git::types::Worktree> {
+            self.accounts
+                .core
+                .read(|conn| {
+                    kalcode_git::store::list_worktrees(conn, &self.accounts.workspace_id, true)
+                })
+                .expect("worktrees")
+        }
+
+        fn states(&self, thread_id: &str) -> Vec<kalcode_contracts::threads::ThreadWorktreeState> {
+            let (row, path) = self
+                .accounts
+                .core
+                .read(|conn| kalcode_git::store::active_thread_worktree(conn, thread_id))
+                .expect("lookup")
+                .expect("bound");
+            crate::git_commands::thread_worktree_states_for(
+                &self.git,
+                vec![(thread_id.to_owned(), row, path, self.root.clone())],
+            )
+        }
+    }
+
+    #[test]
+    fn thread_branch_names_are_safe_slugs_with_the_ids_random_tail() {
+        let id = "0192f3c4-0000-7000-8000-00000000abcd";
+        assert_eq!(
+            thread_branch_name(Some("Fix the Login bug!"), id),
+            "kal/fix-the-login-bug-0000abcd"
+        );
+        assert_eq!(thread_branch_name(None, id), "kal/agent-0000abcd");
+        assert_eq!(
+            thread_branch_name(Some("  \u{2728} "), id),
+            "kal/agent-0000abcd"
+        );
+        let long = thread_branch_name(Some(&"x".repeat(100)), id);
+        assert_eq!(long, format!("kal/{}-0000abcd", "x".repeat(32)));
+        for name in [Some("../.lock"), Some("-a"), Some("a//b@{"), None] {
+            kalcode_git::repo::validate_branch_name(&thread_branch_name(name, id))
+                .expect("valid branch");
+        }
+    }
+
+    #[test]
+    fn isolated_thread_runs_in_its_own_worktree_and_reports_its_branch() {
+        let fixture = FleetFixture::new(true);
+        let thread = fixture
+            .create(fixture.request(Some("Fix login"), None))
+            .expect("isolated thread");
+        let branch = thread.branch.clone().expect("branch");
+        assert!(branch.starts_with("kal/fix-login-"), "{branch}");
+        let worktree_id = thread.worktree_id.clone().expect("worktree id");
+        let rows = fixture.worktrees();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, worktree_id);
+        assert_eq!(rows[0].owner_ref.as_deref(), Some(thread.id.as_str()));
+        assert_eq!(rows[0].branch, branch);
+        let path = fixture
+            .accounts
+            .core
+            .read(|conn| kalcode_git::store::worktree_path(conn, &worktree_id))
+            .expect("path");
+        let starts = fixture.spy.starts();
+        assert_eq!(starts.len(), 1);
+        let cwd = std::path::PathBuf::from(&starts[0].working_directory);
+        assert_eq!(
+            cwd,
+            kalcode_core::workspaces::canonical_folder(&path).expect("canonical")
+        );
+        assert!(cwd.join("README.md").exists());
+        assert_ne!(cwd, fixture.root.path());
+        // The summary every surface reads carries the binding too.
+        let listed = fixture.runtime.get(&thread.id).expect("get");
+        assert_eq!(listed.worktree_id.as_deref(), Some(worktree_id.as_str()));
+
+        // Git facts for the Fleet: level with main, clean, merges cleanly.
+        let states = fixture.states(&thread.id);
+        assert_eq!(states.len(), 1);
+        let state = &states[0];
+        assert_eq!(state.worktree_id, worktree_id);
+        assert_eq!(state.base_branch.as_deref(), Some("main"));
+        assert_eq!((state.ahead, state.behind), (Some(0), Some(0)));
+        assert_eq!((state.changed, state.untracked), (0, 0));
+        assert_eq!(state.conflicts, Some(false));
+        std::fs::write(cwd.join("new.txt"), "agent").expect("write");
+        assert_eq!(fixture.states(&thread.id)[0].untracked, 1);
+    }
+
+    #[test]
+    fn failed_isolated_creation_leaves_no_worktree_row_or_branch_behind() {
+        let fixture = FleetFixture::new(true);
+        // A request the runtime refuses never reaches the checkout.
+        let mut request = fixture.request(Some("Broken"), None);
+        request.provider_id = ProviderId::GEMINI_CLI.into();
+        let error = fixture.create(request).expect_err("unknown provider");
+        assert_eq!(error.code, "provider_unavailable");
+        assert!(
+            fixture.worktrees().is_empty(),
+            "no checkout for a refused request"
+        );
+        assert_eq!(
+            git_output(fixture.root.path(), &["worktree", "list"])
+                .stdout
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count(),
+            1
+        );
+        assert!(fixture.spy.starts().is_empty());
+        assert!(
+            fixture
+                .runtime
+                .list(None, true)
+                .expect("threads")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rollback_marks_the_row_removed_only_when_the_folder_is_gone() {
+        use kalcode_git::types::{WorktreePurpose, WorktreeStatus};
+        let fixture = FleetFixture::new(true);
+        let exe = fixture.git.git().expect("git");
+        let repo = fixture
+            .git
+            .repo(&fixture.root)
+            .expect("repo")
+            .expect("repo");
+        let make = |branch: &str| {
+            let new = kalcode_git::worktree::create_managed(
+                exe,
+                &repo,
+                fixture.git.worktrees_root(),
+                branch,
+                None,
+                WorktreePurpose::Thread,
+                Some(kalcode_contracts::ids::new_id()),
+            )
+            .expect("worktree");
+            let row = fixture
+                .accounts
+                .core
+                .write_with_events(|tx| {
+                    Ok((kalcode_git::store::insert_worktree(tx, &new)?, Vec::new()))
+                })
+                .expect("row")
+                .0;
+            (new, row)
+        };
+        let status = |id: &str| {
+            fixture
+                .accounts
+                .core
+                .read(|conn| kalcode_git::store::get_worktree(conn, id))
+                .expect("row")
+                .status
+        };
+        let (clean, clean_row) = make("kal/clean-1");
+        roll_back_thread_worktree(
+            &fixture.accounts.core,
+            exe,
+            &repo,
+            &clean,
+            Some(&clean_row.id),
+        );
+        assert_eq!(status(&clean_row.id), WorktreeStatus::Removed);
+        assert!(!clean.path.exists());
+        assert!(
+            !git_output(
+                fixture.root.path(),
+                &["rev-parse", "--verify", "--quiet", "refs/heads/kal/clean-1"]
+            )
+            .status
+            .success()
+        );
+        let (dirty, dirty_row) = make("kal/dirty-1");
+        std::fs::write(dirty.path.join("work.txt"), "unsaved").expect("write");
+        roll_back_thread_worktree(
+            &fixture.accounts.core,
+            exe,
+            &repo,
+            &dirty,
+            Some(&dirty_row.id),
+        );
+        assert_eq!(status(&dirty_row.id), WorktreeStatus::Abandoned);
+        assert!(dirty.path.join("work.txt").exists(), "nothing is lost");
+    }
+
+    #[test]
+    fn a_lost_worktree_is_reattached_from_its_branch_and_never_the_main_folder() {
+        let fixture = FleetFixture::new(true);
+        let thread = fixture
+            .create(fixture.request(Some("Lost"), None))
+            .expect("isolated thread");
+        let branch = thread.branch.clone().expect("branch");
+        let first = std::path::PathBuf::from(&fixture.spy.starts()[0].working_directory);
+        // The agent committed work, then the folder was deleted by hand.
+        std::fs::write(first.join("agent.txt"), "committed\n").expect("write");
+        plain_git(&first, &["add", "-A"]);
+        plain_git(&first, &["commit", "-q", "--no-verify", "-m", "agent"]);
+        std::fs::remove_dir_all(&first).expect("delete worktree folder");
+
+        let resumed = fixture
+            .runtime
+            .resume(&thread.id, Some("go on"))
+            .expect("resume");
+        let starts = fixture.spy.starts();
+        assert_eq!(starts.len(), 2);
+        let second = std::path::PathBuf::from(&starts[1].working_directory);
+        assert_ne!(second, first);
+        assert_ne!(second, fixture.root.path(), "never the main folder");
+        assert_eq!(
+            std::fs::read_to_string(second.join("agent.txt")).expect("work is back"),
+            "committed\n"
+        );
+        assert_eq!(resumed.branch.as_deref(), Some(branch.as_str()));
+        assert_ne!(resumed.worktree_id, thread.worktree_id);
+        let rows = fixture.worktrees();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.status == kalcode_git::types::WorktreeStatus::Active)
+                .count(),
+            1
+        );
+
+        // Without its branch there is nothing safe to run in: refused, no launch.
+        std::fs::remove_dir_all(&second).expect("delete again");
+        plain_git(fixture.root.path(), &["worktree", "prune"]);
+        plain_git(fixture.root.path(), &["branch", "-D", &branch]);
+        let error = fixture
+            .runtime
+            .resume(&thread.id, Some("again"))
+            .expect_err("no branch");
+        assert_eq!(error.code, "thread_folder_unavailable");
+        assert_eq!(fixture.spy.starts().len(), 2);
+    }
+
+    #[test]
+    fn archiving_frees_a_clean_worktree_and_resume_brings_it_back() {
+        use kalcode_git::types::WorktreeStatus;
+        let fixture = FleetFixture::new(true);
+        let thread = fixture
+            .create(fixture.request(Some("Archive me"), None))
+            .expect("isolated thread");
+        let branch = thread.branch.clone().expect("branch");
+        let folder = std::path::PathBuf::from(&fixture.spy.starts()[0].working_directory);
+
+        // Uncommitted work keeps the folder.
+        std::fs::write(folder.join("draft.txt"), "unsaved").expect("write");
+        let archived = fixture.runtime.archive(&thread.id).expect("archive");
+        assert!(folder.join("draft.txt").exists());
+        assert_eq!(archived.worktree_id, thread.worktree_id);
+        fixture.runtime.unarchive(&thread.id).expect("unarchive");
+
+        // A clean worktree is freed on archive; its branch stays.
+        std::fs::remove_file(folder.join("draft.txt")).expect("clean");
+        let archived = fixture.runtime.archive(&thread.id).expect("archive");
+        assert!(!folder.exists(), "the folder is freed");
+        assert_eq!(archived.worktree_id, None);
+        assert_eq!(fixture.worktrees()[0].status, WorktreeStatus::Removed);
+        assert!(
+            git_output(
+                fixture.root.path(),
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{branch}")
+                ]
+            )
+            .status
+            .success(),
+            "the branch is kept"
+        );
+
+        fixture.runtime.unarchive(&thread.id).expect("unarchive");
+        let resumed = fixture
+            .runtime
+            .resume(&thread.id, Some("continue"))
+            .expect("resume");
+        assert_eq!(resumed.branch.as_deref(), Some(branch.as_str()));
+        let cwd = std::path::PathBuf::from(
+            &fixture
+                .spy
+                .starts()
+                .last()
+                .expect("start")
+                .working_directory,
+        );
+        assert_ne!(cwd, fixture.root.path());
+        assert!(cwd.join("README.md").exists());
+    }
+
+    #[test]
+    fn isolation_outside_git_is_refused_without_a_fallback() {
+        let fixture = FleetFixture::new(false);
+        let error = fixture
+            .create(fixture.request(None, None))
+            .expect_err("not a repository");
+        assert_eq!(error.code, "worktree_unavailable");
+        assert_eq!(
+            error.message,
+            "This workspace isn't a Git repository, so the agent can't get its own worktree."
+        );
+        assert!(fixture.spy.starts().is_empty());
+        assert!(fixture.worktrees().is_empty());
+    }
+
+    #[test]
+    fn thread_worktree_states_args_are_bounded_and_validated() {
+        use crate::git_commands::{MAX_THREAD_WORKTREE_STATES, thread_ids_arg};
+        let id = kalcode_contracts::ids::new_id();
+        assert_eq!(
+            thread_ids_arg(vec![id.clone(), id.clone()]).expect("dedupe"),
+            std::slice::from_ref(&id)
+        );
+        assert!(thread_ids_arg(Vec::new()).expect("empty").is_empty());
+        let max: Vec<String> = (0..MAX_THREAD_WORKTREE_STATES)
+            .map(|_| kalcode_contracts::ids::new_id())
+            .collect();
+        assert_eq!(thread_ids_arg(max.clone()).expect("max").len(), max.len());
+        let mut over = max;
+        over.push(kalcode_contracts::ids::new_id());
+        for bad in [
+            over,
+            vec!["../x".into()],
+            vec!["not-a-uuid".into()],
+            vec![String::new()],
+        ] {
+            assert_eq!(
+                thread_ids_arg(bad).expect_err("invalid").code,
+                "invalid_thread_ids"
+            );
+        }
+        assert!(crate::command_registry::COMMANDS.contains(&"thread_worktree_states"));
+        assert!(crate::command_registry::COMMANDS.contains(&"thread_worktree_commit"));
+    }
+
+    #[test]
+    fn committing_an_agents_worktree_validates_refuses_and_records_the_commit() {
+        use crate::git_commands::commit_thread_worktree;
+        let fixture = FleetFixture::new(true);
+        let commit = |thread_id: &str, message: &str| {
+            commit_thread_worktree(
+                &fixture.accounts.core,
+                &fixture.git,
+                &fixture.runtime,
+                thread_id,
+                message,
+            )
+        };
+        let code = |result: kalcode_core::Result<
+            kalcode_contracts::threads::ThreadWorktreeState,
+        >| { result.expect_err("refused").code };
+
+        // Argument validation comes first.
+        assert_eq!(code(commit("not-an-id", "m")), "invalid_thread_id");
+        let unknown = kalcode_contracts::ids::new_id();
+        for bad in ["", "  \n ", "a\0b", "esc\u{1b}[0m", &"x".repeat(2_001)] {
+            assert_eq!(code(commit(&unknown, bad)), "invalid_commit_message");
+        }
+        assert_eq!(code(commit(&unknown, "m")), "thread_not_found");
+
+        // A thread running in the workspace folder has no worktree to commit.
+        let shared = fixture
+            .runtime
+            .create(fixture.request(Some("Shared"), None))
+            .expect("shared thread");
+        assert_eq!(code(commit(&shared.id, "m")), "worktree_unknown");
+
+        let thread = fixture
+            .create(fixture.request(Some("Commit me"), None))
+            .expect("isolated thread");
+        let branch = thread.branch.clone().expect("branch");
+        let folder = std::path::PathBuf::from(&fixture.spy.starts()[1].working_directory);
+        assert_eq!(code(commit(&thread.id, "m")), "nothing_to_commit");
+
+        // Never while the agent may still be changing files.
+        std::fs::write(folder.join("feature.txt"), "agent work\n").expect("write");
+        let set_status = |status: ThreadStatus| {
+            fixture
+                .accounts
+                .core
+                .write_with_events(|tx| {
+                    kalcode_threads::store::set_status(tx, &thread.id, status, None, "t")?;
+                    Ok(((), Vec::new()))
+                })
+                .expect("status");
+        };
+        for busy in [
+            ThreadStatus::Thinking,
+            ThreadStatus::WaitingForPermission,
+            ThreadStatus::Paused,
+        ] {
+            set_status(busy);
+            let error = commit(&thread.id, "m").expect_err("busy");
+            assert_eq!(error.code, "thread_busy");
+            assert_eq!(
+                error.message,
+                "Stop or wait for the agent before committing its work."
+            );
+        }
+        set_status(ThreadStatus::Idle);
+
+        let main_head = git_output(fixture.root.path(), &["rev-parse", "HEAD"]).stdout;
+        let state = commit(&thread.id, "Add the feature").expect("commit");
+        assert_eq!(state.branch, branch);
+        assert_eq!((state.ahead, state.behind), (Some(1), Some(0)));
+        assert_eq!((state.changed, state.untracked), (0, 0));
+        assert_eq!(state.conflicts, Some(false));
+        assert_eq!(
+            git_output(fixture.root.path(), &["rev-parse", "HEAD"]).stdout,
+            main_head,
+            "the main checkout is untouched"
+        );
+        assert!(!fixture.root.path().join("feature.txt").exists());
+        let events = fixture
+            .accounts
+            .core
+            .recent_events(50, None)
+            .expect("events");
+        let recorded = events
+            .iter()
+            .find(|e| e.event.type_name() == "git.commit_created")
+            .expect("git.commit_created");
+        assert_eq!(
+            recorded.correlation.thread_id.as_deref(),
+            Some(thread.id.as_str())
+        );
+        assert_eq!(
+            recorded.correlation.workspace_id.as_deref(),
+            Some(fixture.accounts.workspace_id.as_str())
+        );
+        assert_eq!(code(commit(&thread.id, "again")), "nothing_to_commit");
+
+        // A worktree folder that is gone.
+        std::fs::remove_dir_all(&folder).expect("delete");
+        assert_eq!(code(commit(&thread.id, "m")), "worktree_missing");
     }
 }

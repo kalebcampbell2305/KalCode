@@ -70,6 +70,7 @@ function summary(partial: Partial<ThreadSummary>): ThreadSummary {
     permissionProfileId: null,
     runtimeKind: null,
     terminalId: null,
+    worktreeId: null,
     ...partial,
   };
 }

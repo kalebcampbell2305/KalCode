@@ -141,7 +141,8 @@ test.describe("cards", () => {
   test("show provider, name, workspace, branch, activity, status, mode and last activity", async ({ page }) => {
     await open(page, "busy");
     const fix = card(page, "Fix flaky checkout test");
-    await expect(fix.getByText("Codex", { exact: true })).toBeVisible();
+    // Agent Fleet call sign: the provider plus a letter.
+    await expect(fix.getByText(/^Codex [A-Z]+$/)).toBeVisible();
     await expect(fix.getByText("gpt-5-codex")).toBeVisible();
     await expect(fix.getByText("atlas-api")).toBeVisible();
     await expect(fix.getByText("fix/checkout-flake")).toBeVisible();
@@ -164,10 +165,11 @@ test.describe("cards", () => {
 
   test("DONE is unmistakable, with its follow-ups", async ({ page }) => {
     await open(page, "busy");
-    const done = card(page, "Add light theme tokens");
+    // (Add light theme tokens is ready to merge in this fixture; see fleet.spec.ts.)
+    const done = card(page, "Generate API client");
     await expect(done.getByText("Completed", { exact: true })).toBeVisible();
     await expect(done.getByRole("button", { name: "Open" })).toBeVisible();
-    await done.getByRole("button", { name: "More actions for Add light theme tokens" }).click();
+    await done.getByRole("button", { name: "More actions for Generate API client" }).click();
     await expect(page.getByRole("menuitem")).toHaveText(["Open", "Archive"]);
   });
 

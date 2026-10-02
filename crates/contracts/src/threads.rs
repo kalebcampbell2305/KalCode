@@ -281,8 +281,8 @@ pub struct ThreadSummary {
     pub pending_approvals: u32,
     pub unread_messages: u32,
     pub files_changed: Option<u32>,
-    /// The Git branch the thread works on. Not stored yet: `threads` has no branch column (the
-    /// worktree binding arrives with L-2, migration v12), so the runtime reports `null`.
+    /// The Git branch of the thread's own worktree (see `worktree_id`); `null` for a thread that
+    /// runs in the workspace folder.
     pub branch: Option<String>,
     pub error: Option<ThreadError>,
     // ---- Adopted in CA-1 (Z3 / Z4 / Z7 requests). Defaulted so older JSON still decodes. ----
@@ -302,6 +302,40 @@ pub struct ThreadSummary {
     /// The PTY terminal of an interactive provider pane (L-2 / Z7-W4).
     #[serde(default)]
     pub terminal_id: Option<String>,
+    /// The KalCode-managed Git worktree the thread runs in (`git_worktrees` row with purpose
+    /// `thread`, owned by this thread, still active). `null`: the thread runs in the workspace
+    /// folder.
+    #[serde(default)]
+    pub worktree_id: Option<String>,
+}
+
+/// Git facts about a thread's own worktree (`thread_worktree_states`), from which the UI decides
+/// whether the agent's work is ready to merge. Computed natively on request; paths never cross
+/// IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ThreadWorktreeState {
+    pub thread_id: String,
+    pub worktree_id: String,
+    /// The worktree's branch (`kal/...`).
+    pub branch: String,
+    /// The branch checked out in the workspace's main folder, which the worktree branch would
+    /// merge into; `null` when that folder is on a detached HEAD.
+    pub base_branch: Option<String>,
+    /// Commits on the worktree branch that the base branch doesn't have; `null` when unknown.
+    pub ahead: Option<u32>,
+    /// Commits on the base branch that the worktree branch doesn't have; `null` when unknown.
+    pub behind: Option<u32>,
+    /// Uncommitted changes (modified, staged, deleted, renamed, conflicted) in the worktree.
+    pub changed: u32,
+    /// Untracked (not ignored) files in the worktree.
+    pub untracked: u32,
+    /// Whether merging the worktree branch into the base branch would conflict. `null` when
+    /// unknown (no base branch, Git older than 2.38, or a repository-defined merge driver).
+    pub conflicts: Option<bool>,
+    /// When these facts were read (RFC 3339).
+    pub observed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -404,6 +438,11 @@ pub struct ThreadCreateInput {
     pub confirm_bypass: Option<bool>,
     #[serde(default)]
     pub profile_id: Option<String>,
+    /// `true`: the thread gets its own Git worktree and branch (`kal/<name>-<id>`) so parallel
+    /// agents never share a folder; refused with `worktree_unavailable` when the workspace isn't
+    /// in a Git repository. Absent or `false`: the thread runs in the workspace folder.
+    #[serde(default)]
+    pub isolate: Option<bool>,
 }
 
 #[cfg(test)]

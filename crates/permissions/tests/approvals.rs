@@ -1739,3 +1739,133 @@ fn utility_http_review_rejects_noncanonical_origin_and_body_mismatch() {
         "invalid_utility_action"
     );
 }
+
+#[test]
+fn a_thread_in_its_own_worktree_is_contained_in_that_worktree() {
+    use kalcode_permissions::{CoreWorkspaceRoots, NoThreads, WorkspaceRoots};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let folder = |rel: &str| {
+        let path = temp.path().join(rel);
+        std::fs::create_dir_all(&path).expect("mkdir");
+        kalcode_core::workspaces::canonical_folder(&path).expect("canonical")
+    };
+    let (ws_root, worktree, cwd) = (folder("ws"), folder("wt"), folder("wt/sub"));
+    let core = Arc::new(open_core(&temp.path().join("data")));
+    let (workspace_id, bound, plain, worktree_id) = (new_id(), new_id(), new_id(), new_id());
+    let text = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    core.transact(|tx| {
+        tx.execute(
+            "INSERT INTO workspaces (id, name, root_path, created_at, last_opened_at)
+             VALUES (?1, 'Fleet', ?2, 't', 't')",
+            (&workspace_id, text(&ws_root)),
+        )?;
+        for (id, folder) in [(&bound, &cwd), (&plain, &ws_root)] {
+            tx.execute(
+                "INSERT INTO threads (id, name, provider_id, provider_name, workspace_id,
+                    workspace_name, cwd, permission_mode, status, created_at, last_activity_at)
+                 VALUES (?1, 'n', 'claude_code', 'Claude Code', ?2, 'Fleet', ?3, 'approve',
+                    'idle', 't', 't')",
+                (id, &workspace_id, text(folder)),
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO git_worktrees (id, workspace_id, path, branch, base_commit, purpose,
+                owner_ref, status, created_at)
+             VALUES (?1, ?2, ?3, 'kal/agent-1', ?4, 'thread', ?5, 'active', 't')",
+            (
+                &worktree_id,
+                &workspace_id,
+                text(&worktree),
+                "a".repeat(40),
+                &bound,
+            ),
+        )?;
+        Ok(((), Vec::new()))
+    })
+    .expect("fixture");
+
+    let roots = Arc::new(CoreWorkspaceRoots::new(core.clone()));
+    assert_eq!(roots.thread_root(&workspace_id, &bound), Some(cwd.clone()));
+    assert_eq!(
+        roots.thread_root(&workspace_id, &plain),
+        Some(ws_root.clone())
+    );
+    // Another workspace's id never borrows the binding.
+    assert_eq!(roots.thread_root(&new_id(), &bound), None);
+
+    let service =
+        PermissionService::new(core.clone(), roots.clone(), Arc::new(NoThreads)).expect("service");
+    let write = |thread_id: &str| NormalizedAction {
+        id: format!("toolu_{}", new_id()),
+        thread_id: thread_id.to_owned(),
+        workspace_id: workspace_id.clone(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(
+            kalcode_contracts::agent::ProviderId::CLAUDE_CODE,
+        ),
+        action: ActionKind::FileWrite {
+            path: text(&cwd.join("main.rs")),
+        },
+        summary: "write".into(),
+        requested_at: "2026-09-24T00:00:00.000Z".into(),
+        origin: None,
+    };
+    let outside = |thread_id: &str| {
+        service
+            .evaluate_detailed(&write(thread_id), M::Approve)
+            .0
+            .scopes
+            .contains(&S::FilesystemOutsideWorkspace)
+    };
+    assert!(
+        !outside(&bound),
+        "the agent's own worktree is its workspace"
+    );
+    assert!(
+        outside(&plain),
+        "other threads stay contained in the workspace"
+    );
+
+    // Fails closed for a thread that has a worktree which doesn't resolve: a stored folder
+    // outside the worktree, ...
+    let set_cwd = |folder: &std::path::Path| {
+        core.transact(|tx| {
+            tx.execute(
+                "UPDATE threads SET cwd = ?2 WHERE id = ?1",
+                (&bound, text(folder)),
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("cwd");
+    };
+    set_cwd(&ws_root);
+    assert_eq!(roots.thread_root(&workspace_id, &bound), None);
+    assert!(outside(&bound));
+    set_cwd(&cwd);
+    assert_eq!(roots.thread_root(&workspace_id, &bound), Some(cwd.clone()));
+    // ... a worktree folder that is gone, ...
+    let renamed = temp.path().join("wt-moved");
+    std::fs::rename(&worktree, &renamed).expect("move worktree");
+    assert_eq!(roots.thread_root(&workspace_id, &bound), None);
+    std::fs::rename(&renamed, &worktree).expect("restore worktree");
+    // ... a worktree that is no longer active (it never falls back to the workspace root), ...
+    core.transact(|tx| {
+        tx.execute(
+            "UPDATE git_worktrees SET status = 'removed', removed_at = 't' WHERE id = ?1",
+            [&worktree_id],
+        )?;
+        Ok(((), Vec::new()))
+    })
+    .expect("remove");
+    assert_eq!(roots.thread_root(&workspace_id, &bound), None);
+    assert!(outside(&bound));
+    // ... and a lookup that fails.
+    core.transact(|tx| {
+        tx.execute("ALTER TABLE git_worktrees RENAME TO git_worktrees_gone", [])?;
+        Ok(((), Vec::new()))
+    })
+    .expect("break lookup");
+    assert_eq!(roots.thread_root(&workspace_id, &plain), None);
+    assert!(outside(&plain));
+    assert_eq!(roots.root(&workspace_id), Some(ws_root));
+}

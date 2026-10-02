@@ -20,6 +20,9 @@ pub struct Repo {
     prefix: String,
     /// `-c` settings that neutralize filter drivers defined by the repository's own config.
     overrides: Vec<String>,
+    /// The repository's own config (`local` / `worktree` scope) defines a merge driver
+    /// (`merge.<name>.driver`, an arbitrary command). Merge predictions refuse to run then.
+    repo_merge_driver: bool,
 }
 
 impl Repo {
@@ -86,8 +89,10 @@ impl Repo {
             common_dir: PathBuf::from(common),
             prefix,
             overrides: Vec::new(),
+            repo_merge_driver: false,
         };
-        repo.overrides = repository_filter_overrides(git, &repo.toplevel)?;
+        (repo.overrides, repo.repo_merge_driver) =
+            repository_filter_overrides(git, &repo.toplevel)?;
         Ok(Some(repo))
     }
 
@@ -115,6 +120,11 @@ impl Repo {
 
     pub fn overrides(&self) -> &[String] {
         &self.overrides
+    }
+
+    /// True when the repository's own config defines a merge driver (see the field docs).
+    pub fn defines_merge_driver(&self) -> bool {
+        self.repo_merge_driver
     }
 
     /// A hardened command running at the top level with this repository's neutralizations.
@@ -161,8 +171,12 @@ impl Repo {
 /// diff and checkout. Drivers the user configured globally (for example large-file storage)
 /// are the user's own choice; drivers defined or redefined by the **repository's** config
 /// (`local` / `worktree` scope, including files it includes) are neutralized for KalCode's
-/// operations. Reading the configuration executes nothing.
-pub(crate) fn repository_filter_overrides(git: &Git, toplevel: &Path) -> Result<Vec<String>> {
+/// operations. Reading the configuration executes nothing. Also reports whether the repository's
+/// config defines a merge driver (`merge.<name>.driver`), which merge predictions must not run.
+pub(crate) fn repository_filter_overrides(
+    git: &Git,
+    toplevel: &Path,
+) -> Result<(Vec<String>, bool)> {
     let out = git
         .cmd()
         .current_dir(toplevel)
@@ -171,8 +185,14 @@ pub(crate) fn repository_filter_overrides(git: &Git, toplevel: &Path) -> Result<
         .max_stdout(4 * 1024 * 1024)
         .run_ok("discover")?;
     let mut drivers: Vec<String> = Vec::new();
+    let mut merge_driver = false;
     for (scope, key) in parse_config_list(&out.stdout) {
         if scope != "local" && scope != "worktree" {
+            continue;
+        }
+        let lower = key.to_ascii_lowercase();
+        if lower.starts_with("merge.") && lower.ends_with(".driver") {
+            merge_driver = true;
             continue;
         }
         let Some(rest) = key.strip_prefix("filter.") else {
@@ -198,7 +218,7 @@ pub(crate) fn repository_filter_overrides(git: &Git, toplevel: &Path) -> Result<
         overrides.push(format!("filter.{name}.process="));
         overrides.push(format!("filter.{name}.required=false"));
     }
-    Ok(overrides)
+    Ok((overrides, merge_driver))
 }
 
 /// Parses `git config --list --show-scope -z`: records of `scope\0key\nvalue\0` or `scope\0key\0`.

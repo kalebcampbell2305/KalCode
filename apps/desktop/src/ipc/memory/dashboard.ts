@@ -154,6 +154,8 @@ interface ThreadSeed {
   lastMinAgo: number;
   files: number | null;
   branch: string | null;
+  /** Agent Fleet: the thread runs in its own worktree with these Git facts. */
+  worktree?: { ahead: number; changed: number; conflicts: boolean };
   unread?: number;
   error?: { code: string; message: string };
 }
@@ -173,6 +175,7 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 1,
     files: 7,
     branch: "feat/auth-middleware",
+    worktree: { ahead: 2, changed: 3, conflicts: false },
   },
   {
     n: 2,
@@ -188,6 +191,7 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 0,
     files: 2,
     branch: "fix/checkout-flake",
+    worktree: { ahead: 1, changed: 2, conflicts: false },
   },
   {
     n: 3,
@@ -203,6 +207,7 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 0,
     files: 3,
     branch: "feat/invoices",
+    worktree: { ahead: 0, changed: 4, conflicts: false },
   },
   {
     n: 4,
@@ -309,6 +314,7 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 24,
     files: 12,
     branch: "feat/light-tokens",
+    worktree: { ahead: 3, changed: 0, conflicts: false },
   },
   {
     n: 11,
@@ -324,6 +330,7 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 11,
     files: 0,
     branch: "release/preview",
+    worktree: { ahead: 0, changed: 5, conflicts: false },
     error: {
       code: "provider_exited",
       message:
@@ -359,6 +366,7 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
     lastMinAgo: 196,
     files: 9,
     branch: "chore/api-client",
+    worktree: { ahead: 1, changed: 0, conflicts: true },
   },
 ];
 
@@ -598,6 +606,7 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   const threads = new Map<string, ThreadSummary & { archived: boolean }>();
   const approvals = new Map<string, ApprovalView>();
   const terminals: TerminalInfo[] = [];
+  const worktreeFacts = new Map<string, NonNullable<ThreadSeed["worktree"]>>();
   let failing = scenario === "errors";
   let extraApproval = 100;
 
@@ -612,6 +621,7 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
     for (const seed of seeds) {
       const provider = PROVIDERS[seed.provider];
       const id = fixtureId(2, seed.n);
+      if (seed.worktree) worktreeFacts.set(id, seed.worktree);
       threads.set(id, {
         id,
         name: seed.name,
@@ -632,6 +642,7 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         unreadMessages: seed.unread ?? 0,
         filesChanged: seed.files,
         branch: seed.branch,
+        worktreeId: seed.worktree ? fixtureId(4, seed.n) : null,
         error: seed.error ?? null,
         archivedAt: allArchived ? ago(Math.max(0, seed.lastMinAgo - 1)) : null,
         resumable: false,
@@ -797,6 +808,60 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   };
 
   const handlers: DashboardHandlers = {
+    thread_worktree_commit: (args) => {
+      const thread = requireThread(args);
+      const facts = worktreeFacts.get(thread.id);
+      if (!facts || !thread.worktreeId || !thread.branch)
+        fail({
+          category: "git",
+          code: "worktree_unavailable",
+          message: "This agent doesn't run in its own worktree.",
+          retryable: false,
+        });
+      if (facts.changed === 0)
+        fail({
+          category: "validation",
+          code: "nothing_to_commit",
+          message: "There are no changes to commit.",
+          retryable: false,
+        });
+      worktreeFacts.set(thread.id, { ...facts, ahead: facts.ahead + 1, changed: 0 });
+      const next = worktreeFacts.get(thread.id) as NonNullable<ThreadSeed["worktree"]>;
+      return {
+        threadId: thread.id,
+        worktreeId: thread.worktreeId,
+        branch: thread.branch,
+        baseBranch: "main",
+        ahead: next.ahead,
+        behind: 0,
+        changed: 0,
+        untracked: 0,
+        conflicts: next.conflicts,
+        observedAt: new Date().toISOString(),
+      };
+    },
+    thread_worktree_states: read((args) => {
+      const ids = Array.isArray(args.threadIds) ? (args.threadIds as string[]) : [];
+      return ids.flatMap((id) => {
+        const thread = threads.get(id);
+        const facts = worktreeFacts.get(id);
+        if (!thread?.worktreeId || !thread.branch || !facts) return [];
+        return [
+          {
+            threadId: id,
+            worktreeId: thread.worktreeId,
+            branch: thread.branch,
+            baseBranch: "main",
+            ahead: facts.ahead,
+            behind: 0,
+            changed: facts.changed,
+            untracked: 0,
+            conflicts: facts.conflicts,
+            observedAt: new Date().toISOString(),
+          },
+        ];
+      });
+    }),
     thread_list: read((args) => {
       if (failing) {
         fail({

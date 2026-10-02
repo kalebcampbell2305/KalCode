@@ -21,6 +21,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use kalcode_contracts::threads::ThreadWorktreeState;
 use kalcode_core::events::NewEvent;
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_git::checkpoint::CreateOutcome;
@@ -65,6 +66,17 @@ pub(crate) fn workspace_root(
     let core = state.core.as_ref().ok_or_else(|| {
         KalError::internal("core_unavailable", "KalCode's runtime is not available.")
     })?;
+    workspace_root_in(core, workspace_id)
+}
+
+/// [`workspace_root`] from the `Core` directly.
+pub(crate) fn workspace_root_in(
+    core: &kalcode_core::Core,
+    workspace_id: &str,
+) -> Result<WorkspaceRoot, KalError> {
+    if !kalcode_contracts::ids::is_valid_id(workspace_id) {
+        return Err(invalid_id());
+    }
     let workspace = core
         .workspaces()?
         .into_iter()
@@ -272,6 +284,265 @@ pub async fn git_branches(
     let core = Arc::clone(&git.0);
     blocking(_runtime_access, "git_branches", move || {
         core.branches(&root)
+    })
+    .await
+}
+
+// ---------- Agent Fleet: threads in their own worktrees (read-only) ----------
+
+/// Most threads one `thread_worktree_states` call accepts.
+pub(crate) const MAX_THREAD_WORKTREE_STATES: usize = 64;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadWorktreeStatesArgs {
+    pub thread_ids: Vec<String>,
+}
+
+/// At most [`MAX_THREAD_WORKTREE_STATES`] valid thread ids, duplicates dropped (order kept).
+pub(crate) fn thread_ids_arg(ids: Vec<String>) -> Result<Vec<String>, KalError> {
+    if ids.len() > MAX_THREAD_WORKTREE_STATES
+        || ids
+            .iter()
+            .any(|id| !kalcode_contracts::ids::is_valid_id(id))
+    {
+        return Err(KalError::validation(
+            "invalid_thread_ids",
+            "Those thread references aren't valid.",
+        ));
+    }
+    let mut unique: Vec<String> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
+    }
+    Ok(unique)
+}
+
+/// Git facts for each thread's own worktree, computed without changing any work tree, index or
+/// ref (see `kalcode_git::worktree::merge_conflicts`). One repository discovery and base branch
+/// per workspace. Threads without an active worktree, whose worktree folder is gone, or whose
+/// facts can't be read are left out.
+pub(crate) fn thread_worktree_states_for(
+    git: &GitCore,
+    bound: Vec<(String, Worktree, std::path::PathBuf, WorkspaceRoot)>,
+) -> Vec<ThreadWorktreeState> {
+    use std::collections::HashMap;
+
+    let Ok(exe) = git.git() else {
+        return Vec::new();
+    };
+    type Base = (kalcode_git::repo::Repo, Option<String>, Option<String>);
+    let mut repos: HashMap<String, Option<Base>> = HashMap::new();
+    let mut states = Vec::with_capacity(bound.len());
+    for (thread_id, row, path, root) in bound {
+        if !path.is_dir() {
+            continue;
+        }
+        let entry = repos.entry(row.workspace_id.clone()).or_insert_with(|| {
+            let repo = git.repo(&root).ok().flatten()?;
+            let base = worktree::current_branch(exe, &repo).unwrap_or_else(|error| {
+                tracing::warn!(event = "git.base_branch_unknown", error = %error.diagnostic());
+                None
+            });
+            // Compared by commit id: a branch name may hold characters git revisions allow but
+            // KalCode's argv validation doesn't. The name is only displayed.
+            let head = worktree::head_commit(exe, &repo).ok().flatten();
+            Some((repo, base, head))
+        });
+        let Some((repo, base, head)) = entry.as_ref() else {
+            continue;
+        };
+        let dirty = match worktree::dirty_state(exe, repo, &path) {
+            Ok(dirty) => dirty,
+            Err(error) => {
+                tracing::warn!(event = "git.thread_worktree_unreadable", thread_id = %thread_id, error = %error.diagnostic());
+                continue;
+            }
+        };
+        let (mut ahead, mut behind, mut conflicts) = (None, None, None);
+        if let (Some(_), Some(base_ref)) = (base, head) {
+            let branch_ref = format!("refs/heads/{}", row.branch);
+            if let Ok((left, right)) = worktree::ahead_behind(exe, repo, base_ref, &branch_ref) {
+                (behind, ahead) = (Some(left), Some(right));
+            }
+            conflicts = worktree::merge_conflicts(exe, repo, base_ref, &branch_ref)
+                .ok()
+                .flatten();
+        }
+        states.push(ThreadWorktreeState {
+            thread_id,
+            worktree_id: row.id,
+            branch: row.branch,
+            base_branch: base.clone(),
+            ahead,
+            behind,
+            changed: dirty.changed,
+            untracked: dirty.untracked,
+            conflicts,
+            observed_at: kalcode_core::time::now_rfc3339(),
+        });
+    }
+    states
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadWorktreeCommitArgs {
+    pub thread_id: String,
+    pub message: String,
+}
+
+/// The agent may still change files: a turn is running or about to, or it is waiting on an
+/// approval or on resources, or paused mid-turn.
+fn agent_is_busy(status: kalcode_contracts::threads::ThreadStatus) -> bool {
+    use kalcode_contracts::threads::ThreadStatus as S;
+    status.is_live()
+        || matches!(
+            status,
+            S::WaitingForPermission | S::WaitingForDependency | S::Paused
+        )
+}
+
+/// Commits everything in a thread's own worktree on its branch (Agent Fleet "Commit changes"),
+/// records `git.commit_created` (thread + workspace correlation) and returns the worktree's
+/// fresh Git facts. Refuses while the agent is busy, for a thread without an active worktree
+/// or whose folder is gone, and when there is nothing to commit. The main checkout and every
+/// other branch are untouched (see `kalcode_git::worktree::commit_all`).
+pub(crate) fn commit_thread_worktree(
+    core: &kalcode_core::Core,
+    git: &GitCore,
+    runtime: &kalcode_threads::ThreadRuntime,
+    thread_id: &str,
+    message: &str,
+) -> Result<ThreadWorktreeState, KalError> {
+    if !kalcode_contracts::ids::is_valid_id(thread_id) {
+        return Err(KalError::validation(
+            "invalid_thread_id",
+            "That thread reference isn't valid.",
+        ));
+    }
+    let message = worktree::validate_commit_message(message)?;
+    let thread = runtime.get(thread_id)?;
+    if agent_is_busy(thread.status) {
+        return Err(KalError::validation(
+            "thread_busy",
+            "Stop or wait for the agent before committing its work.",
+        ));
+    }
+    let (row, path) = core
+        .read(|conn| store::active_thread_worktree(conn, thread_id))?
+        .ok_or_else(|| {
+            KalError::new(
+                ErrorCategory::Git,
+                "worktree_unknown",
+                "This agent doesn't have a worktree of its own.",
+            )
+        })?;
+    if !path.is_dir() {
+        return Err(KalError::new(
+            ErrorCategory::Git,
+            "worktree_missing",
+            "That worktree folder no longer exists.",
+        ));
+    }
+    let root = workspace_root_in(core, &row.workspace_id)?;
+    let exe = git.git()?;
+    let repo = git.repo(&root)?.ok_or_else(|| {
+        KalError::new(
+            ErrorCategory::Git,
+            "not_a_repository",
+            "This folder isn't a Git repository.",
+        )
+    })?;
+    let oid = worktree::commit_all(exe, &repo, &path, &row.branch, &message)?;
+    tracing::info!(event = "thread.worktree_committed", thread_id, worktree_id = %row.id);
+    let event = NewEvent {
+        source: kalcode_contracts::events::EventSource::Ui,
+        correlation: kalcode_contracts::events::Correlation {
+            workspace_id: Some(row.workspace_id.clone()),
+            thread_id: Some(thread_id.to_owned()),
+            ..Default::default()
+        },
+        event: kalcode_contracts::events::EventPayload::GitCommitCreated {
+            workspace_id: row.workspace_id.clone(),
+            worktree_id: Some(row.id.clone()),
+            oid,
+            by_kal_code: true,
+        },
+    };
+    // The commit already exists: a failure to record the event is logged, not returned.
+    if let Err(error) = core.write_with_events(|_tx| Ok(((), vec![event]))) {
+        tracing::warn!(event = "git.commit_event_failed", error = %error.diagnostic());
+    }
+    thread_worktree_states_for(git, vec![(thread_id.to_owned(), row, path, root)])
+        .pop()
+        .ok_or_else(|| {
+            KalError::new(
+                ErrorCategory::Git,
+                "worktree_unreadable",
+                "KalCode committed the changes but couldn't read the worktree afterwards.",
+            )
+        })
+}
+
+/// Agent Fleet "Commit changes": commits an isolated agent's work on its own branch.
+#[tauri::command(async)]
+pub async fn thread_worktree_commit(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
+    threads: crate::runtime_coordinator::RuntimeState<crate::thread_commands::ThreadsState>,
+    args: ThreadWorktreeCommitArgs,
+) -> Result<ThreadWorktreeState, IpcError> {
+    _runtime_access.revalidate()?;
+    let core = Arc::clone(state.core()?);
+    let runtime = Arc::clone(threads.runtime()?);
+    let gitcore = Arc::clone(&git.0);
+    blocking(_runtime_access, "thread_worktree_commit", move || {
+        commit_thread_worktree(&core, &gitcore, &runtime, &args.thread_id, &args.message)
+    })
+    .await
+}
+
+/// Read-only: Git facts for the given threads' own worktrees (Agent Fleet "ready to merge").
+#[tauri::command(async)]
+pub async fn thread_worktree_states(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
+    args: ThreadWorktreeStatesArgs,
+) -> Result<Vec<ThreadWorktreeState>, IpcError> {
+    _runtime_access.revalidate()?;
+    let ids = thread_ids_arg(args.thread_ids).map_err(|e| e.to_ipc())?;
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let core = state.core()?;
+    let rows = core
+        .read(|conn| {
+            let mut rows = Vec::new();
+            for id in &ids {
+                if let Some((row, path)) = store::active_thread_worktree(conn, id)? {
+                    rows.push((id.clone(), row, path));
+                }
+            }
+            Ok(rows)
+        })
+        .map_err(|e| e.log_and_convert("thread_worktree_states"))?;
+    let mut bound = Vec::with_capacity(rows.len());
+    for (thread_id, row, path) in rows {
+        match workspace_root(&state, &row.workspace_id) {
+            Ok(root) => bound.push((thread_id, row, path, root)),
+            Err(error) => {
+                tracing::warn!(event = "git.thread_worktree_workspace_unknown", error = %error.diagnostic());
+            }
+        }
+    }
+    let gitcore = Arc::clone(&git.0);
+    blocking(_runtime_access, "thread_worktree_states", move || {
+        Ok(thread_worktree_states_for(&gitcore, bound))
     })
     .await
 }

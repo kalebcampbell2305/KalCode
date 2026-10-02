@@ -107,6 +107,7 @@ pub fn thread_summary(id: &str, workspace_id: &str, mode: PermissionMode) -> Thr
         permission_profile_id: None,
         runtime_kind: None,
         terminal_id: None,
+        worktree_id: None,
     }
 }
 

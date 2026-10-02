@@ -583,6 +583,7 @@ function fixtureThread(
     permissionProfileId: null,
     runtimeKind: null,
     terminalId: null,
+    worktreeId: null,
     ...extra,
   };
 }

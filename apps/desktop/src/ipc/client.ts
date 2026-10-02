@@ -61,6 +61,7 @@ import type {
   ThreadMessage,
   ThreadOptions,
   ThreadSummary,
+  ThreadWorktreeState,
   ToolCallRecord,
   Workspace,
   WorkspaceGroup,
@@ -110,6 +111,8 @@ export interface CreateThreadInput {
   name: string | null;
   confirmBypass?: boolean | null;
   profileId?: string | null;
+  /** Agent Fleet: run the agent in its own worktree and branch (the workspace must be a Git repository). */
+  isolate?: boolean | null;
 }
 
 /** Opaque native login operation. Provider URLs and credentials remain outside the WebView. */
@@ -527,6 +530,19 @@ export class KalCodeClient {
     return this.call("thread_get", { threadId });
   }
 
+  /** Git facts for the agents that run in their own worktree (Agent Fleet); others are left out. */
+  threadWorktreeStates(threadIds: readonly string[]): Promise<ThreadWorktreeState[]> {
+    return this.call("thread_worktree_states", { threadIds });
+  }
+
+  /**
+   * Commits everything an isolated agent changed in its own worktree, on its branch, when the
+   * person asks (agents may not be able to commit from their sandbox). Refused while it works.
+   */
+  commitThreadWorktree(threadId: string, message: string): Promise<ThreadWorktreeState> {
+    return this.call("thread_worktree_commit", { threadId, message });
+  }
+
   /**
    * Resolves a session name the way KalVoice does (explicit id, exact name in the current
    * workspace, exact name anywhere, provider/account + name, "this/it", provider only, then
@@ -580,6 +596,7 @@ export class KalCodeClient {
       providerAccountId: input.providerAccountId ?? null,
       confirmBypass: input.confirmBypass ?? null,
       profileId: input.profileId ?? null,
+      isolate: input.isolate ?? null,
       promptReviewId: promptReviewId ?? null,
     });
   }
