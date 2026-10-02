@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { splitReleaseVersion } from "../lib.mjs";
+import { splitReleaseVersion, WORKSPACE_INTERNAL_VERSION } from "../lib.mjs";
 import { canonicalJson, identityVars, lookup, refuse, resolveDeep, resolveString, ShipError } from "./context.mjs";
 import { verifyScripts } from "./kit.mjs";
 import { PHASES, phaseById, selectPhases } from "./phases.mjs";
@@ -769,11 +769,14 @@ function git(repo, args) {
   return r.stdout;
 }
 
+// The public version authorities. The Cargo workspace carries a fixed internal crate version
+// (WORKSPACE_INTERNAL_VERSION) so a version change recompiles only the app crate; it is not an authority,
+// but it must be either that fixed value or, for commits before the split, the public version.
 export const VERSION_AUTHORITIES = Object.freeze({
   "apps/desktop/src-tauri/tauri.conf.json": (text) => JSON.parse(text).version,
   "apps/desktop/package.json": (text) => JSON.parse(text).version,
-  "Cargo.toml": (text) => /\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(text)?.[1],
 });
+const workspaceVersion = (text) => /\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(text)?.[1];
 
 export const BUILTINS = {
   // Reads the exact commit (never the working tree) and proves every version authority declares --version.
@@ -789,6 +792,11 @@ export const BUILTINS = {
       if (v !== publicVersion)
         refuse(`${file} at ${c.slice(0, 7)} declares ${JSON.stringify(v ?? null)}, not ${publicVersion}`);
     }
+    const crateVersion = workspaceVersion(git(repo, ["show", `${c}:Cargo.toml`]));
+    if (crateVersion !== WORKSPACE_INTERNAL_VERSION && crateVersion !== publicVersion)
+      refuse(
+        `Cargo.toml at ${c.slice(0, 7)} declares workspace version ${JSON.stringify(crateVersion ?? null)}, neither the fixed ${WORKSPACE_INTERNAL_VERSION} nor ${publicVersion}`,
+      );
     const endpoint = pipeline.kit.identity?.movingEndpoint;
     if (endpoint) {
       const text = git(repo, ["show", `${c}:${endpoint.file}`]);

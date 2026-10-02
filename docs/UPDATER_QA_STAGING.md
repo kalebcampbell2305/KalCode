@@ -9,13 +9,15 @@ candidate behind unlisted immutable version URLs. It cannot move Stable, Beta or
 
 Create a clean baseline checkout from the exact candidate build commit. Its diff must contain only:
 
-- the version in `Cargo.toml`, `Cargo.lock`, `apps/desktop/package.json` and
-  `apps/desktop/src-tauri/tauri.conf.json`; and
+- the version in `apps/desktop/package.json` and `apps/desktop/src-tauri/tauri.conf.json`
+  (a candidate from before the version split, whose `Cargo.toml` still declares the public
+  version, also changes the version in `Cargo.toml` and `Cargo.lock`); and
 - the Stable endpoint in `crates/updater/src/lib.rs`, pinned to
   `https://kalcoded.com/releases/updater/stable/<candidate-version>.json`.
 
-The baseline version must be lower than the candidate. Regenerate `Cargo.lock`; do not hand-edit
-unrelated package entries. Build, sign, notarize and verify both platform artifacts with the normal
+The baseline version must be lower than the candidate. Since the version split the Cargo workspace
+carries the fixed internal version `0.0.0`, so leave `Cargo.toml` and `Cargo.lock` untouched; for an
+older candidate, regenerate `Cargo.lock` and do not hand-edit unrelated package entries. Build, sign, notarize and verify both platform artifacts with the normal
 production tooling. The compiled `--build-info` version, Tauri version, artifact file name and
 build records must all name the baseline version. Test hooks remain disabled.
 

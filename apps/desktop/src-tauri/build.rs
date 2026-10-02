@@ -39,6 +39,7 @@ fn main() {
     let debug = std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
     let base: serde_json::Value = serde_json::from_str(include_str!("tauri.conf.json"))
         .unwrap_or_else(|error| panic!("invalid base app config: {error}"));
+    println!("cargo:rerun-if-changed=tauri.conf.json");
     let overlay: serde_json::Value =
         serde_json::from_str(&std::env::var("TAURI_CONFIG").unwrap_or_else(|_| "{}".into()))
             .unwrap_or_else(|error| panic!("invalid TAURI_CONFIG: {error}"));
@@ -66,6 +67,10 @@ fn main() {
         .pointer("/version")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_else(|| panic!("the base app config has no version"));
+    // KalCode's public version: tauri.conf.json is the authority. It is compiled into this crate
+    // only; the workspace crates carry a fixed internal version, so a version change recompiles
+    // just the app crate.
+    println!("cargo:rustc-env=KALCODE_PUBLIC_VERSION={public_version}");
     let version = overlay.pointer("/version").map_or(public_version, |value| {
         value
             .as_str()

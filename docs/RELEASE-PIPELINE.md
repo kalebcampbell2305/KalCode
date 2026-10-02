@@ -30,7 +30,7 @@ from the kit.
 | Flag | Meaning |
 | --- | --- |
 | `--version` | Stable release identity: plain `x.y.z` for the initial public build or `x.y.z+N` for a later internal build on the same public version. Stable refuses prereleases and other build metadata. |
-| `--commit` | Full 40-hex commit. The `identity` phase proves that `tauri.conf.json`, `apps/desktop/package.json` and `Cargo.toml` all declare the public `x.y.z` portion of `--version` at that exact commit (never the working tree), and that the commit compiles the moving Stable endpoint (so a derived baseline cannot be released as the candidate). |
+| `--commit` | Full 40-hex commit. The `identity` phase proves that `tauri.conf.json` and `apps/desktop/package.json` both declare the public `x.y.z` portion of `--version` at that exact commit, and that `Cargo.toml` declares either the fixed internal crate version `0.0.0` or (before the version split) that public version (never the working tree), and that the commit compiles the moving Stable endpoint (so a derived baseline cannot be released as the candidate). |
 | `--baseline-version` | The lower release identity used for the in-app update trial. For a same-public-version build, the current public `x.y.z` build is lower than `x.y.z+N`. It must be lower than `--version`. Burned release identities stay burned, and preflight refuses a candidate that already has a D1 row. |
 
 Optional flags:

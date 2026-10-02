@@ -104,6 +104,14 @@ export function appVersion() {
   return conf.version;
 }
 
+/**
+ * The fixed internal version of every Cargo workspace crate. KalCode's public version lives in
+ * tauri.conf.json and apps/desktop/package.json and is compiled only into the app crate (its build.rs),
+ * so a public version change does not recompile the workspace. Commits before this split declared
+ * the public version in Cargo.toml instead.
+ */
+export const WORKSPACE_INTERNAL_VERSION = "0.0.0";
+
 /** Windows version resources hold each part in 16 bits, so a build number must fit. */
 export const MAX_BUILD_NUMBER = 65_535;
 const RELEASE_VERSION =
