@@ -109,6 +109,15 @@ export function tierName(tier: AccountTier): string {
   return tier === "owner" ? "Owner" : getPlan(tier).name;
 }
 
+/**
+ * The plan whose limits apply, matching native `AccountSnapshot::plan_tier`: the verified tier
+ * of an active account (ready or offline grace); otherwise (signed out, unverified) Free.
+ */
+export function planTier(snapshot: Pick<AccountSnapshot, "phase" | "tier"> | null | undefined): AccountTier {
+  if (!snapshot || (snapshot.phase !== "ready" && snapshot.phase !== "offline_grace")) return "free";
+  return snapshot.tier ?? "free";
+}
+
 const PHASES = new Set<AccountPhase>([
   "bootstrapping",
   "signed_out",

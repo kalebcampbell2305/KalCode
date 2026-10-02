@@ -12,6 +12,7 @@ import type {
   ProviderAccount,
   ThreadOptions,
 } from "@kalcode/protocol";
+import { limitsFor } from "@kalcode/protocol";
 import {
   Badge,
   Button,
@@ -63,6 +64,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { useOptionalAccount } from "../../account/AccountProvider.tsx";
+import { type AccountTier, planTier, tierName } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
 import {
   type OperationsVoiceFocusLease,
@@ -70,8 +73,11 @@ import {
   subscribeOperationsVoiceFocus,
 } from "../../kalvoice/sceneOperations.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
 import { accountProviderName } from "../../shell/accountCommands.ts";
+import { useNavigation } from "../../shell/navigation.tsx";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
+import { focusSection } from "../dashboard/useNow.ts";
 import { accountFullLabel, accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
 import {
   type ActivityRange,
@@ -232,6 +238,8 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   const toast = useToast();
   const workspaces = useWorkspaces();
   const openInPane = useOpenInPane();
+  const { navigate } = useNavigation();
+  const tier = planTier(useOptionalAccount()?.snapshot);
   const [workspaceId, setWorkspaceId] = useState("");
   const workspaceInitialized = useRef(false);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -497,6 +505,11 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
             workspaceId={workspaceId}
             selected={selectedRun}
             onSelect={showRun}
+            tier={tier}
+            onShowPlans={() => {
+              navigate("settings");
+              requestAnimationFrame(() => requestAnimationFrame(() => focusSection(HUB_SECTIONS.account)));
+            }}
           />
         </TabsContent>
         <TabsContent value="queue">
@@ -569,12 +582,17 @@ function RunsView({
   workspaceId,
   selected,
   onSelect,
+  tier,
+  onShowPlans,
 }: {
   snapshot: OperationsSnapshot;
   client: OperationsApi;
   workspaceId: string;
   selected: string | null;
   onSelect: (id: string) => void;
+  /** The verified plan: its `runHistory` caps how many finished runs the list shows. */
+  tier: AccountTier;
+  onShowPlans: () => void;
 }) {
   const [older, setOlder] = useState<OperationRecord[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -607,6 +625,23 @@ function RunsView({
   const runs = [...byId.values()]
     .filter((item) => !workspaceId || item.spec.workspaceId === workspaceId)
     .sort((a, b) => Date.parse(b.startedAt ?? b.createdAt) - Date.parse(a.startedAt ?? a.createdAt));
+  // The plan's Run history is a display limit over finished runs only: work that hasn't ended
+  // and the run being inspected always stay listed. The snapshot itself is never truncated.
+  const historyLimit = limitsFor(tier).runHistory;
+  let finishedShown = 0;
+  let hiddenRuns = 0;
+  const shownRuns =
+    historyLimit === null
+      ? runs
+      : runs.filter((run) => {
+          if (run.endedAt === null || run.id === selected) return true;
+          if (finishedShown < historyLimit) {
+            finishedShown += 1;
+            return true;
+          }
+          hiddenRuns += 1;
+          return false;
+        });
 
   const loadOlder = async () => {
     if (loadingHistory || (historyStarted && cursor === null)) return;
@@ -651,48 +686,61 @@ function RunsView({
 
   return (
     <section className={styles.runLayout} aria-label="Execution history">
-      {runs.length === 0 ? (
+      {shownRuns.length === 0 ? (
         <EmptyState art={<ListChecks />} title="No runs recorded">
           <p>Queued work appears here when the native scheduler starts it. Load older to check earlier history.</p>
         </EmptyState>
       ) : null}
-      <div className={styles.runList}>
-        {runs.map((run) => (
-          <button
-            key={run.id}
-            type="button"
-            className={styles.runRow}
-            data-operations-run-id={run.id}
-            data-selected={selected === run.id || undefined}
-            onClick={() => onSelect(run.id)}
-          >
-            <span className={styles.kindIcon} data-kind={run.spec.kind} aria-hidden="true">
-              {kindIcon(run.spec.kind)}
-            </span>
-            <span className={styles.runMain}>
-              <span className={styles.runTitle}>{run.spec.name}</span>
-              <span className={styles.runContext}>
-                {run.workspaceName}
-                {run.branch ? ` · ${run.branch}` : ""}
-                {boundAccount(run) ? ` · ${boundAccount(run)}` : ""}
+      <div className={styles.runColumn}>
+        <div className={styles.runList}>
+          {shownRuns.map((run) => (
+            <button
+              key={run.id}
+              type="button"
+              className={styles.runRow}
+              data-operations-run-id={run.id}
+              data-selected={selected === run.id || undefined}
+              onClick={() => onSelect(run.id)}
+            >
+              <span className={styles.kindIcon} data-kind={run.spec.kind} aria-hidden="true">
+                {kindIcon(run.spec.kind)}
               </span>
-              <span className={styles.runAction}>
-                {run.currentAction ??
-                  run.outcome ??
-                  (run.status === "unknown" ? "Execution details unavailable" : "No current action reported")}
+              <span className={styles.runMain}>
+                <span className={styles.runTitle}>{run.spec.name}</span>
+                <span className={styles.runContext}>
+                  {run.workspaceName}
+                  {run.branch ? ` · ${run.branch}` : ""}
+                  {boundAccount(run) ? ` · ${boundAccount(run)}` : ""}
+                </span>
+                <span className={styles.runAction}>
+                  {run.currentAction ??
+                    run.outcome ??
+                    (run.status === "unknown" ? "Execution details unavailable" : "No current action reported")}
+                </span>
               </span>
+              <span className={styles.runStatus}>
+                {status(run, true)}
+                <span>{operationDurationLabel(run)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {hiddenRuns > 0 && historyLimit !== null ? (
+          <p className={styles.runHistoryNote}>
+            <span>
+              {tierName(tier)} shows your {historyLimit} most recent runs. Upgrade to {tierName("pro")} for your full
+              run history.
             </span>
-            <span className={styles.runStatus}>
-              {status(run, true)}
-              <span>{operationDurationLabel(run)}</span>
-            </span>
-          </button>
-        ))}
+            <Button size="sm" variant="ghost" onClick={onShowPlans}>
+              View plans
+            </Button>
+          </p>
+        ) : null}
       </div>
       <div className={styles.runHint}>
         <span>Select a run to inspect its timeline, logs, changed files, artifacts, and tests.</span>
         {historyError ? <span role="alert">{historyError}</span> : null}
-        {!historyStarted || cursor !== null ? (
+        {hiddenRuns > 0 ? null : !historyStarted || cursor !== null ? (
           <Button size="sm" variant="secondary" busy={loadingHistory} onClick={() => void loadOlder()}>
             Load older
           </Button>

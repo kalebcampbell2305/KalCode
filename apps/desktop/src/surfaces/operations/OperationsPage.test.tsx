@@ -10,6 +10,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AccountPhase, AccountTier } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
 import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
 import { OperationsPage } from "./OperationsPage.tsx";
@@ -20,6 +21,8 @@ const seams = vi.hoisted(() => ({
   activate: vi.fn(async () => true),
   createTerminal: vi.fn(async () => ({ id: "terminal-created" })),
   snapshot: null as OperationsSnapshot | null,
+  navigate: vi.fn(),
+  account: null as { snapshot: { phase: AccountPhase; tier: AccountTier | null } } | null,
 }));
 
 vi.mock("./useOperations.ts", () => ({
@@ -44,6 +47,10 @@ vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
   }),
 }));
 vi.mock("../../shell/panes/useOpenInPane.ts", () => ({ useOpenInPane: () => seams.openInPane }));
+vi.mock("../../shell/navigation.tsx", () => ({
+  useNavigation: () => ({ current: "operations", navigate: seams.navigate }),
+}));
+vi.mock("../../account/AccountProvider.tsx", () => ({ useOptionalAccount: () => seams.account }));
 
 function queued(id: string, position: number): OperationRecord {
   return {
@@ -163,6 +170,7 @@ function page(client: OperationsApi) {
 describe("OperationsPage", () => {
   beforeEach(() => {
     seams.snapshot = baseSnapshot();
+    seams.account = null;
     vi.clearAllMocks();
   });
 
@@ -1057,5 +1065,110 @@ describe("OperationsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Queue" }));
     const pendingList = screen.getByRole("list", { name: "Pending tasks" });
     expect(within(pendingList).getByText("Agent · KalCode · Claude Code · Work · Priority 0")).toBeVisible();
+  });
+});
+
+describe("OperationsPage Run history plan limit", () => {
+  /** Twelve finished runs, `done-01` the most recent, plus one run still working that started first. */
+  function historySnapshot(): OperationsSnapshot {
+    const finished = Array.from({ length: 12 }, (_, index) => {
+      const run = queued(`done-${String(index + 1).padStart(2, "0")}`, 0);
+      const minute = String(59 - index).padStart(2, "0");
+      run.status = "succeeded";
+      run.startedAt = `2026-09-30T11:${minute}:00Z`;
+      run.endedAt = `2026-09-30T11:${minute}:30Z`;
+      return run;
+    });
+    const active = queued("still-running", 0);
+    active.status = "running";
+    active.startedAt = "2026-09-30T10:00:00Z";
+    return { ...baseSnapshot(), items: [...finished, active] };
+  }
+
+  function shownRunIds(): string[] {
+    const history = screen.getByRole("region", { name: "Execution history" });
+    return [...history.querySelectorAll<HTMLElement>("[data-operations-run-id]")].map(
+      (row) => row.dataset.operationsRunId ?? "",
+    );
+  }
+
+  const allFinished = Array.from({ length: 12 }, (_, index) => `done-${String(index + 1).padStart(2, "0")}`);
+
+  beforeEach(() => {
+    seams.snapshot = historySnapshot();
+    seams.account = null;
+    vi.clearAllMocks();
+  });
+
+  it("shows Free its 10 most recent finished runs, keeps active runs, and points to the plans", async () => {
+    const user = userEvent.setup();
+    renderPage(operations());
+    expect(shownRunIds()).toEqual([...allFinished.slice(0, 10), "still-running"]);
+    expect(
+      screen.getByText("Free shows your 10 most recent runs. Upgrade to Pro for your full run history."),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "View plans" }));
+    expect(seams.navigate).toHaveBeenCalledWith("settings");
+  });
+
+  it("treats an account without an active verified plan as Free", () => {
+    seams.account = { snapshot: { phase: "authenticated_unactivated", tier: null } };
+    renderPage(operations());
+    expect(shownRunIds()).toHaveLength(11);
+    expect(screen.getByText(/Free shows your 10 most recent runs/)).toBeVisible();
+  });
+
+  it("never hides a run that is still active, however old", () => {
+    const snapshot = historySnapshot();
+    const blocked = queued("old-blocked", 0);
+    blocked.status = "paused";
+    blocked.startedAt = "2026-09-29T09:00:00Z";
+    seams.snapshot = { ...snapshot, items: [...snapshot.items, blocked] };
+    renderPage(operations());
+    expect(shownRunIds()).toEqual([...allFinished.slice(0, 10), "still-running", "old-blocked"]);
+  });
+
+  it("still opens a finished run beyond the limit when it is requested explicitly", async () => {
+    const client = operations();
+    const hidden = seams.snapshot?.items.find((item) => item.id === "done-12");
+    if (!hidden) throw new Error("fixture");
+    vi.mocked(client.detail).mockResolvedValue({
+      run: hidden,
+      timeline: [],
+      logs: null,
+      files: [],
+      artifacts: [],
+      tests: [],
+      relatedServices: [],
+      relatedDeployments: [],
+      notes: [],
+    });
+    renderPage(client);
+    expect(shownRunIds()).not.toContain("done-12");
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = focusOperationsTarget(
+        { kind: "run", tab: "runs", runId: "done-12", workspaceId: "workspace-1", label: "Task done-12" },
+        { timeoutMs: 500 },
+      );
+    });
+    await expect(pending).resolves.toBe(true);
+    expect(shownRunIds()).toContain("done-12");
+    expect(await screen.findByRole("heading", { name: "Task done-12" })).toBeVisible();
+  });
+
+  it.each([
+    ["Pro", { phase: "ready", tier: "pro" }],
+    ["MAX", { phase: "ready", tier: "max" }],
+    ["MAX 2X", { phase: "offline_grace", tier: "max2x" }],
+    ["Owner", { phase: "ready", tier: "owner" }],
+  ] as const)("shows %s the full run history without a plan note", (_name, snapshot) => {
+    seams.account = { snapshot };
+    renderPage(operations());
+    expect(shownRunIds()).toEqual([...allFinished, "still-running"]);
+    expect(screen.queryByText(/most recent runs/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View plans" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load older" })).toBeVisible();
   });
 });
