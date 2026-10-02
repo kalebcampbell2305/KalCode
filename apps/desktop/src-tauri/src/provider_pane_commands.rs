@@ -31,6 +31,7 @@ use kalcode_providers::interactive::provider::{
     InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, marked_interactive,
     marked_interactive_checked,
 };
+use kalcode_providers::interactive::session::PaneVoiceWriteError;
 use kalcode_providers::interactive::session::SessionLimits;
 use kalcode_providers::interactive::{
     ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, HookChannelState, PaneInfo,
@@ -458,6 +459,7 @@ pub fn provider_pane_create(
             account_label: account.map(|account| account.display_name),
             workspace_id,
             model,
+            effort: None,
             permission_mode,
             name,
         })
@@ -576,14 +578,52 @@ pub fn provider_pane_write(
     panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
     data: String,
+    voice: Option<bool>,
+    instance_id: Option<String>,
 ) -> Result<(), IpcError> {
     _runtime_access.revalidate()?;
     panes.require()?;
     validate_thread_id(&thread_id)?;
-    panes
-        .panes
-        .write(&thread_id, data.as_bytes())
-        .map_err(provider_error)
+    if voice.unwrap_or(false) {
+        let instance_id = instance_id
+            .as_deref()
+            .ok_or_else(|| provider_voice_error(PaneVoiceWriteError::TargetChanged))?;
+        panes
+            .panes
+            .write_voice(&thread_id, instance_id, data.as_bytes())
+            .map_err(provider_voice_error)
+    } else {
+        panes
+            .panes
+            .write(&thread_id, data.as_bytes())
+            .map_err(provider_error)
+    }
+}
+
+fn provider_voice_error(error: PaneVoiceWriteError) -> IpcError {
+    match error {
+        PaneVoiceWriteError::SessionEnded => KalError::validation(
+            "pane_not_running",
+            "This pane's provider has ended. Resume the thread to start it again.",
+        ),
+        PaneVoiceWriteError::TargetChanged => KalError::validation(
+            "provider_target_changed",
+            "That provider pane restarted before voice input was delivered.",
+        ),
+        PaneVoiceWriteError::ProviderPrompt => KalError::validation(
+            "provider_permission_prompt",
+            "Answer the provider's current prompt before sending voice input.",
+        ),
+        PaneVoiceWriteError::Unverified => KalError::validation(
+            "provider_input_unverified",
+            "KalCode cannot yet confirm that this provider is ready for input.",
+        ),
+        PaneVoiceWriteError::Io => KalError::validation(
+            "provider_pane_failed",
+            "KalCode could not communicate with this provider pane.",
+        ),
+    }
+    .to_ipc()
 }
 
 #[tauri::command]
@@ -620,6 +660,7 @@ pub fn provider_pane_info(
         marked_interactive(&panes.sessions_dir, &thread_id).then(|| PaneInfo {
             thread_id: thread_id.clone(),
             provider_id: ProviderId::CLAUDE_CODE.into(),
+            instance_id: None,
             hook_channel: HookChannelState::Ended,
             decision_routing: panes.routing,
             kalcode_answers_approvals: false,
@@ -658,6 +699,23 @@ mod tests {
         let ended = provider_error(ProviderError::SessionEnded);
         assert_eq!(ended.code, "pane_not_running");
         assert!(ended.message.contains("Resume the thread"));
+
+        assert_eq!(
+            provider_voice_error(PaneVoiceWriteError::ProviderPrompt).code,
+            "provider_permission_prompt"
+        );
+        assert_eq!(
+            provider_voice_error(PaneVoiceWriteError::Unverified).code,
+            "provider_input_unverified"
+        );
+        assert_eq!(
+            provider_voice_error(PaneVoiceWriteError::SessionEnded).code,
+            "pane_not_running"
+        );
+        assert_eq!(
+            provider_voice_error(PaneVoiceWriteError::TargetChanged).code,
+            "provider_target_changed"
+        );
     }
 
     #[test]

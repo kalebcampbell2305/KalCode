@@ -1,6 +1,7 @@
 import { Button } from "@kalcode/ui/components";
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
+import { useShellSlots } from "../shell/ShellSlots.tsx";
 import { STATE_LABELS } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./PushToTalkActivity.module.css";
@@ -49,7 +50,11 @@ export function FixAction({ code }: { code: string | null }) {
  */
 export function PushToTalkActivity() {
   const { state, panel, status, statusError, signalsError, talkKey, retryConnection, dismiss } = useKalVoice();
+  const slots = useShellSlots();
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const activityStyle = {
+    "--shell-bottom-inset": `${slots?.insets.bottom ?? 0}px`,
+  } as CSSProperties;
   const widgetShowsDetail = panel.visible && status !== null && panel.view !== "orb";
   const phase = state.phase;
   const readiness = pushToTalkReadiness(status, statusError, signalsError, talkKey);
@@ -62,7 +67,13 @@ export function PushToTalkActivity() {
     // can't show it, and the push-to-talk key may do nothing. Say why instead of showing nothing.
     if (dismissed === readiness.message) return null;
     return (
-      <section className={styles.activity} data-phase="error" role="status" aria-label="Push to talk">
+      <section
+        className={styles.activity}
+        style={activityStyle}
+        data-phase="error"
+        role="status"
+        aria-label="Push to talk"
+      >
         <p className={styles.state}>
           <span className={styles.dot} aria-hidden="true" />
           <span>KalVoice: {readiness.label}</span>
@@ -86,6 +97,7 @@ export function PushToTalkActivity() {
   return (
     <section
       className={styles.activity}
+      style={activityStyle}
       data-phase={phase}
       role={failed ? "alert" : "status"}
       aria-label="Push to talk"

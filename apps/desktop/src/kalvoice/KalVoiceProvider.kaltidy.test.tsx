@@ -1,31 +1,41 @@
 import type { KalVoiceSignal } from "@kalcode/protocol";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { type KalTidyApi, KalTidyContext } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { KalVoiceProvider, useKalVoice } from "./KalVoiceProvider.tsx";
 
-const mocks = vi.hoisted(() => ({
-  signal: null as ((signal: KalVoiceSignal) => void) | null,
-  voice: null as { submit: (text: string) => Promise<void> } | null,
-  talk: vi.fn(),
-  request: vi.fn(),
-  client: {
+const mocks = vi.hoisted(() => {
+  const talk = vi.fn();
+  const request = vi.fn();
+  const client = {
     subscribeKalVoice: vi.fn(),
     renewKalVoiceSubscription: vi.fn().mockResolvedValue(undefined),
     kalvoiceStatus: vi.fn().mockResolvedValue(null),
     kalvoiceLatencyRecord: vi.fn().mockResolvedValue(undefined),
-  },
-}));
+    kalvoiceListenCancel: vi.fn().mockResolvedValue(undefined),
+    kalvoiceTalk: talk,
+    kalvoiceRequest: request,
+  };
+  return {
+    signal: null as ((signal: KalVoiceSignal) => void) | null,
+    voice: null as { submit: (text: string) => Promise<void> } | null,
+    talk,
+    request,
+    navigate: vi.fn(),
+    toast: { show: vi.fn() },
+    client,
+  };
+});
 vi.mock("../runtime/RuntimeProvider.tsx", () => ({
-  useRuntime: () => ({ client: { ...mocks.client, kalvoiceTalk: mocks.talk, kalvoiceRequest: mocks.request } }),
+  useRuntime: () => ({ client: mocks.client }),
 }));
 vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => ({ active: { id: "workspace" } }) }));
 vi.mock("../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: vi.fn() }) }));
-vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ current: "code", navigate: vi.fn() }) }));
+vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ current: "code", navigate: mocks.navigate }) }));
 vi.mock("../shell/rail/search/SearchProvider.tsx", () => ({ useOptionalSearch: () => null }));
 vi.mock("../surfaces/permissions/index.ts", () => ({ usePermissions: () => ({}) }));
-vi.mock("@kalcode/ui/components", () => ({ useToast: () => ({ show: vi.fn() }) }));
+vi.mock("@kalcode/ui/components", () => ({ useToast: () => mocks.toast }));
 
 function Probe() {
   const voice = useKalVoice();
@@ -130,4 +140,41 @@ it("a typed request on the KalVoice page runs KalTidy too, without a KalVoice Re
   expect(kalTidy.stopIdle).toHaveBeenCalledOnce();
   expect(mocks.request).not.toHaveBeenCalled();
   expect(view.getByTestId("kalvoice-state")).toHaveTextContent("done: Stopped 3 idle terminals.");
+});
+
+it("keeps pending KalTidy cleanup exclusive and preserves its outcome", async () => {
+  const kalTidy = kalTidyApi();
+  let finishStop!: () => void;
+  vi.mocked(kalTidy.stopIdle).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishStop = () => resolve({ stopped: 2, kept: 1, failed: 0, summary: "Stopped 2 idle terminals." });
+      }),
+  );
+  const view = await start(kalTidy);
+
+  await say("Close all idle terminals.");
+  await waitFor(() => expect(kalTidy.stopIdle).toHaveBeenCalledOnce());
+
+  await act(async () => mocks.voice?.submit("open dashboard"));
+  act(() => mocks.signal?.({ kind: "listening_started", sessionId: "replacement", mode: "talk" }));
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  expect(view.getByTestId("kalvoice-state")).toHaveTextContent("thinking:");
+  expect(view.getByTestId("kalvoice-state")).not.toHaveTextContent("Cancelled");
+  expect(kalTidy.stopIdle).toHaveBeenCalledOnce();
+  expect(mocks.request).not.toHaveBeenCalled();
+  expect(mocks.talk).not.toHaveBeenCalled();
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  expect(mocks.client.kalvoiceListenCancel).toHaveBeenCalledOnce();
+  expect(mocks.toast.show).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: "KalVoice is already executing",
+      description: "It can't be cancelled now. Wait for its final result before starting another request.",
+    }),
+  );
+
+  await act(async () => finishStop());
+
+  await waitFor(() => expect(view.getByTestId("kalvoice-state")).toHaveTextContent("done: Stopped 2 idle terminals."));
 });

@@ -140,6 +140,7 @@ impl Rig {
             provider_account_id: Some(self.account_id.clone()),
             working_directory: self.workspace.display().to_string(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Plan,
             resume_session_id: None,
             secret_ref: None,

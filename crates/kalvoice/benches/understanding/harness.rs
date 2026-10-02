@@ -413,6 +413,7 @@ fn run_grammar(text: &str, world: &World, strict: bool) -> Stage {
                 request: text.to_owned(),
                 workspace_id: None,
                 workspaces: world.workspaces.clone(),
+                grounded_actions: Vec::new(),
             };
             let candidates: Vec<Value> = grounded_action_candidates(&request)
                 .into_iter()
@@ -1298,6 +1299,7 @@ fn understanding_bench() {
                         request: text.to_owned(),
                         workspace_id: None,
                         workspaces: world.workspaces.clone(),
+                        grounded_actions: Vec::new(),
                     })
                 };
                 std::hint::black_box(c);

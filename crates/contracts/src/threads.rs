@@ -262,6 +262,9 @@ pub struct ThreadSummary {
     pub provider_id: ProviderId,
     pub provider_name: String,
     pub model: Option<String>,
+    /// Provider-native reasoning effort. Missing means the provider default.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// Stable selected provider-account metadata id; never a credential.
     #[serde(default)]
     pub provider_account_id: Option<String>,
@@ -584,6 +587,7 @@ mod tests {
         let summary: ThreadSummary = serde_json::from_value(json).expect("decode");
         assert_eq!(summary.archived_at, None);
         assert_eq!(summary.provider_account_id, None);
+        assert_eq!(summary.effort, None);
         assert!(!summary.resumable);
         assert_eq!(summary.permission_profile_id, None);
         assert_eq!(summary.runtime_kind, None);

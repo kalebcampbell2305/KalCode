@@ -50,6 +50,7 @@ pub enum Step {
 
 type Script = Arc<dyn Fn(&str) -> Vec<Step> + Send + Sync>;
 type ExpireObserver = Arc<dyn Fn(&str) + Send + Sync>;
+type StartObserver = Arc<dyn Fn() + Send + Sync>;
 
 pub struct FakeSession {
     pub config: SessionConfig,
@@ -62,6 +63,8 @@ pub struct FakeSession {
     /// Errors the next sends return, in order (for example Resource Governor holds).
     send_errors: Mutex<VecDeque<ProviderError>>,
     terminate_failures: AtomicUsize,
+    native_input_used: AtomicBool,
+    reconfigure_reserved: AtomicBool,
     interrupt_supported: bool,
     /// Set when the runtime drops its handle: a real adapter releases the account's shared
     /// profile lease at that point.
@@ -95,6 +98,12 @@ impl FakeSession {
 
     pub fn fail_next_terminate(&self) {
         self.terminate_failures.store(1, Ordering::SeqCst);
+    }
+
+    /// Simulates text typed directly into an interactive provider pane without Enter. Runtime
+    /// history and status remain untouched, as in the real PTY path.
+    pub fn type_native_draft(&self) {
+        self.native_input_used.store(true, Ordering::SeqCst);
     }
 
     pub fn is_ended(&self) -> bool {
@@ -188,6 +197,36 @@ impl AgentSession for SessionHandle {
         Ok(())
     }
 
+    fn reserve_if_unused(&self) -> Result<bool, ProviderError> {
+        if self.0.native_input_used.load(Ordering::SeqCst)
+            || self
+                .0
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| matches!(call, Call::Send(_)))
+        {
+            return Ok(false);
+        }
+        Ok(self
+            .0
+            .reconfigure_reserved
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok())
+    }
+
+    fn cancel_unused_reservation(&self) {
+        self.0.reconfigure_reserved.store(false, Ordering::SeqCst);
+    }
+
+    fn terminate_reserved(&self) -> Result<(), ProviderError> {
+        if !self.0.reconfigure_reserved.swap(false, Ordering::SeqCst) {
+            return Err(ProviderError::SessionEnded);
+        }
+        self.terminate()
+    }
+
     fn respond_to_approval(
         &self,
         request_id: &str,
@@ -210,17 +249,16 @@ pub struct FakeProvider {
     models: Vec<ModelInfo>,
     script: Mutex<Option<Script>>,
     start_error: Mutex<VecDeque<ProviderError>>,
+    start_observer: Mutex<Option<StartObserver>>,
     pub sessions: Mutex<Vec<Arc<FakeSession>>>,
 }
 
 impl FakeProvider {
     pub fn new(id: &str, name: &str) -> Arc<Self> {
-        Arc::new(Self {
-            id: id.into(),
-            name: name.into(),
-            resume: true,
-            interrupt: true,
-            models: vec![
+        Self::with_models(
+            id,
+            name,
+            vec![
                 ModelInfo {
                     id: "fake-large".into(),
                     display_name: "Fake Large".into(),
@@ -232,8 +270,19 @@ impl FakeProvider {
                     is_default: false,
                 },
             ],
+        )
+    }
+
+    pub fn with_models(id: &str, name: &str, models: Vec<ModelInfo>) -> Arc<Self> {
+        Arc::new(Self {
+            id: id.into(),
+            name: name.into(),
+            resume: true,
+            interrupt: true,
+            models,
             script: Mutex::new(None),
             start_error: Mutex::new(VecDeque::new()),
+            start_observer: Mutex::new(None),
             sessions: Mutex::new(Vec::new()),
         })
     }
@@ -251,6 +300,10 @@ impl FakeProvider {
 
     pub fn fail_next_start(&self, error: ProviderError) {
         self.start_error.lock().unwrap().push_back(error);
+    }
+
+    pub fn set_start_observer(&self, observer: impl Fn() + Send + Sync + 'static) {
+        *self.start_observer.lock().unwrap() = Some(Arc::new(observer));
     }
 
     /// The next `count` starts return `error` (for example a Resource Governor hold).
@@ -329,6 +382,10 @@ impl AgentProvider for FakeProvider {
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
+        let observer = self.start_observer.lock().unwrap().clone();
+        if let Some(observer) = observer {
+            observer();
+        }
         if let Some(error) = self.start_error.lock().unwrap().pop_front() {
             return Err(error);
         }
@@ -342,6 +399,8 @@ impl AgentProvider for FakeProvider {
             fail_send: AtomicBool::new(false),
             send_errors: Mutex::new(VecDeque::new()),
             terminate_failures: AtomicUsize::new(0),
+            native_input_used: AtomicBool::new(false),
+            reconfigure_reserved: AtomicBool::new(false),
             interrupt_supported: self.interrupt,
             released: AtomicBool::new(false),
         });
@@ -558,6 +617,7 @@ impl Harness {
             account_label: None,
             workspace_id: self.workspace_id.clone(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Approve,
             prompt: prompt.into(),
             name: None,

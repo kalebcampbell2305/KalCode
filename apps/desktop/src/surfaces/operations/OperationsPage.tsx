@@ -58,11 +58,17 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import {
+  type OperationsVoiceFocusLease,
+  type OperationsVoiceTarget,
+  subscribeOperationsVoiceFocus,
+} from "../../kalvoice/sceneOperations.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { accountProviderName } from "../../shell/accountCommands.ts";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
@@ -75,6 +81,7 @@ import {
   filteredSnapshot,
   isActiveRun,
   moveQueueItem,
+  type OperationsTab,
   operationDurationLabel,
   operationStatusLabel,
   orderedQueue,
@@ -110,6 +117,39 @@ const STATUS_TONE: Record<
 
 const KINDS: OperationKind[] = ["agent", "build", "test", "script", "deploy", "release", "background", "service"];
 const ENVIRONMENTS: OperationEnvironmentKind[] = ["local", "preview", "staging", "production"];
+
+function elementWithData(root: HTMLElement, attribute: string, value: string): HTMLElement | null {
+  return (
+    [...root.querySelectorAll<HTMLElement>(`[${attribute}]`)].find(
+      (element) => element.getAttribute(attribute) === value,
+    ) ?? null
+  );
+}
+
+function findOperationsVoiceElement(root: HTMLElement, target: OperationsVoiceTarget): HTMLElement | null {
+  switch (target.kind) {
+    case "tab":
+      return elementWithData(root, "data-operations-tab", target.tab);
+    case "run":
+      return elementWithData(root, "data-operations-run-id", target.runId);
+    case "queue":
+      return elementWithData(root, "data-operations-queue-id", target.runId);
+    case "service":
+      return elementWithData(root, "data-operations-service-id", target.serviceId);
+    case "environment": {
+      const environments = [...root.querySelectorAll<HTMLElement>("[data-operations-environment]")];
+      return (
+        environments.find(
+          (element) =>
+            element.dataset.operationsEnvironment === target.environment &&
+            (target.workspaceId === null || element.dataset.operationsWorkspace === target.workspaceId),
+        ) ?? null
+      );
+    }
+    case "activity":
+      return elementWithData(root, "data-operations-activity-id", target.activityId);
+  }
+}
 
 function titleCase(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
@@ -194,14 +234,89 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   const openInPane = useOpenInPane();
   const [workspaceId, setWorkspaceId] = useState("");
   const workspaceInitialized = useRef(false);
+  const pageRef = useRef<HTMLDivElement>(null);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  const [tab, setTab] = useState<OperationsTab>("runs");
+  const [voiceFocus, setVoiceFocus] = useState<{ target: OperationsVoiceTarget } | null>(null);
+  const pendingVoiceFocus = useRef<{
+    target: OperationsVoiceTarget;
+    lease: OperationsVoiceFocusLease;
+    acknowledge(focused: boolean): void;
+  } | null>(null);
+  const voiceFocusRetry = useRef<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const operationsReady = state.snapshot !== null;
 
   useEffect(() => {
     if (workspaceInitialized.current || workspaces.state === "loading") return;
     workspaceInitialized.current = true;
     setWorkspaceId(workspaces.active?.id ?? "");
   }, [workspaces.active?.id, workspaces.state]);
+
+  useEffect(() => {
+    if (!operationsReady) return;
+    const root = pageRef.current;
+    if (!root) return;
+    root.dataset.operationsVoiceReady = "true";
+    const unsubscribe = subscribeOperationsVoiceFocus((target, acknowledge, lease) => {
+      if (voiceFocusRetry.current !== null) window.clearTimeout(voiceFocusRetry.current);
+      pendingVoiceFocus.current?.acknowledge(false);
+      pendingVoiceFocus.current = { target, acknowledge, lease };
+      setVoiceFocus({ target });
+      setTab(target.tab);
+      if (target.kind !== "tab" && target.workspaceId !== null) setWorkspaceId(target.workspaceId);
+      if (target.kind === "run") setSelectedRun(target.runId);
+    });
+    return () => {
+      root.removeAttribute("data-operations-voice-ready");
+      if (voiceFocusRetry.current !== null) window.clearTimeout(voiceFocusRetry.current);
+      voiceFocusRetry.current = null;
+      pendingVoiceFocus.current?.acknowledge(false);
+      pendingVoiceFocus.current = null;
+      unsubscribe();
+    };
+  }, [operationsReady]);
+
+  useLayoutEffect(() => {
+    const root = pageRef.current;
+    if (!root) return;
+    if (!voiceFocus) {
+      for (const previous of root.querySelectorAll<HTMLElement>('[data-kalvoice-focused="true"]')) {
+        previous.removeAttribute("data-kalvoice-focused");
+      }
+      return;
+    }
+    const request = pendingVoiceFocus.current;
+    if (!request || request.target !== voiceFocus.target) return;
+    const attemptFocus = () => {
+      if (pendingVoiceFocus.current !== request) return;
+      if (!request.lease.isActive() || Date.now() >= request.lease.expiresAt) {
+        request.acknowledge(false);
+        pendingVoiceFocus.current = null;
+        voiceFocusRetry.current = null;
+        return;
+      }
+      const target = findOperationsVoiceElement(root, request.target);
+      if (!target) {
+        voiceFocusRetry.current = window.setTimeout(attemptFocus, 16);
+        return;
+      }
+      for (const previous of root.querySelectorAll<HTMLElement>('[data-kalvoice-focused="true"]')) {
+        previous.removeAttribute("data-kalvoice-focused");
+      }
+      target.dataset.kalvoiceFocused = "true";
+      target.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "smooth" });
+      target.focus({ preventScroll: true });
+      request.acknowledge(true);
+      pendingVoiceFocus.current = null;
+      voiceFocusRetry.current = null;
+    };
+    attemptFocus();
+    return () => {
+      if (voiceFocusRetry.current !== null) window.clearTimeout(voiceFocusRetry.current);
+      voiceFocusRetry.current = null;
+    };
+  }, [voiceFocus]);
 
   const snapshot = useMemo(
     () => (state.snapshot ? filteredSnapshot(state.snapshot, workspaceId) : null),
@@ -278,7 +393,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   const failed = snapshot.items.filter((item) => item.status === "failed").length;
 
   return (
-    <div className={styles.page}>
+    <div ref={pageRef} className={styles.page} data-operations-view>
       <header className={styles.header}>
         <div>
           <div className={styles.headingLine}>
@@ -350,13 +465,30 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
         </ul>
       ) : null}
 
-      <Tabs defaultValue="runs" className={styles.tabs}>
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          setVoiceFocus(null);
+          setTab(value as OperationsTab);
+        }}
+        className={styles.tabs}
+      >
         <TabsList aria-label="Operations views" className={styles.tabList}>
-          <TabsTrigger value="runs">Runs</TabsTrigger>
-          <TabsTrigger value="queue">Queue</TabsTrigger>
-          <TabsTrigger value="services">Services</TabsTrigger>
-          <TabsTrigger value="environments">Environments</TabsTrigger>
-          <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="runs" data-operations-tab="runs">
+            Runs
+          </TabsTrigger>
+          <TabsTrigger value="queue" data-operations-tab="queue">
+            Queue
+          </TabsTrigger>
+          <TabsTrigger value="services" data-operations-tab="services">
+            Services
+          </TabsTrigger>
+          <TabsTrigger value="environments" data-operations-tab="environments">
+            Environments
+          </TabsTrigger>
+          <TabsTrigger value="activity" data-operations-tab="activity">
+            Activity
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="runs">
           <RunsView
@@ -530,6 +662,7 @@ function RunsView({
             key={run.id}
             type="button"
             className={styles.runRow}
+            data-operations-run-id={run.id}
             data-selected={selected === run.id || undefined}
             onClick={() => onSelect(run.id)}
           >
@@ -688,6 +821,8 @@ function QueueView({
             <li
               key={item.id}
               className={styles.queueItem}
+              data-operations-queue-id={item.id}
+              tabIndex={-1}
               draggable
               onDragStart={(event) => {
                 setDragged(item.id);
@@ -831,6 +966,7 @@ function QueueColumn({
                   size="sm"
                   variant="ghost"
                   aria-label={`Open run ${item.spec.name}`}
+                  data-operations-queue-id={item.id}
                   onClick={() => onRun(item.id)}
                 >
                   {item.spec.name}
@@ -1255,7 +1391,7 @@ function ServicesView({
               const stopped = service.status !== "running";
               const tone = service.status === "running" ? "working" : service.status === "failed" ? "failed" : "muted";
               return (
-                <tr key={service.id}>
+                <tr key={service.id} data-operations-service-id={service.id} tabIndex={-1}>
                   <td>
                     <strong>{service.name}</strong>
                   </td>
@@ -1420,7 +1556,10 @@ function EnvironmentsView({
                     <article
                       key={kind}
                       className={styles.environment}
+                      data-operations-environment={kind}
+                      data-operations-workspace={environmentWorkspaceId}
                       data-production={production || undefined}
+                      tabIndex={-1}
                       aria-label={`${titleCase(kind)} environment`}
                     >
                       <header>
@@ -1665,7 +1804,7 @@ function ActivityView({ snapshot, onRun }: { snapshot: OperationsSnapshot; onRun
 
 function ActivityEvent({ event, onRun }: { event: OperationActivity; onRun: (id: string) => void }) {
   return (
-    <li>
+    <li data-operations-activity-id={event.id} tabIndex={-1}>
       <span className={styles.activityGlyph} aria-hidden="true">
         <Activity />
       </span>

@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 23,
-          "skippedMaximum": 23,
+          "skippedMinimum": 24,
+          "skippedMaximum": 24,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 276,
+          "minimumExecuted": 282,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
@@ -337,6 +337,10 @@
     }
   ],
   "rustIntentionalIgnores": [
+    {
+      "path": "apps/desktop/src-tauri/src/kalvoice_guardian.rs",
+      "reason": "requires production-signed pinned components and the native guardian helper"
+    },
     {
       "path": "apps/desktop/src-tauri/src/session_resolver_tests.rs",
       "reason": "latency report, not a gate"

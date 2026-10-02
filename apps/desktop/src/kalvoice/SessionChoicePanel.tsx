@@ -11,6 +11,31 @@ import styles from "./SessionChoicePanel.module.css";
 export function SessionChoicePanel() {
   const kalvoice = useOptionalKalVoice();
   const id = useId();
+  const sceneChoice = kalvoice?.sceneChoice;
+  if (kalvoice && sceneChoice) {
+    return (
+      <section className={styles.panel} aria-labelledby={`${id}-scene-question`} data-kalvoice-choice>
+        <p id={`${id}-scene-question`} className={styles.question} role="status">
+          {sceneChoice.question}
+        </p>
+        <ul className={styles.choices} aria-label="Matches">
+          {sceneChoice.choices.map((candidate, index) => (
+            <li key={candidate.id}>
+              <Button size="sm" className={styles.choice} onClick={() => kalvoice.chooseScene(candidate.id)}>
+                {index + 1}. {candidate.label}
+              </Button>
+            </li>
+          ))}
+        </ul>
+        <div className={styles.footer}>
+          <p className={styles.hint}>Choose one, or say its name or number.</p>
+          <Button size="sm" variant="ghost" onClick={kalvoice.dismissSceneChoice}>
+            Dismiss
+          </Button>
+        </div>
+      </section>
+    );
+  }
   const choice = kalvoice?.sessionChoice ?? null;
   if (!kalvoice || !choice) return null;
   return (

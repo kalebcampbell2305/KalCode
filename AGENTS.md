@@ -2,6 +2,12 @@
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## KalVoice integration rule (owner directive 2026-10-01)
+
+Codex and Claude Code share this policy, including the release lifecycle enforced by Claude's `tooling/release/ship.mjs lifecycle hook`. Apply the same delivery requirements regardless of agent. Reuse KalVoice's existing local speech, routing, provider authentication, workspace, terminal, app-control, and release systems. Prioritize working scene awareness, natural targeting, navigation, multi-agent launching, terminal prompting, follow-up context, focus illumination, and meaningful completion callbacks. Optional voice polish must not delay validated core improvements. Preserve native provider approvals and truthful account, plan, and hardware limits. Ship through the normal gates as the next internal build of the current public version on both Windows and macOS; do not create a new public version or treat a merge as delivery.
+
+**No separate KalVoice approval layer (owner reaffirmed 2026-10-01).** This applies to every user, including Owner. A voice action uses the same authenticated account, entitlements, and canonical action path as the corresponding app action. Do not add a KalVoice permission prompt or require users to approve KalVoice itself. Existing app and provider authorization remains authoritative; voice must not impersonate an approval response or bypass a provider sign-in requirement. Target clarification selects an object or account and is not an approval gate.
+
 ## Completion requires verified delivery (owner reaffirmed 2026-09-30)
 
 **MERGED IS NOT SHIPPED. BUILT IS NOT SHIPPED. DONE means users can receive the validated update and live production has been verified.**

@@ -44,9 +44,10 @@ use crate::latency::LatencyTrace;
 use crate::ledger::{self, Consumption, ExecutionResult, RequestExecution};
 use crate::local_reasoning::{
     LOCAL_REASONING_FAILED_MESSAGE, LOCAL_REASONING_INVALID_OUTPUT_MESSAGE,
-    LOCAL_REASONING_UNAVAILABLE_MESSAGE, LOCAL_REASONING_UNCERTAIN_MESSAGE, LocalInterpretation,
-    LocalInterpretationCancellation, LocalInterpretationError, LocalInterpretationRequest,
-    LocalInterpreter, NoLocalInterpreter, bounded_workspace_snapshot, validate_action,
+    LOCAL_REASONING_UNAVAILABLE_MESSAGE, LOCAL_REASONING_UNCERTAIN_MESSAGE, LocalActionGrounding,
+    LocalInterpretation, LocalInterpretationCancellation, LocalInterpretationError,
+    LocalInterpretationRequest, LocalInterpreter, NoLocalInterpreter, bounded_action_snapshot,
+    bounded_workspace_snapshot, validate_action,
 };
 use crate::plan::EntitlementSource;
 use crate::prefs::{self, KalVoicePreferences, KalVoicePreferencesPatch};
@@ -83,8 +84,11 @@ pub enum RequestStage {
 pub enum TalkTarget {
     /// A text box (composer, search, form field).
     Field,
-    /// A terminal or provider pane (text goes to its PTY).
+    /// A raw shell terminal (text goes to its PTY, but voice never submits it).
     Terminal,
+    /// A governed provider pane. Text goes to its PTY and explicit submit commands may use the
+    /// pane's provider-aware input path, which retains busy and permission-prompt guards.
+    ProviderPane,
     /// Nothing that accepts text.
     None,
 }
@@ -152,10 +156,14 @@ fn route_parsed(parsed: &Parsed, text: &str, target: TalkTarget) -> TalkRoute {
     }
     match (command_like, parsed.confidence, target) {
         (true, Confidence::High, _) | (true, _, TalkTarget::None) => TalkRoute::Command,
-        (_, _, TalkTarget::Terminal) if crate::normalize::command_shaped(text) => {
+        (_, _, TalkTarget::Terminal | TalkTarget::ProviderPane)
+            if crate::normalize::command_shaped(text) =>
+        {
             TalkRoute::Request
         }
-        (_, _, TalkTarget::Field | TalkTarget::Terminal) => TalkRoute::Dictation,
+        (_, _, TalkTarget::Field | TalkTarget::Terminal | TalkTarget::ProviderPane) => {
+            TalkRoute::Dictation
+        }
         _ => TalkRoute::Request,
     }
 }
@@ -176,6 +184,26 @@ pub struct CommandRequest {
     pub thread_id: Option<String>,
 }
 
+/// An authenticated-account choice. Retry text is transient and revalidated as a fresh request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LaunchAccountChoice {
+    pub account_id: String,
+    pub label: String,
+    pub retry_text: String,
+}
+
+/// One exact provider-session instance created by a voice launch. The runtime generation makes
+/// an `all of them` follow-up fail closed if any named thread was stopped, resumed, or replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LaunchThreadInstance {
+    pub thread_id: String,
+    pub generation: u64,
+}
+
 /// Something the UI does as part of a result (navigation lives in the UI).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(
@@ -185,6 +213,11 @@ pub struct CommandRequest {
 )]
 #[ts(export)]
 pub enum UiDirective {
+    ChooseLaunchAccount {
+        question: String,
+        choices: Vec<LaunchAccountChoice>,
+        workspace_id: String,
+    },
     Navigate {
         surface: SurfaceId,
     },
@@ -202,6 +235,8 @@ pub enum UiDirective {
     OpenProviderPanes {
         workspace_id: String,
         thread_ids: Vec<String>,
+        #[serde(default)]
+        instances: Vec<LaunchThreadInstance>,
     },
     /// Applies a deterministic layout operation to the selected workspace.
     ControlPane {
@@ -358,6 +393,9 @@ pub struct ExecContext {
     /// The session a recent command resolved to ("tell it to continue"): bounded follow-up
     /// memory, at most two minutes and three commands old, and only in the same workspace.
     pub last_target_id: Option<String>,
+    /// The exact generation-bound sessions created by the immediately preceding voice launch.
+    /// Empty unless that launch is still within the bounded follow-up window.
+    pub last_launch_instances: Vec<LaunchThreadInstance>,
 }
 
 /// The runtime APIs KalVoice drives — the same ones the UI uses. The desktop implements this.
@@ -378,6 +416,15 @@ pub trait Executor: Send + Sync {
     /// Native-resolved workspaces safe to name in local interpretation. Paths never cross this
     /// boundary. The default is empty so incomplete adapters fail closed for workspace actions.
     fn workspace_options(&self) -> std::result::Result<Vec<WorkspaceOption>, ExecError> {
+        Ok(Vec::new())
+    }
+    /// Read-only actions grounded in the current native scene for the existing offline selector.
+    /// Implementations expose only bounded owner-visible labels and canonical typed intents.
+    fn local_reasoning_actions(
+        &self,
+        _request: &str,
+        _ctx: &ExecContext,
+    ) -> std::result::Result<Vec<LocalActionGrounding>, ExecError> {
         Ok(Vec::new())
     }
     /// Resolves a spoken workspace name to its id.
@@ -526,7 +573,8 @@ const FOLLOW_UP_COMMANDS: u8 = 3;
 /// The session the last command resolved to, for "tell it to continue" (memory only; ids only).
 #[derive(Debug, Clone)]
 struct FollowUp {
-    thread_id: String,
+    thread_id: Option<String>,
+    launch_instances: Vec<LaunchThreadInstance>,
     workspace_id: Option<String>,
     set_at: OffsetDateTime,
     commands: u8,
@@ -818,6 +866,19 @@ impl Orchestrator {
         on_stage: &dyn Fn(RequestStage),
         trace: &LatencyTrace,
     ) -> Result<KalVoiceResponse> {
+        self.handle_traced_for_target(req, on_stage, trace, None)
+    }
+
+    /// Handles a request with the immutable push-to-talk destination captured on key-down.
+    /// Typed requests carry no destination. Keeping this native fact beside routing prevents a
+    /// renderer bug or spoofed `thread_id` from turning "send that" into Enter in a raw shell.
+    fn handle_traced_for_target(
+        &self,
+        req: CommandRequest,
+        on_stage: &dyn Fn(RequestStage),
+        trace: &LatencyTrace,
+        talk_target: Option<TalkTarget>,
+    ) -> Result<KalVoiceResponse> {
         if !is_valid_id(&req.request_id) {
             return Err(KalError::validation(
                 "invalid_request_id",
@@ -878,6 +939,7 @@ impl Orchestrator {
             counted: false,
             on_stage,
             last_target_id: None,
+            last_launch_instances: Vec::new(),
             trace,
         };
         if let Some((intent, replay)) = replay {
@@ -903,7 +965,8 @@ impl Orchestrator {
             input: req.input,
         })]);
         on_stage(RequestStage::Thinking);
-        run.last_target_id = self.follow_up_target(req.workspace_id.as_deref());
+        (run.last_target_id, run.last_launch_instances) =
+            self.follow_up_context(req.workspace_id.as_deref());
 
         match understood {
             Understood::Rejected { code, message } => Ok(run.fail(code, message)),
@@ -924,6 +987,22 @@ impl Orchestrator {
                     request_id: req.request_id.clone(),
                     intent: intent.kind_name().to_owned(),
                 })]);
+                if talk_target == Some(TalkTarget::Terminal) {
+                    let refusal = match intent {
+                        KalVoiceIntent::SubmitFocused => Some((
+                            "terminal_submit_refused",
+                            "KalVoice never presses Enter in a terminal. Press Enter yourself to run it.",
+                        )),
+                        KalVoiceIntent::ClearFocused => Some((
+                            "terminal_clear_refused",
+                            "KalVoice doesn't edit a terminal's line. Nothing was changed.",
+                        )),
+                        _ => None,
+                    };
+                    if let Some((code, message)) = refusal {
+                        return Ok(run.fail(code, message.into()));
+                    }
+                }
                 let (intent, providers) = match target {
                     None => (intent, Vec::new()),
                     // Named providers aren't looked up; the layout command carries them.
@@ -1003,7 +1082,10 @@ impl Orchestrator {
     /// The session "it" means for this request while the memory is fresh: set by the last
     /// command that acted on one session, it lasts two minutes and three commands, and another
     /// workspace clears it. Each consultation counts as one command.
-    fn follow_up_target(&self, workspace_id: Option<&str>) -> Option<String> {
+    fn follow_up_context(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> (Option<String>, Vec<LaunchThreadInstance>) {
         let now = (self.clock)();
         let mut slot = self
             .follow_up
@@ -1011,11 +1093,16 @@ impl Orchestrator {
             .unwrap_or_else(PoisonError::into_inner);
         if !slot.as_ref().is_some_and(|f| f.fresh(now, workspace_id)) {
             *slot = None;
-            return None;
+            return (None, Vec::new());
         }
-        let follow_up = slot.as_mut()?;
+        let Some(follow_up) = slot.as_mut() else {
+            return (None, Vec::new());
+        };
         follow_up.commands += 1;
-        Some(follow_up.thread_id.clone())
+        (
+            follow_up.thread_id.clone(),
+            follow_up.launch_instances.clone(),
+        )
     }
 
     /// As [`Self::follow_up_target`] without counting a command (routing only).
@@ -1026,11 +1113,17 @@ impl Orchestrator {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .filter(|f| f.fresh(now, workspace_id))
-            .map(|f| f.thread_id.clone())
+            .and_then(|f| f.thread_id.clone())
     }
 
     /// Remembers the one session a command acted on; opening a workspace forgets it.
     fn remember(&self, intent: &KalVoiceIntent, done: &Executed, workspace_id: Option<&str>) {
+        let launch_instances = match done.directive.as_ref() {
+            Some(UiDirective::OpenProviderPanes { instances, .. }) if !instances.is_empty() => {
+                instances.clone()
+            }
+            _ => Vec::new(),
+        };
         let thread = done
             .directive
             .as_ref()
@@ -1045,6 +1138,7 @@ impl Orchestrator {
                 }
                 | KalVoiceIntent::StopThreads {
                     scope: ThreadScope::Thread { thread_id },
+                    ..
                 } => Some(thread_id.clone()),
                 _ => None,
             });
@@ -1052,9 +1146,10 @@ impl Orchestrator {
             .follow_up
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(thread_id) = thread {
+        if thread.is_some() || !launch_instances.is_empty() {
             *slot = Some(FollowUp {
-                thread_id,
+                thread_id: thread,
+                launch_instances,
                 workspace_id: workspace_id.map(str::to_owned),
                 set_at: (self.clock)(),
                 commands: 0,
@@ -1085,6 +1180,7 @@ impl Orchestrator {
                 thread_id: valid(&req.thread_id),
                 providers: Vec::new(),
                 last_target_id: self.peek_follow_up(req.workspace_id.as_deref()),
+                last_launch_instances: Vec::new(),
             };
             if self.executor.names_one_session(target, &ctx) {
                 route = TalkRoute::Command;
@@ -1120,7 +1216,7 @@ impl Orchestrator {
                 )]);
                 None
             }
-            TalkRoute::Command | TalkRoute::Request => Some(self.handle_traced(
+            TalkRoute::Command | TalkRoute::Request => Some(self.handle_traced_for_target(
                 CommandRequest {
                     request_id: req.request_id,
                     text: req.text,
@@ -1130,6 +1226,7 @@ impl Orchestrator {
                 },
                 on_stage,
                 &trace,
+                Some(req.target),
             )?),
         };
         Ok(TalkResponse {
@@ -1233,7 +1330,13 @@ pub fn describe(intent: &KalVoiceIntent) -> String {
         ),
         KalVoiceIntent::PauseThreads { scope } => format!("Pause {}", scope_text(scope)),
         KalVoiceIntent::ResumeThreads { scope } => format!("Resume {}", scope_text(scope)),
-        KalVoiceIntent::StopThreads { scope } => format!("Stop {}", scope_text(scope)),
+        KalVoiceIntent::StopThreads {
+            scope,
+            expected_count,
+        } => expected_count.map_or_else(
+            || format!("Stop {}", scope_text(scope)),
+            |count| format!("Stop {count} active threads"),
+        ),
         KalVoiceIntent::CreateTerminal { .. } => "Open a terminal".into(),
         KalVoiceIntent::RequestPermissionMode { mode, .. } => format!(
             "Ask to switch a thread to {} mode",
@@ -1454,6 +1557,7 @@ struct Run<'a> {
     counted: bool,
     on_stage: &'a dyn Fn(RequestStage),
     last_target_id: Option<String>,
+    last_launch_instances: Vec<LaunchThreadInstance>,
     trace: &'a LatencyTrace,
 }
 
@@ -1465,6 +1569,7 @@ impl Run<'_> {
             thread_id: self.req.thread_id.clone(),
             providers,
             last_target_id: self.last_target_id.clone(),
+            last_launch_instances: self.last_launch_instances.clone(),
         }
     }
 
@@ -1780,10 +1885,23 @@ impl Run<'_> {
             .as_ref()
             .filter(|id| workspaces.iter().any(|workspace| &workspace.id == *id))
             .cloned();
+        let grounded_actions = if grammar::local_reasoning_must_refuse(request) {
+            Vec::new()
+        } else {
+            match self
+                .o
+                .executor
+                .local_reasoning_actions(request, &self.context(Vec::new()))
+            {
+                Ok(actions) => bounded_action_snapshot(actions, &workspaces),
+                Err(error) => return Ok(self.fail(&error.code, error.message)),
+            }
+        };
         let input = LocalInterpretationRequest {
             request: request.to_owned(),
             workspace_id,
             workspaces: workspaces.clone(),
+            grounded_actions,
         };
         let deadline = Instant::now() + LOCAL_INTERPRETATION_TIMEOUT;
         let operation = Arc::new(LocalInterpretationOperation::new(permit));

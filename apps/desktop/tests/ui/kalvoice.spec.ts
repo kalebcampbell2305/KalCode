@@ -323,6 +323,33 @@ test.describe("KalVoice voice widget", () => {
     await expect(w.getByRole("button", { name: "Hold to talk" })).toBeVisible();
   });
 
+  test("push-to-talk activity stays above the Command Deck status strip", async ({ page }) => {
+    for (const viewport of [
+      { width: 1360, height: 860 },
+      { width: 1024, height: 700 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await open(page, "?scenario=kalvoice-slow&transcript=go%20to%20settings");
+      const w = widget(page);
+      await expectState(page, "Ready");
+      if ((await w.getAttribute("data-view")) !== "orb") {
+        await w.getByRole("button", { name: "Collapse to the orb" }).click();
+      }
+      await expect(w).toHaveAttribute("data-view", "orb");
+
+      await page.keyboard.down("F8");
+      const activity = page.getByRole("status", { name: "Push to talk" });
+      await expect(activity).toBeVisible();
+      const activityBox = await activity.boundingBox();
+      const statusStripBox = await page.getByRole("contentinfo").boundingBox();
+      if (!activityBox || !statusStripBox) throw new Error("no activity or status strip layout");
+      expect(activityBox.y + activityBox.height).toBeLessThanOrEqual(statusStripBox.y);
+
+      await page.keyboard.press("Escape");
+      await page.keyboard.up("F8");
+    }
+  });
+
   test("hiding keeps push to talk; the key and the palette bring it back", async ({ page }) => {
     await open(page, "?transcript=go%20to%20settings");
     await widget(page).getByRole("button", { name: "Hide the widget (F8 still works)" }).click();

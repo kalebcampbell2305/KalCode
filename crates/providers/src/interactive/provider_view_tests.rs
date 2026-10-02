@@ -60,6 +60,10 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        Self::new_for("codex")
+    }
+
+    fn new_for(provider_id: &str) -> Self {
         let dir = tempfile::tempdir().expect("fixture directory");
         let thread_id = new_id();
         let shared = Shared::new(SessionParts {
@@ -68,7 +72,7 @@ impl Rig {
                 workspace_id: new_id(),
                 working_directory: dir.path().to_string_lossy().into_owned(),
             },
-            provider_id: "codex".into(),
+            provider_id: provider_id.into(),
             routing: DecisionRouting::Engine,
             sink: Box::new(|_: AgentEvent| {}),
             provider_session_id: new_id(),
@@ -323,5 +327,71 @@ fn attaching_replays_history_once_then_streams_new_output_once() {
             .count(),
         2,
         "live output appears once after replay"
+    );
+}
+
+#[test]
+fn codex_and_gemini_voice_use_their_provider_native_input_authority() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
+    for provider_id in ["codex", "gemini-cli"] {
+        let rig = Rig::new_for(provider_id);
+        let observed = rig.observer();
+        let instance_id = rig.shared.instance_id();
+        rig.panes
+            .write_voice(&rig.thread_id, instance_id, b"observe\r")
+            .expect("guarded provider-native voice submit");
+        assert_eq!(
+            observed.recv_timeout(WAIT).expect("voice command output"),
+            0,
+            "{provider_id} ordinary input reaches its PTY"
+        );
+    }
+}
+
+#[test]
+fn terminal_replies_and_focus_reports_do_not_hide_real_draft_input() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
+    let rig = Rig::new();
+    for reply in [b"\x1b[0n".as_slice(), b"\x1b[1;1R", b"\x1b[I", b"\x1b[O"] {
+        rig.panes
+            .write(&rig.thread_id, reply)
+            .expect("terminal-generated reply");
+    }
+    assert!(
+        rig.shared.reserve_if_unused().expect("fresh reservation"),
+        "terminal protocol replies are not user input"
+    );
+    rig.panes
+        .write(&rig.thread_id, b"\x1b[1;1R")
+        .expect("DSR reply remains live while reserved");
+    assert!(
+        rig.panes.write(&rig.thread_id, b"blocked draft").is_err(),
+        "human input cannot race a reserved restart"
+    );
+    rig.shared.cancel_unused_reservation();
+    rig.panes
+        .write(&rig.thread_id, b"unsent draft")
+        .expect("human draft");
+    assert!(
+        !rig.shared.reserve_if_unused().expect("draft check"),
+        "an unsent draft blocks restart"
+    );
+}
+
+#[test]
+fn guarded_voice_write_rejects_a_replaced_provider_instance() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
+    let original = Rig::new();
+    let replacement = Rig::new();
+    let captured_instance = original.shared.instance_id().to_owned();
+    original
+        .panes
+        .insert(&original.thread_id, replacement.shared.clone());
+
+    assert_eq!(
+        original
+            .panes
+            .write_voice(&original.thread_id, &captured_instance, b"draft"),
+        Err(PaneVoiceWriteError::TargetChanged)
     );
 }

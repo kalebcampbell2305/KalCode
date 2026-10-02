@@ -1,13 +1,45 @@
 //! Optional spoken replies through the operating system's speech synthesis (Windows speech,
 //! macOS AVSpeechSynthesizer via the `tts` crate). Off by default; never a cloud voice.
 
+/// Runs after the operating-system backend accepts speech for playback.
+pub type SpeechStarted = Box<dyn FnOnce() + Send>;
+/// Runs when accepted speech settles (`true`) or the backend rejects it (`false`).
+pub type SpeechSettled = Box<dyn FnOnce(bool) + Send>;
+#[cfg(any(windows, target_os = "macos", test))]
+type SpeechCompletion = Box<dyn FnOnce() + Send>;
+
 /// Speaks short replies.
 pub trait SpeechOutput: Send + Sync {
     /// Whether the OS voice could be initialized on this machine.
     fn available(&self) -> bool;
-    /// Speaks `text`, interrupting anything already speaking. `done` runs when speech ends.
-    fn speak(&self, text: &str, done: Box<dyn FnOnce() + Send>) -> Result<(), String>;
+    /// Queues `text`, interrupting anything already speaking. `started` runs only after the OS
+    /// backend accepts playback. `settled` reports whether accepted speech later ended or the
+    /// backend rejected it before playback began.
+    fn speak(
+        &self,
+        text: &str,
+        started: SpeechStarted,
+        settled: SpeechSettled,
+    ) -> Result<(), String>;
     fn stop(&self);
+}
+
+#[cfg(any(windows, target_os = "macos", test))]
+fn admit_backend_start<T, E>(
+    result: Result<T, E>,
+    started: SpeechStarted,
+    settled: SpeechSettled,
+) -> Result<SpeechCompletion, E> {
+    match result {
+        Ok(_) => {
+            started();
+            Ok(Box::new(move || settled(true)))
+        }
+        Err(error) => {
+            settled(false);
+            Err(error)
+        }
+    }
 }
 
 /// Longest reply KalVoice will read aloud.
@@ -34,7 +66,12 @@ impl SpeechOutput for Silent {
     fn available(&self) -> bool {
         false
     }
-    fn speak(&self, _text: &str, _done: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+    fn speak(
+        &self,
+        _text: &str,
+        _started: SpeechStarted,
+        _settled: SpeechSettled,
+    ) -> Result<(), String> {
         Err("Spoken replies aren't available on this system.".into())
     }
     fn stop(&self) {}
@@ -49,10 +86,10 @@ mod os {
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
     use std::time::Duration;
 
-    use super::SpeechOutput;
+    use super::{SpeechOutput, SpeechSettled, SpeechStarted, admit_backend_start};
 
     enum Command {
-        Speak(String, Box<dyn FnOnce() + Send>),
+        Speak(String, SpeechStarted, SpeechSettled),
         Stop,
     }
 
@@ -114,15 +151,14 @@ mod os {
                 Duration::from_secs(3600)
             };
             match rx.recv_timeout(wait) {
-                Ok(Command::Speak(text, done)) => {
+                Ok(Command::Speak(text, started, settled)) => {
                     if let Some(previous) = pending.take() {
                         previous();
                     }
-                    match tts.speak(text, true) {
-                        Ok(_) => pending = Some(done),
+                    match admit_backend_start(tts.speak(text, true), started, settled) {
+                        Ok(done) => pending = Some(done),
                         Err(error) => {
                             tracing::warn!(event = "kalvoice.speech_output_failed", error = %error);
-                            done();
                         }
                     }
                 }
@@ -149,8 +185,13 @@ mod os {
             self.available
         }
 
-        fn speak(&self, text: &str, done: Box<dyn FnOnce() + Send>) -> Result<(), String> {
-            self.send(Command::Speak(text.to_owned(), done))
+        fn speak(
+            &self,
+            text: &str,
+            started: SpeechStarted,
+            settled: SpeechSettled,
+        ) -> Result<(), String> {
+            self.send(Command::Speak(text.to_owned(), started, settled))
         }
 
         fn stop(&self) {
@@ -179,6 +220,52 @@ mod tests {
     #[test]
     fn silent_output_is_honest() {
         assert!(!Silent.available());
-        assert!(Silent.speak("hi", Box::new(|| {})).is_err());
+        assert!(
+            Silent
+                .speak("hi", Box::new(|| {}), Box::new(|_| {}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn backend_start_ack_is_truthful_and_ordered() {
+        use std::sync::{Arc, Mutex};
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let started_events = Arc::clone(&events);
+        let settled_events = Arc::clone(&events);
+        let failed = admit_backend_start(
+            Err::<(), _>("backend rejected speech"),
+            Box::new(move || started_events.lock().unwrap().push("started")),
+            Box::new(move |started| {
+                settled_events
+                    .lock()
+                    .unwrap()
+                    .push(if started { "finished" } else { "failed" })
+            }),
+        );
+        match failed {
+            Ok(_) => panic!("backend rejection must not return a completion callback"),
+            Err(error) => assert_eq!(error, "backend rejected speech"),
+        }
+        assert_eq!(*events.lock().unwrap(), ["failed"]);
+
+        events.lock().unwrap().clear();
+        let started_events = Arc::clone(&events);
+        let settled_events = Arc::clone(&events);
+        let completion = admit_backend_start(
+            Ok::<(), &str>(()),
+            Box::new(move || started_events.lock().unwrap().push("started")),
+            Box::new(move |started| {
+                settled_events
+                    .lock()
+                    .unwrap()
+                    .push(if started { "finished" } else { "failed" })
+            }),
+        )
+        .unwrap();
+        assert_eq!(*events.lock().unwrap(), ["started"]);
+        completion();
+        assert_eq!(*events.lock().unwrap(), ["started", "finished"]);
     }
 }

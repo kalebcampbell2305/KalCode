@@ -314,6 +314,7 @@ fn request() -> LocalInterpretationRequest {
         request: "show the dashboard please".into(),
         workspace_id: None,
         workspaces: vec![],
+        grounded_actions: Vec::new(),
     }
 }
 

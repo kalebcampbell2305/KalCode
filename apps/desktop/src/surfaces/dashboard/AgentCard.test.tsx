@@ -11,6 +11,7 @@ function thread(accountLabel: string | null): ThreadSummary {
     providerId: "gemini-cli",
     providerName: "Gemini CLI",
     model: null,
+    effort: null,
     providerAccountId: accountLabel ? "0192f3c4-0000-7000-8000-000000000b02" : null,
     accountLabel,
     workspaceId: "0192f3c4-0000-7000-8000-00000000a001",

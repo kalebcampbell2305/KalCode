@@ -50,6 +50,7 @@ function summary(partial: Partial<ThreadSummary>): ThreadSummary {
     providerId: "claude-code",
     providerName: "Claude Code",
     model: null,
+    effort: null,
     providerAccountId: null,
     accountLabel: null,
     workspaceId: "w",

@@ -191,7 +191,7 @@ impl RuntimeBundle {
                 health.monitor(),
                 permissions.service(),
                 git.0.clone(),
-                voice,
+                voice.clone(),
             )));
         }
         if let Some(git) = &bundle.git {
@@ -200,6 +200,7 @@ impl RuntimeBundle {
                 threads.clone(),
                 git.0.clone(),
                 account.clone(),
+                voice.operation_announcer(),
                 app,
             ) {
                 Ok(operations) => bundle.operations = Some(operations),

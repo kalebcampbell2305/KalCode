@@ -215,6 +215,7 @@ impl Stack {
                 account_label: None,
                 workspace_id: self.workspace_id.clone(),
                 model: None,
+                effort: None,
                 permission_mode: mode,
                 name: None,
             })
@@ -393,6 +394,7 @@ fn headless_and_interactive_threads_share_one_runtime_and_status_model() {
             account_label: None,
             workspace_id: stack.workspace_id.clone(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Approve,
             prompt: "hello".into(),
             name: None,

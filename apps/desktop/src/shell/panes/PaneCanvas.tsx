@@ -29,7 +29,12 @@ import styles from "./PaneCanvas.module.css";
 import { PaneDivider } from "./PaneDivider.tsx";
 import { PaneDock } from "./PaneDock.tsx";
 import { PaneFrame, paneDomId } from "./PaneFrame.tsx";
-import { listenForPaneCommands, type PaneCommand, type PaneCommandResult } from "./paneCommands.ts";
+import {
+  listenForPaneCommands,
+  type PaneCommand,
+  type PaneCommandResult,
+  resolvePaneTabQuery,
+} from "./paneCommands.ts";
 import { type PaneShortcut, paneShortcut } from "./paneShortcuts.ts";
 import type { PaneController } from "./usePaneController.ts";
 
@@ -252,7 +257,10 @@ function PaneCanvasSurface({
       listenForPaneCommands((command) => {
         const handled = latestHost.current.onCommand?.(command);
         if (handled) return handled;
-        return runCommand(latestController.current, command);
+        return runCommand(latestController.current, command, (content) => {
+          const owned = latestHost.current.describe(content);
+          return owned ?? registeredRenderer(content)?.describe(content) ?? describeBuiltin(content);
+        });
       }, scope ?? null),
     [scope],
   );
@@ -559,7 +567,11 @@ function runShortcut(controller: PaneController, paneId: string, shortcut: PaneS
 }
 
 /** The canvas's own handling of commands (after the host had its chance). */
-export function runCommand(controller: PaneController, command: PaneCommand): PaneCommandResult {
+export function runCommand(
+  controller: PaneController,
+  command: PaneCommand,
+  describe: (content: PaneContent) => TabInfo,
+): PaneCommandResult {
   const paneId = controller.focusedPaneId;
   switch (command.kind) {
     case "split": {
@@ -578,19 +590,47 @@ export function runCommand(controller: PaneController, command: PaneCommand): Pa
       controller.show(command.content, { focus: true, placement: command.placement });
       return { handled: true };
     case "close": {
-      const target = command.content
-        ? leaves(controller.layout.root).find((l) =>
-            l.tabs.some((t) => contentKey(t) === contentKey(command.content as PaneContent)),
-          )?.paneId
-        : command.query
-          ? findPaneByTitle(controller, command.query)
-          : paneId;
-      if (!target)
+      if (!command.content && command.query === undefined) {
+        if (!paneId) return { handled: false, message: "There's no pane to close." };
+        controller.close(paneId);
+        return { handled: true };
+      }
+      const direct = command.content
+        ? leaves(controller.layout.root).flatMap((leaf) =>
+            leaf.tabs.flatMap((content, tabIndex) =>
+              contentKey(content) === contentKey(command.content as PaneContent)
+                ? [{ kind: "found" as const, paneId: leaf.paneId, tabIndex }]
+                : [],
+            ),
+          )[0]
+        : null;
+      const resolved =
+        direct ??
+        resolvePaneTabQuery(
+          command.query ?? "",
+          leaves(controller.layout.root).flatMap((leaf) =>
+            leaf.tabs.map((content, tabIndex) => ({
+              paneId: leaf.paneId,
+              tabIndex,
+              names: [describe(content).title],
+            })),
+          ),
+        );
+      if (resolved?.kind !== "found")
         return {
           handled: false,
-          message: command.query ? `No pane matches “${command.query}”.` : "There's no pane to close.",
+          message:
+            resolved?.kind === "ambiguous"
+              ? `More than one tab matches “${command.query}”. Which one?`
+              : command.query
+                ? `No tab matches “${command.query}”.`
+                : "That tab is no longer open.",
         };
-      controller.close(target);
+      const content = findLeaf(controller.layout, resolved.paneId)?.tabs[resolved.tabIndex];
+      if (!content) return { handled: false, message: "That tab is no longer open." };
+      const info = describe(content);
+      if (info.onClose) info.onClose();
+      else controller.hideTab(resolved.paneId, resolved.tabIndex);
       return { handled: true };
     }
     case "maximize":
@@ -619,11 +659,4 @@ export function runCommand(controller: PaneController, command: PaneCommand): Pa
     case "browser-control":
       return { handled: false, message: "The browser pane isn't available here." };
   }
-}
-
-function findPaneByTitle(controller: PaneController, query: string): string | undefined {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return undefined;
-  return leaves(controller.layout.root).find((l) => controller.paneTitle(l.paneId).toLowerCase().includes(needle))
-    ?.paneId;
 }

@@ -55,6 +55,7 @@ function summary(t: CasesFile["threads"][number]): ThreadSummary {
     providerId: t.provider,
     providerName: t.providerName,
     model: null,
+    effort: null,
     providerAccountId: t.account ? `acct-${t.key}` : null,
     accountLabel: t.account,
     workspaceId: workspace.id,

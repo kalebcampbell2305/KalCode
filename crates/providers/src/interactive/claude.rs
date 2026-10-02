@@ -99,6 +99,7 @@ pub struct InteractiveArgs<'a> {
     pub start: SessionStart,
     pub settings_path: &'a Path,
     pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
     /// Display name passed with `-n`.
     pub title: Option<&'a str>,
 }
@@ -135,6 +136,13 @@ pub fn interactive_args(args: &InteractiveArgs<'_>) -> Result<Vec<OsString>, Arg
         }
         out.push("--model".into());
         out.push(model.into());
+    }
+    if let Some(effort) = args.effort {
+        if !crate::claude::argv::valid_effort_name(effort) {
+            return Err(ArgsError::InvalidEffort);
+        }
+        out.push("--effort".into());
+        out.push(effort.into());
     }
     if let Some(title) = args.title.filter(|t| valid_title(t)) {
         out.push("-n".into());
@@ -277,6 +285,7 @@ mod tests {
             },
             settings_path: Path::new("/data/sessions/t/claude-settings.json"),
             model: Some("sonnet"),
+            effort: Some("high"),
             title: Some("Fix the build"),
         })
         .expect("args")
@@ -381,6 +390,7 @@ mod tests {
             start,
             settings_path: Path::new("/s.json"),
             model: None,
+            effort: None,
             title,
         };
         let new = || SessionStart::New {
@@ -412,6 +422,13 @@ mod tests {
             args.last().map(String::as_str),
             Some("0192f3c4-0000-7000-8000-000000000000")
         );
+        assert_eq!(
+            value_after(&args_for(PermissionMode::Approve), "--effort").as_deref(),
+            Some("high")
+        );
+        let mut invalid = base(new(), None);
+        invalid.effort = Some("ultra");
+        assert_eq!(interactive_args(&invalid), Err(ArgsError::InvalidEffort));
     }
 
     #[test]

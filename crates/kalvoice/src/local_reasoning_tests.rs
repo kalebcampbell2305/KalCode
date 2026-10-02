@@ -18,6 +18,7 @@ fn request(text: &str, workspaces: &[(&str, &str)]) -> LocalInterpretationReques
                 name: (*name).into(),
             })
             .collect(),
+        grounded_actions: Vec::new(),
     }
 }
 
@@ -59,6 +60,81 @@ fn fallthrough_candidates_are_opaque_host_owned_safely_labeled_and_bounded() {
             && !candidate.label.contains("show_approvals")
     }));
     assert!(candidates.len() <= MAX_GROUNDED_ACTION_CANDIDATES);
+}
+
+#[test]
+fn live_scene_actions_join_the_same_opaque_bounded_candidate_set() {
+    let mut input = request(
+        "find Claude working on the website",
+        &[(WORKSPACE_ID, "KalCode")],
+    );
+    input.grounded_actions = vec![LocalActionGrounding {
+        label: "Open Website refresh · Claude Code · KalCode · Running frontend tests".into(),
+        intent: KalVoiceIntent::OpenThread {
+            query: "0199a914-5ea1-7db0-b36b-aee1bdc846d8".into(),
+        },
+    }];
+
+    let candidates = grounded_action_candidates(&input);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "c0");
+    assert_eq!(
+        candidates[0].intent,
+        KalVoiceIntent::OpenThread {
+            query: "0199a914-5ea1-7db0-b36b-aee1bdc846d8".into(),
+        }
+    );
+    assert!(!candidates[0].label.contains("0199"));
+}
+
+#[test]
+fn malformed_duplicate_and_excess_live_scene_actions_are_removed_before_inference() {
+    let mut input = request(
+        "open the terminal working on Browser",
+        &[(WORKSPACE_ID, "KalCode")],
+    );
+    input.grounded_actions = (0..MAX_GROUNDED_ACTION_CANDIDATES + 4)
+        .map(|index| LocalActionGrounding {
+            label: format!("Open Browser task {index}"),
+            intent: KalVoiceIntent::OpenThread {
+                query: format!("0199a914-5ea1-7db0-b36b-aee1bdc8{index:04x}"),
+            },
+        })
+        .chain([
+            LocalActionGrounding {
+                label: "Open Browser task 0".into(),
+                intent: KalVoiceIntent::OpenThread {
+                    query: "0199a914-5ea1-7db0-b36b-aee1bdc80000".into(),
+                },
+            },
+            LocalActionGrounding {
+                label: "unsafe\u{202e}label".into(),
+                intent: KalVoiceIntent::OpenThread {
+                    query: "0199a914-5ea1-7db0-b36b-aee1bdc80999".into(),
+                },
+            },
+        ])
+        .collect();
+    input.grounded_actions =
+        bounded_action_snapshot(input.grounded_actions, input.workspaces.as_slice());
+
+    let candidates = grounded_action_candidates(&input);
+    assert_eq!(candidates.len(), MAX_GROUNDED_ACTION_CANDIDATES);
+    assert_eq!(
+        candidates
+            .iter()
+            .filter(|candidate| candidate.intent
+                == KalVoiceIntent::OpenThread {
+                    query: "0199a914-5ea1-7db0-b36b-aee1bdc80000".into(),
+                })
+            .count(),
+        1
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| !candidate.label.contains('\u{202e}'))
+    );
 }
 
 #[test]

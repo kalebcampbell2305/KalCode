@@ -100,6 +100,7 @@ fn upgrading_a_v1_database_keeps_its_data_and_adds_threads() {
             account_label: None,
             workspace_id,
             model: None,
+            effort: None,
             permission_mode: PermissionMode::Approve,
             prompt: "hello".into(),
             name: None,
