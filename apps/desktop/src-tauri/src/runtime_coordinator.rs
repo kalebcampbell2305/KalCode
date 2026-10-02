@@ -185,6 +185,16 @@ impl RuntimeBundle {
                     registry: providers.registry(),
                     provider_runtime: runtime_authority.clone(),
                     threads: threads.runtime_handle(),
+                    ensure_providers: Some({
+                        // Weak: KalVoice must not keep the thread runtime's state alive.
+                        let threads = Arc::downgrade(&threads);
+                        let core = state.core.clone();
+                        Arc::new(move || {
+                            if let Some(threads) = threads.upgrade() {
+                                threads.ensure_providers(core.as_ref());
+                            }
+                        })
+                    }),
                     permissions: permissions.service(),
                     locator: locator.handle(),
                     components,
