@@ -26,6 +26,18 @@ function envelope(payload: EventPayload): EventEnvelope {
 }
 
 describe("describeEvent", () => {
+  it("names a connected account by provider and account, as every surface does", () => {
+    expect(
+      describeEvent(
+        envelope({ type: "provider.connected", payload: { providerId: "claude-code", accountLabel: "Work" } }),
+      ).detail,
+    ).toBe("Claude Code · Work");
+    expect(
+      describeEvent(envelope({ type: "provider.disconnected", payload: { providerId: "codex", accountLabel: null } }))
+        .detail,
+    ).toBe("Codex");
+  });
+
   it("describes a fresh database differently from an upgrade", () => {
     expect(
       describeEvent(

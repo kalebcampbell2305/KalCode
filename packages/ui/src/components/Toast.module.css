@@ -67,6 +67,11 @@
   font-size: var(--text-sm);
 }
 
+.action {
+  margin-top: var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+}
+
 @keyframes enter {
   from {
     opacity: 0;

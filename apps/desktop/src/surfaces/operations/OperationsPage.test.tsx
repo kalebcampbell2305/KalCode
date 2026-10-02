@@ -1,4 +1,10 @@
-import type { OperationDetail, OperationRecord, OperationsSnapshot, ThreadOptions } from "@kalcode/protocol";
+import type {
+  OperationDetail,
+  OperationRecord,
+  OperationsSnapshot,
+  ProviderAccount,
+  ThreadOptions,
+} from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -126,6 +132,23 @@ function operations(): OperationsApi {
 
 function renderPage(client: OperationsApi) {
   return render(page(client));
+}
+
+function account(id: string, displayName: string, extra: Partial<ProviderAccount> = {}): ProviderAccount {
+  return {
+    id,
+    providerId: "codex",
+    displayName,
+    providerReportedIdentity: null,
+    authenticationState: "authenticated",
+    isDefault: false,
+    createdAt: "2026-09-30T12:00:00Z",
+    lastUsedAt: null,
+    lastCheckedAt: null,
+    lastErrorCode: null,
+    archivedAt: null,
+    ...extra,
+  };
 }
 
 function page(client: OperationsApi) {
@@ -892,5 +915,57 @@ describe("OperationsPage", () => {
     expect(await screen.findByText("No runs recorded")).toBeVisible();
     await act(async () => resolveHistory({ items: [stale], nextCursor: null }));
     expect(screen.queryByText("Wrong workspace history")).not.toBeInTheDocument();
+  });
+
+  it("lists a provider's accounts default first in natural order, with sign-in state", async () => {
+    const accounts = [
+      account("c10", "Codex 10"),
+      account("c2", "Codex 2", { authenticationState: "not_authenticated" }),
+      account("c3", "Codex 3", { isDefault: true }),
+      account("c1", "Codex 1", { authenticationState: "unknown" }),
+      account("old", "Codex Old", { archivedAt: "2026-09-30T12:00:00Z" }),
+      account("claude", "Claude 1", { providerId: "claude-code" }),
+    ];
+    const user = userEvent.setup();
+    render(
+      <ToastProvider>
+        <OperationsPage
+          client={operations()}
+          threadOptions={async () => options}
+          providerAccounts={async () => accounts}
+        />
+      </ToastProvider>,
+    );
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "agent");
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Provider" }), "codex");
+    const select = screen.getByRole("combobox", { name: "Account" });
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Provider default", "Codex 3 · Default", "Codex 1 · Not checked", "Codex 2 · Signed out", "Codex 10"]);
+  });
+
+  it("names a bound account as provider and account in Queue and Runs", async () => {
+    const pending = queued("bound", 1);
+    pending.spec = { ...pending.spec, kind: "agent", providerId: "claude-code", providerAccountId: "a-work" };
+    pending.accountLabel = "Work";
+    const run = queued("bound-run", 2);
+    run.status = "succeeded";
+    run.startedAt = "2026-09-30T12:00:00Z";
+    run.spec = { ...run.spec, name: "Bound run", kind: "agent", providerId: "codex", providerAccountId: "a-2" };
+    run.accountLabel = "Codex 2";
+    seams.snapshot = { ...baseSnapshot(), items: [pending, run] };
+    const client = operations();
+    vi.mocked(client.detail).mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+    renderPage(client);
+
+    expect(screen.getByRole("button", { name: /Bound run/ })).toHaveTextContent("KalCode · main · Codex · Codex 2");
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    const pendingList = screen.getByRole("list", { name: "Pending tasks" });
+    expect(within(pendingList).getByText("Agent · KalCode · Claude Code · Work · Priority 0")).toBeVisible();
   });
 });

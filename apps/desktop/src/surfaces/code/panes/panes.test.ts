@@ -117,6 +117,11 @@ describe("pane labels", () => {
     } as ProviderAccount;
 
     expect(resolvePaneAccount(thread, [active], false)).toEqual({ label: "Work profile", state: "active" });
+    // The shared account name, so a blank-named account reads the same here as everywhere else.
+    expect(resolvePaneAccount(thread, [{ ...active, displayName: "  " }], false)).toEqual({
+      label: "Unnamed account",
+      state: "active",
+    });
     expect(paneAccountLabel(requirePaneAccount(resolvePaneAccount(thread, null, false)))).toBe(
       "Work (checking status)",
     );

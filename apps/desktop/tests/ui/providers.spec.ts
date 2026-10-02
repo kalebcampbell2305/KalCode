@@ -109,71 +109,75 @@ test.describe("providers", () => {
     await openProviders(page);
     await page.getByRole("tab", { name: "Accounts" }).click();
 
-    const codex = page.getByRole("region", { name: /^Codex 2$/ });
-    const personal = page.getByRole("region", { name: "Codex account Personal" });
-    const work = page.getByRole("region", { name: "Codex account Work" });
+    const codex = page.getByRole("region", { name: "Codex", exact: true });
+    const personal = page.getByRole("region", { name: "Codex · Personal" });
+    const work = page.getByRole("region", { name: "Codex · Work" });
     await expect(codex).toBeVisible();
+    await expect(codex.getByText("2 accounts · 1 signed in")).toBeVisible();
     await expect(personal.getByText("Default", { exact: true })).toBeVisible();
     await expect(personal.getByText("Signed in", { exact: true })).toBeVisible();
     await expect(work.getByText("Signed out", { exact: true })).toBeVisible();
 
-    const claude = page.getByRole("region", { name: "Claude Code account Personal" });
-    await claude.getByRole("button", { name: "Sign out Personal" }).click();
+    const claude = page.getByRole("region", { name: "Claude Code · Personal" });
+    await claude.getByRole("button", { name: "More actions for Personal" }).click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Sign out Personal" }).click();
     await expect(claude.getByText("Signed out", { exact: true })).toBeVisible();
     await claude.getByRole("button", { name: "Sign in Personal" }).click();
     await expect(claude.getByText("Signed in", { exact: true })).toBeVisible();
 
     await work.getByRole("button", { name: "Sign in Work" }).click();
     await expect(work.getByText("Signed in", { exact: true })).toBeVisible();
-    await work.getByRole("button", { name: "Set Work as default" }).click();
+    await work.getByRole("button", { name: "More actions for Work" }).click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Set Work as default" }).click();
     await expect(work.getByText("Default", { exact: true })).toBeVisible();
 
-    await work.getByRole("button", { name: "Manage Work" }).click();
-    await work.getByRole("button", { name: "Rename Work" }).click();
+    await work.getByRole("button", { name: "More actions for Work" }).click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Rename Work" }).click();
     await work.getByLabel("Account name for Work").fill("Work profile");
     await work.getByRole("button", { name: "Save account name" }).click();
-    const renamed = page.getByRole("region", { name: "Codex account Work profile" });
+    const renamed = page.getByRole("region", { name: "Codex · Work profile" });
     await expect(renamed).toBeVisible();
 
     await renamed.getByRole("button", { name: "Remove Work profile from KalCode" }).click();
     await expect(renamed.getByText(/doesn't sign out of Codex or delete provider credentials/i)).toBeVisible();
     await renamed.getByRole("button", { name: "Confirm remove Work profile" }).click();
-    await expect(page.getByRole("region", { name: "Codex account Work profile" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Codex · Work profile" })).toHaveCount(0);
 
-    const add = page.getByRole("region", { name: "Add provider account" });
-    await add.getByLabel("Provider").selectOption("gemini-cli");
-    await add.getByLabel("Account name").fill("Side project");
-    await add.getByRole("button", { name: "Add account" }).click();
-    await expect(page.getByRole("region", { name: "Gemini CLI account Side project" })).toBeVisible();
+    await page.getByRole("button", { name: "Add account", exact: true }).click();
+    await page.getByLabel("Provider", { exact: true }).selectOption("gemini-cli");
+    await page.getByLabel("Name for the new Gemini CLI account").fill("Side project");
+    await page.getByRole("button", { name: "Add and sign in" }).click();
+    await expect(page.getByRole("region", { name: "Gemini CLI · Side project" })).toBeVisible();
 
-    const gemini = page.getByRole("region", { name: "Gemini CLI account Personal" });
+    const gemini = page.getByRole("region", { name: "Gemini CLI · Personal" });
     await expect(gemini.getByRole("button", { name: "Sign in Personal" })).toBeVisible();
     await expect(gemini.getByRole("button", { name: /auth pane/i })).toHaveCount(0);
     await expect(page.getByText(/Gemini CLI opens Google sign-in in your browser/)).toBeVisible();
     await expectNoSeriousA11yViolations(page);
   });
 
-  test("Gemini signs in and out from its account card without a provider pane", async ({ page }) => {
+  test("Gemini signs in and out from its account row without a provider pane", async ({ page }) => {
     await openProviders(page);
     await page.getByRole("tab", { name: "Accounts" }).click();
 
-    const add = page.getByRole("region", { name: "Add provider account" });
-    await add.getByLabel("Provider").selectOption("gemini-cli");
-    await add.getByLabel("Account name").fill("Side project");
-    await add.getByRole("button", { name: "Add account" }).click();
-    const gemini = page.getByRole("region", { name: "Gemini CLI account Side project" });
-    await expect(gemini.getByText("Not checked", { exact: true })).toBeVisible();
+    // Adding runs Gemini's own sign-in for the new account only.
+    await page.getByRole("button", { name: "Add Gemini CLI account" }).click();
+    await page.getByLabel("Name for the new Gemini CLI account").fill("Side project");
+    await page.getByRole("button", { name: "Add and sign in" }).click();
+    const gemini = page.getByRole("region", { name: "Gemini CLI · Side project" });
+    await expect(gemini.getByText("Signed in", { exact: true })).toBeVisible();
+
+    await gemini.getByRole("button", { name: "More actions for Side project" }).click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Sign out Side project" }).click();
+    await expect(gemini.getByText("Signed out", { exact: true })).toBeVisible();
 
     await gemini.getByRole("button", { name: "Sign in Side project" }).click();
     await expect(gemini.getByText("Signed in", { exact: true })).toBeVisible();
     // Sign-in stays on the Providers page: no workspace, thread or pane is opened for it.
     await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
     await expect(page.locator("[data-provider-pane]")).toHaveCount(0);
-
-    await gemini.getByRole("button", { name: "Sign out Side project" }).click();
-    await expect(gemini.getByText("Signed out", { exact: true })).toBeVisible();
     await expect(
-      page.getByRole("region", { name: "Gemini CLI account Personal" }).getByText("Not checked", { exact: true }),
+      page.getByRole("region", { name: "Gemini CLI · Personal" }).getByText("Not checked", { exact: true }),
     ).toBeVisible();
   });
 

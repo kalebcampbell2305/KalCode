@@ -1,6 +1,5 @@
-import type { ProviderAccount, ProviderStatus } from "@kalcode/protocol";
+import type { ProviderAccount, ProviderHealth, ProviderStatus } from "@kalcode/protocol";
 import {
-  Badge,
   Button,
   ErrorState,
   Field,
@@ -8,17 +7,18 @@ import {
   ProviderMark,
   Select,
   Skeleton,
+  StatusIndicator,
   TextInput,
 } from "@kalcode/ui/components";
-import { ChevronDown, LogIn, Plus, RefreshCw, ShieldCheck } from "lucide-react";
-import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { LogIn, Plus, Search, ShieldCheck } from "lucide-react";
+import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
+import { accountProviderName } from "../../shell/accountCommands.ts";
+import { AccountRow } from "./AccountRow.tsx";
+import { accountName, sortAccounts } from "./accountIdentity.ts";
+import { rateLimitText } from "./healthLabels.ts";
 import styles from "./ProviderAccountsView.module.css";
-import {
-  consumeProviderAccountsRequest,
-  type ProviderAccountsRequest,
-  useProviderAccountsRequest,
-} from "./providersTab.ts";
-import { type AccountUsage, isBrowserAuthProvider, NO_USAGE, useProviderAccounts } from "./useProviderAccounts.ts";
+import { consumeProviderAccountsRequest, useProviderAccountsRequest } from "./providersTab.ts";
+import { isBrowserAuthProvider, NO_USAGE, useProviderAccounts } from "./useProviderAccounts.ts";
 
 const PROVIDERS = [
   { id: "claude-code", name: "Claude Code" },
@@ -26,21 +26,62 @@ const PROVIDERS = [
   { id: "gemini-cli", name: "Gemini CLI" },
 ] as const;
 
-export function ProviderAccountsView({ enabled, statuses }: { enabled: boolean; statuses: ProviderStatus[] | null }) {
+/** Above this many accounts the toolbar offers a filter. */
+const FILTER_THRESHOLD = 6;
+/** The toolbar's add form, which lets the person choose the provider. */
+const ANY_PROVIDER = "*";
+
+interface ProviderEntry {
+  id: string;
+  name: string;
+  /** KalCode can add accounts for it (one of the known providers). */
+  addable: boolean;
+}
+
+export function ProviderAccountsView({
+  enabled,
+  statuses,
+  health = null,
+}: {
+  enabled: boolean;
+  statuses: ProviderStatus[] | null;
+  /** Provider Health snapshots; only provider-wide limits are read from them. */
+  health?: readonly ProviderHealth[] | null;
+}) {
   const state = useProviderAccounts(enabled);
   const request = useProviderAccountsRequest();
-  const names = useMemo(
-    () =>
-      new Map(
-        PROVIDERS.map((provider) => [
-          provider.id,
-          statuses?.find((s) => s.id === provider.id)?.displayName ?? provider.name,
-        ]),
-      ),
-    [statuses],
-  );
+  /** The provider whose add form is open, {@link ANY_PROVIDER} for the toolbar's, or null. */
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const accounts = state.accounts;
+  const loaded = accounts !== null;
 
-  if (state.loadError && !state.accounts) {
+  // Every known provider gets a section, plus any provider the backend returns accounts for, so
+  // nothing is hidden.
+  const providers = useMemo<ProviderEntry[]>(() => {
+    const ids: string[] = PROVIDERS.map((provider) => provider.id);
+    for (const account of accounts ?? []) if (!ids.includes(account.providerId)) ids.push(account.providerId);
+    return ids.map((id) => ({
+      id,
+      name:
+        statuses?.find((s) => s.id === id)?.displayName ??
+        PROVIDERS.find((provider) => provider.id === id)?.name ??
+        accountProviderName(id),
+      addable: PROVIDERS.some((provider) => provider.id === id),
+    }));
+  }, [accounts, statuses]);
+
+  // A request from elsewhere (the thread header's account menu): show that provider and, with
+  // `connect`, open its add form. Handled once the accounts (and so the sections) are on screen.
+  useEffect(() => {
+    if (!request || !loaded) return;
+    consumeProviderAccountsRequest(request.nonce);
+    setFilter("");
+    if (request.connect) setConnecting(request.providerId);
+    document.getElementById(sectionId(request.providerId))?.scrollIntoView?.({ block: "start" });
+  }, [request, loaded]);
+
+  if (state.loadError && !accounts) {
     return (
       <ErrorState
         title="Provider accounts couldn't load"
@@ -50,7 +91,7 @@ export function ProviderAccountsView({ enabled, statuses }: { enabled: boolean; 
       </ErrorState>
     );
   }
-  if (!state.accounts) {
+  if (!accounts) {
     return (
       <Panel as="div" className={styles.loading} role="status" aria-busy="true">
         <span className="visually-hidden">Loading provider accounts</span>
@@ -61,142 +102,210 @@ export function ProviderAccountsView({ enabled, statuses }: { enabled: boolean; 
     );
   }
 
+  const signedIn = accounts.filter((account) => account.authenticationState === "authenticated").length;
+  const query = accounts.length > FILTER_THRESHOLD ? filter.trim().toLowerCase() : "";
+  const matches = (account: ProviderAccount, providerName: string) =>
+    !query ||
+    [accountName(account), account.providerReportedIdentity ?? "", providerName].some((text) =>
+      text.toLowerCase().includes(query),
+    );
+  const sections = providers.map((provider) => {
+    const all = accounts.filter((account) => account.providerId === provider.id);
+    return { provider, all, shown: sortAccounts(all.filter((account) => matches(account, provider.name))) };
+  });
+  const visible = query ? sections.filter((section) => section.shown.length > 0) : sections;
+  const addable = providers.filter((provider) => provider.addable);
+
   return (
     <div className={styles.root}>
-      <Panel
-        id="provider-account-safety"
-        title="Accounts stay isolated"
-        icon={<ShieldCheck />}
-        description="Each account uses a managed provider profile. KalCode stores only display metadata here; credentials and provider profile paths stay outside the app interface."
-        className={styles.safety}
-      >
-        <p className={styles.note}>
-          Sign in runs each provider's own official sign-in for that account only: Claude Code and Codex use their
-          browser sign-in, and Gemini CLI opens Google sign-in in your browser. The provider keeps the credentials in
-          the account's managed profile; KalCode never sees them.
-        </p>
-      </Panel>
+      <div className={styles.toolbar}>
+        <div className={styles.toolbarText}>
+          <p className={styles.summary}>
+            {count(accounts.length, "account")} · {signedIn} signed in
+          </p>
+          <p className={styles.note}>
+            <ShieldCheck aria-hidden="true" />
+            <span>
+              <strong>Accounts stay isolated.</strong> Each account has its own managed provider profile and signs in
+              with the provider's official flow: Claude Code and Codex use their browser sign-in, and Gemini CLI opens
+              Google sign-in in your browser. KalCode never sees the credentials.
+            </span>
+          </p>
+        </div>
+        <div className={styles.toolbarActions}>
+          {accounts.length > FILTER_THRESHOLD ? (
+            <span className={styles.filter}>
+              <Search aria-hidden="true" />
+              <TextInput
+                type="search"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder="Filter by name or email"
+                aria-label="Filter accounts"
+              />
+            </span>
+          ) : null}
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<Plus />}
+            onClick={() => setConnecting(ANY_PROVIDER)}
+            disabled={state.activeLogin !== null || connecting === ANY_PROVIDER}
+          >
+            Add account
+          </Button>
+        </div>
+      </div>
 
-      <AddAccount busy={state.busyKey === "create"} create={state.create} />
-
-      {PROVIDERS.map((provider) => (
-        <ProviderPanel
-          key={provider.id}
-          providerId={provider.id}
-          name={names.get(provider.id) ?? provider.name}
-          accounts={state.accounts?.filter((account) => account.providerId === provider.id) ?? []}
-          state={state}
-          request={request?.providerId === provider.id ? request : null}
+      {connecting === ANY_PROVIDER ? (
+        <ConnectAccount
+          providers={addable}
+          busy={state.busyKey === "create"}
+          create={state.create}
+          signIn={state.signInAuth}
+          onDone={() => setConnecting(null)}
         />
-      ))}
+      ) : null}
+
+      {visible.length === 0 ? (
+        <p className={styles.empty} role="status">
+          No accounts match “{filter.trim()}”.
+        </p>
+      ) : null}
+
+      {visible.map(({ provider, all, shown }) => {
+        const titleId = `${sectionId(provider.id)}-title`;
+        const limit = providerLimit(health?.find((h) => h.providerId === provider.id));
+        const providerSignedIn = all.filter((account) => account.authenticationState === "authenticated").length;
+        const canAdd = provider.addable && connecting !== provider.id;
+        const addButton = (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Plus />}
+            onClick={() => setConnecting(provider.id)}
+            disabled={state.activeLogin !== null}
+          >
+            Add {provider.name} account
+          </Button>
+        );
+        return (
+          <section key={provider.id} id={sectionId(provider.id)} className={styles.section} aria-labelledby={titleId}>
+            <header className={styles.sectionHeader}>
+              <div className={styles.sectionHeading}>
+                <h2 id={titleId} className={styles.sectionTitle}>
+                  <ProviderMark provider={provider.id} name={provider.name} tile size="sm" />
+                </h2>
+                <p className={styles.sectionMeta}>
+                  {count(all.length, "account")} · {providerSignedIn} signed in
+                </p>
+                {limit ? (
+                  <p className={styles.limit} title={limit.detail}>
+                    <StatusIndicator tone="waiting">{limit.text}</StatusIndicator>
+                    <span className={styles.limitScope}>Provider-wide</span>
+                  </p>
+                ) : null}
+              </div>
+              {canAdd && all.length > 0 ? addButton : null}
+            </header>
+
+            {connecting === provider.id ? (
+              <ConnectAccount
+                providers={[provider]}
+                busy={state.busyKey === "create"}
+                create={state.create}
+                signIn={state.signInAuth}
+                onDone={() => setConnecting(null)}
+              />
+            ) : null}
+
+            {all.length === 0 ? (
+              <div className={styles.emptyRow}>
+                <p className={styles.empty}>No {provider.name} accounts yet.</p>
+                {canAdd ? addButton : null}
+              </div>
+            ) : (
+              <div className={styles.rows}>
+                <div className={styles.columns} aria-hidden="true">
+                  <span>Account</span>
+                  <span>Health</span>
+                  <span>Usage</span>
+                  <span />
+                </div>
+                {shown.map((account) => (
+                  <AccountRow
+                    key={account.id}
+                    account={account}
+                    providerName={provider.name}
+                    usage={state.usage ? (state.usage.get(account.id) ?? NO_USAGE) : null}
+                    busyKey={state.busyKey}
+                    activeLogin={state.activeLogin?.accountId === account.id}
+                    loginInProgress={state.activeLogin !== null}
+                    actions={state}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
 
-type AccountsState = ReturnType<typeof useProviderAccounts>;
+function sectionId(providerId: string): string {
+  return `provider-accounts-${providerId}`;
+}
 
-function ProviderPanel({
-  providerId,
-  name,
-  accounts,
-  state,
-  request,
-}: {
-  providerId: string;
-  name: string;
-  accounts: ProviderAccount[];
-  state: AccountsState;
-  /** A request from elsewhere (the thread header's account menu) to open this provider here. */
-  request: ProviderAccountsRequest | null;
-}) {
-  const [connecting, setConnecting] = useState(false);
-  const panel = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    if (!request) return;
-    consumeProviderAccountsRequest(request.nonce);
-    if (request.connect) setConnecting(true);
-    panel.current?.scrollIntoView?.({ block: "start" });
-  }, [request]);
-  const connectLabel = accounts.length === 0 ? `Connect a ${name} account` : `Connect another ${name} account`;
-  return (
-    <Panel
-      ref={panel}
-      id={`provider-accounts-${providerId}`}
-      title={<ProviderMark provider={providerId} name={name} tile size="md" />}
-      count={accounts.length}
-      description={
-        accounts.length === 0 ? "No managed accounts yet." : "Choose the exact account for each new thread or pane."
-      }
-      actions={
-        connecting ? null : (
-          <Button size="sm" icon={<Plus />} onClick={() => setConnecting(true)} disabled={state.activeLogin !== null}>
-            {connectLabel}
-          </Button>
-        )
-      }
-      className={styles.provider}
-    >
-      {connecting ? (
-        <ConnectAccount
-          providerId={providerId}
-          providerName={name}
-          busy={state.busyKey === "create"}
-          create={state.create}
-          signIn={state.signInAuth}
-          onDone={() => setConnecting(false)}
-        />
-      ) : null}
-      {accounts.length === 0 ? (
-        <p className={styles.empty}>Connect an account to use an isolated profile for this provider.</p>
-      ) : (
-        <div className={styles.accounts}>
-          {accounts.map((account) => (
-            <AccountCard
-              key={account.id}
-              account={account}
-              providerName={name}
-              usage={state.usage ? (state.usage.get(account.id) ?? NO_USAGE) : null}
-              busyKey={state.busyKey}
-              activeLogin={state.activeLogin?.accountId === account.id}
-              loginInProgress={state.activeLogin !== null}
-              rename={state.rename}
-              setDefault={state.setDefault}
-              archive={state.archive}
-              refreshAuth={state.refreshAuth}
-              signInAuth={state.signInAuth}
-              cancelLogin={state.cancelLogin}
-              logoutAuth={state.logoutAuth}
-            />
-          ))}
-        </div>
-      )}
-    </Panel>
-  );
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
 /**
- * "Connect another account": the two existing steps in one place. KalCode adds a managed account
- * (its own isolated provider profile), then runs that provider's official browser sign-in for it.
- * Nothing is inferred and no other account is touched.
+ * A rate limit or used-up quota the provider reported. It applies to the whole provider, so it
+ * is shown on the provider's section, never on one account.
+ */
+function providerLimit(health: ProviderHealth | undefined): { text: string; detail: string } | null {
+  if (health?.capacity !== "backing_off") return null;
+  const what = health.reasonCode === "quota_exhausted" ? "Quota used up" : "Rate limited";
+  const reported = rateLimitText(health);
+  return {
+    text: health.backoffUntil ? `${what} · retry ${retryTime(health.backoffUntil)}` : what,
+    detail: [reported.label, reported.detail].filter(Boolean).join(". "),
+  };
+}
+
+/** "14:05" today, "Oct 2, 14:05" on another day. */
+function retryTime(iso: string): string {
+  const at = new Date(iso);
+  const sameDay = at.toDateString() === new Date().toDateString();
+  return sameDay
+    ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : at.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Add an account: KalCode adds a managed account (its own isolated provider profile), then runs
+ * that provider's official browser sign-in for it. With one provider the form is that provider's;
+ * from the toolbar the person chooses it. Nothing is inferred and no other account is touched.
  */
 function ConnectAccount({
-  providerId,
-  providerName,
+  providers,
   busy,
   create,
   signIn,
   onDone,
 }: {
-  providerId: string;
-  providerName: string;
+  providers: readonly ProviderEntry[];
   busy: boolean;
   create: (providerId: string, displayName: string) => Promise<ProviderAccount | null>;
   signIn: (account: ProviderAccount) => Promise<void>;
   onDone: () => void;
 }) {
   const id = useId();
+  const [providerId, setProviderId] = useState(providers[0]?.id ?? "claude-code");
   const [displayName, setDisplayName] = useState("");
+  const providerName = providers.find((provider) => provider.id === providerId)?.name ?? providerId;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const created = await create(providerId, displayName);
@@ -206,6 +315,17 @@ function ConnectAccount({
   };
   return (
     <form className={styles.connectForm} onSubmit={(event) => void submit(event)}>
+      {providers.length > 1 ? (
+        <Field htmlFor={`${id}-provider`} label="Provider">
+          <Select id={`${id}-provider`} value={providerId} onChange={(event) => setProviderId(event.target.value)}>
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      ) : null}
       <Field
         htmlFor={`${id}-name`}
         label={`Name for the new ${providerName} account`}
@@ -232,297 +352,4 @@ function ConnectAccount({
       </div>
     </form>
   );
-}
-
-function AddAccount({
-  busy,
-  create,
-}: {
-  busy: boolean;
-  create: (providerId: string, displayName: string) => Promise<ProviderAccount | null>;
-}) {
-  const id = useId();
-  const [providerId, setProviderId] = useState("claude-code");
-  const [displayName, setDisplayName] = useState("");
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const created = await create(providerId, displayName);
-    if (created) setDisplayName("");
-  };
-  return (
-    <Panel
-      id="add-provider-account"
-      title="Add provider account"
-      description="Use a local name such as Personal or Work."
-    >
-      <form className={styles.addForm} onSubmit={(event) => void submit(event)}>
-        <Field htmlFor={`${id}-provider`} label="Provider">
-          <Select id={`${id}-provider`} value={providerId} onChange={(event) => setProviderId(event.target.value)}>
-            {PROVIDERS.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field
-          htmlFor={`${id}-name`}
-          label="Account name"
-          hint="Stored locally; this is never inferred from provider output."
-        >
-          <TextInput
-            id={`${id}-name`}
-            value={displayName}
-            maxLength={80}
-            onChange={(event) => setDisplayName(event.target.value)}
-            aria-describedby={`${id}-name-hint`}
-            placeholder="Personal"
-            required
-          />
-        </Field>
-        <Button type="submit" variant="primary" icon={<Plus />} busy={busy} disabled={!displayName.trim()}>
-          Add account
-        </Button>
-      </form>
-    </Panel>
-  );
-}
-
-function AccountCard({
-  account,
-  providerName,
-  usage,
-  busyKey,
-  activeLogin,
-  loginInProgress,
-  rename,
-  setDefault,
-  archive,
-  refreshAuth,
-  signInAuth,
-  cancelLogin,
-  logoutAuth,
-}: {
-  account: ProviderAccount;
-  providerName: string;
-  /** `null` while thread use and workspace defaults are unavailable. */
-  usage: AccountUsage | null;
-  busyKey: string | null;
-  activeLogin: boolean;
-  loginInProgress: boolean;
-  rename: (accountId: string, displayName: string) => Promise<ProviderAccount | null>;
-  setDefault: (accountId: string) => Promise<ProviderAccount | null>;
-  archive: (accountId: string) => Promise<ProviderAccount | null>;
-  refreshAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
-  signInAuth: (account: ProviderAccount) => Promise<void>;
-  cancelLogin: () => Promise<void>;
-  logoutAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
-}) {
-  const id = useId();
-  const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(account.displayName);
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const [managing, setManaging] = useState(false);
-  const busy = busyKey?.endsWith(account.id) ?? false;
-  const status = authPresentation(account.authenticationState);
-
-  const saveName = async (event: FormEvent) => {
-    event.preventDefault();
-    const updated = await rename(account.id, name);
-    if (updated) setRenaming(false);
-  };
-
-  return (
-    <section className={styles.account} aria-label={`${providerName} account ${account.displayName}`}>
-      <div className={styles.accountTop}>
-        <div className={styles.accountIdentity}>
-          <h3>{account.displayName}</h3>
-          {account.providerReportedIdentity ? <p>{account.providerReportedIdentity}</p> : null}
-        </div>
-        <div className={styles.badges}>
-          {account.isDefault ? <Badge tone="accent">Default</Badge> : null}
-          <Badge tone={status.tone}>{status.label}</Badge>
-        </div>
-      </div>
-
-      <dl className={styles.usage}>
-        <div>
-          <dt>Active threads</dt>
-          <dd>{usage ? threadUse(usage) : "Unavailable"}</dd>
-        </div>
-        <div>
-          <dt>Workspace default in</dt>
-          <dd>{usage ? usage.workspaces.join(", ") || "None" : "Unavailable"}</dd>
-        </div>
-      </dl>
-
-      {activeLogin ? (
-        <div className={styles.loginState} role="status">
-          <span>Waiting for browser sign-in to finish…</span>
-          <Button
-            size="sm"
-            variant="ghost"
-            busy={busyKey === `cancel:${account.id}`}
-            onClick={() => void cancelLogin()}
-          >
-            Cancel sign-in
-          </Button>
-        </div>
-      ) : null}
-
-      {renaming ? (
-        <form className={styles.renameForm} onSubmit={(event) => void saveName(event)}>
-          <Field htmlFor={`${id}-rename`} label={`Account name for ${account.displayName}`}>
-            <TextInput
-              id={`${id}-rename`}
-              value={name}
-              maxLength={80}
-              onChange={(event) => setName(event.target.value)}
-              required
-              autoFocus
-            />
-          </Field>
-          <div className={styles.actions}>
-            <Button type="submit" size="sm" busy={busyKey === `rename:${account.id}`} disabled={!name.trim()}>
-              Save account name
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setName(account.displayName);
-                setRenaming(false);
-              }}
-            >
-              Cancel rename
-            </Button>
-          </div>
-        </form>
-      ) : (
-        <div className={styles.actions}>
-          {!account.isDefault ? (
-            <Button
-              size="sm"
-              onClick={() => void setDefault(account.id)}
-              busy={busyKey === `default:${account.id}`}
-              disabled={busy}
-              aria-label={`Set ${account.displayName} as default`}
-            >
-              Set default
-            </Button>
-          ) : null}
-          {isBrowserAuthProvider(account.providerId) ? (
-            <>
-              {account.authenticationState === "authenticated" ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void logoutAuth(account)}
-                  busy={busyKey === `logout:${account.id}`}
-                  disabled={busy}
-                  aria-label={`Sign out ${account.displayName}`}
-                >
-                  Sign out
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  icon={<LogIn />}
-                  onClick={() => void signInAuth(account)}
-                  busy={busyKey === `login:${account.id}`}
-                  disabled={busy || loginInProgress}
-                  aria-label={`Sign in ${account.displayName}`}
-                >
-                  Sign in
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<RefreshCw />}
-                onClick={() => void refreshAuth(account)}
-                busy={busyKey === `refresh:${account.id}`}
-                disabled={busy || activeLogin}
-                aria-label={`Refresh ${account.displayName} sign-in status`}
-              >
-                Refresh
-              </Button>
-            </>
-          ) : null}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setManaging((open) => !open)}
-            aria-expanded={managing}
-            aria-controls={`${id}-manage`}
-            aria-label={`Manage ${account.displayName}`}
-          >
-            Manage
-            <ChevronDown aria-hidden="true" className={managing ? styles.chevronOpen : styles.chevron} />
-          </Button>
-        </div>
-      )}
-
-      {managing && !renaming ? (
-        <div id={`${id}-manage`} className={styles.manage}>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setRenaming(true)}
-            disabled={busy}
-            aria-label={`Rename ${account.displayName}`}
-          >
-            Rename
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setConfirmRemove(true)}
-            disabled={busy || activeLogin}
-            aria-label={`Remove ${account.displayName} from KalCode`}
-          >
-            Remove
-          </Button>
-        </div>
-      ) : null}
-
-      {confirmRemove ? (
-        <fieldset className={styles.confirm}>
-          <legend className="visually-hidden">Remove {account.displayName} from KalCode</legend>
-          <p>Removing this entry doesn't sign out of {providerName} or delete provider credentials.</p>
-          <div className={styles.actions}>
-            <Button
-              size="sm"
-              variant="danger"
-              busy={busyKey === `archive:${account.id}`}
-              onClick={async () => {
-                if (await archive(account.id)) setConfirmRemove(false);
-              }}
-              aria-label={`Confirm remove ${account.displayName}`}
-            >
-              Remove from KalCode
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(false)} disabled={busy}>
-              Keep account
-            </Button>
-          </div>
-        </fieldset>
-      ) : null}
-    </section>
-  );
-}
-
-/** "2 · 1 running", "1" or "None": a count in text, never a colour. */
-function threadUse(usage: AccountUsage): string {
-  if (usage.threads === 0) return "None";
-  return usage.running > 0 ? `${usage.threads} · ${usage.running} running` : String(usage.threads);
-}
-
-function authPresentation(state: ProviderAccount["authenticationState"]): {
-  label: string;
-  tone: "success" | "danger" | "outline";
-} {
-  if (state === "authenticated") return { label: "Signed in", tone: "success" };
-  if (state === "not_authenticated") return { label: "Signed out", tone: "danger" };
-  return { label: "Not checked", tone: "outline" };
 }

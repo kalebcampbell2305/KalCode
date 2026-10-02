@@ -64,6 +64,12 @@
   text-overflow: ellipsis;
 }
 
+.default {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
 .active {
   flex: none;
 }

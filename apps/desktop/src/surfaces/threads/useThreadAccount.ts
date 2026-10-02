@@ -2,13 +2,12 @@ import type { ProviderAccount, ThreadSummary } from "@kalcode/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
 import { isWaitingForResources, presentStatus } from "./model.ts";
 
 /** How an account's sign-in state reads in the switcher (text, never colour alone). */
 export function accountStatus(state: ProviderAccount["authenticationState"]): { label: string; usable: boolean } {
-  if (state === "authenticated") return { label: "Signed in", usable: true };
-  if (state === "not_authenticated") return { label: "Signed out", usable: false };
-  return { label: "Not checked", usable: true };
+  return { label: accountSignIn({ authenticationState: state }).label, usable: state !== "not_authenticated" };
 }
 
 /** The label a thread shows for its account (legacy threads may have none). */
@@ -113,7 +112,10 @@ export function describeSendError(error: unknown): string {
   return err.code === "thread_account_changed" ? THREAD_ACCOUNT_CHANGED_MESSAGE : err.message;
 }
 
-/** The active (non-archived) accounts of one provider, re-read on demand (e.g. when a menu opens). */
+/**
+ * The active (non-archived) accounts of one provider in `sortAccounts` order, re-read on demand
+ * (e.g. when a menu opens).
+ */
 export function useProviderAccountList(providerId: string) {
   const { client } = useRuntime();
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
@@ -124,8 +126,10 @@ export function useProviderAccountList(providerId: string) {
   const reload = useCallback(async (): Promise<ProviderAccount[] | null> => {
     const id = ++request.current;
     try {
-      const list = (await client.listProviderAccounts(providerId)).filter(
-        (account) => account.providerId === providerId && account.archivedAt === null,
+      const list = sortAccounts(
+        (await client.listProviderAccounts(providerId)).filter(
+          (account) => account.providerId === providerId && account.archivedAt === null,
+        ),
       );
       if (id === request.current) {
         setAccounts(list);

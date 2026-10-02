@@ -6,6 +6,7 @@ import { publicVersion } from "../platform/version.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { DashboardDataBoundary, useWaitingForYouCount } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
+import { AccountHub, useAccountHubShown } from "./AccountHub.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
 import { type Destination, destinationMeta, PRIMARY_ORDER, useNavigation, viewVisible } from "./navigation.tsx";
 import { useNotifications } from "./notifications/NotificationsProvider.tsx";
@@ -27,6 +28,8 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
   const inDevelopment = PRIMARY_ORDER.filter((id) => visible(id) && flags.get(id)?.state === "gated");
 
   const toggle = () => void updateSettings({ sidebarCollapsed: !collapsed });
+  // The hub menu carries the build version; without an account loaded the footer shows it.
+  const hubShown = useAccountHubShown();
 
   return (
     <nav className={styles.sidebar} aria-label="Primary" data-collapsed={collapsed || undefined}>
@@ -85,7 +88,8 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
           {visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}
         </ul>
         <div className={styles.footerRow}>
-          {collapsed ? null : (
+          <AccountHub collapsed={collapsed} onOpenPalette={onOpenPalette} />
+          {hubShown || collapsed ? null : (
             <p className={styles.build}>
               {info.channel === "stable"
                 ? `Version ${publicVersion(info.version)}`

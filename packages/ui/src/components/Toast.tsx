@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { IconButton } from "./Button.tsx";
+import { Button, IconButton } from "./Button.tsx";
 import { cx } from "./cx.ts";
 import styles from "./Toast.module.css";
 
@@ -12,6 +12,13 @@ export interface ToastInput {
   description?: string;
   /** Milliseconds before auto-dismiss. Errors stay until dismissed. */
   duration?: number;
+  /** One follow-up action ("Review"); choosing it also dismisses the toast. */
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  onSelect: () => void;
 }
 
 interface ToastItem {
@@ -20,6 +27,7 @@ interface ToastItem {
   title: string;
   description: string | undefined;
   duration: number;
+  action: ToastAction | undefined;
 }
 
 interface ToastApi {
@@ -85,6 +93,19 @@ function Toast({
       <div>
         <p className={styles.title}>{toast.title}</p>
         {toast.description ? <p className={styles.description}>{toast.description}</p> : null}
+        {toast.action ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className={styles.action}
+            onClick={() => {
+              dismiss(toast.id);
+              toast.action?.onSelect();
+            }}
+          >
+            {toast.action.label}
+          </Button>
+        ) : null}
       </div>
       <IconButton size="sm" label="Dismiss notification" icon={<X />} onClick={() => dismiss(toast.id)} />
     </li>
@@ -106,14 +127,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
-  const show = useCallback(({ tone = "info", title, description, duration }: ToastInput) => {
+  const show = useCallback(({ tone = "info", title, description, duration, action }: ToastInput) => {
     const id = nextId.current++;
     const protectedId = focusedId.current;
     setToasts((current) => {
       const evictIndex = current.length >= MAX_VISIBLE ? current.findIndex((toast) => toast.id !== protectedId) : -1;
       return [
         ...current.filter((_, index) => index !== evictIndex),
-        { id, tone, title, description, duration: duration ?? (tone === "danger" ? 0 : 4500) },
+        { id, tone, title, description, duration: duration ?? (tone === "danger" ? 0 : 4500), action },
       ];
     });
   }, []);

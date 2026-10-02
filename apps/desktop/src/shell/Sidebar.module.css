@@ -191,26 +191,28 @@
   border-top: 1px solid var(--color-border);
 }
 
+/* The Account Hub, then the collapse control; stacked when the sidebar is collapsed. */
 .footerRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding-left: var(--space-2);
+  gap: var(--space-1);
 }
 
-.sidebar[data-collapsed] .footerRow {
-  justify-content: center;
-  padding: 0;
-}
-
+/* The build version, when no account is loaded to show the hub. */
 .build {
+  flex: 1;
   min-width: 0;
+  padding-left: var(--space-2);
   overflow: hidden;
   color: var(--color-text-faint);
   font-size: var(--type-small);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar[data-collapsed] .footerRow {
+  flex-direction: column;
+  gap: var(--space-1-5);
 }
 
 /* ---- Z4: approvals indicator ---- */

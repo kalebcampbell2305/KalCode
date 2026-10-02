@@ -9,11 +9,14 @@ export interface TooltipProps {
   side?: "top" | "right" | "bottom" | "left";
   /** A single focusable element that forwards refs. */
   children: ReactElement;
+  /** Keeps the tooltip closed, e.g. while the menu its trigger opened is showing. */
+  hidden?: boolean;
 }
 
 /** Supplementary hint on hover and focus. Never the only place essential information lives. */
-export function Tooltip({ content, side = "top", children }: TooltipProps) {
-  const [open, setOpen] = useState(false);
+export function Tooltip({ content, side = "top", children, hidden = false }: TooltipProps) {
+  const [requested, setOpen] = useState(false);
+  const open = requested && !hidden;
   const contentId = useId();
   const trigger = children as ReactElement<{ "aria-describedby"?: string }>;
   // asChild gives child props precedence, so include both descriptions on the child itself.

@@ -9,6 +9,7 @@ import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { UiIntentsProvider } from "../runtime/uiIntents.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
+import { KalTidyProvider } from "../surfaces/code/kaltidy/KalTidyProvider.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { focusSection } from "../surfaces/dashboard/useNow.ts";
@@ -56,13 +57,16 @@ export function Shell() {
                   {/* Z7-W2: shared search (palette + locator) and the workspace rail. */}
                   <SearchProvider>
                     <RailProvider>
-                      {kalvoiceEnabled ? (
-                        <KalVoiceProvider>
-                          <ShellLayout kalvoice />
-                        </KalVoiceProvider>
-                      ) : (
-                        <ShellLayout kalvoice={false} />
-                      )}
+                      {/* KalTidy wraps KalVoice, which stops idle terminals through it. */}
+                      <KalTidyProvider>
+                        {kalvoiceEnabled ? (
+                          <KalVoiceProvider>
+                            <ShellLayout kalvoice />
+                          </KalVoiceProvider>
+                        ) : (
+                          <ShellLayout kalvoice={false} />
+                        )}
+                      </KalTidyProvider>
                     </RailProvider>
                   </SearchProvider>
                 </ShellSlotsProvider>
