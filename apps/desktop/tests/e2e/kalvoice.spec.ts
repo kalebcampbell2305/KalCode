@@ -279,9 +279,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
     // The signed baseline plus the typed local command, spoken local command and direct native
     // app-control command counted; dictation and focused-provider handoff did not.
-    await expect(
-      page.locator("#kalvoice-status").getByText(/^415 \/ 1,500 used · 1,085 remaining · renews/),
-    ).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText(/^44 \/ 150 used · 106 remaining · renews/)).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();

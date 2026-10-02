@@ -25,8 +25,8 @@ use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretStrin
 
 const NOW: i64 = 1_790_000_060;
 const ACCOUNT_ID: &str = "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11";
-const TEST_KEY: &str = "qcP_oTajE0Eubrj1mKtnsYQWs9tx7_aSG-4F49undqE";
-const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVucmVzdHJpY3RlZCI6ZmFsc2UsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7ImNvbmN1cnJlbnRUaHJlYWRzIjoyLCJrYWx2b2ljZVJlcXVlc3RzUGVyTW9udGgiOjc1fSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.JPD0pSzGnCY4FEO0wpcQOQRHEsNtpVGwmYVQSR2vwVdgF52ldGAy9Yhbz8M9phFb98HFZXYXpqFBrFNPmRQ3CQ";
+const TEST_KEY: &str = "tKkvjavy0V_KqYw2EKs0tgb8eKU0PZGL9Mt8tcmnz8U";
+const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVucmVzdHJpY3RlZCI6ZmFsc2UsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7ImthbHZvaWNlUmVxdWVzdHNQZXJNb250aCI6MjUsIm9wZW5UZXJtaW5hbHMiOjQsInBhcmFsbGVsQWdlbnRzIjoxLCJ3b3Jrc3BhY2VzIjoyLCJwcm92aWRlckFjY291bnRzIjoyfSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.VgCLvAbISk34hIwd_bp7GehEM6SykB_SHtE1WV9Rcroo_7-Ux_ZijCUt59TX95VtlgJwKLSOeZJn2VQSBTCrDA";
 
 #[derive(Default)]
 struct TestStore {
@@ -491,7 +491,7 @@ fn kalvoice_unknown_transport_persists_across_restart_and_replays_same_id_once()
     let id = kalcode_contracts::ids::new_id();
     let decision = meter.authorize(&id).expect("verified offline fallback");
     assert!(decision.allowed);
-    assert_eq!(decision.usage.used, 413);
+    assert_eq!(decision.usage.used, 42);
     assert_eq!(
         core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
             .expect("durable"),
@@ -515,7 +515,7 @@ fn kalvoice_unknown_transport_persists_across_restart_and_replays_same_id_once()
             .expect("acked")
             .is_none()
     );
-    assert_eq!(restarted.usage().expect("usage").used, 412);
+    assert_eq!(restarted.usage().expect("usage").used, 41);
 }
 
 #[test]
@@ -595,7 +595,7 @@ fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
                 allowance: None,
             },
         )?;
-        for _ in 0..74 {
+        for _ in 0..24 {
             accounting::reserve(
                 conn,
                 ACCOUNT_ID,
@@ -609,7 +609,7 @@ fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
     .expect("seed");
     let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
         .expect("meter");
-    assert_eq!(meter.usage().expect("legacy count excluded").used, 74);
+    assert_eq!(meter.usage().expect("legacy count excluded").used, 24);
     let other =
         crate::kalvoice_accounting::AccountKalVoice::new(core, account).expect("independent lane");
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -634,7 +634,7 @@ fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
             .sum::<u32>(),
         1
     );
-    assert_eq!(meter.usage().expect("usage").used, 75);
+    assert_eq!(meter.usage().expect("usage").used, 25);
     assert!(api.request_calls.lock().expect("calls").is_empty());
 }
 
@@ -642,8 +642,8 @@ fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
 fn kalvoice_server_receipt_replaces_provisional_count_for_allow_and_deny() {
     use kalcode_kalvoice::accounting::{self, RequestAccounting};
     for (tier, receipt, allowed, used) in [
-        ("pro", "pro-receipt", true, 412),
-        ("free", "free-receipt-exhausted", false, 75),
+        ("pro", "pro-receipt", true, 41),
+        ("free", "free-receipt-exhausted", false, 25),
     ] {
         let api = Arc::new(FakeApi::default());
         let account = metering_account(api.clone(), tier, None, false);
@@ -1256,8 +1256,8 @@ fn metered_receipt_write_failure_keeps_last_unit_reserved_after_cold_offline_res
         )
     };
     for (tier, receipt_name, allowance) in [
-        ("free", "free-receipt-exhausted", 75_u64),
-        ("pro", "pro-receipt", 1500_u64),
+        ("free", "free-receipt-exhausted", 25_u64),
+        ("pro", "pro-receipt", 150_u64),
     ] {
         let api = Arc::new(FakeApi::default());
         let store = Arc::new(TestStore::default());
