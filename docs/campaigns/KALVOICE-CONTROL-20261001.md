@@ -403,3 +403,22 @@ required.
 
 These counts apply only to the work recorded before final integration and release. The final
 release receipt must replace them with audited end-state counts and the exact rollback reference.
+
+## Immutable PR verification ? 2026-10-02 UTC
+
+Recovered implementation committed as `c36bf5b1`; current main merged as `c9b13f20` and
+[PR 67](https://github.com/kalebcampbell2305/KalCode/pull/67) opened. Inventory conflicts
+preserved the proven 275 functional / 56 visual partition; inventory tests passed. The
+post-serialization browser rerun passed `11/11`; source worktree was clean. No publication
+or production-profile mutation has occurred.
+
+The first physical macOS trusted gate rejected a constant-size `chunks_exact(2)` under
+Rust 1.98 Clippy. The parser now uses `as_chunks::<2>()` and the same remainder/count checks;
+this is compatible with the declared Rust 1.89 minimum. The original job log is preserved at
+`target/kalvoice-pr67-mac-job.log`. The gate must rerun on the corrected commit.
+
+Correction reproof: grammar `47/47`, KalVoice all-target Clippy, and independent native
+review passed. A complete committed desktop rerun hit one existing five-second palette
+timeout under concurrent build load; that unchanged palette file passed immediately with
+one worker. Original failure is preserved in `target/kalvoice-resume-desktop-committed.json`;
+no timeout or assertion was changed. Trusted immutable PR gates remain required.

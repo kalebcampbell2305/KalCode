@@ -931,8 +931,8 @@ fn retry_launch(tokens: &[String]) -> Option<Understood> {
     let effort = decode(&tokens[9])?;
     let mut assignments = Vec::new();
     if tokens[11..] != ["none"] {
-        let mut chunks = tokens[11..].chunks_exact(2);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = tokens[11..].as_chunks::<2>();
+        for chunk in chunks {
             let assignment_count = chunk[0].parse::<u32>().ok()?;
             let assignment_count = check_count(assignment_count).ok()?;
             let task = decode(&chunk[1])??;
@@ -941,7 +941,7 @@ fn retry_launch(tokens: &[String]) -> Option<Understood> {
                 task,
             });
         }
-        if !chunks.remainder().is_empty()
+        if !remainder.is_empty()
             || assignments
                 .iter()
                 .map(|assignment| u32::from(assignment.count))
