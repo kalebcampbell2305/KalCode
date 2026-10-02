@@ -4,11 +4,10 @@ KalCode 0.1.9 adds the Command Deck, Agent Fleet, the Provider Dock and KalVoice
 
 ## Upgrading
 
-- **From the latest 0.1.8 build:** 0.1.9 downloads and is verified in the background, then installs without a prompt when you close KalCode, so the next launch runs it. Your workspaces, threads, settings and sign-ins are kept.
-- **From an earlier 0.1.8 build or 0.1.7:** KalCode offers 0.1.9 as an update. Install it with Restart to update or Settings > Updates, or install the download from kalcoded.com/download over your current copy. Your data is kept.
+- **From 0.1.8 or 0.1.7:** KalCode offers 0.1.9 as an update. Install it with Restart to update or Settings > Updates, or install the download from kalcoded.com/download over your current copy. Your data is kept.
 - **Windows, from 0.1.6:** KalCode 0.1.6 can't install updates on Windows. Download the installer from kalcoded.com/download and run it once over your current copy; your data is kept.
 - **macOS, from 0.1.6:** update from inside the app with Restart to update or Settings > Updates.
-- **Later updates:** every update, including a new version, downloads and is verified in the background and installs when you close KalCode.
+- **Later updates:** from 0.1.9 on, every update, including a new version, downloads and is verified in the background and installs when you close KalCode.
 - **Version numbers:** KalCode shows version 0.1.9. Settings > Updates and other detailed views add the build number, for example "0.1.9 build {{BUILD}}". Version 0.1.2 with a build number is only for a private test build and is never offered as an update.
 - **Going back:** KalCode records the build that last updated its data and offers Restore previous version only for a build that can open it. A restore that would reach an older build stops with "The previous version can't open data saved by this version, so it can't be restored. Your data has not been changed."
 
