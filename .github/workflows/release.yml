@@ -19,11 +19,35 @@ permissions:
   statuses: write
 
 jobs:
+  warm:
+    name: Warm the Windows release tree
+    # Keeps <owner repo>/.worktrees/release-warm-windows compiled at the newest main so the release build after a merge is
+    # incremental (docs/release/FAST-PIPELINE.md). Off until the repository variable KALCODE_RELEASE_WARM=true, and
+    # KALCODE_RELEASE_REPO names the owner's checkout on the release machine. It signs and publishes nothing.
+    if: github.ref == 'refs/heads/main' && vars.KALCODE_RELEASE_WARM == 'true' && vars.KALCODE_RELEASE_REPO != ''
+    runs-on: [self-hosted, Windows, kalcode-release]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Warm
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          KALCODE_RELEASE_REPO: ${{ vars.KALCODE_RELEASE_REPO }}
+        run: |
+          $timings = Join-Path $env:LOCALAPPDATA 'KalCode\release-pipeline'
+          node tooling/release/warm-release-tree.mjs --repo $env:KALCODE_RELEASE_REPO --commit $env:GITHUB_SHA --timings-root $timings
+          exit $LASTEXITCODE
+
   release:
     name: Release (automated phases)
     # Off until the release lane hands over (repository variable KALCODE_AUTO_RELEASE=true), so it can
-    # never start a second pipeline beside a release someone is already running by hand.
-    if: github.ref == 'refs/heads/main' && vars.KALCODE_AUTO_RELEASE == 'true'
+    # never start a second pipeline beside a release someone is already running by hand. It runs after the
+    # warm pass (or without it when warming is off or failed), so the release build starts from a warm tree.
+    needs: warm
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.KALCODE_AUTO_RELEASE == 'true' }}
     runs-on: [self-hosted, Windows, kalcode-release]
     timeout-minutes: 380
     steps:

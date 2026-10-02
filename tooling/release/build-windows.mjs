@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyComponentNotices } from "./component-notices.mjs";
 import {
+  clearStaleGuardian,
   GUARDIAN_FILENAME,
   guardianBuildArgs,
   guardianBundleOverlay,
@@ -166,8 +167,10 @@ try {
   const metadataPath = join(signingWorkspace, "metadata.json");
   const overlayPath = join(signingWorkspace, "tauri.bundle.json");
   let signingOverlay = {};
-  // A signed byte from an earlier run must never be mistaken for this commit's guardian.
-  rmSync(builtGuardian, { force: true });
+  // A signed byte from an earlier run must never be mistaken for this commit's guardian. Clearing only the guardian's
+  // own link outputs makes cargo relink it now (a reused deps executable keeps its old timestamp and would trip the
+  // staleness check below), without recompiling kalcode-providers or the desktop crate.
+  clearStaleGuardian(TARGET_DIR);
   run("cargo", guardianBuildArgs(), {
     env: {
       ...childEnvironment,

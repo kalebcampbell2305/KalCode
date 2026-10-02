@@ -178,3 +178,40 @@ test("installer verification measures every installed guardian instead of trusti
   assert.match(verifySource, /sameAuthenticodeSigner\(installer, guardian, powershellJson\)/);
   assert.match(verifySource, /allInstallPassesVerified/);
 });
+
+test("clearStaleGuardian removes only the guardian bin's link outputs so cargo relinks it", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { clearStaleGuardian, staleGuardianOutputs } = await import("./guardian-packaging.mjs");
+  const target = mkdtempSync(join(tmpdir(), "kalcode-guardian-stale-"));
+  try {
+    const release = join(target, "release");
+    mkdirSync(join(release, "deps"), { recursive: true });
+    const binFp = join(release, ".fingerprint", "kalcode-providers-0a1b");
+    const libFp = join(release, ".fingerprint", "kalcode-providers-2c3d");
+    mkdirSync(binFp, { recursive: true });
+    mkdirSync(libFp, { recursive: true });
+    writeFileSync(join(binFp, "bin-kalcode-provider-guardian"), "x");
+    writeFileSync(join(libFp, "lib-kalcode_providers"), "x");
+    for (const f of ["kalcode_provider_guardian-0a1b.exe", "kalcode_provider_guardian-0a1b.pdb", "kalcode_provider_guardian-0a1b.d", "libkalcode_providers-2c3d.rlib"]) {
+      writeFileSync(join(release, "deps", f), "x");
+    }
+    writeFileSync(join(release, GUARDIAN_FILENAME), "old");
+    assert.equal(staleGuardianOutputs(target).length, 4);
+    const removed = clearStaleGuardian(target);
+    assert.equal(removed.length, 5);
+    assert.equal(existsSync(join(release, GUARDIAN_FILENAME)), false);
+    assert.equal(existsSync(binFp), false);
+    assert.equal(existsSync(libFp), true, "the providers library fingerprint stays, so dependents are not recompiled");
+    assert.equal(existsSync(join(release, "deps", "libkalcode_providers-2c3d.rlib")), true);
+    assert.deepEqual(clearStaleGuardian(target), [], "idempotent");
+    assert.deepEqual(clearStaleGuardian(join(target, "missing")), []);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("build-windows clears the guardian's stale link outputs before building it", () => {
+  assert.match(buildSource, /clearStaleGuardian\(TARGET_DIR\);\s*\n\s*run\("cargo", guardianBuildArgs\(\)/);
+});

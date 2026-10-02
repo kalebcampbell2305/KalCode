@@ -1,9 +1,45 @@
-import { basename, isAbsolute } from "node:path";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { basename, isAbsolute, join } from "node:path";
 
 export const GUARDIAN_FILENAME = "kalcode-provider-guardian.exe";
 
 export function guardianBuildArgs() {
   return ["build", "--locked", "--release", "-p", "kalcode-providers", "--bin", "kalcode-provider-guardian"];
+}
+
+/**
+ * Cargo's link outputs for the guardian bin under <targetDir>/release: the deps executable (cargo hard-links or copies it to
+ * release/<GUARDIAN_FILENAME> with its old timestamp) and the bin's fingerprint directory. Removing them makes the next
+ * `cargo build` relink the guardian from the current tree, so a binary left by an earlier (possibly failed or signed) run
+ * is never reused, without recompiling the kalcode-providers library or its dependents.
+ */
+export function staleGuardianOutputs(targetDir) {
+  const release = join(targetDir, "release");
+  const paths = [];
+  const deps = join(release, "deps");
+  if (existsSync(deps)) {
+    for (const name of readdirSync(deps)) {
+      if (/^kalcode_provider_guardian-[0-9a-f]+(\.exe|\.pdb|\.d)?$/.test(name)) paths.push(join(deps, name));
+    }
+  }
+  const fingerprints = join(release, ".fingerprint");
+  if (existsSync(fingerprints)) {
+    for (const name of readdirSync(fingerprints)) {
+      if (!/^kalcode-providers-[0-9a-f]+$/.test(name)) continue;
+      const dir = join(fingerprints, name);
+      if (readdirSync(dir).some((file) => file.startsWith("bin-kalcode-provider-guardian"))) paths.push(dir);
+    }
+  }
+  return paths;
+}
+
+/** Removes {@link staleGuardianOutputs} and the uplifted release binary; returns what was removed. */
+export function clearStaleGuardian(targetDir) {
+  const removed = [...staleGuardianOutputs(targetDir), join(targetDir, "release", GUARDIAN_FILENAME)].filter((path) =>
+    existsSync(path),
+  );
+  for (const path of removed) rmSync(path, { recursive: true, force: true });
+  return removed;
 }
 
 /** Adds the already-built guardian as a Windows resource at the resource root (the exe sibling). */
