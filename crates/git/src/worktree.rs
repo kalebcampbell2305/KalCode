@@ -560,9 +560,32 @@ fn undo_partial_add(git: &Git, repo: &Repo, path: &Path) {
     }
 }
 
+/// `path` with symbolic links resolved even when its last components no longer exist: the
+/// nearest existing ancestor is canonicalized and the missing rest appended. Git records
+/// worktrees by their real path (on macOS `/private/var/...` for a `/var/...` temp folder), so a
+/// missing folder must be compared in that form.
+fn lenient_canonical(path: &Path) -> PathBuf {
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(cursor) {
+            return rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (cursor.parent(), cursor.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                cursor = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
-        let text = plain(p).to_string_lossy().replace('\\', "/");
+        let text = plain(&lenient_canonical(p))
+            .to_string_lossy()
+            .replace('\\', "/");
         let text = text.trim_end_matches('/').to_owned();
         if cfg!(windows) {
             text.to_lowercase()
@@ -574,28 +597,29 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 /// Drops git's registration of a worktree whose folder no longer exists, so its branch can be
-/// checked out again. Targets that one worktree (`git worktree remove --force` on a missing
-/// folder loses nothing); only if git still lists it afterwards does it fall back to
-/// `git worktree prune`, which clears registrations of missing folders (locked ones are kept).
-/// Does nothing when the folder exists or git doesn't list it.
+/// checked out again. Targets that one worktree (`git worktree remove --force` on the path git
+/// itself recorded; on a missing folder it loses nothing); if git still lists it afterwards,
+/// falls back to `git worktree prune`, which only clears registrations whose folders are missing
+/// (locked ones are kept). Does nothing when the folder exists or git doesn't list it.
 pub fn forget_missing(git: &Git, repo: &Repo, path: &Path) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
-    let listed = |git: &Git| -> Result<bool> {
+    let registered = |git: &Git| -> Result<Option<PathBuf>> {
         Ok(list(git, repo)?
-            .iter()
-            .any(|wt| !wt.main && same_path(&wt.path, path)))
+            .into_iter()
+            .find(|wt| !wt.main && same_path(&wt.path, path))
+            .map(|wt| wt.path))
     };
-    if !listed(git)? {
+    let Some(recorded) = registered(git)? else {
         return Ok(());
-    }
+    };
     let _ = repo
         .cmd(git)
         .args(["worktree", "remove", "--force"])
-        .arg(plain(path))
+        .arg(&recorded)
         .run();
-    if listed(git)? {
+    if registered(git)?.is_some() {
         repo.cmd(git)
             .args(["worktree", "prune"])
             .run_ok("worktree")?;
