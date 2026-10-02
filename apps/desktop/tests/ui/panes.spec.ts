@@ -152,7 +152,7 @@ test.describe("splitting and resizing", () => {
 });
 
 test.describe("maximize, collapse, close and reopen never stop a process", () => {
-  test("maximize shows one pane; the others' views are suspended and come back with their output", async ({ page }) => {
+  test("maximize shows one pane; the others' views stay mounted but hidden and come back with their output", async ({ page }) => {
     await openCode(page);
     await pane(page, 0).locator(".xterm-screen").click();
     await page.keyboard.type("echo before-maximize");
@@ -164,7 +164,9 @@ test.describe("maximize, collapse, close and reopen never stop a process", () =>
 
     await page.keyboard.press("Control+Alt+Enter");
     await expect(panes(page)).toHaveCount(1);
-    await expect(page.locator(".xterm")).toHaveCount(1);
+    // The other terminal keeps its view (no rebuild on restore), hidden behind the maximized pane.
+    await expect(page.locator(".xterm:visible")).toHaveCount(1);
+    await expect(page.locator(".xterm")).toHaveCount(2);
     await expect(panes(page).first()).toHaveAttribute("data-maximized", "true");
     expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
 
@@ -181,7 +183,8 @@ test.describe("maximize, collapse, close and reopen never stop a process", () =>
     const collapsed = page.locator("[data-pane-id][data-collapsed]");
     await expect(collapsed).toHaveCount(1);
     expect((await box(collapsed)).width).toBeLessThan(40);
-    await expect(page.locator(".xterm")).toHaveCount(0);
+    // The collapsed pane's terminal keeps its view, hidden; nothing is shown in it.
+    await expect(page.locator("[data-pane-id][data-collapsed] .xterm:visible")).toHaveCount(0);
     const expand = collapsed.getByRole("button", { name: /^Expand PowerShell 7/ });
     await expect(expand).toHaveAttribute("aria-expanded", "false");
     await expand.click();
@@ -471,15 +474,19 @@ test.describe("scale", () => {
       dock: [],
     };
     const running = await memory(page, (m) => m.runningProcessCount());
-    // The default layout is saved first; the seed then stands for a layout from a previous run.
+    // The default layout is saved first. Code stays mounted across pages, so the seed (a layout
+    // from a previous run) is written while another workspace is open, and loads on switching back.
     await expect.poll(() => memory(page, (m) => m.layouts.saves())).toBeGreaterThan(0);
+    await page.getByRole("button", { name: /^Workspace\s/ }).click();
+    await page.getByRole("menuitemradio", { name: /api-server/ }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
     await page.evaluate(
       ([w, l]) => (window as unknown as { __kalcodeMemory: Memory }).__kalcodeMemory.layouts.seed(w as string, l),
       [id, layout] as const,
     );
-    await page.getByRole("button", { name: "Dashboard" }).first().click();
     const started = Date.now();
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
+    await page.getByRole("button", { name: /^Workspace\s/ }).click();
+    await page.getByRole("menuitemradio", { name: /kalcode-site/ }).click();
     await expect(panes(page)).toHaveCount(24);
     expect(Date.now() - started).toBeLessThan(3000);
     // Only the terminals in front have a view; the one ended shell has none running.
@@ -489,9 +496,9 @@ test.describe("scale", () => {
     // Maximizing one suspends the other views; restoring brings them back.
     await pane(page, 0).locator('[role="tab"]').first().click();
     await page.keyboard.press("Control+Alt+Enter");
-    await expect(page.locator(".xterm")).toHaveCount(1);
+    await expect(page.locator(".xterm:visible")).toHaveCount(1);
     await page.keyboard.press("Control+Alt+Enter");
-    await expect(page.locator(".xterm")).toHaveCount(terminals.length);
+    await expect(page.locator(".xterm:visible")).toHaveCount(terminals.length);
     expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
   });
 });
