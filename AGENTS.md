@@ -95,12 +95,29 @@ If KalCode is publicly 0.1.7, every new feature, fix, UI change and KalCode or K
 
 Releases, including owner-declared public milestones, complete without the owner: "you should not need me for anything." Agents run the gates, builds, signing, publication, merges, deploys and approvals themselves. QA evidence comes from automation (end-to-end tests, UI automation, gate runners on both platforms, agent review) instead of owner sittings or clicks. Never bypass signing, notarization, signature, integrity, updater or security checks. If something is physically impossible without a human, such as an operating-system consent that can only be given at the machine, make it a one-time setup, report that exact action once, and never make it a per-release step.
 
+## Permanent storage hygiene rule (owner directive 2026-10-02)
+
+**KALCODE AGENTS CLEAN UP AFTER THEMSELVES.**
+
+After significant building, testing, merging, packaging, shipping, QA, or release work, remove clearly disposable artifacts created or made obsolete by that work. Before storage-heavy work, check that adequate disk space exists. Never allow avoidable build/cache/temp accumulation to fill the development machine. Cleanup must never destroy active work, current useful build caches, release evidence, certified artifacts, credentials, signing material, active worktrees, or anything uncertain. Classify cleanup candidates as SAFE TO DELETE / KEEP / UNSURE. Delete only SAFE TO DELETE. Preserve active useful caches when their rebuild cost outweighs the storage benefit. Shipping and verification always happen before release cleanup. Storage hygiene is part of DONE.
+
+- **Before** storage-heavy work (Rust or full desktop builds, Windows/macOS packaging, release builds, installers, large dependency installs, multi-worktree builds), check free disk space. If it is dangerously low, reclaim clearly disposable storage first, preserving all active work, then continue. Don't wait for a disk-full failure.
+- **After** significant work, clean your own artifacts first: temporary build and extraction directories, obsolete intermediate packaging files, superseded unsigned/test builds, duplicate installers, stale logs, non-evidence screenshots, task-specific caches and QA scratch, obsolete release intermediates. Other safe targets once proven obsolete: stale Rust targets and incremental data of retired worktrees or repo copies, abandoned `node_modules`, stale bundler caches, regenerable package caches, superseded `dist` output, safe temp files, old crash dumps, disposable logs.
+- **Never delete or disturb:** the active repository, current source, uncommitted changes, active branches and worktrees, current release branches, the useful active Rust build cache, current release artifacts and certified builds, signing keys, certificates, credentials, provider authentication/session data, QA evidence, receipts, required screenshots, release records, production handoff files, deployment evidence, anything still needed to ship or roll back, anything whose purpose is unclear, or anything whose removal would force completed validation to be repeated. Never delete something merely because it is large or old.
+- **Active Rust target:** don't routinely run `cargo clean` on the active build tree. Remove obsolete targets, old worktree targets, abandoned builds and duplicate outputs first. Clean an active cache only for a demonstrated reason with substantial benefit, when current work and evidence stay valid and a rebuild is acceptable.
+- **Worktrees:** remove one only after proving no process or agent uses it, it has no uncommitted or stranded work, no release/QA evidence depends on it, and its useful changes are merged or preserved. If uncertain, keep it.
+- **Release order:** build → test → sign → package → verify → ship → verify users can receive it → preserve required artifacts/evidence → clean obsolete intermediates.
+- **Autonomy and balance:** handle ordinary cleanup without asking. Involve the owner only when an item is ambiguous, could remove meaningful work, would sacrifice useful active caches, may involve credentials/keys/evidence, or could invalidate release/QA state. Obsolete data → delete; active useful cache → keep; uncertain → keep. Never "delete every cache after every task".
+- **Deep cleanup** when disk is meaningfully constrained: audit free space, largest directories, repo storage, Rust targets, `node_modules`, package caches, temp, worktrees, release artifacts, old repo copies and QA directories; classify; reclaim the largest SAFE items first; no speculative deletions.
+- **Reporting:** routine cleanup gets one short block (GB removed, what was preserved, free space). A major cleanup reports free space before/after, GB recovered, largest items removed, important large items kept, whether active Rust caches were preserved, and whether future builds may be slower.
+- Cleanup never alters project truth, and valid work is not redone because cleanup happened.
+
 ## Definition of Done
 
 Writing code is not the end of a task. Unless the owner explicitly says "do not ship", "local only", "prototype only" or equivalent, every completed engineering task continues through its whole lifecycle:
 
 ```
-IMPLEMENT → TEST → REVIEW → COMMIT → INTEGRATE/MERGE → BUILD → DEPLOY/PUBLISH → VERIFY PRODUCTION → REPORT COMPLETE
+IMPLEMENT → TEST → REVIEW → COMMIT → INTEGRATE/MERGE → BUILD → DEPLOY/PUBLISH → VERIFY PRODUCTION → PRESERVE EVIDENCE → CLEAN SAFE DISPOSABLE ARTIFACTS → REPORT COMPLETE
 ```
 
 "Complete the task" already means commit, push, merge, ship, deploy and publish once the required automated gates pass. Never ask the owner to say those words.
