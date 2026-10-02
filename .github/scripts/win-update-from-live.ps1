@@ -197,17 +197,55 @@ try {
   $post = Db-Snapshot 'db-candidate'; $floorPost = if (Test-Path -LiteralPath $Floor) { (Read-Shared $Floor).Trim() } else { $null }
   $receipt.checks.updateFromLive = $true
 
-  # 3. data kept: every live table still exists with identical columns/rows (schema_migrations may only grow)
-  $diffs = @()
-  foreach ($t in $pre.tables.PSObject.Properties) {
-    $after = $post.tables.($t.Name)
-    if (-not $after) { $diffs += "table $($t.Name) is gone"; continue }
-    if ($t.Name -eq 'schema_migrations') { if ($after.rows -lt $t.Value.rows) { $diffs += 'schema_migrations lost rows' }; continue }
-    if ($after.rows -ne $t.Value.rows) { $diffs += "$($t.Name) rows $($t.Value.rows) -> $($after.rows)" }
-    elseif ($after.sha256 -ne $t.Value.sha256 -and (@($after.columns) -join ',') -eq (@($t.Value.columns) -join ',')) { $diffs += "$($t.Name) row contents changed" }
-  }
+  # 3. data kept: every row the live build had is still there, unchanged, after the migrating launch. Tables may grow (the
+  #    append-only events log gains this launch's events) and a migration may add columns (compared on the live columns).
+  #    app_meta is launch metadata: every live key must remain (values may change) and last_version must be the candidate.
+  $cmpPy = @'
+import json, sqlite3, sys
+live, cand, version = sys.argv[1], sys.argv[2], sys.argv[3]
+def db(p): return sqlite3.connect("file:" + p + "?mode=ro", uri=True)
+L, C = db(live), db(cand)
+def tables(c): return [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+def cols(c, t): return [r[1] for r in c.execute(f'PRAGMA table_info("{t}")')]
+diffs, kept, grew = [], 0, {}
+ct = set(tables(C))
+for t in tables(L):
+    if t not in ct: diffs.append(f"table {t} is gone"); continue
+    lc, cc = cols(L, t), cols(C, t)
+    missing = [x for x in lc if x not in cc]
+    if missing: diffs.append(f"{t} lost columns {missing}"); continue
+    sel = ", ".join(f'"{x}"' for x in lc)
+    enc = lambda c: [json.dumps(r, default=str) for r in c.execute(f'SELECT {sel} FROM "{t}"')]
+    before, after = enc(L), enc(C)
+    if t == "app_meta":
+        # Launch metadata: every live key must still exist (values may change); last_version must name the candidate.
+        k, v = lc.index("key"), lc.index("value")
+        bk = {json.loads(r)[k] for r in before}; ak = {json.loads(r)[k] for r in after}
+        if bk - ak: diffs.append(f"app_meta lost keys {sorted(bk - ak)}")
+        lv = [json.loads(r)[v] for r in after if json.loads(r)[k] == "last_version"]
+        if lv != [version]: diffs.append(f"app_meta.last_version is {lv}, expected [{version}]")
+        kept += len(bk & ak)
+        if len(ak) > len(bk): grew[t] = len(ak) - len(bk)
+        continue
+    pool = {}
+    for r in after: pool[r] = pool.get(r, 0) + 1
+    lost = 0
+    for r in before:
+        if pool.get(r, 0) > 0: pool[r] -= 1; kept += 1
+        else: lost += 1
+    if lost: diffs.append(f"{t}: {lost} live row(s) missing or changed")
+    if len(after) > len(before): grew[t] = len(after) - len(before)
+sm = lambda c: c.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0]
+print(json.dumps({"liveSchema": sm(L), "candidateSchema": sm(C), "rowsKept": kept, "tablesGrew": grew, "differences": diffs}))
+'@
+  $cmpFile = Join-Path $OutDir 'db-compare.py'; [IO.File]::WriteAllText($cmpFile, $cmpPy)
+  $cj = (& python -I -B $cmpFile (Join-Path $OutDir 'db-live.db') (Join-Path $OutDir 'db-candidate.db') $CandidateVersion | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $cj) { Refuse 'database comparison failed' }
+  $cmp = $cj | ConvertFrom-Json
+  $diffs = @($cmp.differences)
   if ($post.schema -ne $ExpectSchema) { $diffs += "schema $($post.schema), expected $ExpectSchema" }
-  $receipt.dataCompare = [ordered]@{ liveSchema = $pre.schema; candidateSchema = $post.schema; differences = $diffs }
+  Note "data compare: $($cmp.rowsKept) live rows kept; grew: $($cmp.tablesGrew | ConvertTo-Json -Compress); differences: $($diffs.Count)"
+  $receipt.dataCompare = [ordered]@{ liveSchema = $pre.schema; candidateSchema = $post.schema; rowsKept = $cmp.rowsKept; tablesGrew = $cmp.tablesGrew; differences = $diffs }
   if ($diffs.Count) { Refuse ('data not kept: ' + ($diffs -join '; ')) }
   $receipt.checks.dataKept = $true
   $receipt.floor = [ordered]@{ before = $floorPre; after = $floorPost }
