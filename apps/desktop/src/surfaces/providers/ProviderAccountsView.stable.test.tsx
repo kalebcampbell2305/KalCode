@@ -13,9 +13,10 @@ import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.js
 import { Shell } from "../../shell/Shell.tsx";
 import { openProviderAccounts } from "./providersTab.ts";
 
-// Providers → Accounts on the Stable channel: every account shows its thread use, the workspaces
-// that remember it, Set default, Manage, sign in/out, and each provider can connect another
-// account through the same add-then-official-sign-in flow. ProviderProfiles and AccountSignIn are
+// Providers → Accounts on the Stable channel: every account row shows its activity and, in its
+// details, thread use and the workspaces that remember it; its menu holds Set default, Rename,
+// Sign out and Remove; and each provider can add another account through the same
+// add-then-official-sign-in flow. ProviderProfiles and AccountSignIn are
 // Available on Stable (flags.rs); the view ships unconditionally and reads neither flag.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 
@@ -112,11 +113,16 @@ async function mountStable({ openAccounts = true }: { openAccounts?: boolean } =
   await user.click(primary.getByRole("button", { name: "Providers" }));
   await screen.findByRole("heading", { level: 1, name: "Providers" });
   await user.click(screen.getByRole("tab", { name: "Accounts" }));
-  await screen.findByRole("region", { name: "Codex account Personal" });
+  await screen.findByRole("region", { name: "Codex · Personal" });
   return { user, calls, client };
 }
 
 const card = (name: string) => screen.getByRole("region", { name });
+
+/** Opens one row's details (thread use, workspace defaults, rename, remove). */
+async function openDetails(user: ReturnType<typeof userEvent.setup>, region: HTMLElement, name: string) {
+  await user.click(within(region).getByRole("button", { name: `Account details for ${name}` }));
+}
 
 /** The value of one labelled usage row ("Active threads", "Workspace default in") on a card. */
 function usage(region: HTMLElement, term: string): string {
@@ -126,67 +132,81 @@ function usage(region: HTMLElement, term: string): string {
 
 describe("Providers → Accounts (Stable)", () => {
   it("shows each account's open threads, running ones, and the workspaces that remember it", async () => {
-    await mountStable();
-    const codexPersonal = card("Codex account Personal");
-    await waitFor(() => expect(usage(codexPersonal, "Active threads")).toBe("2 · 1 running"));
+    const { user } = await mountStable();
+    const codexPersonal = card("Codex · Personal");
+    await waitFor(() => expect(within(codexPersonal).getByText("2 threads · 1 running")).toBeInTheDocument());
+    await openDetails(user, codexPersonal, "Personal");
+    expect(usage(codexPersonal, "Active threads")).toBe("2 · 1 running");
     expect(usage(codexPersonal, "Workspace default in")).toBe("alpha");
     expect(within(codexPersonal).getByText("Default", { exact: true })).toBeInTheDocument();
     expect(within(codexPersonal).getByText("Signed in", { exact: true })).toBeInTheDocument();
 
-    const claude = card("Claude Code account Personal");
+    const claude = card("Claude Code · Personal");
+    expect(within(claude).getByText("1 thread")).toBeInTheDocument();
+    await openDetails(user, claude, "Personal");
     expect(usage(claude, "Active threads")).toBe("1");
     expect(usage(claude, "Workspace default in")).toBe("None");
 
-    const codexWork = card("Codex account Work");
-    expect(usage(codexWork, "Active threads")).toBe("None");
+    const codexWork = card("Codex · Work");
+    expect(within(codexWork).getByText("No threads")).toBeInTheDocument();
     expect(within(codexWork).getByText("Signed out", { exact: true })).toBeInTheDocument();
+    await openDetails(user, codexWork, "Work");
+    expect(usage(codexWork, "Active threads")).toBe("None");
 
-    const gemini = card("Gemini CLI account Personal");
+    const gemini = card("Gemini CLI · Personal");
+    await openDetails(user, gemini, "Personal");
     expect(usage(gemini, "Workspace default in")).toBe("alpha, beta");
     expect(usage(gemini, "Active threads")).toBe("None");
   });
 
-  it("sets a default with the existing command and keeps Manage actions together", async () => {
+  it("sets a default from the row menu and keeps Rename and Remove in the menu and details", async () => {
     const { user, calls } = await mountStable();
-    const work = card("Codex account Work");
+    const work = card("Codex · Work");
     expect(within(work).queryByText("Default", { exact: true })).toBeNull();
-    await user.click(within(work).getByRole("button", { name: "Set Work as default" }));
+    await user.click(within(work).getByRole("button", { name: "More actions for Work" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Set Work as default" }));
     await waitFor(() => expect(within(work).getByText("Default", { exact: true })).toBeInTheDocument());
     expect(calls).toContain("provider_account_set_default");
-    const personal = card("Codex account Personal");
+    const personal = card("Codex · Personal");
     expect(within(personal).queryByText("Default", { exact: true })).toBeNull();
-    expect(within(personal).getByRole("button", { name: "Set Personal as default" })).toBeInTheDocument();
+    await user.click(within(personal).getByRole("button", { name: "More actions for Personal" }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Set Personal as default" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Rename Personal" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Sign out Personal" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Remove Personal from KalCode" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
 
-    // Rename and Remove live under Manage; Sign in/out stays on the card.
+    // Sign in stays on the row; Rename and Remove are also in the details.
+    expect(within(work).getByRole("button", { name: "Sign in Work" })).toBeInTheDocument();
     expect(within(work).queryByRole("button", { name: "Rename Work" })).toBeNull();
-    const manage = within(work).getByRole("button", { name: "Manage Work" });
-    expect(manage).toHaveAttribute("aria-expanded", "false");
-    await user.click(manage);
-    expect(manage).toHaveAttribute("aria-expanded", "true");
+    const details = within(work).getByRole("button", { name: "Account details for Work" });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    await user.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "true");
     expect(within(work).getByRole("button", { name: "Rename Work" })).toBeInTheDocument();
     expect(within(work).getByRole("button", { name: "Remove Work from KalCode" })).toBeInTheDocument();
-    expect(within(work).getByRole("button", { name: "Sign in Work" })).toBeInTheDocument();
-    expect(within(personal).getByRole("button", { name: "Sign out Personal" })).toBeInTheDocument();
   });
 
   it.each([
     ["Claude Code", "claude-code", "provider_claude_login_start"],
     ["Codex", "codex", "provider_codex_login_start"],
     ["Gemini CLI", "gemini-cli", "provider_gemini_login_start"],
-  ] as const)("connects another %s account with the provider's own sign-in", async (name, _id, loginStart) => {
+  ] as const)("adds another %s account with the provider's own sign-in", async (name, _id, loginStart) => {
     const { user, calls } = await mountStable();
-    const panel = screen.getByRole("region", { name: new RegExp(`^${name}\\s*\\d+$`) });
-    await user.click(within(panel).getByRole("button", { name: `Connect another ${name} account` }));
+    const panel = screen.getByRole("region", { name });
+    await user.click(within(panel).getByRole("button", { name: `Add ${name} account` }));
     await user.type(within(panel).getByRole("textbox", { name: `Name for the new ${name} account` }), "Side");
     await user.click(within(panel).getByRole("button", { name: "Add and sign in" }));
 
-    const added = await screen.findByRole("region", { name: `${name} account Side` });
+    const added = await screen.findByRole("region", { name: `${name} · Side` });
     await waitFor(() => expect(within(added).getByText("Signed in", { exact: true })).toBeInTheDocument());
     expect(calls).toContain("provider_account_create");
     expect(calls).toContain(loginStart);
     expect(calls.indexOf("provider_account_create")).toBeLessThan(calls.indexOf(loginStart));
     // Connecting never touches a workspace, a thread or a provider pane.
     expect(calls.filter((c) => c.startsWith("provider_pane_") || c === "provider_account_bind")).toEqual([]);
+    await openDetails(user, added, "Side");
     expect(usage(added, "Active threads")).toBe("None");
   });
 
@@ -199,7 +219,7 @@ describe("Providers → Accounts (Stable)", () => {
 
     const name = await screen.findByRole("textbox", { name: "Name for the new Gemini CLI account" });
     expect(screen.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
-    const gemini = screen.getByRole("region", { name: /^Gemini CLI\s*\d+$/ });
+    const gemini = screen.getByRole("region", { name: "Gemini CLI" });
     expect(gemini).toContainElement(name);
     expect(name).toHaveFocus();
     // Only one provider's form opens, and nothing is added or signed in until the person acts.

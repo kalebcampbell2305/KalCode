@@ -58,6 +58,22 @@ describe("SettingsAccountView", () => {
     expect(onLogout).toHaveBeenCalledOnce();
   });
 
+  it("shows a Free plan where to compare paid plans, without a portal button", () => {
+    render(
+      <SettingsAccountView
+        account={{ ...account, tier: "free" }}
+        usage={{ ...usage, allowance: 75 }}
+        busy={false}
+        error={null}
+        onManage={vi.fn()}
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Free")).toBeInTheDocument();
+    expect(screen.getByText(/No subscription\. Pro, Max and Max 2X/)).toHaveTextContent("kalcoded.com/pricing");
+    expect(screen.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
+  });
+
   it("shows OWNER as unlimited private access without subscription billing", () => {
     render(
       <SettingsAccountView

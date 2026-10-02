@@ -123,8 +123,8 @@ test.describe("threads", () => {
     // Codex lists no models up front: only the provider's default.
     await form.getByLabel("Provider").selectOption("codex");
     await expect(form.getByLabel("Account", { exact: true }).locator("option")).toHaveText([
-      "Personal (default)",
-      "Work (signed out)",
+      "Personal · Default",
+      "Work · Signed out",
     ]);
     await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
     await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);

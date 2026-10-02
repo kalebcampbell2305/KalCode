@@ -6,8 +6,10 @@
 //   2. Safety preflight. Refuses (exit 2, "skipped") if KalCode is already installed on this
 //      machine (an uninstall entry named KalCode, %LOCALAPPDATA%\KalCode,
 //      %LOCALAPPDATA%\Programs\KalCode, HKCU\Software\KalCode\KalCode or a KalCode shortcut), or
-//      if any kalcode.exe is running: the Tauri NSIS installer and uninstaller silently kill
-//      running kalcode.exe processes of the current user.
+//      if any kalcode.exe is running in this session: the Tauri NSIS installer and uninstaller
+//      silently kill running kalcode.exe processes of the current user. KalCode that another
+//      account runs in its own session (the owner's app while a separate account verifies) is out
+//      of the installer's reach and does not block verification.
 //   3. Pass "no-shortcuts": silent per-user install (/S /NS /D=<temp dir>), checks installed files
 //      files, signatures and the uninstall registration, then silent uninstall and checks
 //      everything is gone.
@@ -223,7 +225,7 @@ function existingInstall() {
 function runningKalcode() {
   return (
     powershellJson(
-      "@(Get-Process -Name kalcode -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Id }) | ConvertTo-Json -Compress",
+      "$me = (Get-Process -Id $PID).SessionId; @(Get-Process -Name kalcode -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me } | ForEach-Object { [string]$_.Id }) | ConvertTo-Json -Compress",
     ) ?? []
   );
 }
@@ -553,11 +555,11 @@ if (existing.length > 0) {
 }
 if (report.preflight.runningKalcode.length > 0) {
   console.log(
-    `  SKIP: kalcode.exe is running (PIDs ${report.preflight.runningKalcode.join(", ")}). The NSIS installer kills running kalcode.exe processes; close them and retry.`,
+    `  SKIP: kalcode.exe is running in this session (PIDs ${report.preflight.runningKalcode.join(", ")}). The NSIS installer kills running kalcode.exe processes; close them and retry.`,
   );
   finish("skipped", 2);
 }
-console.log("  ok   no existing KalCode install, shortcut or running kalcode.exe");
+console.log("  ok   no existing KalCode install, shortcut or kalcode.exe running in this session");
 
 const dataBefore = dataFolderState();
 try {

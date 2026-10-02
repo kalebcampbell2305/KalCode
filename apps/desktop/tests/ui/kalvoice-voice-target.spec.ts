@@ -77,7 +77,7 @@ test.describe("KalVoice thread composer target", () => {
     await composer(page).click();
 
     await talk(page, "cover the empty input case", async () => {
-      const hint = detail(page).getByText(`KALVOICE TARGET · Claude Code · ${PARSER} · Personal`);
+      const hint = detail(page).getByText(`KALVOICE TARGET · ${PARSER} · Claude Code · Personal`);
       await expect(hint).toBeVisible();
       await expect(hint).toHaveAttribute("aria-live", "polite");
       const serious = (

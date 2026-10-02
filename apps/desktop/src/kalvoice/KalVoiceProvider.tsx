@@ -40,6 +40,7 @@ import {
   paneCanvasListening,
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
+import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
 import { useOptionalThreadsIntent } from "../surfaces/threads/intent.tsx";
@@ -57,6 +58,7 @@ import {
   targetIsAlive,
 } from "./dictation.ts";
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
+import { parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import {
   type LocalReasoningState,
@@ -500,9 +502,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   const threadsIntent = useOptionalThreadsIntent();
+  const kalTidy = useKalTidy();
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent });
-  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent };
+  const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy });
+  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent, kalTidy };
 
   /** Composer directives act on a thread's own message box, which lives in Threads. */
   const composerDeps = useCallback(
@@ -1085,6 +1088,16 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       );
       dispatch({ type: "submitted", requestId });
       try {
+        const tidy = parseKalTidyCommand(trimmed);
+        if (tidy) {
+          nativeRequestInFlight.current = lease;
+          try {
+            await runKalTidyCommand(surfaces.current.kalTidy, tidy, scope.report);
+          } finally {
+            if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+          }
+          return;
+        }
         if (await routeScene(trimmed, scope)) return;
         if (scope.signal.aborted || activeRequest.current !== lease) return;
         nativeRequestInFlight.current = lease;
@@ -1169,6 +1182,18 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             choiceRef.current = null;
             setSessionChoice(null);
           }
+        }
+        const tidy = parseKalTidyCommand(text);
+        if (tidy) {
+          if (signal.aborted || activeRequest.current !== lease) return;
+          nativeRequestInFlight.current = lease;
+          try {
+            await runKalTidyCommand(surfaces.current.kalTidy, tidy, scope.report);
+          } finally {
+            if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+          }
+          recordAction();
+          return;
         }
         if (await routeScene(text, scope)) {
           recordAction();

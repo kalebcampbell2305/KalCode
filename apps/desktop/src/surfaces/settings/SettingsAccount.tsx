@@ -5,7 +5,7 @@ import type { AccountUiError } from "../../account/accountState.ts";
 import type { AccountSnapshot, AccountTier, AccountUsageSnapshot } from "../../ipc/account.ts";
 import styles from "./SettingsAccount.module.css";
 
-const TIER_NAMES: Record<AccountTier, string> = {
+export const TIER_NAMES: Record<AccountTier, string> = {
   free: "Free",
   pro: "Pro",
   max: "Max",
@@ -81,6 +81,15 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
           <dt>Dictation</dt>
           <dd>Unlimited</dd>
         </div>
+        {account.tier === "free" ? (
+          <div>
+            <dt>Billing</dt>
+            <dd>
+              No subscription. Pro, Max and Max 2X add more KalVoice requests; compare plans at{" "}
+              <span data-selectable>kalcoded.com/pricing</span>.
+            </dd>
+          </div>
+        ) : null}
         {account.tier === "owner" ? (
           <div>
             <dt>Billing</dt>

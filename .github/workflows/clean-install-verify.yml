@@ -133,10 +133,13 @@ jobs:
             if ($env:COMMIT -cnotmatch '^[0-9a-f]{40}$') { Refuse 'commit must be a full lowercase SHA' }
             if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(\+[1-9][0-9]*)?$') { Refuse 'version must be X.Y.Z or X.Y.Z+N' }
             Note "ok   $($id.Name) ($($id.User.Value)) on $($env:RUNNER_NAME), run $($env:GITHUB_RUN_ID) at $($env:GITHUB_SHA)"
-            # 2. no KalCode in any session: the NSIS installer and uninstaller stop running kalcode.exe
-            $procs = @(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue | ForEach-Object { '{0}#{1}@session{2}' -f $_.Name, $_.Id, $_.SessionId })
-            $receipt.preflight = [ordered]@{ kalcodeProcesses = $procs }
-            if ($procs.Count) { Refuse "KalCode is running ($($procs -join ', ')); close it first (the lead runs relocate-lead.ps1)" }
+            # 2. no KalCode in this job's session: the NSIS installer and uninstaller stop running kalcode.exe
+            #    of the current user only. KalCode in another session (the owner's app) is recorded, not refused.
+            $all = @(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue)
+            $procs = @($all | Where-Object { $_.SessionId -eq $me } | ForEach-Object { '{0}#{1}@session{2}' -f $_.Name, $_.Id, $_.SessionId })
+            $others = @($all | Where-Object { $_.SessionId -ne $me } | ForEach-Object { '{0}#{1}@session{2}' -f $_.Name, $_.Id, $_.SessionId })
+            $receipt.preflight = [ordered]@{ kalcodeProcesses = $procs; otherSessionKalcodeProcesses = $others }
+            if ($procs.Count) { Refuse "KalCode is running in this job's session ($($procs -join ', ')); a leftover from another job" }
             # 3. the pinned packet, byte for byte, copied into this job's own folder
             $sumsPath = Join-Path $env:PACKET 'SHA256SUMS'
             if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) { Refuse "no SHA256SUMS in $($env:PACKET)" }

@@ -21,6 +21,7 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
+import { accountName } from "../../providers/accountIdentity.ts";
 import styles from "./Panes.module.css";
 import { paneStatus } from "./paneLabels.ts";
 
@@ -80,7 +81,7 @@ export function resolvePaneAccount(
       account.archivedAt === null,
   );
   return active
-    ? { label: active.displayName, state: "active" }
+    ? { label: accountName(active), state: "active" }
     : { label: snapshot ?? "Unknown account", state: "archived_or_unavailable" };
 }
 
