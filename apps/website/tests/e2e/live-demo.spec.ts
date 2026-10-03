@@ -37,7 +37,7 @@ test.describe("live demo (desktop)", () => {
     await dialog.getByRole("button", { name: "One more agent" }).click();
     await dialog.getByRole("button", { name: "Launch 2 Codex agents" }).click();
     await expect(app(page).locator(".lk-tab")).toHaveCount(panes + 2);
-    await expect(app(page).getByRole("tab", { name: /Codex B · Personal/ })).toBeVisible();
+    await expect(app(page).getByRole("button", { name: "Codex B · Personal", exact: true })).toBeVisible();
     // The new agent waits at its own prompt, like a real terminal.
     await expect(
       app(page)
@@ -65,7 +65,7 @@ test.describe("live demo (desktop)", () => {
       .getByRole("article", { name: /Codex A/ })
       .getByRole("button", { name: /Open/ })
       .click();
-    await expect(app(page).getByRole("tab", { name: /Codex A/, selected: true })).toBeVisible();
+    await expect(app(page).getByRole("button", { name: "Codex A · Personal", exact: true, pressed: true })).toBeVisible();
     await app(page).getByRole("button", { name: "Add to pane 1" }).click();
     await app(page).getByRole("menuitem", { name: "Browser" }).click();
     await expect(app(page).getByText("localhost:3000").first()).toBeVisible();

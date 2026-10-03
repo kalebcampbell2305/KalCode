@@ -1094,7 +1094,7 @@
   width: 100%;
   min-width: 0;
   height: 1.625rem;
-  padding: 0 1.375rem 0 0.5rem;
+  padding: 0 1.625rem 0 0.5rem;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1107,7 +1107,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.lk-tab[aria-selected="true"] .lk-tab__btn {
+.lk-tab[data-selected="true"] .lk-tab__btn {
   background: var(--color-surface-3);
   color: var(--color-text);
   font-weight: 600;
@@ -1117,11 +1117,11 @@
 }
 .lk-tab__x {
   position: absolute;
-  right: 0.125rem;
+  right: 0;
   display: grid;
   place-items: center;
-  width: 1.125rem;
-  height: 1.125rem;
+  width: 1.5rem;
+  height: 1.5rem;
   padding: 0;
   border: 0;
   border-radius: var(--radius-xs);
@@ -1135,7 +1135,7 @@
   height: 0.75rem;
 }
 .lk-tab:hover .lk-tab__x,
-.lk-tab[aria-selected="true"] .lk-tab__x,
+.lk-tab[data-selected="true"] .lk-tab__x,
 .lk-tab__x:focus-visible {
   opacity: 1;
 }
@@ -1431,7 +1431,7 @@
   color: #69728a;
 }
 .lk-site__stat em {
-  color: #1f9d63;
+  color: #0f7a49;
   font-style: normal;
   font-weight: 600;
 }
@@ -3400,4 +3400,23 @@
   box-shadow:
     0 0 0 2px var(--color-border-focus),
     0 50px 120px -40px rgb(0 0 0 / 0.95);
+}
+
+/* Narrow panes: inactive tabs collapse to their glyph and status dot; the active tab keeps its name. */
+.lk-frame {
+  container: pane / inline-size;
+}
+@container pane (max-width: 24rem) {
+  .lk-tab[data-selected="false"] .lk-tab__btn > span:not(.lk-glyph):not(.lk-dot) {
+    display: none;
+  }
+  .lk-tab[data-selected="false"] .lk-tab__btn {
+    padding-right: 0.5rem;
+  }
+  .lk-tab[data-selected="false"] .lk-tab__x {
+    display: none;
+  }
+  .lk-tab[data-selected="false"] {
+    min-width: 0;
+  }
 }

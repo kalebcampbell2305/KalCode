@@ -35,6 +35,9 @@ if (root) {
     const trigger = (event.target as HTMLElement).closest<HTMLElement>("[data-live-do]");
     if (!trigger) return;
     event.preventDefault();
+    // A Try link keeps its shareable address (#try) without the browser's jump.
+    const href = trigger.getAttribute("href");
+    if (href?.startsWith("#")) history.replaceState(null, "", href);
     const action = trigger.dataset.liveDo ?? "";
     const inside = root.contains(trigger);
     if (!inside) {

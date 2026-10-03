@@ -98,13 +98,13 @@ function topBar(state: State): string {
     <button type="button" class="lk-ctx__chip" data-do="menu:environment" aria-expanded="${state.menu === "environment"}"${hint("Local, Preview, Staging or Production: where you're looking.")}>${icon("globe")}<span><small>Environment</small><span class="lk-env-dot" data-env="${state.environment}"></span>${state.environment}</span></button>
     <button type="button" class="lk-ctx__chip" data-do="menu:mode" aria-expanded="${state.menu === "mode"}"${hint("The permission mode new agents start in.")}>${icon("shield")}<span><small>Mode</small>Approve</span>${icon("chevron", "lk-caret")}</button>
   </div>
-  <button type="button" class="lk-search" data-do="menu:palette" data-tour="palette"${hint("Every KalCode action, one search away.")}>${icon("search")}<span>Search or run a command</span><kbd>Ctrl K</kbd></button>
+  <button type="button" class="lk-search" data-do="menu:palette" data-tour="palette" aria-label="Search or run a command"${hint("Every KalCode action, one search away.")}>${icon("search")}<span>Search or run a command</span><kbd>Ctrl K</kbd></button>
   <div class="lk-signals">
     <button type="button" class="lk-signal" data-tone="working" data-do="go:dashboard"${hint("Coding agents working right now.")}><span class="lk-signal__dot"></span><strong>${c.working}</strong> working</button>
     <button type="button" class="lk-signal" data-tone="waiting" data-do="needs" data-tour="needs" data-active="${c.needs > 0}"${hint("Agents waiting on you. Click to jump to the first one.")}><span class="lk-signal__dot"></span><strong>${c.needs}</strong> ${c.needs === 1 ? "needs" : "need"} you</button>
   </div>
-  <button type="button" class="lk-accounts" data-do="menu:accounts" data-tour="accounts" aria-expanded="${state.menu === "accounts"}"${hint("Connect multiple Claude Code and Codex accounts and see their usage.")}>${icon("users")}<strong>Accounts</strong><small>${ready} ready</small>${icon("chevron", "lk-caret")}</button>
-  <button type="button" class="lk-voice-pill" data-do="voice:toggle" data-tour="voice" aria-expanded="${state.voice.open}"${hint("KalVoice: hold F8 and speak. Here, pick a phrase.")}><span class="lk-orb" data-state="${state.voice.state}" aria-hidden="true"></span><span class="lk-voice-pill__word">KalVoice</span><span class="lk-voice-pill__state">${voiceWord(state)}</span></button>
+  <button type="button" class="lk-accounts" data-do="menu:accounts" data-tour="accounts" aria-label="Accounts and usage: ${ready} ready" aria-expanded="${state.menu === "accounts"}"${hint("Connect multiple Claude Code and Codex accounts and see their usage.")}>${icon("users")}<strong>Accounts</strong><small>${ready} ready</small>${icon("chevron", "lk-caret")}</button>
+  <button type="button" class="lk-voice-pill" data-do="voice:toggle" data-tour="voice" aria-label="KalVoice: ${voiceWord(state)}" aria-expanded="${state.voice.open}"${hint("KalVoice: hold F8 and speak. Here, pick a phrase.")}><span class="lk-orb" data-state="${state.voice.state}" aria-hidden="true"></span><span class="lk-voice-pill__word">KalVoice</span><span class="lk-voice-pill__state">${voiceWord(state)}</span></button>
 </header>`;
 }
 
@@ -228,13 +228,13 @@ export function agentPane(state: State, agent: Agent): string {
     <span class="lk-agent__spacer"></span>
     <span class="lk-agent__mode">Approve</span>
   </div>
-  <div class="lk-term" role="log" aria-label="${esc(agent.sign)} terminal" data-scroll="bottom">${lines(agent.lines)}${isWorking(agent) ? `<div class="lk-ln lk-ln--cursor" data-k="dim">${agent.provider === "claude" ? "✻" : "•"} ${esc(agent.activity)}…</div>` : ""}</div>
+  <div class="lk-term" tabindex="0" role="log" aria-label="${esc(agent.sign)} terminal" data-scroll="bottom">${lines(agent.lines)}${isWorking(agent) ? `<div class="lk-ln lk-ln--cursor" data-k="dim">${agent.provider === "claude" ? "✻" : "•"} ${esc(agent.activity)}…</div>` : ""}</div>
   ${approval}${prompt}
 </div>`;
 }
 
 function terminalPane(tab: Tab): string {
-  return `<div class="lk-agent"><div class="lk-term" role="log" aria-label="${esc(tab.title)}" data-scroll="bottom">${lines(tab.lines ?? [])}</div><form class="lk-prompt lk-prompt--shell" data-form="shell:${tab.id}"><span aria-hidden="true">PS&gt;</span><input name="q" data-key="in-${tab.id}" autocomplete="off" placeholder="Type a command (try git status)" aria-label="Command for ${esc(tab.title)}"/></form></div>`;
+  return `<div class="lk-agent"><div class="lk-term" tabindex="0" role="log" aria-label="${esc(tab.title)}" data-scroll="bottom">${lines(tab.lines ?? [])}</div><form class="lk-prompt lk-prompt--shell" data-form="shell:${tab.id}"><span aria-hidden="true">PS&gt;</span><input name="q" data-key="in-${tab.id}" autocomplete="off" placeholder="Type a command (try git status)" aria-label="Command for ${esc(tab.title)}"/></form></div>`;
 }
 
 export function sampleApp(version: number): string {
@@ -292,7 +292,7 @@ function frame(state: State, f: Frame, index: number): string {
     .filter((t): t is Tab => Boolean(t))
     .map(
       (t) =>
-        `<div class="lk-tab" role="presentation" data-key="tab-${t.id}" aria-selected="${t.id === f.active}"><button type="button" class="lk-tab__btn" role="tab" aria-selected="${t.id === f.active}" data-do="tab:${t.id}">${tabGlyph(state, t)}<span>${esc(tabTitle(state, t))}</span><span class="lk-dot" data-tone="${tabTone(state, t)}"></span></button><button type="button" class="lk-tab__x" data-do="close:${t.id}" aria-label="Close ${esc(tabTitle(state, t))}">${icon("close")}</button></div>`,
+        `<div class="lk-tab" data-key="tab-${t.id}" data-selected="${t.id === f.active}"><button type="button" class="lk-tab__btn" aria-pressed="${t.id === f.active}" data-do="tab:${t.id}">${tabGlyph(state, t)}<span>${esc(tabTitle(state, t))}</span><span class="lk-dot" data-tone="${tabTone(state, t)}"></span></button><button type="button" class="lk-tab__x" data-do="close:${t.id}" aria-label="Close ${esc(tabTitle(state, t))}">${icon("close")}</button></div>`,
     )
     .join("");
   let body = "";
@@ -303,7 +303,7 @@ function frame(state: State, f: Frame, index: number): string {
   else if (active?.kind === "widget") body = widgetPane(state, active);
   const plusOpen = state.menu === `plus:${f.id}`;
   return `<section class="lk-frame" data-key="${f.id}" data-focused="${focused}" data-kind="${active?.kind ?? "empty"}" aria-label="Pane ${index + 1}: ${esc(active ? tabTitle(state, active) : "empty")}" data-do-focus="${f.id}"${active?.kind === "browser" ? ` data-tour="browser"` : ""}>
-  <div class="lk-frame__tabs"><div class="lk-frame__strip" role="tablist" aria-label="Pane ${index + 1} tabs">${tabs}</div>
+  <div class="lk-frame__tabs"><div class="lk-frame__strip" role="group" aria-label="Pane ${index + 1} tabs">${tabs}</div>
     <button type="button" class="lk-icon-btn" data-do="menu:plus:${f.id}" aria-expanded="${plusOpen}" aria-label="Add to pane ${index + 1}"${hint("Open a terminal, Browser, coding agent or widget here.")}>${icon("plus")}</button>
     <span class="lk-frame__end"><button type="button" class="lk-icon-btn" data-do="maximize:${f.id}" aria-label="${state.maximized && focused ? "Restore" : "Maximize"} pane">${icon("maximize")}</button></span>
     ${plusOpen ? plusMenu(f.id) : ""}
@@ -343,9 +343,9 @@ function codeSurface(state: State): string {
   <div class="lk-code__head">
     <span class="lk-code__ws"><strong>${WORKSPACE.name}</strong>${icon("chevron", "lk-caret")}<span class="lk-mono">${WORKSPACE.path}</span></span>
     <span class="lk-code__tools">
-      <button type="button" class="lk-btn" data-do="terminal"${hint("A real shell in your project folder.")}>${icon("terminal")}<span>Terminal</span></button>
-      <span class="lk-split"><button type="button" class="lk-btn" data-do="tidy" data-tour="tidy"${hint("KalTidy: stop idle terminals in one click.")}>${icon("tidy")}<span>KalTidy</span></button><button type="button" class="lk-btn lk-btn--caret" data-do="menu:tidy" aria-expanded="${state.menu === "tidy"}" aria-label="More KalTidy actions">${icon("chevron")}</button>${state.menu === "tidy" ? tidyMenu() : ""}</span>
-      <span class="lk-split"><button type="button" class="lk-btn" data-do="menu:layout" aria-expanded="${state.menu === "layout"}">${icon("layout")}<span>Layout</span>${icon("chevron", "lk-caret")}</button>${state.menu === "layout" ? layoutMenu() : ""}</span>
+      <button type="button" class="lk-btn" data-do="terminal" aria-label="New terminal"${hint("A real shell in your project folder.")}>${icon("terminal")}<span>Terminal</span></button>
+      <span class="lk-split"><button type="button" class="lk-btn" data-do="tidy" data-tour="tidy" aria-label="KalTidy: stop idle terminals"${hint("KalTidy: stop idle terminals in one click.")}>${icon("tidy")}<span>KalTidy</span></button><button type="button" class="lk-btn lk-btn--caret" data-do="menu:tidy" aria-expanded="${state.menu === "tidy"}" aria-label="More KalTidy actions">${icon("chevron")}</button>${state.menu === "tidy" ? tidyMenu() : ""}</span>
+      <span class="lk-split"><button type="button" class="lk-btn" data-do="menu:layout" aria-label="Layout" aria-expanded="${state.menu === "layout"}">${icon("layout")}<span>Layout</span>${icon("chevron", "lk-caret")}</button>${state.menu === "layout" ? layoutMenu() : ""}</span>
       <button type="button" class="lk-btn lk-btn--primary" data-do="launcher" data-tour="new-agent"${hint("Choose a provider, account, model and effort: a real coding agent in its own terminal.")}>${icon("bot")}<span>New agent</span></button>
     </span>
   </div>
