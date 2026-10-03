@@ -29,6 +29,16 @@
     color var(--dur-fast) var(--ease-out);
 }
 
+/* A segment without detail text keeps its words whole; one with detail shrinks, its detail
+   ellipsizing first. Nothing clips mid-word. */
+.segment:not([data-detail]) {
+  flex-shrink: 0;
+}
+
+.segment > :not(.value, .detail) {
+  flex: none;
+}
+
 .segment:first-child {
   border-left: 1px solid var(--color-border);
 }
@@ -114,7 +124,12 @@
   }
 }
 
+/* The value ellipsizes only once its detail is gone (a narrow window with every segment showing). */
 .value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--color-text-secondary);
   font-weight: var(--weight-medium);
 }
@@ -128,6 +143,7 @@
 }
 
 .detail {
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-faint);
@@ -140,6 +156,7 @@
 
 .notice {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--space-1-5);
   padding: 0 var(--space-3);
@@ -148,6 +165,13 @@
   color: var(--status-paused);
   font-size: var(--type-small);
   font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.notice:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -2px;
 }
 
 .notice svg {
@@ -157,6 +181,13 @@
 
 .notice:hover {
   background: var(--color-surface-hover);
+}
+
+/* A laptop-width window keeps every segment's words whole; the detail stays in its tooltip. */
+@media (max-width: 1440px) {
+  .detail {
+    display: none;
+  }
 }
 
 @media (max-width: 1200px) {
