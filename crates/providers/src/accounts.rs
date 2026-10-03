@@ -2,7 +2,8 @@
 //!
 //! Authentication material remains in provider-native managed profiles or the OS secure store.
 //! This store persists labels, adapter-reported status metadata, defaults, and scoped bindings in
-//! the canonical [`Core`] database. It never reads or deletes provider profiles.
+//! the canonical [`Core`] database. It never reads or deletes credentials; launch preparation may
+//! repair bounded, non-secret provider setup metadata under the canonical profile lease.
 
 use std::sync::Arc;
 
@@ -222,9 +223,27 @@ impl AccountStore {
     ) -> std::result::Result<T, ProviderError> {
         let provider = checked_provider(provider).map_err(account_launch_error)?;
         check_id(account_id).map_err(account_launch_error)?;
-        self.core
+        let initial = self
+            .core
             .read(|conn| get_active_account_for_provider(conn, account_id, &provider))
             .map_err(account_launch_error)?;
+        if provider.as_str() == ProviderId::CLAUDE_CODE
+            && initial.authentication_state == AuthState::Authenticated
+        {
+            crate::claude::onboarding::prepare_connected_profile(profiles, account_id, || {
+                self.authenticate_with_active_account(
+                    profiles,
+                    provider.as_str(),
+                    account_id,
+                    |current, lease| {
+                        if current.authentication_state != AuthState::Authenticated {
+                            return Err(ProviderError::NotAuthenticated);
+                        }
+                        crate::claude::onboarding::complete_with_lease(profiles, account_id, &lease)
+                    },
+                )
+            })?;
+        }
         let _lease = profiles.acquire_session_lease(provider.as_str(), account_id)?;
         let account = self
             .core
@@ -962,8 +981,8 @@ fn corrupt_column(index: usize, column: &'static str) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Barrier, Condvar, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
     use crate::managed::ManagedProfiles;
@@ -1387,6 +1406,208 @@ mod tests {
             .profiles
             .acquire_account_lifecycle_lease("codex", &account.id)
             .expect("launch released its temporary guard");
+    }
+
+    #[test]
+    fn authenticated_claude_launch_repairs_legacy_onboarding_before_shared_lease() {
+        let fixture = Fixture::new();
+        let account = fixture
+            .store
+            .create("claude-code", "Personal")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("person@example.test"),
+                None,
+            )
+            .expect("connected");
+        let home = fixture
+            .profiles
+            .profile_home("claude-code", &account.id)
+            .expect("profile home");
+        let config = home.join(".claude.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&serde_json::json!({
+                "oauthAccount": { "accountUuid": "account-native-id" },
+                "hasCompletedOnboarding": false,
+                "nativeField": { "preserved": true }
+            }))
+            .expect("fixture json"),
+        )
+        .expect("legacy config");
+
+        fixture
+            .store
+            .launch_with_active_account(&fixture.profiles, "claude-code", &account.id, |_| {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&config).expect("read migrated config"))
+                        .expect("migrated json");
+                assert_eq!(value["hasCompletedOnboarding"], true);
+                assert_eq!(value["nativeField"]["preserved"], true);
+                assert!(
+                    fixture
+                        .profiles
+                        .acquire_sign_in_lease("claude-code", &account.id)
+                        .is_err(),
+                    "launch callback must run under the shared session lease"
+                );
+                Ok(())
+            })
+            .expect("Claude launch");
+    }
+
+    #[test]
+    fn six_concurrent_claude_launches_share_one_completed_legacy_profile() {
+        let fixture = Fixture::new();
+        let account = fixture
+            .store
+            .create("claude-code", "Personal")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("person@example.test"),
+                None,
+            )
+            .expect("connected");
+        let config = fixture
+            .profiles
+            .profile_home("claude-code", &account.id)
+            .expect("profile home")
+            .join(".claude.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&serde_json::json!({
+                "oauthAccount": { "accountUuid": "account-native-id" },
+                "hasCompletedOnboarding": false
+            }))
+            .expect("fixture json"),
+        )
+        .expect("legacy config");
+        let (arrived_tx, arrived_rx) = mpsc::channel();
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+
+        std::thread::scope(|scope| {
+            let launches = (0..6)
+                .map(|_| {
+                    let arrived_tx = arrived_tx.clone();
+                    let release = Arc::clone(&release);
+                    let store = &fixture.store;
+                    let profiles = &fixture.profiles;
+                    let account_id = account.id.clone();
+                    let config = config.clone();
+                    scope.spawn(move || {
+                        store.launch_with_active_account(
+                            profiles,
+                            "claude-code",
+                            &account_id,
+                            |_| {
+                                arrived_tx.send(()).expect("record callback arrival");
+                                let (released, changed) = &*release;
+                                let released = released.lock().unwrap();
+                                let (released, timeout) = changed
+                                    .wait_timeout_while(released, Duration::from_secs(5), |ready| {
+                                        !*ready
+                                    })
+                                    .unwrap();
+                                assert!(
+                                    !timeout.timed_out() && *released,
+                                    "callback release timed out"
+                                );
+                                let value: serde_json::Value = serde_json::from_slice(
+                                    &std::fs::read(&config).expect("read migrated config"),
+                                )
+                                .expect("migrated json");
+                                assert_eq!(value["hasCompletedOnboarding"], true);
+                                Ok(())
+                            },
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let arrivals = (0..6)
+                .map(|_| arrived_rx.recv_timeout(Duration::from_secs(5)))
+                .collect::<Vec<_>>();
+            {
+                let (released, changed) = &*release;
+                *released.lock().unwrap() = true;
+                changed.notify_all();
+            }
+            for launch in launches {
+                launch
+                    .join()
+                    .expect("launch thread")
+                    .expect("Claude launch");
+            }
+            assert!(
+                arrivals.iter().all(std::result::Result::is_ok),
+                "all six launches must acquire coexisting shared leases: {arrivals:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn claude_launch_never_synthesizes_onboarding_without_connected_metadata() {
+        let fixture = Fixture::new();
+        let account = fixture
+            .store
+            .create("claude-code", "Personal")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("person@example.test"),
+                None,
+            )
+            .expect("connected");
+        let config = fixture
+            .profiles
+            .profile_home("claude-code", &account.id)
+            .expect("profile home")
+            .join(".claude.json");
+        let original = serde_json::to_vec(&serde_json::json!({
+            "oauthAccount": { "emailAddress": "person@example.test" },
+            "hasCompletedOnboarding": false
+        }))
+        .expect("fixture json");
+        std::fs::write(&config, &original).expect("config");
+
+        fixture
+            .store
+            .launch_with_active_account(&fixture.profiles, "claude-code", &account.id, |_| Ok(()))
+            .expect("provider handles incomplete setup");
+        assert_eq!(
+            std::fs::read(&config).expect("config after launch"),
+            original
+        );
+
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::NotAuthenticated, None, None)
+            .expect("signed out");
+        let invoked = AtomicBool::new(false);
+        assert_eq!(
+            fixture.store.launch_with_active_account(
+                &fixture.profiles,
+                "claude-code",
+                &account.id,
+                |_| {
+                    invoked.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            ),
+            Err(ProviderError::NotAuthenticated)
+        );
+        assert!(!invoked.load(Ordering::SeqCst));
+        assert_eq!(std::fs::read(&config).expect("signed-out config"), original);
     }
 
     #[test]

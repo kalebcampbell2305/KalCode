@@ -748,3 +748,21 @@ A live October 2026 investigation traced an external Windows Terminal window to 
 ### Credential ownership and restart compatibility
 
 The owner clarified on 2026-10-03 that existing provider-native sessions must be preserved; the prohibition on new plaintext credential storage applies to KalCode-owned storage. Account restoration persists only safe account metadata and reuses the provider's session. It does not copy tokens, add a token cache, change credential backends, or force reauthentication. Some provider-managed Windows stores can contain plaintext native credential files; this implementation does not claim those files are encrypted. Provider-supported secure storage remains preferable when it preserves compatibility.
+
+### Connected Claude accounts and terminal onboarding
+
+Claude's native authentication and terminal onboarding are separate. Older profiles can contain
+account metadata from a successful official sign-in while their `.claude.json` lacks
+`hasCompletedOnboarding`. The interactive CLI then replays the login wizard. This is documented
+in [upstream issue #67149](https://github.com/anthropics/claude-code/issues/67149).
+
+Before launching a connected managed Claude account, KalCode repairs only this noncredential
+onboarding flag under the canonical exclusive account-profile lease, before taking the shared
+launch lease. It preserves the native configuration's other fields and does not inspect or copy
+credentials. Already-complete profiles require no migration or exclusive lease, so independent
+agents can continue sharing the same signed-in account. Missing native account metadata and
+accounts not marked authenticated retain the provider's normal sign-in behavior. Actual expired
+credentials, native approvals, and workspace trust remain enforced by Claude.
+
+The compatibility change applies on Windows and macOS without a database migration. Rollback is
+a revert PR and a newer internal build; do not erase provider profiles or reset users' sign-ins.

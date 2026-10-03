@@ -3,6 +3,7 @@
 pub mod actions;
 pub mod argv;
 mod normalize;
+pub(crate) mod onboarding;
 pub mod session;
 mod stream;
 
