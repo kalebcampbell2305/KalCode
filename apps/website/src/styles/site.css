@@ -83,7 +83,21 @@
   gap: var(--space-2) var(--space-6);
 }
 
+/* Narrow phones: the X handles need the full width rather than half a column. */
+@media (max-width: 24rem) {
+  .site-footer__follow {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Tablet: the brand keeps its own row so the four link columns (and the X handles) fit. */
 @media (min-width: 48rem) {
+  .site-footer__grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 64rem) {
   .site-footer__grid {
     grid-template-columns: 2fr repeat(4, minmax(0, 1fr));
   }

@@ -210,6 +210,24 @@ test.describe("every page", () => {
     }
   });
 
+  test("the header and footer stay inside narrow phones and tablets", async ({ page }) => {
+    for (const [width, height] of [
+      [320, 640],
+      [768, 1024],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto("/docs");
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${width}px viewport has no horizontal overflow`).toBeLessThanOrEqual(0);
+      for (const target of [page.locator(".header-tools .menu-button"), page.locator(".site-footer .x-link").last()]) {
+        const box = await target.boundingBox();
+        expect(box && box.x + box.width <= width, `${width}px: control is on screen`).toBe(true);
+      }
+    }
+  });
+
   test("the home hero names the product, the providers and an honest call to action", async ({ page }) => {
     await page.goto("/");
     const h1 = page.locator("h1");
