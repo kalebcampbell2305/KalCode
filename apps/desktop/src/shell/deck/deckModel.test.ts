@@ -144,6 +144,8 @@ describe("agentSections", () => {
     expect(sections.needsYou.map((t) => t.name)).toEqual(["failed-new", "reply", "failed-old"]);
     expect(sections.finished.map((t) => t.name)).toEqual(["done"]);
     expect(needsYouCount(sections.needsYou, [])).toBe(3);
+    // Failed agents have stopped: they need the person but aren't running.
+    expect(runningAgentCount(sections)).toBe(1);
   });
 
   it("is empty for no threads", () => {

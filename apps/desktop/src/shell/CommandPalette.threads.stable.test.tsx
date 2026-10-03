@@ -99,7 +99,7 @@ describe("palette threads (Stable)", () => {
     );
   }, 15_000);
 
-  it("never lists a coding agent under Threads", async () => {
+  it("lists a coding agent under Agents, never under Threads", async () => {
     const { user, client } = await mountStable();
     const listThreads = client.listThreads.bind(client);
     vi.spyOn(client, "listThreads").mockImplementation(async (args) => {
@@ -114,6 +114,10 @@ describe("palette threads (Stable)", () => {
     expect(
       await palette.findByRole("option", { name: "Write Unit Tests for Parser Module · Claude Code · Personal" }),
     ).toBeInTheDocument();
-    expect(palette.queryByRole("option", { name: /Parser Agent/ })).toBeNull();
+    const agents = palette.getByRole("group", { name: "Agents" });
+    expect(within(agents).getByRole("option", { name: /Parser Agent/ })).toBeInTheDocument();
+    expect(
+      within(palette.getByRole("group", { name: "Threads" })).queryByRole("option", { name: /Parser Agent/ }),
+    ).toBeNull();
   }, 15_000);
 });

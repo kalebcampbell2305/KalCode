@@ -136,7 +136,7 @@ function AgentList({
     else navigate("code");
   };
 
-  if (running === 0 && sections.finished.length === 0 && sections.idle.length === 0) {
+  if (running === 0 && sections.needsYou.length === 0 && sections.finished.length === 0 && sections.idle.length === 0) {
     return (
       <div className={styles.empty}>
         <span className={styles.emptyArt} aria-hidden="true">

@@ -70,9 +70,13 @@ export function agentSections(threads: readonly ThreadSummary[], now: number): A
   return sections;
 }
 
-/** Agents that are running in the deck's sense: working, needing the person, or blocked. */
+/**
+ * Agents that are running in the deck's sense: working, needing the person, or blocked. A failed
+ * agent needs the person too, but it has stopped, so it isn't counted as running.
+ */
 export function runningAgentCount(sections: AgentSections): number {
-  return sections.needsYou.length + sections.working.length + sections.blocked.length;
+  const waiting = sections.needsYou.filter((thread) => thread.status !== "failed").length;
+  return waiting + sections.working.length + sections.blocked.length;
 }
 
 /**
