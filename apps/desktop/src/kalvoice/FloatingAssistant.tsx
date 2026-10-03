@@ -42,6 +42,13 @@ const DOCK_CHOICES: PanelAnchor[] = [
 ];
 
 const DRAG_THRESHOLD = 4;
+/**
+ * How far below the shell's top inset page headers reach (title row plus a wrapped action row
+ * in narrow windows). A floating widget never rests in this strip; it docks in the top band.
+ */
+const PAGE_HEADER_ZONE = 144;
+
+type Placement = { anchor: PanelAnchor; x: number; y: number };
 /** An error collapses back to compact on its own after this long. */
 const ERROR_SETTLE_MS = 12_000;
 /** Keep the UI hold guard aligned with kalcode_kalvoice::audio::MAX_RECORDING. */
@@ -120,7 +127,7 @@ export function FloatingAssistant() {
   // Docked to the top or bottom edge, the widget lives in a band the shell reserves for it
   // (Z7-W1), right of the sidebar, so it never covers a page header.
   const slots = useShellSlots();
-  const slotEdge: SlotEdge | null = panel.anchor.startsWith("top")
+  const dockedEdge: SlotEdge | null = panel.anchor.startsWith("top")
     ? "top"
     : panel.anchor.startsWith("bottom")
       ? "bottom"
@@ -131,8 +138,34 @@ export function FloatingAssistant() {
   const transientDetail =
     state.phase === "listening" || state.phase === "transcribing" || state.phase === "done" || state.phase === "error";
   if (panel.view !== "expanded" && !transientDetail && size.height > 0) compactHeight.current = size.height;
-  const reserving = panel.visible && status !== null && slotEdge !== null && slots !== null;
   const bandHeight = Math.ceil((compactHeight.current || 44) + 2 * VOICE_SLOT_GAP);
+  // Floating (free, left or right) in the strip where page headers sit, the widget would cover
+  // header controls, most often in narrow windows where headers wrap. A move never leaves it
+  // there (see `clearOfHeader`); a placement saved there earlier rests in the top band instead.
+  const floatingArea: PanelArea | undefined = slots
+    ? {
+        left: slots.mainLeft,
+        top: slots.insets.top + EDGE_MARGIN,
+        bottom: slots.insets.bottom + EDGE_MARGIN,
+        right: slots.insets.right,
+      }
+    : undefined;
+  const headerZoneBottom = (slots?.insets.top ?? 0) + PAGE_HEADER_ZONE;
+  const overHeader = (placement: Placement) =>
+    slots !== null &&
+    !placement.anchor.startsWith("top") &&
+    !placement.anchor.startsWith("bottom") &&
+    positionFor(placement, viewport, size, floatingArea).top < headerZoneBottom;
+  /** Moving up into the header strip docks in the top band; moving down lands just below it. */
+  const clearOfHeader = (next: Placement, down: boolean): Placement => {
+    if (!overHeader(next)) return next;
+    if (!down) return { ...next, anchor: "top" };
+    const left = positionFor(next, viewport, size, floatingArea).left;
+    return placementAt({ left, top: headerZoneBottom }, viewport, size, 0, floatingArea);
+  };
+  const floatsOverHeader = overHeader(panel);
+  const slotEdge: SlotEdge | null = dockedEdge ?? (floatsOverHeader ? "top" : null);
+  const reserving = panel.visible && status !== null && slotEdge !== null && slots !== null;
   const setVoice = slots?.setVoice;
   useEffect(() => {
     if (!setVoice) return;
@@ -150,7 +183,7 @@ export function FloatingAssistant() {
 
   if (!panel.visible || !status) return null;
 
-  const resting = positionFor(panel, viewport, size, area);
+  const resting = positionFor(floatsOverHeader ? { ...panel, anchor: "top" } : panel, viewport, size, area);
   const position = drag ?? resting;
   const view = panel.view;
   const talkKey = displayKey(status.preferences.talkKey);
@@ -198,7 +231,8 @@ export function FloatingAssistant() {
       return;
     }
     suppressClick.current = true;
-    setPanel(placementAt(dropped, viewport, size, undefined, area));
+    const down = dropped.top >= (slots?.insets.top ?? 0) + PAGE_HEADER_ZONE / 2;
+    setPanel(clearOfHeader(placementAt(dropped, viewport, size, undefined, area), down));
     setDrag(null);
   };
 
@@ -213,7 +247,8 @@ export function FloatingAssistant() {
     const d = delta[event.key];
     if (!d) return;
     event.preventDefault();
-    setPanel(nudge(panel, d[0], d[1], viewport, size, area));
+    const from = floatsOverHeader ? { ...panel, anchor: "top" as const } : panel;
+    setPanel(clearOfHeader(nudge(from, d[0], d[1], viewport, size, area), d[1] > 0));
   };
 
   const dragProps = { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };
@@ -258,7 +293,7 @@ export function FloatingAssistant() {
   };
 
   // At the top of the window the widget opens downwards; elsewhere upwards.
-  const growsDown = panel.anchor.startsWith("top");
+  const growsDown = slotEdge === "top";
   const phase = state.phase;
   const listening = phase === "listening" || phase === "transcribing";
   const showsDetail = attention || listening || phase === "done" || phase === "error";

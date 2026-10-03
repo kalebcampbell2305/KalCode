@@ -112,7 +112,8 @@ export function ThreadList({
         </div>
       ) : shown.length === 0 ? (
         <p className={styles.message}>
-          {list.entries.length === 0 ? "No threads yet." : `No threads match "${query.trim()}".`}
+          {/* The detail pane already says "No threads yet" with its action; the list just says where they'll be. */}
+          {list.entries.length === 0 ? "Threads you start appear here." : `No threads match "${query.trim()}".`}
         </p>
       ) : (
         <ul className={styles.list} aria-label="Threads" onKeyDown={onListKeyDown}>

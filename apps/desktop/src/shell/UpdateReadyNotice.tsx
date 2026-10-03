@@ -5,10 +5,36 @@ import { useEffect, useState } from "react";
 import type { KalCodeClient } from "../ipc/client.ts";
 import { toKalCodeError } from "../ipc/errors.ts";
 import { formatVersion, publicVersion, sameVersionBuild } from "../platform/version.ts";
+import { STATUS_META } from "../surfaces/dashboard/data/status.ts";
 import { installsWhenClosed, restartAndInstall } from "../surfaces/settings/updaterModel.ts";
 import styles from "./UpdateReadyNotice.module.css";
 
-export type UpdateReadyNoticeClient = Pick<KalCodeClient, "updaterStatus" | "updaterInstall">;
+export type UpdateReadyNoticeClient = Pick<
+  KalCodeClient,
+  "updaterStatus" | "updaterInstall" | "runningTerminals" | "listThreads"
+>;
+
+/**
+ * Whether a restart would stop work: a running terminal (coding agents run in terminals) or a
+ * thread that is working or waiting on someone. When it can't tell, it assumes work is running.
+ */
+export async function workIsRunning(client: Pick<UpdateReadyNoticeClient, "runningTerminals" | "listThreads">) {
+  try {
+    const [terminals, threads] = await Promise.all([
+      client.runningTerminals(),
+      client.listThreads({ includeArchived: false }),
+    ]);
+    return (
+      terminals.length > 0 ||
+      threads.some(
+        (t) =>
+          t.archivedAt === null && STATUS_META[t.status].group !== "idle" && STATUS_META[t.status].group !== "finished",
+      )
+    );
+  } catch {
+    return true;
+  }
+}
 
 /** How often the shell re-reads updater status (native has no updater event to subscribe to). */
 export const UPDATE_STATUS_POLL_MS = 60_000;
@@ -22,8 +48,9 @@ interface ReadyUpdate {
 
 /**
  * Non-modal, app-wide notice for a downloaded and verified new public version. It never
- * restarts on its own: "Restart to update" asks for confirmation first, then uses the same
- * install path as Settings → Updates. "Later" hides it for this app session. A newer build of
+ * restarts on its own: "Restart to update" asks for confirmation first when terminals, agents or
+ * threads are running (with nothing running it restarts at once), then uses the same install
+ * path as Settings → Updates. "Later" hides it for this app session. A newer build of
  * the running public version staged to install silently when KalCode closes is not announced;
  * one whose silent install failed is offered here, so nobody stays on an old build.
  * Status read failures stay silent — Settings → Updates is where updater problems are reported.
@@ -42,6 +69,7 @@ export function UpdateReadyNotice({
   const [dismissed, setDismissed] = useState<ReadyUpdate | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [checkingWork, setCheckingWork] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -83,10 +111,24 @@ export function UpdateReadyNotice({
       setConfirming(false);
     } catch (error) {
       setConfirming(false);
-      toast.show({ tone: "danger", title: "Update didn't install", description: toKalCodeError(error).message });
+      toast.show({
+        tone: "danger",
+        title: "Update didn't install",
+        description: toKalCodeError(error).message,
+        action: { label: "Try again", onSelect: () => void install() },
+      });
     } finally {
       setInstalling(false);
     }
+  };
+
+  // The confirmation protects running work; with nothing running it would only add a click.
+  const restart = async () => {
+    setCheckingWork(true);
+    const running = await workIsRunning(client);
+    setCheckingWork(false);
+    if (running) setConfirming(true);
+    else await install();
   };
 
   return (
@@ -101,7 +143,12 @@ export function UpdateReadyNotice({
               <p className={styles.title}>{title}</p>
               <p className={styles.detail}>Your work stays open until you restart.</p>
               <div className={styles.actions}>
-                <Button size="sm" variant="primary" onClick={() => setConfirming(true)}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  busy={checkingWork || (installing && !confirming)}
+                  onClick={() => void restart()}
+                >
                   Restart to update
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setDismissed(ready)}>

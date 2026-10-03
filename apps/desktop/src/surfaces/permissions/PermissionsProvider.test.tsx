@@ -338,5 +338,11 @@ describe("permission state lifetime", () => {
     });
     expect(result.current.pending).toEqual([]);
     expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Couldn't record your answer" }));
+    // The toast's "Try again" re-sends the same answer.
+    const shown = toast.show.mock.calls.at(-1)?.[0] as { action?: { label: string; onSelect: () => void } };
+    expect(shown.action?.label).toBe("Try again");
+    runtime.client.decideApproval.mockClear();
+    await act(async () => shown.action?.onSelect());
+    expect(runtime.client.decideApproval).toHaveBeenCalledWith("request-1", "approve_once");
   });
 });

@@ -210,6 +210,56 @@
   background: var(--status-paused-soft);
   color: var(--status-paused-text);
 }
+
+/* The paused badge doubles as its Resume control: badge shape, button behavior. */
+.pausedChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 1.5rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--status-paused-line);
+  border-radius: var(--radius-xs);
+  background: var(--status-paused-soft);
+  color: var(--status-paused-text);
+  font: inherit;
+  font-size: var(--type-small);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.pausedChip svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: none;
+}
+
+.pausedChip:hover:not(:disabled) {
+  border-color: var(--status-paused);
+  background: color-mix(in srgb, var(--status-paused) 20%, transparent);
+}
+
+.pausedChip:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.pausedChip:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.pausedChipAction {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 3px;
+}
 .permissionNotice {
   background: var(--color-accent-soft);
   color: var(--color-accent-text);
