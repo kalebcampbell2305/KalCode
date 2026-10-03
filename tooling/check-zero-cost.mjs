@@ -142,6 +142,13 @@ for (const file of files) {
     // Bind the exception to this exact file and complete statement, not a general key allowlist.
     if (file === "crates/providers/src/account_auth.rs" && line.trim() === 'remove_env(&mut env, "OPENAI_API_KEY");')
       return;
+    // Live plan-usage read: Anthropic's free OAuth usage endpoint with the user's own Claude Code
+    // sign-in (no inference, no company key). Bound to this exact file and declaration.
+    if (
+      file === "crates/providers/src/usage.rs" &&
+      line.trim() === 'const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";'
+    )
+      return;
     for (const re of FORBIDDEN) if (re.test(line)) findings.push(`${file}:${index + 1}: ${re}`);
   });
 }
