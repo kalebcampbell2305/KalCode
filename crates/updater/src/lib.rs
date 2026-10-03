@@ -1684,10 +1684,17 @@ impl UpdateJournal {
                 "KalCode couldn't create a safe update recovery record.",
             ));
         }
+        // Only a durable attempt may stay in memory: a later unrelated save must never record an
+        // install that was refused before it started.
+        let before = self.state.clone();
         self.state.schema_version = JOURNAL_SCHEMA_VERSION;
         self.state.install_attempt = Some(attempt);
         self.state.last_failure = None;
-        self.save()
+        let saved = self.save();
+        if saved.is_err() {
+            self.state = before;
+        }
+        saved
     }
 
     pub fn cancel_install_attempt(&mut self, failure: &'static str) -> Result<(), UpdateError> {
@@ -1848,9 +1855,9 @@ impl UpdateJournal {
         {
             let _ = directory.sync_all();
         }
-        if previous.exists() {
-            fs::remove_file(previous).map_err(|error| UpdateError::io(&error))?;
-        }
+        // The new journal is committed: failing to tidy the old copy (for example a scanner
+        // holding it on Windows) must not report the save as failed. The next save retries.
+        let _ = fs::remove_file(previous);
         Ok(())
     }
 }

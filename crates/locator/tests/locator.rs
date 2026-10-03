@@ -369,6 +369,57 @@ fn indexes_incrementally_from_events_and_forgets_removed_items() {
 }
 
 #[test]
+fn activity_arriving_with_the_startup_rebuild_is_indexed() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_current(dir.path());
+    let ws = workspace(&core, dir.path(), "relaunch");
+    let sources = FakeSources::new();
+    let first = thread(
+        "Earlier billing work",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Completed,
+        &ago(1),
+    );
+    sources.add(first.clone());
+    let locator = Locator::start(core.clone(), sources.clone()).expect("start");
+    assert!(locator.wait_ready(WAIT));
+    core.emit(NewEvent::core(EventPayload::ThreadCompleted {
+        thread_id: first.id.clone(),
+    }))
+    .unwrap();
+    assert!(locator.flush(WAIT));
+    locator.shutdown();
+
+    // Relaunch: the index already holds activity, and a completion lands in the same batch as
+    // the startup rebuild.
+    let second = thread(
+        "Ledger reconciliation",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Completed,
+        &ago(0),
+    );
+    sources.add(second.clone());
+    let restarted = Locator::start(core.clone(), sources).expect("restart");
+    core.emit(NewEvent::core(EventPayload::ThreadCompleted {
+        thread_id: second.id.clone(),
+    }))
+    .unwrap();
+    assert!(restarted.wait_ready(WAIT));
+    assert!(restarted.flush(WAIT));
+    let mut activity = q("ledger");
+    activity.kinds = vec![LocatorEntityKind::Activity];
+    assert_eq!(
+        titles(&restarted, &activity),
+        vec!["Completed · Ledger reconciliation"]
+    );
+    restarted.shutdown();
+}
+
+#[test]
 fn privacy_names_are_redacted_queries_never_stored_messages_off_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let core = core_with_v11(dir.path());

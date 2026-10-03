@@ -31,7 +31,7 @@ use crate::paths::{RelPath, WorkspaceRoot, plain};
 use crate::repo::is_object_id;
 use crate::runner::{Git, git_error};
 
-const MANIFEST: &str = "kalcode-manifest";
+pub(crate) const MANIFEST: &str = "kalcode-manifest";
 const RACY: Duration = Duration::from_secs(2);
 /// Repack when this many packs have accumulated (one per snapshot with new content).
 const MAX_PACKS: usize = 48;
@@ -404,7 +404,9 @@ fn repack_if_needed(git: &Git, shadow: &Path) {
         let result = git
             .cmd()
             .git_dir(shadow, None)
-            .args(["repack", "-a", "-d", "-q"])
+            // Keep unreachable objects: this snapshot's new blobs aren't referenced by any ref
+            // until its checkpoint is written, and `-a -d` alone would delete them.
+            .args(["repack", "-a", "-d", "--keep-unreachable", "-q"])
             .timeout(Duration::from_secs(1800))
             .run_ok("checkpoint");
         if let Err(error) = result {

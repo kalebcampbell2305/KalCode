@@ -801,6 +801,9 @@ impl CheckpointStore {
             .args(["gc", "--prune=now", "--quiet"])
             .timeout(Duration::from_secs(600))
             .run_ok("checkpoint")?;
+        // The stat manifest may name objects the gc just deleted; reusing them would make every
+        // later snapshot of an unchanged file fail. The next snapshot rehashes instead.
+        let _ = std::fs::remove_file(shadow.join(crate::snapshot::MANIFEST));
         Ok(())
     }
 
