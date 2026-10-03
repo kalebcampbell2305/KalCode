@@ -661,7 +661,7 @@ describe("pipeline", () => {
       spawnSync(
         process.execPath,
         ["kit/build.mjs", fx3.commit, "1.2.3", join(fx3.repo, `out-${fx3.commit.slice(0, 7)}`)],
-        { cwd: fx3.repo },
+        { cwd: fx3.repo, windowsHide: true },
       );
       const line = join(fx3.repo, "evidence", "build-line.txt");
       mkdirSync(join(line, ".."), { recursive: true });

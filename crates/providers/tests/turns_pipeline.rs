@@ -571,7 +571,7 @@ fn gemini_modes_never_use_yolo() {
     for (mode, expected) in [
         (PermissionMode::Plan, "plan"),
         (PermissionMode::Approve, "default"),
-        (PermissionMode::Auto, "default"),
+        (PermissionMode::Auto, "auto_edit"),
         (PermissionMode::Custom, "default"),
         (PermissionMode::Bypass, "auto_edit"),
     ] {

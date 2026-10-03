@@ -99,7 +99,7 @@ export function paneInfoCopy(providerId: string, info: PaneInfo | null, provider
         `${name}'s own network traffic to its service.`,
       ],
       footer: codex
-        ? "KalCode starts Codex with a sandbox no broader than this agent's permission mode (read-only unless Bypass, never full access), but it can't block a single command here."
+        ? "In Code, Plan is read-only. Auto keeps work inside the workspace and Codex asks only when it needs to leave that sandbox. Explicit Bypass uses Codex's unrestricted sandbox only after the separate high-risk confirmation."
         : "KalCode starts Gemini CLI in an approval mode no broader than this agent's permission mode (never yolo), but it can't block a single tool call here.",
     };
   }

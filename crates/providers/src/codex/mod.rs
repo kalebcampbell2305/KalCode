@@ -94,6 +94,41 @@ pub(crate) fn verify_managed_executable_version_guarded(
     verify_managed_executable_version_inner(executable, env, neutral_cwd, Some(admission))
 }
 
+pub(crate) fn verify_managed_executable_version_guarded_cancelable(
+    executable: &Path,
+    env: &BTreeMap<OsString, OsString>,
+    neutral_cwd: &Path,
+    admission: crate::guardian::RegisteredJob,
+    canceled: &dyn Fn() -> bool,
+) -> Result<(), ProviderError> {
+    let spec = crate::process::ProcessSpec {
+        program: PathBuf::from(executable),
+        args: vec!["--version".into()],
+        cwd: Some(neutral_cwd.to_path_buf()),
+        env: env.clone(),
+    };
+    let output = crate::process::run_probe_guarded_cancelable(
+        &spec,
+        admission,
+        Duration::from_secs(15),
+        true,
+        16 * 1024,
+        canceled,
+    )
+    .map_err(|_| {
+        ProviderError::Start("Codex did not report a version KalCode can verify".into())
+    })?;
+    if !output.status.success() {
+        return Err(ProviderError::Start(
+            "Codex did not report a version KalCode can verify".into(),
+        ));
+    }
+    let version = Version::find_in(&output.stdout).ok_or_else(|| {
+        ProviderError::Start("Codex did not report a version KalCode can verify".into())
+    })?;
+    require_managed_version(&version)
+}
+
 fn verify_managed_executable_version_inner(
     executable: &Path,
     env: &BTreeMap<OsString, OsString>,

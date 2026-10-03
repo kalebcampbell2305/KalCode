@@ -12,7 +12,6 @@ use kalcode_contracts::events::{
     CorrelationFilter, EventEnvelope, EventPayload, EventQuery, SeqOrder,
 };
 use kalcode_contracts::operations::*;
-use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::confirm::{NativeConfirmation, confirm};
 use kalcode_core::operations::{ACTIVITY_MOMENT_LIMIT, OperationsStore};
@@ -1775,7 +1774,7 @@ fn operation_thread_matches(
         && spec.provider_id.as_deref() == Some(thread.provider_id.as_str())
         && spec.provider_account_id.as_deref() == thread.provider_account_id.as_deref()
         && spec.model.as_deref() == thread.model.as_deref()
-        && thread.permission_mode == PermissionMode::Approve
+        && thread.permission_mode.is_confirm_free_start()
 }
 
 fn project_active_operation_thread(
@@ -2201,6 +2200,7 @@ pub async fn operations_open_url(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use kalcode_contracts::permissions::PermissionMode;
     use kalcode_core::{CoreConfig, Paths, flags::BuildChannel};
 
     fn fixture(
@@ -3122,7 +3122,7 @@ mod tests {
                     workspace_id: &workspace.id,
                     workspace_name: &workspace.name,
                     cwd: &workspace.root_path,
-                    permission_mode: PermissionMode::Approve,
+                    permission_mode: PermissionMode::Auto,
                     now: &at,
                 },
             )?;
@@ -3140,6 +3140,41 @@ mod tests {
             .store
             .bind(&operation.id, None, Some(&operation.id), None, None)
             .expect("bind operation thread");
+        let current = state
+            .threads
+            .runtime_handle()
+            .expect("runtime")
+            .get(&operation.id)
+            .expect("operation thread");
+        assert_eq!(current.permission_mode, PermissionMode::Auto);
+        assert!(operation_thread_matches(
+            &current,
+            &operation.spec,
+            &operation.id
+        ));
+        let mut legacy = current.clone();
+        legacy.permission_mode = PermissionMode::Approve;
+        assert!(
+            operation_thread_matches(&legacy, &operation.spec, &operation.id),
+            "an in-flight Approve operation from an older build remains recoverable"
+        );
+        legacy.permission_mode = PermissionMode::Plan;
+        assert!(
+            operation_thread_matches(&legacy, &operation.spec, &operation.id),
+            "an explicitly restrictive operation remains recoverable"
+        );
+        legacy.permission_mode = PermissionMode::Bypass;
+        assert!(!operation_thread_matches(
+            &legacy,
+            &operation.spec,
+            &operation.id
+        ));
+        legacy.permission_mode = PermissionMode::Custom;
+        assert!(!operation_thread_matches(
+            &legacy,
+            &operation.spec,
+            &operation.id
+        ));
 
         for (runtime_status, activity, expected) in [
             (

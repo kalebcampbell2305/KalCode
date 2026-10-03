@@ -30,8 +30,8 @@ test.describe("providers", () => {
 
     const claude = section(page, "Claude Code");
     await expect(claude.getByText("Installed, version 2.1.282")).toBeVisible();
-    await expect(claude.getByText("Signed in", { exact: true })).toBeVisible();
-    await expect(claude.getByText("Checked with claude auth status.")).toBeVisible();
+    await expect(claude.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Sign-in is checked when a Claude Code session starts.")).toBeVisible();
     await expect(claude.getByText("~\\.local\\bin\\claude.exe", { exact: true })).toBeVisible();
     await expect(claude.getByText("Adapter ready")).toBeVisible();
     await expect(claude.getByText("Account default (default), Opus, Sonnet, Haiku, Fable")).toBeVisible();
@@ -56,9 +56,12 @@ test.describe("providers", () => {
     await expect(gemini.getByText("Auto (default) (default), Pro, Flash, Flash-Lite")).toBeVisible();
     await expect(gemini.getByText("https://geminicli.com/docs/", { exact: true })).toBeVisible();
 
-    // Never a fake "connected" state, and no sign-in button: users sign in with their own CLI.
-    await expect(page.getByText(/connected/i)).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /sign in|log ?in|connect/i })).toHaveCount(0);
+    // Setup never fakes a "connected" state or offers a provider-wide sign-in action. Managed
+    // account state is restored independently in the mounted Accounts panel.
+    await expect(page.getByText("Connected", { exact: true }).filter({ visible: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /sign in|log ?in|connect/i }).filter({ visible: true })).toHaveCount(
+      0,
+    );
   });
 
   test("permission mappings are an accessible table", async ({ page }) => {
@@ -95,7 +98,10 @@ test.describe("providers", () => {
         .getByRole("row", { name: /Bypass/ })
         .getByRole("cell")
         .first(),
-    ).toHaveText(/--sandbox workspace-write\s*-c sandbox_workspace_write\.network_access=false/);
+    ).toHaveText(/--sandbox danger-full-access\s*-c approval_policy='never'/);
+    await expect(codex.getByRole("row", { name: /Auto/ }).getByRole("cell").first()).toHaveText(
+      /--sandbox workspace-write\s*-c approval_policy='never'/,
+    );
     const gemini = page.getByRole("table", { name: /Permission modes in Gemini CLI/ });
     await expect(
       gemini
@@ -121,9 +127,11 @@ test.describe("providers", () => {
     const claude = page.getByRole("region", { name: "Claude Code · Personal" });
     await claude.getByRole("button", { name: "More actions for Personal" }).click();
     await page.getByRole("menu").getByRole("menuitem", { name: "Sign out Personal" }).click();
-    await expect(claude.getByText("Signed out", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Sign-in is checked when a Claude Code session starts.")).toBeVisible();
     await claude.getByRole("button", { name: "Sign in Personal" }).click();
-    await expect(claude.getByText("Signed in", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Sign-in is checked when a Claude Code session starts.")).toBeVisible();
 
     await work.getByRole("button", { name: "Sign in Work" }).click();
     await expect(work.getByText("Signed in", { exact: true })).toBeVisible();
@@ -177,7 +185,7 @@ test.describe("providers", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
     await expect(page.locator("[data-provider-pane]")).toHaveCount(0);
     await expect(
-      page.getByRole("region", { name: "Gemini CLI · Personal" }).getByText("Not checked", { exact: true }),
+      page.getByRole("region", { name: "Gemini CLI · Personal" }).getByText("Signed out", { exact: true }),
     ).toBeVisible();
   });
 

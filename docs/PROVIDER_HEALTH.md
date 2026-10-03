@@ -15,7 +15,7 @@ System code **PH** · Phase **P2** · Code: `crates/providers/src/health/`,
 | Field | Source | Unknown when |
 | --- | --- | --- |
 | Detection (installed / not installed / outdated / error), version, minimum | Z2 detection (`--version`), pushed by the provider registry after every detection | never checked |
-| Sign-in | the provider's documented status command, as reported (`claude auth status` exit code, `codex login status` first line) | Gemini CLI (no documented command) — always unknown, which doesn't block threads |
+| Sign-in | a documented side-effect-free status command, when one exists (`codex login status` first line), or a real provider session | Claude Code and Gemini CLI have no safe passive command — unknown doesn't block a coding session |
 | Account label | not read: KalCode never reads account details from a provider | always, until API-key accounts exist |
 | Models | the adapter's documented list | Codex (listed only by app-server) |
 | Process running, active sessions | sessions started and ended through the thread runtime (`ObservedProvider` wraps every adapter) | — |
@@ -47,8 +47,8 @@ another observation.
   provider's event to the thread runtime **before** observing it, so health can't delay or drop
   thread events. Events and re-detections are delivered by one driver thread that sleeps until
   an observation arrives or the next one ages out of its window.
-- **No polling.** Health never starts a provider process. A read-only re-detection
-  (`--version` + the documented status command) is requested only after a session couldn't start
+- **No polling.** Health never starts a coding session. A read-only re-detection
+  (`--version` plus a side-effect-free status command when one exists) is requested only after a session couldn't start
   or a provider reported a sign-in failure: at most once a minute per provider, backing off to
   30 minutes. "Check again" on the Providers page always works.
 - The code doesn't panic by construction (release builds abort on panic, so there is no

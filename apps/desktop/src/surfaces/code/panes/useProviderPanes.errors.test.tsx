@@ -13,6 +13,7 @@ vi.mock("../../../runtime/RuntimeProvider.tsx", () => {
   const client = {
     listThreads: mocks.listThreads,
     threadOptions: () => Promise.resolve({ providers: [] }),
+    getPermissionSettings: () => Promise.resolve({ defaultMode: "approve" }),
     transport: { invoke: mocks.invoke },
   };
   const feed = { getSnapshot: () => ({ events: [] }), subscribe: () => () => {} };

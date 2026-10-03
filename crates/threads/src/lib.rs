@@ -22,7 +22,9 @@ pub use registry::{
     CoreWorkspaces, NoWorkspaces, ProviderEntry, ProviderRegistry, ResolvedWorkspace,
     WorkspaceResolver,
 };
-pub use runtime::{AgentLimitSource, StreamId, ThreadRuntime, ThreadWorktrees};
+pub use runtime::{
+    AgentLimitSource, ProviderErrorObserver, StreamId, ThreadRuntime, ThreadWorktrees,
+};
 pub use types::{
     BulkOutcome, CreateIdleThread, CreateThread, ProviderOption, StatusCount, ThreadOptions,
     ThreadsStatusSummary, ToolCallRecord, ToolCallStatus, WorkspaceOption,

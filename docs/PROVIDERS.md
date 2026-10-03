@@ -4,11 +4,33 @@ Status: contract defined in Z0 · Implemented in Z2 (detection for Claude Code, 
 CLI; Claude Code adapter) · Codex and Gemini CLI adapters, their panes and Provider Health in
 PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`) · Code: `crates/providers` · Contract:
 `crates/contracts/src/agent.rs`, `health.rs` · Facts verified 2026-09-24/25 against official docs,
-the providers' published SDK/source type definitions and the installed CLIs (Claude Code 2.1.282,
-codex-cli 0.157.0; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
+the providers' published SDK/source type definitions and the installed CLIs (Claude Code 2.1.288,
+codex-cli 0.160.0; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
 (`docs/campaigns/SEC-0.1.1.md`)
 
 ## 1. Principles
+
+### Session restoration
+
+Provider account metadata lives in the canonical Core database: identities, nicknames, defaults,
+bindings, deterministic ordering, and the last provider-confirmed authentication state survive
+application restarts. Startup must not reset authenticated accounts to unknown. The shell restores
+this local registry first; safe Codex/Gemini checks run asynchronously while account pickers
+remain available. Claude stays on persisted provider-confirmed state until the real native coding
+session validates authentication. Account Hub distinguishes Connected, Checking, Expired, and Error.
+A failed check records an error without erasing the last confirmed identity or authentication state.
+Only a provider-confirmed sign-out/expiration changes an account to unauthenticated.
+
+Credentials stay with the existing provider-owned managed profile and storage mechanism on Windows
+and macOS. The registry and frontend contain no provider tokens. Launch still passes
+through the native provider account, profile, authentication and permission checks; cached metadata
+does not grant authentication or bypass real expiration. Local activity is restored separately and
+labeled when stale; unavailable provider usage is never fabricated.
+
+Claude background/manual refresh must not spawn `claude auth status --json`: the certified native
+command can begin OAuth refresh and exit before saving the rotated token ([upstream issue #95822](https://github.com/anthropics/claude-code/issues/95822)).
+Do not advance its last-checked timestamp merely because metadata was restored. Explicit native
+login/logout and the long-lived coding session remain the authentication authority.
 
 - KalCode depends on **no single provider**. Provider-specific logic lives behind the
   `AgentProvider` contract and is translated at the adapter boundary into KalCode concepts
@@ -93,7 +115,7 @@ is `true` only when KalCode's adapter implements it.
 | Interrupt | `interrupt` control request, advertised by `interrupt_receipt_v1` [3] · **used** (§8.4) | Kill the turn's process tree (the SDK's documented cancellation) [14] · **used**; app-server `turn/interrupt` [8] planned | Kill the turn's process tree · **used** |
 | Resume | `--resume <id>`, `--session-id <uuid>` [2] · **used** | `codex exec … resume <thread id> -` [5] · **used** | `--resume <session uuid>` [10][16] · **used** (never `latest` or an index) |
 | Host approvals | `--permission-prompt-tool` (MCP) [2] · not used until Z4 | app-server approval requests (accept/decline) [8] · planned (§8.8) | None documented for headless |
-| Auth status check | `claude auth status`: exit 0 signed in, 1 not [2] · exit code only | `codex login status` [11]; exit codes and wording undocumented | None side-effect-free → unknown |
+| Auth status check | None safe to run passively → unknown until a coding session validates the provider-native session | `codex login status` [11]; exit codes and wording undocumented | None side-effect-free → unknown |
 | Model listing | Documented aliases [4]; KalCode lists `default`, `opus`, `sonnet`, `haiku`, `fable` | app-server `model/list` only → not discoverable; "Provider default" | Documented `--model` aliases (`auto`, `pro`, `flash`, `flash-lite`) [10] · listed |
 | Rate limits | `assistant.error = rate_limit`, `StopFailure rate_limit` (structured) · used by Provider Health | No structured shape in the exec stream → never reported | `result.error.type` `RetryableQuotaError` / `TerminalQuotaError` [17] · used by Provider Health |
 | KalCode adapter | **Implemented** (Z2), minimum version 2.1.259 | **Implemented** (PROVIDERS-2), minimum version 0.155.1 | **Implemented** (PROVIDERS-2), no minimum declared (not installed on the verification machine) |
@@ -114,7 +136,10 @@ policy, but cannot render an interactive provider prompt in KalCode.
 
 Why the mappings remain approximate and bounded:
 
-- Claude Code's `auto` mode is never used (its classifier's decisions are not KalCode policy),
+- Claude Code's native `auto` mode is used only for KalCode Auto. The certified 2.1.282 floor
+  accepts the explicit mode; v2.1.283 made Auto the built-in interactive default on every plan and
+  provider. When the selected model, account, organization or server cannot use the classifier,
+  Claude Code falls back to Manual. KalCode still supplies its credential and remote-action deny floor,
   and `bypassPermissions` / `--dangerously-skip-permissions` are never used (they would also
   allow remote-consequential actions such as `git push`).
 - Codex uses `danger-full-access` only for the explicitly selected Bypass mode. The combined
@@ -136,7 +161,7 @@ Every session also passes `--permission-prompts none` (v2.1.259+: deny what woul
 | --- | --- | --- | --- | --- |
 | Plan | `--restricted --permission-mode plan` | edit and web tools + credential files + remote actions | Stricter | `--restricted` (v2.1.248+) removes command/code-running tools and WebFetch, confines file tools to the working directory, ignores user, project and local settings (managed settings and KalCode's flags still apply), refuses `bypassPermissions`. Plan blocks edits. Even read-only commands are unavailable. |
 | Approve | `--setting-sources user --permission-mode default` | edit and web tools + credential files + remote actions | Stricter | Reads and Claude Code's built-in read-only commands run. `Edit`, `Write`, `NotebookEdit`, `WebFetch` and `WebSearch` are removed. Anything else that would ask is refused, unless the user's own Claude Code allow rules cover it (below). |
-| Auto | `--setting-sources user --permission-mode default` | edit and web tools + credential files + remote actions | Stricter | Runs like Approve. |
+| Auto | `--setting-sources user --permission-mode auto` | credential files + remote actions | Stricter | Claude Code's native background classifier handles ordinary local work. Unsupported or administratively disabled Auto falls back to Manual. Headless permission prompts are refused rather than guessed. |
 | Bypass | `--setting-sources user --permission-mode acceptEdits` | credential files + remote actions | Stricter | File edits and `mkdir`/`touch`/`rm`/`rmdir`/`mv`/`cp`/`sed` in the working directory. Other commands and network are refused unless the user's own Claude Code allow rules cover them. |
 | Custom | as Approve | as Approve | Stricter | Approve baseline; Custom rules are not applied yet. |
 
@@ -169,7 +194,7 @@ evaluated per tool call for Claude Code today. What does hold:
 
 | Enforced by | Guarantee |
 | --- | --- |
-| KalCode (launch flags) | The mode's Claude Code permission mode (never `auto` or `bypassPermissions`); prompts denied (`--permission-prompts none`); repository settings, hooks and `.mcp.json` servers not loaded; the deny rules above. Deny rules win over allow rules from every settings source and over a `PreToolUse` hook that returns "allow" [12], so the user's own Claude Code settings can't re-enable them. |
+| KalCode (launch flags) | The mode's Claude Code permission mode (`auto` only for KalCode Auto; never `bypassPermissions`); prompts denied (`--permission-prompts none`); repository settings, hooks and `.mcp.json` servers not loaded; the deny rules above. Deny rules win over allow rules from every settings source and over a `PreToolUse` hook that returns "allow" [12], so the user's own Claude Code settings can't re-enable them. |
 | Claude Code | Everything else: which commands run without a prompt (its built-in read-only set, `acceptEdits` in Bypass) and **the user's own user-level Claude Code settings**, which are loaded in every mode except Plan. A command allowed there (for example `Bash(npm test)`) runs in a KalCode thread without a KalCode approval, and the user's own hooks run. |
 
 Limits of the deny rules: a Bash or PowerShell rule matches the command as Claude writes it, after
@@ -193,37 +218,33 @@ without approval [1]. Managed settings always apply.
 
 A thread created with `provider_pane_create` runs the real, unmodified `claude` TUI in a PTY
 (`crates/providers/src/interactive`, `docs/PROVIDER_PANES.md`). Launch flags
-(`interactive::claude::interactive_args`, verified against `claude --help` 2.1.282):
+(`interactive::claude::interactive_args`, verified against `claude --help` 2.1.288):
 
 | KalCode | Claude Code flags | KalCode deny rules (`--disallowedTools`) |
 | --- | --- | --- |
 | Plan | `--restricted --permission-mode plan` | edit and web tools + credential files + remote actions |
 | Approve | `--setting-sources user --permission-mode manual` | credential files + remote actions |
-| Auto | `--setting-sources user --permission-mode manual` | credential files + remote actions |
+| Auto | `--setting-sources user --permission-mode auto` | credential files + remote actions |
 | Bypass | `--setting-sources user --permission-mode acceptEdits` | credential files + remote actions |
 | Custom | as Approve | as Approve |
 
 Every pane also passes `--strict-mcp-config`, `--settings <data>/sessions/<thread>/claude-settings.json`
 (KalCode's hooks, exec form, explicit timeouts; nothing that relaxes permissions and no secret)
-and `--session-id <uuid>` or `--resume <id>`. Never: `bypassPermissions`, `auto`, `dontAsk`,
+and `--session-id <uuid>` or `--resume <id>`. Never: `bypassPermissions`, `dontAsk`,
 `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--allowedTools`,
 `--add-dir`, `--bare`, `--safe-mode`, `-p`. A test fails if a mode outside the installed help's
 list is emitted. `manual` is the listed name of Claude Code's ask-normally mode (hook payloads
 report it as `default`; the headless Z2 argv still passes `default`).
 
-Unlike headless threads, the edit and web tools are not removed outside Plan: a person answers
-for them, in KalCode (engine routing) or in Claude Code's own prompt in the pane.
+Unlike headless threads, pane sessions can show provider-native prompts. Auto keeps edit and web
+tools available to Claude Code's classifier; Manual and Accept Edits show the native prompt when
+their policy requires one.
 
-**Who decides a tool call.** Every call reaches KalCode's `PreToolUse` hook first. If KalCode is
-unreachable, the helper exits 2 and the call is blocked. With `DecisionRouting::Engine` (the
-default since the classifier hardening merged) the call becomes `ApprovalRequired` for the Z3
-runtime and the Z4 engine: allow, deny, or a KalCode approval; unanswered for 540 s it goes to
-Claude Code's prompt and the KalCode request expires as `answered_in_provider`. Recursive
-searches, pipelines and multi-level wildcards are sent as opaque (always ask) until the
-classifier judges them (SEC-LATENT §5). With `DecisionRouting::ProviderPrompt` (the switch back)
-KalCode records the call and returns no decision: Claude Code's own permission flow and prompt
-decide, under the deny floor. KalCode's "allow" never
-passes a deny rule (the permissions page: deny rules apply regardless of a hook's answer).
+**Who decides a tool call.** Every call reaches KalCode's `PreToolUse` hook first. Production uses
+`DecisionRouting::ProviderPrompt`: KalCode records the call and returns no decision, so Claude
+Code's native permission flow, prompt, or Auto classifier decides under the deny floor. Engine
+routing remains available only for explicit adapter tests. KalCode never synthesizes an approval,
+and a provider allow cannot pass a launch-time deny rule.
 
 What this still does not cover is listed in `docs/PROVIDER_PANES.md` §4 ("What KalCode cannot
 intercept").
@@ -288,7 +309,7 @@ Every turn passes `--output-format stream-json` and the prompt on stdin, then:
 | --- | --- | --- | --- |
 | Plan | `--approval-mode plan` | Stricter | Gemini CLI's read-only plan mode. |
 | Approve | `--approval-mode default` | Stricter | Tool calls that need confirmation can't be answered headless, so they don't run. |
-| Auto | `--approval-mode default` | Stricter | Runs like Approve. |
+| Auto | `--approval-mode auto_edit` | Stricter | File edits are approved automatically. Shell commands and other tools still require confirmation; headless prompts are denied. `yolo` is never used. |
 | Bypass | `--approval-mode auto_edit` | Stricter | File edits approved automatically; other tools that need confirmation don't run. |
 | Custom | as Approve | Stricter | Approve baseline. |
 
@@ -320,12 +341,13 @@ type definitions and fixtures only (smoke script written, not run).
    | Gemini CLI | `/opt/homebrew/bin`, `/usr/local/bin`, `%APPDATA%\npm` |
 
 2. **Version:** run only `<exe> --version` (15 s timeout) and compare with the adapter's minimum.
-3. **Sign-in:** run the documented status command, if any (15 s timeout), and read only its
-   documented signal. Verified 2026-09-25 against the real install on the verification machine
-   (`real_codex_detection`: codex-cli 0.155.1 through its npm shim, signed in). `claude auth status` stdout is discarded unread (it contains the account
-   email and organization); only the exit code counts (0 / 1; anything else is unknown). For
-   `codex login status` only a leading `Logged in` with exit 0, or `Not logged in`, counts;
-   anything else is unknown. Gemini CLI is always unknown.
+3. **Sign-in:** run a documented side-effect-free status command when one exists (15 s timeout),
+   and read only its documented signal. Verified 2026-09-25 against the real install on the
+   verification machine (`real_codex_detection`: codex-cli 0.155.1 through its npm shim, signed
+   in). For `codex login status` only a leading `Logged in` with exit 0, or `Not logged in`,
+   counts; anything else is unknown. Claude Code and Gemini CLI are always unknown during passive
+   detection. Claude Code sign-in is validated by the real coding session because its status
+   command can refresh OAuth credentials and exit before persisting the rotation.
 
 Probes run with the sanitized provider environment, a neutral working directory (the temp folder,
 never a project), 16 KiB output caps and tree kill on timeout.
@@ -340,7 +362,7 @@ never a project), 16 KiB output caps and tree kill on timeout.
 Sign-in is `authenticated`, `not_authenticated` or `unknown`.
 
 **Shown** (`ProviderStatus`): name, state, path with the home folder as `~`, version, minimum
-version, sign-in state, user-safe message, checked-at, the auth-check command, sign-in command,
+version, sign-in state, user-safe message, checked-at, any safe auth-check command, sign-in command,
 install command, docs link, capabilities and permission mappings, adapter state, model source.
 **Never read or shown:** account email, organization, plan or tokens.
 
@@ -371,9 +393,9 @@ stream-JSON on stdin and stdout.
 
 ### 8.1 Starting a session
 
-`start_session` re-runs detection and refuses to start when Claude Code is not installed,
-outdated, in error, or signed out, or when `secretRef` is set. The working directory must be an
-existing absolute folder resolved natively. argv:
+`start_session` re-runs version-only detection and refuses to start when Claude Code is not
+installed, outdated or in error, or when `secretRef` is set. The provider-native coding session
+validates sign-in. The working directory must be an existing absolute folder resolved natively. argv:
 
 ```text
 claude -p --input-format stream-json --output-format stream-json --verbose
@@ -523,8 +545,8 @@ not away from other processes of the same OS user. KalCode checks **existence on
 never opens, reads, copies or stores any credential file. **One display-only exception** (release-lead
 security sign-off): for a signed-in account, KalCode reads only the `active` field of
 `<GEMINI_CLI_HOME>/.gemini/google_accounts.json` inside that account's own managed profile and shows
-it as the account's provider-reported identity (as Claude Code's `auth status --json` email and
-Codex's `account/read` email are). The file must be an ordinary file (no symlink, junction or reparse
+it as the account's provider-reported identity (as Codex's `account/read` email is). Claude Code
+does not expose identity through a safe passive probe. The file must be an ordinary file (no symlink, junction or reparse
 point, checked before and after opening; the opened handle must be the very file at that path inside
 the account's canonical home, so a `.gemini` swapped for a link mid-read is refused) of at most 16 KiB that parses as JSON with an `active`
 string that looks like an email (at most 320 characters, printable ASCII, one `@`, dotted domain);
@@ -634,8 +656,8 @@ backing off to 30 minutes). Recording an observation never delays a thread event
   argv, and refusal to start when unusable.
 - **Unit tests** cover the permission invariants, env sanitization, bounded line reading, stderr
   redaction, parsing and normalization.
-- **Real-provider tests are `#[ignore]`d.** `real_claude_detection` runs only `--version` and
-  `auth status`. `real_claude_session_smoke` consumes AI quota: it additionally needs
+- **Real-provider tests are `#[ignore]`d.** `real_claude_detection` runs only `--version`.
+  `real_claude_session_smoke` consumes AI quota: it additionally needs
   `KALCODE_REAL_PROVIDER_SMOKE=1` and the owner's explicit approval.
 - **Provider panes (Z7-W4).** The fake provider has an interactive mode (started with
   `--settings`): a minimal TUI that fires the hooks in KalCode's settings file with the documented
@@ -716,3 +738,13 @@ https://claude.ai/install.sh | bash`, `irm https://claude.ai/install.ps1 | iex`,
 npm `@anthropic-ai/claude-code`) · Codex https://github.com/openai/codex (`npm install -g
 @openai/codex`, `brew install --cask codex`) · Gemini CLI `npm install -g @google/gemini-cli`,
 `brew install gemini-cli`.
+
+## Windows background process containment
+
+Provider panes use KalCode's integrated PTY; infrastructure uses the existing hidden, supervised process host. Node tooling must pass `windowsHide: true`, and native background commands use `CREATE_NO_WINDOW`. Never launch an external console unless the user explicitly asks for one, and never disguise a bad spawn by hiding or minimizing its window afterward. Keep the existing bounded cancellation and descendant cleanup; deduplicate account checks before starting provider processes.
+
+A live October 2026 investigation traced an external Windows Terminal window to an already-running signed Codex 0.157 `codex-code-mode-host.exe` beneath a KalCode provider pane. The bootstrap had updated to 0.160 while the older daemon remained alive. This matches [upstream issue #37599](https://github.com/openai/codex/issues/37599); [Codex 0.160](https://github.com/openai/codex/releases/tag/rust-v0.160.0) includes the background-console fixes. A fresh signed 0.160 app server ran repeated background commands without new visible terminal windows. Preserve active work, then restart the affected pane at a controlled boundary to use the installed current runtime. Do not patch signed provider binaries, disable tools, or terminate another active session as a workaround.
+
+### Credential ownership and restart compatibility
+
+The owner clarified on 2026-10-03 that existing provider-native sessions must be preserved; the prohibition on new plaintext credential storage applies to KalCode-owned storage. Account restoration persists only safe account metadata and reuses the provider's session. It does not copy tokens, add a token cache, change credential backends, or force reauthentication. Some provider-managed Windows stores can contain plaintext native credential files; this implementation does not claim those files are encrypted. Provider-supported secure storage remains preferable when it preserves compatibility.

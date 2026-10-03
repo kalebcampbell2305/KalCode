@@ -145,7 +145,7 @@ test("a database from a newer KalCode is refused with a clear explanation", asyn
 });
 
 // Detection only runs `--version` and each provider's documented sign-in status command
-// (`claude auth status`, `codex login status`); it never sends a prompt or signs in.
+// (Claude version detection and `codex login status`); it never sends a prompt or signs in.
 test("the Providers page detects the installed Claude Code CLI", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-provider-detection-"));

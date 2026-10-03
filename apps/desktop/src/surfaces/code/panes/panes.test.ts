@@ -1,11 +1,18 @@
-import type { ApprovalView, PaneInfo, ProviderAccount, ThreadSummary, Workspace } from "@kalcode/protocol";
+import type {
+  ApprovalView,
+  PaneInfo,
+  PermissionMode,
+  ProviderAccount,
+  ThreadSummary,
+  Workspace,
+} from "@kalcode/protocol";
 import { render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import { KalCodeClient } from "../../../ipc/client.ts";
 import { createMemoryTransport, type MemoryTransport } from "../../../ipc/memoryTransport.ts";
 import { PaneAccountChip, paneAccountLabel, resolvePaneAccount } from "./PaneParts.tsx";
-import { PaneChannel, paneStartMode, splitInput } from "./paneChannel.ts";
+import { PaneChannel, paneStartMode, resolvePaneStartMode, splitInput } from "./paneChannel.ts";
 import {
   channelNote,
   isAnswerInProvider,
@@ -153,11 +160,37 @@ describe("pane channel helpers", () => {
     for (const part of parts) expect(/[\ud800-\udbff]$/.test(part)).toBe(false);
   });
 
-  it("starts panes only in Plan, Approve or Auto", () => {
+  it("uses Auto for fresh panes while preserving explicit startable modes", () => {
     expect(paneStartMode("auto")).toBe("auto");
+    expect(paneStartMode("approve")).toBe("approve");
+    expect(paneStartMode("plan")).toBe("plan");
     expect(paneStartMode("bypass")).toBe("approve");
     expect(paneStartMode("custom")).toBe("approve");
-    expect(paneStartMode(null)).toBe("approve");
+  });
+
+  it("waits for delayed canonical settings and preserves a saved Plan preference exactly", async () => {
+    let provideSettings: ((settings: { defaultMode: PermissionMode }) => void) | undefined;
+    const delayed = new Promise<{ defaultMode: PermissionMode }>((resolve) => {
+      provideSettings = resolve;
+    });
+    let settled = false;
+    const resolving = resolvePaneStartMode(null, () => delayed).then((mode) => {
+      settled = true;
+      return mode;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    provideSettings?.({ defaultMode: "plan" });
+    await expect(resolving).resolves.toBe("plan");
+  });
+
+  it("surfaces a canonical settings read failure without inventing a launch mode", async () => {
+    await expect(
+      resolvePaneStartMode(null, async () => {
+        throw new Error("permission settings unavailable");
+      }),
+    ).rejects.toThrow("permission settings unavailable");
   });
 });
 

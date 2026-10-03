@@ -31,7 +31,8 @@ use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent
 use kalcode_contracts::ids::{is_valid_id, new_id};
 use kalcode_contracts::kalvoice::ThreadScope;
 use kalcode_contracts::permissions::{
-    ApprovalDecision, NormalizedAction, PermissionGate, PermissionMode, PolicyEffect,
+    ApprovalDecision, DEFAULT_CODING_PERMISSION_MODE, NormalizedAction, PermissionGate,
+    PermissionMode, PolicyEffect,
 };
 use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
 use kalcode_contracts::threads::{
@@ -53,6 +54,13 @@ use crate::validate;
 
 /// Identifies a live-delta stream subscription.
 pub type StreamId = u64;
+
+/// Observes a normalized provider error for the exact account bound to the still-current session.
+/// The runtime calls this on that session's worker after its generation check and before publishing
+/// `provider.error`, never on the provider callback thread.
+pub trait ProviderErrorObserver: Send + Sync {
+    fn observe(&self, provider_id: &ProviderId, account_id: &str, code: &str) -> Result<()>;
+}
 
 /// Longest assistant message KalCode stores, in bytes. Longer output is truncated with a note.
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
@@ -490,6 +498,8 @@ struct Inner {
     self_ref: Weak<Inner>,
     /// See [`ThreadRuntime::set_thread_worktrees`].
     worktrees: OnceLock<Arc<dyn ThreadWorktrees>>,
+    /// Account metadata observer installed by the desktop composition root before any launch.
+    provider_error_observer: OnceLock<Arc<dyn ProviderErrorObserver>>,
 }
 
 /// The thread runtime. One per `Core`. Every method validates its input natively and is safe to
@@ -553,6 +563,7 @@ impl ThreadRuntime {
             agent_limit: Mutex::new(None),
             self_ref: weak.clone(),
             worktrees: OnceLock::new(),
+            provider_error_observer: OnceLock::new(),
         });
 
         let (decisions, receiver) = mpsc::channel::<(String, Resolution)>();
@@ -595,6 +606,23 @@ impl ThreadRuntime {
             .agent_limit
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
+    }
+
+    /// Installs the account-aware provider error observer. There is exactly one composition owner;
+    /// replacing it after sessions start could retarget an in-flight error to different state.
+    pub fn set_provider_error_observer(
+        &self,
+        observer: Arc<dyn ProviderErrorObserver>,
+    ) -> Result<()> {
+        self.inner
+            .provider_error_observer
+            .set(observer)
+            .map_err(|_| {
+                KalError::internal(
+                    "provider_error_observer_already_set",
+                    "KalCode's provider error observer is already configured.",
+                )
+            })
     }
 
     // ---- Queries ----
@@ -1058,7 +1086,7 @@ impl ThreadRuntime {
                 PermissionMode::Approve,
                 PermissionMode::Auto,
             ],
-            default_permission_mode: PermissionMode::Approve,
+            default_permission_mode: DEFAULT_CODING_PERMISSION_MODE,
         })
     }
 
@@ -2682,6 +2710,31 @@ impl Inner {
             // A stale session (stopped, replaced by a resume): its events no longer apply.
             return ended;
         }
+        if let AgentEvent::Error { code, .. } = &event
+            && let Some(observer) = self.provider_error_observer.get()
+        {
+            match self.row(&live.ctx.thread_id) {
+                Ok(row) => {
+                    if let Some(account_id) = row.provider_account_id.as_deref()
+                        && let Err(error) =
+                            observer.observe(&live.ctx.provider_id, account_id, code)
+                    {
+                        tracing::error!(
+                            event = "thread.provider_error_observer_failed",
+                            thread_id = %live.ctx.thread_id,
+                            provider_id = %live.ctx.provider_id,
+                            error_code = error.code
+                        );
+                    }
+                }
+                Err(error) => tracing::error!(
+                    event = "thread.provider_error_account_lookup_failed",
+                    thread_id = %live.ctx.thread_id,
+                    provider_id = %live.ctx.provider_id,
+                    error_code = error.code
+                ),
+            }
+        }
         if let Err(error) = self.apply_event(live, &mut state, event) {
             tracing::error!(event = "thread.event_failed", thread_id = %live.ctx.thread_id, error = %error.diagnostic());
         }
@@ -4060,6 +4113,43 @@ fn rebind_ready(row: &ThreadRow, live_pending: usize) -> Result<()> {
 mod tests {
     use super::*;
 
+    struct NoopSession;
+
+    impl AgentSession for NoopSession {
+        fn provider_session_id(&self) -> Option<String> {
+            None
+        }
+
+        fn send(&self, _input: AgentInput) -> std::result::Result<(), ProviderError> {
+            Ok(())
+        }
+
+        fn interrupt(&self) -> std::result::Result<(), ProviderError> {
+            Ok(())
+        }
+
+        fn terminate(&self) -> std::result::Result<(), ProviderError> {
+            Ok(())
+        }
+
+        fn respond_to_approval(
+            &self,
+            _request_id: &str,
+            _decision: ApprovalDecision,
+        ) -> std::result::Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    struct CountingProviderErrorObserver(std::sync::atomic::AtomicUsize);
+
+    impl ProviderErrorObserver for CountingProviderErrorObserver {
+        fn observe(&self, _provider_id: &ProviderId, _account_id: &str, _code: &str) -> Result<()> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
     #[test]
     fn paths_inside_the_workspace_are_relative() {
         assert_eq!(
@@ -4129,5 +4219,54 @@ mod tests {
              Providers, then resume this thread."
         );
         assert!(!message.contains("terminal"), "{message}");
+    }
+
+    #[test]
+    fn an_old_session_generation_cannot_report_an_account_error() {
+        let temp = tempfile::tempdir().expect("temp");
+        let core = Arc::new(
+            Core::open(kalcode_core::CoreConfig {
+                paths: kalcode_core::Paths::new(temp.path()),
+                app_version: "0.0.0-test".into(),
+                channel: kalcode_core::flags::BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let runtime = ThreadRuntime::new(
+            core,
+            Arc::new(ProviderRegistry::new()),
+            Arc::new(crate::registry::NoWorkspaces),
+            Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+        )
+        .expect("runtime");
+        let observer = Arc::new(CountingProviderErrorObserver(
+            std::sync::atomic::AtomicUsize::new(0),
+        ));
+        runtime
+            .set_provider_error_observer(observer.clone())
+            .expect("observer");
+        let live = Arc::new(LiveThread {
+            ctx: Ctx {
+                thread_id: new_id(),
+                workspace_id: new_id(),
+                provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+            },
+            state: Mutex::new(LiveState {
+                generation: 2,
+                session: Some(Arc::new(NoopSession)),
+                ..LiveState::default()
+            }),
+        });
+
+        assert!(!runtime.inner.handle_event(
+            &live,
+            1,
+            AgentEvent::Error {
+                code: "provider_authentication_failed".into(),
+                message: "Sign in again".into(),
+                recoverable: true,
+            },
+        ));
+        assert_eq!(observer.0.load(Ordering::Relaxed), 0);
     }
 }

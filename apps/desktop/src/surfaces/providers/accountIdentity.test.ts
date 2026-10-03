@@ -4,6 +4,7 @@ import {
   accountHealth,
   accountInlineLabel,
   accountName,
+  accountSessionState,
   accountSignIn,
   sortAccounts,
 } from "./accountIdentity.ts";
@@ -28,6 +29,35 @@ describe("account identity", () => {
     expect(accountHealth(base).label).toBe("Healthy");
     expect(accountHealth({ ...base, lastErrorCode: "auth_expired" }).label).toBe("Needs attention");
     expect(accountHealth({ ...base, authenticationState: "unknown", lastCheckedAt: null }).label).toBe("Not checked");
+  });
+
+  it("distinguishes restart-safe session states without discarding known usability", () => {
+    const connected = {
+      authenticationState: "authenticated" as const,
+      lastErrorCode: null,
+      lastCheckedAt: "2026-10-01T00:00:00.000Z",
+    };
+    expect(accountSessionState(connected)).toMatchObject({ state: "connected", label: "Connected", usable: true });
+    expect(accountSessionState(connected, true)).toMatchObject({ state: "checking", label: "Checking", usable: true });
+    expect(accountSessionState(connected, false, "Provider unavailable")).toMatchObject({
+      state: "error",
+      label: "Error",
+      usable: true,
+    });
+    expect(
+      accountSessionState(
+        { ...connected, authenticationState: "unknown", lastCheckedAt: null },
+        false,
+        "Provider unavailable",
+      ),
+    ).toMatchObject({ state: "error", label: "Error", usable: true });
+    expect(
+      accountSessionState({
+        ...connected,
+        authenticationState: "not_authenticated",
+        lastErrorCode: "auth_expired",
+      }),
+    ).toMatchObject({ state: "expired", label: "Expired", usable: false });
   });
 
   it("sorts default first, then names in natural order", () => {

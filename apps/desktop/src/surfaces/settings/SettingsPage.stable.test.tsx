@@ -59,12 +59,13 @@ async function mount(channel: "stable" | "development", prepare?: (client: KalCo
 }
 
 const permissions = () => within(screen.getByRole("region", { name: "Permissions" }));
-const defaultModes = () => within(permissions().getByRole("radiogroup", { name: "Default mode for new threads" }));
+const defaultModes = () =>
+  within(permissions().getByRole("radiogroup", { name: "Default mode for new coding agents" }));
 
 describe("Settings on Stable", () => {
-  it("offers only the modes a new thread can start in", async () => {
+  it("offers only startable modes and recommends Auto by default", async () => {
     await mount("stable");
-    await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Approve" })).toBeChecked());
+    await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Auto" })).toBeChecked());
     expect(
       defaultModes()
         .getAllByRole("radio")
@@ -72,17 +73,17 @@ describe("Settings on Stable", () => {
     ).toEqual(["Plan", "Approve", "Auto"]);
   });
 
-  it("says a saved Bypass default starts threads in Approve, with no sidebar alarm", async () => {
+  it("says a saved Bypass default starts coding agents in Approve, with no sidebar alarm", async () => {
     const { user, primary } = await mount("stable", async (client) => {
       await client.updatePermissionSettings("bypass", { confirmBypass: true });
     });
     const note = await permissions().findByRole("status");
     expect(note).toHaveTextContent("Bypass is your saved default");
-    expect(note).toHaveTextContent("New threads start in Approve");
-    expect(note).toHaveTextContent("nothing runs in Bypass because of this setting");
+    expect(note).toHaveTextContent("New coding agents start in Approve");
+    expect(note).toHaveTextContent("Bypass cannot be selected at launch");
     expect(primary.queryByRole("button", { name: /Bypass/ })).not.toBeInTheDocument();
 
-    await user.click(within(note).getByRole("button", { name: "Switch to Approve" }));
+    await user.click(within(note).getByRole("button", { name: "Use Approve" }));
     await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Approve" })).toBeChecked());
     expect(permissions().queryByText("Bypass is your saved default")).not.toBeInTheDocument();
   });

@@ -77,15 +77,18 @@ describe("detectionLabel", () => {
 
 describe("authLabel", () => {
   it("names the documented command that was used", () => {
-    expect(authLabel(detected(claude, {}))).toEqual({
-      tone: "success",
-      label: "Signed in",
-      detail: "Checked with claude auth status.",
-    });
     expect(authLabel(detected(codex, { auth: "not_authenticated" }))).toMatchObject({
       tone: "waiting",
       label: "Signed out",
       detail: "Checked with codex login status.",
+    });
+  });
+
+  it("defers Claude sign-in checks to a real session", () => {
+    expect(authLabel(detected(claude, { auth: "unknown" }))).toEqual({
+      tone: "idle",
+      label: "Sign-in status unknown",
+      detail: "Sign-in is checked when a Claude Code session starts.",
     });
   });
 

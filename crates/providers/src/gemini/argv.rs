@@ -13,12 +13,13 @@ pub const FORBIDDEN: &[&str] = &[
     "--experimental-acp",
 ];
 
-/// Gemini CLI's approval mode for a KalCode mode. Custom runs as Approve.
+/// Gemini CLI's approval mode for a KalCode mode. Auto uses Gemini's bounded auto-edit policy;
+/// shell and other tools still prompt. Custom runs as Approve, and unrestricted yolo is forbidden.
 pub fn approval_mode(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Plan => "plan",
-        PermissionMode::Bypass => "auto_edit",
-        PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => "default",
+        PermissionMode::Auto | PermissionMode::Bypass => "auto_edit",
+        PermissionMode::Approve | PermissionMode::Custom => "default",
     }
 }
 

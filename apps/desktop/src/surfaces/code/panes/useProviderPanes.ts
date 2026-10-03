@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
-import { isPaneProvider, PaneChannel, type PaneProviderId, paneStartMode } from "./paneChannel.ts";
+import { isPaneProvider, PaneChannel, type PaneProviderId, resolvePaneStartMode } from "./paneChannel.ts";
 
 /** How a new coding agent starts: account, exact model and effort (each optional). */
 export interface AgentLaunch {
@@ -190,13 +190,17 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
       setCreating(providerId);
       setLaunchError(null);
       try {
+        // The spinner is already visible. If the provider-wide settings read is still in flight,
+        // read the canonical local value now rather than guessing Auto or Approve and widening a
+        // saved Plan preference. A read failure is surfaced below and no pane is created.
+        const permissionMode = await resolvePaneStartMode(settings, () => client.getPermissionSettings());
         const thread = await channel.create({
           providerId,
           providerAccountId: launch.providerAccountId ?? null,
           model: launch.model ?? null,
           effort: launch.effort ?? null,
           workspaceId: workspace.id,
-          permissionMode: paneStartMode(settings?.defaultMode),
+          permissionMode,
         });
         // Creation owns this exact terminal identity. A list read can still describe
         // the instant before creation; never drop a fresh terminal on that snapshot.
@@ -218,7 +222,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
         setCreating(null);
       }
     },
-    [channel, workspace.id, settings?.defaultMode],
+    [channel, client, workspace.id, settings],
   );
 
   const clearLaunchError = useCallback(() => setLaunchError(null), []);

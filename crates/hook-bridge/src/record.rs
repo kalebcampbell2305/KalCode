@@ -397,7 +397,11 @@ pub fn from_claude_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecord, R
             record.notification_type = clean_id(get("notification_type"), MAX_WORD_CHARS);
         }
         HookEvent::StopFailure => {
-            record.error_type = clean_id(get("error_type"), MAX_WORD_CHARS);
+            // Claude Code's documented StopFailure field is `error`. Keep the older
+            // `error_type` spelling as a compatibility fallback for already-running supported
+            // clients, but never let it override the canonical field.
+            record.error_type =
+                clean_id(get("error").or_else(|| get("error_type")), MAX_WORD_CHARS);
         }
         HookEvent::SessionEnd => record.end_reason = clean_id(get("reason"), MAX_WORD_CHARS),
         HookEvent::UserPromptSubmit => {
@@ -578,11 +582,27 @@ mod tests {
         assert_eq!(
             record(
                 HookEvent::StopFailure,
-                json!({"error_type": "rate_limit", "error_message": "m"})
+                json!({"error": "rate_limit", "error_details": "m"})
             )
             .error_type
             .as_deref(),
             Some("rate_limit")
+        );
+        assert_eq!(
+            record(
+                HookEvent::StopFailure,
+                json!({"error": "authentication_failed", "error_type": "rate_limit"})
+            )
+            .error_type
+            .as_deref(),
+            Some("authentication_failed"),
+            "the documented field must win over the legacy fallback"
+        );
+        assert_eq!(
+            record(HookEvent::StopFailure, json!({"error_type": "overloaded"}))
+                .error_type
+                .as_deref(),
+            Some("overloaded")
         );
         assert!(record(HookEvent::PreToolUse, json!({"agent_id": "a1"})).in_subagent);
     }

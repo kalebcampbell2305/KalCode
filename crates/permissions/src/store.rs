@@ -3,8 +3,8 @@
 
 pub use kalcode_contracts::permissions::ApprovalContext;
 use kalcode_contracts::permissions::{
-    ApprovalDecision, ApprovalRequest, ApprovalStatus, NormalizedAction, PermissionMode,
-    PermissionProfile, PermissionScope, PolicyDecision,
+    ApprovalDecision, ApprovalRequest, ApprovalStatus, DEFAULT_CODING_PERMISSION_MODE,
+    NormalizedAction, PermissionMode, PermissionProfile, PermissionScope, PolicyDecision,
 };
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::{KalError, Result};
@@ -33,6 +33,26 @@ pub struct PermissionSettings {
 
 impl Default for PermissionSettings {
     fn default() -> Self {
+        Self {
+            default_mode: DEFAULT_CODING_PERMISSION_MODE,
+            default_profile_id: None,
+        }
+    }
+}
+
+impl PermissionSettings {
+    /// The saved default when it can be represented at session creation. An explicit Bypass or
+    /// Custom setting cannot be inferred without its confirmation/profile, so use the
+    /// conservative native prompt mode rather than broadening it to Auto.
+    pub const fn startable_default_mode(&self) -> PermissionMode {
+        if self.default_mode.is_confirm_free_start() {
+            self.default_mode
+        } else {
+            PermissionMode::Approve
+        }
+    }
+
+    fn conservative_recovery() -> Self {
         Self {
             default_mode: PermissionMode::Approve,
             default_profile_id: None,
@@ -469,7 +489,7 @@ pub fn load_settings(conn: &Connection) -> Result<PermissionSettings> {
     Ok(match value {
         Some(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
             tracing::warn!(event = "permissions.settings_invalid", error = %error);
-            PermissionSettings::default()
+            PermissionSettings::conservative_recovery()
         }),
         None => PermissionSettings::default(),
     })

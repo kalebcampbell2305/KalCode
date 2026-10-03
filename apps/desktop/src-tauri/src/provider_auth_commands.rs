@@ -37,6 +37,7 @@ use crate::AppState;
 mod e2e;
 
 const CODEX_TRUTH_TTL: Duration = Duration::from_secs(5 * 60);
+const ACCOUNT_VALIDATION_PREEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PENDING_LOGINS: usize = 8;
 const AUTH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -291,9 +292,6 @@ struct CodexTruth {
     cache: HashMap<String, EligibilityEntry>,
     generations: HashMap<String, u64>,
     active_operations: HashSet<String>,
-    /// The latest plan verdict this app run observed per account. Unlike `cache`, starting an
-    /// operation doesn't clear it; a sign-in or sign-out that takes the exclusive lease does.
-    last_known: HashMap<String, CloudConfigEligibility>,
 }
 
 struct RuntimeInner {
@@ -305,6 +303,8 @@ struct RuntimeInner {
     codex_auth: Option<Arc<CodexAccountAuthManager>>,
     gemini_auth: Option<Arc<GeminiAccountAuthManager>>,
     codex_truth: Mutex<CodexTruth>,
+    active_validations: Mutex<HashMap<(String, String), Arc<AtomicBool>>>,
+    validation_changed: Condvar,
 }
 
 /// Cheap clone passed to every runtime factory. It is the only desktop owner of account metadata,
@@ -318,6 +318,36 @@ struct AccountOperation {
     runtime: ProviderRuntimeAuthority,
     account_id: String,
     generation: u64,
+}
+
+struct AccountValidation {
+    runtime: ProviderRuntimeAuthority,
+    key: (String, String),
+    canceled: Arc<AtomicBool>,
+}
+
+impl AccountValidation {
+    fn cancellation(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.canceled)
+    }
+}
+
+impl Drop for AccountValidation {
+    fn drop(&mut self) {
+        let mut active = self
+            .runtime
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if active
+            .get(&self.key)
+            .is_some_and(|canceled| Arc::ptr_eq(canceled, &self.canceled))
+        {
+            active.remove(&self.key);
+        }
+        self.runtime.inner.validation_changed.notify_all();
+    }
 }
 
 impl Drop for AccountOperation {
@@ -404,16 +434,22 @@ impl ProviderRuntimeAuthority {
                     Arc::clone(&profiles),
                 ))
             });
+        let accounts = AccountStore::new(core);
+        accounts
+            .restore_legacy_startup_invalidations()
+            .map_err(|_| "provider_account_restore_failed".to_owned())?;
         Ok(Self {
             inner: Arc::new(RuntimeInner {
                 guardian,
-                accounts: AccountStore::new(core),
+                accounts,
                 profiles,
                 source_env,
                 claude_auth,
                 codex_auth,
                 gemini_auth,
                 codex_truth: Mutex::new(CodexTruth::default()),
+                active_validations: Mutex::new(HashMap::new()),
+                validation_changed: Condvar::new(),
             }),
         })
     }
@@ -446,6 +482,66 @@ impl ProviderRuntimeAuthority {
         self.inner.accounts.clone()
     }
 
+    fn begin_account_validation(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> Result<AccountValidation, RuntimeAuthError> {
+        let key = (provider.to_owned(), account_id.to_owned());
+        let mut active = self
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if active.contains_key(&key) {
+            return Err(RuntimeAuthError::Busy);
+        }
+        let canceled = Arc::new(AtomicBool::new(false));
+        active.insert(key.clone(), Arc::clone(&canceled));
+        Ok(AccountValidation {
+            runtime: self.clone(),
+            key,
+            canceled,
+        })
+    }
+
+    /// Supersedes one exact background validation before a foreground Codex plan read. The
+    /// provider process receives the cancellation token, proves cleanup, then the RAII validation
+    /// removes itself and wakes this waiter. No provider I/O runs while the registry mutex is held.
+    fn preempt_account_validation(
+        &self,
+        provider: &str,
+        account_id: &str,
+        timeout: Duration,
+    ) -> bool {
+        let key = (provider.to_owned(), account_id.to_owned());
+        let deadline = Instant::now() + timeout;
+        let mut active = self
+            .inner
+            .active_validations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(canceled) = active.get(&key) {
+            canceled.store(true, Ordering::Release);
+        }
+        while active.contains_key(&key) {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let waited = self
+                .inner
+                .validation_changed
+                .wait_timeout(active, deadline.saturating_duration_since(now))
+                .unwrap_or_else(PoisonError::into_inner);
+            active = waited.0;
+            if waited.1.timed_out() && active.contains_key(&key) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Seeds credential-free managed-provider identities only for the explicitly attested native
     /// E2E data directory. Shipped builds do not compile this entry point.
     #[cfg(feature = "e2e")]
@@ -458,16 +554,25 @@ impl ProviderRuntimeAuthority {
         account_id: &str,
         result: &Result<ClaudeAccountState, ClaudeAccountAuthError>,
     ) -> Result<(), ClaudeAccountAuthError> {
-        let (state, identity, error_code) = match result {
-            Ok(state) if state.logged_in => {
-                (AuthState::Authenticated, state.identity.as_deref(), None)
-            }
-            Ok(_) => (AuthState::NotAuthenticated, None, None),
-            Err(_) => (AuthState::Unknown, None, Some("claude_auth_failed")),
+        let update = match result {
+            Ok(state) if state.logged_in => self.inner.accounts.mark_authentication(
+                account_id,
+                AuthState::Authenticated,
+                state.identity.as_deref(),
+                None,
+            ),
+            Ok(_) => self.inner.accounts.mark_authentication(
+                account_id,
+                AuthState::NotAuthenticated,
+                None,
+                None,
+            ),
+            Err(_) => self
+                .inner
+                .accounts
+                .mark_validation_error(account_id, "claude_auth_failed"),
         };
-        self.inner
-            .accounts
-            .mark_authentication(account_id, state, identity, error_code)
+        update
             .map(|_| ())
             .map_err(|_| ClaudeAccountAuthError::StateUpdateFailed)
     }
@@ -476,57 +581,26 @@ impl ProviderRuntimeAuthority {
         &self,
         account_id: &str,
     ) -> Result<ProviderAccount, RuntimeAuthError> {
-        let manager = self
+        // Claude Code 2.1.x may refresh OAuth credentials while evaluating `auth status --json`,
+        // and its short-lived status path can exit before that refresh drains. Startup must never
+        // risk corrupting a valid provider-native session. Restore the durable safe account state;
+        // the long-lived Claude coding process remains the authoritative native session check.
+        let restored = self
             .inner
-            .claude_auth
-            .as_ref()
-            .cloned()
-            .ok_or(RuntimeAuthError::ProviderUnavailable)?;
-        let observer = self.clone();
-        let recorded_failure = Arc::new(Mutex::new(None));
-        let provider_failure = Arc::clone(&recorded_failure);
-        let result = self.inner.accounts.authenticate_with_active_account(
-            &self.inner.profiles,
-            ProviderId::CLAUDE_CODE,
-            account_id,
-            move |_, lease| {
-                manager
-                    .read_account_with_lease_observed(account_id, lease, move |result| {
-                        observer.observe_claude(account_id, result)
-                    })
-                    .map_err(|error| {
-                        *provider_failure
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
-                        ProviderError::Start(error.to_string())
-                    })
-            },
-        );
-        if let Err(error) = &result {
-            let failure = recorded_failure
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
-            // Only a lease refused for a busy profile ran no Claude operation and changes no
-            // account state. Any other failure before the operation (an invalid, archived or
-            // other-provider account, or an unreadable profile) is not busy.
-            if failure.is_none() && is_profile_busy(error) {
-                return Err(RuntimeAuthError::Busy);
-            }
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("claude_auth_failed"),
-            );
-            return Err(RuntimeAuthError::Claude(
-                failure.unwrap_or(ClaudeAccountAuthError::ProfileUnavailable),
-            ));
-        }
-        self.inner
             .accounts
-            .get(account_id)
-            .map_err(RuntimeAuthError::Account)
+            .get_active_for_provider(account_id, &ProviderId::new(ProviderId::CLAUDE_CODE))
+            .map_err(RuntimeAuthError::Account)?;
+        if restored.last_error_code.as_deref() == Some("claude_auth_failed") {
+            // This code was produced by the retired short-lived status probe and is no longer an
+            // authoritative health signal. Clear only that obsolete error; keep auth/identity and
+            // every real launch failure unchanged.
+            return self
+                .inner
+                .accounts
+                .clear_validation_error(account_id)
+                .map_err(RuntimeAuthError::Account);
+        }
+        Ok(restored)
     }
 
     fn start_claude_login(
@@ -573,12 +647,10 @@ impl ProviderRuntimeAuthority {
                 return Err(RuntimeAuthError::Busy);
             }
             if failure != Some(ClaudeAccountAuthError::AlreadyConnected) {
-                let _ = self.inner.accounts.mark_authentication(
-                    account_id,
-                    AuthState::Unknown,
-                    None,
-                    Some("claude_auth_failed"),
-                );
+                let _ = self
+                    .inner
+                    .accounts
+                    .mark_validation_error(account_id, "claude_auth_failed");
             }
             return Err(RuntimeAuthError::Claude(
                 failure.unwrap_or(ClaudeAccountAuthError::ProfileUnavailable),
@@ -625,12 +697,10 @@ impl ProviderRuntimeAuthority {
             if failure.is_none() && is_profile_busy(error) {
                 return Err(RuntimeAuthError::Busy);
             }
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("claude_auth_failed"),
-            );
+            let _ = self
+                .inner
+                .accounts
+                .mark_validation_error(account_id, "claude_auth_failed");
             return Err(RuntimeAuthError::Claude(
                 failure.unwrap_or(ClaudeAccountAuthError::ProfileUnavailable),
             ));
@@ -646,15 +716,21 @@ impl ProviderRuntimeAuthority {
         account_id: &str,
         result: &Result<GeminiAccountState, GeminiAccountAuthError>,
     ) -> Result<(), GeminiAccountAuthError> {
-        // The identity is Gemini's `active` Google account (display only, never logged); it is
-        // present only for a signed-in profile, so sign-out and failures clear it.
-        let (state, identity, error_code) = match result {
-            Ok(state) => (state.auth, state.identity.as_deref(), None),
-            Err(_) => (AuthState::Unknown, None, Some("gemini_auth_failed")),
+        // The identity is Gemini's `active` Google account (display only, never logged). A
+        // provider-confirmed sign-out clears it; a failed check preserves the last safe value.
+        let update = match result {
+            Ok(state) => self.inner.accounts.mark_authentication(
+                account_id,
+                state.auth,
+                state.identity.as_deref(),
+                None,
+            ),
+            Err(_) => self
+                .inner
+                .accounts
+                .mark_validation_error(account_id, "gemini_auth_failed"),
         };
-        self.inner
-            .accounts
-            .mark_authentication(account_id, state, identity, error_code)
+        update
             .map(|_| ())
             .map_err(|_| GeminiAccountAuthError::StateUpdateFailed)
     }
@@ -704,12 +780,10 @@ impl ProviderRuntimeAuthority {
             .as_ref()
             .is_some_and(|error| *error != GeminiAccountAuthError::AlreadyConnected)
         {
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("gemini_auth_failed"),
-            );
+            let _ = self
+                .inner
+                .accounts
+                .mark_validation_error(account_id, "gemini_auth_failed");
         }
         Err(match failure {
             Some(error) => RuntimeAuthError::Gemini(error),
@@ -723,16 +797,57 @@ impl ProviderRuntimeAuthority {
         &self,
         account_id: &str,
     ) -> Result<ProviderAccount, RuntimeAuthError> {
+        let _validation = self.begin_account_validation(ProviderId::GEMINI_CLI, account_id)?;
         let observer = self.clone();
         let profiles = Arc::clone(&self.inner.profiles);
-        self.with_gemini_account(account_id, |lease| {
-            gemini_account_auth::read_account_with_lease_observed(
-                &profiles,
-                account_id,
-                lease,
-                |result| observer.observe_gemini(account_id, result),
-            )
-        })?;
+        let observer_profiles = Arc::clone(&profiles);
+        let recorded_failure = Arc::new(Mutex::new(None));
+        let provider_failure = Arc::clone(&recorded_failure);
+        let result = self.inner.accounts.observe_with_active_account(
+            &profiles,
+            ProviderId::GEMINI_CLI,
+            account_id,
+            move |_, lease| {
+                gemini_account_auth::observe_account_with_lease_observed(
+                    &observer_profiles,
+                    account_id,
+                    lease,
+                    move |result| observer.observe_gemini(account_id, result),
+                )
+                .map_err(|error| {
+                    *provider_failure
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                    ProviderError::Start(error.to_string())
+                })
+            },
+        );
+        if let Err(error) = result {
+            let failure = recorded_failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if failure == Some(GeminiAccountAuthError::Canceled) {
+                return self
+                    .inner
+                    .accounts
+                    .get(account_id)
+                    .map_err(RuntimeAuthError::Account);
+            }
+            if failure.is_none() && is_profile_busy(&error) {
+                return Err(RuntimeAuthError::Busy);
+            }
+            if failure.is_some() {
+                let _ = self
+                    .inner
+                    .accounts
+                    .mark_validation_error(account_id, "gemini_auth_failed");
+            }
+            return Err(match failure {
+                Some(error) => RuntimeAuthError::Gemini(error),
+                None => RuntimeAuthError::Busy,
+            });
+        }
         self.inner
             .accounts
             .get(account_id)
@@ -807,33 +922,9 @@ impl ProviderRuntimeAuthority {
         generation: u64,
         result: &Result<CodexAccountState, CodexAccountAuthError>,
     ) -> Result<(), CodexAccountAuthError> {
-        {
-            let truth = self
-                .inner
-                .codex_truth
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if truth.generations.get(account_id) != Some(&generation) {
-                return Err(CodexAccountAuthError::StateUpdateFailed);
-            }
-        }
-        let (state, identity, error_code, eligibility) = match result {
-            Ok(state) => match &state.account {
-                Some(account) => (
-                    AuthState::Authenticated,
-                    account.email.as_deref(),
-                    None,
-                    Some(state.cloud_config_eligibility()),
-                ),
-                None => (AuthState::NotAuthenticated, None, None, None),
-            },
-            Err(_) => (AuthState::Unknown, None, Some("codex_auth_failed"), None),
-        };
-        self.inner
-            .accounts
-            .mark_authentication(account_id, state, identity, error_code)
-            .map_err(|_| CodexAccountAuthError::StateUpdateFailed)?;
-
+        // The generation check, durable account update, and cache update form one commit. No
+        // provider I/O runs under this mutex. Holding it here prevents a superseded observer from
+        // writing an expired state between a generation check and the next foreground operation.
         let mut truth = self
             .inner
             .codex_truth
@@ -842,8 +933,32 @@ impl ProviderRuntimeAuthority {
         if truth.generations.get(account_id) != Some(&generation) {
             return Err(CodexAccountAuthError::StateUpdateFailed);
         }
+        let eligibility = match result {
+            Ok(state) => {
+                let (authentication, identity, eligibility) = match &state.account {
+                    Some(account) => (
+                        AuthState::Authenticated,
+                        account.email.as_deref(),
+                        Some(state.cloud_config_eligibility()),
+                    ),
+                    None => (AuthState::NotAuthenticated, None, None),
+                };
+                self.inner
+                    .accounts
+                    .mark_authentication(account_id, authentication, identity, None)
+                    .map_err(|_| CodexAccountAuthError::StateUpdateFailed)?;
+                eligibility
+            }
+            Err(_) => {
+                self.inner
+                    .accounts
+                    .mark_validation_error(account_id, "codex_auth_failed")
+                    .map_err(|_| CodexAccountAuthError::StateUpdateFailed)?;
+                None
+            }
+        };
+
         truth.cache.remove(account_id);
-        truth.last_known.remove(account_id);
         if let Some(eligibility) = eligibility {
             truth.cache.insert(
                 account_id.to_owned(),
@@ -853,50 +968,7 @@ impl ProviderRuntimeAuthority {
                     checked_at: Instant::now(),
                 },
             );
-            truth.last_known.insert(account_id.to_owned(), eligibility);
         }
-        Ok(())
-    }
-
-    /// Called once a sign-in or sign-out holds the exclusive lease: from here the profile may
-    /// change, so no earlier verdict may be reused for it.
-    fn forget_codex_verdict(&self, account_id: &str) {
-        self.inner
-            .codex_truth
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .last_known
-            .remove(account_id);
-    }
-
-    /// Re-admits this run's last verdict when a plan check was refused only because the profile
-    /// is busy. Sign-in and sign-out both need the exclusive lease, so while live sessions hold
-    /// the shared lease neither can have changed this profile: the verdict is the one those
-    /// sessions launched under. It's refused while any account operation is in flight, is
-    /// forgotten by a sign-in or sign-out that took the lease, and only preserves the decision
-    /// (an organization or unknown plan still refuses). With no verdict this run, it stays busy.
-    /// The restored entry is dated now so the launch can resolve it under its shared lease.
-    fn reuse_codex_verdict(&self, account_id: &str) -> Result<(), RuntimeAuthError> {
-        let mut truth = self
-            .inner
-            .codex_truth
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if truth.active_operations.contains(account_id) {
-            return Err(RuntimeAuthError::Busy);
-        }
-        let Some(eligibility) = truth.last_known.get(account_id).copied() else {
-            return Err(RuntimeAuthError::Busy);
-        };
-        let generation = truth.generations.get(account_id).copied().unwrap_or(0);
-        truth.cache.insert(
-            account_id.to_owned(),
-            EligibilityEntry {
-                eligibility,
-                generation,
-                checked_at: Instant::now(),
-            },
-        );
         Ok(())
     }
 
@@ -921,6 +993,16 @@ impl ProviderRuntimeAuthority {
     }
 
     fn refresh_codex_account(&self, account_id: &str) -> Result<ProviderAccount, RuntimeAuthError> {
+        self.refresh_codex_account_inner(account_id, true)
+    }
+
+    fn refresh_codex_account_inner(
+        &self,
+        account_id: &str,
+        allow_config_repair: bool,
+    ) -> Result<ProviderAccount, RuntimeAuthError> {
+        let validation = self.begin_account_validation(ProviderId::CODEX, account_id)?;
+        let cancellation = validation.cancellation();
         let manager = self
             .inner
             .codex_auth
@@ -932,15 +1014,18 @@ impl ProviderRuntimeAuthority {
         let observer = self.clone();
         let recorded_failure = Arc::new(Mutex::new(None));
         let provider_failure = Arc::clone(&recorded_failure);
-        let result = self.inner.accounts.authenticate_with_active_account(
+        let result = self.inner.accounts.observe_with_active_account(
             &self.inner.profiles,
             ProviderId::CODEX,
             account_id,
             move |_, lease| {
                 manager
-                    .read_account_with_lease_observed(account_id, lease, move |result| {
-                        observer.observe_codex(account_id, generation, result)
-                    })
+                    .observe_account_with_lease_observed(
+                        account_id,
+                        lease,
+                        cancellation,
+                        move |result| observer.observe_codex(account_id, generation, result),
+                    )
                     .map_err(|error| {
                         *provider_failure
                             .lock()
@@ -955,9 +1040,33 @@ impl ProviderRuntimeAuthority {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            // A busy profile ran no account check, so it changes no account state.
+            // A superseded background observer and a busy profile both leave the account's last
+            // known state untouched. The foreground operation that superseded it owns the truth.
+            if failure == Some(CodexAccountAuthError::Canceled) {
+                return self
+                    .inner
+                    .accounts
+                    .get(account_id)
+                    .map_err(RuntimeAuthError::Account);
+            }
             if failure.is_none() && is_profile_busy(&error) {
                 return Err(RuntimeAuthError::Busy);
+            }
+            if allow_config_repair && failure == Some(CodexAccountAuthError::ProfileConfigChanged) {
+                // Normal certified Codex sessions may persist harmless UI/model preferences.
+                // Normalize only config.toml under the exact exclusive lease, then retry this
+                // read-only check. A live session keeps the repair fail-closed and retains the
+                // last safe account state until a later refresh.
+                drop(validation);
+                return match self.repair_codex_profile_config(account_id) {
+                    Ok(()) => self.refresh_codex_account_inner(account_id, false),
+                    Err(RuntimeAuthError::Busy) => self
+                        .inner
+                        .accounts
+                        .get(account_id)
+                        .map_err(RuntimeAuthError::Account),
+                    Err(error) => Err(error),
+                };
             }
             // An uncertified Codex CLI is refused before the account check starts: the account
             // is unchanged, and the refusal names the supported versions instead of reporting a
@@ -967,21 +1076,64 @@ impl ProviderRuntimeAuthority {
                     CodexAccountAuthError::UnsupportedVersion,
                 ));
             }
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("codex_auth_failed"),
-            );
-            return Err(match error {
-                ProviderError::NotInstalled => RuntimeAuthError::ProviderUnavailable,
-                _ => RuntimeAuthError::Provider(CodexAccountAuthError::ConnectionEnded),
+            let _ = self
+                .inner
+                .accounts
+                .mark_validation_error(account_id, "codex_auth_failed");
+            return Err(match failure {
+                Some(error) => RuntimeAuthError::Provider(error),
+                None if matches!(error, ProviderError::NotInstalled) => {
+                    RuntimeAuthError::ProviderUnavailable
+                }
+                None => RuntimeAuthError::Provider(CodexAccountAuthError::ConnectionEnded),
             });
         }
         self.inner
             .accounts
             .get(account_id)
             .map_err(RuntimeAuthError::Account)
+    }
+
+    fn repair_codex_profile_config(&self, account_id: &str) -> Result<(), RuntimeAuthError> {
+        let manager = self
+            .inner
+            .codex_auth
+            .as_ref()
+            .cloned()
+            .ok_or(RuntimeAuthError::ProviderUnavailable)?;
+        let recorded_failure = Arc::new(Mutex::new(None));
+        let provider_failure = Arc::clone(&recorded_failure);
+        let result = self.inner.accounts.authenticate_with_active_account(
+            &self.inner.profiles,
+            ProviderId::CODEX,
+            account_id,
+            move |_, lease| {
+                manager
+                    .repair_profile_config_with_lease(account_id, lease)
+                    .map_err(|error| {
+                        *provider_failure
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                        ProviderError::Start(error.to_string())
+                    })
+            },
+        );
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let failure = recorded_failure
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                if failure.is_none() && is_profile_busy(&error) {
+                    Err(RuntimeAuthError::Busy)
+                } else {
+                    Err(RuntimeAuthError::Provider(
+                        failure.unwrap_or(CodexAccountAuthError::ProfileUnavailable),
+                    ))
+                }
+            }
+        }
     }
 
     /// Refreshes security-sensitive Codex plan truth before any shared launch lease is acquired.
@@ -995,14 +1147,18 @@ impl ProviderRuntimeAuthority {
             return Ok(());
         }
         if self.cached_codex_eligibility(account_id).is_err() {
-            match self.refresh_codex_account(account_id) {
-                Ok(_) => {}
-                // Live sessions on this account hold its shared lease, so the check can't take the
-                // exclusive one. See `reuse_codex_verdict` for why their verdict still holds.
-                Err(RuntimeAuthError::Busy) => self
-                    .reuse_codex_verdict(account_id)
-                    .map_err(RuntimeAuthError::into_provider_error)?,
-                Err(error) => return Err(error.into_provider_error()),
+            if !self.preempt_account_validation(
+                ProviderId::CODEX,
+                account_id,
+                ACCOUNT_VALIDATION_PREEMPT_TIMEOUT,
+            ) {
+                return Err(RuntimeAuthError::Busy.into_provider_error());
+            }
+            // The background observer may have completed with a current verdict while it was
+            // being preempted. Avoid a duplicate native account read in that case.
+            if self.cached_codex_eligibility(account_id).is_err() {
+                self.refresh_codex_account(account_id)
+                    .map_err(RuntimeAuthError::into_provider_error)?;
             }
         }
         match self
@@ -1075,28 +1231,24 @@ impl ProviderRuntimeAuthority {
             &self.inner.profiles,
             ProviderId::CODEX,
             account_id,
-            move |_, lease| {
-                self.forget_codex_verdict(account_id);
-                match manager.start_chatgpt_login_with_lease_observed(
-                    account_id,
-                    lease,
-                    move |result| {
-                        let observed =
-                            observer.observe_codex(&observed_account_id, generation, result);
-                        completed_operation
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .take();
-                        observed
-                    },
-                ) {
-                    Ok(pending) => Ok(Arc::new(pending)),
-                    Err(error) => {
-                        *recorded_failure
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
-                        Err(ProviderError::Start(error.to_string()))
-                    }
+            move |_, lease| match manager.start_chatgpt_login_with_lease_observed(
+                account_id,
+                lease,
+                move |result| {
+                    let observed = observer.observe_codex(&observed_account_id, generation, result);
+                    completed_operation
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    observed
+                },
+            ) {
+                Ok(pending) => Ok(Arc::new(pending)),
+                Err(error) => {
+                    *recorded_failure
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                    Err(ProviderError::Start(error.to_string()))
                 }
             },
         );
@@ -1114,12 +1266,10 @@ impl ProviderRuntimeAuthority {
                 return Err(RuntimeAuthError::Busy);
             }
             if failure != Some(CodexAccountAuthError::AlreadyConnected) {
-                let _ = self.inner.accounts.mark_authentication(
-                    account_id,
-                    AuthState::Unknown,
-                    None,
-                    Some("codex_auth_failed"),
-                );
+                let _ = self
+                    .inner
+                    .accounts
+                    .mark_validation_error(account_id, "codex_auth_failed");
             }
             operation
                 .lock()
@@ -1147,7 +1297,6 @@ impl ProviderRuntimeAuthority {
             ProviderId::CODEX,
             account_id,
             move |_, lease| {
-                self.forget_codex_verdict(account_id);
                 manager
                     .logout_with_lease_observed(account_id, lease, move |result| {
                         observer.observe_codex(account_id, generation, result)
@@ -1160,12 +1309,10 @@ impl ProviderRuntimeAuthority {
             if is_profile_busy(&error) {
                 return Err(RuntimeAuthError::Busy);
             }
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("codex_auth_failed"),
-            );
+            let _ = self
+                .inner
+                .accounts
+                .mark_validation_error(account_id, "codex_auth_failed");
             return Err(RuntimeAuthError::Provider(
                 CodexAccountAuthError::ConnectionEnded,
             ));
@@ -2657,6 +2804,181 @@ mod tests {
     }
 
     #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn foreground_preemption_cancels_only_the_exact_background_validation() {
+        let fixture = Fixture::new();
+        let other = fixture
+            .runtime
+            .account_store()
+            .create(ProviderId::CODEX, "Other")
+            .expect("other account");
+        let validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("validation");
+        let cancellation = validation.cancellation();
+        let other_validation = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &other.id)
+            .expect("other validation");
+        let other_cancellation = other_validation.cancellation();
+        let observer = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !cancellation.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert!(cancellation.load(Ordering::Acquire));
+            drop(validation);
+        });
+
+        let started = Instant::now();
+        assert!(fixture.runtime.preempt_account_validation(
+            ProviderId::CODEX,
+            &fixture.account.id,
+            Duration::from_secs(1)
+        ));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        observer.join().expect("observer exits");
+        assert!(!other_cancellation.load(Ordering::Acquire));
+        drop(other_validation);
+        let _next = fixture
+            .runtime
+            .begin_account_validation(ProviderId::CODEX, &fixture.account.id)
+            .expect("exact validation registry released");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn launch_preempts_a_delayed_background_observer_without_false_sign_out() {
+        let mut fixture = Fixture::new();
+        let marker = install_read_only_codex_app_server(&mut fixture, "pro", true);
+        let store = fixture.runtime.account_store();
+        store
+            .mark_authentication(
+                &fixture.account.id,
+                AuthState::Authenticated,
+                Some("cached@example.test"),
+                None,
+            )
+            .expect("cached account");
+        let runtime = fixture.runtime.clone();
+        let account_id = fixture.account.id.clone();
+        let background = std::thread::spawn(move || runtime.refresh_codex_account(&account_id));
+        let entered_deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < entered_deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(marker.exists(), "background observer entered account/read");
+
+        let started = Instant::now();
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("foreground launch refreshes after preemption");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "launch must not wait for the observer's five-second delay"
+        );
+        let canceled = background
+            .join()
+            .expect("background observer joins")
+            .expect("preemption resolves current safe account");
+        assert_eq!(canceled.authentication_state, AuthState::Authenticated);
+
+        let refreshed = store.get(&fixture.account.id).expect("refreshed account");
+        assert_eq!(refreshed.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            refreshed.provider_reported_identity.as_deref(),
+            Some("restored@example.test")
+        );
+        assert_eq!(refreshed.last_error_code, None);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn validation_errors_preserve_last_safe_state_and_explicit_expiry_clears_it() {
+        let fixture = Fixture::new();
+        let store = fixture.runtime.account_store();
+        let claude = store
+            .create(ProviderId::CLAUDE_CODE, "Claude")
+            .expect("Claude account");
+        let gemini = store
+            .create(ProviderId::GEMINI_CLI, "Gemini")
+            .expect("Gemini account");
+
+        for (account, identity) in [
+            (&fixture.account, "codex@example.test"),
+            (&claude, "claude@example.test"),
+            (&gemini, "gemini@example.test"),
+        ] {
+            store
+                .mark_authentication(&account.id, AuthState::Authenticated, Some(identity), None)
+                .expect("connected");
+        }
+
+        fixture
+            .runtime
+            .observe_claude(&claude.id, &Err(ClaudeAccountAuthError::ConnectionEnded))
+            .expect("record Claude error");
+        fixture
+            .runtime
+            .observe_gemini(&gemini.id, &Err(GeminiAccountAuthError::ConnectionEnded))
+            .expect("record Gemini error");
+        observe_codex_plan(&fixture, &Err(CodexAccountAuthError::ConnectionEnded));
+
+        for (account, identity, error) in [
+            (&fixture.account, "codex@example.test", "codex_auth_failed"),
+            (&claude, "claude@example.test", "claude_auth_failed"),
+            (&gemini, "gemini@example.test", "gemini_auth_failed"),
+        ] {
+            let preserved = store.get(&account.id).expect("preserved account");
+            assert_eq!(preserved.authentication_state, AuthState::Authenticated);
+            assert_eq!(
+                preserved.provider_reported_identity.as_deref(),
+                Some(identity)
+            );
+            assert_eq!(preserved.last_error_code.as_deref(), Some(error));
+        }
+
+        fixture
+            .runtime
+            .observe_claude(
+                &claude.id,
+                &Ok(ClaudeAccountState {
+                    logged_in: false,
+                    auth_method: None,
+                    identity: None,
+                    subscription_type: None,
+                }),
+            )
+            .expect("record Claude expiry");
+        fixture
+            .runtime
+            .observe_gemini(
+                &gemini.id,
+                &Ok(GeminiAccountState {
+                    auth: AuthState::NotAuthenticated,
+                    identity: None,
+                }),
+            )
+            .expect("record Gemini expiry");
+        observe_codex_plan(
+            &fixture,
+            &Ok(CodexAccountState {
+                account: None,
+                requires_openai_auth: true,
+            }),
+        );
+
+        for account in [&fixture.account, &claude, &gemini] {
+            let expired = store.get(&account.id).expect("expired account");
+            assert_eq!(expired.authentication_state, AuthState::NotAuthenticated);
+            assert_eq!(expired.provider_reported_identity, None);
+            assert_eq!(expired.last_error_code, None);
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     fn expire_codex_plan(fixture: &Fixture) {
         if let Some(entry) = fixture
             .runtime
@@ -2694,9 +3016,9 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn codex_launch_reuses_this_runs_plan_verdict_while_live_sessions_hold_the_profile() {
+    fn codex_launch_refreshes_plan_truth_while_live_sessions_hold_the_profile() {
         let mut fixture = Fixture::new();
-        install_unrunnable_auth_managers(&mut fixture);
+        install_read_only_codex_app_server(&mut fixture, "pro", false);
         let store = fixture.runtime.account_store();
         observe_codex_plan(&fixture, &connected("pro"));
         let session = codex_session(&fixture);
@@ -2705,7 +3027,7 @@ mod tests {
         assert_eq!(
             codex_launch_refusal(&fixture),
             None,
-            "an idle session's lease must not block another launch on the same account"
+            "a read-only account observer must refresh safely beside a live session"
         );
         assert_eq!(
             fixture
@@ -2721,43 +3043,52 @@ mod tests {
             "a busy check is not a failure"
         );
 
-        // Reuse preserves the decision; it never upgrades it.
+        // Fresh provider truth replaces stale in-memory plan state.
         observe_codex_plan(&fixture, &connected("business"));
         expire_codex_plan(&fixture);
+        assert_eq!(codex_launch_refusal(&fixture), None);
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some("provider_account_plan_unsupported")
-        );
-        observe_codex_plan(&fixture, &connected("mystery"));
-        expire_codex_plan(&fixture);
-        assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some("provider_account_plan_unverified")
+            store
+                .get(&fixture.account.id)
+                .expect("fresh account truth")
+                .provider_reported_identity
+                .as_deref(),
+            Some("restored@example.test")
         );
         drop(session);
     }
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn busy_codex_plan_check_without_a_verdict_fails_busy_and_marks_nothing() {
+    fn live_session_does_not_hide_a_failed_codex_check_or_clear_safe_auth() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
         let store = fixture.runtime.account_store();
-        let before = store.get(&fixture.account.id).expect("account");
+        store
+            .mark_authentication(
+                &fixture.account.id,
+                AuthState::Authenticated,
+                Some("preserved@example.test"),
+                None,
+            )
+            .expect("known safe account");
         let session = codex_session(&fixture);
 
-        assert!(matches!(
+        assert!(!matches!(
             fixture.runtime.refresh_codex_account(&fixture.account.id),
             Err(RuntimeAuthError::Busy)
         ));
         assert_eq!(
             codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY)
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
         );
         let after = store.get(&fixture.account.id).expect("account");
-        assert_eq!(after.authentication_state, before.authentication_state);
-        assert_eq!(after.last_error_code, None);
-        assert_eq!(after.last_checked_at, before.last_checked_at);
+        assert_eq!(after.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            after.provider_reported_identity.as_deref(),
+            Some("preserved@example.test")
+        );
+        assert_eq!(after.last_error_code.as_deref(), Some("codex_auth_failed"));
         drop(session);
     }
 
@@ -2796,6 +3127,96 @@ mod tests {
             Arc::clone(&inner.profiles),
             env!("KALCODE_PUBLIC_VERSION"),
         )));
+    }
+
+    /// Installs only the certified read-only Codex app-server account surface. This fake never
+    /// reads provider credentials or contacts a provider.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn install_read_only_codex_app_server(
+        fixture: &mut Fixture,
+        plan: &str,
+        delay_first_read: bool,
+    ) -> std::path::PathBuf {
+        let dir = fixture._temp.path().join("codex-read-only");
+        std::fs::create_dir_all(&dir).expect("fake codex directory");
+        let first_read_marker = dir.join("first-read-entered");
+        #[cfg(windows)]
+        let executable = {
+            let server = dir.join("codex-app-server.ps1");
+            std::fs::write(
+                &server,
+                format!(
+                    r#"$ErrorActionPreference = 'Stop'
+while (($line = [Console]::In.ReadLine()) -ne $null) {{
+  $request = $line | ConvertFrom-Json
+  if ($request.method -eq 'initialize') {{
+    $result = @{{ userAgent = 'codex_cli_rs/0.160.0'; codexHome = $env:CODEX_HOME; platformFamily = 'windows'; platformOs = 'windows' }}
+  }} elseif ($request.method -eq 'account/read') {{
+    if ($request.params.refreshToken -ne $false) {{ exit 9 }}
+    if ({delay_first_read} -and -not (Test-Path -LiteralPath '{marker}')) {{
+      [IO.File]::WriteAllText('{marker}', 'entered')
+      Start-Sleep -Seconds 5
+    }}
+    $result = @{{ account = @{{ type = 'chatgpt'; email = 'restored@example.test'; planType = '{plan}' }}; requiresOpenaiAuth = $true }}
+  }} else {{ continue }}
+  [Console]::Out.WriteLine((@{{ id = $request.id; result = $result }} | ConvertTo-Json -Compress -Depth 8))
+  [Console]::Out.Flush()
+}}
+"#,
+                    delay_first_read = if delay_first_read { "$true" } else { "$false" },
+                    marker = first_read_marker.to_string_lossy().replace('`', "``").replace('\'', "''"),
+                ),
+            )
+            .expect("fake app-server");
+            let script = dir.join("codex.cmd");
+            std::fs::write(
+                &script,
+                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+            )
+            .expect("fake codex");
+            script
+        };
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script = dir.join("codex");
+            std::fs::write(
+                &script,
+                format!(
+                    r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.0'; exit 0; fi
+found=false
+for arg in "$@"; do if [ "$arg" = "app-server" ]; then found=true; fi; done
+$found || exit 2
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{{"id":%s,"result":{{"userAgent":"codex_cli_rs/0.160.0","codexHome":"%s","platformFamily":"unix","platformOs":"macos"}}}}\n' "$id" "$CODEX_HOME" ;;
+    *'"method":"account/read"'*'"refreshToken":false'*)
+      if {delay_first_read} && [ ! -e '{marker}' ]; then : > '{marker}'; sleep 5; fi
+      printf '{{"id":%s,"result":{{"account":{{"type":"chatgpt","email":"restored@example.test","planType":"{plan}"}},"requiresOpenaiAuth":true}}}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+                    delay_first_read = if delay_first_read { "true" } else { "false" },
+                    marker = first_read_marker.to_string_lossy().replace('\'', "'\\''"),
+                ),
+            )
+            .expect("fake codex");
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+                .expect("executable fake codex");
+            script
+        };
+        let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
+        inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
+            executable,
+            inner.source_env.clone(),
+            Arc::clone(&inner.profiles),
+            env!("KALCODE_PUBLIC_VERSION"),
+        )));
+        first_read_marker
     }
 
     /// Codex CLI 0.160.0 shipped while 0.1.9 certified only 0.155-0.158: the launch's plan check
@@ -2842,7 +3263,8 @@ mod tests {
     fn codex_sign_in_or_sign_out_forgets_the_reusable_plan_verdict() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
-        let busy = Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY);
+        let check_failed =
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED);
 
         // A completed sign-out observes a signed-out profile, so no earlier verdict survives it.
         observe_codex_plan(&fixture, &connected("pro"));
@@ -2854,7 +3276,7 @@ mod tests {
             }),
         );
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
         drop(session);
 
         // A sign-out or sign-in that took the exclusive lease may have changed the profile, so the
@@ -2862,7 +3284,7 @@ mod tests {
         observe_codex_plan(&fixture, &connected("pro"));
         assert!(fixture.runtime.logout_codex(&fixture.account.id).is_err());
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
         drop(session);
 
         observe_codex_plan(&fixture, &connected("pro"));
@@ -2873,13 +3295,13 @@ mod tests {
                 .is_err()
         );
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
         drop(session);
     }
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn account_operations_while_sessions_run_are_busy_and_mark_nothing() {
+    fn account_writers_while_sessions_run_are_busy_but_passive_claude_restore_is_immediate() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
         let store = fixture.runtime.account_store();
@@ -2902,10 +3324,14 @@ mod tests {
             fixture.runtime.logout_codex(&fixture.account.id),
             Err(RuntimeAuthError::Busy)
         ));
-        assert!(matches!(
-            fixture.runtime.refresh_claude_account(&claude.id),
-            Err(RuntimeAuthError::Busy)
-        ));
+        assert_eq!(
+            fixture
+                .runtime
+                .refresh_claude_account(&claude.id)
+                .expect("passive restore")
+                .id,
+            claude.id
+        );
         assert!(matches!(
             fixture.runtime.start_claude_login(&claude.id),
             Err(RuntimeAuthError::Busy)
@@ -2925,15 +3351,19 @@ mod tests {
         );
         assert_eq!(claude_after.last_error_code, None);
 
-        // A refused sign-in never touched the profile, so the live sessions' verdict still stands.
-        expire_codex_plan(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture), None);
+        // Beginning a lifecycle operation invalidates the prior plan generation even when the
+        // live session then refuses the writer. A new read-only check is allowed beside the
+        // session; this intentionally unrunnable fake therefore fails as a real check error.
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
+        );
         drop((codex_session, claude_session));
     }
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn claude_account_failures_before_the_lease_are_not_reported_as_busy() {
+    fn passive_claude_restore_rejects_archived_or_missing_metadata() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
         let store = fixture.runtime.account_store();
@@ -2944,13 +3374,18 @@ mod tests {
             .archive(&fixture.runtime.inner.profiles, &claude.id)
             .expect("archive");
         let missing = kalcode_contracts::ids::new_id();
+        let wrong_provider = store
+            .create(ProviderId::GEMINI_CLI, "Gemini")
+            .expect("other provider account");
 
-        for account_id in [claude.id.as_str(), missing.as_str()] {
+        for account_id in [
+            claude.id.as_str(),
+            missing.as_str(),
+            wrong_provider.id.as_str(),
+        ] {
             assert!(matches!(
                 fixture.runtime.refresh_claude_account(account_id),
-                Err(RuntimeAuthError::Claude(
-                    ClaudeAccountAuthError::ProfileUnavailable
-                ))
+                Err(RuntimeAuthError::Account(_))
             ));
             assert!(matches!(
                 fixture.runtime.start_claude_login(account_id),
@@ -2991,7 +3426,7 @@ mod tests {
         let session = codex_session(&fixture);
         assert_eq!(
             codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
             "a new account has no verdict of its own this run"
         );
         drop(session);

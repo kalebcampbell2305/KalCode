@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 24,
-          "skippedMaximum": 24,
+          "skippedMinimum": 23,
+          "skippedMaximum": 23,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 21,
-          "skippedMaximum": 21,
+          "skippedMinimum": 20,
+          "skippedMaximum": 20,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -370,10 +370,6 @@
     {
       "path": "crates/providers/src/codex/managed_policy.rs",
       "reason": "run explicitly when certifying a Codex CLI release (KALCODE_CERTIFY_CODEX)"
-    },
-    {
-      "path": "crates/providers/tests/claude_sign_in_real.rs",
-      "reason": "needs a real Claude Code (KALCODE_REAL_CLAUDE); no sign-in, prompt or quota"
     },
     {
       "path": "crates/providers/tests/claude_sign_in_real.rs",

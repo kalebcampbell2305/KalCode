@@ -26,7 +26,8 @@ use kalcode_threads::runtime::{
     INTERRUPTED_ACTIVITY, PAUSED_ACTIVITY, RECOVERED_ACTIVITY, SHUTDOWN_ACTIVITY, STOPPED_ACTIVITY,
 };
 use kalcode_threads::{
-    CreateThread, ProviderEntry, ProviderRegistry, ThreadRuntime, ToolCallStatus,
+    CreateThread, ProviderEntry, ProviderErrorObserver, ProviderRegistry, ThreadRuntime,
+    ToolCallStatus,
 };
 
 fn status(h: &Harness, id: &str) -> ThreadStatus {
@@ -119,6 +120,17 @@ fn create_starts_a_session_and_records_the_lifecycle() {
     // Event payloads never carry message text.
     let json = serde_json::to_string(&events).expect("json");
     assert!(!json.contains("OAuth callback race"));
+}
+
+#[test]
+fn new_coding_options_default_to_bounded_auto() {
+    let h = Harness::new();
+    let options = h.runtime.options().expect("options");
+    assert_eq!(options.default_permission_mode, PermissionMode::Auto);
+    assert!(options.permission_modes.contains(&PermissionMode::Plan));
+    assert!(options.permission_modes.contains(&PermissionMode::Approve));
+    assert!(options.permission_modes.contains(&PermissionMode::Auto));
+    assert!(!options.permission_modes.contains(&PermissionMode::Bypass));
 }
 
 #[test]
@@ -1329,6 +1341,86 @@ fn provider_errors_are_recorded() {
         "provider_error"
     );
     assert!(session.calls().contains(&Call::Terminate));
+}
+
+struct RecordingProviderErrorObserver {
+    core: Arc<Core>,
+    observed: Mutex<Vec<(String, String, String, bool)>>,
+}
+
+impl ProviderErrorObserver for RecordingProviderErrorObserver {
+    fn observe(
+        &self,
+        provider_id: &ProviderId,
+        account_id: &str,
+        code: &str,
+    ) -> kalcode_core::Result<()> {
+        let already_published = self.core.recent_events(500, None)?.iter().any(|event| {
+            matches!(
+                &event.event,
+                EventPayload::ProviderError { code: published, .. } if published == code
+            )
+        });
+        self.observed.lock().unwrap().push((
+            provider_id.to_string(),
+            account_id.to_owned(),
+            code.to_owned(),
+            already_published,
+        ));
+        Ok(())
+    }
+}
+
+#[test]
+fn provider_error_observer_gets_the_current_account_before_the_error_is_published() {
+    let h = Harness::new();
+    let observed = Arc::new(RecordingProviderErrorObserver {
+        core: h.core.clone(),
+        observed: Mutex::new(Vec::new()),
+    });
+    h.runtime
+        .set_provider_error_observer(observed.clone())
+        .expect("observer");
+    let account_id = new_id();
+    h.core
+        .transact(|conn| {
+            conn.execute(
+                "INSERT INTO provider_accounts (
+                    id, provider_id, display_name, authentication_state, is_default, created_at
+                 ) VALUES (?1, 'claude-code', 'Fixture account', 'authenticated', 1, ?2)",
+                rusqlite::params![&account_id, "2026-09-25T00:00:00Z"],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("account");
+    let mut request = h.request("x");
+    request.provider_account_id = Some(account_id.clone());
+    let thread = h.runtime.create(request).expect("create");
+    h.provider.last_session().emit(AgentEvent::Error {
+        code: "api_authentication_failed".into(),
+        message: "Sign in again".into(),
+        recoverable: true,
+    });
+    wait_until("provider error observation", || {
+        !observed.observed.lock().unwrap().is_empty()
+    });
+    assert_eq!(
+        observed.observed.lock().unwrap().as_slice(),
+        &[(
+            "fake".into(),
+            account_id,
+            "api_authentication_failed".into(),
+            false,
+        )]
+    );
+    wait_until("provider error publication", || {
+        h.events_for(&thread.id).iter().any(|event| {
+            matches!(
+                &event.event,
+                EventPayload::ProviderError { code, .. } if code == "api_authentication_failed"
+            )
+        })
+    });
 }
 
 #[test]

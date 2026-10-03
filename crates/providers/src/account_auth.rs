@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
@@ -131,6 +132,8 @@ impl fmt::Debug for CodexAuthUrl {
 pub enum CodexAccountAuthError {
     #[error("the managed Codex profile could not be prepared")]
     ProfileUnavailable,
+    #[error("the managed Codex profile configuration must be normalized before observation")]
+    ProfileConfigChanged,
     #[error("the Codex app-server could not be started")]
     StartFailed,
     #[error("the installed Codex version is not certified for managed profiles")]
@@ -277,6 +280,47 @@ impl CodexAccountAuthManager {
             result = Err(CodexAccountAuthError::StateUpdateFailed);
         }
         result
+    }
+
+    /// Reads official account truth with `refreshToken:false` under a shared observer lease.
+    /// The observer skips managed-config rewrites and yields to launch supersession or an explicit
+    /// sign-in/sign-out/archive before either can mutate this profile.
+    pub fn observe_account_with_lease_observed<F>(
+        &self,
+        account_id: &str,
+        lease: ProfileLease,
+        superseded: Arc<AtomicBool>,
+        observe: F,
+    ) -> Result<CodexAccountState, CodexAccountAuthError>
+    where
+        F: Fn(
+            &Result<CodexAccountState, CodexAccountAuthError>,
+        ) -> Result<(), CodexAccountAuthError>,
+    {
+        let lifecycle = lease
+            .observer_cancellation()
+            .ok_or(CodexAccountAuthError::ProfileUnavailable)?;
+        let mut session =
+            self.connect_observer_with_lease(account_id, lease, vec![superseded, lifecycle])?;
+        let mut result = session.read_account();
+        if let Err(cleanup) = session.finish() {
+            result = Err(cleanup);
+        }
+        if result != Err(CodexAccountAuthError::Canceled) && observe(&result).is_err() {
+            result = Err(CodexAccountAuthError::StateUpdateFailed);
+        }
+        result
+    }
+
+    /// Repairs only the inert KalCode-owned `config.toml` under an exact exclusive lease. Native
+    /// Codex credentials are neither read nor changed.
+    pub fn repair_profile_config_with_lease(
+        &self,
+        account_id: &str,
+        lease: ProfileLease,
+    ) -> Result<(), CodexAccountAuthError> {
+        managed_policy::repair_observer_config_with_lease(&self.profiles, account_id, lease)
+            .map_err(|_| CodexAccountAuthError::ProfileUnavailable)
     }
 
     pub fn start_chatgpt_login(
@@ -464,9 +508,39 @@ impl CodexAccountAuthManager {
         self.connect_prepared(launch)
     }
 
+    fn connect_observer_with_lease(
+        &self,
+        account_id: &str,
+        lease: ProfileLease,
+        cancellations: Vec<Arc<AtomicBool>>,
+    ) -> Result<RpcSession, CodexAccountAuthError> {
+        let launch = managed_policy::prepare_observer_with_lease(
+            &self.profiles,
+            &self.source_env,
+            account_id,
+            lease,
+        )
+        .map_err(|error| {
+            if managed_policy::is_unmanaged_config(&error) {
+                CodexAccountAuthError::ProfileConfigChanged
+            } else {
+                CodexAccountAuthError::ProfileUnavailable
+            }
+        })?;
+        self.connect_prepared_with_cancellations(launch, cancellations)
+    }
+
     fn connect_prepared(
         &self,
         launch: managed_policy::ManagedAuthLaunch,
+    ) -> Result<RpcSession, CodexAccountAuthError> {
+        self.connect_prepared_with_cancellations(launch, Vec::new())
+    }
+
+    fn connect_prepared_with_cancellations(
+        &self,
+        launch: managed_policy::ManagedAuthLaunch,
+        cancellations: Vec<Arc<AtomicBool>>,
     ) -> Result<RpcSession, CodexAccountAuthError> {
         let mut env = launch.env;
         remove_env(&mut env, "OPENAI_API_KEY");
@@ -480,18 +554,34 @@ impl CodexAccountAuthManager {
                     .lease
                     .prepare_guarded_job("codex-auth-version")
                     .map_err(|_| CodexAccountAuthError::StartFailed)?;
-                crate::codex::verify_managed_executable_version_guarded(
-                    &self.executable,
-                    &env,
-                    &launch.cwd,
-                    version_job,
-                )
-                .map_err(|error| match error {
+                let canceled = || {
+                    cancellations
+                        .iter()
+                        .any(|cancellation| cancellation.load(Ordering::Acquire))
+                };
+                let checked = if cancellations.is_empty() {
+                    crate::codex::verify_managed_executable_version_guarded(
+                        &self.executable,
+                        &env,
+                        &launch.cwd,
+                        version_job,
+                    )
+                } else {
+                    crate::codex::verify_managed_executable_version_guarded_cancelable(
+                        &self.executable,
+                        &env,
+                        &launch.cwd,
+                        version_job,
+                        &canceled,
+                    )
+                };
+                checked.map_err(|error| match error {
                     // Only a version outside the certified window is a version refusal; a CLI
                     // that can't report a version is a start failure.
                     kalcode_contracts::agent::ProviderError::Refused { .. } => {
                         CodexAccountAuthError::UnsupportedVersion
                     }
+                    _ if canceled() => CodexAccountAuthError::Canceled,
                     _ => CodexAccountAuthError::StartFailed,
                 })?;
                 (launch.args, false)
@@ -536,6 +626,7 @@ impl CodexAccountAuthManager {
             lease: Some(launch.lease),
             client_version: self.client_version.clone(),
             cleanup_attempted: false,
+            cancellations,
             #[cfg(test)]
             force_cleanup_failure,
         };
@@ -753,11 +844,18 @@ struct RpcSession {
     lease: Option<ProfileLease>,
     client_version: String,
     cleanup_attempted: bool,
+    cancellations: Vec<Arc<AtomicBool>>,
     #[cfg(test)]
     force_cleanup_failure: bool,
 }
 
 impl RpcSession {
+    fn is_canceled(&self) -> bool {
+        self.cancellations
+            .iter()
+            .any(|cancellation| cancellation.load(Ordering::Acquire))
+    }
+
     fn initialize(&mut self) -> Result<(), CodexAccountAuthError> {
         let response = self.request(
             "initialize",
@@ -791,6 +889,9 @@ impl RpcSession {
         method: &'static str,
         params: Option<Value>,
     ) -> Result<Value, CodexAccountAuthError> {
+        if self.is_canceled() {
+            return Err(CodexAccountAuthError::Canceled);
+        }
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let mut request = json!({"id":id,"method":method});
@@ -801,6 +902,9 @@ impl RpcSession {
         let deadline = Instant::now() + self.request_timeout;
         let mut ignored = 0usize;
         loop {
+            if self.is_canceled() {
+                return Err(CodexAccountAuthError::Canceled);
+            }
             let message = self.recv_value(deadline)?;
             if message.get("method").is_some() && message.get("id").is_none() {
                 if self.pending_notifications.len() >= MAX_IGNORED_MESSAGES {
@@ -857,7 +961,15 @@ impl RpcSession {
     fn recv_value(&self, deadline: Instant) -> Result<Value, CodexAccountAuthError> {
         let mut non_protocol_lines = 0usize;
         loop {
-            match recv_until(&self.lines, deadline) {
+            if self.is_canceled() {
+                return Err(CodexAccountAuthError::Canceled);
+            }
+            let receive_deadline = if self.cancellations.is_empty() {
+                deadline
+            } else {
+                deadline.min(Instant::now() + Duration::from_millis(15))
+            };
+            match recv_until(&self.lines, receive_deadline) {
                 Ok(OutputLine::Line(line)) if line.len() > MAX_AUTH_LINE_BYTES => {
                     return Err(CodexAccountAuthError::InvalidResponse);
                 }
@@ -879,6 +991,7 @@ impl RpcSession {
                 Ok(OutputLine::Closed) | Err(RecvTimeoutError::Disconnected) => {
                     return Err(CodexAccountAuthError::ConnectionEnded);
                 }
+                Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => continue,
                 Err(RecvTimeoutError::Timeout) => return Err(CodexAccountAuthError::TimedOut),
             }
         }

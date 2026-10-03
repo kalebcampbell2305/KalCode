@@ -13,11 +13,11 @@ Free.
 > so for them the rules in §3–§5 — Custom rules, standing grants, "remote-consequential always
 > asks" — are **not** applied per tool call. KalCode enforces for Claude Code through launch
 > flags instead: a Claude Code mode no broader than the KalCode mode, prompts denied, and
-> KalCode deny rules for remote actions and credential files (and, outside Bypass, the edit and
+> KalCode deny rules for remote actions and credential files (and, in Plan/Approve/Custom, edit and
 > web tools) that the user's own Claude Code settings can't override. Other commands follow
 > Claude Code's own rules, including the user's own Claude Code user settings. Details and
-> limits: §8 and `docs/PROVIDERS.md` §5. Per-action enforcement for Claude Code arrives with
-> provider panes and the hook bridge (Z7, `docs/PROVIDER_PANES.md`).
+> limits: §8 and `docs/PROVIDERS.md` §5. Provider panes observe hook events but keep provider-native
+> prompts and Auto classification authoritative (`docs/PROVIDER_PANES.md`).
 
 ## 1. Model
 
@@ -286,10 +286,12 @@ uses and whether the mapping is **exact**, **approximate (stricter)** or **unsup
 
 | Provider | Plan | Approve | Auto | Bypass | Custom | Who decides each tool call today |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code (headless) | `--restricted --permission-mode plan` | `--permission-mode default` | as Approve | `--permission-mode acceptEdits` | as Approve (rules not applied) | Claude Code, within KalCode's launch flags: prompts denied, KalCode deny rules (remote actions and credential files in every mode; edit and web tools outside Bypass). **Not** this engine. |
-| Claude Code (provider pane, Z7-W4) | `--restricted --permission-mode plan` | `--setting-sources user --permission-mode manual` | as Approve | `--setting-sources user --permission-mode acceptEdits` | as Approve | Every call reaches KalCode's `PreToolUse` hook first (unreachable KalCode ⇒ blocked). **This engine** decides each call (`ActionOrigin::Thread`, `Engine` routing, the default since SEC-LATENT merged), asks through the one approval queue and returns allow/deny to the provider; recursive searches, pipelines and multi-level wildcards arrive as opaque (always ask). Under the deny floor (remote actions and credential files; edit and web tools in Plan). The feature is behind the `provider_panes` flag. |
-| Codex | declared, adapter planned | declared | declared | declared | as Approve | — |
-| Gemini CLI | declared, adapter planned | declared | declared | declared | as Approve | — |
+| Claude Code (headless) | `--restricted --permission-mode plan` | `--permission-mode default` | `--permission-mode auto` | `--permission-mode acceptEdits` | as Approve (profile rules are not applied) | Claude Code decides under KalCode's deny floor. Auto uses Claude Code's background classifier; unsupported Auto falls back to Manual. Prompts are denied headless. Credential files and remote actions remain denied in every mode; edit and web tools are also denied in Plan, Approve and Custom. |
+| Claude Code (provider pane, Z7-W4) | `--restricted --permission-mode plan` | `--setting-sources user --permission-mode manual` | `--setting-sources user --permission-mode auto` | `--setting-sources user --permission-mode acceptEdits` | as Approve | Claude Code's native prompt/classifier decides under the same deny floor. KalCode observes hooks but does not answer provider prompts (`ProviderPrompt` routing). Auto falls back to Manual when unavailable. The feature is behind the `provider_panes` flag. |
+| Codex (headless) | `--sandbox read-only`, `never` | `--sandbox workspace-write`, `on-request` | `--sandbox workspace-write`, `never` | `--sandbox danger-full-access`, `never` | as Approve | Codex decides inside its native sandbox. Auto runs workspace work without prompts; headless approval requests cannot be answered. Web/search and workspace network access remain disabled. |
+| Codex (provider pane) | `--sandbox read-only`, `never` | `--sandbox workspace-write`, `on-request` | `--sandbox workspace-write`, `on-request` | `--sandbox danger-full-access`, `never` | as Approve | Codex decides; native prompts stay visible in the pane. Auto retains the workspace sandbox and asks before escalation. Web/search and workspace network access remain disabled. |
+| Gemini CLI (headless) | `--approval-mode plan` | `--approval-mode default` | `--approval-mode auto_edit` | `--approval-mode auto_edit` | as Approve | Gemini CLI decides. Auto approves only file edits; shell and other prompts are denied headless. `yolo` is never used. |
+| Gemini CLI (provider pane) | `--approval-mode plan` | `--approval-mode default` | `--approval-mode auto_edit` | `--approval-mode auto_edit` | as Approve | Gemini CLI decides. Auto approves only file edits; shell and other risky tools still prompt in the pane. `yolo` is never used. |
 
 All mappings are *approximate (stricter)*. Flags, deny rules and their limits (a Bash deny rule
 matches the command text, so a push written another way falls back to Claude Code's mode and the

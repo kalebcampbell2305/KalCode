@@ -4,7 +4,7 @@ import { ShieldCheck, TriangleAlert } from "lucide-react";
 import { AlertDialog } from "radix-ui";
 import { useId, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { EFFECT_LABELS, MODE_DESCRIPTIONS, MODE_LABELS, SCOPE_LABELS, START_MODES } from "./labels.ts";
+import { EFFECT_LABELS, MODE_DESCRIPTIONS, MODE_LABELS, SCOPE_LABELS, START_MODES, startModeFor } from "./labels.ts";
 import { usePermissions } from "./PermissionsProvider.tsx";
 import styles from "./PermissionsSettings.module.css";
 
@@ -14,16 +14,17 @@ const MODES: readonly PermissionMode[] = ["plan", "approve", "auto", "bypass", "
  * Settings → Permissions: default mode for new threads, Bypass confirmation, profiles.
  *
  * The default is what new threads (and, where shipped, provider panes) start in. They can only
- * start in Plan, Approve or Auto, so a saved Bypass or Custom default starts them in Approve and
- * nothing runs in Bypass because of it. Stable offers only the modes a thread can start in.
+ * start in Plan, Approve or Auto. Saved Bypass and Custom defaults start them in Approve because
+ * their confirmation or profile semantics cannot be replayed implicitly. Stable offers only startable modes.
  */
 export function PermissionsSettings() {
   const { info } = useRuntime();
   const { settings, profiles, setDefaultMode } = usePermissions();
   const [confirming, setConfirming] = useState(false);
   const customProfiles = profiles.filter((profile) => profile.mode === "custom");
-  const mode = settings?.defaultMode ?? "approve";
+  const mode = settings?.defaultMode ?? "auto";
   const startable = START_MODES.includes(mode);
+  const fallbackMode = startModeFor(mode);
   const choices = info.channel === "stable" ? START_MODES : MODES;
 
   const choose = (next: PermissionMode) => {
@@ -40,7 +41,7 @@ export function PermissionsSettings() {
       id="permissions"
       title="Permissions"
       icon={<ShieldCheck />}
-      description="How much agents, providers and KalVoice may do without asking. Every mode is available on every plan."
+      description="Auto keeps everyday coding moving without repeated prompts. Security boundaries and external effects still ask."
       padding="none"
       bodyClassName={styles.body}
       className={styles.panel}
@@ -51,12 +52,12 @@ export function PermissionsSettings() {
           <div>
             <p className={styles.bannerTitle}>{MODE_LABELS[mode]} is your saved default</p>
             <p className={styles.bannerText}>
-              New threads start in Approve: threads can only start in Plan, Approve or Auto, so nothing runs in{" "}
-              {MODE_LABELS[mode]} because of this setting.
+              New coding agents start in {MODE_LABELS[fallbackMode]} because {MODE_LABELS[mode]} cannot be selected at
+              launch.
             </p>
           </div>
-          <Button size="sm" onClick={() => void setDefaultMode("approve")}>
-            Switch to Approve
+          <Button size="sm" onClick={() => void setDefaultMode(fallbackMode)}>
+            {fallbackMode === "auto" ? "Use Auto" : "Use Approve"}
           </Button>
         </div>
       ) : null}
@@ -65,10 +66,10 @@ export function PermissionsSettings() {
         <div className={styles.row}>
           <div className={styles.rowText}>
             <p id="default-mode-label" className={styles.rowLabel}>
-              Default mode for new threads
+              Default mode for new coding agents
             </p>
             <p id="default-mode-help" className={styles.rowHelp}>
-              {startable ? MODE_DESCRIPTIONS[mode] : "New threads start in Approve."}
+              {startable ? MODE_DESCRIPTIONS[mode] : `New coding agents start in ${MODE_LABELS[fallbackMode]}.`}
             </p>
           </div>
           <SegmentedControl<PermissionMode>
@@ -196,23 +197,18 @@ function BypassConfirm({
           <AlertDialog.Description asChild>
             <div className={styles.dialogBody}>
               <p>
-                New threads still start in Approve: threads can only start in Plan, Approve or Auto. A thread in Bypass
-                has broad local authority. Without asking you, its agents can:
+                New coding agents still start in Approve: Bypass cannot be selected at launch. Bypass uses the broadest
+                local mode each provider safely supports:
               </p>
               <ul>
-                <li>change and delete files in the workspace, including recursive deletes</li>
-                <li>run any local command and install packages</li>
-                <li>commit to the local Git repository and use the network</li>
+                <li>Codex uses its unrestricted local sandbox with approval prompts off.</li>
+                <li>Claude Code accepts file edits and common file commands; other prompts are refused.</li>
+                <li>Gemini CLI accepts file edits; shell commands and other tools still prompt.</li>
               </ul>
               <p>
-                These still ask every time: pushing to Git remotes, deploying, changing cloud resources, sending
-                messages, spending money, reading secrets, and files outside the workspace. Commands KalCode can't fully
-                check always ask.
-              </p>
-              <p>
-                Claude Code threads don't show KalCode's questions. For them, KalCode refuses pushes, publishes,
-                deploys, cloud tools and reading credential files. Other commands follow Claude Code's own rules and
-                your Claude Code settings.
+                Claude Code never uses bypassPermissions, and Gemini CLI never uses yolo. Provider sign-in and OS or
+                administrator boundaries still apply. KalCode-governed pushes, deploys, publishing, cloud changes,
+                messages, spending and credential access still require their normal authorization.
               </p>
               <p>Agents and KalVoice can never turn Bypass on. You can switch back at any time.</p>
             </div>
@@ -224,7 +220,7 @@ function BypassConfirm({
               checked={understood}
               onChange={(event) => setUnderstood(event.target.checked)}
             />
-            I understand that agents in a Bypass thread act without asking for local work.
+            I understand that provider Bypass limits differ and Codex runs with unrestricted local access.
           </label>
           <div className={styles.dialogActions}>
             <AlertDialog.Cancel asChild>

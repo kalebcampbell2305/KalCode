@@ -69,6 +69,7 @@ pub fn is_auth_code(code: &str) -> bool {
     matches!(
         code,
         "api_authentication_failed"
+            | "api_oauth_org_not_allowed"
             | "provider_authentication_failed"
             | "provider_oauth_org_not_allowed"
     )
@@ -354,7 +355,13 @@ fn assess(p: &ProviderState) -> Assessment {
         recoverability: Recoverability::None,
         reason_code: auth_unknown.then_some("auth_unknown"),
         reason: auth_unknown.then(|| {
-            format!("{name} has no documented way to check sign-in, so it shows as unknown.")
+            if detection.provider_id.as_str() == ProviderId::CLAUDE_CODE {
+                "Claude Code sign-in is checked when a coding session starts.".to_owned()
+            } else {
+                format!(
+                    "{name} has no documented safe way to check sign-in, so it shows as unknown."
+                )
+            }
         }),
     }
 }
@@ -844,6 +851,19 @@ mod tests {
         assert_eq!(h.state, HealthState::Healthy);
         assert_eq!(h.auth, AuthState::Unknown);
         assert_eq!(h.reason_code.as_deref(), Some("auth_unknown"));
+
+        m.detected(&[detection(
+            ProviderId::CLAUDE_CODE,
+            DetectionState::Installed,
+            AuthState::Unknown,
+        )]);
+        let claude = m
+            .get(&ProviderId::new(ProviderId::CLAUDE_CODE))
+            .expect("Claude");
+        assert_eq!(
+            claude.reason.as_deref(),
+            Some("Claude Code sign-in is checked when a coding session starts.")
+        );
     }
 
     #[test]
@@ -1089,5 +1109,10 @@ mod tests {
         assert!(is_failure_code("turn_error_max_turns"));
         assert!(!is_failure_code("provider_warning"));
         assert!(is_auth_code("api_authentication_failed"));
+        assert!(is_auth_code("api_oauth_org_not_allowed"));
+        assert!(is_auth_code("provider_authentication_failed"));
+        assert!(is_auth_code("provider_oauth_org_not_allowed"));
+        assert!(!is_auth_code("api_cloud_credential_error"));
+        assert!(!is_auth_code("provider_billing_error"));
     }
 }

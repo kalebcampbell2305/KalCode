@@ -38,7 +38,9 @@ use kalcode_contracts::context::PromptReview;
 use kalcode_contracts::kalvoice::{
     BrowserControl, KalVoiceIntent, PaneDirection, ProviderPaneRequest,
 };
-use kalcode_contracts::permissions::{ApprovalStatus, PermissionMode};
+use kalcode_contracts::permissions::{
+    ApprovalStatus, DEFAULT_CODING_PERMISSION_MODE, PermissionMode,
+};
 use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountBindingKind};
 use kalcode_contracts::sessions::{
     MAX_SESSION_CHOICES, SessionAttention, SessionFollowUp, SessionMatchTier, SessionResolution,
@@ -103,6 +105,20 @@ fn threads_unavailable() -> ExecError {
         "threads_unavailable",
         "KalCode's thread runtime isn't running, so KalVoice can't manage threads. Restart KalCode; if this keeps happening, export diagnostics.",
     )
+}
+
+/// Voice-created coding panes honor the user's saved startable mode. Bypass still requires a
+/// direct confirmation and Custom requires a profile, so neither is inferred by a voice launch.
+/// If the authoritative settings store is present but unreadable, keep the restrictive prompt
+/// mode instead of broadening a possibly saved preference.
+fn provider_launch_permission_mode(permissions: Option<&PermissionService>) -> PermissionMode {
+    match permissions {
+        Some(service) => match service.settings() {
+            Ok(settings) => settings.startable_default_mode(),
+            Err(_) => return PermissionMode::Approve,
+        },
+        None => DEFAULT_CODING_PERMISSION_MODE,
+    }
 }
 
 /// Whether `feature` is shown in this build (a gated feature is hidden on Stable and Beta).
@@ -782,6 +798,7 @@ impl DesktopExecutor {
         let runtime = self.provider_threads()?;
         let workspace = self.target_workspace(workspace_id)?;
         let options = runtime.options().map_err(|e| from_core(&e))?;
+        let permission_mode = provider_launch_permission_mode(self.permissions.as_deref());
         // Resolve every account before starting anything: an unknown label in a later group
         // must not silently start earlier groups under a different/default account.
         let mut requests = Vec::new();
@@ -891,7 +908,7 @@ impl DesktopExecutor {
                 workspace_id: workspace.id.clone(),
                 model,
                 effort,
-                permission_mode: PermissionMode::Approve,
+                permission_mode,
                 name: None,
             };
             if group.assignments.is_empty() {
@@ -2797,6 +2814,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn implicit_voice_launches_keep_saved_startable_modes_without_inferring_bypass() {
+        assert_eq!(provider_launch_permission_mode(None), PermissionMode::Auto);
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+        ] {
+            assert!(mode.is_confirm_free_start());
+        }
+        for mode in [PermissionMode::Bypass, PermissionMode::Custom] {
+            assert!(!mode.is_confirm_free_start());
+        }
+    }
+
     fn executor(dir: &std::path::Path) -> DesktopExecutor {
         let core = Core::open(kalcode_core::CoreConfig {
             paths: kalcode_core::Paths::new(dir),
@@ -3729,6 +3761,12 @@ mod tests {
             launched
                 .iter()
                 .all(|thread| thread.provider_account_id.as_deref() == Some(work.id.as_str()))
+        );
+        assert!(
+            launched
+                .iter()
+                .all(|thread| thread.permission_mode == PermissionMode::Auto),
+            "implicit voice launches use the bounded coding default"
         );
         let Some(UiDirective::OpenProviderPanes {
             workspace_id,

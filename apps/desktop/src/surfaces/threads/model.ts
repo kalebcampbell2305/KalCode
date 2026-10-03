@@ -136,11 +136,12 @@ export const PERMISSION_MODES: Record<PermissionMode, { label: string; descripti
   plan: { label: "Plan", description: "Reads and plans. Nothing is changed." },
   approve: {
     label: "Approve",
-    description: "Reads run freely. Edits, commands and network access wait for your approval.",
+    description: "Ask before edits and commands. Use this when you want to review each coding action.",
   },
   auto: {
     label: "Auto",
-    description: "Actions your permission rules cover run automatically. Everything else still asks.",
+    description:
+      "Recommended for everyday coding. Workspace edits, development commands, tests, builds and local Git run automatically; real security boundaries and external effects still ask.",
   },
   bypass: { label: "Bypass", description: "Broad local authority. Remote actions still follow their own rules." },
   custom: { label: "Custom", description: "A named rule set." },

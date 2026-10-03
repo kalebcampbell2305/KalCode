@@ -62,7 +62,7 @@ async function expectPaneText(page: Page, text: string, timeout = 30_000) {
   await expect(pane(page).locator("[data-pane-terminal] .xterm-rows")).toContainText(text, { timeout });
 }
 
-test("a provider pane runs the CLI in a PTY and routes its tool calls through KalCode approvals", async () => {
+test("a provider pane runs routine coding in Auto and still gates remote effects", async () => {
   test.setTimeout(240_000);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-"));
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-project-"));
@@ -103,17 +103,14 @@ test("a provider pane runs the CLI in a PTY and routes its tool calls through Ka
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
     await shot(page, "z7w4-pane-idle");
 
-    // Approve mode asks before a build command: KalCode's approval appears on the pane.
+    // Auto is the fresh default: a routine workspace build runs without interrupting the user.
     await typeInPane(page, "run cargo build");
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("PERMISSION REQUIRED", { timeout: 30_000 });
-    const approve = page.getByRole("button", { name: "Approve once" }).first();
-    await expect(approve).toBeVisible();
-    await shot(page, "z7w4-pane-permission-required");
-    await approve.click();
     await expectPaneText(page, "RAN Bash");
+    await expect(page.getByRole("button", { name: "Approve once" })).toHaveCount(0);
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await shot(page, "z7w4-pane-auto-build");
 
-    // A denial blocks the call in the provider.
+    // A remote Git effect still asks and can be denied.
     await typeInPane(page, "run git push origin main");
     const deny = page.getByRole("button", { name: "Deny" }).first();
     await expect(deny).toBeVisible({ timeout: 30_000 });
