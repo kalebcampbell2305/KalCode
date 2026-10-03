@@ -313,6 +313,7 @@
       "when": { "targets": ["desktop"] },
       "builtin": "desktop-dist-placeholder",
       "envByPlatform": { "linux": { "KALCODE_SKIP_OS_KEYCHAIN_TEST": "1" } },
+      "timeoutMs": 1500000,
       "run": [
         "cargo fmt --all -- --check",
         "node apps/desktop/scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",

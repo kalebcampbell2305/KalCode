@@ -106,7 +106,7 @@ export async function lifecycleMain(argv, io = {}) {
       log("gate: nothing changed; nothing to check");
       return 0;
     }
-    const outcome = runGates(g.plan, { repo: g.top, log, keepGoing: Boolean(opts.keepGoing) });
+    const outcome = await runGates(g.plan, { repo: g.top, log, keepGoing: Boolean(opts.keepGoing) });
     const receipt = recordGate(git, g, outcome);
     if (opts.json) log(JSON.stringify({ status: outcome.status, results: outcome.results, receipt }, null, 2));
     log(
