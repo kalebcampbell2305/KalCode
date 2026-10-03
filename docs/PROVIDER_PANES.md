@@ -1,5 +1,34 @@
 # Provider panes — design note
 
+## Fresh-agent launch incident (2026-10-03)
+
+Windows build `0.1.9+1125` omitted `kalcode-hook.exe`. The installed application had the updater and
+guardian helpers, but the interactive Claude/Codex startup path requires the hook helper beside
+`kalcode.exe`. New launches received fresh thread/session identities and then failed before PTY
+creation. The durable interactive marker made the missing-PTY fallback appear historical, hiding
+the actual startup error behind an "earlier run" explanation.
+
+Windows releases now build, sign, bundle and verify the hook helper, including its exact hash,
+timestamped publisher signature, clean installation and upgrade. Publication requires that evidence.
+macOS already packages and verifies this helper. Pane startup also checks helper availability;
+failed creation returns the recorded native error, while resource-held creation remains queued.
+Missing terminal output uses native status/error, and restored metadata retains the actual provider.
+
+New agent creation continues to use fresh identities; only explicit Resume supplies a historical
+provider-session identity. Account/workspace routing and plan admission remain canonical. Launch
+admission stays serialized because the existing count-based plan check is not an atomic concurrent
+reservation; successfully started agents run independently. No database or marker migration is needed.
+
+Regression coverage: `interactive_runtime.rs` and `interactive_cli.rs` exercise real PTYs with fixture
+providers; `provider_pane_commands.rs` checks native startup guards; `PaneTerminal.voice.test.tsx`
+checks missing-PTY truth; `provider-panes.spec.ts` checks 1/4/6 Claude and multi-Codex UI layouts;
+`hook-packaging.test.mjs`, signing and updater tests enforce shipment integrity. Fixture tests do not
+claim live provider authentication. Signed candidate and production-update results are recorded by
+the release lane. Roll back a regression by reverting this fix through a PR and publishing a newer
+internal build; never downgrade the production feed or overwrite owner session data.
+
+## Original design record
+
 Status: **BUILT for Claude Code on `z7/provider-panes`, and for Codex (provider-native modes) and Gemini
 CLI (process state only) in PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`), behind the
 `provider_panes` feature flag.**

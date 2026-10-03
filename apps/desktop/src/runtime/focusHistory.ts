@@ -7,6 +7,7 @@ import { useSyncExternalStore } from "react";
  * Threads surface shows) and `WorkspaceProvider.selectTerminal`; read by `UiIntents.focusPrevious`.
  */
 export type FocusEntry =
+  | { kind: "agent"; agentId: string; workspaceId: string }
   | { kind: "thread"; threadId: string; workspaceId: string | null }
   | { kind: "terminal"; terminalId: string; workspaceId: string };
 
@@ -17,7 +18,11 @@ let entries: readonly FocusEntry[] = [];
 const listeners = new Set<() => void>();
 
 const keyOf = (entry: FocusEntry) =>
-  entry.kind === "thread" ? `thread:${entry.threadId}` : `terminal:${entry.terminalId}`;
+  entry.kind === "agent"
+    ? `agent:${entry.agentId}`
+    : entry.kind === "thread"
+      ? `thread:${entry.threadId}`
+      : `terminal:${entry.terminalId}`;
 
 function publish(next: readonly FocusEntry[]): void {
   entries = next;
@@ -55,7 +60,7 @@ export function focusHistory(): readonly FocusEntry[] {
 
 /** Drops a thread or terminal that no longer exists (archived, closed). */
 export function forgetFocus(kind: FocusEntry["kind"], id: string): void {
-  const next = entries.filter((e) => (e.kind === "thread" ? e.threadId : e.terminalId) !== id || e.kind !== kind);
+  const next = entries.filter((e) => keyOf(e) !== `${kind}:${id}`);
   if (next.length !== entries.length) publish(next);
 }
 

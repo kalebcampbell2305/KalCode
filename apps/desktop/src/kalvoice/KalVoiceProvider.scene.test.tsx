@@ -213,6 +213,8 @@ function thread(id: string, name: string, currentActivity: string): ThreadSummar
     filesChanged: 0,
     lastActivityAt: "2026-10-01T10:09:00.000Z",
     archivedAt: null,
+    runtimeKind: "interactive_pty",
+    terminalId: null,
   } as ThreadSummary;
 }
 
@@ -322,6 +324,26 @@ beforeEach(() => {
 });
 
 describe("KalVoice scene integration", () => {
+  it("keeps a native agent directive bound to Code when session metadata cannot be read", async () => {
+    const requestId = "00000000-0000-4000-8000-000000000099";
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(requestId);
+    mocks.request.mockResolvedValue({
+      ...fallbackResponse(),
+      requestId,
+      directive: { kind: "open_agent", agentId: "agent-native", workspaceId: "workspace-kalcode" },
+    });
+    mocks.client.getThread.mockRejectedValue(new Error("Session metadata unavailable"));
+    await mount();
+    await say("open the native agent");
+    expect(mocks.focusIntent).toHaveBeenCalledWith({
+      kind: "agent",
+      agentId: "agent-native",
+      workspaceId: "workspace-kalcode",
+    });
+    expect(mocks.focusIntent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "thread" }));
+    expect(mocks.client.getThread).not.toHaveBeenCalled();
+  });
+
   it("settles a handled local scene command in typed history", async () => {
     await mount();
 
@@ -584,8 +606,8 @@ describe("KalVoice scene integration", () => {
 
     await say("find Claude working on the website updater");
     expect(mocks.focusIntent).toHaveBeenLastCalledWith({
-      kind: "thread",
-      threadId: "thread-updater",
+      kind: "agent",
+      agentId: "thread-updater",
       workspaceId: "workspace-kalcode",
     });
     expect(screen.getByTestId("voice-result")).toHaveTextContent("Updater opened.");
@@ -594,8 +616,8 @@ describe("KalVoice scene integration", () => {
     await say("open it");
     expect(mocks.focusIntent).toHaveBeenCalledTimes(1);
     expect(mocks.focusIntent).toHaveBeenCalledWith({
-      kind: "thread",
-      threadId: "thread-updater",
+      kind: "agent",
+      agentId: "thread-updater",
       workspaceId: "workspace-kalcode",
     });
     expect(mocks.request).not.toHaveBeenCalled();
@@ -624,8 +646,8 @@ describe("KalVoice scene integration", () => {
     await say("two");
     await waitFor(() =>
       expect(mocks.focusIntent).toHaveBeenCalledWith({
-        kind: "thread",
-        threadId: "thread-backend",
+        kind: "agent",
+        agentId: "thread-backend",
         workspaceId: "workspace-kalcode",
       }),
     );
@@ -677,8 +699,8 @@ describe("KalVoice scene integration", () => {
 
       await waitFor(() =>
         expect(mocks.focusIntent).toHaveBeenCalledWith({
-          kind: "thread",
-          threadId: backend.id,
+          kind: "agent",
+          agentId: backend.id,
           workspaceId: "workspace-kalcode",
         }),
       );
@@ -723,12 +745,24 @@ describe("KalVoice scene integration", () => {
     await say("two");
     await waitFor(() =>
       expect(mocks.focusIntent).toHaveBeenCalledWith({
-        kind: "thread",
-        threadId: api.id,
+        kind: "agent",
+        agentId: api.id,
         workspaceId: "workspace-api",
       }),
     );
     expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("never answers an agent completion question with a chat callback", async () => {
+    const chat = { ...thread("chat-finished", "Chat result", "Finished chatting"), runtimeKind: "headless" as const };
+    mocks.client.getThread.mockResolvedValue(chat);
+    mocks.request.mockResolvedValue(fallbackResponse());
+    await mount();
+    lifecycle("completed", "thread", chat.id);
+    await say("which agent just finished");
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    expect(mocks.focusIntent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("voice-result")).not.toHaveTextContent("Chat result finished its task");
   });
 
   it("drops a completed-agent follow-up when the runtime client and feed are replaced", async () => {
@@ -775,8 +809,8 @@ describe("KalVoice scene integration", () => {
       if (id === release.id) return release;
       throw new Error("Unknown thread");
     });
-    mocks.focusIntent.mockImplementation(async (target: { kind: string; threadId?: string }) => {
-      if (target.threadId === release.id) throw new Error("Thread closed before focus");
+    mocks.focusIntent.mockImplementation(async (target: { kind: string; agentId?: string }) => {
+      if (target.agentId === release.id) throw new Error("Agent closed before focus");
     });
     await mount();
     await waitFor(() => expect(mocks.client.listThreads).toHaveBeenCalled());
@@ -786,8 +820,8 @@ describe("KalVoice scene integration", () => {
 
     await say("open Updater");
     expect(mocks.focusIntent).toHaveBeenCalledWith({
-      kind: "thread",
-      threadId: updater.id,
+      kind: "agent",
+      agentId: updater.id,
       workspaceId: "workspace-kalcode",
     });
 
@@ -799,7 +833,7 @@ describe("KalVoice scene integration", () => {
     await say("open it");
 
     expect(
-      mocks.focusIntent.mock.calls.filter((call) => call[0]?.kind === "thread" && call[0]?.threadId === updater.id),
+      mocks.focusIntent.mock.calls.filter((call) => call[0]?.kind === "agent" && call[0]?.agentId === updater.id),
     ).toHaveLength(1);
     expect(mocks.request).toHaveBeenCalledTimes(1);
   });
@@ -827,8 +861,8 @@ describe("KalVoice scene integration", () => {
     expect(mocks.client.getThread).toHaveBeenCalledWith(target.id);
     if (followup === "open it") {
       expect(mocks.focusIntent).toHaveBeenCalledWith({
-        kind: "thread",
-        threadId: target.id,
+        kind: "agent",
+        agentId: target.id,
         workspaceId: "workspace-kalcode",
       });
       expect(screen.getByTestId("voice-result")).toHaveTextContent("Claude A opened.");

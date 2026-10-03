@@ -50,8 +50,8 @@ export interface VoiceSceneTarget {
 
 export type VoiceSceneReference =
   | { kind: "named"; query: string; kinds?: readonly VoiceSceneKind[] }
-  | { kind: "current" }
-  | { kind: "last_target" }
+  | { kind: "current"; agents?: boolean }
+  | { kind: "last_target"; agents?: boolean }
   | { kind: "other"; query: string; kinds?: readonly VoiceSceneKind[] }
   | { kind: "beside_current" }
   /** `agents`: the person said "agent", so only coding agents count (AGENTS.md). */
@@ -253,7 +253,10 @@ export function resolveVoiceSceneTarget(
     referenceKinds && context.kinds
       ? referenceKinds.filter((kind) => context.kinds?.includes(kind))
       : (referenceKinds ?? context.kinds);
-  const targets = filtered({ ...context, kinds });
+  const coding =
+    ("agents" in reference && reference.agents) ||
+    ("query" in reference && /\b(?:agent|agents)\b/i.test(reference.query));
+  const targets = filtered({ ...context, kinds }).filter((target) => !coding || target.codingAgent === true);
   switch (reference.kind) {
     case "current": {
       const choices = targets.filter((target) => target.focused);

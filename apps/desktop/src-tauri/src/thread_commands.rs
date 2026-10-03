@@ -277,20 +277,25 @@ fn adapter(
         runtime: runtime.clone(),
         test_fixture,
     });
+    let guard = |provider: Arc<dyn AgentProvider>| -> Arc<dyn AgentProvider> {
+        let observed = ObservedProvider::wrap(provider, health);
+        let governed = ResourceAdmissionProvider::wrap(observed, resources.clone());
+        Arc::new(AccountBoundProvider::managed(
+            governed,
+            runtime.clone(),
+            crate::environment::TEST_HOOKS_ENABLED,
+        ))
+    };
+    // Persist the terminal identity before account/resource guards can refuse or defer it.
+    // Both branches retain exactly the same guards; a deferred agent never retries headless.
     let adapter: Arc<dyn AgentProvider> = match id.as_str() {
         // Z7-W4: the per-thread runtime router when provider panes are enabled.
-        ProviderId::CLAUDE_CODE => routes.route_claude(headless),
-        ProviderId::CODEX => routes.route_cli(ProviderId::CODEX, headless),
-        ProviderId::GEMINI_CLI => routes.route_cli(ProviderId::GEMINI_CLI, headless),
+        ProviderId::CLAUDE_CODE => routes.route_claude(headless, guard),
+        ProviderId::CODEX => routes.route_cli(ProviderId::CODEX, headless, guard),
+        ProviderId::GEMINI_CLI => routes.route_cli(ProviderId::GEMINI_CLI, headless, guard),
         _ => return None,
     };
-    let observed = ObservedProvider::wrap(adapter, health);
-    let governed = ResourceAdmissionProvider::wrap(observed, resources);
-    Some(Arc::new(AccountBoundProvider::managed(
-        governed,
-        runtime,
-        crate::environment::TEST_HOOKS_ENABLED,
-    )))
+    Some(adapter)
 }
 
 impl ThreadsState {

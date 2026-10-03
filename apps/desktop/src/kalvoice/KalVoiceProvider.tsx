@@ -41,6 +41,7 @@ import {
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
+import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
 import { useOptionalThreadsIntent } from "../surfaces/threads/intent.tsx";
@@ -623,6 +624,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           // anything else opens in Threads.
           void intents.focus({ kind: "thread", threadId: directive.threadId });
           break;
+        case "open_agent":
+          void intents.focus({ kind: "agent", agentId: directive.agentId, workspaceId: directive.workspaceId });
+          break;
         case "open_provider_panes":
           scopedPane(directive.workspaceId, { kind: "open-provider-panes", threadIds: directive.threadIds });
           break;
@@ -696,7 +700,23 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
                 }),
               (error) => scope.report({ ok: false, message: toKalCodeError(error).message }),
             );
-          } else void composeInThread(composerDeps(scope), directive);
+          } else {
+            void (async () => {
+              const thread = await client.getThread(directive.threadId);
+              if (scope.signal.aborted) return;
+              if (isCodingAgent(thread)) {
+                await intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
+                await deliverToProviderThread(thread.id, directive.text, {
+                  mode: directive.submit ? "send" : "insert",
+                  signal: scope.signal,
+                });
+                scope.report({
+                  ok: true,
+                  message: directive.submit ? "Sent to the agent." : "Inserted in the agent terminal.",
+                });
+              } else await composeInThread(composerDeps(scope), directive);
+            })().catch((error) => scope.report({ ok: false, message: toKalCodeError(error).message }));
+          }
           break;
         case "focus_previous":
           void intents.focusPrevious().then((focused) => {
@@ -727,7 +747,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           break;
       }
     },
-    [navigate, composerDeps],
+    [navigate, composerDeps, client],
   );
 
   const applyResponse = useCallback(
@@ -744,11 +764,19 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       if (response.directive && response.directive.kind !== "choose_session") {
         lastLifecycle.current = null;
         lastOperation.current = null;
-        if (response.directive.kind === "open_thread" || response.directive.kind === "compose_in_thread") {
-          const threadId = response.directive.threadId;
+        if (
+          response.directive.kind === "open_thread" ||
+          response.directive.kind === "open_agent" ||
+          response.directive.kind === "compose_in_thread"
+        ) {
+          const threadId =
+            response.directive.kind === "open_agent" ? response.directive.agentId : response.directive.threadId;
           const target = scene
             .snapshot()
-            .find((candidate) => candidate.kind === "thread" && candidate.entityId === threadId);
+            .find(
+              (candidate) =>
+                (candidate.kind === "thread" || candidate.kind === "agent") && candidate.entityId === threadId,
+            );
           lastSceneTarget.current = target ? { target, expiresAt: Date.now() + 120_000 } : null;
         } else if (response.directive.kind !== "submit_composer") lastSceneTarget.current = null;
       }
@@ -863,7 +891,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const completed = lastCompletedThread.current;
       const recentScene = lastSceneTarget.current;
       const summaryTarget =
-        recentScene && recentScene.expiresAt > Date.now() && recentScene.target.kind === "thread"
+        recentScene &&
+        recentScene.expiresAt > Date.now() &&
+        (recentScene.target.kind === "thread" || recentScene.target.kind === "agent")
           ? recentScene.target.entityId
           : null;
       const completionQuery = /^(?:what|which (?:agent|terminal)) just (?:finished|completed)$/.test(spoken);
@@ -892,6 +922,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           report({ ok: false, message: "That agent is no longer available." });
           return true;
         }
+        if (/\bagent\b/.test(spoken) && !isCodingAgent(thread)) {
+          lastLifecycle.current = null;
+          lastCompletedThread.current = null;
+          lastSceneTarget.current = null;
+          // An unrelated chat callback cannot answer an agent question. The native resolver
+          // can still locate a coding session using its durable runtime identity.
+          return false;
+        }
         if (liveCallback?.workspaceId && thread.workspaceId !== liveCallback.workspaceId) {
           lastLifecycle.current = null;
           lastSceneTarget.current = null;
@@ -899,7 +937,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           return true;
         }
         const target: VoiceSceneTarget = {
-          kind: "thread",
+          kind: isCodingAgent(thread) ? "agent" : "thread",
+          codingAgent: isCodingAgent(thread),
           entityId: thread.id,
           title: thread.name,
           workspaceId: thread.workspaceId,
@@ -1056,11 +1095,30 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       choiceRef.current = null;
       setSessionChoice(null);
       try {
+        if (pending.followUp.kind === "compose") {
+          runDirective(
+            {
+              kind: "compose_in_thread",
+              threadId: choice.threadId,
+              text: pending.followUp.text,
+              submit: pending.followUp.submit,
+            },
+            scope,
+          );
+          return true;
+        }
         await followUpChoice(
           {
             ...composerDeps(scope),
-            focusThread: (id) => {
-              if (!scope.signal.aborted) void surfaces.current.uiIntents.focus({ kind: "thread", threadId: id });
+            focusThread: async (id) => {
+              if (scope.signal.aborted) return;
+              const thread = await client.getThread(id);
+              if (scope.signal.aborted) return;
+              await surfaces.current.uiIntents.focus(
+                isCodingAgent(thread)
+                  ? { kind: "agent", agentId: id, workspaceId: thread.workspaceId }
+                  : { kind: "thread", threadId: id },
+              );
             },
           },
           choice,
@@ -1071,7 +1129,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       }
       return true;
     },
-    [beginRequest, composerDeps, scopeFor],
+    [beginRequest, composerDeps, scopeFor, client, runDirective],
   );
   const chooseSession = useCallback(
     (threadId: string) => {
@@ -1117,7 +1175,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             threadId:
               lastSceneTarget.current &&
               lastSceneTarget.current.expiresAt > Date.now() &&
-              lastSceneTarget.current.target.kind === "thread"
+              (lastSceneTarget.current.target.kind === "thread" || lastSceneTarget.current.target.kind === "agent")
                 ? lastSceneTarget.current.target.entityId
                 : (getSelectedThread()?.threadId ?? null),
           });
@@ -1225,7 +1283,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
                   ? target.sink.destination.threadId
                   : lastSceneTarget.current &&
                       lastSceneTarget.current.expiresAt > Date.now() &&
-                      lastSceneTarget.current.target.kind === "thread"
+                      (lastSceneTarget.current.target.kind === "thread" ||
+                        lastSceneTarget.current.target.kind === "agent")
                     ? lastSceneTarget.current.target.entityId
                     : (getSelectedThread()?.threadId ?? null),
           });

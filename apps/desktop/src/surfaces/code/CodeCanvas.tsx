@@ -51,7 +51,9 @@ import {
   findContent,
   leaves,
   makeLeaf,
+  migrateAgentContents,
   parseLayout,
+  removeContents,
   splitPane,
 } from "../../shell/panes/model.ts";
 import { PaneCanvas, type PaneHost } from "../../shell/panes/PaneCanvas.tsx";
@@ -90,7 +92,7 @@ import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.t
 import { TerminalView } from "./TerminalView.tsx";
 
 const terminalContent = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
-const threadContent = (threadId: string): PaneContent => ({ kind: "thread", threadId });
+const agentContent = (agentId: string): PaneContent => ({ kind: "agent", agentId });
 
 /** Contract tones: a running shell is working (green), a failed exit is failed (red), else muted. */
 function terminalTone(terminal: TerminalInfo): "working" | "muted" | "failed" {
@@ -115,7 +117,7 @@ export function defaultLayoutFor(
   );
   let layout: PaneLayout = { ...base, root: makeLeaf(tabs, first.paneId, active) };
   if (paneThreadIds.length > 0) {
-    const panes = makeLeaf(paneThreadIds.map(threadContent));
+    const panes = makeLeaf(paneThreadIds.map(agentContent));
     layout = tabs.length > 0 ? splitPane(layout, first.paneId, "horizontal", panes) : { ...layout, root: panes };
   }
   return layout;
@@ -217,13 +219,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const terminal = terminalById.get(content.terminalId);
         return terminal ? (labels.get(terminal.id) ?? terminal.title) : "Terminal";
       }
-      if (content.kind === "thread") {
-        const thread = paneById.get(content.threadId)?.thread;
-        if (!thread) return "Thread";
+      if (content.kind === "agent") {
+        const thread = paneById.get(content.agentId)?.thread;
+        if (!thread) return "Agent";
         const account = accountFor(thread);
         return account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name;
       }
       if (content.kind === "dashboard") return "Dashboard";
+      if (content.kind === "thread") return "Thread";
       if (content.kind === "browser") return "Browser";
       if (content.kind === "git") return "Git";
       return "Widget";
@@ -234,7 +237,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running.
   const stopAgent = useCallback(
     async (threadId: string) => {
-      if (!paneById.get(threadId)?.info.running) return;
+      if (!paneById.has(threadId)) return;
       try {
         providerPanes.updated(await client.stopThread(threadId));
       } catch (error) {
@@ -244,12 +247,23 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [paneById, providerPanes, client],
   );
 
-  const initialState = useRef({ terminals, activeTerminalId, panes: providerPanes.panes.map((p) => p.thread.id) });
+  const initialState = useRef({
+    terminals,
+    activeTerminalId,
+    panes: providerPanes.panes.map((p) => p.thread.id),
+    chatIds: providerPanes.chatIds,
+  });
   const store = useMemo(
     () => ({
       load: async () => {
         const stored = await client.layoutGet(workspace.id);
-        return stored ? parseLayout(stored.layout) : null;
+        const layout = stored ? parseLayout(stored.layout) : null;
+        return layout
+          ? removeContents(
+              migrateAgentContents(layout, new Set(initialState.current.panes)),
+              new Set(initialState.current.chatIds.map((id) => `thread:${id}`)),
+            )
+          : null;
       },
       save: async (layout: PaneLayout) => {
         await client.layoutSave(workspace.id, layout);
@@ -269,11 +283,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     titleOf,
     onCloseContent: (content) => {
       if (content.kind === "terminal") void closeTerminal(content.terminalId);
-      if (content.kind === "thread") void stopAgent(content.threadId);
+      if (content.kind === "agent") void stopAgent(content.agentId);
     },
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
+
+  useEffect(() => {
+    if (!controller.ready) return;
+    const layout = removeContents(
+      migrateAgentContents(controller.layout, new Set(paneById.keys())),
+      new Set(providerPanes.chatIds.map((id) => `thread:${id}`)),
+    );
+    if (layout !== controller.layout) controller.replace(layout);
+  }, [controller, paneById, providerPanes.chatIds]);
 
   // KalVoice reads the same live layout and identities that this canvas renders. The registry is
   // in-memory and publishes metadata only: terminal output, provider responses and browser URLs
@@ -355,15 +378,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
                 },
               ];
             }
-            if (content.kind === "thread") {
-              const thread = current.paneById.get(content.threadId)?.thread;
+            if (content.kind === "agent") {
+              const thread = current.paneById.get(content.agentId)?.thread;
               if (!thread) return [];
               const account = current.accountFor(thread);
               const effort = voiceThreadEffort(thread);
               return [
                 {
                   ...shared,
-                  kind: "thread" as const,
+                  kind: "agent" as const,
                   entityId: thread.id,
                   title: account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name,
                   aliases: [
@@ -425,7 +448,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const content = allContents(current.layout).find((candidate) => {
           if (target.kind === "terminal" && candidate.kind === "terminal")
             return candidate.terminalId === target.entityId;
-          if (target.kind === "thread" && candidate.kind === "thread") return candidate.threadId === target.entityId;
+          if (target.kind === "agent" && candidate.kind === "agent") return candidate.agentId === target.entityId;
           if (target.kind === "browser" && candidate.kind === "browser") return candidate.browserId === target.entityId;
           if (target.kind === "dashboard") return candidate.kind === "dashboard";
           if (target.kind === "widget" && candidate.kind === "widget") return candidate.widgetId === target.entityId;
@@ -484,7 +507,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     if (!returning || !controller.ready) return;
     const leaf = leaves(controller.layout.root).find((l) => l.paneId === controller.focusedPaneId);
     const content = leaf?.tabs[leaf.activeTab];
-    if (leaf && (content?.kind === "terminal" || content?.kind === "thread")) controller.focusPane(leaf.paneId, true);
+    if (leaf && (content?.kind === "terminal" || content?.kind === "agent")) controller.focusPane(leaf.paneId, true);
   }, [codeShown]);
 
   // A terminal selected elsewhere (palette, Dashboard, KalVoice, a new terminal) comes forward.
@@ -513,8 +536,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   // Z7-W3: a Dashboard card, a notification or KalVoice asked to focus a provider pane's thread.
   usePaneFocusRequests((threadId) => {
-    if (!controller.ready || !paneById.has(threadId)) return false;
-    controller.show(threadContent(threadId), { focus: true });
+    if (!controller.ready) return false;
+    controller.replace(migrateAgentContents(controller.layout, new Set([threadId])));
+    controller.show(agentContent(threadId), { focus: true });
     return true;
   });
 
@@ -552,18 +576,18 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       const [first] = created;
       if (created.length === 1 && first) {
         const focused = leaves(current.layout.root).find((l) => l.paneId === current.focusedPaneId);
-        current.show(threadContent(first), {
+        current.show(agentContent(first), {
           focus: true,
           placement: focused && focused.tabs.length > 0 ? "split" : "tab",
         });
       } else if (created.length > 1 && first) {
-        const next = arrangeContents(current.layout, created.map(threadContent));
+        const next = arrangeContents(current.layout, created.map(agentContent));
         if (next) {
           current.replace(next, `Arranged ${created.length} agents.`);
-          const shown = findContent(next, contentKey(threadContent(first)));
+          const shown = findContent(next, contentKey(agentContent(first)));
           if (shown) current.focusPane(shown.paneId);
         } else {
-          for (const id of created) current.show(threadContent(id), { focus: id === first, placement: "tab" });
+          for (const id of created) current.show(agentContent(id), { focus: id === first, placement: "tab" });
         }
       }
       // Any started agent closes the launcher, so a retry never duplicates them; a failure that
@@ -604,8 +628,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           onClose: () => closeTerminalTab(terminal.id),
         };
       }
-      if (content.kind === "thread") {
-        const entry = paneById.get(content.threadId);
+      if (content.kind === "agent") {
+        const entry = paneById.get(content.agentId);
         if (!entry) return null;
         const status = paneStatus(entry.thread.status);
         const account = accountFor(entry.thread);
@@ -615,11 +639,11 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           tone: status.tone,
           statusText: `${entry.thread.providerName}${account ? ` · ${paneAccountLabel(account)}` : ""} · ${status.label}`,
           terminal: true,
-          running: entry.info.running,
+          running: entry.info?.running ?? false,
           // Closing the tab stops the agent and takes the pane thread out of the layout.
           onClose: () => {
             void stopAgent(entry.thread.id);
-            controllerRef.current.forget(new Set([contentKey(threadContent(entry.thread.id))]));
+            controllerRef.current.forget(new Set([contentKey(agentContent(entry.thread.id))]));
           },
         };
       }
@@ -657,26 +681,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           />
         );
       }
-      if (content.kind === "thread") {
-        const entry = paneById.get(content.threadId);
-        if (!entry) {
+      if (content.kind === "agent") {
+        const entry = paneById.get(content.agentId);
+        if (!entry?.info) {
           return (
             <PaneNotice
               icon={<LayoutPanelLeft />}
-              title="This thread isn't a pane here"
+              title="Connecting to agent terminal"
               actions={
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    navigate("threads");
-                    threadsIntent.request("open", content.threadId);
-                  }}
-                >
-                  Open in Threads
+                <Button size="sm" onClick={() => void providerPanes.refresh()}>
+                  Retry connection
                 </Button>
               }
             >
-              <p>It runs without a terminal pane, or provider panes are off in this build. Threads shows it in full.</p>
+              <p>{providerPanes.error ?? "Waiting for the coding session's terminal connection."}</p>
             </PaneNotice>
           );
         }
@@ -704,8 +722,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       restartTerminal,
       closeTerminalTab,
       providerPanes,
-      navigate,
-      threadsIntent,
       current,
       accountFor,
       browserBridge,
@@ -743,8 +759,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (t.status === "running" && !shown.has(contentKey(content))) list.push({ content, title: titleOf(content) });
     }
     for (const p of providerPanes.panes) {
-      const content = threadContent(p.thread.id);
-      if (p.info.running && !shown.has(contentKey(content))) list.push({ content, title: titleOf(content) });
+      const content = agentContent(p.thread.id);
+      if (p.info?.running && !shown.has(contentKey(content))) list.push({ content, title: titleOf(content) });
     }
     return list;
   }, [terminals, providerPanes.panes, shown, titleOf]);
@@ -853,9 +869,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
               <DropdownMenuItem
                 key={contentKey(item.content)}
                 icon={
-                  item.content.kind === "thread" ? (
+                  item.content.kind === "agent" ? (
                     <ProviderGlyph
-                      provider={paneById.get(item.content.threadId)?.thread.providerId ?? "claude-code"}
+                      provider={paneById.get(item.content.agentId)?.thread.providerId ?? "claude-code"}
                       size="xs"
                     />
                   ) : (
@@ -945,17 +961,21 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           return { handled: false, message: "That address cannot be opened in Browser." };
         }
       }
-      if (command.kind === "open" && command.content.kind === "thread" && !paneById.has(command.content.threadId)) {
-        navigate("threads");
-        threadsIntent.request("open", command.content.threadId);
-        return { handled: true, message: "Opened the thread in Threads." };
+      if (command.kind === "open" && command.content.kind === "thread") {
+        if (paneById.has(command.content.threadId)) {
+          controllerRef.current.show(agentContent(command.content.threadId), { focus: true });
+        } else {
+          navigate("threads");
+          threadsIntent.request("open", command.content.threadId);
+        }
+        return { handled: true };
       }
       if (command.kind === "arrange-providers") {
         const selected = selectDistinctProviderThreads(
           command.providerIds,
           providerPanes.panes.map((entry) => ({ threadId: entry.thread.id, providerId: entry.thread.providerId })),
         );
-        const found = selected.threadIds.map(threadContent);
+        const found = selected.threadIds.map(agentContent);
         if (found.length === 0) {
           return { handled: false, message: "None of those providers has a pane in this workspace yet." };
         }
@@ -972,12 +992,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (command.kind === "open-provider-panes") {
         const threadIds = [...new Set(command.threadIds.filter((threadId) => threadId.trim().length > 0))];
         if (threadIds.length === 0) return { handled: false, message: "No provider panes were created." };
-        const next = arrangeContents(current.layout, threadIds.map(threadContent));
+        const next = arrangeContents(current.layout, threadIds.map(agentContent));
         if (!next) {
           return { handled: false, message: "There isn't room to show every new provider pane." };
         }
         current.replace(next, `Arranged ${threadIds.length} provider ${threadIds.length === 1 ? "pane" : "panes"}.`);
-        const first = findContent(next, contentKey(threadContent(threadIds[0] as string)));
+        const first = findContent(next, contentKey(agentContent(threadIds[0] as string)));
         if (first) current.focusPane(first.paneId);
         // The exact ids are already authoritative; refresh fills their runtime labels and status.
         void providerPanes.refresh();
@@ -995,7 +1015,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const contents = new Map(allContents(current.layout).map((content) => [contentKey(content), content]));
         const candidates = paneQueryCandidates(current.layout, (key) => {
           const content = contents.get(key);
-          return content ? { title: titleOf(content), aliases: aliases.get(key) ?? [] } : null;
+          return content
+            ? {
+                title: titleOf(content),
+                aliases: aliases.get(content.kind === "agent" ? `thread:${content.agentId}` : key) ?? [],
+              }
+            : null;
         });
         const result = applyPaneControl(
           current.layout,

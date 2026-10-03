@@ -103,14 +103,20 @@ test("the agents rail hides to a strip of live counts and is remembered", async 
 test("projects switch the workspace, and the top bar follows with its branch", async ({ page }) => {
   await open(page, "code");
   const projects = page.getByRole("region", { name: "Projects" });
-  await expect(projects.getByRole("button", { name: "kalcode-site" })).toHaveAttribute("aria-current", "true");
+  await expect(projects.getByRole("button", { name: "kalcode-site", exact: true })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await expect(bar(page).getByRole("button", { name: "Workspace kalcode-site" })).toBeVisible();
   await expect(bar(page).getByRole("button", { name: /^Branch feature\/oauth-race/ })).toBeVisible();
 
-  await projects.getByRole("button", { name: "api-server" }).click();
+  await projects.getByRole("button", { name: "api-server", exact: true }).click();
   await expect(page.getByRole("main")).toHaveAttribute("data-surface", "code");
   await expect(bar(page).getByRole("button", { name: "Workspace api-server" })).toBeVisible();
-  await expect(projects.getByRole("button", { name: "api-server" })).toHaveAttribute("aria-current", "true");
+  await expect(projects.getByRole("button", { name: "api-server", exact: true })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
 });
 
 test("the mode chip sets the permission mode new threads start in", async ({ page }) => {

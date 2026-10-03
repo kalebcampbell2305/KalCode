@@ -166,6 +166,7 @@ export function ProviderPane({
           providerId={thread.providerId}
           providerAccountId={thread.providerAccountId}
           status={thread.status}
+          errorMessage={thread.error?.message}
           providerPromptActive={providerAsking}
           label={`${thread.name} ${identity.name}${accountLabel ? ` ${accountLabel}` : ""} input`}
           running={running}

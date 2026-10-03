@@ -25,7 +25,16 @@ use kalcode_contracts::sessions::{
     MAX_SESSION_CHOICES, MAX_SESSION_QUERY_CHARS, SessionCandidate, SessionMatchTier,
     SessionResolution,
 };
-use kalcode_contracts::threads::ThreadSummary;
+use kalcode_contracts::threads::{ThreadRuntimeKind, ThreadSummary};
+
+/// Product nouns constrain the runtime before names or task context are matched.
+/// Provider names alone do not prove that a session is a coding terminal.
+pub fn matches_requested_runtime(thread: &ThreadSummary, query: &str) -> bool {
+    let coding = normalize(query)
+        .split_whitespace()
+        .any(|word| matches!(word, "agent" | "agents" | "terminal" | "terminals"));
+    !coding || thread.runtime_kind == Some(ThreadRuntimeKind::InteractivePty)
+}
 
 /// What the person is looking at when they name a session.
 #[derive(Debug, Clone, Copy, Default)]
@@ -144,7 +153,7 @@ pub fn resolve(
     }
     let open: Vec<Entry<'_>> = threads
         .iter()
-        .filter(|t| t.archived_at.is_none())
+        .filter(|t| t.archived_at.is_none() && matches_requested_runtime(t, trimmed))
         .map(Entry::new)
         .collect();
     let in_workspace = |e: &Entry<'_>| ctx.workspace_id.is_some_and(|w| e.t.workspace_id == w);
@@ -643,6 +652,9 @@ fn within_distance(a: &str, b: &str, max: usize) -> bool {
 pub fn session_resolve(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: crate::runtime_coordinator::RuntimeState<crate::thread_commands::ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<
+        crate::provider_pane_commands::ProviderPanesState,
+    >,
     query: String,
     workspace_id: Option<String>,
     focused_thread_id: Option<String>,
@@ -661,10 +673,13 @@ pub fn session_resolve(
             .into());
         }
     }
-    let threads = state
+    let mut threads = state
         .runtime()?
         .list(None, false)
         .map_err(|e| e.log_and_convert("session_resolve"))?;
+    for thread in &mut threads {
+        panes.stamp_runtime_kind(thread);
+    }
     Ok(resolve(
         &threads,
         &query,

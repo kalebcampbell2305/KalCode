@@ -24,6 +24,7 @@ import {
   MAX_PANES,
   makeLeaf,
   matchingPreset,
+  migrateAgentContents,
   movePane,
   moveTab,
   neighbourPane,
@@ -67,6 +68,44 @@ function twoPanes(): PaneLayout {
 function expectValid(layout: PaneLayout) {
   expect(validateLayout(layout)).toBeNull();
 }
+
+describe("coding agent pane identity", () => {
+  it("round trips agent tabs and dock items separately from Threads", () => {
+    const agent: PaneContent = { kind: "agent", agentId: "live-provider-session" };
+    const layout = layoutOf(makeLeaf([agent, thread("conversation")], "code", 1));
+    layout.dock = [{ kind: "agent", agentId: "background-provider-session" }];
+    expect(parseLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+    expect(contentKey(agent)).toBe("agent:live-provider-session");
+    expect(contentKey(agent)).not.toBe(contentKey(thread("live-provider-session")));
+  });
+
+  it("migrates only confirmed legacy agent tabs and dock entries while preserving geometry", () => {
+    const untouched = makeLeaf([thread("conversation"), term("shell")], "chat");
+    const layout = layoutOf({
+      kind: "split",
+      axis: "vertical",
+      ratios: [650, 350],
+      children: [{ ...makeLeaf([thread("agent-1"), thread("unknown")], "code", 1), collapsed: true }, untouched],
+    });
+    layout.maximizedPaneId = "chat";
+    layout.dock = [thread("agent-2"), thread("unconfirmed")];
+    const migrated = migrateAgentContents(layout, new Set(["agent-1", "agent-2"]));
+    expect(leaves(migrated.root)[0]).toEqual({
+      ...leaves(layout.root)[0],
+      tabs: [{ kind: "agent", agentId: "agent-1" }, thread("unknown")],
+    });
+    expect(leaves(migrated.root)[1]).toBe(untouched);
+    expect(migrated.root.kind === "split" && migrated.root.ratios).toBe(
+      layout.root.kind === "split" && layout.root.ratios,
+    );
+    expect(migrated.maximizedPaneId).toBe("chat");
+    expect(migrated.dock).toEqual([{ kind: "agent", agentId: "agent-2" }, thread("unconfirmed")]);
+    expect(leaves(layout.root)[0]?.tabs[0]).toEqual(thread("agent-1"));
+    expect(migrateAgentContents(migrated, new Set(["agent-1", "agent-2"]))).toBe(migrated);
+    expect(migrateAgentContents(layout, new Set())).toBe(layout);
+    expectValid(migrated);
+  });
+});
 
 describe("ratios", () => {
   it("always sum to 1000 with every share positive", () => {

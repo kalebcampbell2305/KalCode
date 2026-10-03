@@ -16,6 +16,7 @@ import {
   guardianBuildArgs,
   guardianBundleOverlay,
 } from "./guardian-packaging.mjs";
+import { clearStaleHook, HOOK_FILENAME, hookBuildArgs, hookBundleOverlay } from "./hook-packaging.mjs";
 import {
   assertCleanTree,
   headCommit,
@@ -47,8 +48,11 @@ const lap = (name) => {
 
 // The release build relinks the guardian anyway; never leave a link output a later build could mistake for its own.
 clearStaleGuardian(TARGET_DIR);
+clearStaleHook(TARGET_DIR);
 run("cargo", guardianBuildArgs(), { env: { ...base, CARGO_TARGET_DIR: TARGET_DIR } });
 lap("guardian");
+run("cargo", hookBuildArgs(), { env: { ...base, CARGO_TARGET_DIR: TARGET_DIR } });
+lap("hook");
 
 const desktopEnv = {
   ...signingEnvironment(base),
@@ -60,11 +64,14 @@ const workspace = mkdtempSync(join(tmpdir(), "kalcode-release-warm-"));
 try {
   const overlayPath = join(workspace, "tauri.bundle.json");
   writeJson(overlayPath, {
-    ...guardianBundleOverlay({
-      guardianPath: join(TARGET_DIR, "release", GUARDIAN_FILENAME),
-      signingOverlay: buildSigningOverlay({
-        nodePath: process.execPath,
-        signerPath: join(ROOT, "tooling", "release", "sign-windows.mjs"),
+    ...hookBundleOverlay({
+      hookPath: join(TARGET_DIR, "release", HOOK_FILENAME),
+      signingOverlay: guardianBundleOverlay({
+        guardianPath: join(TARGET_DIR, "release", GUARDIAN_FILENAME),
+        signingOverlay: buildSigningOverlay({
+          nodePath: process.execPath,
+          signerPath: join(ROOT, "tooling", "release", "sign-windows.mjs"),
+        }),
       }),
     }),
     version: releaseVersionOverlay(releaseVersion()).version,
@@ -97,5 +104,6 @@ run("cargo", ["build", "--quiet", "--locked", "--release", "--manifest-path", UP
 lap("updaterSigner");
 // A warm guardian must not survive into the signed build (build-windows.mjs relinks and signs its own).
 clearStaleGuardian(TARGET_DIR);
+clearStaleHook(TARGET_DIR);
 assertCleanTree("After the warm build, the working tree");
 console.log(JSON.stringify({ warmed: true, commit: headCommit(), seconds }));

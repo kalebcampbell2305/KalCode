@@ -1,7 +1,7 @@
 /**
- * The Fleet's card → thread morph: the clicked card grows into that thread's view (View
+ * The Fleet's card → agent morph: the clicked card grows into that thread's view (View
  * Transitions API: WebView2 on Windows; WKWebView on macOS 15+). Where the API is missing, or
- * motion is reduced, the thread simply opens.
+ * motion is reduced, the terminal simply opens.
  */
 
 type StartViewTransition = (update: () => Promise<void> | void) => {
@@ -11,7 +11,7 @@ type StartViewTransition = (update: () => Promise<void> | void) => {
 
 const NAME = "fleet-agent";
 /**
- * Rendering is paused while the new state is prepared, so wait only briefly for the thread view
+ * Rendering is paused while the new state is prepared, so wait only briefly for the agent terminal
  * to mount; if it isn't there yet, the page cross-fades instead of morphing.
  */
 const MOUNT_WAIT_MS = 100;
@@ -32,9 +32,9 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-/** The view of exactly this thread, once mounted (other open thread views are left alone). */
-async function threadView(threadId: string): Promise<HTMLElement | null> {
-  const selector = `[data-thread-detail="${CSS.escape(threadId)}"]`;
+/** The view of exactly this agent, once mounted (other open agent terminals are left alone). */
+async function agentView(agentId: string): Promise<HTMLElement | null> {
+  const selector = `[data-provider-pane="${CSS.escape(agentId)}"]`;
   const deadline = performance.now() + MOUNT_WAIT_MS;
   for (;;) {
     const found = document.querySelector<HTMLElement>(selector);
@@ -43,8 +43,8 @@ async function threadView(threadId: string): Promise<HTMLElement | null> {
   }
 }
 
-/** Opens a thread from its fleet card, morphing the card into the thread view when possible. */
-export function morphIntoThread(card: HTMLElement | null, threadId: string, open: () => unknown): void {
+/** Opens an agent from its fleet card, morphing the card into the agent terminal when possible. */
+export function morphIntoAgent(card: HTMLElement | null, agentId: string, open: () => unknown): void {
   const start = (document as Document & { startViewTransition?: StartViewTransition }).startViewTransition;
   if (!start || !card || motionReduced()) {
     void Promise.resolve(open()).catch(() => undefined);
@@ -53,7 +53,7 @@ export function morphIntoThread(card: HTMLElement | null, threadId: string, open
   card.style.setProperty("view-transition-name", NAME);
   let target: HTMLElement | null = null;
   const transition = start.call(document, async () => {
-    // Exactly one element carries the name in each state: the card before, the thread view after.
+    // Exactly one element carries the name in each state: the card before, the agent terminal after.
     card.style.removeProperty("view-transition-name");
     const opening = new Promise((resolve) => resolve(open()));
     // The open keeps going past the race; its errors surface where `open` reports them.
@@ -66,7 +66,7 @@ export function morphIntoThread(card: HTMLElement | null, threadId: string, open
       }),
     ]).finally(() => clearTimeout(timer));
     if (!opened) return;
-    target = await threadView(threadId);
+    target = await agentView(agentId);
     target?.style.setProperty("view-transition-name", NAME);
   });
   // Navigation errors surface where `open` reports them; the transition only cleans up.

@@ -14,7 +14,7 @@ export interface AgentLaunch {
 
 export interface ProviderPaneEntry {
   thread: ThreadSummary;
-  info: PaneInfo;
+  info: PaneInfo | null;
 }
 
 /** Hook-channel changes (waiting → active or limited) carry no thread event; poll while waiting. */
@@ -36,6 +36,8 @@ export interface ProviderPanes {
   channel: PaneChannel;
   /** This workspace's provider pane threads, oldest first. */
   panes: readonly ProviderPaneEntry[];
+  /** Confirmed chat sessions; remove only their obsolete Code layout references. */
+  chatIds: readonly string[];
   /** Whether the first read finished (so absence means "not a pane"). */
   loaded: boolean;
   creating: boolean;
@@ -61,6 +63,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   const { settings } = usePermissions();
   const channel = useMemo(() => new PaneChannel(client), [client]);
   const [panes, setPanes] = useState<ProviderPaneEntry[]>([]);
+  const [chatIds, setChatIds] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState<PaneProviderId | null>(null);
   const [offered, setOffered] = useState<readonly PaneProviderId[]>([]);
@@ -73,15 +76,31 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     try {
       const threads = await client.listThreads({ workspaceId: workspace.id });
       const candidates = threads.filter((t) => isPaneProvider(t.providerId));
-      const infos = await Promise.all(candidates.map((t) => channel.info(t.id).catch(() => null)));
+      const infos = await Promise.allSettled(candidates.map((t) => channel.info(t.id)));
       if (current !== generation.current) return;
-      const next: ProviderPaneEntry[] = [];
-      candidates.forEach((thread, i) => {
-        const info = infos[i];
-        if (info) next.push({ thread, info });
+      setChatIds(
+        candidates
+          .filter((thread, index) => {
+            const result = infos[index];
+            return thread.runtimeKind !== "interactive_pty" && result?.status === "fulfilled" && result.value === null;
+          })
+          .map((thread) => thread.id),
+      );
+      setPanes((previous) => {
+        const next: ProviderPaneEntry[] = [];
+        candidates.forEach((thread, i) => {
+          const result = infos[i];
+          const info =
+            result?.status === "fulfilled"
+              ? result.value
+              : previous.find((entry) => entry.thread.id === thread.id)?.info;
+          if (info || thread.runtimeKind === "interactive_pty") next.push({ thread, info: info ?? null });
+        });
+        next.sort((a, b) => a.thread.createdAt.localeCompare(b.thread.createdAt));
+        return next;
       });
-      next.sort((a, b) => a.thread.createdAt.localeCompare(b.thread.createdAt));
-      setPanes(next);
+      const failed = infos.find((result) => result.status === "rejected");
+      setError(failed?.status === "rejected" ? toKalCodeError(failed.reason).message : null);
       setLoaded(true);
     } catch (cause) {
       if (current === generation.current) {
@@ -152,8 +171,10 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   // Claude Code's hook channel connects on its own, soon after start. A Codex pane's channel
   // becomes active with its first `notify` (a finished turn), which may produce no thread event
   // (idle → idle), so it is polled too, more slowly (an in-memory read, no provider process).
-  const waiting = panes.some((p) => p.info.hookChannel === "waiting" && p.thread.providerId === "claude-code");
-  const codexWaiting = panes.some((p) => p.info.hookChannel === "waiting" && p.thread.providerId === "codex");
+  const waiting = panes.some(
+    (p) => !p.info || (p.info.hookChannel === "waiting" && p.thread.providerId === "claude-code"),
+  );
+  const codexWaiting = panes.some((p) => p.info?.hookChannel === "waiting" && p.thread.providerId === "codex");
   useEffect(() => {
     if (!waiting && !codexWaiting) return;
     const timer = setInterval(() => void refresh(), waiting ? WAITING_POLL_MS : CODEX_WAITING_POLL_MS);
@@ -177,7 +198,18 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
           workspaceId: workspace.id,
           permissionMode,
         });
-        await refresh();
+        // Creation owns this exact terminal identity. A list read can still describe
+        // the instant before creation; never drop a fresh terminal on that snapshot.
+        generation.current += 1;
+        setPanes((previous) => [...previous.filter((entry) => entry.thread.id !== thread.id), { thread, info: null }]);
+        try {
+          const info = await channel.info(thread.id);
+          setPanes((previous) => previous.map((entry) => (entry.thread.id === thread.id ? { thread, info } : entry)));
+        } catch (cause) {
+          // The session already exists. A metadata read cannot undo it or make the
+          // launcher offer to create a duplicate; keep its terminal identity visible.
+          setError(toKalCodeError(cause).message);
+        }
         return thread;
       } catch (cause) {
         setError(toKalCodeError(cause).message);
@@ -186,7 +218,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
         setCreating(null);
       }
     },
-    [channel, client, workspace.id, settings, refresh],
+    [channel, client, workspace.id, settings],
   );
 
   const updated = useCallback(
@@ -201,6 +233,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     enabled,
     channel,
     panes,
+    chatIds,
     loaded: loaded || !enabled,
     creating: creating !== null,
     creatingProvider: creating,

@@ -29,6 +29,15 @@
 - Do not implement the trusted coding experience by blindly accepting provider prompts or applying unrestricted approval bypass to every action. Test routine development and genuine risk boundaries together on Windows and macOS.
 
 
+## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
+
+An agent is always a real provider coding terminal/session in Code. Agent commands never create chat Threads. Opening four Claude Code agents creates four fresh Claude Code terminals in the current workspace; opening six Codex agents creates six fresh Codex terminals. Each binds its provider account, exact model, effort and working directory. Agent Fleet focuses that same terminal. Threads remain a separate product concept. Preserve terminal identity through resource waits, retry, restoration and runtime errors; never fall back to chat execution or Threads navigation.
+
+KalCode agents must never spam the Windows desktop with external terminal windows. User-visible shell work runs inside KalCode's integrated PTY; background work runs headless/hidden and must never steal focus. Do not spawn Windows Terminal, cmd, PowerShell or another external console unless the user explicitly requests one. Prevent window creation at the owning spawn boundary; minimizing or hiding a window after creation is not a fix. Deduplicate active logical jobs, bound retries, and terminate owned child processes on cancellation/completion without disturbing unrelated user work.
+
+For Codex tool execution on Windows, use the existing PTY execution mode (`exec_command` with `tty: true`) so commands stay contained. Any explicitly launched background helper must use the platform's no-window creation mechanism (`windowsHide`, `CREATE_NO_WINDOW`, or `Start-Process -WindowStyle Hidden` as applicable). Test the actual owning spawn path and observe window/focus events; reduced popup frequency is not completion.
+
+
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 
 **KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.**
@@ -136,6 +145,10 @@ This file is the canonical engineering and release policy for every agent workin
 
 ## Permanent definition: AGENT means a coding agent (owner directive 2026-10-02)
 
+**Creating a new KalCode coding agent always creates a fresh live provider coding session. Multi-agent launch creates N independent provider processes and terminal sessions, subject to the existing account, plan and resource limits. New agents must never inherit ended or failed state from historical sessions. Agent UI state reflects the real provider process: starting or waiting during initialization, live only after successful creation, and failed only for an actual failure.**
+
+New-agent creation and historical restoration are separate lifecycle paths. Use fresh agent, provider-session and PTY identities for new launches; sharing a provider account never means sharing a runtime identity. Resume preserves the historical agent's conversation while creating a new process instance. Ship and verify every required runtime helper beside the application on Windows and macOS, including `kalcode-hook`; a missing helper or failed spawn must report its real cause, never an "earlier run" explanation.
+
 "IN KALCODE, AN AGENT IS A REAL CODING AGENT RUNNING IN A CODING TERMINAL/PANE.
 
 AGENT IS NOT A THREAD.
@@ -152,7 +165,7 @@ This applies to Claude Code, Codex and every future agent, in product code, UI c
 
 - **Agent** = a real provider coding session (Claude Code, Codex, Gemini CLI) running in its own terminal pane in Code, with a provider, account, exact model, effort, workspace, worktree/branch where relevant, live status and current task. N agents = N panes.
 - **Thread** = the chat-oriented surface in Threads. Never implement, list, count or open an agent as a Thread, and never call a thread an agent.
-- In code, an agent is a thread record whose `runtimeKind` is `interactive_pty` (native stamps it from the provider-pane marker on `thread_list`/`thread_get`; `isCodingAgent` in `apps/desktop/src/surfaces/dashboard/data/agents.ts`). Agent surfaces read `useCodingAgents()`; opening an agent goes through `uiIntents.focus({ kind: "thread", ... })`, which focuses its Code pane.
+- In storage, coding sessions retain their existing record IDs and are identified by `runtimeKind: "interactive_pty"`, stamped from the durable provider-pane marker before resource admission. This shared storage does not make an agent a chat Thread. Agent surfaces read `useCodingAgents()`; opening an agent uses `uiIntents.focus({ kind: "agent", agentId, workspaceId })`, and Code persists `{ kind: "agent", agentId }` pane content. Never route an agent through a Thread focus target or fall back to a headless chat when its terminal runtime is unavailable.
 - Code's **New agent** launcher (+) chooses provider → account (only when there are several) → exact model → effort → count, and starts that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on the Dashboard; "the agent that just finished" means the latest finished coding agent.
 - Agents rail, Agent Fleet, Needs You counts, widgets, Squads, Handoffs, Queue, Runs and future automation use this same definition. Do not create an alternate one.
 

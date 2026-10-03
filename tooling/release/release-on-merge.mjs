@@ -128,12 +128,8 @@ export function shipLockState(lockFile, { alive = pidAlive, now = Date.now } = {
 }
 
 function run(command, args, options = {}) {
-  const r = spawnSync(command, args, {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    ...options,
-    windowsHide: true,
-  });
+  const r = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options, windowsHide: true });
+
   if (r.error) throw new ReleaseError(`${command} failed: ${r.error.message}`);
   return { code: r.status ?? 1, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -168,7 +164,7 @@ function runShip(args) {
     const timer = setTimeout(() => {
       timedOut = true;
       if (process.platform === "win32")
-        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       else child.kill("SIGKILL");
     }, RELEASE_TIMEOUT_MS);
     for (const stream of [child.stdout, child.stderr]) {

@@ -59,6 +59,33 @@ const thread = {
 } as ThreadSummary & { effort: string };
 
 let dispose: (() => void) | null = null;
+
+it("coding sessions publish agent identities and focus only their validated Code terminal", async () => {
+  const agent = { ...thread, runtimeKind: "interactive_pty" as const };
+  const targets = createBaseVoiceSceneTargets({ workspaces: [workspace], terminals: [], threads: [agent] });
+  expect(targets.find((candidate) => candidate.entityId === agent.id)).toMatchObject({
+    kind: "agent",
+    codingAgent: true,
+  });
+  const actions = {
+    workspaces: [workspace],
+    activeWorkspaceId: workspace.id,
+    terminals: [],
+    getThread: vi.fn().mockResolvedValue(agent),
+    listTerminals: vi.fn().mockResolvedValue([]),
+    activateWorkspace: vi.fn().mockResolvedValue(true),
+    selectTerminal: vi.fn(),
+    focusIntent: vi.fn().mockResolvedValue(undefined),
+    navigateToCode: vi.fn(),
+  };
+  const target = { kind: "agent" as const, entityId: agent.id, title: agent.name };
+  await expect(focusKnownVoiceSceneTarget(target, actions)).resolves.toBe(true);
+  expect(actions.focusIntent).toHaveBeenCalledWith({ kind: "agent", agentId: agent.id, workspaceId: workspace.id });
+  actions.focusIntent.mockClear();
+  actions.getThread.mockResolvedValue({ ...agent, runtimeKind: "headless" });
+  await expect(focusKnownVoiceSceneTarget(target, actions)).resolves.toBe(false);
+  expect(actions.focusIntent).not.toHaveBeenCalled();
+});
 afterEach(() => {
   dispose?.();
   dispose = null;

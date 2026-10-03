@@ -24,6 +24,13 @@ import {
   guardianSignatureEvidence,
 } from "./guardian-packaging.mjs";
 import {
+  clearStaleHook,
+  HOOK_FILENAME,
+  hookBuildArgs,
+  hookBundleOverlay,
+  hookSignatureEvidence,
+} from "./hook-packaging.mjs";
+import {
   assertCleanTree,
   capture,
   DESKTOP_DIR,
@@ -150,6 +157,7 @@ try {
 const bundled = join(TARGET_DIR, "release", "bundle", "nsis", `${product}_${version}_x64-setup.exe`);
 const builtApp = join(TARGET_DIR, "release", "kalcode.exe");
 const builtGuardian = join(TARGET_DIR, "release", GUARDIAN_FILENAME);
+const builtHook = join(TARGET_DIR, "release", HOOK_FILENAME);
 const startedAt = Date.now();
 
 console.log(`Building ${product} ${version} for Windows x64 from ${commit.slice(0, 12)}…`);
@@ -160,6 +168,8 @@ let publisherIdentityOids = [];
 let publisherIdentityBound = false;
 let guardianSignature = null;
 let guardianSha256 = null;
+let hookSignature = null;
+let hookSha256 = null;
 let childEnvironment = buildEnvironment(process.env, channel.compiledChannel);
 let buildFailure = null;
 try {
@@ -177,15 +187,32 @@ try {
       CARGO_TARGET_DIR: TARGET_DIR,
     },
   });
+  clearStaleHook(TARGET_DIR);
+  run("cargo", hookBuildArgs(), {
+    env: {
+      ...childEnvironment,
+      CARGO_TARGET_DIR: TARGET_DIR,
+    },
+  });
   if (!existsSync(builtGuardian) || !statSync(builtGuardian).isFile()) {
     throw new Error("the provider guardian build did not produce its canonical executable");
   }
   if (statSync(builtGuardian).mtimeMs < startedAt - 1000) {
     throw new Error("the provider guardian executable is stale");
   }
+  if (!existsSync(builtHook) || !statSync(builtHook).isFile()) {
+    throw new Error("the hook helper build did not produce its canonical executable");
+  }
+  if (statSync(builtHook).mtimeMs < startedAt - 1000) {
+    throw new Error("the hook helper executable is stale");
+  }
   const unsignedGuardianSignature = authenticodeStatus(builtGuardian, powershellJson);
   if (unsignedGuardianSignature.status !== "NotSigned" || unsignedGuardianSignature.timestamped) {
     throw new Error("the freshly built provider guardian must be unsigned before release signing");
+  }
+  const unsignedHookSignature = authenticodeStatus(builtHook, powershellJson);
+  if (unsignedHookSignature.status !== "NotSigned" || unsignedHookSignature.timestamped) {
+    throw new Error("the freshly built hook helper must be unsigned before release signing");
   }
   if (signingMode.sign) {
     writeJson(metadataPath, artifactSigningMetadata());
@@ -227,6 +254,13 @@ try {
       publisherIdentityOids,
       signingRequired: true,
     });
+    signTarget({ targetPath: builtHook, metadataPath, env: childEnvironment });
+    hookSignature = hookSignatureEvidence({
+      signature: authenticodeStatus(builtHook, powershellJson),
+      identityOids: authenticodeIdentityOids(builtHook, powershellJson),
+      publisherIdentityOids,
+      signingRequired: true,
+    });
   } else {
     // Never let an unsigned local simulation inherit artifacts signed by an earlier build.
     rmSync(builtApp, { force: true });
@@ -237,13 +271,23 @@ try {
       publisherIdentityOids: [],
       signingRequired: false,
     });
+    hookSignature = hookSignatureEvidence({
+      signature: unsignedHookSignature,
+      identityOids: [],
+      publisherIdentityOids: [],
+      signingRequired: false,
+    });
     tauriArgs.push("--no-sign");
   }
   guardianSha256 = await sha256File(builtGuardian);
+  hookSha256 = await sha256File(builtHook);
   writeJson(overlayPath, {
-    ...guardianBundleOverlay({
-      guardianPath: builtGuardian,
-      signingOverlay,
+    ...hookBundleOverlay({
+      hookPath: builtHook,
+      signingOverlay: guardianBundleOverlay({
+        guardianPath: builtGuardian,
+        signingOverlay,
+      }),
     }),
     version: releaseVersionOverlay(version).version,
   });
@@ -269,9 +313,13 @@ if (buildFailure) fail(buildFailure instanceof Error ? buildFailure.message : St
 if (!existsSync(bundled)) fail(`The bundler did not produce ${bundled}`);
 if (!existsSync(builtApp)) fail(`The build did not produce ${builtApp}`);
 if (!existsSync(builtGuardian)) fail(`The build did not retain ${builtGuardian}`);
+if (!existsSync(builtHook)) fail(`The build did not retain ${builtHook}`);
 if (statSync(bundled).mtimeMs < startedAt - 1000) fail(`${bundled} is stale (not written by this build).`);
 if ((await sha256File(builtGuardian)) !== guardianSha256) {
   fail("the provider guardian changed while the application was being bundled");
+}
+if ((await sha256File(builtHook)) !== hookSha256) {
+  fail("the hook helper changed while the application was being bundled");
 }
 const builtAppSignature = authenticodeStatus(builtApp, powershellJson);
 const bundledSignature = authenticodeStatus(bundled, powershellJson);
@@ -402,6 +450,12 @@ const record = {
     file: GUARDIAN_FILENAME,
     sha256: guardianSha256,
     ...guardianSignature,
+    bundledBesideApplication: true,
+  },
+  hook: {
+    file: HOOK_FILENAME,
+    sha256: hookSha256,
+    ...hookSignature,
     bundledBesideApplication: true,
   },
   updater: {

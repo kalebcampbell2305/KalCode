@@ -204,13 +204,14 @@ export function createBaseVoiceSceneTargets({ workspaces, terminals, threads }: 
 
   for (const thread of threads) {
     const effort = voiceThreadEffort(thread);
+    const codingAgent = isCodingAgent(thread);
     targets.push({
-      kind: "thread",
+      kind: codingAgent ? "agent" : "thread",
       entityId: thread.id,
       title: thread.name,
       aliases: compactAliases([
         thread.providerName,
-        `${thread.providerName} agent`,
+        `${thread.providerName} ${codingAgent ? "agent" : "thread"}`,
         thread.accountLabel,
         thread.accountLabel ? `${thread.providerName} ${thread.accountLabel}` : null,
         thread.workspaceName,
@@ -231,7 +232,7 @@ export function createBaseVoiceSceneTargets({ workspaces, terminals, threads }: 
       model: thread.model,
       effort,
       branch: thread.branch,
-      codingAgent: isCodingAgent(thread),
+      codingAgent,
       updatedAt: thread.lastActivityAt,
     });
   }
@@ -306,6 +307,7 @@ export interface KnownVoiceSceneFocusActions {
   focusIntent: (
     target:
       | { kind: "thread"; threadId: string; workspaceId: string }
+      | { kind: "agent"; agentId: string; workspaceId: string }
       | { kind: "workspace"; workspaceId: string }
       | { kind: "provider"; providerId: string }
       | { kind: "dashboard" },
@@ -345,11 +347,16 @@ export async function focusKnownVoiceSceneTarget(
     actions.selectTerminal(target.entityId, true, workspaceId);
     return true;
   }
-  if (target.kind === "thread") {
+  if (target.kind === "thread" || target.kind === "agent") {
     try {
       const thread = await actions.getThread(target.entityId);
       if (signal?.aborted || thread.archivedAt !== null) return false;
-      await actions.focusIntent({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+      if ((target.kind === "agent" || target.codingAgent) && !isCodingAgent(thread)) return false;
+      await actions.focusIntent(
+        isCodingAgent(thread)
+          ? { kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId }
+          : { kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId },
+      );
       return !signal?.aborted;
     } catch {
       return false;
@@ -420,7 +427,12 @@ export function useVoiceScene(): VoiceScene {
     async (reference: VoiceSceneReference, options: VoiceSceneResolveOptions = {}): Promise<VoiceSceneResolution> => {
       const context: VoiceSceneContext = { targets: snapshot(), ...options };
       const local = resolveVoiceSceneTarget(reference, context);
-      if (local.kind !== "not_found" || reference.kind !== "named" || typeof client.locatorSearch !== "function") {
+      if (
+        local.kind !== "not_found" ||
+        reference.kind !== "named" ||
+        /\bagents?\b/i.test(reference.query) ||
+        typeof client.locatorSearch !== "function"
+      ) {
         return local;
       }
       try {

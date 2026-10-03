@@ -207,3 +207,152 @@
   width: 0.9375rem;
   height: 0.9375rem;
 }
+
+.heading {
+  flex: 1;
+  min-width: 0;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 1.875rem;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.toggle:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+.toggle:focus-visible,
+.menuButton:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -1px;
+}
+.chevron {
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: transform 160ms var(--ease-out);
+}
+.toggle[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+.header[data-narrow] {
+  padding: 0 0 var(--space-1);
+}
+.body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.body[hidden] {
+  display: none;
+}
+.project {
+  position: relative;
+  flex-shrink: 0;
+}
+.project .row {
+  padding-right: 1.75rem;
+}
+.project[data-pinned] .row,
+.project[data-pinned] .tile {
+  touch-action: none;
+  user-select: none;
+}
+.project[data-dragging] {
+  opacity: 0.65;
+}
+.project[data-drop]::after {
+  content: "";
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  pointer-events: none;
+}
+.project[data-drop="before"]::after {
+  top: -1px;
+}
+.project[data-drop="after"]::after {
+  bottom: -1px;
+}
+.initial[data-pin] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-muted);
+}
+.initial svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  stroke-width: 1.6;
+}
+.menuButton {
+  position: absolute;
+  right: 0.125rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-1);
+  color: var(--color-text-muted);
+  opacity: 0;
+}
+.menuButton svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.project:hover .menuButton,
+.project:focus-within .menuButton,
+.menuButton[data-open] {
+  opacity: 1;
+}
+.menuButton:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.unavailable {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--type-label);
+  line-height: 1.1;
+}
+.row[data-unavailable],
+.tile[data-unavailable] {
+  opacity: 1;
+  color: var(--color-text-muted);
+}
+.notice {
+  margin: var(--space-1) var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  text-align: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+@media (hover: none) {
+  .menuButton {
+    opacity: 1;
+  }
+}

@@ -46,7 +46,7 @@ use kalcode_contracts::sessions::{
     MAX_SESSION_CHOICES, SessionAttention, SessionFollowUp, SessionMatchTier, SessionResolution,
 };
 use kalcode_contracts::threads::WorkspaceOption;
-use kalcode_contracts::threads::{ProviderOption, ThreadStatus, ThreadSummary};
+use kalcode_contracts::threads::{ProviderOption, ThreadRuntimeKind, ThreadStatus, ThreadSummary};
 use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 use kalcode_core::workspaces::TerminalSize;
 use kalcode_core::{Core, KalError};
@@ -1351,6 +1351,54 @@ impl DesktopExecutor {
         Ok(threads)
     }
 
+    /// Raw runtime summaries do not carry pane identity. Read the same durable marker used
+    /// by Code/Fleet before agent target resolution, including after app restart.
+    fn sessions_for_query(&self, query: &str) -> Result<Vec<ThreadSummary>, ExecError> {
+        let mut threads = self.open_threads(None)?;
+        let sessions = self.core.paths().data_dir.join("sessions");
+        for thread in &mut threads {
+            let interactive = kalcode_providers::interactive::provider::marked_interactive_checked(
+                &sessions, &thread.id,
+            )
+            .map_err(|_| {
+                ExecError::new(
+                    "interactive_marker_unavailable",
+                    "KalCode couldn't verify this session's coding terminal. Try again.",
+                )
+            })?;
+            thread.runtime_kind = Some(if interactive {
+                ThreadRuntimeKind::InteractivePty
+            } else {
+                ThreadRuntimeKind::Headless
+            });
+        }
+        threads.retain(|thread| session_resolver::matches_requested_runtime(thread, query));
+        Ok(threads)
+    }
+
+    fn open_session_directive(&self, thread: &ThreadSummary) -> Result<UiDirective, ExecError> {
+        let interactive = kalcode_providers::interactive::provider::marked_interactive_checked(
+            &self.core.paths().data_dir.join("sessions"),
+            &thread.id,
+        )
+        .map_err(|_| {
+            ExecError::new(
+                "interactive_marker_unavailable",
+                "KalCode couldn't verify this session's coding terminal. Try again.",
+            )
+        })?;
+        Ok(if interactive {
+            UiDirective::OpenAgent {
+                agent_id: thread.id.clone(),
+                workspace_id: thread.workspace_id.clone(),
+            }
+        } else {
+            UiDirective::OpenThread {
+                thread_id: thread.id.clone(),
+            }
+        })
+    }
+
     /// The one open thread a spoken name means (session resolver, P3). Never guesses: several
     /// fits, or a fit too loose for `use_`, is a "Which one?" refusal whose `ChooseSession`
     /// directive runs `follow_up` on the session the person picks.
@@ -1362,10 +1410,7 @@ impl DesktopExecutor {
         follow_up: SessionFollowUp,
         verb: &str,
     ) -> Result<ThreadSummary, ExecError> {
-        let threads = self
-            .threads()?
-            .list(None, false)
-            .map_err(|e| from_core(&e))?;
+        let threads = self.sessions_for_query(query)?;
         // "There" points at the session in front, like "it".
         let query = if query.trim().eq_ignore_ascii_case("there") {
             "it"
@@ -1948,12 +1993,10 @@ impl Executor for DesktopExecutor {
         if !session_resolver::is_locating_query(request) {
             return Ok(Vec::new());
         }
-        let Some(runtime) = &self.threads else {
+        if self.threads.is_none() {
             return Ok(Vec::new());
-        };
-        let threads = runtime
-            .list(None, false)
-            .map_err(|error| from_core(&error))?;
+        }
+        let threads = self.sessions_for_query(request)?;
         let resolution = session_resolver::resolve(
             &threads,
             request,
@@ -2059,10 +2102,7 @@ impl Executor for DesktopExecutor {
     /// A thread by name through the session resolver, only when exactly one open thread fits
     /// by id, exact name or provider/account + name (never a first match).
     fn find_thread(&self, name: &str) -> Result<Option<String>, ExecError> {
-        let threads = self
-            .threads()?
-            .list(None, false)
-            .map_err(|e| from_core(&e))?;
+        let threads = self.sessions_for_query(name)?;
         Ok(
             match session_resolver::resolve(&threads, name, &ResolveContext::default()) {
                 SessionResolution::Resolved { target, tier }
@@ -2312,9 +2352,7 @@ impl Executor for DesktopExecutor {
                         thread.name,
                         state.phrase()
                     ),
-                    directive: Some(UiDirective::OpenThread {
-                        thread_id: thread.id,
-                    }),
+                    directive: Some(self.open_session_directive(&thread)?),
                 })
             }
             KalVoiceIntent::WhichSessions { state } => self.which_sessions(*state, ctx),
@@ -2500,9 +2538,7 @@ impl Executor for DesktopExecutor {
                 )?;
                 Ok(Executed {
                     summary: format!("Opened \u{201c}{}\u{201d}.", thread.name),
-                    directive: Some(UiDirective::OpenThread {
-                        thread_id: thread.id,
-                    }),
+                    directive: Some(self.open_session_directive(&thread)?),
                 })
             }
             KalVoiceIntent::RequestPermissionMode { mode, thread_query } => {
@@ -2521,9 +2557,7 @@ impl Executor for DesktopExecutor {
                         thread.name,
                         requestable_mode_label(*mode)
                     ),
-                    directive: Some(UiDirective::OpenThread {
-                        thread_id: thread.id,
-                    }),
+                    directive: Some(self.open_session_directive(&thread)?),
                 })
             }
             KalVoiceIntent::PauseThreads { scope } => {
@@ -2665,9 +2699,7 @@ impl Executor for DesktopExecutor {
                             "\u{201c}{}\u{201d} already uses {}.",
                             thread.name, account.display_name
                         ),
-                        directive: Some(UiDirective::OpenThread {
-                            thread_id: thread.id,
-                        }),
+                        directive: Some(self.open_session_directive(&thread)?),
                     });
                 }
                 Ok(Executed {
@@ -4474,6 +4506,17 @@ mod tests {
     fn local_reasoner_scene_actions_use_live_threads_and_preserve_ambiguity() {
         let s = sessions();
         let ctx = s.f.ctx();
+        for thread in [&s.research_a, &s.research_b] {
+            let dir =
+                s.f.executor
+                    .core
+                    .paths()
+                    .data_dir
+                    .join("sessions")
+                    .join(&thread.id);
+            std::fs::create_dir_all(&dir).expect("session directory");
+            std::fs::write(dir.join("interactive"), b"{}").expect("coding-session marker");
+        }
 
         let actions =
             s.f.executor
@@ -4538,6 +4581,43 @@ mod tests {
                 .expect("non-locating prose")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn explicit_agent_targets_and_reasoning_fallback_never_offer_chat_threads() {
+        let s = sessions();
+        let ctx = s.f.ctx();
+        let dir =
+            s.f.executor
+                .core
+                .paths()
+                .data_dir
+                .join("sessions")
+                .join(&s.auth.id);
+        std::fs::create_dir_all(&dir).expect("session directory");
+        std::fs::write(dir.join("interactive"), b"{}").expect("coding-session marker");
+        assert_eq!(
+            s.f.run(&open("Authentication agent"), &ctx)
+                .expect("agent")
+                .directive,
+            Some(UiDirective::OpenAgent {
+                agent_id: s.auth.id.clone(),
+                workspace_id: s.auth.workspace_id.clone()
+            })
+        );
+        assert!(s.f.run(&open("Release Windows agent"), &ctx).is_err());
+        assert_eq!(
+            s.f.run(&open("Release Windows thread"), &ctx)
+                .expect("chat")
+                .directive,
+            opened(&s.release_windows)
+        );
+        let actions =
+            s.f.executor
+                .local_reasoning_actions("find the agent working on sign-in", &ctx)
+                .expect("candidates");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].intent, open(&s.auth.id));
     }
 
     #[test]

@@ -80,6 +80,8 @@ export function emptyLayout(): PaneLayout {
 /** Stable identity of a content item (the same terminal is never shown twice). */
 export function contentKey(content: PaneContent): string {
   switch (content.kind) {
+    case "agent":
+      return `agent:${content.agentId}`;
     case "thread":
       return `thread:${content.threadId}`;
     case "terminal":
@@ -122,6 +124,30 @@ export function findContent(layout: PaneLayout, key: string): { paneId: string; 
 /** Every content item shown in the layout (panes and the dock). */
 export function allContents(layout: PaneLayout): PaneContent[] {
   return [...leaves(layout.root).flatMap((l) => l.tabs), ...layout.dock];
+}
+
+/** Upgrade old Code agent tabs only after their provider-session identity is confirmed. */
+export function migrateAgentContents(layout: PaneLayout, knownAgentIds: ReadonlySet<string>): PaneLayout {
+  const migrate = (items: PaneContent[]): PaneContent[] => {
+    let changed = false;
+    const next = items.map((content): PaneContent => {
+      if (content.kind !== "thread" || !knownAgentIds.has(content.threadId)) return content;
+      changed = true;
+      return { kind: "agent", agentId: content.threadId };
+    });
+    return changed ? next : items;
+  };
+  const visit = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      const tabs = migrate(node.tabs);
+      return tabs === node.tabs ? node : { ...node, tabs };
+    }
+    const children = node.children.map(visit);
+    return children.every((child, index) => child === node.children[index]) ? node : { ...node, children };
+  };
+  const root = visit(layout.root);
+  const dock = migrate(layout.dock);
+  return root === layout.root && dock === layout.dock ? layout : { ...layout, root, dock };
 }
 
 export function activeContent(leaf: LeafNode): PaneContent | null {
@@ -1091,6 +1117,8 @@ function isContent(value: unknown): value is PaneContent {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   switch (v.kind) {
+    case "agent":
+      return typeof v.agentId === "string";
     case "thread":
       return typeof v.threadId === "string";
     case "terminal":
