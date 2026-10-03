@@ -82,7 +82,11 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByRole("heading", { name: "New thread" })).toBeVisible();
-    await expect(form.getByText("Loading providers and workspaces")).toHaveCount(0, { timeout: 60_000 });
+    await expect(
+      form
+        .getByRole("combobox", { name: "Provider", exact: true })
+        .or(form.getByRole("heading", { name: "No provider is ready for threads", exact: true })),
+    ).toBeVisible({ timeout: 60_000 });
 
     // Compare the UI with what native detection reported.
     const statuses = await invoke<ProviderStatusLite[]>(page, "providers_list");
