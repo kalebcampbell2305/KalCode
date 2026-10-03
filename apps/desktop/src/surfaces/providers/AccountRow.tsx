@@ -14,6 +14,7 @@ import {
 import { ChevronDown, Info, LogIn, LogOut, MoreHorizontal, PenLine, RefreshCw, Star, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { agentsAndThreadsLabel } from "../dashboard/data/agents.ts";
 import { accountFullLabel, accountHealth, accountName, accountSignIn } from "./accountIdentity.ts";
 import styles from "./ProviderAccountsView.module.css";
 import { type AccountUsage, isBrowserAuthProvider } from "./useProviderAccounts.ts";
@@ -386,8 +387,12 @@ function AccountFacts({
         </div>
       ) : null}
       <div>
+        <dt>Active agents</dt>
+        <dd>{usage ? openUse(usage.agents, usage.agentsRunning) : "Unavailable"}</dd>
+      </div>
+      <div>
         <dt>Active threads</dt>
-        <dd>{usage ? threadUse(usage) : "Unavailable"}</dd>
+        <dd>{usage ? openUse(usage.threads, usage.threadsRunning) : "Unavailable"}</dd>
       </div>
       <div>
         <dt>Workspace default in</dt>
@@ -406,14 +411,14 @@ function When({ iso, now }: { iso: string; now: number }) {
 }
 
 /** "2 · 1 running", "1" or "None": a count in text, never a colour. */
-function threadUse(usage: AccountUsage): string {
-  if (usage.threads === 0) return "None";
-  return usage.running > 0 ? `${usage.threads} · ${usage.running} running` : String(usage.threads);
+function openUse(open: number, running: number): string {
+  if (open === 0) return "None";
+  return running > 0 ? `${open} · ${running} running` : String(open);
 }
 
-/** KalCode's own activity on the account, for the row: "2 threads · 1 running" or "No threads". */
+/** KalCode's own activity on the account, for the row: "2 agents · 1 thread · 1 running" or "No agents or threads". */
 function activity(usage: AccountUsage): string {
-  if (usage.threads === 0) return "No threads";
-  const threads = `${usage.threads} thread${usage.threads === 1 ? "" : "s"}`;
-  return usage.running > 0 ? `${threads} · ${usage.running} running` : threads;
+  const open = agentsAndThreadsLabel(usage.agents, usage.threads);
+  const running = usage.agentsRunning + usage.threadsRunning;
+  return running > 0 ? `${open} · ${running} running` : open;
 }

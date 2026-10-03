@@ -1,5 +1,6 @@
 import { Button, Panel } from "@kalcode/ui/components";
 import { LogOut, UserRound } from "lucide-react";
+import { useEffect } from "react";
 import { useAccount } from "../../account/AccountProvider.tsx";
 import type { AccountUiError } from "../../account/accountState.ts";
 import { type AccountSnapshot, type AccountTier, type AccountUsageSnapshot, tierName } from "../../ipc/account.ts";
@@ -26,6 +27,11 @@ export interface SettingsAccountViewProps {
 
 export function SettingsAccount() {
   const { snapshot, usage, busy, error, actions } = useAccount();
+  // Requests used since the last account action: read fresh usage whenever this section opens.
+  const { refreshUsage } = actions;
+  useEffect(() => {
+    void refreshUsage();
+  }, [refreshUsage]);
   return (
     <SettingsAccountView
       account={snapshot}

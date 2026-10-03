@@ -123,6 +123,15 @@ describe("Account Hub", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  it("refreshes KalVoice usage each time the menu opens, without waiting for it", async () => {
+    const { user, hub, accountCalls } = await mount();
+    await waitFor(() => expect(accountCalls).toContain("account_usage"));
+    const before = accountCalls.filter((command) => command === "account_usage").length;
+    await user.click(hub);
+    expect(screen.getByRole("menu")).toHaveTextContent("owner@example.com");
+    await waitFor(() => expect(accountCalls.filter((command) => command === "account_usage").length).toBe(before + 1));
+  });
+
   it("lists the account shortcuts, Settings and Sign out", async () => {
     const { user, hub } = await mount();
     await user.click(hub);

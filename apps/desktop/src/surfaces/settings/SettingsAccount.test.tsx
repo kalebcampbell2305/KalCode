@@ -1,8 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type { AccountSnapshot, AccountUsageSnapshot } from "../../ipc/account.ts";
-import { SettingsAccountView } from "./SettingsAccount.tsx";
+import { type AccountOperations, AccountProvider } from "../../account/AccountProvider.tsx";
+import type { AccountSnapshot, AccountUsageSnapshot, RuntimeStatus } from "../../ipc/account.ts";
+import { SettingsAccount, SettingsAccountView } from "./SettingsAccount.tsx";
 
 const account: AccountSnapshot = {
   phase: "ready",
@@ -90,5 +92,38 @@ describe("SettingsAccountView", () => {
     expect(screen.getByText("Unlimited requests")).toBeInTheDocument();
     expect(screen.getByText("No subscription payment required")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsAccount", () => {
+  it("reads fresh usage when it opens, so requests used this session show", async () => {
+    const usageCall = vi
+      .fn<() => Promise<AccountUsageSnapshot | null>>()
+      .mockResolvedValueOnce(usage)
+      .mockResolvedValue({ ...usage, used: 45 });
+    const client = {
+      status: vi.fn(async () => account),
+      runtimeStatus: vi.fn<() => Promise<RuntimeStatus>>(async () => ({ phase: "ready", ready: true })),
+      usage: usageCall,
+    } as unknown as AccountOperations;
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return open ? (
+        <SettingsAccount />
+      ) : (
+        <button type="button" onClick={() => setOpen(true)}>
+          Open settings
+        </button>
+      );
+    }
+    render(
+      <AccountProvider client={client}>
+        <Harness />
+      </AccountProvider>,
+    );
+    await waitFor(() => expect(usageCall).toHaveBeenCalledOnce());
+    await userEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(await screen.findByText("105 remaining · 45 / 150 used · resets Oct 1")).toBeInTheDocument();
+    expect(usageCall).toHaveBeenCalledTimes(2);
   });
 });

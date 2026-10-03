@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { isCodingAgent } from "../dashboard/data/agents.ts";
 import { presentStatus } from "../threads/model.ts";
 import { signInFailureTitle } from "./providerLabels.ts";
 
@@ -58,19 +59,23 @@ interface ActiveLogin {
 
 /** What uses one account right now. Derived from public thread and binding metadata only. */
 export interface AccountUsage {
-  /** Non-archived threads bound to the account. */
+  /** Non-archived coding agents (terminal panes in Code) bound to the account. */
+  agents: number;
+  /** Of those, the ones whose provider is working now. */
+  agentsRunning: number;
+  /** Non-archived chat threads bound to the account (never coding agents). */
   threads: number;
   /** Of those, the ones whose provider is working now. */
-  running: number;
+  threadsRunning: number;
   /** Names of the workspaces whose default for this provider is the account, sorted. */
   workspaces: string[];
 }
 
-export const NO_USAGE: AccountUsage = { threads: 0, running: 0, workspaces: [] };
+export const NO_USAGE: AccountUsage = { agents: 0, agentsRunning: 0, threads: 0, threadsRunning: 0, workspaces: [] };
 
 /**
- * Per-account usage: non-archived threads bound to each account (running ones counted
- * separately) and the workspaces that remember each account. A binding for a workspace KalCode no
+ * Per-account usage: non-archived coding agents and threads bound to each account, counted apart
+ * (running ones counted separately), and the workspaces that remember each account. A binding for a workspace KalCode no
  * longer lists is not shown.
  */
 export function accountUsage(
@@ -82,7 +87,7 @@ export function accountUsage(
   const entry = (accountId: string) => {
     let current = usage.get(accountId);
     if (!current) {
-      current = { threads: 0, running: 0, workspaces: [] };
+      current = { agents: 0, agentsRunning: 0, threads: 0, threadsRunning: 0, workspaces: [] };
       usage.set(accountId, current);
     }
     return current;
@@ -90,8 +95,14 @@ export function accountUsage(
   for (const thread of threads) {
     if (thread.archivedAt !== null || !thread.providerAccountId) continue;
     const current = entry(thread.providerAccountId);
-    current.threads += 1;
-    if (presentStatus(thread.status).working) current.running += 1;
+    const running = presentStatus(thread.status).working ? 1 : 0;
+    if (isCodingAgent(thread)) {
+      current.agents += 1;
+      current.agentsRunning += running;
+    } else {
+      current.threads += 1;
+      current.threadsRunning += running;
+    }
   }
   const names = new Map(workspaces.map((workspace) => [workspace.id, workspace.name]));
   for (const binding of bindings) {

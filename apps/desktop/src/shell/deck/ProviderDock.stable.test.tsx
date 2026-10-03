@@ -140,12 +140,12 @@ describe("Provider Dock on Stable", () => {
       return found;
     });
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Claude Code · Personal: Healthy, No threads",
+      "Claude Code · Personal: Healthy, No agents or threads",
       "Codex · Personal: Healthy, Idle · 1 thread",
-      "Codex · B: Not checked, No threads",
-      "Codex · Work: Signed out, No threads",
+      "Codex · B: Not checked, No agents or threads",
+      "Codex · Work: Signed out, No agents or threads",
       "Gemini CLI · Personal: Not checked, Idle · 1 thread",
-      "Gemini CLI · Gemini B: Not checked, No threads",
+      "Gemini CLI · Gemini B: Not checked, No agents or threads",
     ]);
     expect(buttons[3]).toHaveAttribute("data-health", "signed_out");
     expect(buttons[0]).toHaveTextContent("Claude Personal");

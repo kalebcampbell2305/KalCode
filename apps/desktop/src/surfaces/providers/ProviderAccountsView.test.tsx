@@ -16,8 +16,16 @@ vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => runtime 
 
 let calls: CommandName[] = [];
 
-/** Uses the memory transport, recording every command; `accounts` replaces the account list. */
-function useTransport({ accounts, fail }: { accounts?: ProviderAccount[]; fail?: CommandName } = {}) {
+/** Uses the memory transport, recording every command; `accounts` / `threads` replace those lists. */
+function useTransport({
+  accounts,
+  threads,
+  fail,
+}: {
+  accounts?: ProviderAccount[];
+  threads?: ThreadSummary[];
+  fail?: CommandName;
+} = {}) {
   const transport = createMemoryTransport("default", { detectDelayMs: 0 });
   const invoke = transport.invoke.bind(transport);
   transport.invoke = (<T,>(command: CommandName, args?: Record<string, unknown>): Promise<T> => {
@@ -26,6 +34,7 @@ function useTransport({ accounts, fail }: { accounts?: ProviderAccount[]; fail?:
       return Promise.reject({ category: "internal", code: "boom", message: "Threads unavailable", retryable: true });
     }
     if (accounts && command === "provider_accounts_list") return Promise.resolve(accounts as T);
+    if (threads && command === "thread_list") return Promise.resolve(threads as T);
     // Account edits on the fixture list answer like the backend: the updated account.
     const edit: Partial<Record<CommandName, Partial<ProviderAccount>>> = {
       provider_account_set_default: { isDefault: true },
@@ -55,7 +64,10 @@ beforeEach(() => {
     },
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 function mount(health: ProviderHealth[] | null = null) {
   return render(
@@ -230,6 +242,9 @@ describe("account rows", () => {
     useTransport({
       accounts: [account("a", "codex", "Personal", { isDefault: true }), account("b", "codex", "Work")],
     });
+    // Local midday, so "now + 15 min" never crosses midnight into the dated format.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 3, 12, 0, 0));
     const backoffUntil = new Date(Date.now() + 15 * 60_000).toISOString();
     const codexHealth = {
       providerId: "codex",
@@ -279,18 +294,50 @@ describe("account usage", () => {
     const row = await screen.findByRole("region", { name: "Codex · Personal" });
     await waitFor(() => expect(within(row).getByText("Activity unavailable")).toBeInTheDocument());
     await user.click(within(row).getByRole("button", { name: "Account details for Personal" }));
-    expect(within(row).getAllByText("Unavailable")).toHaveLength(2);
+    expect(within(row).getAllByText("Unavailable")).toHaveLength(3);
     expect(within(row).getByRole("button", { name: "More actions for Personal" })).toBeTruthy();
     expect(within(row).queryByText("None")).toBeNull();
   });
 
-  it("counts non-archived threads per account and lists only known workspaces", () => {
-    const thread = (id: string, accountId: string | null, status: ThreadSummary["status"], archived = false) =>
+  it("calls coding agents agents and chat threads threads, never one count for both", async () => {
+    const bound = (id: string, status: ThreadSummary["status"], agent: boolean) =>
+      ({
+        id,
+        providerAccountId: "a",
+        status,
+        archivedAt: null,
+        runtimeKind: agent ? "interactive_pty" : null,
+        terminalId: null,
+      }) as ThreadSummary;
+    useTransport({
+      accounts: [account("a", "codex", "Personal", { isDefault: true })],
+      threads: [bound("1", "editing", true), bound("2", "idle", true), bound("3", "idle", false)],
+    });
+    const user = userEvent.setup();
+    mount();
+    const row = await screen.findByRole("region", { name: "Codex · Personal" });
+    await waitFor(() => expect(within(row).getByText("2 agents · 1 thread · 1 running")).toBeInTheDocument());
+    await user.click(within(row).getByRole("button", { name: "Account details for Personal" }));
+    const fact = (term: string) => within(row).getByText(term, { selector: "dt" }).nextElementSibling;
+    expect(fact("Active agents")).toHaveTextContent(/^2 · 1 running$/);
+    expect(fact("Active threads")).toHaveTextContent(/^1$/);
+  });
+
+  it("counts non-archived agents and threads per account apart and lists only known workspaces", () => {
+    const thread = (
+      id: string,
+      accountId: string | null,
+      status: ThreadSummary["status"],
+      archived = false,
+      agent = false,
+    ) =>
       ({
         id,
         providerAccountId: accountId,
         status,
         archivedAt: archived ? "2026-09-28T00:00:00Z" : null,
+        runtimeKind: agent ? "interactive_pty" : null,
+        terminalId: null,
       }) as ThreadSummary;
     const usage = accountUsage(
       [
@@ -299,6 +346,9 @@ describe("account usage", () => {
         thread("3", "a", "thinking", true),
         thread("4", null, "running_tool"),
         thread("5", "b", "completed"),
+        thread("6", "a", "editing", false, true),
+        thread("7", "a", "idle", false, true),
+        thread("8", "a", "idle", false, true),
       ],
       [
         { providerId: "codex", kind: "workspace", scopeId: "w2", accountId: "a" },
@@ -311,8 +361,14 @@ describe("account usage", () => {
         { id: "w2", name: "alpha" },
       ],
     );
-    expect(usage.get("a")).toEqual({ threads: 2, running: 1, workspaces: ["alpha", "beta"] });
-    expect(usage.get("b")).toEqual({ threads: 1, running: 0, workspaces: [] });
+    expect(usage.get("a")).toEqual({
+      agents: 3,
+      agentsRunning: 1,
+      threads: 2,
+      threadsRunning: 1,
+      workspaces: ["alpha", "beta"],
+    });
+    expect(usage.get("b")).toEqual({ agents: 0, agentsRunning: 0, threads: 1, threadsRunning: 0, workspaces: [] });
     expect(usage.get("c")).toBeUndefined();
   });
 });

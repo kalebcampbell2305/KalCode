@@ -43,6 +43,7 @@ import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
+import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { accountInlineLabel, accountName, accountSignIn, sortAccounts } from "../surfaces/providers/accountIdentity.ts";
 import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
@@ -229,14 +230,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // list is unchanged.
   const uiIntents = useOptionalUiIntents();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [agents, setAgents] = useState<ThreadSummary[]>([]);
   const threadsVisible = visible.has("threads");
   useEffect(() => {
     if (!open || !threadsVisible || locatorVisible) return;
     let live = true;
     client
       .listThreads({ includeArchived: false })
-      .then((listed) => live && setThreads(listed.filter((t) => t.archivedAt === null).slice(0, PALETTE_THREADS)))
-      .catch(() => live && setThreads([]));
+      .then((listed) => {
+        if (!live) return;
+        // Coding agents are not threads (AGENTS.md): they get their own group and open in Code.
+        const open = listed.filter((t) => t.archivedAt === null);
+        setThreads(open.filter((t) => !isCodingAgent(t)).slice(0, PALETTE_THREADS));
+        setAgents(open.filter(isCodingAgent).slice(0, PALETTE_THREADS));
+      })
+      .catch(() => {
+        if (!live) return;
+        setThreads([]);
+        setAgents([]);
+      });
     return () => {
       live = false;
     };
@@ -340,6 +352,29 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   </Item>
                 ))
               : null}
+          </Command.Group>
+        ) : null}
+        {visible.has("threads") && typed && !locatorVisible && agents.length > 0 ? (
+          <Command.Group heading="Agents" className={styles.group}>
+            {threadItems(agents).map(({ thread, label, value }) => (
+              <Item
+                key={thread.id}
+                icon={<SquareTerminal />}
+                value={`${value} · agent`}
+                thread
+                onSelect={focusThread(thread)}
+                keywords={[
+                  "agent",
+                  "go to",
+                  thread.name,
+                  thread.providerName,
+                  thread.accountLabel ?? "",
+                  thread.workspaceName,
+                ].filter(Boolean)}
+              >
+                {label}
+              </Item>
+            ))}
           </Command.Group>
         ) : null}
 
