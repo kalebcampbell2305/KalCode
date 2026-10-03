@@ -517,6 +517,29 @@ A version change does **not** by itself mean: creating new features, stopping cu
 
 Releases, including builds that carry an owner-requested version change, complete without the owner: "you should not need me for anything." Agents run the gates, builds, signing, publication, merges, deploys and approvals themselves. QA evidence comes from automation (end-to-end tests, UI automation, gate runners on both platforms, agent review) instead of owner sittings or clicks. Never bypass signing, notarization, signature, integrity, updater or security checks. If something is physically impossible without a human, such as an operating-system consent that can only be given at the machine, make it a one-time setup, report that exact action once, and never make it a per-release step.
 
+## Permanent website rule (owner directive 2026-10-03)
+
+"THE KALCODE WEBSITE SHOULD FEEL LIKE KALCODE ITSELF.
+
+THE WEBSITE IS NOT JUST MARKETING. IT IS AN INTERACTIVE PRODUCT DEMO, ONBOARDING EXPERIENCE, TUTORIAL, AND CONVERSION FUNNEL.
+
+VISITORS SHOULD BE ABLE TO EXPERIENCE THE KALCODE WORKFLOW BEFORE DOWNLOADING.
+
+THE DEMO MAY BE TEMPORARY/NON-PERSISTENT, BUT IT SHOULD FEEL FULLY INTERACTIVE.
+
+THE WEBSITE MUST TRACK THE REAL PRODUCT, STAY TRUTHFUL ABOUT AVAILABLE VS COMING-SOON FEATURES, AND NEVER MISREPRESENT WHAT USERS RECEIVE.
+
+NOTHING SHIPS BLAND.
+
+THE WEBSITE MUST BE BEAUTIFUL, DYNAMIC, FAST, SIMPLE, AND UNMISTAKABLY KALCODE."
+
+- **The live demo** is the home page's centerpiece: `apps/website/src/lib/live/` (state, sample workspace, renderer, tour) and `src/scripts/live/` (browser runtime, loaded on demand). One renderer draws both the build-time first paint and every client update.
+- **It mirrors the shipped app, from shared sources:** shell, labels and flows follow `apps/desktop` (Command Deck top bar, the Stable sidebar, tabbed Code panes, the New agent launcher, Agent Fleet call signs); statuses come from `@kalcode/protocol/display-status`; availability, plans and limits from `@kalcode/protocol/plans`; icons are generated from the app's lucide version (`scripts/gen-live-icons.mjs`, drift-tested); colours and type from `@kalcode/ui` tokens. When the app's UI changes, update the demo in the same follow-up so a visitor who downloads KalCode sees what the website showed them.
+- **Agents in the demo are coding terminals**, per the AGENT definition above, never threads.
+- **The demo is not the Free plan.** It is a temporary sample in the browser; the Free plan is a real account tier from `plans.ts`. Never invent prices, limits or plan features for the website.
+- **Truth:** a demo surface whose `PLAN_FEATURE_GROUPS` entry is `coming_soon` carries a Coming soon tag automatically; flipping the entry to `available` (after production verification) removes it. Sample data is fictional sample data, never real user information.
+- **Fast:** the demo script loads only near the viewport or on a Try control, honours reduced motion, pauses off-screen, and needs no inline styles (strict CSP).
+
 ## Permanent KalCode pricing and plan roadmap (owner directive 2026-10-01)
 
 **KALCODE PRICING IS A CONTINUOUS PRODUCT SYSTEM.** Free = TRY ("Try KalCode."). Pro = BUILD ("For developers using AI every day."). MAX = ORCHESTRATE ("Serious multi-agent development.", marked MOST POPULAR). MAX 2X = AUTOMATE ("Maximum KalCode. Maximum autonomy.").

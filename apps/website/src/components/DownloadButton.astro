@@ -9,12 +9,13 @@ import Icon from "./Icon.astro";
 
 interface Props {
   size?: "lg" | "md";
+  variant?: "primary" | "secondary";
 }
-const { size = "lg" } = Astro.props;
+const { size = "lg", variant = "primary" } = Astro.props;
 const cta = downloadCta();
 ---
 <a
-  class:list={["button", "button--primary", { "button--lg": size === "lg" }]}
+  class:list={["button", `button--${variant}`, { "button--lg": size === "lg" }]}
   href={cta.href}
   data-download-os={cta.os ?? undefined}
   data-download-state={cta.kind}
