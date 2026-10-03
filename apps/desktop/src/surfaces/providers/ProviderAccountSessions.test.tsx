@@ -302,6 +302,31 @@ describe("provider account session restoration", () => {
     expect(runtime.client.refreshClaudeAccount).not.toHaveBeenCalled();
   });
 
+  it("reconciles an expiry the native launch persisted when a coding agent fails to start", async () => {
+    // A launch that finds the native session gone marks that account not authenticated and fails
+    // the agent with `provider_not_authenticated`. Without this reread the account kept showing
+    // Connected (no Sign in) and stayed selectable for new agents until KalCode restarted.
+    const codex = account("codex-a", "codex", "Codex A");
+    const expired = { ...codex, authenticationState: "not_authenticated" as const, providerReportedIdentity: null };
+    const list = vi
+      .fn<() => Promise<ProviderAccount[]>>()
+      .mockResolvedValueOnce([codex])
+      .mockResolvedValueOnce([expired]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshClaudeAccount: vi.fn(),
+      refreshCodexAccount: vi.fn().mockResolvedValue(codex),
+      refreshGeminiAccount: vi.fn(),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([codex]));
+    await waitFor(() => expect(view.result.current?.checking.size).toBe(0));
+
+    act(() => runtime.feed?.merge([threadFailed(1, "provider_not_authenticated")]));
+    await waitFor(() => expect(view.result.current?.accounts?.[0]?.authenticationState).toBe("not_authenticated"));
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
   it("coalesces simultaneous provider expirations and retries across metadata mutations", async () => {
     const claude = account("claude-a", "claude-code", "Claude A");
     const codexA = account("codex-a", "codex", "Codex A");
