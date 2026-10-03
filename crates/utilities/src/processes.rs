@@ -516,10 +516,12 @@ impl ProcessSampler {
     /// The current rows. CPU use is measurable from the second call on.
     pub fn rows(&mut self) -> (Vec<ProcRow>, bool) {
         // Two refreshes closer than sysinfo's minimum interval give meaningless CPU values.
-        if let Some(last) = self.last
-            && last.elapsed() < sysinfo::MINIMUM_CPU_UPDATE_INTERVAL
-        {
-            std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL - last.elapsed());
+        if let Some(last) = self.last {
+            // One clock read: a second read can pass the interval and underflow (a panic).
+            let wait = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.saturating_sub(last.elapsed());
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
+            }
         }
         self.refresh(ProcessesToUpdate::All);
         self.samples = self.samples.saturating_add(1);
