@@ -122,7 +122,7 @@ test("projects switch the workspace, and the top bar follows with its branch", a
 test("the mode chip sets the permission mode new threads start in", async ({ page }) => {
   await open(page, "busy");
   await bar(page)
-    .getByRole("button", { name: /^Permission mode: Approve/ })
+    .getByRole("button", { name: /^Permission mode: Auto/ })
     .click();
   // Choose only once the menu is open: a click while it opens can be dropped on a loaded machine.
   const menu = page.getByRole("menu", { name: /^Permission mode/ });
