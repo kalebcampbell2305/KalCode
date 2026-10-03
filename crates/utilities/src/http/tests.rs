@@ -413,6 +413,23 @@ fn large_bodies_are_cut_at_the_cap() {
 }
 
 #[test]
+fn a_large_text_body_cut_mid_character_stays_text() {
+    // "é" is two bytes; the leading "a" puts the cap inside one.
+    let big = format!("a{}", "é".repeat(MAX_RESPONSE_BYTES));
+    let (port, _) = serve(vec![ok(&big, "text/plain; charset=utf-8")]);
+    let gate = Gate::new(GateVerdict::Ask, Ok(()));
+    let view = HttpSession::new()
+        .send(
+            &spec(HttpMethod::Get, format!("http://127.0.0.1:{port}/")),
+            &gate,
+        )
+        .expect("sent");
+    assert!(view.truncated);
+    assert_eq!(view.body_kind, HttpBodyKind::Text);
+    assert_eq!(view.body.len(), MAX_RESPONSE_BYTES - 1);
+}
+
+#[test]
 fn binary_bodies_are_shown_as_hex_and_json_is_recognised() {
     let (hex, kind) = describe_body(vec![0, 1, 0xff], None);
     assert_eq!(kind, HttpBodyKind::Binary);

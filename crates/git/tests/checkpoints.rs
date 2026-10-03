@@ -567,6 +567,94 @@ fn pruning_deletes_refs_and_reclaims_space() {
     assert_eq!(store.usage_bytes(fx.ws.id()).expect("usage"), 0);
 }
 
+#[test]
+fn checkpoints_keep_working_after_pruning_reclaims_every_checkpoint() {
+    let fx = Fixture::plain_folder();
+    let store = CheckpointStore::new(
+        fx.data.join("checkpoints"),
+        CheckpointOptions {
+            quota_bytes: 0,
+            ..CheckpointOptions::default()
+        },
+    );
+    fx.write("a.txt", "unchanged across the prune\n");
+    // Old enough that the stat manifest trusts it (not "racy").
+    std::fs::File::options()
+        .write(true)
+        .open(fx.path("a.txt"))
+        .expect("open")
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .expect("age the file");
+    let first = new_id();
+    created(
+        store
+            .create(&fx.git, &fx.ws, &first, None, None)
+            .expect("create"),
+    );
+    // The workspace is over quota on its own, so every unpinned checkpoint goes.
+    let pruned = store
+        .prune_to_quota(&fx.git, fx.ws.id(), std::slice::from_ref(&first))
+        .expect("prune");
+    assert_eq!(pruned, vec![first]);
+
+    fx.write("b.txt", "new after the prune\n");
+    store
+        .create(&fx.git, &fx.ws, &new_id(), None, None)
+        .expect("a checkpoint after pruning still snapshots unchanged files");
+}
+
+/// Adds one pack holding a single unreferenced blob to a bare repository.
+fn add_loose_pack(git_dir: &std::path::Path, content: &str) {
+    use std::io::Write as _;
+    let mut command = std::process::Command::new(common::git_exe());
+    common::hide_test_process(&mut command);
+    let mut child = command
+        .arg("--git-dir")
+        .arg(git_dir)
+        .args([
+            "-c",
+            "fastimport.unpackLimit=0",
+            "fast-import",
+            "--quiet",
+            "--done",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn fast-import");
+    let mut stdin = child.stdin.take().expect("stdin");
+    write!(
+        stdin,
+        "blob\nmark :1\ndata {}\n{content}\ndone\n",
+        content.len()
+    )
+    .expect("write");
+    drop(stdin);
+    assert!(child.wait().expect("wait").success());
+}
+
+#[test]
+fn the_snapshot_that_triggers_a_repack_keeps_its_new_files() {
+    let fx = Fixture::plain_folder();
+    let store = store(&fx);
+    fx.write("a.txt", "first\n");
+    created(
+        store
+            .create(&fx.git, &fx.ws, &new_id(), None, None)
+            .expect("create"),
+    );
+    // Enough packs that the next snapshot with new content repacks the store.
+    let shadow = store.shadow_dir(fx.ws.id()).expect("shadow");
+    for i in 0..48 {
+        add_loose_pack(&shadow, &format!("filler {i}"));
+    }
+    fx.write("b.txt", "imported just before the repack\n");
+    created(
+        store
+            .create(&fx.git, &fx.ws, &new_id(), None, None)
+            .expect("the repacking snapshot still finds its own new objects"),
+    );
+}
+
 /// Creates a directory link: a junction on Windows (no privilege needed), a symlink elsewhere.
 fn dir_link(link: &std::path::Path, target: &std::path::Path) -> bool {
     #[cfg(windows)]

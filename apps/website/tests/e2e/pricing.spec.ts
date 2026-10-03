@@ -209,6 +209,7 @@ test.describe("pricing", () => {
     for (const [width, height] of [
       [1440, 900],
       [390, 844],
+      [320, 640],
     ] as const) {
       await page.setViewportSize({ width, height });
       await page.goto("/pricing");
@@ -216,6 +217,11 @@ test.describe("pricing", () => {
         await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
         `${width}px`,
       ).toBeLessThanOrEqual(0);
+      // The head clips its overflow, so check the status chip, lead and toggle themselves.
+      for (const selector of [".page-head .chip", ".page-head .lead", "[data-interval-toggle]"]) {
+        const box = await page.locator(selector).boundingBox();
+        expect(box && box.x + box.width <= width, `${selector} fits at ${width}px`).toBe(true);
+      }
     }
   });
 });

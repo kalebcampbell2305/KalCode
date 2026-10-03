@@ -121,12 +121,14 @@ test("projects switch the workspace, and the top bar follows with its branch", a
 
 test("the mode chip sets the permission mode new threads start in", async ({ page }) => {
   await open(page, "busy");
+  // New threads and agents start in Auto, the trusted coding default (#125).
   await bar(page)
     .getByRole("button", { name: /^Permission mode: Auto/ })
     .click();
   // Choose only once the menu is open: a click while it opens can be dropped on a loaded machine.
   const menu = page.getByRole("menu", { name: /^Permission mode/ });
   await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitemradio", { name: /^Auto/ })).toHaveAttribute("aria-checked", "true");
   const plan = menu.getByRole("menuitemradio", { name: /^Plan/ });
   await expect(plan).toBeVisible();
   await plan.click();

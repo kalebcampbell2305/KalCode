@@ -896,6 +896,19 @@ main > .hero:first-child {
     box-shadow: 0 30px 40px -30px rgb(16 32 64 / 0.3);
   }
 
+  /* A backdrop-filter on the header makes it the sheet's backdrop root, so the sheet's own blur
+     sees nothing and the page text shows through the open menu. The open header drops its blur
+     and takes the sheet's near-opaque ground instead. */
+  .site-header[data-menu-open] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgb(4 7 14 / 0.94);
+  }
+
+  [data-theme="light"] .site-header[data-menu-open] {
+    background: rgb(245 247 251 / 0.97);
+  }
+
   html.js .site-nav:not([data-open]) {
     display: none;
   }
@@ -1003,6 +1016,21 @@ main > .hero:first-child {
 
   .site-header .brand-link {
     gap: var(--space-2);
+  }
+}
+
+/* Narrowest phones (320px): logo, Download and the menu button must all stay on screen. */
+@media (max-width: 22.5rem) {
+  .site-header .wordmark {
+    height: 0.625rem;
+  }
+
+  .header-tools {
+    gap: var(--space-2);
+  }
+
+  .header-tools .button {
+    padding-inline: var(--space-3);
   }
 }
 

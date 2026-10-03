@@ -2,6 +2,7 @@ import type { AgentEvent, ThreadMessage, ThreadSummary, ToolCallRecord } from "@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { isCodingAgent } from "../dashboard/data/agents.ts";
 import { isThreadEvent } from "./model.ts";
 
 type LoadState = "loading" | "ready" | "error";
@@ -76,7 +77,10 @@ export function useThreadList(includeArchived: boolean) {
       const all = includeArchived ? await client.listThreads({ includeArchived: true }) : open;
       if (id !== request.current) return;
       const openIds = new Set(open.map((t) => t.id));
-      setEntries(all.map((thread) => ({ thread, archived: !openIds.has(thread.id) })));
+      // Coding agents are provider panes, not threads (AGENTS.md): they live in Code and the Fleet.
+      setEntries(
+        all.filter((thread) => !isCodingAgent(thread)).map((thread) => ({ thread, archived: !openIds.has(thread.id) })),
+      );
       setState("ready");
       setError(null);
     } catch (err) {
