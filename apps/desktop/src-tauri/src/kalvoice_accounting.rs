@@ -293,6 +293,14 @@ impl RequestAccounting for AccountKalVoice {
                     usage: self.usage_inner(&self.authority()?)?,
                 })
             }
+            KalVoiceRecord::Refused(error) => {
+                // The service never counted it and its action does not run: never replay it.
+                self.core.transact(|conn| {
+                    accounting::settle(conn, &self.account_id, request_id, false)?;
+                    Ok(((), Vec::new()))
+                })?;
+                Err(account_error(error))
+            }
             KalVoiceRecord::Unavailable if provisional_exhausted => {
                 // Only the server could have admitted this request past the device estimate.
                 // Nothing runs, so the claim is not replayed later.

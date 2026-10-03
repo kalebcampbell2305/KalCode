@@ -580,6 +580,36 @@ fn kalvoice_invalid_receipt_never_admits_execution_and_unknown_claim_stays_onlin
     );
 }
 
+/// A request the service rejected outright (4xx other than 429) was never counted and its
+/// action never ran, so it is not replayed (and counted) later.
+#[test]
+fn kalvoice_definitive_rejection_is_never_replayed() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", Some("pro-receipt"), false);
+    let (_directory, core) = metering_core();
+    let meter =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account).expect("meter");
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Http {
+            status: 403,
+            code: "forbidden".into(),
+            retry_after_seconds: None,
+        }));
+    let id = kalcode_contracts::ids::new_id();
+    assert!(meter.authorize(&id).is_err());
+    assert!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("settled")
+            .is_none()
+    );
+    meter.synchronize();
+    assert_eq!(*api.request_calls.lock().expect("calls"), vec![(id, false)]);
+    assert_eq!(meter.usage().expect("usage").used, 41);
+}
+
 #[test]
 fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
     use kalcode_kalvoice::accounting::{self, RequestAccounting};
