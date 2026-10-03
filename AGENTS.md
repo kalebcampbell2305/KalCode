@@ -144,6 +144,14 @@ After shipping, preserve required artifacts/evidence and apply the permanent saf
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## Permanent account-aware launch rule (owner directive 2026-10-03)
+
+Every entry point for a new provider terminal, coding agent or thread follows the same account rule on Windows and macOS: use the provider's sole account automatically; when several accounts exist, show a clean account picker immediately in the launch flow. Never require a Settings visit to choose or connect an account.
+
+- Reuse the shared `LaunchAccountPicker` and canonical provider account/session APIs. Show restored identities while slower provider/model discovery runs; preserve the exact selected account, workspace defaults and draft through background updates.
+- Missing or expired accounts use the existing provider-owned sign-in flow inline. Preserve authentication, entitlement and provider approval boundaries; account selection never implies permission to bypass them.
+- Ordinary shell terminals do not require a provider account. Agents remain real coding terminals; Threads remain separate.
+
 ## Permanent definition: AGENT means a coding agent (owner directive 2026-10-02)
 
 **Creating a new KalCode coding agent always creates a fresh live provider coding session. Multi-agent launch creates N independent provider processes and terminal sessions, subject to the existing account, plan and resource limits. New agents must never inherit ended or failed state from historical sessions. Agent UI state reflects the real provider process: starting or waiting during initialization, live only after successful creation, and failed only for an actual failure.**
