@@ -44,6 +44,7 @@ import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
+import { TASK_DESCRIPTIONS, TASK_LABELS, TASK_LAYOUTS } from "../../shell/panes/adaptiveCanvas.ts";
 import {
   BUILTIN_PRESETS,
   type BuiltinPreset,
@@ -424,6 +425,21 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           </DropdownMenuContent>
         </DropdownMenu>
       </SplitControl>
+      <Tooltip content="Arrange panes without stopping work. Undo restores your exact layout.">
+        <Button size="sm" variant="ghost" icon={<LayoutGrid />} onClick={() => controller.tidy()}>
+          Tidy
+        </Button>
+      </Tooltip>
+      {controller.undoLayoutLabel ? (
+        <Tooltip content={`Restore the arrangement before ${controller.undoLayoutLabel}`}>
+          <IconButton
+            size="sm"
+            label={`Undo ${controller.undoLayoutLabel}`}
+            icon={<Undo2 />}
+            onClick={() => controller.undoLayout()}
+          />
+        </Tooltip>
+      ) : null}
       <KalTidyActions />
       <span className={styles.groupDivider} aria-hidden="true" />
       <DropdownMenu
@@ -441,7 +457,39 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           </DropdownMenuTrigger>
         </Tooltip>
         <DropdownMenuContent align="end" minWidth={17}>
-          <DropdownMenuLabel>Arrange panes</DropdownMenuLabel>
+          <DropdownMenuLabel>Adaptive Canvas</DropdownMenuLabel>
+          {api.layoutSuggestion ? (
+            <>
+              <DropdownMenuItem
+                icon={<LayoutGrid />}
+                description={api.layoutSuggestion.reason}
+                onSelect={() => {
+                  if (api.layoutSuggestion) api.applyTaskLayout(api.layoutSuggestion.task);
+                }}
+              >
+                {`Suggested: ${TASK_LABELS[api.layoutSuggestion.task]}`}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
+          {TASK_LAYOUTS.map((task) => (
+            <DropdownMenuItem
+              key={task}
+              icon={
+                <span className={styles.layoutPreview} data-layout={task} aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              }
+              description={TASK_DESCRIPTIONS[task]}
+              onSelect={() => api.applyTaskLayout(task)}
+            >
+              {TASK_LABELS[task]}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Pane counts</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={current ?? ""}
             onValueChange={(value) => controller.preset(value as BuiltinPreset)}
@@ -663,7 +711,7 @@ const StatusBar = memo(function StatusBar({ api }: { api: CodeCanvasApi }) {
       </div>
       <span className={styles.statusKeys} aria-hidden="true">
         <span data-key="move">
-          <Kbd>{PANE_SHORTCUT_LABELS.focus}</Kbd> move
+          <Kbd>{PANE_SHORTCUT_LABELS.focus}</Kbd> focus
         </span>
         <span data-key="split">
           <Kbd>{PANE_SHORTCUT_LABELS.splitRight}</Kbd> split

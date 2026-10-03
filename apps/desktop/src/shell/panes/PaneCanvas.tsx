@@ -3,6 +3,7 @@ import {
   memo,
   type PointerEvent,
   type ReactNode,
+  type RefObject,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -10,25 +11,32 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import { useOptionalKalVoice } from "../../kalvoice/KalVoiceProvider.tsx";
 import { describeBuiltin, renderBuiltin } from "./builtinContent.tsx";
 import { type PaneRenderContext, registeredRenderer, subscribeRegistry, type TabInfo } from "./contentRegistry.ts";
 import {
+  allContents,
+  CANVAS_GEOMETRY,
   canSplit as canSplitPane,
   computeGeometry,
   contentKey,
   DEFAULT_GEOMETRY,
   type Divider,
   type DropZone,
+  findContent,
   findLeaf,
   type LeafNode,
   leaves,
+  minSize,
+  movePane,
+  moveTab,
   type Rect,
 } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
 import { PaneDivider } from "./PaneDivider.tsx";
 import { PaneDock } from "./PaneDock.tsx";
-import { PaneFrame, paneDomId } from "./PaneFrame.tsx";
+import { bodyDomId, PaneFrame, paneDomId, panelDomId, tabDomId } from "./PaneFrame.tsx";
 import {
   listenForPaneCommands,
   type PaneCommand,
@@ -56,6 +64,17 @@ export interface PaneHost {
 const HEADER_PX = DEFAULT_GEOMETRY.collapsedSize;
 const DRAG_THRESHOLD = 6;
 
+export { CANVAS_GEOMETRY } from "./model.ts";
+
+/** Grow the scrollable work area instead of shrinking live content below usable dimensions. */
+export function canvasExtent(layout: PaneController["layout"], width: number, height: number) {
+  const dock = layout.dock.length ? DOCK_PX + DOCK_GAP : 0;
+  return {
+    width: Math.max(width - dock, layout.maximizedPaneId ? 320 : minSize(layout.root, "horizontal", CANVAS_GEOMETRY)),
+    height: Math.max(height, layout.maximizedPaneId ? 220 : minSize(layout.root, "vertical", CANVAS_GEOMETRY)),
+  };
+}
+
 interface DragSource {
   kind: "tab" | "pane";
   paneId: string;
@@ -78,28 +97,13 @@ const ZONE_TEXT: Record<DropZone, string> = {
   bottom: "Split down",
 };
 
-function zoneRect(rect: Rect, zone: DropZone): Rect {
-  const body = { x: rect.x, y: rect.y + HEADER_PX, width: rect.width, height: Math.max(0, rect.height - HEADER_PX) };
-  switch (zone) {
-    case "center":
-      return rect;
-    case "left":
-      return { ...body, width: body.width / 2 };
-    case "right":
-      return { ...body, x: body.x + body.width / 2, width: body.width / 2 };
-    case "top":
-      return { ...body, height: body.height / 2 };
-    case "bottom":
-      return { ...body, y: body.y + body.height / 2, height: body.height / 2 };
-  }
-}
-
 /** The pane and drop zone under a point (canvas coordinates). */
-function hitTest(
+export function hitTest(
   panes: Map<string, Rect>,
   x: number,
   y: number,
   visible: Set<string>,
+  previous: { paneId: string; zone: DropZone } | null = null,
 ): { paneId: string; zone: DropZone } | null {
   for (const [paneId, rect] of panes) {
     if (!visible.has(paneId)) continue;
@@ -113,6 +117,12 @@ function hitTest(
       ["top", ry],
       ["bottom", 1 - ry],
     ];
+    // A small magnetic band prevents jitter around edge/centre and corner boundaries.
+    if (previous?.paneId === paneId && previous.zone !== "center") {
+      const held = edges.find(([zone]) => zone === previous.zone);
+      const nearest = Math.min(...edges.map(([, distance]) => distance));
+      if (held && held[1] < 0.34 && held[1] <= nearest + 0.07) return previous;
+    }
     const [zone, distance] = edges.reduce((a, b) => (b[1] < a[1] ? b : a));
     return { paneId, zone: distance < 0.28 ? zone : "center" };
   }
@@ -194,6 +204,9 @@ function PaneCanvasSurface({
 }: PaneCanvasSurfaceProps) {
   const { layout } = controller;
   const ref = useRef<HTMLDivElement>(null);
+  const parking = useRef<HTMLDivElement>(null);
+  const mountedContent = useRef(new Set<string>());
+  const contentFocus = useRef(new Map<string, { n: number; key: string }>());
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [drag, setDrag] = useState<DragState | null>(null);
   // The ref owns the gesture from pointerdown, before it crosses the threshold and enters
@@ -211,7 +224,7 @@ function PaneCanvasSurface({
       const height = Math.floor(element.clientHeight);
       // A hidden surface measures 0 × 0: keep the last real size for layout and commands.
       if (width === 0 && height === 0) return;
-      controller.size.current = { width, height };
+      controller.size.current = canvasExtent(latestController.current.layout, width, height);
       setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
     };
     measure();
@@ -221,14 +234,19 @@ function PaneCanvasSurface({
   }, [controller.size]);
 
   const docked = layout.dock.length > 0;
-  const paneWidth = Math.max(0, (size.width || 1200) - (docked ? DOCK_PX + DOCK_GAP : 0));
+  const extent = canvasExtent(layout, size.width || 1200, size.height || 800);
+  const paneWidth = extent.width;
+  controller.size.current = { width: paneWidth, height: extent.height };
   const geometry = useMemo(
-    () => computeGeometry(layout, paneWidth, size.height || 800),
-    [layout, paneWidth, size.height],
+    () => computeGeometry(layout, paneWidth, extent.height, CANVAS_GEOMETRY),
+    [layout, paneWidth, extent.height],
   );
   const panes = useMemo(() => leaves(layout.root), [layout]);
   const items = useMemo(() => orderedItems(layout.root, geometry.dividers), [layout.root, geometry.dividers]);
   const maximized = layout.maximizedPaneId;
+  const contents = allContents(layout);
+  const currentKeys = new Set(contents.map(contentKey));
+  for (const key of mountedContent.current) if (!currentKeys.has(key)) mountedContent.current.delete(key);
 
   // Delivery and visual focus read the same immutable native-session target. This remains pinned
   // if focus moves after push-to-talk starts and ignores stale session identities.
@@ -316,12 +334,18 @@ function PaneCanvasSurface({
       const currentLayout = currentController.layout;
       const width = Math.floor(canvas.clientWidth);
       const height = Math.floor(canvas.clientHeight);
-      currentController.size.current = { width, height };
+      const currentExtent = canvasExtent(currentLayout, width, height);
+      currentController.size.current = currentExtent;
       setSize((previous) => (previous.width === width && previous.height === height ? previous : { width, height }));
-      const currentPaneWidth = Math.max(0, width - (currentLayout.dock.length > 0 ? DOCK_PX + DOCK_GAP : 0));
-      const currentGeometry = computeGeometry(currentLayout, currentPaneWidth, height);
+      const currentGeometry = computeGeometry(
+        currentLayout,
+        currentExtent.width,
+        currentExtent.height,
+        CANVAS_GEOMETRY,
+      );
       const currentPanes = leaves(currentLayout.root);
       const currentMaximized = currentLayout.maximizedPaneId;
+      if (currentMaximized) currentGeometry.panes.set(currentMaximized, { x: 0, y: 0, ...currentExtent });
       const currentVisible = new Set(
         currentPanes
           .filter((pane) => !pane.collapsed && (!currentMaximized || pane.paneId === currentMaximized))
@@ -329,7 +353,13 @@ function PaneCanvasSurface({
       );
       const currentSource = findLeaf(currentLayout, source.paneId);
       const bounds = canvas.getBoundingClientRect();
-      const target = hitTest(currentGeometry.panes, e.clientX - bounds.left, e.clientY - bounds.top, currentVisible);
+      const target = hitTest(
+        currentGeometry.panes,
+        e.clientX - bounds.left + canvas.scrollLeft,
+        e.clientY - bounds.top + canvas.scrollTop,
+        currentVisible,
+        current.target,
+      );
       const valid =
         currentSource &&
         (source.kind === "pane" || source.index < currentSource.tabs.length) &&
@@ -377,9 +407,21 @@ function PaneCanvasSurface({
   const overlay =
     drag?.active && drag.target
       ? (() => {
-          const rect = geometry.panes.get(drag.target.paneId);
-          if (!rect) return null;
-          const zone = zoneRect(rect, drag.target.zone);
+          const source = findLeaf(layout, drag.source.paneId);
+          const selected = source?.tabs[drag.source.kind === "tab" ? drag.source.index : source.activeTab];
+          const preview =
+            drag.source.kind === "tab"
+              ? moveTab(layout, drag.source.paneId, drag.source.index, drag.target.paneId, drag.target.zone)
+              : movePane(layout, drag.source.paneId, drag.target.paneId, drag.target.zone);
+          if (preview === layout) return null;
+          const destination = selected ? findContent(preview, contentKey(selected))?.paneId : drag.source.paneId;
+          const previewExtent = canvasExtent(preview, size.width || 1200, size.height || 800);
+          const zone = destination
+            ? computeGeometry(preview, previewExtent.width, previewExtent.height, CANVAS_GEOMETRY).panes.get(
+                destination,
+              )
+            : null;
+          if (!zone) return null;
           return (
             <div
               className={styles.dropZone}
@@ -407,6 +449,7 @@ function PaneCanvasSurface({
       role="group"
       aria-label={label}
       aria-roledescription="pane canvas"
+      data-pane-canvas
       data-dragging={drag?.active || undefined}
       data-maximized={maximized ? "true" : undefined}
       data-panes={count}
@@ -417,101 +460,187 @@ function PaneCanvasSurface({
       <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
         {kalVoiceTargetPaneId ? `KalVoice is listening to ${titleOfPane(kalVoiceTargetPaneId)}.` : ""}
       </p>
-      {items.map((item) => {
-        if (item.type === "divider") {
-          if (maximized) return null;
-          const d = item.divider;
-          const split = nodeAtPath(layout.root, d.path);
-          const beforeNode = split?.kind === "split" ? split.children[d.index] : undefined;
-          const afterNode = split?.kind === "split" ? split.children[d.index + 1] : undefined;
-          const beforeLeaves = beforeNode ? leaves(beforeNode) : [];
-          const afterLeaves = afterNode ? leaves(afterNode) : [];
-          const name = (list: LeafNode[]) =>
-            list.length === 1 && list[0] ? titleOfPane(list[0].paneId) : `${list.length} panes`;
+      <div
+        className={styles.stage}
+        style={{ width: paneWidth + (docked ? DOCK_PX + DOCK_GAP : 0), height: extent.height }}
+      >
+        {items.map((item) => {
+          if (item.type === "divider") {
+            if (maximized) return null;
+            const d = item.divider;
+            const split = nodeAtPath(layout.root, d.path);
+            const beforeNode = split?.kind === "split" ? split.children[d.index] : undefined;
+            const afterNode = split?.kind === "split" ? split.children[d.index + 1] : undefined;
+            const beforeLeaves = beforeNode ? leaves(beforeNode) : [];
+            const afterLeaves = afterNode ? leaves(afterNode) : [];
+            const name = (list: LeafNode[]) =>
+              list.length === 1 && list[0] ? titleOfPane(list[0].paneId) : `${list.length} panes`;
+            return (
+              <PaneDivider
+                key={`divider-${d.path.join(".")}-${d.index}`}
+                divider={d}
+                layout={layout}
+                before={name(beforeLeaves)}
+                after={name(afterLeaves)}
+                controls={[...beforeLeaves, ...afterLeaves].map((l) => paneDomId(l.paneId)).join(" ")}
+                onResize={(next) => controller.replace(next)}
+                onEven={() => controller.evenDivider(d.path, d.index)}
+                onFocus={() => undefined}
+              />
+            );
+          }
+          const leaf = item.leaf;
+          const index = panes.indexOf(leaf);
+          const rect =
+            maximized === leaf.paneId
+              ? { x: 0, y: 0, width: paneWidth, height: extent.height }
+              : geometry.panes.get(leaf.paneId);
+          if (!rect) return null;
+          const hidden = maximized !== null && maximized !== leaf.paneId;
+          const tabs = leaf.tabs.map(describe);
           return (
-            <PaneDivider
-              key={`divider-${d.path.join(".")}-${d.index}`}
-              divider={d}
-              layout={layout}
-              before={name(beforeLeaves)}
-              after={name(afterLeaves)}
-              controls={[...beforeLeaves, ...afterLeaves].map((l) => paneDomId(l.paneId)).join(" ")}
-              onResize={(next) => controller.replace(next)}
-              onEven={() => controller.evenDivider(d.path, d.index)}
-              onFocus={() => undefined}
+            <PaneFrame
+              key={leaf.paneId}
+              leaf={leaf}
+              index={index}
+              count={count}
+              rect={rect}
+              collapsedStrip={item.stripAxis}
+              hidden={hidden}
+              maximized={maximized === leaf.paneId}
+              focused={controller.focusedPaneId === leaf.paneId}
+              kalVoiceTarget={kalVoiceTargetPaneId === leaf.paneId}
+              focusRequest={controller.focusRequest.paneId === leaf.paneId ? controller.focusRequest.n : 0}
+              canSplit={
+                canSplitPane(layout, leaf.paneId, "horizontal") || canSplitPane(layout, leaf.paneId, "vertical")
+              }
+              canCollapse={multiple && openPanes > 1}
+              multiple={multiple}
+              dropTarget={drag?.active === true && drag.target?.paneId === leaf.paneId}
+              tabs={tabs}
+              renderEmpty={host.renderEmpty}
+              addMenu={host.addMenu}
+              onFocus={(paneId) => {
+                if (controller.focusedPaneId !== paneId) controller.focusPane(paneId, false);
+              }}
+              onActivate={(i, focusContent) => {
+                controller.activate(leaf.paneId, i);
+                controller.focusPane(leaf.paneId, focusContent);
+              }}
+              onCloseTab={(i) => {
+                const info = tabs[i];
+                if (info?.onClose) info.onClose();
+                else controller.hideTab(leaf.paneId, i);
+              }}
+              onSplit={(axis) => controller.split(leaf.paneId, axis)}
+              onMaximize={() => controller.toggleMaximize(leaf.paneId)}
+              onCollapse={() => controller.toggleCollapse(leaf.paneId)}
+              onClose={() => controller.close(leaf.paneId)}
+              onDock={() => controller.dock(leaf.paneId)}
+              onSwap={(direction) => controller.swapWith(leaf.paneId, direction)}
+              onTabPointerDown={(event, i) =>
+                beginDrag(event, { kind: "tab", paneId: leaf.paneId, index: i, title: tabs[i]?.title ?? "Tab" })
+              }
+              onHeaderPointerDown={(event) => {
+                const target = event.target as HTMLElement;
+                if (target.closest('[role="tab"], [data-no-drag], button')) return;
+                beginDrag(event, { kind: "pane", paneId: leaf.paneId, index: -1, title: titleOfPane(leaf.paneId) });
+              }}
+              consumeClick={() => suppressClick.current}
             />
           );
-        }
-        const leaf = item.leaf;
-        const index = panes.indexOf(leaf);
-        const rect =
-          maximized === leaf.paneId
-            ? { x: 0, y: 0, width: paneWidth, height: size.height }
-            : geometry.panes.get(leaf.paneId);
-        if (!rect) return null;
-        const hidden = maximized !== null && maximized !== leaf.paneId;
-        const tabs = leaf.tabs.map(describe);
-        return (
-          <PaneFrame
-            key={leaf.paneId}
-            leaf={leaf}
-            index={index}
-            count={count}
-            rect={rect}
-            collapsedStrip={item.stripAxis}
-            hidden={hidden}
-            maximized={maximized === leaf.paneId}
-            focused={controller.focusedPaneId === leaf.paneId}
-            kalVoiceTarget={kalVoiceTargetPaneId === leaf.paneId}
-            focusRequest={controller.focusRequest.paneId === leaf.paneId ? controller.focusRequest.n : 0}
-            canSplit={canSplitPane(layout, leaf.paneId, "horizontal") || canSplitPane(layout, leaf.paneId, "vertical")}
-            canCollapse={multiple && openPanes > 1}
-            multiple={multiple}
-            dropTarget={drag?.active === true && drag.target?.paneId === leaf.paneId}
-            tabs={tabs}
-            renderContent={renderContent}
-            renderEmpty={host.renderEmpty}
-            addMenu={host.addMenu}
-            onFocus={(paneId) => {
-              if (controller.focusedPaneId !== paneId) controller.focusPane(paneId, false);
-            }}
-            onActivate={(i, focusContent) => {
-              controller.activate(leaf.paneId, i);
-              controller.focusPane(leaf.paneId, focusContent);
-            }}
-            onCloseTab={(i) => {
-              const info = tabs[i];
-              if (info?.onClose) info.onClose();
-              else controller.hideTab(leaf.paneId, i);
-            }}
-            onSplit={(axis) => controller.split(leaf.paneId, axis)}
-            onMaximize={() => controller.toggleMaximize(leaf.paneId)}
-            onCollapse={() => controller.toggleCollapse(leaf.paneId)}
-            onClose={() => controller.close(leaf.paneId)}
-            onDock={() => controller.dock(leaf.paneId)}
-            onSwap={(direction) => controller.swapWith(leaf.paneId, direction)}
-            onTabPointerDown={(event, i) =>
-              beginDrag(event, { kind: "tab", paneId: leaf.paneId, index: i, title: tabs[i]?.title ?? "Tab" })
-            }
-            onHeaderPointerDown={(event) => {
-              const target = event.target as HTMLElement;
-              if (target.closest('[role="tab"], [data-no-drag], button')) return;
-              beginDrag(event, { kind: "pane", paneId: leaf.paneId, index: -1, title: titleOfPane(leaf.paneId) });
-            }}
-            consumeClick={() => suppressClick.current}
+        })}
+        <div ref={parking} hidden aria-hidden="true" />
+        {contents.map((content) => {
+          const key = contentKey(content);
+          const location = findContent(layout, key);
+          const leaf = location ? findLeaf(layout, location.paneId) : null;
+          const active = !!leaf && leaf.activeTab === location?.index;
+          const visible = active && !leaf.collapsed && (!maximized || maximized === leaf.paneId);
+          // Initialize on first visibility; thereafter layout changes only hide or move the host.
+          if (visible) mountedContent.current.add(key);
+          if (!mountedContent.current.has(key)) return null;
+          const request = leaf && controller.focusRequest.paneId === leaf.paneId ? controller.focusRequest.n : 0;
+          if (leaf && request !== contentFocus.current.get(leaf.paneId)?.n) {
+            contentFocus.current.set(leaf.paneId, {
+              n: request,
+              key: contentKey(leaf.tabs[leaf.activeTab] ?? content),
+            });
+          }
+          const focus = leaf ? contentFocus.current.get(leaf.paneId) : undefined;
+          const context: PaneRenderContext = {
+            paneId: leaf?.paneId ?? "",
+            tabId: leaf && location ? tabDomId(leaf.paneId, location.index) : "",
+            focused: visible && controller.focusedPaneId === leaf?.paneId,
+            visible,
+            focusRequest: visible && focus?.key === key ? focus.n : 0,
+          };
+          return (
+            <PersistentContent
+              key={key}
+              content={content}
+              context={context}
+              active={active}
+              parking={parking}
+              renderContent={renderContent}
+              onFocus={() => {
+                if (leaf && visible) controller.focusPane(leaf.paneId, false);
+              }}
+            />
+          );
+        })}
+        {overlay}
+        {docked ? (
+          <PaneDock
+            items={layout.dock.map((content) => ({ content, info: describe(content) }))}
+            style={{ left: paneWidth + DOCK_GAP, top: 0, width: DOCK_PX, height: extent.height }}
+            onOpen={(i) => controller.undock(i)}
+            onRemove={(i) => controller.removeFromDock(i)}
           />
-        );
-      })}
-      {overlay}
-      {docked ? (
-        <PaneDock
-          items={layout.dock.map((content) => ({ content, info: describe(content) }))}
-          style={{ left: paneWidth + DOCK_GAP, top: 0, width: DOCK_PX, height: size.height }}
-          onOpen={(i) => controller.undock(i)}
-          onRemove={(i) => controller.removeFromDock(i)}
-        />
-      ) : null}
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+/** The portal target never changes. Only its DOM placement does: no React remount or PTY detach. */
+function PersistentContent({
+  content,
+  context,
+  active,
+  parking,
+  renderContent,
+  onFocus,
+}: {
+  content: PaneContent;
+  context: PaneRenderContext;
+  active: boolean;
+  parking: RefObject<HTMLDivElement | null>;
+  renderContent: (content: PaneContent, context: PaneRenderContext) => ReactNode;
+  onFocus: () => void;
+}) {
+  const [container] = useState(() => document.createElement("div"));
+  useLayoutEffect(() => {
+    const destination = document.getElementById(bodyDomId(context.paneId)) ?? parking.current;
+    if (!destination) return;
+    const focused = container.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null;
+    if (container.parentElement !== destination) destination.appendChild(container);
+    if (container.className !== styles.panel) container.className = styles.panel ?? "";
+    if (container.hidden !== (context.visible === false)) container.hidden = context.visible === false;
+    if (container.getAttribute("role") !== "tabpanel") container.setAttribute("role", "tabpanel");
+    if (context.tabId && container.getAttribute("aria-labelledby") !== context.tabId)
+      container.setAttribute("aria-labelledby", context.tabId);
+    else if (!context.tabId && container.hasAttribute("aria-labelledby")) container.removeAttribute("aria-labelledby");
+    const panelId = active && context.paneId ? panelDomId(context.paneId) : "";
+    if (container.id !== panelId) container.id = panelId;
+    if (context.visible && focused && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  });
+  useLayoutEffect(() => () => container.remove(), [container]);
+  return createPortal(
+    <div className={styles.contentHost} onFocusCapture={onFocus} onPointerDownCapture={onFocus}>
+      {renderContent(content, context)}
+    </div>,
+    container,
   );
 }
 
@@ -538,6 +667,15 @@ function nodeAtPath(root: PaneNode, path: readonly number[]): PaneNode | null {
 
 function runShortcut(controller: PaneController, paneId: string, shortcut: PaneShortcut) {
   switch (shortcut.kind) {
+    case "move":
+      controller.swapWith(paneId, shortcut.direction);
+      break;
+    case "tidy":
+      controller.tidy();
+      break;
+    case "undo-layout":
+      controller.undoLayout();
+      break;
     case "focus":
       controller.focusDirection(shortcut.direction);
       break;

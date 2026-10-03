@@ -49,6 +49,7 @@ interface PaneTerminalProps {
   /** The provider process is running (input is accepted). */
   running: boolean;
   focusRequest: number;
+  visible?: boolean;
   theme: "light" | "dark";
   /** The pane isn't focused: output renders in batches (≤ 4 a second). */
   throttled?: boolean;
@@ -72,6 +73,7 @@ export const PaneTerminal = memo(function PaneTerminal({
   label,
   running,
   focusRequest,
+  visible = true,
   theme,
   throttled = false,
 }: PaneTerminalProps) {
@@ -524,7 +526,7 @@ export const PaneTerminal = memo(function PaneTerminal({
       focusSeen.current = focusRequest;
       if (focusRequest !== 0) focusPending.current = true;
     }
-    if (focusRequest === 0) return;
+    if (focusRequest === 0 || !visible) return;
     if (!focusPending.current) {
       const active = document.activeElement;
       const lostWithOldTerminal =
@@ -536,7 +538,7 @@ export const PaneTerminal = memo(function PaneTerminal({
       termRef.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusRequest, instanceId]);
+  }, [focusRequest, instanceId, visible]);
 
   return (
     <>

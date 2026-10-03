@@ -45,6 +45,8 @@ export interface PaneRenderContext {
   tabId: string;
   /** The pane has focus: output renders live. Unfocused panes are throttled. */
   focused: boolean;
+  /** False while tabbed behind other work, minimized, docked or covered by a maximized pane. */
+  visible?: boolean;
   /** Changes whenever the content should take keyboard focus. */
   focusRequest: number;
 }

@@ -328,6 +328,12 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       { id: "core-browser", label: "Integrated Browser", from: "free", status: "available", verifiedIn: LIVE },
       {
+        id: "adaptive-canvas",
+        label: "Adaptive Canvas: task layouts, snap and reversible Tidy",
+        from: "free",
+        status: "coming_soon",
+      },
+      {
         id: "provider-terminals",
         label: "Real Claude Code and Codex terminals in Code",
         from: "free",
@@ -526,7 +532,7 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       { id: "handoff-chains", label: "Agent Handoff Chains", from: "max", status: "coming_soon" },
       { id: "agent-files", label: "Agent File Ownership and collision warnings", from: "max", status: "coming_soon" },
       { id: "stuck-agents", label: "Stuck Agent Detector", from: "max", status: "coming_soon" },
-      { id: "mission-control", label: "Mission Control and Adaptive Canvas", from: "max", status: "coming_soon" },
+      { id: "mission-control", label: "Mission Control", from: "max", status: "coming_soon" },
       { id: "deploy", label: "KalCode Deploy", from: "max", status: "coming_soon" },
       {
         id: "remote",
