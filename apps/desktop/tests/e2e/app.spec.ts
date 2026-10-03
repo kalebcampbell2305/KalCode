@@ -163,7 +163,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
     const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
     for (const [id, executable, version] of [
       ["claude-code", "claude.exe", "2.1.282"],
-      ["codex", "codex.exe", "0.155.1"],
+      ["codex", "codex.exe", "0.160.0"],
       ["gemini-cli", "gemini.exe", "0.61.0"],
     ] as const) {
       const status = statuses.find((candidate) => candidate.id === id);
@@ -176,10 +176,11 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
 
     await app.page.getByRole("button", { name: "Providers" }).click();
     await expect(app.page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+    await app.page.getByRole("tab", { name: "Setup", exact: true }).click();
 
     const claude = app.page.getByRole("region", { name: "Claude Code", exact: true });
     await expect(claude.getByText(/^Installed, version \d+\.\d+\.\d+/)).toBeVisible({ timeout: 30_000 });
-    await expect(claude.getByText(/^(Signed in|Signed out|Sign-in status unknown)$/)).toBeVisible();
+    await expect(claude.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
     // Every provider ends with a definite result, never a spinner.
     for (const name of ["Codex", "Gemini CLI"]) {
       const region = app.page.getByRole("region", { name, exact: true });
@@ -212,7 +213,7 @@ test("the Threads surface runs on the native thread runtime", async () => {
     const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
     for (const [id, executable, version] of [
       ["claude-code", "claude.exe", "2.1.282"],
-      ["codex", "codex.exe", "0.155.1"],
+      ["codex", "codex.exe", "0.160.0"],
       ["gemini-cli", "gemini.exe", "0.61.0"],
     ] as const) {
       const status = statuses.find((candidate) => candidate.id === id);

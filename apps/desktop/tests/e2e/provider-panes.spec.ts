@@ -62,7 +62,7 @@ async function expectPaneText(page: Page, text: string, timeout = 30_000) {
   await expect(pane(page).locator("[data-pane-terminal] .xterm-rows")).toContainText(text, { timeout });
 }
 
-test("a provider pane runs routine coding in Auto and still gates remote effects", async () => {
+test("a provider pane runs routine coding in Bypass and still gates credential access", async () => {
   test.setTimeout(240_000);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-"));
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-project-"));
@@ -103,15 +103,16 @@ test("a provider pane runs routine coding in Auto and still gates remote effects
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
     await shot(page, "z7w4-pane-idle");
 
-    // Auto is the fresh default: a routine workspace build runs without interrupting the user.
+    // Bypass is the fresh default: routine coding runs without interrupting the user.
+    await expect(pane(page).locator("[data-pane-mode]")).toHaveAttribute("data-pane-mode", "bypass");
     await typeInPane(page, "run cargo build");
     await expectPaneText(page, "RAN Bash");
     await expect(page.getByRole("button", { name: "Approve once" })).toHaveCount(0);
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
     await shot(page, "z7w4-pane-auto-build");
 
-    // A remote Git effect still asks and can be denied.
-    await typeInPane(page, "run git push origin main");
+    // Credential access is the one protected scope in Bypass: it still asks and can be denied.
+    await typeInPane(page, "run printenv");
     const deny = page.getByRole("button", { name: "Deny" }).first();
     await expect(deny).toBeVisible({ timeout: 30_000 });
     await deny.click();
