@@ -1030,8 +1030,16 @@ kbd.ptt__key {
 
 .page-head__inner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-6);
   justify-items: start;
+}
+
+/* A long status chip wraps instead of widening the head past a narrow phone screen. */
+.page-head .chip {
+  max-width: 100%;
+  padding-block: 0.3rem;
+  white-space: normal;
 }
 
 .page-head .lead {

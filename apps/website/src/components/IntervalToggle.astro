@@ -78,6 +78,13 @@ const { note, class: className } = Astro.props;
     white-space: nowrap;
   }
 
+  /* Narrowest phones (320px): both options and the savings note stay inside the screen. */
+  @media (max-width: 22.5rem) {
+    .interval__option {
+      padding: 0 var(--space-3);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .interval__option {
       transition: none;
