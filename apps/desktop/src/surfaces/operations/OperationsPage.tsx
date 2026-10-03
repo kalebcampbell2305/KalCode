@@ -1902,6 +1902,7 @@ export function OperationsRunDetail({
   mutate,
   refreshKey,
   initialTab = "overview",
+  role,
   onClose,
 }: {
   client: OperationsApi;
@@ -1911,6 +1912,7 @@ export function OperationsRunDetail({
   mutate: OperationsMutationRunner;
   refreshKey: string;
   initialTab?: OperationsDetailTab;
+  role?: "dialog";
   onClose: () => void;
 }) {
   const loader = useMemo(
@@ -1966,7 +1968,7 @@ export function OperationsRunDetail({
   const value = detail?.owner === loader && detail.id === id ? detail.value : null;
   const errorMessage = error?.owner === loader ? error.message : null;
   return (
-    <aside className={styles.detail} aria-label="Run details">
+    <aside className={styles.detail} aria-label="Run details" role={role}>
       <header className={styles.detailHeader}>
         <div>
           <span className={styles.detailKind}>{value ? titleCase(value.run.spec.kind) : "Run"}</span>

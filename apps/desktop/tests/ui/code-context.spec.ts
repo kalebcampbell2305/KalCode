@@ -42,7 +42,7 @@ test("Code context keeps workspace runs, services and test evidence beside real 
   const frontend = services.getByRole("listitem").filter({ hasText: "Frontend" });
   await expect(frontend).toContainText("node · PID 14221");
   await frontend.getByRole("button", { name: "Logs" }).click();
-  const detail = page.getByRole("complementary", { name: "Run details" });
+  const detail = page.getByRole("dialog", { name: "Run details" });
   await expect(detail.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
   await expect(detail.getByText("vite ready in 412 ms", { exact: false })).toBeVisible();
   await detail.getByRole("button", { name: "Close run details" }).click();
@@ -101,7 +101,7 @@ test("run evidence stays inside a narrow window with the Agent rail open", async
 
   const context = page.getByRole("region", { name: "Workspace context for kalcode-site" });
   await context.getByRole("button", { name: "Open run Frontend dev server" }).click();
-  const detail = page.getByRole("complementary", { name: "Run details" });
+  const detail = page.getByRole("dialog", { name: "Run details" });
   await expect(detail).toBeVisible();
   const bounds = await detail.boundingBox();
   const viewport = page.viewportSize();

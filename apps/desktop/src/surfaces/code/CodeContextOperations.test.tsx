@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationsApi } from "../../ipc/operations.ts";
+import { blockingBrowserOverlayOpen } from "../browser/browserVisibility.ts";
 import {
   CodeContextOperations,
   codeContextOperationsAvailable,
@@ -18,17 +19,21 @@ const seams = vi.hoisted(() => ({
   openInPane: vi.fn(async () => ({ handled: true, message: "" })),
   activate: vi.fn(async () => true),
   createTerminal: vi.fn(async () => ({ id: "created-terminal" })),
+  operationsEnabled: [] as boolean[],
 }));
 
 vi.mock("../operations/useOperations.ts", () => ({
-  useOperations: () => ({
-    snapshot: seams.snapshot,
-    observedAt: seams.snapshot?.observedAt ?? null,
-    loading: false,
-    refreshing: false,
-    error: null,
-    refresh: seams.refresh,
-  }),
+  useOperations: (_client: OperationsApi, enabled: boolean) => {
+    seams.operationsEnabled.push(enabled);
+    return {
+      snapshot: seams.snapshot,
+      observedAt: seams.snapshot?.observedAt ?? null,
+      loading: false,
+      refreshing: false,
+      error: null,
+      refresh: seams.refresh,
+    };
+  },
 }));
 vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
   useWorkspaces: () => ({
@@ -148,19 +153,24 @@ function api(): OperationsApi {
   } as OperationsApi;
 }
 
-function renderContext(client: OperationsApi) {
-  return render(
+function context(client: OperationsApi, visible = true) {
+  return (
     <StrictMode>
       <ToastProvider>
-        <CodeContextOperations client={client} />
+        <CodeContextOperations client={client} visible={visible} />
       </ToastProvider>
-    </StrictMode>,
+    </StrictMode>
   );
+}
+
+function renderContext(client: OperationsApi, visible = true) {
+  return render(context(client, visible));
 }
 
 describe("CodeContextOperations", () => {
   beforeEach(() => {
     seams.snapshot = snapshot();
+    seams.operationsEnabled.length = 0;
     vi.clearAllMocks();
   });
 
@@ -171,6 +181,38 @@ describe("CodeContextOperations", () => {
     );
     expect(codeContextOperationsAvailable([{ id: "operations", visible: true, state: "gated" }])).toBe(false);
     expect(codeContextOperationsAvailable([{ id: "operations", visible: false, state: "available" }])).toBe(false);
+  });
+
+  it("suspends the Operations feed while its pane is hidden and resumes when shown", () => {
+    const client = api();
+    const view = renderContext(client);
+    expect(seams.operationsEnabled.at(-1)).toBe(true);
+
+    view.rerender(context(client, false));
+    expect(seams.operationsEnabled.at(-1)).toBe(false);
+
+    view.rerender(context(client, true));
+    expect(seams.operationsEnabled.at(-1)).toBe(true);
+  });
+
+  it("keeps selected run state but removes its global drawer while the pane is hidden", async () => {
+    const client = api();
+    const user = userEvent.setup();
+    const view = renderContext(client);
+    await user.click(screen.getByRole("tab", { name: /Tests/ }));
+    await user.click(screen.getByRole("button", { name: "Open run Workspace tests" }));
+    expect(await screen.findByRole("dialog", { name: "Run details" })).toBeVisible();
+    expect(blockingBrowserOverlayOpen()).toBe(true);
+
+    view.rerender(context(client, false));
+    expect(screen.queryByRole("dialog", { name: "Run details" })).not.toBeInTheDocument();
+    expect(blockingBrowserOverlayOpen()).toBe(false);
+
+    view.rerender(context(client, true));
+    expect(await screen.findByRole("dialog", { name: "Run details" })).toBeVisible();
+    expect(blockingBrowserOverlayOpen()).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Close run details" }));
+    expect(blockingBrowserOverlayOpen()).toBe(false);
   });
 
   it("scopes test runs to Code's workspace and opens the canonical test evidence tab", async () => {
@@ -184,7 +226,7 @@ describe("CodeContextOperations", () => {
     expect(within(tests).queryByText("Other tests")).not.toBeInTheDocument();
     await user.click(within(tests).getByRole("button", { name: "Open run Workspace tests" }));
 
-    const detail = await screen.findByRole("complementary", { name: "Run details" });
+    const detail = await screen.findByRole("dialog", { name: "Run details" });
     expect(within(detail).getByRole("tab", { name: "Tests" })).toHaveAttribute("aria-selected", "true");
     expect(within(detail).getByText("42 tests passed")).toBeVisible();
     expect(client.detail).toHaveBeenCalledWith("test-current");

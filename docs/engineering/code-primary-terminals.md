@@ -4,7 +4,7 @@ Code restores the active workspace at startup, while an explicit navigation acti
 
 The existing provider-pane runtime remains authoritative. Every coding agent is an `interactive_pty` record with its own native PTY and provider session. Fleet and the agent rail focus that same Code pane. Threads remain separate. The launcher now uses the remembered provider when no provider is explicitly requested; its existing account/model/effort validation and workspace binding remain unchanged.
 
-The Context menu opens Browser, registered widgets, and current-workspace Runs/Services/Tests beside terminals. Operations data, service actions, run evidence, feature flags, and history entitlements use the existing canonical clients and contracts. Opening context does not start work. Operations polling pauses when Code is hidden; same-frame duplicate mutations are rejected before asynchronous work starts. Run details account for both collapsed and expanded agent rails.
+The Context menu opens Browser, registered widgets, and current-workspace Runs/Services/Tests beside terminals. Operations data, service actions, run evidence, feature flags, and history entitlements use the existing canonical clients and contracts. Opening context does not start work. Operations polling pauses when Code or its context pane is hidden; same-frame duplicate mutations are rejected before asynchronous work starts. Run details account for both collapsed and expanded agent rails. Compact details use a visible, named dialog portal so native Browser children cannot cover them; hiding the pane removes the global drawer while preserving selection.
 
 ## Evidence
 

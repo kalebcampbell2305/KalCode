@@ -933,7 +933,7 @@
 
 .detail {
   position: fixed;
-  z-index: var(--z-dialog);
+  z-index: var(--z-overlay);
   top: var(--titlebar-h);
   right: var(--sidebar-w-collapsed);
   bottom: 0;

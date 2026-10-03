@@ -24,6 +24,7 @@ import {
   TestTube2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
 import { planTier } from "../../ipc/account.ts";
 import { type OperationsApi, OperationsClient } from "../../ipc/operations.ts";
@@ -87,7 +88,7 @@ export function registerCodeContextOperations(client: OperationsApi): () => void
       glyph: <Activity />,
       statusText: "Current-workspace runs, services and test evidence",
     }),
-    render: () => <CodeContextOperations client={client} />,
+    render: (_content, context) => <CodeContextOperations client={client} visible={context.visible !== false} />,
   });
 }
 
@@ -108,9 +109,10 @@ export function CodeContextOperationsRegistration() {
   return null;
 }
 
-export function CodeContextOperations({ client }: { client: OperationsApi }) {
+export function CodeContextOperations({ client, visible = true }: { client: OperationsApi; visible?: boolean }) {
   const navigation = useNavigation();
-  const state = useOperations(client, navigation.current === "code");
+  const active = navigation.current === "code" && visible;
+  const state = useOperations(client, active);
   const toast = useToast();
   const workspaces = useWorkspaces();
   const openInPane = useOpenInPane();
@@ -310,19 +312,23 @@ export function CodeContextOperations({ client }: { client: OperationsApi }) {
         </Button>
       </footer>
 
-      {selected ? (
-        <OperationsRunDetail
-          key={`${selected.id}:${selected.tab}`}
-          client={client}
-          id={selected.id}
-          snapshot={snapshot}
-          busy={busy}
-          mutate={mutate}
-          refreshKey={`${snapshot.revision}:${state.observedAt ?? snapshot.observedAt}`}
-          initialTab={selected.tab}
-          onClose={() => setSelected(null)}
-        />
-      ) : null}
+      {selected && active
+        ? createPortal(
+            <OperationsRunDetail
+              key={`${selected.id}:${selected.tab}`}
+              client={client}
+              id={selected.id}
+              snapshot={snapshot}
+              busy={busy}
+              mutate={mutate}
+              refreshKey={`${snapshot.revision}:${state.observedAt ?? snapshot.observedAt}`}
+              initialTab={selected.tab}
+              role="dialog"
+              onClose={() => setSelected(null)}
+            />,
+            document.body,
+          )
+        : null}
     </section>
   );
 }
