@@ -120,6 +120,8 @@
     "allow-terminal-restart",
     "allow-terminal-close",
     "allow-terminal-write",
+    "allow-terminal-image-import",
+    "allow-terminal-image-discard",
     "allow-terminal-resize",
     "allow-terminal-attach",
     "allow-terminal-detach",

@@ -96,6 +96,8 @@ interface QueuedInput {
   signal?: AbortSignal;
   /** Revalidates mutable destination state at the write linearization point. */
   beforeWrite?: () => void;
+  /** One delivery's exact native writer, used when its target identity is stricter than the lane default. */
+  writeOverride?: (data: string) => Promise<void>;
   failure?: DictationDeliveryError;
   onAbort?: () => void;
   resolve: () => void;
@@ -110,7 +112,12 @@ export function createOrderedInputQueue(
   writeGuarded: (data: string) => Promise<void> = write,
 ): {
   send(data: string): void;
-  deliver(data: string, options?: DictationDeliveryOptions, beforeWrite?: () => void): Promise<void>;
+  deliver(
+    data: string,
+    options?: DictationDeliveryOptions,
+    beforeWrite?: () => void,
+    writeOverride?: (data: string) => Promise<void>,
+  ): Promise<void>;
   dispose(): void;
 } {
   let pending: QueuedInput[] = [];
@@ -122,32 +129,46 @@ export function createOrderedInputQueue(
     while (pending.length > 0) {
       const batch = pending;
       pending = [];
-      const live: QueuedInput[] = [];
-      for (const item of batch) {
-        if (item.onAbort) item.signal?.removeEventListener("abort", item.onAbort);
-        if (item.failure || item.signal?.aborted) {
-          item.reject(
-            item.failure ??
-              new DictationDeliveryError("dictation_cancelled", "Dictation was cancelled before delivery."),
-          );
-        } else {
+      let start = 0;
+      while (start < batch.length) {
+        const first = batch[start];
+        if (!first) break;
+        const { background, writeOverride } = first;
+        let end = start + 1;
+        while (
+          end < batch.length &&
+          batch[end]?.background === background &&
+          batch[end]?.writeOverride === writeOverride
+        ) {
+          end += 1;
+        }
+        const group: QueuedInput[] = [];
+        for (const item of batch.slice(start, end)) {
+          if (item.onAbort) item.signal?.removeEventListener("abort", item.onAbort);
+          if (closed) {
+            item.reject(new DictationDeliveryError("target_closed", "That destination closed before delivery."));
+            continue;
+          }
+          if (item.failure || item.signal?.aborted) {
+            item.reject(
+              item.failure ??
+                new DictationDeliveryError("dictation_cancelled", "Dictation was cancelled before delivery."),
+            );
+            continue;
+          }
           try {
             item.beforeWrite?.();
-            live.push(item);
+            group.push(item);
           } catch (cause) {
             item.reject(cause);
           }
         }
-      }
-      if (live.length === 0) continue;
-      let start = 0;
-      while (start < live.length) {
-        const background = live[start]?.background ?? false;
-        let end = start + 1;
-        while (end < live.length && live[end]?.background === background) end += 1;
-        const group = live.slice(start, end);
+        if (group.length === 0) {
+          start = end;
+          continue;
+        }
         try {
-          await (background ? write : writeGuarded)(group.map((item) => item.data).join(""));
+          await (background ? write : (writeOverride ?? writeGuarded))(group.map((item) => item.data).join(""));
           for (const item of group) item.resolve();
         } catch (cause) {
           for (const item of group) {
@@ -166,6 +187,7 @@ export function createOrderedInputQueue(
     background: boolean,
     options: DictationDeliveryOptions = {},
     beforeWrite?: () => void,
+    writeOverride?: (data: string) => Promise<void>,
   ) =>
     new Promise<void>((resolve, reject) => {
       try {
@@ -178,7 +200,15 @@ export function createOrderedInputQueue(
         reject(cause);
         return;
       }
-      const item: QueuedInput = { data, signal: options.signal, beforeWrite, resolve, reject, background };
+      const item: QueuedInput = {
+        data,
+        signal: options.signal,
+        beforeWrite,
+        writeOverride,
+        resolve,
+        reject,
+        background,
+      };
       item.onAbort = () => {
         item.failure = new DictationDeliveryError("dictation_cancelled", "Dictation was cancelled before delivery.");
       };
@@ -191,8 +221,8 @@ export function createOrderedInputQueue(
     send(data) {
       void enqueue(data, true).catch(() => undefined);
     },
-    deliver(data, options, beforeWrite) {
-      return enqueue(data, false, options, beforeWrite);
+    deliver(data, options, beforeWrite, writeOverride) {
+      return enqueue(data, false, options, beforeWrite, writeOverride);
     },
     dispose() {
       closed = true;
