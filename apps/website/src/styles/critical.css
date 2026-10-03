@@ -1006,6 +1006,21 @@ main > .hero:first-child {
   }
 }
 
+/* Narrowest phones (320px): logo, Download and the menu button must all stay on screen. */
+@media (max-width: 22.5rem) {
+  .site-header .wordmark {
+    height: 0.625rem;
+  }
+
+  .header-tools {
+    gap: var(--space-2);
+  }
+
+  .header-tools .button {
+    padding-inline: var(--space-3);
+  }
+}
+
 :root {
   --world-base: #03050c;
   --world-deep: #010208;
