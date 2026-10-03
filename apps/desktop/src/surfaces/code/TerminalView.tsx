@@ -19,7 +19,7 @@ import styles from "./Code.module.css";
 import { noteTerminalInput, noteTerminalOutput } from "./kaltidy/activity.ts";
 import { suppressReplayQueries } from "./replayQueries.ts";
 import { isTerminalShortcut } from "./shortcuts.ts";
-import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "./terminalTheme.ts";
+import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "./terminalTheme.ts";
 
 const FONT_SIZE = 13;
 const RESIZE_DEBOUNCE_MS = 80;
@@ -37,11 +37,6 @@ interface TerminalViewProps {
   theme: "light" | "dark";
   /** The pane isn't focused: output renders in batches (≤ 4 a second). */
   throttled?: boolean;
-}
-
-function monoFontFamily(): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
-  return value || "ui-monospace, Consolas, monospace";
 }
 
 /**
@@ -181,7 +176,8 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     });
     observer.observe(host);
     // Re-measure once the monospace font has loaded, so cells match the real glyphs.
-    void document.fonts?.load(`${FONT_SIZE}px ${monoFontFamily()}`).then(() => {
+    const fontFamily = monoFontFamily();
+    void document.fonts?.load(`${FONT_SIZE}px ${fontFamily}`).then(() => {
       if (disposed) return;
       term.options.fontFamily = monoFontFamily();
       fitNow();
@@ -212,6 +208,8 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     };
     const connect = (resync: boolean) => {
       const current = ++generation;
+      // A replay abandoned by this new generation never clears its own flag.
+      replaying = false;
       if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
       attachment = null;
       unacked = 0;
@@ -279,7 +277,10 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     const host = hostRef.current;
     if (!host) return;
     return registerDictationSink(host, {
-      label: labelRef.current,
+      // Read live: tab labels renumber without re-registering (which would end a capture).
+      get label() {
+        return labelRef.current;
+      },
       destination: { kind: "raw_terminal", terminalId },
       async deliver(transcript, options) {
         throwIfDictationCancelled(options?.signal);
@@ -312,7 +313,12 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     termRef.current?.textarea?.setAttribute("aria-label", `${label} terminal input`);
   }, [label]);
 
+  const themeSeen = useRef(theme);
   useEffect(() => {
+    if (themeSeen.current !== theme) {
+      themeSeen.current = theme;
+      invalidateMonoFontFamily();
+    }
     const term = termRef.current;
     if (term) term.options.theme = TERMINAL_THEMES[theme];
   }, [theme]);

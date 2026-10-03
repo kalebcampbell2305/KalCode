@@ -10,32 +10,32 @@ import type { ProviderId } from "./ProviderId.ts";
  * KalCode's adapter does, not only what the provider documents: a flag is `true` only when
  * KalCode implements it.
  */
-export type ProviderStatus = { id: ProviderId, displayName: string, 
+export type ProviderStatus = { id: ProviderId, displayName: string,
 /**
  * `None` until the first detection has run.
  */
-detection: ProviderDetection | null, 
+detection: ProviderDetection | null,
 /**
  * Stable machine code when the last detection ended in `error`, e.g. `version_timeout`.
  */
-detectionErrorCode: string | null, 
+detectionErrorCode: string | null,
 /**
  * The documented command KalCode runs to read the sign-in state, e.g. `claude auth
  * status`; `None` when the provider documents no side-effect-free way to check.
  */
-authCheck: string | null, capabilities: ProviderCapabilities, adapter: AdapterState, modelSource: ModelSource, 
+authCheck: string | null, capabilities: ProviderCapabilities, adapter: AdapterState, modelSource: ModelSource,
 /**
  * The documented integration surface KalCode uses or will use, in plain language.
  */
-integration: string, 
+integration: string,
 /**
  * How the user signs in with the provider's own CLI. KalCode never handles the login.
  */
-signInCommand: string, 
+signInCommand: string,
 /**
  * How the provider documents installing it on this platform.
  */
-installCommand: string, 
+installCommand: string,
 /**
  * The provider's official documentation.
  */

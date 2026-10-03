@@ -3,20 +3,22 @@ import type {
   PaneLayout,
   ProviderAccount,
   ShellOption,
+  StatusTone,
   TerminalInfo,
   ThreadSummary,
   Workspace,
 } from "@kalcode/protocol";
 import {
-  Badge,
   Button,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   EmptyState,
   ProviderGlyph,
+  Skeleton,
 } from "@kalcode/ui/components";
 import {
+  Bot,
   GitBranch,
   Globe,
   LayoutDashboard,
@@ -26,7 +28,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { VoiceSceneTarget } from "../../kalvoice/sceneTargets.ts";
 import {
   registerVoicePaneScene,
@@ -67,6 +69,7 @@ import {
   providerPaneAliasesOf,
   selectDistinctProviderThreads,
 } from "../../shell/panes/paneCommands.ts";
+import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
 import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "../../shell/rail/paneIds.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
@@ -93,7 +96,11 @@ import { resolveBrowserTarget } from "./browserTarget.ts";
 import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
+import { CODE_SHORTCUT_LABELS } from "./shortcuts.ts";
 import { TerminalView } from "./TerminalView.tsx";
+
+/** How long an agent pane waits for its terminal before offering Retry. */
+const RETRY_AFTER_MS = 4000;
 
 const terminalContent = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const agentContent = (agentId: string): PaneContent => ({ kind: "agent", agentId });
@@ -127,10 +134,17 @@ export function defaultLayoutFor(
   return layout;
 }
 
+/** Something running that isn't shown in any pane, with the tone of its status dot. */
+export interface BackgroundItem {
+  content: PaneContent;
+  title: string;
+  tone: StatusTone;
+}
+
 export interface CodeCanvasApi {
   controller: PaneController;
   /** Contents that run but aren't shown in any pane. */
-  background: { content: PaneContent; title: string }[];
+  background: BackgroundItem[];
   providerPanes: ProviderPanes;
   shells: readonly ShellOption[];
   newTerminal: (shellId: string | null) => void;
@@ -141,8 +155,31 @@ export interface CodeCanvasApi {
 
 interface CodeCanvasProps {
   workspace: Workspace;
-  /** Renders the header toolbar and status bar around the canvas. */
-  children: (api: CodeCanvasApi, canvas: ReactNode) => ReactNode;
+  /**
+   * Renders the header toolbar and status bar around the canvas. `api` is null while the
+   * workspace's panes load: the header shows at once and the canvas is a skeleton.
+   */
+  children: (api: CodeCanvasApi | null, canvas: ReactNode) => ReactNode;
+}
+
+/** The canvas while panes or the saved layout load: one quiet pane frame, never a blank page. */
+function CanvasSkeleton({ label }: { label: string }) {
+  return (
+    <div className={styles.canvasLoading} role="status" aria-busy="true">
+      <span className="visually-hidden">{label}</span>
+      <div className={styles.skeletonFrame} aria-hidden="true">
+        <div className={styles.skeletonHeader}>
+          <Skeleton width="7.5rem" height="0.75rem" />
+          <Skeleton width="5rem" height="0.75rem" />
+        </div>
+        <div className={styles.skeletonBody}>
+          <Skeleton width="38%" height="0.625rem" />
+          <Skeleton width="62%" height="0.625rem" />
+          <Skeleton width="47%" height="0.625rem" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -151,14 +188,8 @@ interface CodeCanvasProps {
  * layout of a workspace can include them.
  */
 export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
-  const providerPanes = useProviderPanes(workspace);
-  if (!providerPanes.loaded) {
-    return (
-      <div className={styles.canvasLoading} role="status" aria-busy="true">
-        <span className="visually-hidden">Loading panes</span>
-      </div>
-    );
-  }
+  const providerPanes = useProviderPanes(workspace, { active: useNavigation().current === "code" });
+  if (!providerPanes.loaded) return <>{children(null, <CanvasSkeleton label="Loading panes" />)}</>;
   return (
     <LoadedCanvas workspace={workspace} providerPanes={providerPanes}>
       {children}
@@ -193,7 +224,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   useEffect(() => {
     if (hasSharedAccountSessions) return;
     let cancelled = false;
-    setProviderAccounts(null);
+    // The previous accounts stay until the new read lands, so pane labels don't flicker.
     setProviderAccountsUnavailable(false);
     void client
       .listProviderAccounts()
@@ -478,7 +509,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   }, [workspace.id, codeShown]);
 
   // ---------- Keep the layout in step with the runtime ----------
-  const seenTerminals = useRef<Set<string> | null>(null);
+  // Seeded at mount: a terminal created while the layout loads is new and joins a pane, while
+  // ones that existed when the canvas opened and aren't in the layout stay in the background.
+  const seenTerminals = useRef(new Set(initialState.current.terminals.map((t) => t.id)));
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconcile on runtime changes only.
   useEffect(() => {
     if (!controller.ready) return;
@@ -490,10 +523,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     if (gone.length > 0) controller.forget(new Set(gone));
     // Terminals opened while the canvas is up join the focused pane; ones that existed when it
     // opened and aren't in the layout stay in the background (they were closed from a pane).
-    if (seenTerminals.current === null) {
-      seenTerminals.current = known;
-      return;
-    }
     for (const terminal of terminals) {
       if (seenTerminals.current.has(terminal.id)) continue;
       seenTerminals.current.add(terminal.id);
@@ -526,7 +555,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     // A new terminal's request can arrive before the terminal list has it; wait for it.
     if (!terminalById.has(focusRequest.terminalId)) return;
     handledFocus.current = focusRequest.n;
-    seenTerminals.current?.add(focusRequest.terminalId);
+    seenTerminals.current.add(focusRequest.terminalId);
     controller.show(terminalContent(focusRequest.terminalId), { focus: true });
   }, [focusRequest, controller.ready, terminalById]);
 
@@ -555,9 +584,23 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     }
   }, [focusedTerminalId]);
 
+  // Agent tabs whose threads no longer exist leave the layout once a list read succeeded (else
+  // they'd wait on "Connecting" forever). Ids just announced by a command are kept until the
+  // list catches up with them.
+  const pendingAgents = useRef(new Set<string>());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconcile on list changes only.
+  useEffect(() => {
+    if (!controller.ready || !providerPanes.loaded || providerPanes.error) return;
+    for (const id of pendingAgents.current) if (paneById.has(id)) pendingAgents.current.delete(id);
+    const gone = allContents(controller.layout)
+      .filter((c) => c.kind === "agent" && !paneById.has(c.agentId) && !pendingAgents.current.has(c.agentId))
+      .map(contentKey);
+    if (gone.length > 0) controller.forget(new Set(gone));
+  }, [paneById, controller.ready, providerPanes.loaded, providerPanes.error]);
+
   // Z7-W3: a Dashboard card, a notification or KalVoice asked to focus a provider pane's thread.
   usePaneFocusRequests((threadId) => {
-    if (!controller.ready) return false;
+    if (!controller.ready || !paneById.has(threadId)) return false;
     controller.replace(migrateAgentContents(controller.layout, new Set([threadId])));
     controller.show(agentContent(threadId), { focus: true });
     return true;
@@ -577,8 +620,44 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     paneId: string | null;
     returnToHandoff: boolean;
   } | null>(null);
-  const [handoffSource, setHandoffSource] = useState<ThreadSummary | null>(null);
   const [handoffTargetId, setHandoffTargetId] = useState<string | null>(null);
+  // The id only: the dialog always reads the thread's current summary, and closes if it's gone.
+  const [handoffSourceId, setHandoffSourceId] = useState<string | null>(null);
+  const handoffSource = handoffSourceId ? (paneById.get(handoffSourceId)?.thread ?? null) : null;
+  useEffect(() => {
+    if (handoffSourceId && providerPanes.loaded && !paneById.has(handoffSourceId)) {
+      setHandoffSourceId(null);
+      setHandoffTargetId(null);
+    }
+  }, [handoffSourceId, paneById, providerPanes.loaded]);
+  // One stable hand-off handler per thread, so panes don't re-render for a new closure.
+  const handOffHandlers = useRef(new Map<string, () => void>());
+  const handOffFor = useCallback((threadId: string) => {
+    let handler = handOffHandlers.current.get(threadId);
+    if (!handler) {
+      handler = () => {
+        setHandoffSourceId(threadId);
+        setHandoffTargetId(null);
+      };
+      handOffHandlers.current.set(threadId, handler);
+    }
+    return handler;
+  }, []);
+  // One stable close handler per thread for the ended bar: stops the agent and drops its tab.
+  const closeAgentHandlers = useRef(new Map<string, () => void>());
+  const stopAgentRef = useRef(stopAgent);
+  stopAgentRef.current = stopAgent;
+  const closeAgentFor = useCallback((threadId: string) => {
+    let handler = closeAgentHandlers.current.get(threadId);
+    if (!handler) {
+      handler = () => {
+        void stopAgentRef.current(threadId);
+        controllerRef.current.forget(new Set([contentKey(agentContent(threadId))]));
+      };
+      closeAgentHandlers.current.set(threadId, handler);
+    }
+    return handler;
+  }, []);
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
   // A fresh launcher never shows the previous launch's refusal.
@@ -641,6 +720,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     },
     [closeTerminal],
   );
+
+  const restartById = useCallback((terminalId: string) => void restartTerminal(terminalId), [restartTerminal]);
 
   const describe = useCallback(
     (content: PaneContent): TabInfo | null => {
@@ -706,30 +787,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           <TerminalPanel
             terminal={terminal}
             label={labels.get(terminal.id) ?? terminal.title}
-            context={context}
+            focused={context.focused}
+            focusRequest={context.focusRequest}
+            codeShown={codeShown}
             theme={theme}
             workspace={workspace}
-            onRestart={() => void restartTerminal(terminal.id)}
-            onClose={() => closeTerminalTab(terminal.id)}
+            onRestart={restartById}
+            onClose={closeTerminalTab}
           />
         );
       }
       if (content.kind === "agent") {
         const entry = paneById.get(content.agentId);
         if (!entry?.info) {
-          return (
-            <PaneNotice
-              icon={<LayoutPanelLeft />}
-              title="Connecting to agent terminal"
-              actions={
-                <Button size="sm" onClick={() => void providerPanes.refresh()}>
-                  Retry connection
-                </Button>
-              }
-            >
-              <p>{providerPanes.error ?? "Waiting for the coding session's terminal connection."}</p>
-            </PaneNotice>
-          );
+          return <AgentConnecting error={providerPanes.error} onRetry={providerPanes.refresh} />;
         }
         return (
           <ProviderPane
@@ -739,12 +810,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             account={accountFor(entry.thread)}
             theme={theme}
             focusRequest={context.focusRequest}
-            throttled={!context.focused}
+            throttled={!context.focused || !codeShown}
             onChanged={providerPanes.updated}
-            onHandOff={() => {
-              setHandoffSource(entry.thread);
-              setHandoffTargetId(null);
-            }}
+            onHandOff={handOffFor(entry.thread.id)}
+            onClose={closeAgentFor(entry.thread.id)}
           />
         );
       }
@@ -756,12 +825,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       paneById,
       theme,
       workspace,
-      restartTerminal,
+      restartById,
       closeTerminalTab,
       providerPanes,
       current,
+      codeShown,
       accountFor,
       browserBridge,
+      handOffFor,
+      closeAgentFor,
     ],
   );
 
@@ -790,14 +862,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   const shown = useMemo(() => new Set(allContents(controller.layout).map(contentKey)), [controller.layout]);
   const background = useMemo(() => {
-    const list: { content: PaneContent; title: string }[] = [];
+    const list: BackgroundItem[] = [];
     for (const t of terminals) {
       const content = terminalContent(t.id);
-      if (t.status === "running" && !shown.has(contentKey(content))) list.push({ content, title: titleOf(content) });
+      if (t.status === "running" && !shown.has(contentKey(content)))
+        list.push({ content, title: titleOf(content), tone: "working" });
     }
     for (const p of providerPanes.panes) {
       const content = agentContent(p.thread.id);
-      if (p.info?.running && !shown.has(contentKey(content))) list.push({ content, title: titleOf(content) });
+      if (p.info?.running && !shown.has(contentKey(content)))
+        list.push({ content, title: titleOf(content), tone: paneStatus(p.thread.status).tone });
     }
     return list;
   }, [terminals, providerPanes.panes, shown, titleOf]);
@@ -813,13 +887,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         shell={shell}
         providerPanes={providerPanes}
         background={background}
-        gitTeaser={gitTeaser}
         onTerminal={() => newTerminal(null)}
         onProviderPane={() => openAgentLauncher("claude-code", paneId)}
         onShow={(content) => controllerRef.current.show(content, { paneId, focus: true })}
       />
     ),
-    [shell, providerPanes, background, gitTeaser, newTerminal, openAgentLauncher],
+    [shell, providerPanes, background, newTerminal, openAgentLauncher],
   );
 
   // Z7-W2's widgets stay registered (saved layouts restore them) but are offered only when their
@@ -1040,6 +1113,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         if (!next) {
           return { handled: false, message: "There isn't room to show every new provider pane." };
         }
+        for (const id of threadIds) if (!paneById.has(id)) pendingAgents.current.add(id);
         current.replace(next, `Arranged ${threadIds.length} provider ${threadIds.length === 1 ? "pane" : "panes"}.`);
         const first = findContent(next, contentKey(agentContent(threadIds[0] as string)));
         if (first) current.focusPane(first.paneId);
@@ -1097,15 +1171,18 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       active={codeShown}
     />
   ) : (
-    <div className={styles.canvasLoading} role="status" aria-busy="true">
-      <span className="visually-hidden">Loading the layout</span>
-    </div>
+    <CanvasSkeleton label="Loading the layout" />
+  );
+
+  const api = useMemo<CodeCanvasApi>(
+    () => ({ controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf }),
+    [controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf],
   );
 
   return (
     <>
       <UtilityDockRegistration />
-      {children({ controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf }, canvas)}
+      {children(api, canvas)}
       {handoffSource ? (
         <HandOffDialog
           open={launcher?.returnToHandoff !== true}
@@ -1116,7 +1193,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             setLauncher({ providerId: "claude-code", paneId: null, returnToHandoff: true });
           }}
           onClose={() => {
-            setHandoffSource(null);
+            setHandoffSourceId(null);
             setHandoffTargetId(null);
           }}
         />
@@ -1131,6 +1208,23 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           fixedCount={launcher.returnToHandoff ? 1 : undefined}
           purpose={launcher.returnToHandoff ? "handoff" : "standard"}
           onLaunch={(spec) => launchAgents(spec, launcher.paneId, launcher.returnToHandoff)}
+          onNewTerminal={
+            launcher.returnToHandoff
+              ? undefined
+              : () => {
+                  if (launcher.paneId) controllerRef.current.focusPane(launcher.paneId, false);
+                  newTerminal(null);
+                }
+          }
+          onOpenBrowser={
+            launcher.returnToHandoff
+              ? undefined
+              : () =>
+                  controllerRef.current.show(browserContent(), {
+                    ...(launcher.paneId ? { paneId: launcher.paneId } : { placement: "split" as const }),
+                    focus: true,
+                  })
+          }
           onClose={() => setLauncher(null)}
         />
       ) : null}
@@ -1138,11 +1232,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 }
 
-/** A terminal in a pane: its view, and the restart / ended states (Z1). */
-function TerminalPanel({
+/**
+ * A terminal in a pane: its view, and the restart / ended states (Z1). Memoized: the canvas
+ * re-renders on every layout change, a terminal only when its own state changes.
+ */
+const TerminalPanel = memo(function TerminalPanel({
   terminal,
   label,
-  context,
+  focused,
+  focusRequest,
+  codeShown,
   theme,
   workspace,
   onRestart,
@@ -1150,11 +1249,13 @@ function TerminalPanel({
 }: {
   terminal: TerminalInfo;
   label: string;
-  context: PaneRenderContext;
+  focused: boolean;
+  focusRequest: number;
+  codeShown: boolean;
   theme: "light" | "dark";
   workspace: Workspace;
-  onRestart: () => void;
-  onClose: () => void;
+  onRestart: (terminalId: string) => void;
+  onClose: (terminalId: string) => void;
 }) {
   if (terminal.status === "ended_by_app") {
     return (
@@ -1162,14 +1263,15 @@ function TerminalPanel({
         <EmptyState
           headingLevel={2}
           framed={false}
+          align="center"
           art={<PowerOff />}
           title="This terminal ended when KalCode closed"
           actions={
             <>
-              <Button variant="primary" icon={<RotateCcw />} onClick={onRestart}>
+              <Button variant="primary" icon={<RotateCcw />} onClick={() => onRestart(terminal.id)}>
                 Restart
               </Button>
-              <Button variant="ghost" icon={<X />} onClick={onClose}>
+              <Button variant="ghost" icon={<X />} onClick={() => onClose(terminal.id)}>
                 Close tab
               </Button>
             </>
@@ -1183,6 +1285,8 @@ function TerminalPanel({
       </div>
     );
   }
+  const failed = terminal.status === "exited" && terminal.exitCode !== 0 && terminal.exitCode !== null;
+  const ended = `${describeTerminalStatus(terminal)}${terminal.exitCode === 0 ? "." : ""}`;
   return (
     <div className={styles.paneTerminal} data-status={terminal.status}>
       <TerminalView
@@ -1190,29 +1294,59 @@ function TerminalPanel({
         terminal={terminal}
         label={label}
         visible
-        focusRequest={context.focusRequest}
+        focusRequest={focusRequest}
         theme={theme}
-        throttled={!context.focused}
+        throttled={!focused || !codeShown}
       />
       {terminal.status === "exited" ? (
-        <div className={styles.endedBar} role="status">
-          <span className={styles.endedText}>
-            {describeTerminalStatus(terminal)}
-            {terminal.exitCode === 0 ? "." : ""}
+        <div className={styles.endedBar} role="status" data-tone={failed ? "failed" : "muted"}>
+          <span className={styles.endedDot} aria-hidden="true" />
+          <span className={styles.endedText} title={ended}>
+            {ended}
           </span>
-          <Button size="sm" variant="primary" icon={<RotateCcw />} onClick={onRestart}>
-            Restart
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onClose}>
-            Close tab
-          </Button>
+          <span className={styles.endedActions}>
+            <Button size="sm" variant="primary" icon={<RotateCcw />} onClick={() => onRestart(terminal.id)}>
+              Restart
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onClose(terminal.id)}>
+              Close tab
+            </Button>
+          </span>
         </div>
       ) : null}
     </div>
   );
+});
+
+/** Until a coding agent's terminal connects: a quiet spinner first, Retry only when it's needed. */
+function AgentConnecting({ error, onRetry }: { error: string | null; onRetry: () => Promise<void> }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), RETRY_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const stuck = error !== null || slow;
+  return (
+    <PaneNotice
+      icon={stuck ? <LayoutPanelLeft /> : <span className={styles.spinner} />}
+      title={stuck ? "Connecting to agent terminal" : "Connecting…"}
+      actions={
+        stuck ? (
+          <Button size="sm" icon={<RotateCcw />} onClick={() => void onRetry()}>
+            Retry connection
+          </Button>
+        ) : undefined
+      }
+    >
+      <p>
+        {error ??
+          (stuck ? "The coding session's terminal is taking longer than usual." : "Starting the agent's terminal.")}
+      </p>
+    </PaneNotice>
+  );
 }
 
-/** An empty pane: what can be opened here. */
+/** An empty pane: what can be opened here, the signature action first. */
 function EmptyPane({
   shell,
   providerPanes,
@@ -1220,71 +1354,71 @@ function EmptyPane({
   onTerminal,
   onProviderPane,
   onShow,
-  gitTeaser,
 }: {
   shell: ShellOption | null;
   providerPanes: ProviderPanes;
-  background: { content: PaneContent; title: string }[];
+  background: BackgroundItem[];
   onTerminal: () => void;
   onProviderPane: () => void;
   onShow: (content: PaneContent) => void;
-  gitTeaser: boolean;
 }) {
+  const agents = providerPanes.enabled;
   return (
     <div className={styles.emptyPane}>
-      <div className={styles.emptyHead}>
+      <div className={styles.emptyInner}>
         <span className={styles.emptyPaneArt} aria-hidden="true">
           <LayoutPanelLeft />
         </span>
-        <div>
+        <div className={styles.emptyHead}>
           <h2 className={styles.emptyTitle}>Empty pane</h2>
-          <p className={styles.emptyText}>Open something here. Closing a pane ends what runs in it.</p>
-        </div>
-      </div>
-      <div className={styles.emptyActions}>
-        <Button size="sm" icon={<Globe />} onClick={() => onShow(browserContent())}>
-          Open Browser
-        </Button>
-        <Button variant="primary" size="sm" icon={<SquareTerminal />} onClick={onTerminal} disabled={!shell}>
-          {shell ? `New ${shell.name} terminal` : "No shells found"}
-        </Button>
-        {providerPanes.enabled ? (
-          <Button
-            size="sm"
-            icon={<ProviderGlyph provider="claude-code" size="xs" />}
-            busy={providerPanes.creating}
-            onClick={onProviderPane}
-          >
-            Launch an agent
-          </Button>
-        ) : null}
-      </div>
-      {background.length > 0 ? (
-        <div className={styles.emptyGroup}>
-          <h3 className={styles.emptyLabel}>Running in the background</h3>
-          <ul className={styles.emptyList}>
-            {background.slice(0, 6).map((item) => (
-              <li key={contentKey(item.content)}>
-                <button type="button" className={styles.emptyItem} onClick={() => onShow(item.content)}>
-                  <span className={styles.emptyDot} aria-hidden="true" />
-                  <span className={styles.emptyItemTitle}>{item.title}</span>
-                  <span className={styles.emptyItemAction}>Show</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {gitTeaser ? (
-        <div className={styles.emptyGroup}>
-          <h3 className={styles.emptyLabel}>Not in this build yet</h3>
-          <p className={styles.emptyComing}>
-            <Badge tone="outline">
-              <GitBranch aria-hidden="true" /> Git
-            </Badge>
+          <p className={styles.emptyText}>
+            {agents ? "Start an agent, a terminal or the browser here." : "Start a terminal or the browser here."}
           </p>
         </div>
-      ) : null}
+        <div className={styles.emptyActions}>
+          {agents ? (
+            <Button variant="primary" size="sm" icon={<Bot />} busy={providerPanes.creating} onClick={onProviderPane}>
+              <span className={styles.buttonLabel}>Launch an agent</span>
+            </Button>
+          ) : null}
+          <Button
+            variant={agents ? "secondary" : "primary"}
+            size="sm"
+            icon={<SquareTerminal />}
+            onClick={onTerminal}
+            disabled={!shell}
+          >
+            <span className={styles.buttonLabel}>{shell ? `New ${shell.name} terminal` : "No shells found"}</span>
+          </Button>
+          <Button variant="ghost" size="sm" icon={<Globe />} onClick={() => onShow(browserContent())}>
+            <span className={styles.buttonLabel}>Open Browser</span>
+          </Button>
+        </div>
+        {background.length > 0 ? (
+          <div className={styles.emptyGroup}>
+            <h3 className={styles.emptyLabel}>Running in the background</h3>
+            <ul className={styles.emptyList}>
+              {background.slice(0, 6).map((item) => (
+                <li key={contentKey(item.content)}>
+                  <button type="button" className={styles.emptyItem} onClick={() => onShow(item.content)}>
+                    <span className={styles.emptyDot} data-tone={item.tone} aria-hidden="true" />
+                    <span className={styles.emptyItemTitle}>{item.title}</span>
+                    <span className={styles.emptyItemAction}>Show</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <p className={styles.emptyHint} aria-hidden="true">
+          <span>
+            <kbd>{PANE_SHORTCUT_LABELS.splitRight}</kbd> split
+          </span>
+          <span>
+            <kbd>{CODE_SHORTCUT_LABELS["new-terminal"]}</kbd> terminal
+          </span>
+        </p>
+      </div>
     </div>
   );
 }

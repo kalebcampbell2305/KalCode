@@ -380,7 +380,7 @@ test.describe("widgets", () => {
     // Detection runs on the Providers page; the widget only reads the health snapshot.
     await page.getByRole("button", { name: "Providers" }).click();
     await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
-    await expect(page.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
     await page.getByRole("button", { name: "Dashboard" }).click();
 
     const health = page.getByRole("region", { name: "Provider health" });
@@ -402,7 +402,7 @@ test.describe("widgets", () => {
     // A later plain visit opens the default tab again.
     await page.getByRole("button", { name: "Dashboard" }).click();
     await page.getByRole("button", { name: "Providers" }).click();
-    await expect(page.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("provider health shows sign-in, install and reported rate-limit states in words", async ({ page }) => {
@@ -483,6 +483,11 @@ test.describe("states", () => {
     await expect(board(page).getByRole("button")).toHaveText(["Launch an agent"]);
     await expect(board(page).getByText(/A CLI you type into a plain terminal isn't tracked here/)).toBeVisible();
     await board(page).getByRole("button", { name: "Launch an agent" }).click();
+    // One action: Code opens with its New agent launcher already up.
+    const launcher = page.getByRole("dialog", { name: "New agent" });
+    await expect(launcher).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(launcher).toHaveCount(0);
     await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
     await expect(
       page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),

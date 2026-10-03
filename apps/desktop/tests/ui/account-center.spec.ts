@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
-test("account center opens in place, groups accounts, and never invents quota", async ({ page }) => {
+test("account center opens in place with each account's real usage, never an invented one", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Account and usage center" }).click();
   const center = page.getByRole("dialog", { name: "Accounts & usage" });
@@ -9,8 +9,23 @@ test("account center opens in place, groups accounts, and never invents quota", 
   for (const provider of ["Claude Code", "Codex", "Gemini CLI"]) {
     await expect(center.getByRole("heading", { name: provider, exact: true })).toBeVisible();
   }
-  await expect(center.getByText("Usage unavailable", { exact: true }).first()).toBeVisible();
-  await expect(center).not.toContainText(/\d+% left/);
+  // Canonical per-account usage: real windows, resets and plan where the provider reports them.
+  const claude = center.getByRole("region", { name: "Claude Code · Personal", exact: true });
+  await expect(claude.getByText("Max 20x", { exact: true })).toBeVisible();
+  const windows = claude.getByRole("list", { name: "Personal usage" });
+  await expect(windows.getByRole("listitem")).toHaveCount(2);
+  await expect(windows).toContainText("5-hour64% left");
+  await expect(windows).toContainText("Weekly42% left");
+  await expect(windows).toContainText(/Resets in 2h 1[34]m/);
+  const codex = center.getByRole("region", { name: "Codex · Personal", exact: true });
+  await expect(codex).toContainText("56% left");
+  // No number where the provider reports none; a signed-out account offers Sign in in its row.
+  const gemini = center.getByRole("region", { name: "Gemini CLI · Personal", exact: true });
+  await expect(gemini.getByText("Usage unavailable", { exact: true })).toBeVisible();
+  await expect(gemini).not.toContainText(/\d+% left/);
+  const work = center.getByRole("region", { name: "Codex · Work", exact: true });
+  await expect(work).not.toContainText(/\d+% left/);
+  await expect(work.getByRole("button", { name: "Sign in Work" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Dashboard", exact: true, level: 1 })).toBeVisible();
   const violations = (await new AxeBuilder({ page }).include("[data-account-center]").analyze()).violations.filter(
     (v) => v.impact === "serious" || v.impact === "critical",
@@ -67,9 +82,7 @@ test("switching selects the next agent while the current terminal keeps its real
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
-  await expect(
-    launcher.getByRole("combobox", { name: "Account", exact: true }).locator("option:checked"),
-  ).toContainText("Studio");
+  await expect(launcher.getByRole("option", { selected: true })).toContainText("Studio");
   await launcher.getByRole("button", { name: "Launch Claude Code agent" }).click();
   await expect(page.locator("[data-provider-pane]")).toHaveCount(2);
   await expect(chip).toContainText("Studio");
@@ -90,13 +103,17 @@ test("sign-in, sign-out and refresh use the existing account without creating a 
   await page.getByRole("button", { name: "Account and usage center" }).click();
   const center = page.getByRole("dialog", { name: "Accounts & usage" });
   const work = center.getByRole("region", { name: "Codex · Work", exact: true });
-  await work.getByRole("button", { name: "Account details" }).click();
-  await work.getByRole("button", { name: "Sign in", exact: true }).click();
+  // Sign in is right in the signed-out row: one click, no details to open first.
+  await work.getByRole("button", { name: "Sign in Work" }).click();
   await expect(work.getByText("Ready", { exact: true })).toBeVisible();
+  await expect(work.getByRole("button", { name: "Sign in Work" })).toHaveCount(0);
+  // Signed in, the row fills with the account's real usage in place.
+  await expect(work.getByRole("list", { name: "Work usage" })).toContainText("8% left");
+  await work.getByRole("button", { name: "Account details" }).click();
   await work.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(work.getByText("Signed out", { exact: true })).toBeVisible();
   await center.getByRole("button", { name: "Refresh usage" }).click();
-  await expect(center.getByRole("status")).toContainText("Provider usage is unavailable");
+  await expect(center.getByRole("status")).toContainText("Account information refreshed.");
   await expect(work.getByText("Signed out", { exact: true })).toBeVisible();
   await expect(page.locator("[data-provider-pane]")).toHaveCount(0);
 });

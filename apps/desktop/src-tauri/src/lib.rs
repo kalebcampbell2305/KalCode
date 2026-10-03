@@ -44,6 +44,7 @@ mod operations_commands;
 mod operations_observed;
 pub mod permission_commands;
 mod provider_account_commands;
+mod provider_usage_commands;
 mod provider_auth_commands;
 mod provider_commands;
 mod provider_health_commands;
@@ -789,6 +790,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 provider_account_commands::provider_account_bind,
                 provider_account_commands::provider_account_unbind,
                 provider_account_commands::provider_account_bindings_list,
+                provider_usage_commands::provider_account_usage,
                 provider_commands::providers_list,
                 provider_commands::providers_detect,
                 provider_health_commands::provider_health_list,

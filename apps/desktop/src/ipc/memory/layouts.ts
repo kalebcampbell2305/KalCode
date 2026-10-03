@@ -98,6 +98,8 @@ function contentOk(content: PaneContent): boolean {
   switch (content.kind) {
     case "thread":
       return UUID.test(content.threadId);
+    case "agent":
+      return UUID.test(content.agentId);
     case "terminal":
       return UUID.test(content.terminalId);
     case "git":

@@ -11,12 +11,13 @@ import {
   TextInput,
 } from "@kalcode/ui/components";
 import { LogIn, Plus, Search, ShieldCheck } from "lucide-react";
-import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { accountProviderName } from "../../shell/accountCommands.ts";
 import { AccountRow } from "./AccountRow.tsx";
 import { accountName, sortAccounts } from "./accountIdentity.ts";
 import { rateLimitText } from "./healthLabels.ts";
 import styles from "./ProviderAccountsView.module.css";
+import { sameSignInLabel } from "./providerLabels.ts";
 import { consumeProviderAccountsRequest, useProviderAccountsRequest } from "./providersTab.ts";
 import { isBrowserAuthProvider, NO_USAGE, useProviderAccounts } from "./useProviderAccounts.ts";
 
@@ -31,6 +32,12 @@ const FILTER_THRESHOLD = 6;
 /** The toolbar's add form, which lets the person choose the provider. */
 const ANY_PROVIDER = "*";
 
+/** Setup's "Sign in": sign in this provider's default account (or add one when it has none). */
+export interface ProviderSignInRequest {
+  providerId: string;
+  nonce: number;
+}
+
 interface ProviderEntry {
   id: string;
   name: string;
@@ -42,11 +49,13 @@ export function ProviderAccountsView({
   enabled,
   statuses,
   health = null,
+  signInRequest = null,
 }: {
   enabled: boolean;
   statuses: ProviderStatus[] | null;
   /** Provider Health snapshots; only provider-wide limits are read from them. */
   health?: readonly ProviderHealth[] | null;
+  signInRequest?: ProviderSignInRequest | null;
 }) {
   const state = useProviderAccounts(enabled);
   const request = useProviderAccountsRequest();
@@ -80,6 +89,27 @@ export function ProviderAccountsView({
     if (request.connect) setConnecting(request.providerId);
     document.getElementById(sectionId(request.providerId))?.scrollIntoView?.({ block: "start" });
   }, [request, loaded]);
+
+  // Setup's Sign in: this view owns the browser sign-in (its row shows progress and Cancel), so it
+  // starts it here. One request starts at most one sign-in, even if the effect re-runs.
+  const handledSignIn = useRef(0);
+  const { activeLogin, signInAuth } = state;
+  useEffect(() => {
+    if (!signInRequest || !accounts || handledSignIn.current === signInRequest.nonce) return;
+    handledSignIn.current = signInRequest.nonce;
+    const { providerId } = signInRequest;
+    setFilter("");
+    document.getElementById(sectionId(providerId))?.scrollIntoView?.({ block: "start" });
+    const signedOut = sortAccounts(accounts.filter((account) => account.providerId === providerId)).filter(
+      (account) => account.authenticationState !== "authenticated",
+    );
+    const target = signedOut[0];
+    if (!target) {
+      if (!accounts.some((account) => account.providerId === providerId)) setConnecting(providerId);
+      return;
+    }
+    if (activeLogin === null && isBrowserAuthProvider(target.providerId)) void signInAuth(target);
+  }, [signInRequest, accounts, activeLogin, signInAuth]);
 
   if (state.loadError && !accounts) {
     return (
@@ -230,6 +260,7 @@ export function ProviderAccountsView({
                   <span>Account</span>
                   <span>Health</span>
                   <span>Usage</span>
+                  <span>Activity</span>
                   <span />
                 </div>
                 {shown.map((account) => (
@@ -245,6 +276,7 @@ export function ProviderAccountsView({
                     validationError={state.validationErrors.get(account.id) ?? null}
                     usageStale={state.usageStale}
                     usageRefreshing={state.usageRefreshing}
+                    sameSignIn={sameSignInLabel(account, accounts)}
                     actions={state}
                   />
                 ))}

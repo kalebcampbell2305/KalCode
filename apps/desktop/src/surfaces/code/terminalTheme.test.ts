@@ -1,7 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { contrast, MINIMUM_CONTRAST, type PaletteKey, TERMINAL_THEMES } from "./terminalTheme.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  contrast,
+  invalidateMonoFontFamily,
+  MINIMUM_CONTRAST,
+  monoFontFamily,
+  type PaletteKey,
+  TERMINAL_THEMES,
+} from "./terminalTheme.ts";
 
 /**
  * The shared terminal palette (website stage + desktop): packages/ui/src/styles/terminal.css,
@@ -109,5 +116,27 @@ describe("terminal palettes", () => {
   it("computes WCAG contrast", () => {
     expect(contrast("#000000", "#ffffff")).toBeCloseTo(21, 1);
     expect(contrast("#777777", "#777777")).toBe(1);
+  });
+});
+
+describe("terminal font stack", () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty("--font-mono");
+    invalidateMonoFontFamily();
+    vi.restoreAllMocks();
+  });
+
+  it("reads --font-mono once per theme, never caching the fallback", () => {
+    invalidateMonoFontFamily();
+    expect(monoFontFamily()).toBe("ui-monospace, Consolas, monospace");
+    document.documentElement.style.setProperty("--font-mono", "Mono A, monospace");
+    const read = vi.spyOn(window, "getComputedStyle");
+    expect(monoFontFamily()).toBe("Mono A, monospace");
+    expect(monoFontFamily()).toBe("Mono A, monospace");
+    expect(read).toHaveBeenCalledTimes(1);
+    document.documentElement.style.setProperty("--font-mono", "Mono B, monospace");
+    expect(monoFontFamily()).toBe("Mono A, monospace");
+    invalidateMonoFontFamily();
+    expect(monoFontFamily()).toBe("Mono B, monospace");
   });
 });

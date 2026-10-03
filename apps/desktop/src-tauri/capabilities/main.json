@@ -100,6 +100,7 @@
     "allow-provider-account-bind",
     "allow-provider-account-unbind",
     "allow-provider-account-bindings-list",
+    "allow-provider-account-usage",
     "allow-provider-codex-account-refresh",
     "allow-provider-codex-login-start",
     "allow-provider-codex-login-wait",

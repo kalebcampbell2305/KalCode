@@ -22,20 +22,22 @@ import {
 import {
   Bot,
   BroomSparkles,
+  Check,
   ChevronDown,
   Equal,
-  FolderOpen,
   LayoutGrid,
   ListChecks,
   Minimize2,
   Plus,
   Save,
+  Settings2,
   SquareTerminal,
   Trash2,
   Undo2,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, memo, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
@@ -91,91 +93,90 @@ export function CodePage() {
   return active ? <WorkspaceView key={active.id} workspace={active} /> : <CodeEmpty />;
 }
 
+/**
+ * One workspace. The canvas stays mounted even while the folder is missing: availability can
+ * flip for a single refresh (a sleeping drive, a network share), and unmounting would rebuild
+ * every terminal. The missing-folder state covers the canvas instead.
+ */
 function WorkspaceView({ workspace }: { workspace: Workspace }) {
-  const { openFolder, picking, remove } = useWorkspaces();
-
-  const header = (toolbar: ReactNode) => (
-    <header className={styles.header}>
-      <div className={styles.heading}>
-        <div className={styles.titleRow}>
-          <h1 className={styles.title}>{workspace.name}</h1>
-          {workspace.available ? null : <Badge tone="waiting">Folder not found</Badge>}
-        </div>
-        <p className={styles.path} title={workspace.rootPath} data-selectable>
-          {workspace.displayPath}
-        </p>
-      </div>
-      <div className={styles.headerActions} id="code-actions" tabIndex={-1}>
-        {toolbar}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm">
-              Switch workspace
-              <ChevronDown aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <WorkspaceMenuContent align="end" />
-        </DropdownMenu>
-        <Button size="sm" icon={<FolderOpen />} onClick={() => void openFolder()} busy={picking}>
-          Open folder…
-        </Button>
-      </div>
-    </header>
-  );
-
-  if (!workspace.available) {
-    return (
-      <div className={styles.code}>
-        {header(
-          <div className={styles.toolGroup}>
-            <IconButton size="sm" label="New terminal" icon={<Plus />} disabled />
-            <IconButton size="sm" label="Choose a shell" icon={<ChevronDown />} disabled />
-          </div>,
-        )}
-        <div className={styles.canvasArea}>
-          <div className={styles.missing}>
-            <ErrorState
-              title="This folder can't be found"
-              actions={
-                <>
-                  <Button onClick={() => void openFolder()} busy={picking}>
-                    Open another folder…
-                  </Button>
-                  <Button variant="ghost" onClick={() => void remove(workspace)}>
-                    Remove from KalCode
-                  </Button>
-                </>
-              }
-            >
-              <p>
-                {workspace.displayPath} was moved or deleted outside KalCode. Terminals can't start until it's back.
-                Removing the workspace only forgets it here.
-              </p>
-            </ErrorState>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <CodeCanvas workspace={workspace}>
       {(api, canvas) => (
         <div className={styles.code} data-workspace-id={workspace.id}>
-          <CodeShortcuts api={api} />
-          {header(<Toolbar api={api} />)}
-          <div className={styles.canvasArea}>{canvas}</div>
-          <StatusBar api={api} />
+          {api ? <CodeShortcuts api={api} /> : null}
+          <header className={styles.header}>
+            <WorkspaceTitle workspace={workspace} />
+            <div className={styles.headerActions} id="code-actions" tabIndex={-1}>
+              {api ? <Toolbar api={api} available={workspace.available} /> : <ToolbarPlaceholder />}
+            </div>
+          </header>
+          <div className={styles.canvasArea}>
+            {canvas}
+            {workspace.available ? null : <MissingFolder workspace={workspace} />}
+          </div>
+          {api ? <StatusBar api={api} /> : <div className={styles.statusBar} aria-hidden="true" />}
         </div>
       )}
     </CodeCanvas>
   );
 }
 
+/** The workspace name is the switcher: it lists workspaces and opens folders. */
+function WorkspaceTitle({ workspace }: { workspace: Workspace }) {
+  return (
+    <div className={styles.heading}>
+      <DropdownMenu>
+        <h1 className={styles.title}>
+          <Tooltip content="Switch workspace or open a folder" side="bottom">
+            <DropdownMenuTrigger asChild>
+              <button type="button" className={styles.switcher}>
+                <span className={styles.switcherName}>{workspace.name}</span>
+                <ChevronDown className={styles.switcherChevron} aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+          </Tooltip>
+        </h1>
+        <WorkspaceMenuContent align="start" />
+      </DropdownMenu>
+      {workspace.available ? null : <Badge tone="waiting">Folder not found</Badge>}
+      <span className={styles.path} title={workspace.rootPath} data-selectable>
+        {workspace.displayPath}
+      </span>
+    </div>
+  );
+}
+
+function MissingFolder({ workspace }: { workspace: Workspace }) {
+  const { openFolder, picking, remove } = useWorkspaces();
+  return (
+    <div className={styles.missing}>
+      <ErrorState
+        title="This folder can't be found"
+        actions={
+          <>
+            <Button onClick={() => void openFolder()} busy={picking}>
+              Open another folder…
+            </Button>
+            <Button variant="ghost" onClick={() => void remove(workspace)}>
+              Remove from KalCode
+            </Button>
+          </>
+        }
+      >
+        <p>
+          {workspace.displayPath} was moved or deleted outside KalCode. Terminals can't start until it's back. Removing
+          the workspace only forgets it here.
+        </p>
+      </ErrorState>
+    </div>
+  );
+}
+
 /**
  * Code's terminal shortcuts, on panes: Ctrl+Tab / Ctrl+Shift+Tab cycle the focused pane's tabs,
- * Ctrl+Shift+W closes its tab (what it runs keeps running), Ctrl+Shift+E leaves the terminal for
- * its tab. They work inside terminals too.
+ * Ctrl+Shift+W closes its tab (closing a terminal's tab ends its shell, as the tab's close does),
+ * Ctrl+Shift+E leaves the terminal for its tab. They work inside terminals too, but never behind
+ * an open dialog or menu.
  */
 function CodeShortcuts({ api }: { api: CodeCanvasApi }) {
   const latest = useRef(api);
@@ -186,6 +187,8 @@ function CodeShortcuts({ api }: { api: CodeCanvasApi }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !shown.current) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
       const shortcut = codeShortcut(event);
       if (!shortcut || shortcut === "new-terminal") return; // new terminal is global (Shell)
       const { controller } = latest.current;
@@ -199,8 +202,7 @@ function CodeShortcuts({ api }: { api: CodeCanvasApi }) {
         const tab = document.querySelector<HTMLElement>(
           `#pane-${CSS.escape(leaf.paneId)} [role="tab"][aria-selected="true"]`,
         );
-        // The tab's own close (an ended shell tidies away; anything running keeps running).
-        tab?.querySelector<HTMLElement>('[class*="tabClose"]')?.click();
+        tab?.querySelector<HTMLElement>("[data-tab-close]")?.click();
       } else if (shortcut === "leave-terminal") {
         const tab = document.querySelector<HTMLElement>(
           `#pane-${CSS.escape(leaf.paneId)} [role="tab"][aria-selected="true"]`,
@@ -221,10 +223,31 @@ const PRESET_LABEL: Record<BuiltinPreset, string> = {
   six: "6 panes (3 × 2)",
 };
 
-function Toolbar({ api }: { api: CodeCanvasApi }) {
+/** Same platform-aware chord as the pane shortcuts (Ctrl Alt n; ⌃ ⌥ n on macOS). */
+const presetShortcut = (preset: BuiltinPreset) => formatShortcut(["Control", "Alt", String(PRESET_PANES[preset])]);
+
+/** One control made of a main action and its menu, joined by a hairline. */
+function SplitControl({ children }: { children: ReactNode }) {
+  return <div className={styles.split}>{children}</div>;
+}
+
+/** The header before the panes have loaded: the same footprint, nothing to act on yet. */
+function ToolbarPlaceholder() {
+  return (
+    <div className={styles.toolbar}>
+      <SplitControl>
+        <IconButton size="sm" className={styles.splitPart} label="New terminal" icon={<Plus />} disabled />
+        <IconButton size="sm" className={styles.splitPart} label="Choose a shell" icon={<ChevronDown />} disabled />
+      </SplitControl>
+    </div>
+  );
+}
+
+const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; available: boolean }) {
   const { client } = useRuntime();
   const { controller, shells, background, providerPanes } = api;
   const [presets, setPresets] = useState<SavedLayoutPreset[]>([]);
+  const [managing, setManaging] = useState(false);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -232,6 +255,7 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
   const chose = useRef(false);
   const current = matchingPreset(controller.layout);
   const maximized = controller.layout.maximizedPaneId !== null;
+  const noShells = shells.length === 0 || !available;
 
   const loadPresets = () => {
     client
@@ -311,21 +335,65 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
 
   const defaultShell = shells.find((s) => s.isDefault) ?? shells[0];
   return (
-    <>
-      <div className={styles.toolGroup}>
+    <div className={styles.toolbar}>
+      {providerPanes.error ? (
+        <span className={styles.toolError} role="alert" title={providerPanes.error}>
+          {providerPanes.error}
+        </span>
+      ) : null}
+      {background.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={styles.backgroundButton}
+              aria-label={`${background.length} in background`}
+            >
+              <span className={styles.backgroundDot} aria-hidden="true" />
+              <span className={styles.backgroundCount}>{background.length}</span>
+              <span className={styles.collapsibleLabel}>in background</span>
+              <ChevronDown aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" minWidth={16}>
+            <DropdownMenuLabel>Running, not in a pane</DropdownMenuLabel>
+            {background.map((item) => (
+              <DropdownMenuItem
+                key={contentKey(item.content)}
+                icon={<span className={styles.menuDot} data-tone={item.tone} />}
+                onSelect={() => controller.show(item.content, { focus: true })}
+              >
+                {`Show ${item.title}`}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+      <SplitControl>
         <Tooltip content={`New ${defaultShell?.name ?? "terminal"} terminal (${CODE_SHORTCUT_LABELS["new-terminal"]})`}>
-          <IconButton
+          <Button
             size="sm"
-            label="New terminal"
-            icon={<Plus />}
-            disabled={shells.length === 0}
+            variant="ghost"
+            className={styles.splitPart}
+            aria-label="New terminal"
+            icon={<SquareTerminal />}
+            disabled={noShells}
             onClick={() => api.newTerminal(null)}
-          />
+          >
+            <span className={styles.collapsibleLabel}>Terminal</span>
+          </Button>
         </Tooltip>
         <DropdownMenu>
           <Tooltip content="Choose a shell">
             <DropdownMenuTrigger asChild>
-              <IconButton size="sm" label="Choose a shell" icon={<ChevronDown />} disabled={shells.length === 0} />
+              <IconButton
+                size="sm"
+                className={styles.splitPart}
+                label="Choose a shell"
+                icon={<ChevronDown />}
+                disabled={noShells}
+              />
             </DropdownMenuTrigger>
           </Tooltip>
           <DropdownMenuContent
@@ -352,25 +420,23 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </SplitControl>
       <KalTidyActions />
-      {providerPanes.enabled ? (
-        <Button size="sm" icon={<Bot />} busy={providerPanes.creating} onClick={() => api.openAgentLauncher()}>
-          New agent
-        </Button>
-      ) : null}
-      {providerPanes.error ? (
-        <span className={styles.toolError} role="alert">
-          {providerPanes.error}
-        </span>
-      ) : null}
-      <DropdownMenu onOpenChange={(open) => open && loadPresets()}>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" icon={<LayoutGrid />}>
-            Layout
-            <ChevronDown aria-hidden="true" />
-          </Button>
-        </DropdownMenuTrigger>
+      <span className={styles.groupDivider} aria-hidden="true" />
+      <DropdownMenu
+        onOpenChange={(open) => {
+          if (open) loadPresets();
+          else setManaging(false);
+        }}
+      >
+        <Tooltip content="Arrange, save and restore pane layouts">
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" icon={<LayoutGrid />} aria-label="Layout">
+              <span className={styles.collapsibleLabel}>Layout</span>
+              <ChevronDown aria-hidden="true" className={styles.chevron} />
+            </Button>
+          </DropdownMenuTrigger>
+        </Tooltip>
         <DropdownMenuContent align="end" minWidth={17}>
           <DropdownMenuLabel>Arrange panes</DropdownMenuLabel>
           <DropdownMenuRadioGroup
@@ -378,7 +444,7 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
             onValueChange={(value) => controller.preset(value as BuiltinPreset)}
           >
             {BUILTIN_PRESETS.map((preset) => (
-              <DropdownMenuRadioItem key={preset} value={preset} shortcut={`Ctrl Alt ${PRESET_PANES[preset]}`}>
+              <DropdownMenuRadioItem key={preset} value={preset} shortcut={presetShortcut(preset)}>
                 {PRESET_LABEL[preset]}
               </DropdownMenuRadioItem>
             ))}
@@ -386,27 +452,41 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
           {presets.length > 0 ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel>Saved layouts</DropdownMenuLabel>
-              {presets.map((preset) => (
-                <DropdownMenuItem
-                  key={preset.id}
-                  icon={<LayoutGrid />}
-                  description={`${leaves(preset.layout.root).length} panes`}
-                  onSelect={() => controller.applyShape(preset.layout.root, preset.name)}
-                >
-                  {preset.name}
-                </DropdownMenuItem>
-              ))}
-              {presets.map((preset) => (
-                <DropdownMenuItem
-                  key={`delete-${preset.id}`}
-                  icon={<Trash2 />}
-                  tone="danger"
-                  onSelect={() => void deletePreset(preset)}
-                >
-                  {`Delete ${preset.name}`}
-                </DropdownMenuItem>
-              ))}
+              <DropdownMenuLabel>{managing ? "Delete saved layouts" : "Saved layouts"}</DropdownMenuLabel>
+              {presets.map((preset) =>
+                managing ? (
+                  <DropdownMenuItem
+                    key={preset.id}
+                    icon={<Trash2 />}
+                    tone="danger"
+                    onSelect={(event) => {
+                      // Stay open: several layouts can go in one visit.
+                      event.preventDefault();
+                      void deletePreset(preset);
+                    }}
+                  >
+                    {`Delete ${preset.name}`}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    key={preset.id}
+                    icon={<LayoutGrid />}
+                    description={`${leaves(preset.layout.root).length} panes`}
+                    onSelect={() => controller.applyShape(preset.layout.root, preset.name)}
+                  >
+                    {preset.name}
+                  </DropdownMenuItem>
+                ),
+              )}
+              <DropdownMenuItem
+                icon={managing ? <Check /> : <Settings2 />}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  setManaging((value) => !value);
+                }}
+              >
+                {managing ? "Done" : "Manage saved layouts…"}
+              </DropdownMenuItem>
             </>
           ) : null}
           <DropdownMenuSeparator />
@@ -432,34 +512,29 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {background.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm">
-              <span className={styles.backgroundDot} aria-hidden="true" />
-              {`${background.length} in background`}
-              <ChevronDown aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" minWidth={16}>
-            <DropdownMenuLabel>Running, not in a pane</DropdownMenuLabel>
-            {background.map((item) => (
-              <DropdownMenuItem
-                key={contentKey(item.content)}
-                icon={<SquareTerminal />}
-                onSelect={() => controller.show(item.content, { focus: true })}
-              >
-                {`Show ${item.title}`}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+      {providerPanes.enabled ? (
+        <Tooltip content="Launch Claude Code, Codex or Gemini CLI in a pane">
+          <Button
+            size="sm"
+            variant="primary"
+            className={styles.primaryAction}
+            icon={<Bot />}
+            aria-label="New agent"
+            busy={providerPanes.creating}
+            onClick={() => api.openAgentLauncher()}
+          >
+            <span className={styles.agentLabel}>New agent</span>
+          </Button>
+        </Tooltip>
       ) : null}
-    </>
+    </div>
   );
-}
+});
 
-/** KalTidy in Code: one click stops idle terminals; the menu offers the review first. */
+/**
+ * KalTidy in Code: one click stops idle terminals; the menu offers the review first. More KalTidy
+ * actions join the menu as items.
+ */
 function KalTidyActions() {
   const kalTidy = useKalTidy();
   const [tidying, setTidying] = useState(false);
@@ -473,10 +548,11 @@ function KalTidyActions() {
     }
   };
   return (
-    <div className={styles.toolGroup}>
+    <SplitControl>
       <Tooltip content="KalTidy: Stop idle terminals">
         <IconButton
           size="sm"
+          className={styles.splitPart}
           label="KalTidy: Stop idle terminals"
           icon={<BroomSparkles />}
           busy={tidying}
@@ -486,7 +562,7 @@ function KalTidyActions() {
       <DropdownMenu>
         <Tooltip content="More KalTidy actions">
           <DropdownMenuTrigger asChild>
-            <IconButton size="sm" label="More KalTidy actions" icon={<ChevronDown />} />
+            <IconButton size="sm" className={styles.splitPart} label="More KalTidy actions" icon={<ChevronDown />} />
           </DropdownMenuTrigger>
         </Tooltip>
         <DropdownMenuContent align="end" minWidth={17}>
@@ -508,61 +584,70 @@ function KalTidyActions() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
+    </SplitControl>
   );
 }
 
 /**
  * The foot of the canvas: the focused pane and its state, pane and process counts, and the
- * keys that drive panes. Decorative duplicate of pane state, so it is not a live region (the
- * canvas announces changes itself).
+ * keys that drive panes (fewer as the canvas narrows; they never overlap the counts). Decorative
+ * duplicate of pane state, so it is not a live region (the canvas announces changes itself).
  */
-function StatusBar({ api }: { api: CodeCanvasApi }) {
+const StatusBar = memo(function StatusBar({ api }: { api: CodeCanvasApi }) {
   const { controller, background, titleOf } = api;
   const panes = leaves(controller.layout.root);
   const focused = panes.find((p) => p.paneId === controller.focusedPaneId);
   const content = focused?.tabs[focused.activeTab];
-  const running = api.providerPanes.panes.filter((p) => p.info?.running).length;
+  const agentsRunning = api.providerPanes.panes.filter((p) => p.info?.running).length;
   const terminalsRunning = useWorkspaces().terminals.filter((t) => t.status === "running").length;
+  const running = terminalsRunning + agentsRunning;
   return (
     <div className={styles.statusBar}>
-      {content ? (
+      <div className={styles.statusInfo}>
+        {content ? (
+          <span className={styles.statusFocus}>
+            <ProviderGlyph
+              provider={
+                content.kind === "agent"
+                  ? (api.providerPanes.panes.find((p) => p.thread.id === content.agentId)?.thread.providerId ??
+                    "generic")
+                  : content.kind === "terminal"
+                    ? "shell"
+                    : "generic"
+              }
+              size="xs"
+            />
+            <span className={styles.statusStrong}>{titleOf(content)}</span>
+          </span>
+        ) : null}
+        {controller.saveState === "error" ? (
+          <span className={styles.statusItem}>
+            <StatusChip variant="inline" size="sm" tone="failed" label="Layout not saved" />
+          </span>
+        ) : null}
         <span className={styles.statusItem}>
-          <ProviderGlyph
-            provider={
-              content.kind === "thread"
-                ? (api.providerPanes.panes.find((p) => p.thread.id === content.threadId)?.thread.providerId ??
-                  "generic")
-                : content.kind === "terminal"
-                  ? "shell"
-                  : "generic"
-            }
-            size="xs"
-          />
-          <span className={styles.statusStrong}>{titleOf(content)}</span>
+          {panes.length} {panes.length === 1 ? "pane" : "panes"}
         </span>
-      ) : null}
-      <span className={styles.statusItem}>
-        {panes.length} {panes.length === 1 ? "pane" : "panes"} · {terminalsRunning + running} running
-        {background.length > 0 ? ` · ${background.length} in background` : ""}
-      </span>
-      {controller.saveState === "error" ? (
-        <StatusChip variant="inline" size="sm" tone="failed" label="Layout not saved" />
-      ) : null}
+        <span className={styles.statusItem} data-running={running > 0 || undefined}>
+          <span className={styles.runDot} aria-hidden="true" />
+          {running} running
+        </span>
+        {background.length > 0 ? <span className={styles.statusItem}>{background.length} in background</span> : null}
+      </div>
       <span className={styles.statusKeys} aria-hidden="true">
-        <span>
+        <span data-key="move">
           <Kbd>{PANE_SHORTCUT_LABELS.focus}</Kbd> move
         </span>
-        <span>
+        <span data-key="split">
           <Kbd>{PANE_SHORTCUT_LABELS.splitRight}</Kbd> split
         </span>
-        <span>
+        <span data-key="maximize">
           <Kbd>{PANE_SHORTCUT_LABELS.maximize}</Kbd> maximize
         </span>
-        <span>
+        <span data-key="leave">
           <Kbd>{CODE_SHORTCUT_LABELS["leave-terminal"]}</Kbd> leave terminal
         </span>
       </span>
     </div>
   );
-}
+});

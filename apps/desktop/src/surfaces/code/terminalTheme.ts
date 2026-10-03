@@ -13,6 +13,30 @@ import type { ITheme } from "@xterm/xterm";
  */
 export const MINIMUM_CONTRAST = 4.5;
 
+const MONO_FALLBACK = "ui-monospace, Consolas, monospace";
+let monoFontCache: string | null = null;
+
+/**
+ * The terminal font stack from `--font-mono`, read once (getComputedStyle forces a style
+ * recalculation, and every terminal mount asked several times). A fallback is never cached, so a
+ * read before the stylesheet applies doesn't stick; a theme change invalidates the cache.
+ */
+export function monoFontFamily(): string {
+  if (monoFontCache) return monoFontCache;
+  const value =
+    typeof document === "undefined"
+      ? ""
+      : getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+  if (!value) return MONO_FALLBACK;
+  monoFontCache = value;
+  return value;
+}
+
+/** Forget the cached font stack (the theme or font tokens changed). */
+export function invalidateMonoFontFamily(): void {
+  monoFontCache = null;
+}
+
 export const TERMINAL_THEMES: Record<"dark" | "light", Required<Pick<ITheme, PaletteKey>> & ITheme> = {
   dark: {
     background: "#070c17",

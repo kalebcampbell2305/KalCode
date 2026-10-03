@@ -1,11 +1,14 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
-async function openProviders(page: Page, scenario?: string) {
+/** Opens Providers (Accounts is its default tab), then Setup unless another tab is named. */
+async function openProviders(page: Page, scenario?: string, tab: "Setup" | "Accounts" = "Setup") {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.getByRole("button", { name: "Providers" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
+  if (tab === "Setup") await page.getByRole("tab", { name: "Setup" }).click();
 }
 
 async function expectNoSeriousA11yViolations(page: Page) {
@@ -30,38 +33,43 @@ test.describe("providers", () => {
 
     const claude = section(page, "Claude Code");
     await expect(claude.getByText("Installed, version 2.1.282")).toBeVisible();
-    await expect(claude.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
-    await expect(claude.getByText("Sign-in is checked when a Claude Code session starts.")).toBeVisible();
+    // Sign-in is the managed accounts' state: the same one the Accounts tab shows.
+    await expect(claude.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
     await expect(claude.getByText("~\\.local\\bin\\claude.exe", { exact: true })).toBeVisible();
     await expect(claude.getByText("Adapter ready")).toBeVisible();
     await expect(claude.getByText("Account default (default), Opus, Sonnet, Haiku, Fable")).toBeVisible();
 
     const codex = section(page, "Codex");
     await expect(codex.getByText("Installed, version 0.155.1")).toBeVisible();
-    await expect(codex.getByText("Signed in", { exact: true })).toBeVisible();
-    await expect(codex.getByText("Checked with codex login status.")).toBeVisible();
+    await expect(codex.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
     await expect(codex.getByText("Adapter ready", { exact: true })).toBeVisible();
     await expect(codex.getByText("Not listed without starting a session")).toBeVisible();
 
     const gemini = section(page, "Gemini CLI");
     await expect(gemini.getByText("Installed, version 0.12.0")).toBeVisible();
     await expect(gemini.getByText("Adapter ready", { exact: true })).toBeVisible();
-    await expect(gemini.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
-    await expect(
-      gemini.getByText("Gemini CLI has no documented way to check sign-in without starting a session."),
-    ).toBeVisible();
-    // Gemini signs in only from its managed account card; a terminal `gemini` uses another profile.
-    await expect(gemini.getByText(/^Open Accounts, add a Gemini CLI account and choose Sign in\./)).toBeVisible();
+    // No Gemini account is signed in: the state, one Sign in action and why, never a terminal login.
+    await expect(gemini.getByText("Not signed in", { exact: true })).toBeVisible();
+    await expect(gemini.getByText("Gemini opens Google sign-in in your browser for that account only.")).toBeVisible();
     await expect(gemini.getByText(/in a terminal to sign in to Gemini CLI/)).toHaveCount(0);
+    await expect(page.getByText(/^Open Accounts/)).toHaveCount(0);
     await expect(gemini.getByText("Auto (default) (default), Pro, Flash, Flash-Lite")).toBeVisible();
     await expect(gemini.getByText("https://geminicli.com/docs/", { exact: true })).toBeVisible();
 
-    // Setup never fakes a "connected" state or offers a provider-wide sign-in action. Managed
-    // account state is restored independently in the mounted Accounts panel.
+    // Setup never fakes a "connected" state; Sign in appears only where no account is signed in.
     await expect(page.getByText("Connected", { exact: true }).filter({ visible: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /sign in|log ?in|connect/i }).filter({ visible: true })).toHaveCount(
-      0,
+      1,
     );
+
+    // Sign in goes straight to the default Gemini account's own browser sign-in, on Accounts.
+    await gemini.getByRole("button", { name: "Sign in to Gemini CLI account" }).click();
+    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
+    const account = page.getByRole("region", { name: "Gemini CLI · Personal" });
+    await expect(account.getByText("Signed in", { exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Setup" }).click();
+    await expect(gemini.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
+    await expect(gemini.getByRole("button", { name: "Sign in to Gemini CLI account" })).toHaveCount(0);
   });
 
   test("permission mappings are an accessible table", async ({ page }) => {
@@ -112,8 +120,7 @@ test.describe("providers", () => {
   });
 
   test("managed accounts support local metadata and official browser sign-in flows", async ({ page }) => {
-    await openProviders(page);
-    await page.getByRole("tab", { name: "Accounts" }).click();
+    await openProviders(page, undefined, "Accounts");
 
     const codex = page.getByRole("region", { name: "Codex", exact: true });
     const personal = page.getByRole("region", { name: "Codex · Personal" });
@@ -126,12 +133,15 @@ test.describe("providers", () => {
 
     const claude = page.getByRole("region", { name: "Claude Code · Personal" });
     await claude.getByRole("button", { name: "More actions for Personal" }).click();
+    await expect(claude.getByText("42% left")).toBeVisible();
     await page.getByRole("menu").getByRole("menuitem", { name: "Sign out Personal" }).click();
-    await expect(claude.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
-    await expect(claude.getByText("Sign-in is checked when a Claude Code session starts.")).toBeVisible();
+    await expect(claude.getByText("Signed out", { exact: true })).toBeVisible();
+    // Signed out: no usage number, just the one next step.
+    await expect(claude.getByText("Sign in to read usage", { exact: true })).toBeVisible();
+    await expect(claude.getByText(/% left/)).toHaveCount(0);
     await claude.getByRole("button", { name: "Sign in Personal" }).click();
-    await expect(claude.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
-    await expect(claude.getByText("Sign-in is checked when a Claude Code session starts.")).toBeVisible();
+    await expect(claude.getByText("Signed in", { exact: true })).toBeVisible();
+    await expect(claude.getByText("42% left")).toBeVisible();
 
     await work.getByRole("button", { name: "Sign in Work" }).click();
     await expect(work.getByText("Signed in", { exact: true })).toBeVisible();
@@ -165,8 +175,7 @@ test.describe("providers", () => {
   });
 
   test("Gemini signs in and out from its account row without a provider pane", async ({ page }) => {
-    await openProviders(page);
-    await page.getByRole("tab", { name: "Accounts" }).click();
+    await openProviders(page, undefined, "Accounts");
 
     // Adding runs Gemini's own sign-in for the new account only.
     await page.getByRole("button", { name: "Add Gemini CLI account" }).click();
@@ -261,14 +270,13 @@ test.describe("providers", () => {
     await expect(page.getByRole("region", { name: "Runtime health" }).getByText("0 of 3 installed")).toBeVisible();
   });
 
-  test("an outdated, signed-out CLI explains what to do", async ({ page }) => {
+  test("an outdated CLI explains what to do; sign-in stays the accounts' state", async ({ page }) => {
     await openProviders(page, "providers-outdated");
     const claude = section(page, "Claude Code");
     await expect(claude.getByText("Outdated, version 2.1.100")).toBeVisible();
     await expect(claude.getByText("KalCode needs version 2.1.259 or later to run Claude Code threads.")).toBeVisible();
-    await expect(claude.getByText("Signed out", { exact: true })).toBeVisible();
-    // Claude Code signs in only from its managed account card; a terminal `claude` uses another profile.
-    await expect(claude.getByText(/^Open Accounts, add a Claude Code account and choose Sign in\./)).toBeVisible();
+    // Claude Code signs in only through its managed accounts; a terminal `claude` uses another profile.
+    await expect(claude.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
     await expect(claude.getByText(/in a terminal to sign in to Claude Code/)).toHaveCount(0);
   });
 
@@ -409,6 +417,10 @@ test.describe("providers", () => {
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await page.getByRole("button", { name: "Providers" }).click();
         await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
+        // Accounts (the default tab) with real usage, then Setup.
+        await expect(page.getByRole("region", { name: "Claude Code · Personal" })).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+        await page.getByRole("tab", { name: "Setup" }).click();
         await expect(
           section(page, "Claude Code")
             .getByText(/Installed|Outdated|Not checked yet/)

@@ -37,6 +37,7 @@ mod node_managers;
 pub mod process;
 pub mod registry;
 pub(crate) mod turns;
+pub mod usage;
 pub mod version;
 pub mod version_window;
 

@@ -1,9 +1,15 @@
-/* Provider panes (Z7-W4): the pane header and overlays, hosted in a pane of the canvas (Z7-W1). */
+/* Provider panes (Z7-W4): one compact header and the in-pane bars and overlays, hosted in a pane
+   of the canvas (Z7-W1). The canvas tab strip carries the provider mark; this header never
+   repeats it. */
 
 /* ---------- Pane ---------- */
 
 .pane {
   /* The canvas frame (Z7-W1) draws the border, radius and focus glow; the pane fills it. */
+  --pane-chip-h: 1.25rem;
+  --pane-chip-radius: var(--radius-sm);
+  --pane-ring: transparent;
+  --pane-tint: transparent;
   position: relative;
   display: flex;
   flex: 1;
@@ -15,87 +21,63 @@
   container-name: provider-pane;
 }
 
-/* Narrow panes (Z7-W1 canvas): the title keeps its room; details step aside. */
-/* The title keeps at least a readable width; the channel note gives way first. */
-.titleBlock {
-  min-width: 7rem;
+/* A state that needs the person (or went wrong) rings the whole pane, quietly. */
+.pane::after {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--pane-ring);
+  content: "";
+  pointer-events: none;
 }
 
-@container provider-pane (max-width: 40rem) {
-  .model,
-  .note {
-    display: none;
-  }
+.pane[data-tone="waiting"] {
+  --pane-ring: var(--status-waiting-line);
+  --pane-tint: var(--status-waiting);
 }
 
-@container provider-pane (max-width: 32rem) {
-  .handoffLabel {
-    display: none;
-  }
+.pane[data-tone="failed"] {
+  --pane-ring: var(--status-failed-line);
+  --pane-tint: var(--status-failed);
 }
 
-@container provider-pane (max-width: 24rem) {
-  .providerName {
-    display: none;
-  }
-}
-
-.pane[data-tone="waiting"] > header {
-  box-shadow: inset 2px 0 0 var(--status-waiting-line);
-}
-
-/* ---------- Header ---------- */
+/* ---------- Header: name · account · model · effort · usage | mode · status · actions ---------- */
 
 .header {
   display: flex;
   flex: none;
   align-items: center;
-  gap: var(--space-3);
-  min-height: 2.5rem;
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  gap: var(--space-2);
+  min-height: calc(var(--control-h-sm) + var(--space-1));
+  padding: 0 var(--space-1) 0 var(--space-2);
   border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-1);
+  background: color-mix(in srgb, var(--pane-tint) 7%, var(--color-surface-1));
 }
 
-.identity {
+/* The focused agent: a fine electric-blue hairline under its header. */
+.pane:focus-within > .header {
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-accent) 55%, transparent);
+}
+
+.lead {
   display: flex;
-  flex: none;
+  flex: 1 1 auto;
   align-items: center;
   gap: var(--space-2);
-}
-
-.providerName {
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-}
-
-.titleBlock {
-  display: flex;
-  flex: 1 1 0;
-  overflow: hidden;
-  align-items: baseline;
-  gap: var(--space-2);
   min-width: 0;
-}
-
-.title {
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .titleButton {
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 4.5rem;
   max-width: 100%;
+  height: var(--pane-chip-h);
   padding: 0 var(--space-1);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--pane-chip-radius);
   background: transparent;
+  color: inherit;
   text-align: left;
   cursor: text;
 }
@@ -109,39 +91,128 @@
   box-shadow: var(--shadow-focus);
 }
 
+.title {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--pane-chip-h);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane:focus-within .title {
+  color: var(--color-text);
+}
+
 .titleInput {
+  flex: 1 1 auto;
   width: min(24rem, 100%);
-  height: 1.75rem;
+  min-width: 6rem;
+  height: var(--control-h-sm);
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border-focus);
-  border-radius: var(--radius-sm);
+  border-radius: var(--pane-chip-radius);
   background: var(--color-bg-sunken);
   color: var(--color-text);
   font: inherit;
   font-size: var(--text-sm);
 }
 
-.model {
+.titleError {
   flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--status-failed-line);
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+  font-size: var(--text-xs);
+}
+
+/* Identity: segments joined by a quiet middle dot. It gives way well before the name does, and
+   its text segments ellipsize instead of being clipped mid-letter. */
+.identity {
+  display: inline-flex;
+  flex: 0 6 auto;
+  align-items: center;
   color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.seg {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.seg ~ .seg::before {
+  flex: none;
+  margin: 0 var(--space-1-5);
+  color: var(--color-text-faint);
+  content: "·";
+}
+
+/* Text segments ellipsize (a flex container can't), and never shrink to a stub of letters. */
+.accountName,
+.model {
+  display: inline-block;
+}
+
+.accountName {
+  min-width: 2.75rem;
+  overflow: hidden;
+  max-width: 11rem;
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+}
+
+.accountName[data-account-state="archived_or_unavailable"],
+.accountName[data-account-state="status_unavailable"] {
+  color: var(--status-waiting-text);
+}
+
+.model {
+  min-width: 3rem;
+  overflow: hidden;
+  max-width: 13rem;
+  color: var(--color-text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.effort {
+  flex: none;
+}
+
+/* The account's usage badge (the canonical one; it owns its low-usage warning tone). It reads as
+   a chip, so no separator dot; it takes the row's chip height and radius. */
+.usage {
+  display: inline-flex;
+  flex: none;
+}
+
+.usage > [data-usage-tone][data-size] {
+  height: var(--pane-chip-h);
+  border-radius: var(--pane-chip-radius);
 }
 
 .meta {
   display: flex;
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1-5);
+  min-width: 0;
 }
 
-.handoffButton {
+.headerButton {
   flex: none;
 }
 
-.handoffButton svg {
+.headerButton svg {
   width: 0.875rem;
   height: 0.875rem;
 }
@@ -152,11 +223,15 @@
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  overflow: hidden;
+  max-width: 16rem;
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
+  font-size: var(--text-2xs);
   white-space: nowrap;
+}
+
+.noteText {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .note[data-tone="limited"] {
@@ -164,101 +239,161 @@
 }
 
 .note svg {
-  width: 0.875rem;
-  height: 0.875rem;
-}
-
-/* ---------- Glyph (neutral KalCode design; never a provider's mark) ---------- */
-
-.glyph {
-  display: inline-grid;
   flex: none;
-  place-items: center;
-  width: 1.375rem;
-  height: 1.375rem;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-surface-raised);
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  font-weight: var(--weight-semibold);
-  line-height: 1;
-}
-
-.glyph[data-shape="square"] {
-  border-radius: var(--radius-sm);
-}
-
-.glyph[data-shape="circle"] {
-  border-radius: var(--radius-full);
-}
-
-.glyph[data-shape="hexagon"] {
-  border: 0;
-  clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0% 50%);
-  background: var(--color-border-strong);
-}
-
-/* ---------- Status chip (text + glyph; tone never alone) ---------- */
-
-.chip {
-  --chip-fg: var(--color-text-muted);
-  --chip-bg: var(--color-surface-raised);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 1.375rem;
-  padding: 0 var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--chip-fg) 30%, transparent);
-  border-radius: var(--radius-full);
-  background: var(--chip-bg);
-  color: var(--chip-fg);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-wide);
-  white-space: nowrap;
-}
-
-.chip svg {
   width: 0.75rem;
   height: 0.75rem;
 }
 
-/* Tones: green running, amber waiting for you (and paused), red failed, neutral done. */
+/* ---------- Chips: one height and one radius for the whole row ---------- */
+
+.mode,
+.chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--pane-chip-h);
+  border: 1px solid var(--chip-line);
+  border-radius: var(--pane-chip-radius);
+  background: var(--chip-bg);
+  color: var(--chip-fg);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.mode {
+  --chip-fg: var(--color-text-secondary);
+  --chip-bg: transparent;
+  --chip-line: var(--color-border);
+  padding: 0 var(--space-1-5);
+  font-weight: var(--weight-medium);
+}
+
+/* Bypass is the one mode that always stays visible: it widens what the agent may do. */
+.mode[data-risky] {
+  --chip-fg: var(--status-failed-text);
+  --chip-bg: var(--status-failed-soft);
+  --chip-line: var(--status-failed-line);
+}
+
+.mode svg,
+.chip svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.statusGroup {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+/* Status chip: glyph + words; tone only reinforces. Never shrinks (a squeezed chip drew its
+   glyph over its own label). */
+.chip {
+  --chip-fg: var(--status-muted-text);
+  --chip-bg: var(--status-muted-soft);
+  --chip-line: var(--status-muted-line);
+  padding: 0 var(--space-1-5) 0 var(--space-1);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+}
+
+.chipLabel {
+  flex: none;
+}
+
 .chip[data-tone="working"] {
-  --chip-fg: var(--color-success);
-  --chip-bg: var(--color-success-soft);
+  --chip-fg: var(--status-working-text);
+  --chip-bg: var(--status-working-soft);
+  --chip-line: var(--status-working-line);
 }
 
 .chip[data-tone="waiting"] {
   --chip-fg: var(--status-waiting-text);
   --chip-bg: var(--status-waiting-soft);
+  --chip-line: var(--status-waiting-line);
 }
 
 .chip[data-tone="done"] {
-  --chip-fg: var(--color-text);
-  --chip-bg: var(--color-surface-raised);
+  --chip-fg: var(--status-done-text);
+  --chip-bg: var(--status-done-soft);
+  --chip-line: var(--status-done-line);
 }
 
 .chip[data-tone="failed"] {
-  --chip-fg: var(--color-danger-text);
-  --chip-bg: var(--color-danger-soft);
+  --chip-fg: var(--status-failed-text);
+  --chip-bg: var(--status-failed-soft);
+  --chip-line: var(--status-failed-line);
 }
 
 .chip[data-tone="paused"] {
-  --chip-fg: var(--color-waiting);
-  --chip-bg: var(--color-waiting-soft);
+  --chip-fg: var(--status-paused-text);
+  --chip-bg: var(--status-paused-soft);
+  --chip-line: var(--status-paused-line);
 }
 
 .chip[data-tone="recovering"] {
-  --chip-fg: var(--color-live);
-  --chip-bg: var(--color-live-soft);
+  --chip-fg: var(--status-recovering-text);
+  --chip-bg: var(--status-recovering-soft);
+  --chip-line: var(--status-recovering-line);
 }
 
 .qualifier {
   color: var(--color-text-muted);
   font-size: var(--text-2xs);
   white-space: nowrap;
+}
+
+/* ---------- Narrow panes (quarter panes in a 6-pane layout): details step aside in order ---------- */
+
+@container provider-pane (max-width: 46rem) {
+  .note {
+    display: none;
+  }
+}
+
+/* The tab above already names the agent (rename stays in More and on the tab), so the header
+   spends narrow widths on the identity line: account · model · effort · usage. */
+@container provider-pane (max-width: 40rem) {
+  .titleButton,
+  .qualifier,
+  .handoffLabel {
+    display: none;
+  }
+}
+
+@container provider-pane (max-width: 30rem) {
+  .effort {
+    display: none;
+  }
+}
+
+@container provider-pane (max-width: 26rem) {
+  .mode:not([data-risky]) {
+    display: none;
+  }
+}
+
+@container provider-pane (max-width: 22rem) {
+  .model {
+    display: none;
+  }
+}
+
+@container provider-pane (max-width: 15rem) {
+  .accountName {
+    display: none;
+  }
+}
+
+@container provider-pane (max-width: 12rem) {
+  .usage {
+    display: none;
+  }
 }
 
 /* ---------- Body, overlays ---------- */
@@ -279,7 +414,8 @@
   width: min(30rem, calc(100% - 2 * var(--space-3)));
   max-height: calc(100% - 2 * var(--space-3));
   overflow: auto;
-  border: 1px solid var(--color-border-strong);
+  overscroll-behavior: contain;
+  border: 1px solid var(--status-waiting-line);
   border-radius: var(--radius-lg);
   background: var(--color-surface-overlay);
   box-shadow: var(--shadow-lg);
@@ -293,12 +429,24 @@
 .overlayBar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
   border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--status-waiting) 6%, transparent);
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
+}
+
+.overlayBar > svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--status-waiting-text);
+}
+
+.overlayBarText {
+  flex: 1;
+  min-width: 0;
 }
 
 .overlayBody {
@@ -311,24 +459,29 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1-5) var(--space-3);
-  border-top: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-top: 1px solid var(--status-waiting-line);
+  background: color-mix(in srgb, var(--status-waiting) 7%, var(--color-surface-1));
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
 }
 
 .banner svg {
+  flex: none;
   width: 0.875rem;
   height: 0.875rem;
+  color: var(--status-waiting-text);
 }
 
 .infoPanel {
   position: absolute;
   top: var(--space-2);
-  right: var(--space-3);
+  right: var(--space-2);
   z-index: 3;
-  width: min(26rem, calc(100% - 2 * var(--space-3)));
+  width: min(26rem, calc(100% - 2 * var(--space-2)));
+  max-height: calc(100% - 2 * var(--space-2));
   padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   background: var(--color-surface-overlay);
@@ -354,31 +507,207 @@
   color: var(--color-text-secondary);
 }
 
+.infoPanel .infoLimitsTitle {
+  margin-top: var(--space-2);
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
 .infoActions {
   display: flex;
   justify-content: flex-end;
 }
 
+/* ---------- Stop confirmation ---------- */
+
 .confirm {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface-raised);
-  font-size: var(--text-sm);
+  background: color-mix(in srgb, var(--status-failed) 5%, var(--color-surface-raised));
+  font-size: var(--text-xs);
+}
+
+.confirm[data-state="error"] {
+  border-bottom-color: var(--status-failed-line);
+}
+
+.confirmCopy {
+  display: flex;
+  flex: 1 1 16rem;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 .confirmText {
-  flex: 1;
   color: var(--color-text-secondary);
 }
 
+.confirmError {
+  color: var(--status-failed-text);
+  font-weight: var(--weight-medium);
+}
+
+.confirmActions,
+.endedActions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-left: auto;
+}
+
+/* ---------- Ended bar: the agent's provider ended; Resume starts it again ---------- */
+
+.endedBar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  font-size: var(--text-xs);
+}
+
+.endedBar[data-tone="failed"] {
+  border-top-color: var(--status-failed-line);
+  background: color-mix(in srgb, var(--status-failed) 6%, var(--color-surface-2));
+}
+
+.endedDot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--status-muted);
+}
+
+.endedBar[data-tone="failed"] .endedDot {
+  background: var(--status-failed);
+  box-shadow: 0 0 0 3px var(--status-failed-soft);
+}
+
+.endedCopy {
+  display: flex;
+  flex: 1 1 8rem;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.endedText {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A failure says why in full; it never hides behind an ellipsis. */
+.endedBar[data-tone="failed"] .endedText {
+  white-space: normal;
+}
+
+.endedError {
+  color: var(--status-failed-text);
+  font-weight: var(--weight-medium);
+}
+
+/* ---------- Connection error: the pane's terminal stream couldn't attach ---------- */
+
+.connectError {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  left: var(--space-3);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
+  border: 1px solid var(--status-failed-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-overlay);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.connectError > svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--status-failed-text);
+}
+
+.connectErrorText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Motion ---------- */
+
+@keyframes pane-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes pane-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes pane-breathe {
+  50% {
+    opacity: 0.5;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .chip {
+  .overlay,
+  .connectError,
+  .endedBar {
+    animation: pane-rise var(--dur-fast) var(--ease-out);
+  }
+
+  .infoPanel,
+  .confirm,
+  .titleError {
+    animation: pane-drop var(--dur-fast) var(--ease-out);
+  }
+
+  .header {
     transition:
-      background-color 160ms ease,
-      color 160ms ease;
+      background-color var(--dur-base) var(--ease-standard),
+      box-shadow var(--dur-fast) var(--ease-standard);
+  }
+
+  .pane::after {
+    transition: box-shadow var(--dur-base) var(--ease-standard);
+  }
+
+  .chip,
+  .mode {
+    transition:
+      background-color var(--dur-fast) var(--ease-standard),
+      border-color var(--dur-fast) var(--ease-standard),
+      color var(--dur-fast) var(--ease-standard);
+  }
+
+  .chip[data-tone="working"] svg {
+    animation: pane-breathe var(--dur-pulse) var(--ease-in-out) infinite;
   }
 }

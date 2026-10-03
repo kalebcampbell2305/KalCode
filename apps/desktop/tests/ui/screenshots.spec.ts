@@ -70,6 +70,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
       await setTheme(page, theme);
       await page.getByRole("button", { name: "Providers" }).click();
+      await page.getByRole("tab", { name: "Setup" }).click();
       await expect(page.getByText("Installed, version 2.1.282")).toBeVisible();
       await shot(page, `providers-${theme}-${size.name}`);
       // Review aids: the lower part of the page (permission table, a provider that isn't installed).
@@ -96,6 +97,7 @@ test("@screenshots providers states", async ({ page }) => {
     await page.goto(`/?scenario=${scenario}`);
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await page.getByRole("button", { name: "Providers" }).click();
+    await page.getByRole("tab", { name: "Setup" }).click();
     await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
     await shot(page, `${scenario}-dark-1440`);
   }

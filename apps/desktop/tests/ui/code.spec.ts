@@ -148,7 +148,7 @@ test.describe("terminals", () => {
     await page.getByRole("tab", { name: /^PowerShell 7$/ }).hover();
     await page
       .getByRole("tab", { name: /^PowerShell 7$/ })
-      .locator('[class*="tabClose"]')
+      .locator("[data-tab-close]")
       .click();
     await expect(page.getByRole("tab")).toHaveCount(1);
     await expect.poll(() => runningProcesses(page)).toBe(1);
@@ -264,7 +264,9 @@ test.describe("workspaces list", () => {
     await queueFolders(page, "first-project", "second-project");
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "first-project" })).toBeVisible();
-    await page.getByRole("button", { name: "Open folder…" }).click();
+    // With a workspace open, folders open from the workspace switcher (its name in the header).
+    await page.getByRole("heading", { level: 1, name: "first-project" }).getByRole("button").click();
+    await page.getByRole("menuitem", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "second-project" })).toBeVisible();
     await page.evaluate(() =>
       (

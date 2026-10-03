@@ -112,7 +112,7 @@ test.describe("KalVoice pane intents", () => {
     const launch = async (provider: "Claude Code" | "Codex") => {
       await page.getByRole("button", { name: "New agent", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "New agent" });
-      if (provider === "Codex") await dialog.getByRole("radio", { name: "Codex" }).click();
+      if (provider === "Codex") await dialog.getByRole("group", { name: "Codex" }).getByRole("option").first().click();
       await dialog.getByRole("button", { name: `Launch ${provider} agent` }).click();
       await expect(dialog).toHaveCount(0);
     };

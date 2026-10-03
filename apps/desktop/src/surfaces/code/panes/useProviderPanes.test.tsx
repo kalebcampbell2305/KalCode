@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ThreadSummary, Workspace } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useProviderPanes } from "./useProviderPanes.ts";
 
 const state = vi.hoisted(() => {
@@ -29,6 +29,10 @@ const agent = {
   createdAt: "2026-10-03",
 } as ThreadSummary;
 const info = { threadId: agent.id, running: true, hookChannel: "active" };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -105,4 +109,62 @@ it("identifies legacy chat references without treating a failed metadata read as
     await view.result.current.refresh();
   });
   expect(view.result.current.chatIds).toEqual([]);
+});
+
+/** Settles the hook's pending reads (`waitFor` polls with the faked `setInterval`). */
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  });
+}
+
+/** The poll is an interval; only intervals are faked. Returns how many list reads it made. */
+function pollTicks(ms: number) {
+  const reads = state.client.listThreads.mock.calls.length;
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+  return state.client.listThreads.mock.calls.length - reads;
+}
+
+it("stops polling for an ended agent whose pane has no live info", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  state.client.listThreads.mockResolvedValue([agent]);
+  state.client.transport.invoke.mockResolvedValue(null);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await settle();
+  expect(view.result.current.panes).toEqual([{ thread: agent, info: null }]);
+  expect(pollTicks(10_000)).toBe(0);
+});
+
+it("keeps polling for a pane whose info read failed, but only while the Code surface is shown", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  state.client.listThreads.mockResolvedValue([agent]);
+  state.client.transport.invoke.mockRejectedValue(new Error("IPC temporarily unavailable"));
+  const view = renderHook(({ active }) => useProviderPanes(workspace, { active }), {
+    initialProps: { active: false },
+  });
+  await settle();
+  expect(view.result.current.panes).toHaveLength(1);
+  expect(pollTicks(10_000)).toBe(0);
+  view.rerender({ active: true });
+  expect(pollTicks(1_500)).toBe(1);
+});
+
+it("keeps the same value and pane list when a refresh changes nothing", async () => {
+  state.client.listThreads.mockImplementation(async () => [{ ...agent }]);
+  state.client.transport.invoke.mockImplementation(async () => ({ ...info }));
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.panes).toHaveLength(1));
+  const before = view.result.current;
+  await act(async () => {
+    await before.refresh();
+  });
+  expect(view.result.current).toBe(before);
+  state.client.listThreads.mockImplementation(async () => [{ ...agent, name: "Renamed" }]);
+  await act(async () => {
+    await before.refresh();
+  });
+  expect(view.result.current.panes).not.toBe(before.panes);
+  expect(view.result.current.panes[0]?.thread.name).toBe("Renamed");
 });

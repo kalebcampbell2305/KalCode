@@ -3,7 +3,7 @@
 /**
  * Outcome of a bulk operation on one thread.
  */
-export type BulkOutcome = { threadId: string, ok: boolean, 
+export type BulkOutcome = { threadId: string, ok: boolean,
 /**
  * User-safe reason when `ok` is false.
  */
