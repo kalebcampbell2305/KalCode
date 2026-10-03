@@ -163,7 +163,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
     const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
     for (const [id, executable, version] of [
       ["claude-code", "claude.exe", "2.1.282"],
-      ["codex", "codex.exe", "0.155.1"],
+      ["codex", "codex.exe", "0.160.0"],
       ["gemini-cli", "gemini.exe", "0.61.0"],
     ] as const) {
       const status = statuses.find((candidate) => candidate.id === id);
@@ -212,7 +212,7 @@ test("the Threads surface runs on the native thread runtime", async () => {
     const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
     for (const [id, executable, version] of [
       ["claude-code", "claude.exe", "2.1.282"],
-      ["codex", "codex.exe", "0.155.1"],
+      ["codex", "codex.exe", "0.160.0"],
       ["gemini-cli", "gemini.exe", "0.61.0"],
     ] as const) {
       const status = statuses.find((candidate) => candidate.id === id);
