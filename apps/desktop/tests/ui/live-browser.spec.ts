@@ -11,13 +11,6 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 const OUT = new URL("../../qa/screenshots/", import.meta.url);
 mkdirSync(OUT, { recursive: true });
 
-type BrowserHooks = {
-  setErrors(id: string, errors: string[]): void;
-  pickElement(id: string, element: { selector: string; tag: string; text: string; html: string }): void;
-  blockPopup(id: string, url: string): void;
-  opened(): string[];
-};
-
 const panes = (page: Page) => page.locator("[data-pane-id]:not([hidden])");
 const browserPane = (page: Page) => page.locator("[data-browser-id]").first();
 const agentText = (page: Page) => page.locator("[data-provider-pane] [data-pane-terminal] .xterm-rows").first();
@@ -29,6 +22,7 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: new URL(`${name}.png`, OUT).pathname.replace(/^\/([A-Za-z]:)/, "$1") });
 }
 
+/** Runs `fn` against the in-memory Browser hooks (`MemoryBrowserHooks` in browserBridge.ts). */
 async function hooks<T>(page: Page, fn: string): Promise<T> {
   return page.evaluate(`(${fn})(window.__kalcodeMemory.browser)`) as Promise<T>;
 }

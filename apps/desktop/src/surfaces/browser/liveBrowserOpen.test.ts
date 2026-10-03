@@ -80,11 +80,14 @@ describe("handleOpenLiveBrowser", () => {
   it("opens beside an agent and keeps the full runtime URL out of the saved layout", () => {
     const controller = fakeController(twoColumns());
     const initialUrls = new Map<string, string>();
+    const besideAgents = new Map<string, string>();
     const result = handleOpenLiveBrowser(
       { kind: "open-live-browser", url: "http://localhost:5173/app?draft=1", beside: { agentId: "agent-1" } },
       controller,
       initialUrls,
+      besideAgents,
     );
+    expect([...besideAgents.values()]).toEqual(["agent-1"]);
     expect(result.handled).toBe(true);
     const panes = leaves(controller.layout.root);
     const browserPane = panes.at(-1);

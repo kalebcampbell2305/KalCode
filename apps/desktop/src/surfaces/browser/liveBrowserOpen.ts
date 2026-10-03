@@ -155,6 +155,8 @@ export function handleOpenLiveBrowser(
   command: OpenLiveBrowserCommand,
   controller: PaneController,
   initialUrls: Map<string, string>,
+  /** Receives the agent a new Live Browser opened beside (its Ask Agent preselects it). */
+  besideAgents?: Map<string, string>,
 ): PaneCommandResult {
   const layout = controller.layout;
   if (command.url) {
@@ -172,6 +174,7 @@ export function handleOpenLiveBrowser(
   }
   const content = browserContent(undefined, command.url ? persistableBrowserUrl(command.url) : null);
   if (command.url) initialUrls.set(content.browserId, command.url);
+  if (command.beside && "agentId" in command.beside) besideAgents?.set(content.browserId, command.beside.agentId);
   const placed = placeLiveBrowser(layout, content, {
     anchorPaneId: anchorPaneId(layout, command.beside),
     canvasWidth: controller.size.current.width,
