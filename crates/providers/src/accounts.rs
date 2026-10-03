@@ -1553,6 +1553,98 @@ mod tests {
     }
 
     #[test]
+    fn completed_fast_path_waits_for_inflight_onboarding_migration_lease() {
+        let fixture = Fixture::new();
+        let account = fixture
+            .store
+            .create("claude-code", "Personal")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("person@example.test"),
+                None,
+            )
+            .expect("connected");
+        let config = fixture
+            .profiles
+            .profile_home("claude-code", &account.id)
+            .expect("profile home")
+            .join(".claude.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&serde_json::json!({
+                "oauthAccount": { "accountUuid": "account-native-id" },
+                "hasCompletedOnboarding": false
+            }))
+            .expect("fixture json"),
+        )
+        .expect("legacy config");
+        let (written_tx, written_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let migration_store = &fixture.store;
+            let migration_profiles = &fixture.profiles;
+            let migration_account_id = account.id.clone();
+            let migration = scope.spawn(move || {
+                crate::claude::onboarding::prepare_connected_profile(
+                    migration_profiles,
+                    &migration_account_id,
+                    || {
+                        migration_store.authenticate_with_active_account(
+                            migration_profiles,
+                            "claude-code",
+                            &migration_account_id,
+                            |current, lease| {
+                                assert_eq!(current.authentication_state, AuthState::Authenticated);
+                                crate::claude::onboarding::complete_with_lease(
+                                    migration_profiles,
+                                    &migration_account_id,
+                                    &lease,
+                                )?;
+                                written_tx.send(()).expect("migration wrote marker");
+                                release_rx
+                                    .recv_timeout(Duration::from_secs(5))
+                                    .expect("release migration");
+                                Ok(())
+                            },
+                        )
+                    },
+                )
+            });
+            written_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("migration reached post-write pause");
+
+            let release = scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(250));
+                release_tx.send(()).expect("release migration");
+            });
+            let started = Instant::now();
+            let result = fixture.store.launch_with_active_account(
+                &fixture.profiles,
+                "claude-code",
+                &account.id,
+                |_| Ok(()),
+            );
+            let elapsed = started.elapsed();
+            release.join().expect("release thread");
+            migration
+                .join()
+                .expect("migration thread")
+                .expect("migration");
+            assert!(
+                elapsed >= Duration::from_millis(150),
+                "launch escaped before migration released its exclusive lease: {result:?}"
+            );
+            result.expect("launch waits for migration handoff");
+        });
+    }
+
+    #[test]
     fn claude_launch_never_synthesizes_onboarding_without_connected_metadata() {
         let fixture = Fixture::new();
         let account = fixture

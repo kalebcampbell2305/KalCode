@@ -49,8 +49,19 @@ pub(crate) fn prepare_connected_profile(
 ) -> Result<(), ProviderError> {
     let home = profiles.profile_home(ProviderId::CLAUDE_CODE, account_id)?;
     let path = home.join(CONFIG_NAME);
-    if inspect(&path)? != SetupState::LegacyConnected {
-        return Ok(());
+    match inspect(&path)? {
+        SetupState::ProviderMustHandle => return Ok(()),
+        SetupState::Complete => {
+            let Some(gate) = active_profile_gate(&home) else {
+                return Ok(());
+            };
+            let _guard = gate.lock().unwrap_or_else(PoisonError::into_inner);
+            if inspect(&path)? == SetupState::LegacyConnected {
+                migrate_exclusively()?;
+            }
+            return Ok(());
+        }
+        SetupState::LegacyConnected => {}
     }
 
     let gate = profile_gate(home);
@@ -59,6 +70,18 @@ pub(crate) fn prepare_connected_profile(
         migrate_exclusively()?;
     }
     Ok(())
+}
+
+/// Returns only an already-active migration gate. The ordinary completed-profile path never
+/// creates a gate or requests an exclusive profile lease, but it must wait for a migration that
+/// has installed the marker and has not yet released that exclusive lease.
+fn active_profile_gate(home: &Path) -> Option<Arc<Mutex<()>>> {
+    let gates = PROFILE_GATES.get()?;
+    gates
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(home)
+        .and_then(Weak::upgrade)
 }
 
 /// Sets exactly Claude's onboarding marker while the selected profile's canonical exclusive
