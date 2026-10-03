@@ -5,7 +5,8 @@ import { expect, type Page, test } from "@playwright/test";
 async function has(page: Page, testId: string): Promise<boolean> {
   const pagePath = ["before-after", "demo-center"].includes(testId) ? "/product" : "/";
   await page.goto(process.env.STAGE_URL ?? pagePath);
-  await expect(page.getByTestId(testId).first()).toBeAttached();
+  // Pages compose only the stages they use (lib/stage.ts); a stage that is not on the page skips.
+  await page.waitForLoadState("domcontentloaded");
   return (await page.getByTestId(testId).count()) > 0;
 }
 

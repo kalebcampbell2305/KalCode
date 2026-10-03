@@ -680,8 +680,9 @@ a:hover {
   backdrop-filter: saturate(150%) blur(16px);
 }
 
-[data-theme="light"] .site-header[data-scrolled],
-[data-theme="light"] .site-header[data-menu-open] {
+/* World pages are always dark, whatever the visitor's theme: only reading pages get the light glass. */
+[data-theme="light"] body:not([data-world]) .site-header[data-scrolled],
+[data-theme="light"] body:not([data-world]) .site-header[data-menu-open] {
   border-bottom-color: var(--color-border);
   background: rgb(245 247 251 / 0.82);
 }
@@ -905,7 +906,7 @@ main > .hero:first-child {
     background: rgb(4 7 14 / 0.94);
   }
 
-  [data-theme="light"] .site-header[data-menu-open] {
+  [data-theme="light"] body:not([data-world]) .site-header[data-menu-open] {
     background: rgb(245 247 251 / 0.97);
   }
 
@@ -1339,4 +1340,25 @@ body[data-world] {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Home hero (2026-10 redesign): the second line lit, the four promises as one calm row. */
+.hero__accent {
+  background: linear-gradient(100deg, #ffffff 0%, #a9c8ff 45%, #4c8dff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: none;
+}
+
+.hero__line--steps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.125rem 0.875rem;
+  max-width: 44rem;
+}
+
+.hero__line--steps > span {
+  white-space: nowrap;
 }

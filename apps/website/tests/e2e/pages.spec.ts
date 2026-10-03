@@ -232,11 +232,13 @@ test.describe("every page", () => {
     await page.goto("/");
     const h1 = page.locator("h1");
     await expect(h1).toContainText("KalCode");
-    await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
+    await expect(h1).toContainText("AI engineering. One workspace.");
     const hero = page.locator(".hero");
-    await expect(hero).toContainText("Claude Code, Codex and the coding tools you already use");
+    await expect(hero).toContainText("Run Claude Code and Codex.");
     await expect(hero).not.toContainText("Gemini");
-    const primary = hero.locator(".button--primary");
+    // Try KalCode leads (no account needed); the download sits right beside it.
+    await expect(hero.locator(".button--primary")).toContainText("Try KalCode");
+    const primary = hero.locator("[data-download-state]");
     await expect(primary).toHaveText("Download KalCode");
     if (WINDOWS_BUILD && MANIFEST.latest) {
       // A published Windows build: the primary action is the real download (Windows visitors).
@@ -250,8 +252,9 @@ test.describe("every page", () => {
       await expect(hero).toContainText("No public build yet");
       await expect(page.locator('a[href^="/download/"]')).toHaveCount(0);
     }
-    await hero.getByRole("link", { name: "See it in action" }).click();
-    await expect(page).toHaveURL(/#workspace$/);
+    await hero.getByRole("link", { name: "Try KalCode" }).click();
+    await expect(page).toHaveURL(/#try$/);
+    await expect(page.locator("[data-live]")).toHaveAttribute("data-live", "ready");
     // Provider constellation: honest adapter status.
     const providers = page.getByRole("list", { name: "Works with the coding agents you already use" });
     await expect(providers).toContainText("Adapter built");
@@ -283,7 +286,7 @@ test.describe("every page", () => {
       const title = await page.locator(".hero__statement").boundingBox();
       // Centred: the title's centre is within 2 px of the viewport's centre line.
       expect(title && Math.abs(title.x + title.width / 2 - width / 2) < 2, `title centred at ${width}`).toBe(true);
-      for (const name of ["Download KalCode", "See it in action"]) {
+      for (const name of ["Download KalCode", "Try KalCode"]) {
         const box = await page.locator(".hero").getByRole("link", { name }).boundingBox();
         expect(box && box.y + box.height <= Math.max(height, hero?.height ?? 0), `${name} inside the hero`).toBe(true);
       }

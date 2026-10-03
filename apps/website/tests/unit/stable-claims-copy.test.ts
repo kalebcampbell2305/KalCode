@@ -307,15 +307,19 @@ describe("plans", () => {
 });
 
 describe("home page", () => {
-  it("describes the workspace as it ships", async () => {
+  // AGENTS.md "AGENT means a coding agent": an agent is a real coding terminal, never a thread.
+  it("describes the workspace as it ships: agents are coding terminals, not threads", async () => {
     const copy = text(await render(Home, "/"));
-    expect(copy).toContain("Real terminals, a browser pane and your agents' threads, in one workspace.");
-    expect(copy).toMatch(/Dashboard Every thread\. One dashboard\./);
+    expect(copy).toContain("An agent is a real coding terminal.");
+    expect(copy).toContain("the actual Claude Code or Codex running in its own terminal pane, not a chat thread");
+    expect(copy).toContain("From one agent to a fleet.");
+    expect(copy).not.toMatch(/agents' threads|Every thread\. One dashboard/);
   });
 
-  it("says in the home meta that threads run at the same time, without a panes claim", () => {
+  it("says in the home meta that agents run in real terminals, without a panes claim", () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
-    expect(home).toContain("run their threads at the same time");
+    expect(home).toContain("Run Claude Code and Codex agents in real terminals");
+    expect(home).not.toMatch(/threads/i);
     expect(PAGES.find((p) => p.path === "/product")?.description).not.toMatch(/provider panes/i);
   });
 
@@ -748,7 +752,7 @@ describe("home meta description", () => {
   it("describes KalCode as released, not in private development", async () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
     expect(home).toBe(
-      "KalCode is a desktop workspace for the coding agents you already use. Connect Claude Code and Codex, run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
+      "KalCode is the desktop workspace for AI coding. Run Claude Code and Codex agents in real terminals, see every agent in Agent Fleet, preview your app in Live Browser and control it all with KalVoice. Try it live in your browser.",
     );
     expect(home).not.toMatch(/private development/i);
     selectSignedStable();
