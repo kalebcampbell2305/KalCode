@@ -8,35 +8,24 @@ import {
   type ThreadWorktreeState,
 } from "@kalcode/protocol";
 import {
-  Badge,
   Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
   IconButton,
-  ProviderMark,
-  StatusChip,
+  ProviderGlyph,
 } from "@kalcode/ui/components";
-import {
-  Archive,
-  ArrowUp,
-  CircleCheck,
-  FileDiff,
-  FolderGit2,
-  GitBranch,
-  GitMerge,
-  Hourglass,
-  MoreHorizontal,
-  ShieldAlert,
-} from "lucide-react";
-import { type MouseEvent, memo, useEffect, useRef, useState } from "react";
+import { Archive, ArrowUp, ChevronDown, Clock3, FolderGit2, GitBranch, GitMerge, MoreHorizontal, X } from "lucide-react";
+import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { MODE_LABELS } from "../permissions/labels.ts";
 import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
-import { formatElapsed } from "./data/format.ts";
+import { fleetGroupOf } from "./data/board.ts";
+import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
+import { STATUS_META } from "./data/status.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
@@ -52,8 +41,6 @@ export interface AgentCardProps {
   onAction: (thread: ThreadSummary, action: Exclude<ThreadAction, "open">) => void;
   onDecide: (requestId: string, decision: ApprovalDecision) => Promise<unknown>;
   onReviewApprovals: () => void;
-  /** Present when this build can show a thread's changes (a diff surface). */
-  onViewChanges?: (thread: ThreadSummary) => void;
   /**
    * An archived thread, shown read-only: no focus, actions or approvals, only Unarchive
    * (`onAction(thread, "unarchive")`).
@@ -68,6 +55,11 @@ export interface AgentCardProps {
   readiness?: MergeReadiness;
   /** Called with fresh worktree facts after the person commits the agent's changes. */
   onCommitted?: (state: ThreadWorktreeState) => void;
+  /** The card shows its details (remembered by the Fleet). */
+  expanded?: boolean;
+  onToggleExpanded?: (threadId: string) => void;
+  /** One-click remove for a failed, finished or stopped agent (the X); absent: not offered. */
+  onDismiss?: (thread: ThreadSummary) => void;
 }
 
 /**
@@ -90,25 +82,48 @@ export function startedText(createdAt: string, now: number): string | null {
   return ms < 60_000 ? "Started just now" : `Started ${formatElapsed(ms)} ago`;
 }
 
+/** The card's one status word or phrase, from runtime state only. */
+export function stateLabel(thread: ThreadSummary, ready: boolean): string {
+  if (ready) return "Ready to merge";
+  const shown = presentThread(thread);
+  if (shown.label === "Waiting for system resources" || shown.label === "Last turn failed") return shown.label;
+  if (thread.status === "interrupted") return shown.label === "Not started" ? "Not started" : "Stopped";
+  if (thread.status === "waiting_for_dependency") return "Blocked";
+  if (thread.status === "completed") return "Done";
+  const display = displayStatusOf(thread.status).status;
+  if (display === "working") return "Working";
+  return STATUS_META[thread.status].label;
+}
+
 /** What the thread is doing, from structured runtime state only (never model prose). */
-function activityLine(thread: ThreadSummary): string {
+function activityLine(thread: ThreadSummary, approval: ApprovalView | undefined): string {
   const display = displayStatusOf(thread.status);
   if (display.status === "failed" && thread.error) return thread.error.message;
+  if (display.status === "permission_required" && approval) {
+    return `Wants to ${approval.action.summary ? approval.action.summary.charAt(0).toLowerCase() + approval.action.summary.slice(1) : "act"}`;
+  }
   if (thread.currentActivity) return thread.currentActivity;
   // A launch held for system resources is not "waiting on another task": say what the runtime said.
   if (isWaitingForResources(thread) && thread.error) return thread.error.message;
-  if (display.qualifier) return DISPLAY_QUALIFIER_LABEL[display.qualifier];
+  if (display.qualifier) {
+    const text = DISPLAY_QUALIFIER_LABEL[display.qualifier];
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
   return "No current activity reported";
 }
 
 function isInteractive(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest("button, a, input, [role='menuitem'], [role='group']") !== null;
+  return (
+    target instanceof Element &&
+    target.closest("button, a, input, textarea, [role='menuitem'], [role='group'], [data-details]") !== null
+  );
 }
 
 /**
- * One agent (thread) on the Dashboard: provider, name, workspace, account and branch, what it is doing now,
- * its status, permission mode and last activity. PERMISSION REQUIRED carries the inline approval;
- * DONE is marked "Completed" with its follow-ups. Clicking the card focuses the thread's pane.
+ * One coding agent in the Agent Fleet: who it runs as (account), its task, its state and how
+ * long it has run; the provider and workspace; model, effort and branch; and what it is doing now
+ * (or why it needs you). Common actions sit on the card; the rest are in its menu, and its
+ * details expand in place. Clicking the card opens the agent's terminal in Code.
  */
 export const AgentCard = memo(function AgentCard({
   thread,
@@ -119,28 +134,31 @@ export const AgentCard = memo(function AgentCard({
   onAction,
   onDecide,
   onReviewApprovals,
-  onViewChanges,
   archived = false,
   headingLevel = 3,
   handle,
   worktree,
   readiness,
   onCommitted,
+  expanded = false,
+  onToggleExpanded,
+  onDismiss,
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
-  // The runtime holds this thread's launch for system resources (its `waiting_for_resources`
-  // error), so the shared "waiting on another task" qualifier would be untrue. Same words and
-  // tone as the Threads surface.
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
-  const tone = resourceWait?.tone ?? DISPLAY_STATUS_TONE[display.status];
-  // The provider account the thread runs on (text, never a credential), e.g. "Gemini B".
+  const ready = !archived && readiness?.ready === true;
+  const tone = ready ? "working" : (resourceWait?.tone ?? DISPLAY_STATUS_TONE[display.status]);
+  const group = fleetGroupOf(thread.status);
+  // The provider account the agent runs on (text, never a credential), e.g. "Claude A".
   const accountLabel = thread.accountLabel?.trim() || null;
+  const provider = thread.providerName || providerName(thread.providerId);
   const [confirmStop, setConfirmStop] = useState(false);
   const stopRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
   // The menu returns focus to its trigger on close; Stop… moves it to the confirmation instead.
   const confirmFromMenu = useRef(false);
   const nameId = `agent-${thread.id}-name`;
+  const detailsId = useId();
   const Heading = `h${headingLevel}` as const;
 
   // A status that changes while the card is on screen gets a brief transition (not on first paint).
@@ -155,18 +173,39 @@ export const AgentCard = memo(function AgentCard({
     ? []
     : (availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
   const request = archived ? undefined : approvals[0];
-  const ready = !archived && readiness?.ready === true;
-  const done = !archived && !ready && display.status === "done";
   const actionNeeded = !archived && display.status === "permission_required";
   const failed = display.status === "failed";
-  const canViewChanges = (done || ready) && onViewChanges !== undefined && (thread.filesChanged ?? 0) > 0;
+  const elapsedMs = runDurationMs(thread, now);
   const started = startedText(thread.createdAt, now);
+  const activity = activityLine(thread, request);
+  const label = archived ? "Archived" : stateLabel(thread, ready);
+  const resumable = actions.includes("resume");
+  const dirty = worktree ? worktree.changed + worktree.untracked : 0;
 
   const onCardClick = (event: MouseEvent<HTMLElement>) => {
     if (archived || isInteractive(event.target)) return;
     if (window.getSelection()?.toString()) return;
     onFocus(thread);
   };
+
+  // The one primary follow-up each state needs, on the card.
+  let primary: { label: string; run: () => void; busy?: boolean; aria?: string } | null = null;
+  if (!archived) {
+    if (failed && actions.includes("retry")) {
+      primary = { label: "Retry", run: () => onAction(thread, "retry"), busy: pendingAction === "retry" };
+    } else if (display.status === "waiting_for_you") {
+      primary = { label: "Reply", run: () => onFocus(thread) };
+    } else if (resumable) {
+      primary = {
+        label: "Resume",
+        run: () => onAction(thread, "resume"),
+        busy: pendingAction === "resume",
+        aria: `Resume ${thread.name}`,
+      };
+    } else if (group === "done" || ready) {
+      primary = { label: "Open", run: () => onFocus(thread), aria: `Open ${thread.name}` };
+    }
+  }
 
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: the name button is the keyboard path; the card is a larger mouse target.
@@ -176,64 +215,57 @@ export const AgentCard = memo(function AgentCard({
       data-thread-id={thread.id}
       data-tone={tone}
       data-status={display.status}
+      data-group={group}
       data-changed={changed || undefined}
       data-archived={archived || undefined}
       data-ready={ready || undefined}
+      data-expanded={expanded || undefined}
       aria-busy={pendingAction ? true : undefined}
       onClick={onCardClick}
     >
-      {/* DONE and PERMISSION REQUIRED carry their status in a band (glyph + words) instead of a chip. */}
-      {archived ? (
-        <p className={styles.band} data-kind="archived">
-          <Archive aria-hidden="true" className={styles.bandGlyph} />
-          <span>Archived</span>
-          {thread.archivedAt ? (
-            <time className={styles.bandDetail} dateTime={thread.archivedAt} title={formatAbsolute(thread.archivedAt)}>
-              {formatRelative(thread.archivedAt, now)}
-            </time>
-          ) : null}
-        </p>
-      ) : ready && readiness?.ready ? (
-        <p className={styles.band} data-kind="ready">
-          <GitMerge aria-hidden="true" className={styles.bandGlyph} />
-          <span>Ready to merge</span>
-          <span className={styles.bandDetail}>
-            {readiness.ahead} {readiness.ahead === 1 ? "commit" : "commits"} ahead of {readiness.base ?? "base"}
+      <header className={styles.top}>
+        <span className={styles.signal} data-tone={archived ? "muted" : tone} aria-hidden="true" />
+        {accountLabel ? (
+          <span className={styles.who} title={`Account: ${accountLabel}`}>
+            <span className="visually-hidden">account </span>
+            {accountLabel}
           </span>
-        </p>
-      ) : done ? (
-        <p className={styles.band} data-kind="done">
-          <CircleCheck aria-hidden="true" className={styles.bandGlyph} />
-          <span>Completed</span>
-        </p>
-      ) : actionNeeded ? (
-        <p className={styles.band} data-kind="action">
-          <ShieldAlert aria-hidden="true" className={styles.bandGlyph} />
-          <span>Action needed</span>
-          <span className={styles.bandDetail}>Permission required</span>
-        </p>
-      ) : null}
-
-      <header className={styles.head}>
-        <ProviderMark
-          provider={thread.providerId}
-          name={handle ?? thread.providerName}
-          detail={thread.model ?? undefined}
-          size="sm"
-          tile
-          className={styles.provider}
-        />
-        {done || actionNeeded || ready ? null : (
-          <StatusChip
-            status={display.status}
-            qualifier={resourceWait ? null : display.qualifier}
-            label={resourceWait?.label}
-            tone={resourceWait?.tone}
-            icon={resourceWait ? Hourglass : undefined}
-            size="sm"
-            className={styles.status}
-          />
+        ) : (
+          <span className={styles.who}>{handle ?? provider}</span>
         )}
+        <span className={styles.state} data-tone={archived ? "muted" : tone} data-kind="state">
+          {archived ? <Archive aria-hidden="true" className={styles.stateGlyph} /> : null}
+          {ready ? <GitMerge aria-hidden="true" className={styles.stateGlyph} /> : null}
+          {label}
+        </span>
+        {elapsedMs !== null && !archived ? (
+          <time
+            className={styles.elapsed}
+            data-kind="elapsed"
+            dateTime={thread.createdAt}
+            title={`${started ?? "Started"} · ${formatAbsolute(thread.createdAt)}`}
+          >
+            <Clock3 aria-hidden="true" />
+            <span className="visually-hidden">Running time </span>
+            {elapsedMs < 60_000 ? "<1 min" : formatElapsed(elapsedMs)}
+          </time>
+        ) : null}
+        {archived && thread.archivedAt ? (
+          <time className={styles.elapsed} dateTime={thread.archivedAt} title={formatAbsolute(thread.archivedAt)}>
+            {formatRelative(thread.archivedAt, now)}
+          </time>
+        ) : null}
+        {onDismiss && !archived ? (
+          <IconButton
+            size="sm"
+            className={styles.dismiss}
+            label={`Clear ${thread.name}`}
+            title="Clear from the Fleet (restore it from Archived)"
+            icon={<X />}
+            busy={pendingAction === "archive"}
+            onClick={() => onDismiss(thread)}
+          />
+        ) : null}
       </header>
 
       <Heading className={styles.name} id={nameId}>
@@ -249,42 +281,64 @@ export const AgentCard = memo(function AgentCard({
       </Heading>
 
       <p className={styles.where}>
-        <span className={styles.workspace}>{thread.workspaceName}</span>
-        {accountLabel ? (
-          <span className={styles.account} title={`Account: ${accountLabel}`}>
-            <span className="visually-hidden">account </span>
-            {accountLabel}
-          </span>
-        ) : null}
-        {thread.branch ? (
-          <span
-            className={styles.branch}
-            title={thread.worktreeId ? `${thread.branch} · its own worktree and branch` : thread.branch}
-          >
-            {thread.worktreeId ? (
-              <FolderGit2 aria-hidden="true" className={styles.branchGlyph} />
-            ) : (
-              <GitBranch aria-hidden="true" className={styles.branchGlyph} />
-            )}
-            <span className="visually-hidden">{thread.worktreeId ? "worktree branch " : "branch "}</span>
-            <span className={styles.branchName}>{thread.branch}</span>
-          </span>
-        ) : null}
-        {worktree?.ahead ? (
-          <span className={styles.ahead} title={`${worktree.ahead} commits ahead of ${worktree.baseBranch ?? "base"}`}>
-            <ArrowUp aria-hidden="true" />
-            <span className="visually-hidden">commits ahead </span>
-            {worktree.ahead}
-          </span>
-        ) : null}
+        <ProviderGlyph provider={thread.providerId} size="xs" className={styles.whereGlyph} />
+        <span className={styles.providerName}>{provider}</span>
+        <span className={styles.sep} aria-hidden="true">
+          ·
+        </span>
+        <span className={styles.workspace} title={thread.workspaceName}>
+          {thread.workspaceName}
+        </span>
       </p>
 
-      <p className={styles.activity} data-failed={failed || undefined} title={activityLine(thread)}>
-        {activityLine(thread)}
+      {thread.model || thread.effort || thread.branch ? (
+        <p className={styles.tech}>
+          {thread.model ? <span className={styles.model}>{thread.model}</span> : null}
+          {thread.effort ? (
+            <span className={styles.effort}>
+              <span className="visually-hidden">effort </span>
+              {thread.effort}
+            </span>
+          ) : null}
+          {thread.branch ? (
+            <span
+              className={styles.branch}
+              title={thread.worktreeId ? `${thread.branch} · its own worktree and branch` : thread.branch}
+            >
+              {thread.worktreeId ? (
+                <FolderGit2 aria-hidden="true" className={styles.branchGlyph} />
+              ) : (
+                <GitBranch aria-hidden="true" className={styles.branchGlyph} />
+              )}
+              <span className="visually-hidden">{thread.worktreeId ? "worktree branch " : "branch "}</span>
+              <span className={styles.branchName}>{thread.branch}</span>
+            </span>
+          ) : null}
+          {worktree?.ahead ? (
+            <span className={styles.ahead} title={`${worktree.ahead} commits ahead of ${worktree.baseBranch ?? "base"}`}>
+              <ArrowUp aria-hidden="true" />
+              <span className="visually-hidden">commits ahead </span>
+              {worktree.ahead}
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+
+      <p className={styles.activity} data-tone={tone} data-group={group} title={activity}>
+        {activity}
       </p>
+
+      {actionNeeded && request ? (
+        <InlineApproval
+          request={request}
+          more={approvals.length - 1}
+          onDecide={onDecide}
+          onReviewAll={onReviewApprovals}
+        />
+      ) : null}
 
       {/* Work an isolated agent left uncommitted: KalCode commits it on the agent's branch when asked. */}
-      {!archived && worktree && worktree.changed + worktree.untracked > 0 && COMMITTABLE.has(thread.status) ? (
+      {!archived && worktree && dirty > 0 && COMMITTABLE.has(thread.status) ? (
         <div className={styles.followUps}>
           <CommitChanges thread={thread} worktree={worktree} onCommitted={onCommitted} />
         </div>
@@ -296,60 +350,6 @@ export const AgentCard = memo(function AgentCard({
           <GitMerge aria-hidden="true" />
           <span>Not ready to merge: {readiness.reason}</span>
         </p>
-      ) : null}
-
-      {actionNeeded && request ? (
-        <InlineApproval
-          request={request}
-          more={approvals.length - 1}
-          onDecide={onDecide}
-          onReviewAll={onReviewApprovals}
-        />
-      ) : null}
-
-      {archived ? (
-        <div className={styles.followUps}>
-          <Button
-            size="sm"
-            variant="secondary"
-            busy={pendingAction === "unarchive"}
-            aria-label={`Unarchive ${thread.name}`}
-            onClick={() => onAction(thread, "unarchive")}
-          >
-            Unarchive
-          </Button>
-        </div>
-      ) : done || ready ? (
-        <div className={styles.followUps}>
-          <Button size="sm" variant="secondary" onClick={() => onFocus(thread)}>
-            Open
-          </Button>
-          {canViewChanges ? (
-            <Button size="sm" variant="ghost" icon={<FileDiff />} onClick={() => onViewChanges?.(thread)}>
-              View changes
-            </Button>
-          ) : null}
-        </div>
-      ) : failed && actions.includes("retry") ? (
-        <div className={styles.followUps}>
-          <Button
-            size="sm"
-            variant="secondary"
-            busy={pendingAction === "retry"}
-            onClick={() => onAction(thread, "retry")}
-          >
-            Retry
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => onFocus(thread)}>
-            Open
-          </Button>
-        </div>
-      ) : display.status === "waiting_for_you" ? (
-        <div className={styles.followUps}>
-          <Button size="sm" variant="secondary" onClick={() => onFocus(thread)}>
-            Reply
-          </Button>
-        </div>
       ) : null}
 
       {confirmStop ? (
@@ -389,79 +389,171 @@ export const AgentCard = memo(function AgentCard({
         </div>
       ) : null}
 
-      <footer className={styles.foot}>
-        <Badge tone={thread.permissionMode === "bypass" ? "danger" : "outline"} className={styles.mode}>
-          <span className="visually-hidden">Permission mode </span>
-          {MODE_LABELS[thread.permissionMode]}
-        </Badge>
-        {thread.filesChanged ? (
-          <span className={styles.meta}>
-            {thread.filesChanged} {thread.filesChanged === 1 ? "file" : "files"}
-          </span>
-        ) : null}
-        {started ? (
+      {expanded ? (
+        <dl className={styles.details} id={detailsId} data-details>
+          <div>
+            <dt>Account</dt>
+            <dd>{accountLabel ?? "Provider default"}</dd>
+          </div>
+          {handle ? (
+            <div>
+              <dt>Call sign</dt>
+              <dd>{handle}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>Model</dt>
+            <dd>
+              {thread.model ?? "Provider default"}
+              {thread.effort ? ` · ${thread.effort} effort` : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>Runs in</dt>
+            <dd>
+              {thread.worktreeId
+                ? `Its own worktree${worktree?.baseBranch ? ` (from ${worktree.baseBranch})` : ""}`
+                : "The workspace folder"}
+            </dd>
+          </div>
+          <div>
+            <dt>Permissions</dt>
+            <dd>
+              <span className="visually-hidden">Permission mode </span>
+              {MODE_LABELS[thread.permissionMode]}
+            </dd>
+          </div>
+          {thread.filesChanged !== null ? (
+            <div>
+              <dt>Files</dt>
+              <dd>
+                {thread.filesChanged} {thread.filesChanged === 1 ? "file" : "files"} touched
+                {dirty > 0 ? ` · ${dirty} uncommitted` : ""}
+              </dd>
+            </div>
+          ) : null}
+          {started ? (
+            <div>
+              <dt>Started</dt>
+              <dd>
+                <time data-kind="started" dateTime={thread.createdAt} title={`Started ${formatAbsolute(thread.createdAt)}`}>
+                  {started}
+                </time>
+              </dd>
+            </div>
+          ) : null}
+          {thread.error ? (
+            <div>
+              <dt>Error</dt>
+              <dd className={styles.detailError}>{thread.error.message}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+
+      {archived ? (
+        <footer className={styles.foot}>
+          <Button
+            size="sm"
+            variant="secondary"
+            busy={pendingAction === "unarchive"}
+            aria-label={`Unarchive ${thread.name}`}
+            onClick={() => onAction(thread, "unarchive")}
+          >
+            Unarchive
+          </Button>
+        </footer>
+      ) : (
+        <footer className={styles.foot}>
+          {primary ? (
+            <Button
+              size="sm"
+              variant={failed || display.status === "waiting_for_you" ? "primary" : "secondary"}
+              className={styles.primary}
+              busy={primary.busy}
+              aria-label={primary.aria}
+              onClick={primary.run}
+            >
+              {primary.label}
+            </Button>
+          ) : null}
+          {thread.permissionMode === "bypass" ? (
+            <span className={styles.bypass} title="Bypass: runs without asking">
+              Bypass
+            </span>
+          ) : null}
+          {thread.filesChanged ? (
+            <span className={styles.meta} data-kind="files">
+              {thread.filesChanged} {thread.filesChanged === 1 ? "file" : "files"}
+            </span>
+          ) : null}
           <time
             className={styles.meta}
-            data-kind="started"
-            dateTime={thread.createdAt}
-            title={`Started ${formatAbsolute(thread.createdAt)}`}
+            data-kind="last-activity"
+            dateTime={thread.lastActivityAt}
+            title={`Last activity ${formatAbsolute(thread.lastActivityAt)}`}
           >
-            {started}
+            <span className="visually-hidden">Last activity </span>
+            {formatRelative(thread.lastActivityAt, now)}
           </time>
-        ) : null}
-        <time
-          className={styles.meta}
-          data-kind="last-activity"
-          dateTime={thread.lastActivityAt}
-          title={formatAbsolute(thread.lastActivityAt)}
-        >
-          <span className="visually-hidden">Last activity </span>
-          {formatRelative(thread.lastActivityAt, now)}
-        </time>
-        {actions.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          <span className={styles.tools}>
+            {actions.length > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <IconButton
+                    ref={menuRef}
+                    size="sm"
+                    className={styles.tool}
+                    label={`More actions for ${thread.name}`}
+                    icon={<MoreHorizontal />}
+                    busy={pendingAction !== undefined && pendingAction !== "retry" && pendingAction !== "resume"}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  onCloseAutoFocus={(event) => {
+                    if (!confirmFromMenu.current) return;
+                    confirmFromMenu.current = false;
+                    event.preventDefault();
+                    stopRef.current?.focus();
+                  }}
+                >
+                  <DropdownMenuItem onSelect={() => onFocus(thread)}>Open</DropdownMenuItem>
+                  {actions.map((action) =>
+                    action === "stop" ? (
+                      <DropdownMenuItem
+                        key={action}
+                        tone="danger"
+                        onSelect={() => {
+                          confirmFromMenu.current = true;
+                          setConfirmStop(true);
+                        }}
+                      >
+                        Stop…
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem key={action} onSelect={() => onAction(thread, action)}>
+                        {ACTION_LABELS[action]}
+                      </DropdownMenuItem>
+                    ),
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+            {onToggleExpanded ? (
               <IconButton
-                ref={menuRef}
                 size="sm"
-                className={styles.more}
-                label={`More actions for ${thread.name}`}
-                icon={<MoreHorizontal />}
-                busy={pendingAction !== undefined && pendingAction !== "retry"}
+                className={styles.tool}
+                label={expanded ? `Hide details for ${thread.name}` : `Show details for ${thread.name}`}
+                aria-expanded={expanded}
+                aria-controls={expanded ? detailsId : undefined}
+                icon={<ChevronDown className={styles.chevron} data-open={expanded || undefined} />}
+                onClick={() => onToggleExpanded(thread.id)}
               />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              onCloseAutoFocus={(event) => {
-                if (!confirmFromMenu.current) return;
-                confirmFromMenu.current = false;
-                event.preventDefault();
-                stopRef.current?.focus();
-              }}
-            >
-              <DropdownMenuItem onSelect={() => onFocus(thread)}>Open</DropdownMenuItem>
-              {actions.map((action) =>
-                action === "stop" ? (
-                  <DropdownMenuItem
-                    key={action}
-                    tone="danger"
-                    onSelect={() => {
-                      confirmFromMenu.current = true;
-                      setConfirmStop(true);
-                    }}
-                  >
-                    Stop…
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem key={action} onSelect={() => onAction(thread, action)}>
-                    {ACTION_LABELS[action]}
-                  </DropdownMenuItem>
-                ),
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
-      </footer>
+            ) : null}
+          </span>
+        </footer>
+      )}
     </article>
   );
 });

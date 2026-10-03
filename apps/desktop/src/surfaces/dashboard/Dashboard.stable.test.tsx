@@ -91,7 +91,8 @@ describe("Stable Dashboard", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     const archived = within(agents.getByRole("region", { name: /^Archived/ }));
     const cards = archived.getAllByRole("article");
-    expect(cards.map((card) => card.querySelector("h3")?.textContent)).toEqual([
+    // Newest archived first (hundreds stay usable: the view pages through them).
+    expect(cards.map((card) => card.querySelector("h3")?.textContent).sort()).toEqual([
       "Add light theme tokens",
       "Deploy preview build",
       "Generate API client",
@@ -107,12 +108,13 @@ describe("Stable Dashboard", () => {
     }
 
     await user.click(archived.getByRole("button", { name: "Unarchive Deploy preview build" }));
-    // Restored: it is back on the board (Failed waits for you), the rest stay archived.
+    // Restored: it is back on the board in its own Failed group, the rest stay archived.
     await waitFor(() => expect(agents.getAllByRole("article", { name: "Deploy preview build" })).toHaveLength(1));
     expect(agents.queryByRole("heading", { name: /agents are archived/ })).toBeNull();
     const stillArchived = within(agents.getByRole("region", { name: /^Archived/ }));
     expect(stillArchived.getAllByRole("article")).toHaveLength(2);
-    expect(agents.getByRole("button", { name: "Waiting for you, 1" })).toBeInTheDocument();
+    expect(agents.getByRole("button", { name: "Failed, 1" })).toBeInTheDocument();
+    expect(agents.getByRole("button", { name: "Needs you, 0" })).toBeInTheDocument();
   });
 
   it("populated: shows the board and the Sidebar counts what needs you", async () => {
@@ -121,7 +123,7 @@ describe("Stable Dashboard", () => {
     await waitFor(() => expect(agents.getAllByRole("article").length).toBeGreaterThan(0));
     expect(agents.queryByRole("heading", { name: "No agents yet" })).toBeNull();
     expect(agents.queryByRole("heading", { name: /archived/ })).toBeNull();
-    const waiting = agents.getByRole("button", { name: /^Waiting for you, \d+$/ });
+    const waiting = agents.getByRole("button", { name: /^Needs you, \d+$/ });
     const count = Number(waiting.getAttribute("aria-label")?.split(", ")[1]);
     expect(count).toBeGreaterThan(0);
 
@@ -130,9 +132,9 @@ describe("Stable Dashboard", () => {
     await waitFor(() => expect(nav.textContent).toBe(`Dashboard${count}`));
     expect(nav).toHaveAccessibleName("Dashboard");
     expect(nav).toHaveAccessibleDescription(`${count} sessions need you`);
-    // Every card shows when it started.
+    // Every card shows how long its agent has run.
     for (const card of agents.getAllByRole("article")) {
-      expect(card.querySelector('time[data-kind="started"]')?.textContent).toMatch(/^Started /);
+      expect(card.querySelector('time[data-kind="elapsed"]')?.textContent).toMatch(/^Running time /);
     }
   });
 

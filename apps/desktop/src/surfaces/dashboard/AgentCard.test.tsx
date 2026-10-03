@@ -35,7 +35,7 @@ function thread(accountLabel: string | null): ThreadSummary {
   };
 }
 
-function mount(summary: ThreadSummary) {
+function mount(summary: ThreadSummary, extra: Partial<Parameters<typeof AgentCard>[0]> = {}) {
   return render(
     <AgentCard
       thread={summary}
@@ -46,15 +46,16 @@ function mount(summary: ThreadSummary) {
       onAction={vi.fn()}
       onDecide={vi.fn()}
       onReviewApprovals={vi.fn()}
+      {...extra}
     />,
   );
 }
 
 describe("AgentCard account label", () => {
-  it("shows the provider account as text next to the workspace", () => {
+  it("leads with the provider account, then the provider and workspace", () => {
     mount(thread("Gemini B"));
     const card = screen.getByRole("article", { name: "Research" });
-    expect(card.textContent).toContain("kalcode");
+    expect(card.textContent).toContain("Gemini CLI·kalcode");
     const account = screen.getByTitle("Account: Gemini B");
     expect(account.textContent).toBe("account Gemini B");
     expect(card.contains(account)).toBe(true);
@@ -69,9 +70,10 @@ describe("AgentCard account label", () => {
     expect(screen.getByTitle("Account: Gemini B")).toBeTruthy();
   });
 
-  it("shows nothing for a thread without an account (or a blank label)", () => {
-    const { unmount } = mount(thread(null));
+  it("falls back to the call sign without an account (or with a blank label)", () => {
+    const { unmount } = mount(thread(null), { handle: "Gemini C" });
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
+    expect(screen.getByText("Gemini C")).toBeTruthy();
     unmount();
     mount(thread("   "));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
@@ -79,9 +81,13 @@ describe("AgentCard account label", () => {
 });
 
 describe("AgentCard start time", () => {
-  it("shows when the thread started, from its real createdAt", () => {
-    mount({ ...thread(null), createdAt: "2026-09-28T11:18:00Z", lastActivityAt: "2026-09-28T12:00:30Z" });
+  it("shows how long it has run, and when it started in its details", () => {
+    mount(
+      { ...thread(null), createdAt: "2026-09-28T11:18:00Z", lastActivityAt: "2026-09-28T12:00:30Z" },
+      { expanded: true, onToggleExpanded: vi.fn() },
+    );
     const card = screen.getByRole("article", { name: "Research" });
+    expect(card.querySelector('time[data-kind="elapsed"]')?.textContent).toBe("Running time 43 min");
     const started = card.querySelector('time[data-kind="started"]');
     expect(started?.textContent).toBe("Started 43 min ago");
     expect(started?.getAttribute("dateTime")).toBe("2026-09-28T11:18:00Z");
@@ -96,8 +102,10 @@ describe("AgentCard start time", () => {
     expect(startedText("2026-09-28T12:00:30Z", now)).toBe("Started just now");
     expect(startedText("2026-09-26T09:01:00Z", now)).toBe("Started 2 d 3 h ago");
     expect(startedText("not a date", now)).toBeNull();
-    mount({ ...thread(null), createdAt: "not a date" });
-    expect(screen.getByRole("article", { name: "Research" }).querySelector('time[data-kind="started"]')).toBeNull();
+    mount({ ...thread(null), createdAt: "not a date" }, { expanded: true, onToggleExpanded: vi.fn() });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.querySelector('time[data-kind="started"]')).toBeNull();
+    expect(card.querySelector('time[data-kind="elapsed"]')).toBeNull();
   });
 });
 
@@ -177,5 +185,80 @@ describe("AgentCard waiting states", () => {
     mount(thread(null));
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
     expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Archive"]);
+  });
+});
+
+describe("AgentCard Fleet controls", () => {
+  it("expands its details in place and says so", async () => {
+    const onToggle = vi.fn();
+    const { rerender } = mount({ ...thread("Claude A"), model: "claude-opus-4-1", effort: "high" }, { onToggleExpanded: onToggle });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("claude-opus-4-1");
+    expect(card.textContent).toContain("effort high");
+    const toggle = screen.getByRole("button", { name: "Show details for Research" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledWith("0192f3c4-0000-7000-8000-000000000005");
+    rerender(
+      <AgentCard
+        thread={{ ...thread("Claude A"), model: "claude-opus-4-1", effort: "high" }}
+        now={Date.parse("2026-09-28T12:01:00Z")}
+        approvals={[]}
+        pendingAction={undefined}
+        onFocus={vi.fn()}
+        onAction={vi.fn()}
+        onDecide={vi.fn()}
+        onReviewApprovals={vi.fn()}
+        expanded
+        onToggleExpanded={onToggle}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Hide details for Research" })).toHaveAttribute("aria-expanded", "true");
+    expect(card.textContent).toContain("Permission mode Approve");
+    expect(card.textContent).toContain("claude-opus-4-1 · high effort");
+  });
+
+  it("a failed agent offers Retry and the one-click clear, and clicking the clear never opens it", async () => {
+    const onDismiss = vi.fn();
+    const onFocus = vi.fn();
+    const onAction = vi.fn();
+    const failed: ThreadSummary = {
+      ...thread("Claude A"),
+      status: "failed",
+      error: { code: "provider_exited", message: "Claude Code exited (exit code 1)." },
+    };
+    mount(failed, { onDismiss, onFocus, onAction });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("Failed");
+    expect(card.textContent).toContain("Claude Code exited (exit code 1).");
+    await userEvent.click(screen.getByRole("button", { name: "Clear Research" }));
+    expect(onDismiss).toHaveBeenCalledWith(failed);
+    expect(onFocus).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onAction).toHaveBeenCalledWith(failed, "retry");
+  });
+
+  it("names its state in words: working, needs your reply, stopped, done", () => {
+    const cases: [ThreadSummary["status"], string][] = [
+      ["running_command", "Working"],
+      ["waiting_for_user", "Needs your reply"],
+      ["interrupted", "Stopped"],
+      ["completed", "Done"],
+      ["waiting_for_permission", "Needs approval"],
+    ];
+    for (const [status, label] of cases) {
+      const { unmount } = mount({ ...thread(null), status });
+      const card = screen.getByRole("article", { name: "Research" });
+      expect(card.querySelector('[data-kind="state"]')?.textContent).toBe(label);
+      unmount();
+    }
+  });
+
+  it("clicking the card opens the agent (its terminal in Code)", async () => {
+    const onFocus = vi.fn();
+    const summary = thread("Claude A");
+    mount(summary, { onFocus });
+    await userEvent.click(screen.getByRole("article", { name: "Research" }));
+    expect(onFocus).toHaveBeenCalledWith(summary);
   });
 });

@@ -1,28 +1,38 @@
-/* One agent on the Dashboard (Z7-W3). A framed navy panel; its top hairline carries the status
-   tone (never colour alone: the chip always says the status in words, with a glyph). */
+/* One coding agent in the Agent Fleet. A compact graphite tile: a status rail on its left edge
+   carries the tone (never colour alone: the state is always written next to it), then who it runs
+   as, its task, where it runs and what it is doing now. Dense, calm, and alive while it works. */
 
 .card {
-  --card-px: var(--space-4);
-  --tone-line: var(--color-border-strong);
+  --card-px: var(--space-3-5);
+  --tone: var(--status-muted);
+  --tone-soft: var(--status-muted-soft);
+  --tone-text: var(--color-text-secondary);
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1-5);
   min-width: 0;
-  padding: var(--space-3-5) var(--card-px) var(--space-3);
+  padding: var(--space-3) var(--card-px) var(--space-2-5) calc(var(--card-px) + 2px);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-panel);
-  background: var(--panel-sheen), var(--color-surface-1);
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 70% at 0% 0%, color-mix(in srgb, var(--tone) 7%, transparent) 0%, transparent 60%),
+    var(--panel-sheen),
+    var(--color-surface-1);
   box-shadow: var(--shadow-panel);
   overflow: hidden;
   cursor: pointer;
   transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+    border-color 180ms var(--ease-out),
+    box-shadow 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
 }
 
 .card:hover {
   border-color: var(--color-border-lit-soft);
+  box-shadow:
+    var(--shadow-panel),
+    0 10px 30px -18px rgb(76 141 255 / 0.35);
 }
 
 .card:focus-within {
@@ -30,59 +40,92 @@
   box-shadow: var(--shadow-lit);
 }
 
-/* Status hairline along the top edge. */
+.card:active:not(:has(button:active)) {
+  transform: scale(0.995);
+}
+
+/* Status rail along the left edge. */
 .card::before {
   content: "";
   position: absolute;
-  top: 0;
+  top: 10px;
+  bottom: 10px;
   left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--tone-line);
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--tone);
+  box-shadow: 0 0 12px -1px color-mix(in srgb, var(--tone) 70%, transparent);
+  opacity: 0.9;
   pointer-events: none;
 }
 
 .card[data-tone="working"] {
-  --tone-line: var(--status-working);
+  --tone: var(--status-working);
+  --tone-soft: var(--status-working-soft);
+  --tone-text: var(--status-working-text);
 }
 .card[data-tone="waiting"] {
-  --tone-line: var(--status-waiting);
+  --tone: var(--status-waiting);
+  --tone-soft: var(--status-waiting-soft);
+  --tone-text: var(--status-waiting-text);
 }
 .card[data-tone="done"] {
-  --tone-line: var(--status-done);
+  --tone: var(--color-accent);
+  --tone-soft: var(--color-accent-soft);
+  --tone-text: var(--color-accent-text);
 }
 .card[data-tone="failed"] {
-  --tone-line: var(--status-failed);
+  --tone: var(--status-failed);
+  --tone-soft: var(--status-failed-soft);
+  --tone-text: var(--status-failed-text);
 }
 .card[data-tone="paused"] {
-  --tone-line: var(--status-paused-line);
+  --tone: var(--status-paused);
+  --tone-soft: var(--status-paused-soft);
+  --tone-text: var(--status-paused-text);
 }
 .card[data-tone="recovering"] {
-  --tone-line: var(--status-recovering);
+  --tone: var(--status-recovering);
+  --tone-soft: var(--status-recovering-soft);
+  --tone-text: var(--status-recovering-text);
 }
 .card[data-tone="muted"] {
-  --tone-line: var(--status-muted-line);
+  --tone: var(--status-muted-line);
+  --tone-soft: var(--status-muted-soft);
+  --tone-text: var(--color-text-muted);
+}
+.card[data-tone="muted"]::before {
+  box-shadow: none;
+  opacity: 0.6;
 }
 
-/* WORKING breathes softly; waiting stays static; done and failed transition once. */
+.card[data-status="permission_required"],
+.card[data-status="waiting_for_you"] {
+  border-color: var(--status-waiting-line);
+}
+
+.card[data-ready] {
+  border-color: var(--status-working-line);
+}
+
+.card[data-archived] {
+  cursor: default;
+}
+
+/* WORKING breathes softly; a state that changes on screen flashes once. */
 .card[data-tone="working"]::before,
 .card[data-tone="recovering"]::before {
   animation: breathe var(--dur-pulse) var(--ease-in-out) infinite;
 }
 
-.card[data-changed][data-status="done"] .band,
-.card[data-changed][data-status="failed"]::before {
+.card[data-changed] .state {
   animation: arrive var(--dur-status) var(--ease-out) 1;
-}
-
-.card[data-status="permission_required"] {
-  border-color: var(--status-waiting-line);
 }
 
 @keyframes breathe {
   0%,
   100% {
-    opacity: 0.45;
+    opacity: 0.5;
   }
   50% {
     opacity: 1;
@@ -91,113 +134,139 @@
 
 @keyframes arrive {
   from {
-    filter: brightness(1.6);
+    filter: brightness(1.7);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tone) 60%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) .card::before,
-  :root:not([data-motion="full"]) .band {
+  :root:not([data-motion="full"]) .signal,
+  :root:not([data-motion="full"]) .state {
     animation: none;
   }
 }
 
 :global([data-motion="reduced"]) .card::before,
-:global([data-motion="reduced"]) .band {
+:global([data-motion="reduced"]) .signal,
+:global([data-motion="reduced"]) .state {
   animation: none;
 }
 
-/* DONE / ACTION NEEDED band: a full-width label strip at the top of the card. */
-.band {
+/* ---- top row: signal · account · state · elapsed · clear ---- */
+
+.top {
   display: flex;
   align-items: center;
-  gap: var(--space-1-5);
-  margin: calc(-1 * var(--space-3-5)) calc(-1 * var(--card-px)) var(--space-0-5);
-  padding: var(--space-1-5) var(--card-px);
-  font-family: var(--font-label);
-  font-size: var(--type-label);
-  font-weight: var(--type-label-weight);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.band[data-kind="done"] {
-  border-bottom: 1px solid var(--status-done-line);
-  background: var(--status-done-soft);
-  color: var(--status-done-text);
-}
-
-/* READY TO MERGE: the worktree is clean, ahead of its base and merges without conflicts. */
-.band[data-kind="ready"] {
-  border-bottom: 1px solid var(--status-working-line);
-  background: var(--status-working-soft);
-  color: var(--status-working-text);
-}
-
-.band[data-kind="ready"] .bandGlyph {
-  color: var(--status-working);
-}
-
-.card[data-ready] {
-  --tone-line: var(--status-working);
-  border-color: var(--status-working-line);
-}
-
-.band[data-kind="archived"] {
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-2);
-  color: var(--color-text-muted);
-}
-
-.card[data-archived] {
-  cursor: default;
-}
-
-.band[data-kind="action"] {
-  border-bottom: 1px solid var(--status-waiting-line);
-  background: var(--status-waiting-soft);
-  color: var(--status-waiting-text);
-}
-
-.bandDetail {
-  margin-left: auto;
-  font-family: var(--font-sans, inherit);
-  font-size: var(--type-small);
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-  opacity: 0.85;
-}
-
-.bandGlyph {
-  width: 0.875rem;
-  height: 0.875rem;
-  flex: none;
-}
-
-.head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-1-5) var(--space-2);
+  gap: var(--space-2);
   min-width: 0;
+  min-height: 1.5rem;
 }
 
-.provider {
+.signal {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--tone);
+}
+
+.signal[data-tone="working"],
+.signal[data-tone="recovering"] {
+  animation: ping 1.8s var(--ease-out) infinite;
+}
+
+.signal[data-tone="waiting"] {
+  box-shadow: 0 0 0 3px var(--status-waiting-soft);
+}
+
+.who {
   min-width: 0;
   overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.status {
+.state {
+  display: inline-flex;
   flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.0625rem var(--space-1-5);
+  border-radius: 999px;
+  background: var(--tone-soft);
+  color: var(--tone-text);
+  font-size: var(--type-label);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
+
+.stateGlyph {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.elapsed {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.elapsed svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  opacity: 0.8;
+}
+
+.dismiss {
+  flex: none;
+  margin: -0.25rem -0.375rem -0.25rem 0;
+  color: var(--color-text-faint);
+  opacity: 0.7;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.top:not(:has(.elapsed)) .dismiss {
+  margin-left: auto;
+}
+
+.card:hover .dismiss,
+.dismiss:focus-visible {
+  color: var(--color-text);
+  opacity: 1;
+}
+
+/* ---- task, where, tech ---- */
 
 .name {
   min-width: 0;
   margin: 0;
   font-size: var(--type-title);
-  font-weight: var(--type-title-weight, 600);
+  font-weight: 600;
+  letter-spacing: -0.01em;
   line-height: 1.3;
 }
 
@@ -227,9 +296,7 @@
 }
 
 .nameButton:hover {
-  text-decoration: underline;
-  text-decoration-color: var(--color-border-lit);
-  text-underline-offset: 3px;
+  color: var(--color-accent-text);
 }
 
 .nameButton:focus-visible {
@@ -240,14 +307,46 @@
 .where {
   display: flex;
   align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+}
+
+.whereGlyph {
+  flex: none;
+}
+
+.providerName {
+  flex: none;
+}
+
+.sep {
+  flex: none;
+  color: var(--color-text-faint);
+}
+
+.workspace {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tech {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
   min-width: 0;
   margin: 0;
   color: var(--color-text-muted);
-  font-size: var(--type-small);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.4;
 }
 
-.workspace {
+.model {
   flex: none;
   max-width: 45%;
   overflow: hidden;
@@ -255,26 +354,85 @@
   white-space: nowrap;
 }
 
-.account {
+.effort {
   flex: none;
-  max-width: 30%;
-  overflow: hidden;
-  padding-left: var(--space-2);
-  border-left: 1px solid var(--color-border);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0 0.3125rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
 }
 
 .branch {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 0.25rem;
   min-width: 0;
   overflow: hidden;
-  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* The flex row above can't ellipsize its own text; the name does. */
+.branchName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.branchGlyph {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: none;
+}
+
+.ahead {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.ahead svg {
+  width: 0.6875rem;
+  height: 0.6875rem;
+}
+
+/* ---- what it is doing now (or why it needs you) ---- */
+
+.activity {
+  margin: var(--space-0-5) 0 0;
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-bg-sunken);
+  color: var(--color-text-secondary);
   font-size: var(--type-small);
+  line-height: 1.45;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity[data-group="working"] {
+  color: var(--color-text);
+}
+
+.activity[data-group="needs_you"],
+.activity[data-group="failed"] {
+  display: -webkit-box;
+  border-color: color-mix(in srgb, var(--tone) 28%, transparent);
+  background: var(--tone-soft);
+  color: var(--tone-text);
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.followUps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .mergeNote {
@@ -293,56 +451,46 @@
   color: var(--color-text-faint);
 }
 
-.ahead {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.125rem;
-  flex: none;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
+/* ---- details (expanded) ---- */
+
+.details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg-sunken) 70%, transparent);
   font-size: var(--type-small);
-  font-variant-numeric: tabular-nums;
+  cursor: default;
+  animation: reveal 200ms var(--ease-out);
 }
 
-.ahead svg {
-  width: 0.6875rem;
-  height: 0.6875rem;
+.details > div {
+  display: contents;
 }
 
-/* The flex row above can't ellipsize its own text; the name does. */
-.branchName {
+.details dt {
+  color: var(--color-text-muted);
+}
+
+.details dd {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.branchGlyph {
-  width: 0.8125rem;
-  height: 0.8125rem;
-  flex: none;
-}
-
-.activity {
-  display: -webkit-box;
-  min-height: calc(2 * 1.45em);
   margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--type-ui);
-  line-height: 1.45;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
 }
 
-.activity[data-failed] {
-  color: var(--status-failed-text);
+.detailError {
+  color: var(--status-failed-text) !important;
 }
 
-.followUps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
 }
 
 /* Inline approval (ACTION NEEDED): a sunken well with the exact action and the answers. */
@@ -412,8 +560,18 @@
 
 .decisions {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1-5);
+}
+
+.decisionMore {
+  margin-left: auto;
+  color: var(--color-text-secondary);
+}
+
+.decisionMoreGlyph {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 .linkButton {
@@ -460,20 +618,32 @@
   gap: var(--space-2);
 }
 
+/* ---- footer: the one follow-up, facts, menu and details ---- */
+
 .foot {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1-5) var(--space-2-5);
+  gap: var(--space-2-5);
+  min-height: 1.75rem;
   margin-top: auto;
-  padding-top: var(--space-2-5);
+  padding-top: var(--space-2);
   border-top: 1px solid var(--color-border-subtle);
   color: var(--color-text-muted);
   font-size: var(--type-small);
 }
 
-.mode {
+.primary {
   flex: none;
+}
+
+.bypass {
+  flex: none;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--status-failed-line);
+  border-radius: 999px;
+  color: var(--status-failed-text);
+  font-size: var(--type-label);
+  font-weight: 600;
 }
 
 .meta {
@@ -481,6 +651,26 @@
   font-variant-numeric: tabular-nums;
 }
 
-.more {
+.tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
   margin-left: auto;
+  margin-right: -0.375rem;
+}
+
+.tool {
+  color: var(--color-text-muted);
+}
+
+.tool:hover {
+  color: var(--color-text);
+}
+
+.chevron {
+  transition: transform 200ms var(--ease-out);
+}
+
+.chevron[data-open] {
+  transform: rotate(180deg);
 }

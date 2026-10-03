@@ -12,43 +12,142 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- toolbar: filter chips · search · grouping ---- */
+/* ---- the fleet at a glance: count, status bar, filters, search, grouping, cleanup ---- */
+
+.head {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3-5) var(--space-4) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background:
+    radial-gradient(90% 140% at 0% 0%, rgb(76 141 255 / 0.1) 0%, transparent 55%),
+    radial-gradient(60% 120% at 100% 0%, rgb(76 141 255 / 0.05) 0%, transparent 60%),
+    var(--panel-sheen),
+    var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+/* A faint star-chart grid: depth, never noise. */
+.head::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgb(140 175 240 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(140 175 240 / 0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: linear-gradient(90deg, black 0%, transparent 45%);
+  pointer-events: none;
+}
+
+.head > * {
+  position: relative;
+}
+
+.overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  margin: 0;
+}
+
+.totalCount {
+  color: var(--color-text);
+  font-family: var(--font-display, inherit);
+  font-size: 1.625rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.totalLabel {
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+}
+
+.statusBar {
+  display: flex;
+  flex: 1 1 16rem;
+  gap: 3px;
+  min-width: 10rem;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.segment {
+  min-width: 6px;
+  border-radius: 999px;
+  background: var(--status-muted-line);
+  transition: flex-grow 240ms var(--ease-out);
+}
+
+.segment[data-chip="needs_you"] {
+  background: var(--status-waiting);
+  box-shadow: 0 0 10px -2px var(--status-waiting);
+}
+.segment[data-chip="working"] {
+  background: var(--status-working);
+  box-shadow: 0 0 10px -2px var(--status-working);
+}
+.segment[data-chip="done"] {
+  background: var(--color-accent);
+  box-shadow: 0 0 10px -2px var(--color-glow);
+}
+.segment[data-chip="idle"] {
+  background: var(--status-muted-line);
+}
+.segment[data-chip="failed"] {
+  background: var(--status-failed);
+}
 
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3) var(--space-4);
+  gap: var(--space-2-5) var(--space-4);
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1-5);
+  gap: var(--space-1);
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  height: 2rem;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
+  gap: var(--space-1-5);
+  height: 1.875rem;
+  padding: 0 var(--space-1-5) 0 var(--space-2-5);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--color-surface-1);
+  background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
   font-size: var(--type-ui);
   cursor: pointer;
   transition:
-    border-color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    border-color 160ms var(--ease-out),
+    background-color 160ms var(--ease-out),
+    color 160ms var(--ease-out);
 }
 
 .chip:hover {
-  border-color: var(--color-border-strong);
+  background: var(--color-surface-2);
   color: var(--color-text);
 }
 
@@ -57,16 +156,20 @@
   outline-offset: 2px;
 }
 
+.chip[data-empty]:not([aria-pressed="true"]) {
+  color: var(--color-text-muted);
+}
+
 .chip[aria-pressed="true"] {
   border-color: var(--color-border-lit);
-  background: var(--color-surface-2);
+  background: var(--color-accent-soft);
   color: var(--color-text);
-  box-shadow: var(--shadow-lit);
+  box-shadow: 0 0 18px -8px var(--color-glow);
 }
 
 .chipDot {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.4375rem;
+  height: 0.4375rem;
   border-radius: 50%;
   background: var(--color-text-faint);
 }
@@ -74,7 +177,7 @@
 .chipDot[data-chip="all"] {
   background: var(--color-accent);
 }
-.chipDot[data-chip="waiting_for_you"] {
+.chipDot[data-chip="needs_you"] {
   background: var(--status-waiting);
   box-shadow: 0 0 0 2px var(--status-waiting-soft);
 }
@@ -82,20 +185,30 @@
   background: var(--status-working);
 }
 .chipDot[data-chip="done"] {
-  background: var(--status-done);
+  background: var(--color-accent);
 }
 .chipDot[data-chip="idle"] {
   background: var(--status-muted);
 }
+.chipDot[data-chip="failed"] {
+  background: var(--status-failed);
+}
+
+.chip[data-empty] .chipDot {
+  opacity: 0.4;
+  box-shadow: none;
+}
 
 .chipCount {
-  min-width: 1.25rem;
+  min-width: 1.375rem;
   padding: 0 var(--space-1-5);
   border-radius: 999px;
   background: var(--color-surface-2);
   color: var(--color-text);
+  font-size: var(--type-small);
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+  line-height: 1.25rem;
   text-align: center;
 }
 
@@ -103,18 +216,23 @@
   background: var(--color-surface-3);
 }
 
+.chip[data-chip="needs_you"]:not([data-empty]) .chipCount {
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2-5);
 }
 
 .search {
   position: relative;
   display: flex;
   align-items: center;
-  width: clamp(12rem, 22vw, 20rem);
+  width: clamp(12rem, 22vw, 18rem);
 }
 
 .searchGlyph {
@@ -156,6 +274,45 @@
   text-transform: uppercase;
 }
 
+.cleanup {
+  flex: none;
+}
+
+.cleanupMenu {
+  min-width: 18rem;
+}
+
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--status-failed-line);
+  border-radius: 10px;
+  background: var(--status-failed-soft);
+  animation: drop 200ms var(--ease-out);
+}
+
+.confirmText {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-ui);
+}
+
+.confirmActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
 /* ---- rows (virtualized when long) ---- */
 
 .rows {
@@ -176,15 +333,33 @@
 
 .cardRow {
   display: grid;
-  gap: var(--space-3);
+  gap: 10px;
   /* Cards keep their natural height: a tall approval card doesn't stretch its neighbours. */
   align-items: start;
-  padding-bottom: var(--space-3);
+  padding-bottom: 10px;
+}
+
+.groupRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.25rem;
+  padding: var(--space-1) 0 var(--space-1-5);
+}
+
+.groupRule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-border) 0%, transparent 100%);
+}
+
+.groupAction {
+  flex: none;
+  color: var(--color-text-secondary);
 }
 
 .groupHeading {
   margin: 0;
-  padding: var(--space-2) 0 var(--space-2);
   font-size: var(--type-ui);
   font-weight: 600;
 }
@@ -200,6 +375,7 @@
   color: var(--color-text);
   font: inherit;
   cursor: pointer;
+  transition: background-color 160ms var(--ease-out);
 }
 
 .groupToggle:hover {
@@ -215,11 +391,33 @@
   width: 1rem;
   height: 1rem;
   color: var(--color-text-muted);
-  transition: transform var(--dur-fast) var(--ease-out);
+  transition: transform 200ms var(--ease-out);
 }
 
 .groupChevron[data-collapsed] {
   transform: rotate(-90deg);
+}
+
+.groupDot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--status-muted);
+}
+
+.groupDot[data-chip="needs_you"] {
+  background: var(--status-waiting);
+  box-shadow: 0 0 8px var(--status-waiting);
+}
+.groupDot[data-chip="working"] {
+  background: var(--status-working);
+  box-shadow: 0 0 8px var(--status-working);
+}
+.groupDot[data-chip="done"] {
+  background: var(--color-accent);
+}
+.groupDot[data-chip="failed"] {
+  background: var(--status-failed);
 }
 
 .groupName {
@@ -230,8 +428,12 @@
   text-transform: uppercase;
 }
 
-.groupHeading[data-chip="waiting_for_you"] .groupName {
+.groupHeading[data-chip="needs_you"] .groupName {
   color: var(--status-waiting-text);
+}
+
+.groupHeading[data-chip="failed"] .groupName {
+  color: var(--status-failed-text);
 }
 
 .groupMark {
@@ -279,7 +481,7 @@
 
 .skeleton {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(284px, 1fr));
   gap: var(--space-3);
 }
 
@@ -320,6 +522,6 @@
 
 .archivedGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 284px), 1fr));
+  gap: 10px;
 }

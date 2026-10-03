@@ -52,25 +52,101 @@ export function summaryLine(counts: ChipCounts): string {
   return [head, ...parts].join(" · ");
 }
 
-/** Case-insensitive match on what a card shows: name, workspace, branch, provider, model, activity. */
-export function matchesQuery(thread: ThreadSummary, query: string): boolean {
+// ---- Agent Fleet groups (owner request 2026-10-03) ----
+//
+// The Fleet shows six filters: ALL, NEEDS YOU, WORKING, DONE, IDLE and FAILED. They partition the
+// agents exactly (every agent is in one group), so the summary adds up. They follow the contract
+// chips, except that FAILED is its own group: a failed run needs a decision (retry or clear), not
+// an answer, and hundreds of old failures must never bury the agents that are waiting on a reply.
+
+export type FleetGroupId = "needs_you" | "working" | "done" | "idle" | "failed";
+export type FleetFilter = "all" | FleetGroupId;
+
+export const FLEET_FILTERS: readonly FleetFilter[] = ["all", "needs_you", "working", "done", "idle", "failed"];
+/** Status groups in board order: what needs the person first, history last. */
+export const FLEET_GROUPS: readonly FleetGroupId[] = ["needs_you", "working", "done", "idle", "failed"];
+
+export const FLEET_FILTER_LABELS: Record<FleetFilter, string> = {
+  all: "All",
+  needs_you: "Needs you",
+  working: "Working",
+  done: "Done",
+  idle: "Idle",
+  failed: "Failed",
+};
+
+export type FleetCounts = Record<FleetFilter, number>;
+
+export function fleetGroupOf(status: ThreadStatus): FleetGroupId {
+  if (status === "failed") return "failed";
+  const chip = chipOf(status);
+  return chip === "waiting_for_you" ? "needs_you" : chip === "all" ? "idle" : chip;
+}
+
+export function fleetCounts(threads: readonly ThreadSummary[]): FleetCounts {
+  const counts: FleetCounts = { all: 0, needs_you: 0, working: 0, done: 0, idle: 0, failed: 0 };
+  for (const thread of threads) {
+    counts.all += 1;
+    counts[fleetGroupOf(thread.status)] += 1;
+  }
+  return counts;
+}
+
+/** "27 agents · 1 working · 2 need you · 9 done · 15 idle": real counts, zero groups left out. */
+export function fleetSummaryLine(counts: FleetCounts): string {
+  const head = `${counts.all} ${counts.all === 1 ? "agent" : "agents"}`;
+  const parts = [
+    counts.working ? `${counts.working} working` : null,
+    counts.needs_you ? `${counts.needs_you} ${counts.needs_you === 1 ? "needs" : "need"} you` : null,
+    counts.done ? `${counts.done} done` : null,
+    counts.idle ? `${counts.idle} idle` : null,
+    counts.failed ? `${counts.failed} failed` : null,
+  ];
+  return [head, ...parts.filter(Boolean)].join(" · ");
+}
+
+/** A Dashboard chip request (KalVoice, notifications) as the Fleet filter that shows it. */
+export function fleetFilterOf(chip: DashboardChip): FleetFilter {
+  return chip === "waiting_for_you" ? "needs_you" : chip;
+}
+
+/**
+ * Case-insensitive match on what a card shows: task, account, call sign, provider, workspace,
+ * branch, model, effort, activity and status. Every word must match some field.
+ */
+export function matchesQuery(thread: ThreadSummary, query: string, extra: readonly (string | undefined)[] = []): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
+  const group = fleetGroupOf(thread.status);
   const fields = [
     thread.name,
     thread.workspaceName,
     thread.branch,
     thread.providerName,
+    thread.accountLabel,
     thread.model,
+    thread.effort,
     thread.currentActivity,
+    FLEET_FILTER_LABELS[group],
+    group === "needs_you" ? "waiting" : null,
+    thread.error?.message,
+    ...extra,
   ];
   return q
     .split(/\s+/)
     .every((word) => fields.some((field) => typeof field === "string" && field.toLowerCase().includes(word)));
 }
 
-export function filterThreads(threads: readonly ThreadSummary[], chip: DashboardChip, query: string): ThreadSummary[] {
-  return threads.filter((t) => (chip === "all" || chipOf(t.status) === chip) && matchesQuery(t, query));
+export function filterThreads(
+  threads: readonly ThreadSummary[],
+  filter: FleetFilter,
+  query: string,
+  extraFields?: (thread: ThreadSummary) => readonly (string | undefined)[],
+): ThreadSummary[] {
+  return threads.filter(
+    (t) =>
+      (filter === "all" || fleetGroupOf(t.status) === filter) && matchesQuery(t, query, extraFields?.(t) ?? []),
+  );
 }
 
 export type GroupMode = "status" | "project" | "provider";
@@ -87,8 +163,8 @@ export const GROUP_MODE_LABELS: Record<GroupMode, string> = {
  */
 export const GROUP_MODES: readonly GroupMode[] = ["status", "project", "provider"];
 
-/** Urgency within the board: needs you, working, done, idle. */
-const CHIP_RANK: Record<DashboardChip, number> = { waiting_for_you: 0, working: 1, done: 2, idle: 3, all: 4 };
+/** Urgency within the board: needs you, working, failed (a decision), done, idle. */
+const GROUP_RANK: Record<FleetGroupId, number> = { needs_you: 0, working: 1, failed: 2, done: 3, idle: 4 };
 
 /** Within a chip: the display statuses that need the person most come first. */
 const DISPLAY_RANK: Record<DisplayStatus, number> = {
@@ -115,7 +191,7 @@ export function compareThreads(a: ThreadSummary, b: ThreadSummary): number {
   const da = displayStatusOf(a.status);
   const db = displayStatusOf(b.status);
   return (
-    CHIP_RANK[da.chip] - CHIP_RANK[db.chip] ||
+    GROUP_RANK[fleetGroupOf(a.status)] - GROUP_RANK[fleetGroupOf(b.status)] ||
     DISPLAY_RANK[da.status] - DISPLAY_RANK[db.status] ||
     time(b.lastActivityAt) - time(a.lastActivityAt) ||
     a.name.localeCompare(b.name) ||
@@ -127,8 +203,8 @@ export interface ThreadGroup {
   key: string;
   label: string;
   mode: GroupMode;
-  /** Status groups: the chip. */
-  chip?: Exclude<DashboardChip, "all">;
+  /** Status groups: the Fleet group. */
+  status?: FleetGroupId;
   /** Provider groups: the provider id (for its mark). */
   providerId?: string;
   threads: ThreadSummary[];
@@ -137,20 +213,14 @@ export interface ThreadGroup {
   working: number;
 }
 
-const STATUS_GROUP_LABELS: Record<Exclude<DashboardChip, "all">, string> = {
-  waiting_for_you: "Needs you",
-  working: "Working",
-  done: "Done",
-  idle: "Idle",
-};
 
 function makeGroup(key: string, label: string, mode: GroupMode, threads: ThreadSummary[]): ThreadGroup {
   let needsYou = 0;
   let working = 0;
   for (const t of threads) {
-    const chip = chipOf(t.status);
-    if (chip === "waiting_for_you") needsYou += 1;
-    if (chip === "working") working += 1;
+    const group = fleetGroupOf(t.status);
+    if (group === "needs_you") needsYou += 1;
+    if (group === "working") working += 1;
   }
   return { key, label, mode, threads: [...threads].sort(compareThreads), needsYou, working };
 }
@@ -161,16 +231,17 @@ function makeGroup(key: string, label: string, mode: GroupMode, threads: ThreadS
  */
 export function groupThreads(threads: readonly ThreadSummary[], mode: GroupMode): ThreadGroup[] {
   if (mode === "status") {
-    const buckets = new Map<Exclude<DashboardChip, "all">, ThreadSummary[]>();
+    const buckets = new Map<FleetGroupId, ThreadSummary[]>();
     for (const t of threads) {
-      const chip = chipOf(t.status) as Exclude<DashboardChip, "all">;
-      const list = buckets.get(chip) ?? [];
+      const group = fleetGroupOf(t.status);
+      const list = buckets.get(group) ?? [];
       list.push(t);
-      buckets.set(chip, list);
+      buckets.set(group, list);
     }
-    return (["waiting_for_you", "working", "done", "idle"] as const)
-      .filter((chip) => buckets.has(chip))
-      .map((chip) => ({ ...makeGroup(chip, STATUS_GROUP_LABELS[chip], mode, buckets.get(chip) ?? []), chip }));
+    return FLEET_GROUPS.filter((group) => buckets.has(group)).map((group) => ({
+      ...makeGroup(group, FLEET_FILTER_LABELS[group], mode, buckets.get(group) ?? []),
+      status: group,
+    }));
   }
   const buckets = new Map<string, { label: string; providerId?: string; threads: ThreadSummary[] }>();
   for (const t of threads) {

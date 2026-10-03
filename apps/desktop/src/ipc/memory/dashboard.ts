@@ -17,6 +17,8 @@
  *   loading          every Dashboard read stays pending (skeleton review)
  *   dash-1 | dash-6 | dash-20 | dash-50
  *                    scale: exactly that many agents across providers, projects and states (Z7-W3)
+ *   fleet            the Agent Fleet as the owner runs it: 27 live agents on named accounts
+ *                    ("Claude A") with model and effort, plus 120 old failed runs to clean up
  */
 import type {
   ActionKind,
@@ -46,7 +48,8 @@ export type DashboardScenario =
   | "dash-1"
   | "dash-6"
   | "dash-20"
-  | "dash-50";
+  | "dash-50"
+  | "fleet";
 
 export const DASHBOARD_SCENARIOS: readonly DashboardScenario[] = [
   "busy",
@@ -59,6 +62,7 @@ export const DASHBOARD_SCENARIOS: readonly DashboardScenario[] = [
   "dash-6",
   "dash-20",
   "dash-50",
+  "fleet",
 ];
 
 export function isDashboardScenario(value: string | null): value is DashboardScenario {
@@ -467,7 +471,47 @@ const SCALE_COUNTS: Partial<Record<DashboardScenario, number>> = {
   "dash-6": 6,
   "dash-20": 20,
   "dash-50": 50,
+  fleet: 27,
 };
+
+/** The `fleet` scenario's account names: what the owner calls their provider accounts. */
+const FLEET_ACCOUNTS: Record<keyof typeof PROVIDERS, readonly string[]> = {
+  claude: ["Claude A", "Claude B"],
+  codex: ["Codex A", "Codex B"],
+  gemini: ["Gemini A"],
+};
+const FLEET_EFFORT: Record<keyof typeof PROVIDERS, string | null> = { claude: "high", codex: "medium", gemini: null };
+const FLEET_FAILURES = [
+  "Claude Code exited unexpectedly (exit code 1). Your files are unchanged since the last completed step.",
+  "The provider session expired. Sign in to the account again, then retry.",
+  "Tests failed: 3 failing in checkout.spec.ts.",
+  "Rate limit reached for this account. Retry when it resets or switch accounts.",
+  "Codex exited (exit code 137): the process ran out of memory.",
+] as const;
+
+/** The `fleet` scenario's history: old failed runs that pile up until someone clears them. */
+function fleetFailedSeeds(count: number): ThreadSeed[] {
+  return Array.from({ length: count }, (_, i) => {
+    const provider = SCALE_PROVIDERS[i % SCALE_PROVIDERS.length] ?? "claude";
+    const task = SCALE_TASKS[(i * 5) % SCALE_TASKS.length] ?? `Task ${i + 1}`;
+    return {
+      n: 400 + i,
+      name: `${task} (run ${Math.floor(i / SCALE_TASKS.length) + 2})`,
+      provider,
+      model: SCALE_MODELS[provider],
+      account: null,
+      workspace: SCALE_WORKSPACES[i % SCALE_WORKSPACES.length] ?? WORKSPACES.kalcode,
+      mode: "auto",
+      status: "failed",
+      activity: null,
+      startedMinAgo: 600 + i * 37,
+      lastMinAgo: 560 + i * 37,
+      files: i % 3,
+      branch: `task/${task.toLowerCase().replaceAll(" ", "-").slice(0, 28)}`,
+      error: { code: "provider_exited", message: FLEET_FAILURES[i % FLEET_FAILURES.length] ?? "The run failed." },
+    };
+  });
+}
 
 interface ApprovalSeed {
   n: number;
@@ -618,8 +662,10 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
       : scale
         ? scaleSeeds(scale)
         : BUSY_THREADS;
-    for (const seed of seeds) {
+    const fleet = scenario === "fleet";
+    for (const [index, seed] of (fleet ? [...seeds, ...fleetFailedSeeds(120)] : seeds).entries()) {
       const provider = PROVIDERS[seed.provider];
+      const fleetAccounts = FLEET_ACCOUNTS[seed.provider];
       const id = fixtureId(2, seed.n);
       if (seed.worktree) worktreeFacts.set(id, seed.worktree);
       threads.set(id, {
@@ -628,9 +674,9 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         providerId: provider.providerId,
         providerName: provider.providerName,
         model: seed.model,
-        effort: null,
+        effort: fleet ? FLEET_EFFORT[seed.provider] : null,
         providerAccountId: null,
-        accountLabel: seed.account,
+        accountLabel: fleet ? (fleetAccounts[index % fleetAccounts.length] ?? seed.account) : seed.account,
         workspaceId: seed.workspace.id,
         workspaceName: seed.workspace.name,
         permissionMode: seed.mode,
@@ -996,7 +1042,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
     thread_archive: (args) => {
       const thread = requireThread(args);
       // Like native: finished threads and quiet open ones (whose idle session the archive ends).
-      if (!["completed", "failed", "interrupted", "idle", "waiting_for_user"].includes(thread.status))
+      // Offline: no session is running (native archives it like any quiet thread).
+      if (!["completed", "failed", "interrupted", "idle", "waiting_for_user", "offline"].includes(thread.status))
         invalidTransition(thread, "archived");
       thread.archived = true;
       thread.archivedAt = new Date().toISOString();
