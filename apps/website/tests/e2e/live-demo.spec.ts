@@ -65,7 +65,9 @@ test.describe("live demo (desktop)", () => {
       .getByRole("article", { name: /Codex A/ })
       .getByRole("button", { name: /Open/ })
       .click();
-    await expect(app(page).getByRole("button", { name: "Codex A · Personal", exact: true, pressed: true })).toBeVisible();
+    await expect(
+      app(page).getByRole("button", { name: "Codex A · Personal", exact: true, pressed: true }),
+    ).toBeVisible();
     await app(page).getByRole("button", { name: "Add to pane 1" }).click();
     await app(page).getByRole("menuitem", { name: "Browser" }).click();
     await expect(app(page).getByText("localhost:3000").first()).toBeVisible();
