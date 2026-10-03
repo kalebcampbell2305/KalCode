@@ -408,6 +408,47 @@ fn a_failed_create_leaves_nothing_behind_and_keeps_existing_branches() {
 }
 
 #[test]
+fn commit_all_keeps_message_lines_that_start_with_a_hash() {
+    let fx = Fixture::repo();
+    let repo = Repo::discover(&fx.git, &fx.ws)
+        .expect("discover")
+        .expect("repo");
+    let new = worktree::create_managed(
+        &fx.git,
+        &repo,
+        &fx.data.join("worktrees"),
+        "kal/agent-hash",
+        None,
+        WorktreePurpose::Thread,
+        None,
+    )
+    .expect("create");
+    std::fs::write(new.path.join("a.txt"), "one\n").expect("write");
+    worktree::commit_all(
+        &fx.git,
+        &repo,
+        &new.path,
+        "kal/agent-hash",
+        "#42 fix login\n\nDetails",
+    )
+    .expect("commit");
+    assert_eq!(
+        fx.git_plain(&["log", "-1", "--format=%B", "kal/agent-hash"])
+            .trim(),
+        "#42 fix login\n\nDetails"
+    );
+    // A message that is only a "#" line is a real message, not an empty one.
+    std::fs::write(new.path.join("b.txt"), "two\n").expect("write");
+    worktree::commit_all(&fx.git, &repo, &new.path, "kal/agent-hash", "#43")
+        .expect("hash-only message");
+    assert_eq!(
+        fx.git_plain(&["log", "-1", "--format=%B", "kal/agent-hash"])
+            .trim(),
+        "#43"
+    );
+}
+
+#[test]
 fn commit_all_commits_on_the_worktree_branch_only() {
     let fx = Fixture::repo();
     let repo = Repo::discover(&fx.git, &fx.ws)
