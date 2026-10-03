@@ -9,7 +9,10 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--color-border-lit-soft) transparent;
+  scrollbar-width: thin;
   outline: none;
   isolation: isolate;
 }
@@ -721,5 +724,60 @@
 @container pane (max-width: 36rem) {
   .maxBadge {
     display: none;
+  }
+}
+
+/* Content portals retain one DOM root while their frame changes. */
+.stage {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+.contentHost {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.divider::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+.divider::after {
+  content: "";
+  position: absolute;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.divider[data-axis="horizontal"]::after {
+  width: 2px;
+  height: 28px;
+}
+.divider[data-axis="vertical"]::after {
+  width: 28px;
+  height: 2px;
+}
+.divider:hover::after,
+.divider:focus-visible::after {
+  background: var(--color-accent);
+}
+.dropZone {
+  backdrop-filter: blur(2px);
+  box-shadow:
+    inset 0 0 0 1px var(--color-accent-soft),
+    inset 0 0 48px -20px var(--color-glow),
+    0 0 20px -12px var(--color-glow);
+}
+.dropLabel {
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dropZone {
+    transition: none;
   }
 }
