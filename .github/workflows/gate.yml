@@ -70,8 +70,53 @@ jobs:
     # Enabled once the Mac gate runner exists (repository variable KALCODE_MAC_GATE=true).
     if: vars.KALCODE_MAC_GATE == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, kalcode-gate]
-    timeout-minutes: 120
+    # Covers the release-packaging wait below (capped at 120 min) plus the gate itself (120 min).
+    timeout-minutes: 240
     steps:
+      # Release packaging runs on this same Mac (as kalebcampbell, launchd job
+      # com.kalcode.release.package.<sha12>). A gate compile next to it slows the release by tens
+      # of minutes, so wait while a release is packaging. Signals, any of which means "packaging":
+      #  1. a fresh marker /Users/Shared/KalCode-release/packaging.lock (mtime < 3 h; a stale marker
+      #     is ignored), which a release launcher may create at start and remove on exit;
+      #  2. a kalebcampbell process whose arguments name the package job, its wrapper
+      #     (run-production-macos-package-<sha12>.sh) or the release clone (KalCode-final-*);
+      #  3. kalebcampbell cargo/rustc processes. macOS hides other users' process arguments from a
+      #     non-root account, so (2) may not match from kalcodeci; process names stay visible.
+      # The wait is capped at 120 min, then the gate proceeds. This step never fails the job.
+      - name: Wait while a release is packaging on this Mac
+        shell: bash
+        run: |
+          marker=/Users/Shared/KalCode-release/packaging.lock
+          release_user=kalebcampbell
+          budget=$((120 * 60)); poll=60; log_every=300; fresh=$((3 * 60 * 60))
+          packaging_reason() {
+            if [ -f "$marker" ]; then
+              mtime=$(stat -f %m "$marker" 2>/dev/null || echo 0)
+              age=$(( $(date +%s) - mtime ))
+              if [ "$age" -ge 0 ] && [ "$age" -lt "$fresh" ]; then
+                echo "marker $marker (age ${age}s)"; return 0
+              fi
+            fi
+            pids=$(pgrep -u "$release_user" -f 'com\.kalcode\.release\.package|run-production-macos-package-|KalCode-final-' 2>/dev/null | xargs)
+            if [ -n "$pids" ]; then echo "release package processes of $release_user: $pids"; return 0; fi
+            pids=$(pgrep -u "$release_user" -x 'cargo|rustc' 2>/dev/null | xargs)
+            if [ -n "$pids" ]; then echo "cargo/rustc of $release_user: $pids"; return 0; fi
+            return 1
+          }
+          waited=0; last_log=-$log_every
+          while reason=$(packaging_reason); do
+            if [ "$waited" -ge "$budget" ]; then
+              echo "::warning::Release still packaging after $((waited / 60)) min ($reason); running the gate anyway."
+              exit 0
+            fi
+            if [ $((waited - last_log)) -ge "$log_every" ]; then
+              echo "$(date -u +%H:%M:%SZ) release packaging on this Mac: $reason; gate waiting (${waited}s of ${budget}s)."
+              last_log=$waited
+            fi
+            sleep "$poll"; waited=$((waited + poll))
+          done
+          echo "No release packaging in the way after ${waited}s; running the gate."
+          exit 0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
