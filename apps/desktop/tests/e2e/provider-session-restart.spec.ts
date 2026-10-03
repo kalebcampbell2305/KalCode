@@ -280,11 +280,15 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     await app.page.getByRole("button", { name: "Providers", exact: true }).click();
     await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
     const codexARegion = app.page.getByRole("region", { name: /Codex A/ });
-    await expect(codexARegion.getByText("1 thread", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(codexARegion.getByText("Usage unavailable", { exact: true })).toBeVisible();
+    // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake
+    // provider records no rate limits, so it says so instead of inventing a number.
+    await expect(codexARegion.getByText("1 agent", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(codexARegion.getByText("Not checked", { exact: true })).toBeVisible();
     const codexBRegion = app.page.getByRole("region", { name: /Codex B/ });
-    await expect(codexBRegion.getByText("1 thread", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(codexBRegion.getByText("Usage unavailable", { exact: true })).toBeVisible();
+    // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake
+    // provider records no rate limits, so it says so instead of inventing a number.
+    await expect(codexBRegion.getByText("1 agent", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(codexBRegion.getByText("Not checked", { exact: true })).toBeVisible();
   } finally {
     if (app) await closeGracefully(app);
     removeDir(dataDir);
