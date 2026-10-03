@@ -92,7 +92,7 @@ test("clicking a card opens the agent's terminal in Code, never Threads", async 
   await expect(page.getByText("Open in Threads")).toHaveCount(0);
 });
 
-test("cleanup: the card X, Clear failed with Undo, and Close all asks once", async ({ page }) => {
+test("cleanup: the card X, Clear failed, and Close all asks once", async ({ page }) => {
   await open(page, "fleet");
   // One-click clear on a finished card.
   await chip(page, "Done").click();
@@ -101,23 +101,31 @@ test("cleanup: the card X, Clear failed with Undo, and Close all asks once", asy
   await expect(done).toHaveCount(0);
   await expect(chip(page, "Done")).toHaveAccessibleName("Done, 2");
 
-  // Clear failed from the group header: every failed agent goes, and Undo brings them back.
+  // Clear failed from the group header: every failed agent goes at once.
   await chip(page, "Failed").click();
   await board(page).getByRole("button", { name: "Clear failed" }).click();
   await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 0");
   await expect(page.getByText("Cleared 121 failed agents.")).toBeVisible();
-  await page.getByRole("button", { name: "Undo" }).last().click();
-  await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 121");
   await chip(page, "All").click();
 
-  // Close all: one confirmation, Cancel keeps everything.
+  // Close all. With KalTidy's canonical cleanup (#152) the Fleet hands off to KalTidy's one
+  // confirmation, which closes the current workspace's terminals and agents; without it, the
+  // Fleet asks its own single confirmation and closes every agent.
   await board(page).getByRole("button", { name: "Clean up" }).click();
-  await page.getByRole("menuitem", { name: "Close all agents…" }).click();
+  const item = page.getByRole("menuitem", { name: /^Close all (agents|terminals and agents)…$/ });
+  const canonical = ((await item.textContent()) ?? "").includes("terminals");
+  await item.click();
+  if (canonical) {
+    // This scenario has no open workspace: KalTidy says so and closes nothing.
+    await expect(page.getByText("Open a workspace first.")).toBeVisible();
+    await expect(chip(page, "All")).toHaveAccessibleName("All, 25");
+    return;
+  }
   const confirm = board(page).getByRole("group", { name: "Close all agents?" });
   await expect(confirm).toContainText("Active agents, builds, tests, and running processes will be stopped.");
   await confirm.getByRole("button", { name: "Cancel" }).click();
   await expect(confirm).toHaveCount(0);
-  await expect(chip(page, "All")).toHaveAccessibleName("All, 146");
+  await expect(chip(page, "All")).toHaveAccessibleName("All, 25");
   await board(page).getByRole("button", { name: "Clean up" }).click();
   await page.getByRole("menuitem", { name: "Close all agents…" }).click();
   await board(page)
