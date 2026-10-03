@@ -1,10 +1,14 @@
 import type { ProviderAccount, ThreadOptions, Workspace } from "@kalcode/protocol";
-import { render, screen, waitFor } from "@testing-library/react";
+import { ToastProvider } from "@kalcode/ui/components";
+import { render as renderView, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import { ProviderAccountSessionsProvider } from "../providers/ProviderAccountSessions.tsx";
 import { NewAgentDialog } from "./NewAgentDialog.tsx";
+
+const render = (ui: ReactNode) => renderView(<ToastProvider>{ui}</ToastProvider>);
 
 const runtime = vi.hoisted(() => ({ client: null as unknown as KalCodeClient }));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => runtime }));
@@ -49,6 +53,85 @@ beforeEach(() => {
 });
 
 describe("restored accounts in the Code launcher", () => {
+  it("uses the sole account without a picker and launches its exact identity", async () => {
+    const personal = makeAccount("personal", "Personal", true);
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [personal]),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(() => new Promise<ThreadOptions>(() => {})),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <NewAgentDialog
+        workspace={{ id: "ws", name: "Project" } as Workspace}
+        offered={[]}
+        initialProvider="claude-code"
+        busy={false}
+        error={null}
+        onLaunch={onLaunch}
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByText(/Personal/);
+    expect(screen.queryByRole("combobox", { name: "Account" })).not.toBeInTheDocument();
+    const launch = screen.getByRole("button", { name: "Launch Claude Code agent" });
+    await waitFor(() => expect(launch).toBeEnabled());
+    await userEvent.setup().click(launch);
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ providerAccountId: personal.id }));
+  });
+
+  it("offers accounts and launches the chosen one without waiting for model detection", async () => {
+    const personal = makeAccount("personal", "Personal", true);
+    const work = makeAccount("work", "Work", false);
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [personal, work]),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(() => new Promise<ThreadOptions>(() => {})),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <NewAgentDialog
+        workspace={{ id: "ws", name: "Project" } as Workspace}
+        offered={[]}
+        initialProvider="claude-code"
+        busy={false}
+        error={null}
+        onLaunch={onLaunch}
+        onClose={vi.fn()}
+      />,
+    );
+    const picker = await screen.findByRole("combobox", { name: "Account" });
+    const user = userEvent.setup();
+    await user.selectOptions(picker, work.id);
+    await user.click(screen.getByRole("button", { name: "Launch Claude Code agent" }));
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ providerAccountId: work.id }));
+  });
+
+  it("reports a failed account read instead of launching an implicit account", async () => {
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => {
+        throw new Error("Account registry unavailable");
+      }),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(async () => ({ providers: [] })),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    render(
+      <NewAgentDialog
+        workspace={{ id: "ws", name: "Project" } as Workspace}
+        offered={[]}
+        initialProvider="claude-code"
+        busy={false}
+        error={null}
+        onLaunch={onLaunch}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Accounts unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Launch Claude Code agent" })).toBeDisabled();
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
   it("shows a truthful recovery action when startup restore exhausts its quiet retries", async () => {
     const claude = makeAccount("claude-a", "Claude A", true);
     runtime.client = {

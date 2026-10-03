@@ -2,9 +2,10 @@ import type { ModelInfo, ProviderAccount, ProviderAccountBinding, Workspace } fr
 import { Button, Field, IconButton, ProviderGlyph, SegmentedControl, Select, TextInput } from "@kalcode/ui/components";
 import { Bot, Minus, Plus } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { accountName, accountSessionState } from "../providers/accountIdentity.ts";
+import { accountSessionState } from "../providers/accountIdentity.ts";
+import { LaunchAccountPicker } from "../providers/LaunchAccountPicker.tsx";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import styles from "./NewAgentDialog.module.css";
 import {
@@ -26,21 +27,10 @@ export interface AgentLaunchSpec extends AgentLaunch {
 
 interface LaunchData {
   models: ReadonlyMap<string, readonly ModelInfo[]>;
-  /** Direct-client fallback when rendered outside the shell account provider. */
-  accounts: readonly ProviderAccount[] | null;
   bindings: readonly ProviderAccountBinding[];
 }
 
-const EMPTY: LaunchData = { models: new Map(), accounts: [], bindings: [] };
-
-/** "Work", "Work · Default", "Work · Signed out". */
-function accountOption(account: ProviderAccount, checking = false, validationError: string | null = null): string {
-  const parts = [accountName(account)];
-  if (account.isDefault) parts.push("Default");
-  const session = accountSessionState(account, checking, validationError);
-  if (session.state !== "connected") parts.push(session.label);
-  return parts.join(" · ");
-}
+const EMPTY: LaunchData = { models: new Map(), bindings: [] };
 
 export interface NewAgentDialogProps {
   workspace: Workspace;
@@ -76,64 +66,87 @@ export function NewAgentDialog({
     providers.includes(initialProvider) ? initialProvider : "claude-code",
   );
   const [data, setData] = useState<LaunchData | null>(null);
-  const [accountId, setAccountId] = useState("");
+  const [selection, setSelection] = useState<{ scope: string; id: string } | null>(null);
+  const scope = `${providerId}:${workspace.id}`;
+  const accountId = selection?.scope === scope ? selection.id : "";
+  const setAccountId = (id: string) => setSelection({ scope, id });
+  const [bindingsReady, setBindingsReady] = useState(false);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
-  const [retryingAccounts, setRetryingAccounts] = useState(false);
+  const [localAccounts, setLocalAccounts] = useState<readonly ProviderAccount[] | null>(null);
+  const [localAccountError, setLocalAccountError] = useState<string | null>(null);
   // What the person typed; the launch uses it clamped, so editing "1" to "5" never passes through 15.
   const [countText, setCountText] = useState("1");
   const count = clampAgentCount(Number(countText));
 
-  // Models, accounts and the workspace's remembered accounts. A read that fails leaves the
-  // provider defaults, which native resolves the same way.
+  const reloadAccounts = useCallback(async () => {
+    try {
+      const [accounts, bindings] = await Promise.all([
+        sessions ? sessions.reload() : client.listProviderAccounts(),
+        client.listProviderAccountBindings({ kind: "workspace" }),
+      ]);
+      setLocalAccounts(accounts);
+      setData((current) => ({ ...EMPTY, ...current, bindings }));
+      setBindingsReady(true);
+      setLocalAccountError(null);
+    } catch {
+      setLocalAccountError("Accounts unavailable");
+    }
+  }, [client, sessions]);
+
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      client.threadOptions().catch(() => null),
-      sharedSessions ? Promise.resolve(null) : client.listProviderAccounts().catch(() => []),
-      client.listProviderAccountBindings({ kind: "workspace" }).catch(() => []),
-    ]).then(([options, accounts, bindings]) => {
-      if (cancelled) return;
-      setData({
-        models: new Map((options?.providers ?? []).map((p) => [p.id, p.models])),
-        accounts,
-        bindings,
-      });
-    });
+    if (!sharedSessions) {
+      client.listProviderAccounts().then(
+        (accounts) => {
+          if (!cancelled) setLocalAccounts(accounts);
+        },
+        () => {
+          if (!cancelled) setLocalAccountError("Accounts unavailable");
+        },
+      );
+    }
+    // Account selection never waits for provider/model detection.
+    client.listProviderAccountBindings({ kind: "workspace" }).then(
+      (bindings) => {
+        if (!cancelled) {
+          setData((current) => ({ ...EMPTY, ...current, bindings }));
+          setBindingsReady(true);
+        }
+      },
+      () => {
+        if (!cancelled) setLocalAccountError("Workspace accounts unavailable");
+      },
+    );
+    client.threadOptions().then(
+      (options) => {
+        if (!cancelled)
+          setData((current) => ({
+            ...EMPTY,
+            ...current,
+            models: new Map(options.providers.map((p) => [p.id, p.models])),
+          }));
+      },
+      () => undefined,
+    );
     return () => {
       cancelled = true;
     };
   }, [client, sharedSessions]);
 
   const loaded = data ?? EMPTY;
-  const restoredAccounts = sessions?.accounts ?? loaded.accounts;
+  const restoredAccounts = sessions ? sessions.accounts : localAccounts;
   const accounts = launchAccounts(restoredAccounts ?? [], providerId);
   const models = loaded.models.get(providerId) ?? [];
   const efforts = AGENT_EFFORTS[providerId];
   const name = providerIdentity(providerId).name;
-  const preselectedAccountId =
-    data && restoredAccounts ? preselectLaunchAccount(restoredAccounts, data.bindings, providerId, workspace.id) : null;
-  // The derived choice is already authoritative on the first ready paint. The effect below keeps
-  // the controlled select in sync, but launch must never briefly submit a null account while that
-  // effect is waiting to run.
+  const preselectedAccountId = restoredAccounts
+    ? preselectLaunchAccount(restoredAccounts, loaded.bindings, providerId, workspace.id)
+    : null;
+  // Resolve on the first ready paint, retaining an explicit choice as background checks settle.
   const selectedAccountId = accounts.some((account) => account.id === accountId)
     ? accountId
     : (preselectedAccountId ?? "");
-  const preselectedAccountRef = useRef(preselectedAccountId);
-  preselectedAccountRef.current = preselectedAccountId;
-  const accountSelectionScope = [
-    providerId,
-    workspace.id,
-    ...(restoredAccounts?.map((item) => `${item.id}:${Number(item.isDefault)}`) ?? ["loading"]),
-    ...(data?.bindings.map((binding) => `${binding.providerId}:${binding.scopeId}:${binding.accountId}`) ?? []),
-  ].join("|");
-
-  // A provider (or the loaded accounts) changing picks that provider's account again.
-  useEffect(() => {
-    if (accountSelectionScope.length === 0 || preselectedAccountRef.current === null) return;
-    setAccountId(preselectedAccountRef.current);
-  }, [accountSelectionScope]);
-
   const chooseProvider = (next: PaneProviderId) => {
     setProviderId(next);
     setModel("");
@@ -143,7 +156,15 @@ export function NewAgentDialog({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     // Waits for the (local, fast) account read, so the account shown is the one that runs.
-    if (busy || !data || !restoredAccounts) return;
+    if (
+      busy ||
+      !bindingsReady ||
+      !restoredAccounts ||
+      !selectedAccountId ||
+      !selectedSession?.usable ||
+      accountLoadError
+    )
+      return;
     const ok = await onLaunch({
       providerId,
       count,
@@ -162,14 +183,8 @@ export function NewAgentDialog({
         sessions?.validationErrors.get(account.id) ?? null,
       )
     : null;
-  const ready = data !== null && restoredAccounts !== null;
-  const accountLoadError = sessions?.accounts === null ? sessions.loadError : null;
-  const retryAccountRestore = async () => {
-    if (!sessions || retryingAccounts) return;
-    setRetryingAccounts(true);
-    await sessions.reload();
-    setRetryingAccounts(false);
-  };
+  const ready = bindingsReady && restoredAccounts !== null;
+  const accountLoadError = (sessions?.accounts === null ? sessions.loadError : null) ?? localAccountError;
   return (
     <Dialog.Root open onOpenChange={(open) => (open || busy ? undefined : onClose())}>
       <Dialog.Portal>
@@ -205,46 +220,16 @@ export function NewAgentDialog({
               />
             </div>
 
-            {accounts.length > 1 ? (
-              <Field htmlFor={`${id}-account`} label="Account">
-                <Select
-                  id={`${id}-account`}
-                  value={selectedAccountId}
-                  disabled={busy}
-                  onChange={(event) => setAccountId(event.target.value)}
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {accountOption(a, sessions?.checking.has(a.id), sessions?.validationErrors.get(a.id) ?? null)}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            ) : (
-              <p className={styles.account}>
-                <span className={styles.label}>Account</span>
-                <span className={styles.accountStatus}>
-                  <span className={styles.accountValue} role={accountLoadError ? "alert" : undefined}>
-                    {account
-                      ? accountOption(
-                          account,
-                          sessions?.checking.has(account.id),
-                          sessions?.validationErrors.get(account.id) ?? null,
-                        )
-                      : accountLoadError
-                        ? "Accounts unavailable"
-                        : ready
-                          ? `No ${name} account added yet`
-                          : "Restoring accounts…"}
-                  </span>
-                  {accountLoadError && sessions ? (
-                    <Button type="button" variant="ghost" busy={retryingAccounts} onClick={retryAccountRestore}>
-                      Try again
-                    </Button>
-                  ) : null}
-                </span>
-              </p>
-            )}
+            <LaunchAccountPicker
+              providerId={providerId}
+              providerName={name}
+              accounts={restoredAccounts}
+              value={selectedAccountId}
+              onChange={setAccountId}
+              onReload={reloadAccounts}
+              disabled={busy}
+              error={accountLoadError}
+            />
 
             <div className={styles.grid}>
               <Field htmlFor={`${id}-model`} label="Model">
@@ -322,7 +307,7 @@ export function NewAgentDialog({
                 type="submit"
                 variant="primary"
                 busy={busy}
-                disabled={!ready || selectedSession?.usable === false}
+                disabled={!ready || !selectedAccountId || !selectedSession?.usable || !!accountLoadError}
                 icon={<ProviderGlyph provider={providerId} size="xs" />}
               >
                 {launchLabel(count, name)}
