@@ -115,7 +115,7 @@ fn provider_launch_permission_mode(permissions: Option<&PermissionService>) -> P
     match permissions {
         Some(service) => match service.settings() {
             Ok(settings) => settings.startable_default_mode(),
-            Err(_) => return PermissionMode::Approve,
+            Err(_) => PermissionMode::Approve,
         },
         None => DEFAULT_CODING_PERMISSION_MODE,
     }
