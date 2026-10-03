@@ -73,8 +73,8 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-/** The schema version this build migrates to (through v21 provider reasoning effort). */
-const LATEST = 21;
+/** The schema version this build migrates to (through v22 agent handoffs). */
+const LATEST = 22;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
