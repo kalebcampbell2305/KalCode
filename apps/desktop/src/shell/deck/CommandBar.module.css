@@ -3,7 +3,7 @@
   position: relative;
   z-index: var(--z-sticky);
   display: grid;
-  grid-template-columns: var(--deck-brand-w, var(--sidebar-w)) auto minmax(14rem, 1fr) auto;
+  grid-template-columns: var(--deck-brand-w, var(--sidebar-w)) auto minmax(2rem, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   height: var(--titlebar-h);
@@ -12,6 +12,12 @@
   background:
     radial-gradient(40rem 5rem at 18% 0%, var(--color-accent-soft), transparent 70%),
     linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken));
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 /* A lit hairline along the bottom edge under the brand, fading right. */

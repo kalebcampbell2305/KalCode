@@ -1,0 +1,368 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 240px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface-1);
+  color: var(--color-text);
+  font-size: 11px;
+  white-space: nowrap;
+  transition:
+    background 160ms,
+    border-color 160ms;
+}
+.chip:hover,
+.chip[data-state="open"] {
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent);
+}
+.chipName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 115px;
+  font-weight: 600;
+}
+.chipStatus {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+.chip[data-tone="attention"] .chipStatus,
+.status[data-tone="attention"],
+.attention {
+  color: var(--status-waiting);
+}
+.chip[data-tone="danger"] .chipStatus,
+.status[data-tone="danger"],
+.error {
+  color: var(--status-failed);
+}
+.popover {
+  z-index: var(--z-popover, 100);
+  width: min(410px, calc(100vw - 24px));
+  max-height: min(760px, var(--radix-popover-content-available-height));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 13px;
+  background: var(--color-surface-1);
+  color: var(--color-text);
+  box-shadow:
+    0 18px 64px #0005,
+    0 2px 8px #0003;
+  font-size: 12px;
+  animation: enter 160ms ease-out;
+  transform-origin: var(--radix-popover-content-transform-origin);
+}
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 17px 17px 14px;
+  flex: none;
+}
+.header > div {
+  flex: 1;
+}
+.header h2 {
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 650;
+  margin: 0;
+  letter-spacing: -0.2px;
+}
+.header p {
+  margin: 3px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+.iconButton:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+.context {
+  padding: 11px 17px;
+  border-block: 1px solid var(--color-border);
+  background: var(--color-accent-soft);
+  font-size: 11px;
+  flex: none;
+  overflow-wrap: anywhere;
+}
+.context p {
+  margin: 0;
+  line-height: 1.6;
+}
+.context span,
+.secondary {
+  color: var(--color-text-muted);
+}
+.body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 17px 12px;
+  min-height: 64px;
+}
+.groupHeader {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 15px 0 8px;
+}
+.groupHeader h3 {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0;
+}
+.groupHeader > span {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.account {
+  border-bottom: 1px solid var(--color-border);
+  padding: 9px 0 11px;
+}
+.account:last-child {
+  border-bottom: 0;
+}
+.accountTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+.selected {
+  color: var(--color-accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.tag {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+.identity {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  margin: 0 0 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accountMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  font-size: 11px;
+}
+.status {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--color-text-muted);
+}
+.status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status[data-tone="healthy"] i {
+  background: var(--color-accent);
+}
+.usage {
+  color: var(--color-text-muted);
+}
+.details {
+  padding-top: 11px;
+  animation: enter 160ms ease-out;
+}
+.details dl {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 11px;
+}
+.details dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.details dt {
+  color: var(--color-text-muted);
+}
+.details dd {
+  margin: 0;
+  text-align: right;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.actions button,
+.login button {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--color-text);
+  font-size: 11px;
+}
+.actions button:hover,
+.login button:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.footer {
+  border-top: 1px solid var(--color-border);
+  padding: 12px 17px;
+  flex: none;
+  max-height: 50%;
+  overflow-y: auto;
+}
+.add {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: 12px;
+}
+.add:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.disclosure {
+  color: var(--color-text-muted);
+  text-align: center;
+  font-size: 10px;
+  margin: 9px 0 0;
+}
+.empty {
+  padding: 18px 0;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+.empty h3 {
+  color: var(--color-text);
+}
+.notice,
+.attention,
+.error {
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.notice {
+  margin: 0 0 10px;
+  color: var(--color-text-muted);
+}
+.login {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+.rename,
+.addForm {
+  display: grid;
+  gap: 7px;
+  font-size: 11px;
+}
+.rename input,
+.addForm input,
+.addForm select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+.rotated {
+  transform: rotate(180deg);
+}
+.popover button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.popover button:focus-visible,
+.chip:focus-visible,
+.popover input:focus-visible,
+.popover select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.spinning {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .popover,
+  .details,
+  .spinning {
+    animation: none;
+  }
+}
+@media (max-width: 1140px) {
+  .chip {
+    max-width: 175px;
+  }
+  .chipName {
+    max-width: 80px;
+  }
+  .chipStatus {
+    display: none;
+  }
+}
