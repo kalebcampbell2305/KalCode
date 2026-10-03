@@ -216,7 +216,7 @@ impl RequestAccounting for AccountKalVoice {
         let authority = self.authority()?;
         let cycle = cycle(&authority)?;
         // Last-unit admission and durable budget reservation happen in one SQLite transaction.
-        let (decision, _) = self.core.transact(|conn| {
+        let ((decision, provisional_exhausted), _) = self.core.transact(|conn| {
             let mut usage = accounting::usage(
                 conn,
                 &self.account_id,
@@ -225,12 +225,20 @@ impl RequestAccounting for AccountKalVoice {
                 cycle.end,
                 cycle.receipt,
             )?;
-            if usage.exhausted() {
+            let exhausted = usage.exhausted();
+            // Without a current receipt the device cycle is only an estimate: the server's
+            // cycle is anchored to the billing date, not the 1st, and may have reset. Online,
+            // the server decides (and returns a fresh receipt); the estimate still applies if
+            // the server can't be reached, and always offline.
+            if exhausted && (cycle.receipt || authority.offline) {
                 return Ok((
-                    MeterDecision {
-                        allowed: false,
-                        usage,
-                    },
+                    (
+                        MeterDecision {
+                            allowed: false,
+                            usage,
+                        },
+                        true,
+                    ),
                     Vec::new(),
                 ));
             }
@@ -241,12 +249,17 @@ impl RequestAccounting for AccountKalVoice {
                 authority.now_unix,
                 authority.offline,
             )?;
-            usage.used = usage.used.saturating_add(1);
+            if !exhausted {
+                usage.used = usage.used.saturating_add(1);
+            }
             Ok((
-                MeterDecision {
-                    allowed: true,
-                    usage,
-                },
+                (
+                    MeterDecision {
+                        allowed: true,
+                        usage,
+                    },
+                    exhausted,
+                ),
                 Vec::new(),
             ))
         })?;
@@ -278,6 +291,18 @@ impl RequestAccounting for AccountKalVoice {
                 Ok(MeterDecision {
                     allowed,
                     usage: self.usage_inner(&self.authority()?)?,
+                })
+            }
+            KalVoiceRecord::Unavailable if provisional_exhausted => {
+                // Only the server could have admitted this request past the device estimate.
+                // Nothing runs, so the claim is not replayed later.
+                self.core.transact(|conn| {
+                    accounting::settle(conn, &self.account_id, request_id, false)?;
+                    Ok(((), Vec::new()))
+                })?;
+                Ok(MeterDecision {
+                    allowed: false,
+                    usage: decision.usage,
                 })
             }
             KalVoiceRecord::Unavailable => {
