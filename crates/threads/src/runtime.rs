@@ -1096,6 +1096,13 @@ impl ThreadRuntime {
         self.create_reviewed(request, None)
     }
 
+    /// [`Self::create`] with a caller-chosen thread id (a provider pane marks its id durably
+    /// before the thread exists).
+    pub fn create_with_id(&self, thread_id: &str, request: CreateThread) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.create_reviewed_with_id(request, None, Some(thread_id), None)
+    }
+
     /// Inspects a create prompt without starting a provider or writing thread state.
     pub fn review_create_prompt(&self, request: &CreateThread) -> Result<PromptReview> {
         let prompt = validate::prompt(&request.prompt)?;
@@ -1200,6 +1207,25 @@ impl ThreadRuntime {
     /// Creates a thread whose session starts without a task; it waits (`idle`) for input. Coding
     /// agents (provider panes) start this way, so an untitled one is a "New agent".
     pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
+        self.create_idle_inner(request, None)
+    }
+
+    /// [`Self::create_idle`] with a caller-chosen thread id (a provider pane marks its id
+    /// durably before the thread exists).
+    pub fn create_idle_with_id(
+        &self,
+        thread_id: &str,
+        request: CreateIdleThread,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.create_idle_inner(request, Some(thread_id))
+    }
+
+    fn create_idle_inner(
+        &self,
+        request: CreateIdleThread,
+        thread_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
             None => naming::AGENT_FALLBACK_NAME.to_owned(),
@@ -1217,7 +1243,7 @@ impl ThreadRuntime {
                 cwd: None,
             },
             None,
-            None,
+            thread_id,
         )
     }
 
