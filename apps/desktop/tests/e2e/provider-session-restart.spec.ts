@@ -167,8 +167,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
     // The launcher lists each provider's accounts as options; the restored default is marked.
     const codexGroup = launcher.getByRole("group", { name: "Codex", exact: true });
-    const account = (group: typeof codexGroup, name: string) =>
-      group.getByRole("option").filter({ hasText: name });
+    const account = (group: typeof codexGroup, name: string) => group.getByRole("option").filter({ hasText: name });
     await expect(codexGroup.getByRole("option")).toHaveCount(2);
     await expect(account(codexGroup, "Codex A")).toBeVisible();
     await account(codexGroup, "Codex A").click();
