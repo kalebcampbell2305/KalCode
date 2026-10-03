@@ -32,7 +32,7 @@ use time::OffsetDateTime;
 use crate::account::runtime::AccountRuntime;
 use crate::git_commands::GitState;
 use crate::provider_pane_commands::ProviderPanesState;
-use crate::runtime_coordinator::RuntimeState;
+use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
 use crate::thread_commands::ThreadsState;
 
 const PREVIEW_TTL: Duration = Duration::from_secs(15 * 60);
@@ -1079,6 +1079,7 @@ impl HandoffState {
 
 #[tauri::command(async)]
 pub async fn handoff_preview(
+    _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
     source_thread_id: String,
     target_thread_id: String,
@@ -1103,6 +1104,7 @@ pub async fn handoff_preview(
 
 #[tauri::command(async)]
 pub async fn handoff_send(
+    _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
     id: String,
     preview_hash: String,
@@ -1115,6 +1117,7 @@ pub async fn handoff_send(
 
 #[tauri::command(async)]
 pub async fn handoff_list(
+    _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
     thread_id: Option<String>,
 ) -> Result<Vec<HandoffRecord>, IpcError> {
@@ -1126,6 +1129,7 @@ pub async fn handoff_list(
 
 #[tauri::command(async)]
 pub async fn handoff_cancel(
+    _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
     id: String,
 ) -> Result<HandoffRecord, IpcError> {
@@ -1134,6 +1138,7 @@ pub async fn handoff_cancel(
 
 #[tauri::command(async)]
 pub async fn handoff_complete(
+    _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
     id: String,
     outcome: HandoffCompletion,
@@ -1147,6 +1152,7 @@ pub async fn handoff_complete(
 
 #[tauri::command(async)]
 pub async fn handoff_return(
+    _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
     id: String,
 ) -> Result<HandoffPreview, IpcError> {
