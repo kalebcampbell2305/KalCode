@@ -78,6 +78,34 @@ test.describe("live demo (desktop)", () => {
     }
   });
 
+  test("Code leads the navigation and opens workspace context without leaving Code", async ({ page }) => {
+    const errors = await openDemo(page);
+    const navigation = app(page).getByRole("navigation", { name: "KalCode" }).first();
+    await expect(navigation.getByRole("button").first()).toHaveAccessibleName("Code");
+
+    await app(page).getByRole("button", { name: "Context" }).click();
+    const menu = app(page).getByRole("menu", { name: "Beside your code" });
+    await expect(menu.getByRole("menuitem", { name: "Browser" })).toBeVisible();
+    await menu.getByRole("menuitem", { name: "Runs, services & tests" }).click();
+
+    await expect(app(page).locator(".lk-app")).toHaveAttribute("data-surface", "code");
+    await expect(app(page).getByRole("region", { name: /Runs & services/ })).toBeVisible();
+    for (const tab of ["Runs", "Services", "Tests"]) {
+      await app(page)
+        .getByRole("tab", { name: new RegExp(`^${tab}`) })
+        .click();
+      await expect(app(page).getByRole("tab", { name: new RegExp(`^${tab}`) })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    }
+    await app(page).getByRole("button", { name: "Context" }).click();
+    await app(page).getByRole("menu", { name: "Beside your code" }).getByRole("menuitem", { name: "Browser" }).click();
+    await expect(app(page).getByRole("button", { name: "Browser", pressed: true })).toBeVisible();
+    await expect(app(page).locator(".lk-app")).toHaveAttribute("data-surface", "code");
+    expect(errors).toEqual([]);
+  });
+
   test("the tour walks every step and ends on Download and Create account", async ({ page }) => {
     await openDemo(page);
     await page.getByRole("button", { name: /Take the 2-minute tour/ }).click();
@@ -113,6 +141,10 @@ test.describe("live demo (desktop)", () => {
           ["serious", "critical"].includes(v.impact ?? ""),
         );
       expect(await scan()).toEqual([]);
+      await app(page).getByRole("button", { name: "Context" }).click();
+      expect(await scan()).toEqual([]);
+      await app(page).getByRole("menuitem", { name: "Runs, services & tests" }).click();
+      expect(await scan()).toEqual([]);
       await app(page).getByRole("button", { name: "New agent" }).click();
       expect(await scan()).toEqual([]);
     });
@@ -131,6 +163,10 @@ test.describe("live demo (phone)", () => {
       .getByRole("button", { name: /Codex A/ })
       .click();
     await expect(app(page).getByRole("log", { name: "Codex A terminal" })).toBeVisible();
+    await app(page).getByRole("button", { name: "Context" }).click();
+    await app(page).getByRole("menuitem", { name: "Runs, services & tests" }).click();
+    await expect(app(page).getByRole("tab", { name: /^Runs/ })).toBeVisible();
+    await expect(app(page).locator(".lk-app")).toHaveAttribute("data-surface", "code");
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(width).toBeLessThanOrEqual(390);
     // The tour moves focus around the demo; the app must never scroll sideways inside its frame.

@@ -78,6 +78,33 @@ describe("useOperations", () => {
     if (descriptor) Object.defineProperty(document, "visibilityState", descriptor);
   });
 
+  it("does no work while its projection is disabled and refreshes when enabled", async () => {
+    const read = vi.fn(async () => snapshot(4));
+    const client = api(read);
+    const { result, rerender } = renderHook(({ enabled }) => useOperations(client, enabled), {
+      initialProps: { enabled: false },
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(9_000);
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(result.current.snapshot).toBeNull();
+
+    await act(async () => {
+      rerender({ enabled: true });
+      await Promise.resolve();
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.current.snapshot?.revision).toBe(4);
+
+    rerender({ enabled: false });
+    act(() => vi.advanceTimersByTime(6_000));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.current.snapshot?.revision).toBe(4);
+  });
+
   it("fences a slower snapshot from a replaced client lifetime", async () => {
     let resolveOld!: (value: OperationsSnapshot) => void;
     const oldApi = api(

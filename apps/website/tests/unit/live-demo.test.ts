@@ -14,9 +14,12 @@ import {
   MODELS,
   openBrowser,
   openLauncher,
+  openOperationsContext,
   openTerminal,
   promptAgent,
+  runs,
   runVoice,
+  SURFACES,
   tick,
   tidyIdle,
 } from "../../src/lib/live/model";
@@ -28,12 +31,42 @@ describe("the live demo's sample workspace", () => {
   it("opens on Code with Claude A working, Codex A testing, a dev server and one agent needing you", () => {
     const state = initialState();
     expect(state.surface).toBe("code");
+    expect(SURFACES[0]?.id).toBe("code");
     const bySign = Object.fromEntries(agentsList(state).map((a) => [a.sign, a]));
     expect(bySign["Claude A"]?.status).toBe("working");
     expect(bySign["Codex A"]?.status).toBe("testing");
     expect(bySign["Claude B"]?.status).toBe("done");
     expect(counts(state).needs).toBe(1);
     expect(Object.values(state.tabs).some((t) => t.kind === "terminal" && t.title.includes("dev server"))).toBe(true);
+  });
+
+  it("opens current-workspace runs, services and tests beside Code without duplicating the pane", () => {
+    const state = initialState();
+    openOperationsContext(state);
+
+    const context = Object.values(state.tabs).find((tab) => tab.widget === "operations");
+    expect(state.surface).toBe("code");
+    expect(context?.title).toBe("Runs & services");
+    const html = renderApp(state, cfg);
+    for (const label of ["Runs", "Services", "Tests"]) {
+      expect(html).toMatch(new RegExp(`role="tab"[^>]*>${label}<span>`));
+    }
+
+    openOperationsContext(state);
+    expect(Object.values(state.tabs).filter((tab) => tab.widget === "operations")).toHaveLength(1);
+  });
+
+  it("shows current test-run evidence without inventing a completed result", () => {
+    const state = initialState();
+    openOperationsContext(state);
+    state.contextTab = "tests";
+    const run = runs(state).find((entry) => entry.name === "Tests");
+    if (!run) throw new Error("The sample workspace must have a test run");
+    expect(run?.status).toBe("Running");
+    state.run = run.id;
+    const html = renderApp(state, cfg);
+    expect(html).not.toContain("14 tests passed · evidence attached");
+    expect(html).toContain(`<strong>${run.status} · ${run.duration}</strong>`);
   });
 
   it("gives every agent its own terminal pane: N launched agents are N panes, never threads", () => {

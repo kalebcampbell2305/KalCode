@@ -188,8 +188,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await typeInTerminal(page, "echo before-reload-%OS%");
     await expect(visibleTerminal(page)).toContainText("before-reload-Windows_NT");
     await page.reload();
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await codeNav(page).click();
+    await expect(page.getByRole("heading", { level: 1, name: "z1-site" })).toBeVisible();
     await expect(page.getByRole("tab", { name: /Command Prompt/ })).toHaveAttribute("aria-selected", "true");
     await expect(visibleTerminal(page)).toContainText("before-reload-Windows_NT", { timeout: 20_000 });
     await typeInTerminal(page, "echo after-reload-%OS%");
@@ -216,14 +215,15 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await codeNav(page).click();
     await closeGracefully(app);
 
-    // Relaunch: the workspace is active and its tabs come back as ended, with Restart.
+    // Relaunch opens the active workspace directly in Code and restores its tabs as ended, with
+    // Restart available.
     app = await launch(dataDir, env);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "z1-site" })).toBeVisible();
+    await app.page.getByRole("button", { name: "Dashboard" }).click();
     await expect(
       app.page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running."),
     ).toBeVisible();
     await codeNav(app.page).click();
-    await expect(app.page.getByRole("heading", { level: 1, name: "z1-site" })).toBeVisible();
     await expect(app.page.getByRole("tab")).toHaveCount(2);
     await expect(app.page.getByRole("tab", { name: /Ended/ })).toHaveCount(2);
     await expect(app.page.getByRole("heading", { name: "This terminal ended when KalCode closed" })).toBeVisible();

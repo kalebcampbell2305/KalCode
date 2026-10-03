@@ -26,7 +26,7 @@ function contentKey(snapshot: OperationsSnapshot): string {
 }
 
 /** One shared, visibility-aware native snapshot feed for every Operations projection. */
-export function useOperations(client: OperationsApi): OperationsState {
+export function useOperations(client: OperationsApi, enabled = true): OperationsState {
   const [snapshotState, setSnapshot] = useState<{ owner: object; value: OperationsSnapshot; key: string } | null>(null);
   const [observedState, setObserved] = useState<{ owner: object; value: string } | null>(null);
   const [errorState, setError] = useState<{ owner: object; value: Error } | null>(null);
@@ -39,13 +39,18 @@ export function useOperations(client: OperationsApi): OperationsState {
   live.current = lifecycle;
 
   useEffect(() => {
-    lifecycle.active = true;
+    lifecycle.active = enabled;
+    if (!enabled) {
+      lifecycle.generation += 1;
+      lifecycle.inFlight = null;
+      setRefreshingOwner((owner) => (owner === lifecycle ? null : owner));
+    }
     return () => {
       lifecycle.active = false;
       lifecycle.generation += 1;
       lifecycle.inFlight = null;
     };
-  }, [lifecycle]);
+  }, [enabled, lifecycle]);
 
   const load = useCallback(
     (manual: boolean): Promise<void> => {
@@ -95,6 +100,7 @@ export function useOperations(client: OperationsApi): OperationsState {
   const poll = useCallback(() => void load(false), [load]);
 
   useEffect(() => {
+    if (!enabled) return;
     let timer: ReturnType<typeof setInterval> | null = null;
     const updateTimer = () => {
       if (timer) clearInterval(timer);
@@ -111,7 +117,7 @@ export function useOperations(client: OperationsApi): OperationsState {
       window.removeEventListener("focus", poll);
       if (timer) clearInterval(timer);
     };
-  }, [poll]);
+  }, [enabled, poll]);
 
   const snapshot = snapshotState?.owner === lifecycle ? snapshotState.value : null;
   const error = errorState?.owner === lifecycle ? errorState.value : null;
