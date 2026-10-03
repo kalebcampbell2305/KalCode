@@ -68,7 +68,8 @@ for (const provider of ["Claude Code", "Codex", "Gemini CLI"]) {
     await openCode(page);
     await page.getByRole("button", { name: "New agent", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
-    await launcher.getByRole("radio", { name: provider, exact: true }).click();
+    // The launcher lists accounts grouped by provider; picking one picks its provider.
+    await launcher.getByRole("group", { name: provider, exact: true }).getByRole("option").first().click();
     if (provider === "Gemini CLI") {
       await launcher.getByRole("button", { name: "Sign in to Personal" }).click();
       await expect(launcher.getByRole("button", { name: "Sign in to Personal" })).toHaveCount(0);
