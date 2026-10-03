@@ -753,6 +753,46 @@ describe("KalVoice scene integration", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
+  it("opens the coding agent whose turn just finished, though its pane is idle again", async () => {
+    // An agent in a Code pane goes back to idle when its turn completes; the completion event,
+    // not a "completed" status, is what makes it "the agent that just finished".
+    const earlier = { ...thread("agent-earlier", "Earlier agent", "Ready"), status: "idle" as const };
+    const finished = { ...thread("agent-finished", "Finished agent", "Ready"), status: "idle" as const };
+    const chat = { ...thread("chat-later", "Chat later", "Done"), runtimeKind: "headless" as const };
+    mocks.client.listThreads.mockResolvedValue([earlier, finished, chat]);
+    mocks.client.getThread.mockImplementation(async (id: string) => {
+      const found = [earlier, finished, chat].find((t) => t.id === id);
+      if (!found) throw new Error("Unknown thread");
+      return found;
+    });
+    await mount();
+    const complete = (seq: number, type: string, threadId: string) =>
+      act(() => {
+        mocks.runtime.feed.push({
+          id: `event-${seq}`,
+          seq,
+          version: 1,
+          occurredAt: new Date(Date.now() + seq).toISOString(),
+          source: { kind: "provider" },
+          correlation: { correlationId: `turn-${seq}`, causationId: null },
+          type,
+          payload: type === "agent.turn_completed" ? { threadId, ok: true, interrupted: false } : { threadId },
+        });
+      });
+    complete(1, "agent.turn_completed", earlier.id);
+    complete(2, "agent.turn_completed", finished.id);
+    complete(3, "thread.completed", chat.id);
+
+    await say("open the agent that just finished");
+
+    expect(mocks.focusIntent).toHaveBeenCalledExactlyOnceWith({
+      kind: "agent",
+      agentId: finished.id,
+      workspaceId: "workspace-kalcode",
+    });
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
   it("never answers an agent completion question with a chat callback", async () => {
     const chat = { ...thread("chat-finished", "Chat result", "Finished chatting"), runtimeKind: "headless" as const };
     mocks.client.getThread.mockResolvedValue(chat);

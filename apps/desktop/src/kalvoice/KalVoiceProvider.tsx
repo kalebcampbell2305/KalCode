@@ -238,6 +238,8 @@ function afterPaint(fn: () => void) {
 /** How long a pane command waits for the Code canvas to come up (60 × 50 ms). */
 const PANE_WAIT_MS = 50;
 const PANE_WAIT_TRIES = 60;
+/** How many finished threads KalVoice remembers for "the agent that just finished". */
+const RECENT_COMPLETIONS = 8;
 
 export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const { client, feed } = useRuntime();
@@ -351,6 +353,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const lastOperation = useRef<{ target: OperationsVoiceTarget; expiresAt: number } | null>(null);
   const lastSceneTarget = useRef<{ target: VoiceSceneTarget; expiresAt: number } | null>(null);
   const lastCompletedThread = useRef<{ threadId: string; at: number } | null>(null);
+  /** Threads whose work finished since mount, newest first ("open the agent that just finished"). */
+  const recentCompletions = useRef<string[]>([]);
   const lastLifecycle = useRef<{
     targetKind: "thread" | "operation";
     targetId: string;
@@ -369,6 +373,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       lastSceneTarget.current = null;
       lastOperation.current = null;
       lastCompletedThread.current = null;
+      recentCompletions.current = [];
       lastLifecycle.current = null;
     };
   }, [client, abortActiveRequest]);
@@ -389,6 +394,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     lastSceneTarget.current = null;
     lastOperation.current = null;
     lastCompletedThread.current = null;
+    recentCompletions.current = [];
     lastLifecycle.current = null;
   }
   const choiceId = useRef(0);
@@ -399,6 +405,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   statusRef.current = { status, error: statusError };
   useEffect(() => {
     lastCompletedThread.current = null;
+    recentCompletions.current = [];
     lastLifecycle.current = null;
     if (!feed) return;
     const mountedAt = Date.now();
@@ -407,13 +414,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const events = feed.getSnapshot().events;
       const fresh = events.filter((event) => event.seq > highWater && Date.parse(event.occurredAt) >= mountedAt);
       highWater = Math.max(highWater, events[0]?.seq ?? 0);
-      const completion = fresh.find(
-        (event) =>
-          event.type === "thread.completed" ||
-          (event.type === "agent.turn_completed" && event.payload.ok && !event.payload.interrupted),
+      const completions = fresh.flatMap((event) =>
+        event.type === "thread.completed" ||
+        (event.type === "agent.turn_completed" && event.payload.ok && !event.payload.interrupted)
+          ? [event]
+          : [],
       );
-      if (!completion || (completion.type !== "thread.completed" && completion.type !== "agent.turn_completed")) return;
+      const completion = completions[0];
+      if (!completion) return;
       lastCompletedThread.current = { threadId: completion.payload.threadId, at: Date.parse(completion.occurredAt) };
+      const ids = completions.map((event) => event.payload.threadId);
+      recentCompletions.current = [...new Set([...ids, ...recentCompletions.current])].slice(0, RECENT_COMPLETIONS);
     });
   }, [feed]);
   useEffect(() => {
@@ -1056,6 +1067,26 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             : `I couldn't open ${target.title}; it may no longer be available.`,
         });
       };
+      // A coding agent goes back to idle when its turn completes, so "the agent that just
+      // finished" comes from completion events first; finished statuses are the fallback.
+      if (reference.kind === "latest_completed" && typeof client.getThread === "function") {
+        for (const threadId of recentCompletions.current) {
+          const thread = await client.getThread(threadId).catch(() => null);
+          if (signal.aborted) return true;
+          if (!thread || thread.id !== threadId || thread.archivedAt) continue;
+          if (reference.agents && !isCodingAgent(thread)) continue;
+          await focusTarget({
+            kind: isCodingAgent(thread) ? "agent" : "thread",
+            codingAgent: isCodingAgent(thread),
+            entityId: thread.id,
+            title: thread.name,
+            workspaceId: thread.workspaceId,
+            providerId: thread.providerId,
+            status: thread.status,
+          });
+          return true;
+        }
+      }
       if (resolution.kind === "resolved") {
         await focusTarget(resolution.target);
         return true;
