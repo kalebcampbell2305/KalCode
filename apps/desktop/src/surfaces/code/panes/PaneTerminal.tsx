@@ -1,8 +1,10 @@
 import "@xterm/xterm/css/xterm.css";
 import type { ThreadStatus } from "@kalcode/protocol";
+import { Button } from "@kalcode/ui/components";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { useEffect, useRef } from "react";
+import { RotateCcw, Unplug } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import {
   createOrderedInputQueue,
@@ -19,7 +21,8 @@ import codeStyles from "../Code.module.css";
 import { suppressReplayQueries } from "../replayQueries.ts";
 import { isTerminalShortcut } from "../shortcuts.ts";
 import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "../terminalImages.ts";
-import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "../terminalTheme.ts";
+import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "../terminalTheme.ts";
+import styles from "./Panes.module.css";
 import type { PaneChannel } from "./paneChannel.ts";
 
 const FONT_SIZE = 13;
@@ -51,17 +54,12 @@ interface PaneTerminalProps {
   throttled?: boolean;
 }
 
-function monoFontFamily(): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
-  return value || "ui-monospace, Consolas, monospace";
-}
-
 /**
  * The provider's own TUI, shown in xterm.js exactly as the CLI draws it (the same terminal stack
  * as Z1 tabs: DOM renderer, flow-controlled attachment, replay first). KalCode never reads this
  * text for status; status comes from native only.
  */
-export function PaneTerminal({
+export const PaneTerminal = memo(function PaneTerminal({
   channel,
   threadId,
   instanceId,
@@ -79,6 +77,8 @@ export function PaneTerminal({
 }: PaneTerminalProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const reconnectRef = useRef<(() => void) | null>(null);
   const runningRef = useRef(running);
   runningRef.current = running;
   const initialTheme = useRef(theme);
@@ -187,6 +187,10 @@ export function PaneTerminal({
       input.send(data);
     };
     term.onData(send);
+    term.onBinary((data) => {
+      // Legacy mouse reports (TUIs); only 7-bit data survives the UTF-8 input path unchanged.
+      if ([...data].every((ch) => ch.charCodeAt(0) < 0x80)) send(data);
+    });
 
     const guardProviderImagePaste = () => {
       const current = contextRef.current;
@@ -298,6 +302,8 @@ export function PaneTerminal({
     };
     const connect = (resync: boolean) => {
       const current = ++generation;
+      // A replay abandoned by this new generation never clears its own flag.
+      replaying = false;
       if (attachment !== null) channel.detach(attachment).catch(() => undefined);
       attachment = null;
       unacked = 0;
@@ -328,20 +334,27 @@ export function PaneTerminal({
             return;
           }
           attachment = id;
+          setConnectError(null);
           fitNow();
+          // Fitting to xterm's own default size fires no resize; the PTY may still differ.
+          if (id !== null && runningRef.current && term.cols > 0 && term.rows > 0) {
+            channel.resize(threadId, { cols: term.cols, rows: term.rows }).catch(() => undefined);
+          }
           if (id === null && !resync) {
             missingOutput = true;
             showMissingOutput();
           }
         })
         .catch((error: unknown) => {
-          if (!disposed) term.write(`\r\n${toKalCodeError(error).message}\r\n`);
+          if (!disposed && current === generation) setConnectError(toKalCodeError(error).message);
         });
     };
+    reconnectRef.current = () => connect(true);
     connect(false);
 
     return () => {
       disposed = true;
+      reconnectRef.current = null;
       unregisterImageTarget();
       observer.disconnect();
       cancelAnimationFrame(frame);
@@ -445,7 +458,10 @@ export function PaneTerminal({
       }
     };
     return registerDictationSink(host, {
-      label: labelRef.current,
+      // Read live: labels renumber without re-registering (which would end a capture).
+      get label() {
+        return labelRef.current;
+      },
       destination: {
         kind: "provider_pane",
         threadId,
@@ -474,7 +490,12 @@ export function PaneTerminal({
     termRef.current?.textarea?.setAttribute("aria-label", label);
   }, [label]);
 
+  const themeSeen = useRef(theme);
   useEffect(() => {
+    if (themeSeen.current !== theme) {
+      themeSeen.current = theme;
+      invalidateMonoFontFamily();
+    }
     const term = termRef.current;
     if (term) term.options.theme = TERMINAL_THEMES[theme];
   }, [theme]);
@@ -491,11 +512,54 @@ export function PaneTerminal({
     if (!running) term.write("\x1b[?25l");
   }, [running]);
 
+  // Focus on request, and again when a resumed agent's new instance recreates the terminal while
+  // this pane had focus (the old xterm took the keyboard focus with it).
+  // A request stays pending until it lands: a new agent's instance id often arrives right after
+  // its focus request, and re-running this effect must not drop that request.
+  const focusSeen = useRef(0);
+  const focusPending = useRef(false);
   useEffect(() => {
+    void instanceId;
+    if (focusSeen.current !== focusRequest) {
+      focusSeen.current = focusRequest;
+      if (focusRequest !== 0) focusPending.current = true;
+    }
     if (focusRequest === 0) return;
-    const frame = requestAnimationFrame(() => termRef.current?.focus());
+    if (!focusPending.current) {
+      const active = document.activeElement;
+      const lostWithOldTerminal =
+        active === null || active === document.body || (hostRef.current?.contains(active) ?? false);
+      if (throttledRef.current || !lostWithOldTerminal) return;
+    }
+    const frame = requestAnimationFrame(() => {
+      focusPending.current = false;
+      termRef.current?.focus();
+    });
     return () => cancelAnimationFrame(frame);
-  }, [focusRequest]);
+  }, [focusRequest, instanceId]);
 
-  return <div ref={hostRef} className={codeStyles.xtermHost} data-pane-terminal={threadId} data-selectable />;
-}
+  return (
+    <>
+      <div ref={hostRef} className={codeStyles.xtermHost} data-pane-terminal={threadId} data-selectable />
+      {connectError ? (
+        <div className={styles.connectError} role="alert">
+          <Unplug aria-hidden="true" />
+          <span className={styles.connectErrorText} title={connectError}>
+            {connectError}
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<RotateCcw />}
+            onClick={() => {
+              setConnectError(null);
+              reconnectRef.current?.();
+            }}
+          >
+            Reconnect
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+});

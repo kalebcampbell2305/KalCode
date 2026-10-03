@@ -5,7 +5,7 @@ import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
 import { isCodingAgent } from "./agents.ts";
-import { chipCounts } from "./board.ts";
+import { fleetCounts } from "./board.ts";
 import { type DashboardResource, RefreshTracker } from "./refresh.ts";
 import { type Resource, type ResourceState, useResource } from "./resource.ts";
 
@@ -26,10 +26,31 @@ interface DashboardDataValue {
   /** Thread id → action in flight. */
   pendingActions: ReadonlyMap<string, ThreadAction>;
   runAction: (thread: ThreadSummary, action: Exclude<ThreadAction, "open">) => Promise<void>;
+  /** Many agents at once (Fleet cleanup): see `BulkStep`. */
+  runBulk: (steps: readonly BulkStep[]) => Promise<BulkResult>;
   /** Screen-reader announcements (new approvals are announced app-wide by ApprovalAnnouncer). */
   urgent: Announcement | null;
   polite: Announcement | null;
 }
+
+/**
+ * One agent's part of a bulk cleanup: the contract commands to run, in order (for example
+ * `["stop", "archive"]` for an agent that is still working). A step stops at its first failure.
+ */
+export interface BulkStep {
+  thread: ThreadSummary;
+  commands: readonly ("stop" | "archive" | "unarchive")[];
+}
+
+export interface BulkResult {
+  /** Agents whose every command succeeded, as native returned them. */
+  done: ThreadSummary[];
+  /** Agents with a failed command (left as they were after it). */
+  failed: number;
+}
+
+/** Bulk cleanup runs this many agents at once: fast for hundreds, gentle on the runtime. */
+const BULK_CONCURRENCY = 8;
 
 const DashboardDataContext = createContext<DashboardDataValue | null>(null);
 
@@ -268,6 +289,73 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     [client, allThreads.update, invalidate, toast, lifetime, isCurrent, actionSession],
   );
 
+  // Fleet cleanup ("Clear failed", "Close all"): every agent's commands run with bounded
+  // concurrency; each card shows its action in flight, the list updates once at the end, and the
+  // caller reports one outcome (never a toast per agent).
+  const runBulk = useCallback(
+    async (steps: readonly BulkStep[]): Promise<BulkResult> => {
+      const session = actionSession;
+      if (!isCurrent(session) || steps.length === 0) return { done: [], failed: 0 };
+      const marker: ThreadAction = steps[0]?.commands.includes("unarchive") ? "unarchive" : "archive";
+      setActionState((state) => {
+        if (!isCurrent(session)) return state;
+        const own = state.owner === lifetime && state.session === session;
+        const pending = new Map(own ? state.pending : []);
+        for (const step of steps) pending.set(step.thread.id, marker);
+        return { owner: lifetime, session, pending, polite: own ? state.polite : null };
+      });
+      const done: ThreadSummary[] = [];
+      let failed = 0;
+      const queue = [...steps];
+      const worker = async () => {
+        for (let step = queue.shift(); step; step = queue.shift()) {
+          let latest: ThreadSummary | null = null;
+          try {
+            for (const command of step.commands) {
+              if (command === "stop") latest = await client.stopThread(step.thread.id);
+              else if (command === "unarchive") latest = await client.unarchiveThread(step.thread.id);
+              else {
+                try {
+                  latest = await client.archiveThread(step.thread.id);
+                } catch (refused) {
+                  // Native refuses to archive an agent whose session still runs: end it through the
+                  // canonical stop (what closing its pane in Code does), then archive. No orphans.
+                  if (toKalCodeError(refused).code !== "thread_running") throw refused;
+                  await client.stopThread(step.thread.id);
+                  latest = await client.archiveThread(step.thread.id);
+                }
+              }
+            }
+            if (latest) done.push(latest);
+          } catch {
+            failed += 1;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(BULK_CONCURRENCY, steps.length) }, worker));
+      if (!isCurrent(session)) return { done, failed };
+      const byId = new Map(done.map((t) => [t.id, t]));
+      // Commands other than thread_list/thread_get don't say how the provider runs: keep what the
+      // list knew, so an agent never drops off agent surfaces before the next read.
+      allThreads.update((list) =>
+        list.map((t) => {
+          const updated = byId.get(t.id);
+          if (!updated) return t;
+          return updated.runtimeKind === null ? { ...updated, runtimeKind: t.runtimeKind } : updated;
+        }),
+      );
+      invalidate(["threads"], session);
+      setActionState((state) => {
+        if (!isCurrent(session) || state.owner !== lifetime) return state;
+        const pending = new Map(state.pending);
+        for (const step of steps) if (pending.get(step.thread.id) === marker) pending.delete(step.thread.id);
+        return { ...state, pending };
+      });
+      return { done, failed };
+    },
+    [client, allThreads.update, invalidate, lifetime, isCurrent, actionSession],
+  );
+
   const value = useMemo<DashboardDataValue>(
     () => ({
       threads: resourceOwner === lifetime ? threads : { ...threads, state: { status: "loading" } },
@@ -275,10 +363,11 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
       terminals: resourceOwner === lifetime ? terminals : { ...terminals, state: { status: "loading" } },
       pendingActions,
       runAction,
+      runBulk,
       urgent,
       polite,
     }),
-    [threads, archived, terminals, pendingActions, runAction, polite, resourceOwner, lifetime],
+    [threads, archived, terminals, pendingActions, runAction, runBulk, polite, resourceOwner, lifetime],
   );
 
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
@@ -292,14 +381,14 @@ function useDashboardData(): DashboardDataValue {
 
 /** Threads from Z3 `thread_list`, refreshed on thread/tool/file/approval events. */
 export function useThreadSummaries() {
-  const { threads, pendingActions, runAction } = useDashboardData();
-  return { ...threads, pendingActions, runAction };
+  const { threads, pendingActions, runAction, runBulk } = useDashboardData();
+  return { ...threads, pendingActions, runAction, runBulk };
 }
 
 /** Archived threads (read-only on the Dashboard; `runAction(thread, "unarchive")` restores one). */
 export function useArchivedThreads() {
-  const { archived, pendingActions, runAction } = useDashboardData();
-  return { ...archived, pendingActions, runAction };
+  const { archived, pendingActions, runAction, runBulk } = useDashboardData();
+  return { ...archived, pendingActions, runAction, runBulk };
 }
 
 function useAgentsOnly(state: ResourceState<ThreadSummary[]>): ResourceState<ThreadSummary[]> {
@@ -327,13 +416,14 @@ export function useArchivedCodingAgents() {
 }
 
 /**
- * How many open threads wait for the person: the Dashboard's "Waiting for you" chip count, from
- * the same thread list. 0 until the list has loaded (and when it can't be read).
+ * How many open agents wait for the person (an approval or a reply): the Fleet's "Needs you"
+ * count, from the same thread list. Failed runs have their own group and never inflate it.
+ * 0 until the list has loaded (and when it can't be read).
  */
 export function useWaitingForYouCount(): number {
   // The Dashboard's badge counts what its Fleet shows: coding agents.
   const { state } = useCodingAgents();
-  return useMemo(() => (state.status === "ready" ? chipCounts(state.data).waiting_for_you : 0), [state]);
+  return useMemo(() => (state.status === "ready" ? fleetCounts(state.data).needs_you : 0), [state]);
 }
 
 /** Running terminals from Z1 `terminals_running`, refreshed on shell events. */

@@ -12,7 +12,9 @@ test("Code welcome keeps missing-workspace actions aligned at compact widths", a
   await code.click();
   await page.getByRole("button", { name: "Open folder…", exact: true }).click();
   await expect(page.getByRole("heading", { name: "missing-project", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Open folder…", exact: true }).click();
+  // With a workspace open, folders open from the workspace switcher (its name in the header).
+  await page.getByRole("heading", { level: 1, name: "missing-project" }).getByRole("button").click();
+  await page.getByRole("menuitem", { name: "Open folder…" }).click();
   await expect(page.getByRole("heading", { name: "temporary-project", exact: true })).toBeVisible();
   await page.evaluate(() => {
     const memory = (window as unknown as { __kalcodeMemory: { makeUnavailable: (name: string) => void } })

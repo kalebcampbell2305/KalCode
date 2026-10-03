@@ -21,7 +21,7 @@ interface ShellSlotsValue {
   /** Left edge of the main column (right of the sidebar), in pixels. */
   mainLeft: number;
   setMainLeft: (left: number) => void;
-  /** Space the shell chrome takes at the other window edges (top bar, agents rail, status strip). */
+  /** Space the shell chrome takes at the other window edges (top bar, agents rail). */
   insets: ShellInsets;
   setInsets: (insets: ShellInsets) => void;
 }

@@ -160,6 +160,27 @@ describe("Providers → Accounts (Stable)", () => {
     expect(usage(gemini, "Active threads")).toBe("None");
   });
 
+  it("shows each account's canonical provider usage and plan, and says so when there is none", async () => {
+    const { user } = await mountStable();
+    const claude = card("Claude Code · Personal");
+    // The limiting window leads: the same "42% left" the launcher, panes and center show.
+    await waitFor(() => expect(within(claude).getByText("42% left")).toBeInTheDocument());
+    expect(within(claude).getByText("Max 20x")).toBeInTheDocument();
+    expect(within(claude).getByText(/^Weekly · resets in 3d \d+h$/)).toBeInTheDocument();
+    await openDetails(user, claude, "Personal");
+    expect(usage(claude, "Plan")).toBe("Max 20x");
+    expect(usage(claude, "Usage and limits")).toMatch(/Weekly · 42% left · resets in 3d \d+h/);
+    expect(usage(claude, "Usage and limits")).toMatch(/5-hour · 64% left · resets in 2h \d+m/);
+
+    expect(within(card("Codex · Personal")).getByText("56% left")).toBeInTheDocument();
+    const work = card("Codex · Work");
+    expect(within(work).queryByText(/% left/)).toBeNull();
+    expect(within(work).getByText("Sign in to read usage")).toBeInTheDocument();
+    const gemini = card("Gemini CLI · Personal");
+    expect(within(gemini).getByText("Usage unavailable")).toBeInTheDocument();
+    expect(within(gemini).queryByText(/% left/)).toBeNull();
+  });
+
   it("sets a default from the row menu and keeps Rename and Remove in the menu and details", async () => {
     const { user, calls } = await mountStable();
     const work = card("Codex · Work");

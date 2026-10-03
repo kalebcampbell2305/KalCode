@@ -10,6 +10,7 @@ import type {
   PanelView,
   SizeClass,
   TalkTarget,
+  UiCommand,
   UiDirective,
 } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
@@ -822,6 +823,34 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     sceneChoiceRef.current = null;
     setSceneChoice(null);
   }, []);
+
+  /**
+   * Takes one KalVoice Request for a command the UI runs itself, as native does before its own
+   * commands act. `false` means it must not run: the limit (or an error) is already shown.
+   */
+  const meterUiCommand = useCallback(
+    async (scope: RequestScope, command: UiCommand, input: KalVoiceInput): Promise<boolean> => {
+      if (scope.signal.aborted) return false;
+      let response: KalVoiceResponse;
+      try {
+        response = await client.kalvoiceMeterUiCommand({
+          requestId: scope.requestId,
+          input,
+          command,
+          workspaceId: surfaces.current.workspaces.active?.id ?? null,
+        });
+      } catch (error) {
+        if (!scope.signal.aborted) scope.report({ ok: false, message: toKalCodeError(error).message });
+        return false;
+      }
+      setStatus((s) => (s ? { ...s, usage: response.usage } : s));
+      if (scope.signal.aborted) return false;
+      if (response.outcome.kind === "completed") return true;
+      applyResponse(response, null, scope);
+      return false;
+    },
+    [client, applyResponse],
+  );
   const chooseScene = useCallback(
     async (id: string, suppliedScope?: RequestScope): Promise<void> => {
       const pending = sceneChoiceRef.current;
@@ -863,7 +892,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
      * dictation target) only an answer to a pending scene chooser counts: native routing decides
      * whether everything else is dictated, as it does for its own low-confidence commands.
      */
-    async (text: string, requestScope: RequestScope, dictating = false): Promise<boolean> => {
+    async (text: string, requestScope: RequestScope, input: KalVoiceInput, dictating = false): Promise<boolean> => {
       if (requestScope.signal.aborted) return true;
       const signal = combineAbortSignals([requestScope.signal, sceneLifetime.current.signal]);
       const scope: RequestScope = {
@@ -905,7 +934,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         };
         lastSceneTarget.current = null;
         if (/^(?:what did|what happened)/.test(spoken)) {
-          report({ ok: true, message: `${run.spec.name}: ${run.status.replaceAll("_", " ")}.` });
+          if (await meterUiCommand(scope, "scene", input))
+            report({ ok: true, message: `${run.spec.name}: ${run.status.replaceAll("_", " ")}.` });
           return true;
         }
       }
@@ -958,6 +988,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           report({ ok: false, message: "That agent is no longer available." });
           return true;
         }
+        if (!(await meterUiCommand(scope, "scene", input))) return true;
         const target: VoiceSceneTarget = {
           kind: isCodingAgent(thread) ? "agent" : "thread",
           codingAgent: isCodingAgent(thread),
@@ -1015,9 +1046,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         navigate: () => navigate("operations"),
         focus: (target: OperationsVoiceTarget) => focusOperationsTarget(target, { signal }),
         signal,
+        claim: () => meterUiCommand(scope, "operations", input),
       };
       const show = (result: OperationsVoiceResult, resultScope: RequestScope = scope) => {
-        if (!result.handled || resultScope.signal.aborted) return;
+        if (!result.handled || result.refused || resultScope.signal.aborted) return;
         if (result.target) {
           lastLifecycle.current = null;
           lastOperation.current = { target: result.target, expiresAt: Date.now() + 120_000 };
@@ -1034,7 +1066,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
               id: choice.id,
               label: choice.label,
               execute: async (choiceScope) => {
-                const choiceDeps = { ...deps, signal: choiceScope.signal };
+                const choiceDeps = {
+                  ...deps,
+                  signal: choiceScope.signal,
+                  claim: () => meterUiCommand(choiceScope, "operations", input),
+                };
                 show(await executeOperationsVoiceChoice(choice, choiceDeps), choiceScope);
               },
             })),
@@ -1058,6 +1094,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       if (signal.aborted) return true;
       const focusTarget = async (target: VoiceSceneTarget, focusScope: RequestScope = scope) => {
         if (focusScope.signal.aborted) return;
+        if (!(await meterUiCommand(focusScope, "scene", input))) return;
         lastLifecycle.current = null;
         const focused = await scene.focus(target, focusScope.signal);
         if (focusScope.signal.aborted) return;
@@ -1116,7 +1153,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       }
       return false;
     },
-    [client, operationsClient, navigate, chooseScene, dismissSceneChoice, scene],
+    [client, operationsClient, navigate, chooseScene, dismissSceneChoice, scene, meterUiCommand],
   );
   /** Follows up on the session the person picked (a click or its spoken name). */
   const followUp = useCallback(
@@ -1199,13 +1236,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         if (tidy) {
           nativeRequestInFlight.current = lease;
           try {
+            if (surfaces.current.kalTidy && !(await meterUiCommand(scope, "kaltidy", input))) return;
             await runKalTidyCommand(surfaces.current.kalTidy, tidy, scope.report);
           } finally {
             if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
           }
           return;
         }
-        if (await routeScene(trimmed, scope)) return;
+        if (await routeScene(trimmed, scope, input)) return;
         if (scope.signal.aborted || activeRequest.current !== lease) return;
         nativeRequestInFlight.current = lease;
         let response: Awaited<ReturnType<typeof client.kalvoiceRequest>>;
@@ -1240,7 +1278,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         );
       }
     },
-    [client, applyResponse, beginRequest, scopeFor, workspaces.active?.id, routeScene],
+    [client, applyResponse, beginRequest, scopeFor, workspaces.active?.id, routeScene, meterUiCommand],
   );
   launchRetry.current = (text, workspaceId, label) => submit(text, "text", workspaceId, label);
 
@@ -1295,6 +1333,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           if (signal.aborted || activeRequest.current !== lease) return;
           nativeRequestInFlight.current = lease;
           try {
+            if (surfaces.current.kalTidy && !(await meterUiCommand(scope, "kaltidy", "voice"))) return;
             await runKalTidyCommand(surfaces.current.kalTidy, tidy, scope.report);
           } finally {
             if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
@@ -1302,7 +1341,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           recordAction();
           return;
         }
-        if (await routeScene(text, scope, target !== null && targetIsAlive(target))) {
+        if (await routeScene(text, scope, "voice", target !== null && targetIsAlive(target))) {
           recordAction();
           return;
         }
@@ -1371,7 +1410,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         dictationSessions.current.finish(sessionId);
       }
     },
-    [client, applyResponse, beginRequest, followUp, scopeFor, workspaces.active?.id, routeScene],
+    [client, applyResponse, beginRequest, followUp, scopeFor, workspaces.active?.id, routeScene, meterUiCommand],
   );
 
   const onSignal = useCallback(

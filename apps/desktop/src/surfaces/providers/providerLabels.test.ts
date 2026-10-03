@@ -8,10 +8,12 @@ import {
   capabilityItems,
   detectionLabel,
   fidelityLabel,
+  managedSignInLabel,
   modelList,
   needsFirstDetection,
   needsInstall,
   needsSignIn,
+  sameSignInLabel,
   settingGroups,
   signInFailureTitle,
   summarizeProviders,
@@ -122,20 +124,54 @@ describe("guidance", () => {
     expect(needsSignIn(claude)).toBe(false);
   });
 
-  it("sends Gemini sign-in to the managed account card, not a terminal", () => {
-    const hint = accountSignInHint(gemini);
-    expect(hint).toMatch(/^Open Accounts, add a Gemini CLI account and choose Sign in\./);
-    expect(hint).toContain("Google sign-in in your browser for that account only");
-    expect(hint).not.toMatch(/^Run /);
-    // Claude Code and Codex threads also run in managed per-account profiles, so their Setup
-    // guidance must point at the account card, never at a standalone terminal login.
-    const claudeHint = accountSignInHint(claude);
-    expect(claudeHint).toMatch(/^Open Accounts, add a .+ account and choose Sign in\./);
-    expect(claudeHint).toContain("Running claude in a terminal signs in a separate profile");
-    const codexHint = accountSignInHint(codex);
-    expect(codexHint).toMatch(/^Open Accounts, add a .+ account and choose Sign in\./);
-    expect(codexHint).toContain("Codex opens ChatGPT sign-in");
+  it("explains the managed sign-in in one line, never as a terminal command", () => {
+    expect(accountSignInHint(gemini)).toBe("Gemini opens Google sign-in in your browser for that account only.");
+    expect(accountSignInHint(claude)).toBe("Claude Code opens its sign-in in your browser for that account only.");
+    expect(accountSignInHint(codex)).toBe("Codex opens ChatGPT sign-in in your browser for that account only.");
+    for (const status of [gemini, claude, codex]) expect(accountSignInHint(status)).not.toMatch(/^Run |terminal/);
     expect(accountSignInHint({ id: "other-cli", displayName: "Other" })).toBeNull();
+  });
+
+  it("reads managed sign-in from KalCode's accounts, the same state the Accounts tab shows", () => {
+    const signedIn = { authenticationState: "authenticated" } as const;
+    const signedOut = { authenticationState: "not_authenticated" } as const;
+    expect(managedSignInLabel(null)).toBeNull();
+    expect(managedSignInLabel([])).toEqual({ tone: "idle", label: "No account yet", detail: null });
+    expect(managedSignInLabel([signedOut])).toEqual({ tone: "waiting", label: "Not signed in", detail: null });
+    expect(managedSignInLabel([signedIn, signedOut])?.label).toBe("Signed in (1 account)");
+    expect(managedSignInLabel([signedIn, signedIn, signedOut])).toEqual({
+      tone: "success",
+      label: "Signed in (2 accounts)",
+      detail: null,
+    });
+  });
+
+  it("names the other account when two accounts share one provider sign-in", () => {
+    const row = (id: string, displayName: string, identity: string | null, extra = {}) => ({
+      id,
+      providerId: "codex",
+      displayName,
+      providerReportedIdentity: identity,
+      isDefault: false,
+      archivedAt: null,
+      ...extra,
+    });
+    const personal = row("a", "Personal", "me@example.com", { isDefault: true });
+    const work = row("b", "Work", " ME@example.com ");
+    const side = row("c", "Side", "other@example.com");
+    const claude = row("d", "Claude", "me@example.com", { providerId: "claude-code" });
+    const all = [personal, work, side, claude];
+    expect(sameSignInLabel(work, all)).toBe("Same sign-in as Personal");
+    expect(sameSignInLabel(personal, all)).toBe("Same sign-in as Work");
+    expect(sameSignInLabel(side, all)).toBeNull();
+    expect(sameSignInLabel(row("e", "Unknown", null), all)).toBeNull();
+    expect(sameSignInLabel(row("f", "Third", "me@example.com"), all)).toBe("Same sign-in as Personal +1");
+    expect(
+      sameSignInLabel(
+        work,
+        [personal, work].map((a) => ({ ...a, archivedAt: "2026-10-01T00:00:00Z" })),
+      ),
+    ).toBeNull();
   });
 
   it("offers install guidance only when the CLI is missing", () => {

@@ -52,3 +52,164 @@ export function preselectLaunchAccount(
 export function launchLabel(count: number, providerName: string): string {
   return count === 1 ? `Launch ${providerName} agent` : `Launch ${count} ${providerName} agents`;
 }
+
+const EFFORT_LABELS: Record<string, string> = {
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+/** "High", "Extra high"… for a provider-native effort id. */
+export function effortLabel(effort: string): string {
+  return EFFORT_LABELS[effort] ?? (effort ? effort[0]?.toUpperCase() + effort.slice(1) : "Default");
+}
+
+/**
+ * The last launch per provider, remembered across restarts so the launcher never asks twice
+ * (owner simplicity rule). Local preference only: the workspace's native account binding stays
+ * the authority whenever it changed after this launch (Account Center "use for new agents").
+ */
+export interface RememberedLaunch {
+  providerId: PaneProviderId;
+  accountId: string;
+  /** Exact provider model id, or null for the provider/account default. */
+  model: string | null;
+  /** The model's display name when launched, so the launcher can name it before options load. */
+  modelName: string | null;
+  effort: string | null;
+  count: number;
+  workspaceId: string;
+  /** The workspace's bound account for this provider when this launch happened. */
+  boundAccountId: string | null;
+  at: string;
+}
+
+export interface LaunchMemory {
+  /** The most recent launch of any provider (the launcher's RECENT row). */
+  last: RememberedLaunch | null;
+  byProvider: Partial<Record<PaneProviderId, RememberedLaunch>>;
+}
+
+export const LAUNCH_MEMORY_KEY = "kalcode.agentLauncher.v1";
+const EMPTY_MEMORY: LaunchMemory = { last: null, byProvider: {} };
+const PROVIDER_IDS: readonly string[] = ["claude-code", "codex", "gemini-cli"];
+
+function storage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= 400 ? value : null;
+}
+
+function parseLaunch(value: unknown): RememberedLaunch | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const providerId = text(v.providerId);
+  const accountId = text(v.accountId);
+  const workspaceId = text(v.workspaceId);
+  if (!providerId || !PROVIDER_IDS.includes(providerId) || !accountId || !workspaceId) return null;
+  return {
+    providerId: providerId as PaneProviderId,
+    accountId,
+    model: text(v.model),
+    modelName: text(v.modelName),
+    effort: text(v.effort),
+    count: clampAgentCount(typeof v.count === "number" ? v.count : 1),
+    workspaceId,
+    boundAccountId: text(v.boundAccountId),
+    at: text(v.at) ?? "",
+  };
+}
+
+/** Never throws: unreadable or malformed memory is simply empty. */
+export function readLaunchMemory(store: Storage | null = storage()): LaunchMemory {
+  try {
+    const raw = store?.getItem(LAUNCH_MEMORY_KEY);
+    if (!raw) return EMPTY_MEMORY;
+    const parsed = JSON.parse(raw) as { last?: unknown; byProvider?: Record<string, unknown> };
+    const byProvider: LaunchMemory["byProvider"] = {};
+    for (const id of PROVIDER_IDS) {
+      const entry = parseLaunch(parsed.byProvider?.[id]);
+      if (entry && entry.providerId === id) byProvider[id as PaneProviderId] = entry;
+    }
+    return { last: parseLaunch(parsed.last), byProvider };
+  } catch {
+    return EMPTY_MEMORY;
+  }
+}
+
+/** Records a launch that actually started. Best effort: a full or blocked store changes nothing. */
+export function rememberLaunch(entry: RememberedLaunch, store: Storage | null = storage()): LaunchMemory {
+  const current = readLaunchMemory(store);
+  const next: LaunchMemory = { last: entry, byProvider: { ...current.byProvider, [entry.providerId]: entry } };
+  try {
+    store?.setItem(LAUNCH_MEMORY_KEY, JSON.stringify(next));
+  } catch {
+    // Not remembered; the launch itself already happened.
+  }
+  return next;
+}
+
+/** The workspace's bound account for a provider, when it is still a launchable account. */
+export function boundLaunchAccount(
+  accounts: readonly ProviderAccount[],
+  bindings: readonly ProviderAccountBinding[] | null,
+  providerId: string,
+  workspaceId: string,
+): string | null {
+  const bound = bindings?.find(
+    (b) => b.kind === "workspace" && b.providerId === providerId && b.scopeId === workspaceId,
+  );
+  return bound && launchAccounts(accounts, providerId).some((a) => a.id === bound.accountId) ? bound.accountId : null;
+}
+
+/**
+ * The account the launcher highlights for a provider: the last one launched, unless this
+ * workspace's native binding changed since that launch (an explicit Account Center choice wins),
+ * then the runtime's own order (binding, default, sole signed-in account).
+ */
+export function resolveLaunchAccount(
+  accounts: readonly ProviderAccount[],
+  bindings: readonly ProviderAccountBinding[] | null,
+  providerId: string,
+  workspaceId: string,
+  remembered: RememberedLaunch | null | undefined,
+): string {
+  const bound = boundLaunchAccount(accounts, bindings, providerId, workspaceId);
+  const known = remembered && launchAccounts(accounts, providerId).some((a) => a.id === remembered.accountId);
+  if (remembered && known) {
+    if (!bound) return remembered.accountId;
+    if (remembered.workspaceId === workspaceId && remembered.boundAccountId === bound) return remembered.accountId;
+    return bound;
+  }
+  return preselectLaunchAccount(accounts, bindings ?? [], providerId, workspaceId);
+}
+
+/**
+ * Accounts that are the same provider sign-in as an earlier account (same provider-reported
+ * identity), mapped to that earlier account's name: "Same sign-in as KalCode". Order is the
+ * stable account order, so the first account keeps its plain identity.
+ */
+export function sameSignIns(
+  accounts: readonly Pick<ProviderAccount, "id" | "providerId" | "displayName" | "providerReportedIdentity">[],
+): Map<string, string> {
+  const first = new Map<string, string>();
+  const same = new Map<string, string>();
+  for (const account of accounts) {
+    const identity = account.providerReportedIdentity?.trim().toLowerCase();
+    if (!identity) continue;
+    const key = `${account.providerId}\u0000${identity}`;
+    const owner = first.get(key);
+    if (owner === undefined) first.set(key, account.displayName.trim() || "Unnamed account");
+    else same.set(account.id, owner);
+  }
+  return same;
+}

@@ -20,6 +20,7 @@ use kalcode_contracts::agent::{
     ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::ids::is_valid_id;
+use kalcode_contracts::permissions::PermissionMode;
 use kalcode_hook_bridge::KEY_ENV;
 use kalcode_hook_bridge::server::BridgeServer;
 use kalcode_pty::{AttachId, ProgramSpec, PtySession, TerminalSize};
@@ -546,6 +547,35 @@ pub fn marked_interactive_checked(sessions_dir: &Path, thread_id: &str) -> std::
     }
 }
 
+/// Bypass runs without approvals (owner directive 2026-10-03), so Claude Code's one-time
+/// bypassPermissions warning is pre-accepted in the account's own user settings
+/// (`skipDangerousModePermissionPrompt`, https://code.claude.com/docs/en/settings-reference).
+/// Best effort: other keys are kept, and an unreadable file is left untouched (the dialog then
+/// shows once).
+fn accept_bypass_dialog(config_dir: &Path) {
+    const KEY: &str = "skipDangerousModePermissionPrompt";
+    let path = config_dir.join("settings.json");
+    let mut settings = match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(_) => return,
+    };
+    if settings.get(KEY) == Some(&serde_json::Value::Bool(true)) {
+        return;
+    }
+    settings.insert(KEY.into(), serde_json::Value::Bool(true));
+    let Ok(mut bytes) = serde_json::to_vec_pretty(&serde_json::Value::Object(settings)) else {
+        return;
+    };
+    bytes.push(b'\n');
+    if let Err(error) = write_atomically(&path, &bytes) {
+        tracing::warn!(event = "pane.bypass_settings_write_failed", error = %error);
+    }
+}
+
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, bytes)?;
@@ -596,6 +626,9 @@ impl AgentProvider for InteractiveClaudeProvider {
             let guardian_job = lease.prepare_guarded_job("claude-pane")?;
             let probe_guardian = profiles.probe_guardian()?;
             let env = profiles.prepare_env(ProviderId::CLAUDE_CODE, account, &self.env)?;
+            if config.permission_mode == PermissionMode::Bypass {
+                accept_bypass_dialog(&profiles.profile_home(ProviderId::CLAUDE_CODE, account)?);
+            }
             let provider = Self {
                 env,
                 managed: None,
@@ -774,4 +807,37 @@ pub fn wait_for_pane(panes: &PaneRegistry, thread_id: &str, timeout: Duration) -
         std::thread::sleep(Duration::from_millis(20));
     }
     panes.contains(thread_id)
+}
+
+#[cfg(test)]
+mod bypass_dialog_tests {
+    use super::accept_bypass_dialog;
+
+    #[test]
+    fn bypass_pre_accepts_claude_warning_and_keeps_other_settings() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"theme":"dark"}"#).expect("seed");
+        accept_bypass_dialog(dir.path());
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["skipDangerousModePermissionPrompt"], true);
+
+        let fresh = tempfile::tempdir().expect("temp");
+        accept_bypass_dialog(fresh.path());
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(fresh.path().join("settings.json")).expect("read"),
+        )
+        .expect("json");
+        assert_eq!(value["skipDangerousModePermissionPrompt"], true);
+
+        let broken = tempfile::tempdir().expect("temp");
+        std::fs::write(broken.path().join("settings.json"), b"{not json").expect("seed");
+        accept_bypass_dialog(broken.path());
+        assert_eq!(
+            std::fs::read(broken.path().join("settings.json")).expect("read"),
+            b"{not json"
+        );
+    }
 }

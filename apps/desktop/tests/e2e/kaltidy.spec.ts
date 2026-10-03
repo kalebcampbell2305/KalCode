@@ -78,7 +78,7 @@ test("KalTidy stops an idle shell and keeps terminals still running a command", 
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("combobox").fill("tidy");
     await palette.getByRole("option", { name: "KalTidy: Review terminals before stopping" }).click();
-    const review = page.getByRole("dialog", { name: "KalTidy — Stop idle terminals" });
+    const review = page.getByRole("dialog", { name: "KalTidy — Review terminals and agents" });
     const idle = review.getByRole("region", { name: /^Idle/ });
     await expect(idle.getByRole("checkbox")).toHaveCount(1, { timeout: 20_000 });
     await expect(idle.getByRole("checkbox")).toBeChecked();

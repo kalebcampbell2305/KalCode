@@ -106,7 +106,7 @@ test("a pane's permission request and completion reach the notification center, 
     await nav(page, "Dashboard").click();
     const board = page.getByRole("region", { name: "Agents", exact: true });
     const card = board.getByRole("article").first();
-    await expect(card.getByText("Action needed")).toBeVisible({ timeout: 15_000 });
+    await expect(card.getByText("Needs approval", { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(card.getByRole("button", { name: "Approve once" })).toBeVisible();
     await shot(page, "e2e-dashboard-action-needed");
 

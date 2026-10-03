@@ -107,16 +107,14 @@ fn threads_unavailable() -> ExecError {
     )
 }
 
-/// Voice-created coding panes honor the user's saved startable mode. Bypass still requires a
-/// direct confirmation and Custom requires a profile, so neither is inferred by a voice launch.
-/// If the authoritative settings store is present but unreadable, keep the restrictive prompt
-/// mode instead of broadening a possibly saved preference.
+/// Voice-created coding panes start like every other agent: without approvals (Bypass) unless
+/// the saved default is read-only Plan.
 fn provider_launch_permission_mode(permissions: Option<&PermissionService>) -> PermissionMode {
     match permissions {
-        Some(service) => match service.settings() {
-            Ok(settings) => settings.startable_default_mode(),
-            Err(_) => PermissionMode::Approve,
-        },
+        Some(service) => service
+            .settings()
+            .unwrap_or_default()
+            .startable_default_mode(),
         None => DEFAULT_CODING_PERMISSION_MODE,
     }
 }
@@ -2815,18 +2813,21 @@ mod tests {
     }
 
     #[test]
-    fn implicit_voice_launches_keep_saved_startable_modes_without_inferring_bypass() {
-        assert_eq!(provider_launch_permission_mode(None), PermissionMode::Auto);
+    fn implicit_voice_launches_start_without_approvals() {
+        // Owner directive 2026-10-03: voice launches start in Bypass like every other agent.
+        assert_eq!(
+            provider_launch_permission_mode(None),
+            PermissionMode::Bypass
+        );
         for mode in [
             PermissionMode::Plan,
             PermissionMode::Approve,
             PermissionMode::Auto,
+            PermissionMode::Bypass,
         ] {
             assert!(mode.is_confirm_free_start());
         }
-        for mode in [PermissionMode::Bypass, PermissionMode::Custom] {
-            assert!(!mode.is_confirm_free_start());
-        }
+        assert!(!PermissionMode::Custom.is_confirm_free_start());
     }
 
     fn executor(dir: &std::path::Path) -> DesktopExecutor {
@@ -3765,8 +3766,8 @@ mod tests {
         assert!(
             launched
                 .iter()
-                .all(|thread| thread.permission_mode == PermissionMode::Auto),
-            "implicit voice launches use the bounded coding default"
+                .all(|thread| thread.permission_mode == PermissionMode::Bypass),
+            "implicit voice launches start without approvals (owner directive 2026-10-03)"
         );
         let Some(UiDirective::OpenProviderPanes {
             workspace_id,

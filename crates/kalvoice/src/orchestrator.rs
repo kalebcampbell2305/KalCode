@@ -184,6 +184,38 @@ pub struct CommandRequest {
     pub thread_id: Option<String>,
 }
 
+/// A KalVoice command that the renderer runs itself: KalTidy, Operations and scene commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum UiCommand {
+    Kaltidy,
+    Operations,
+    Scene,
+}
+
+impl UiCommand {
+    fn kind_name(self) -> &'static str {
+        match self {
+            Self::Kaltidy => "ui_kaltidy",
+            Self::Operations => "ui_operations",
+            Self::Scene => "ui_scene",
+        }
+    }
+}
+
+/// Claims one KalVoice Request for a command the renderer is about to run. The UI runs the
+/// command only when the response is `completed`; a replayed id is never counted twice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UiCommandRequest {
+    pub request_id: String,
+    pub input: KalVoiceInput,
+    pub command: UiCommand,
+    pub workspace_id: Option<String>,
+}
+
 /// An authenticated-account choice. Retry text is transient and revalidated as a fresh request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -874,6 +906,140 @@ impl Orchestrator {
         self.handle_traced_for_target(req, on_stage, trace, None)
     }
 
+    /// Reads current usage and any recorded execution for this request id. A request id that
+    /// was already recorded yields its replayed response instead of a new run.
+    fn begin_run<'a>(
+        &'a self,
+        req: &'a CommandRequest,
+        on_stage: &'a dyn Fn(RequestStage),
+        trace: &'a LatencyTrace,
+    ) -> Result<std::result::Result<Run<'a>, KalVoiceResponse>> {
+        let (allowance, anchor) = self.allowance();
+        let now = (self.clock)();
+        // Serialize this read with request claims so a newly inserted claim is never observed
+        // before its in-process owner is marked active.
+        let account_usage = self
+            .accounting
+            .as_ref()
+            .map(|accounting| accounting.usage())
+            .transpose()?;
+        let execution_id = self.execution_id(&req.request_id);
+        let active = self
+            .active_claims
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (usage, recorded) = self.core.read(|c| {
+            Ok((
+                ledger::usage(c, now, anchor, allowance)?,
+                ledger::recorded_request(c, &execution_id)?,
+            ))
+        })?;
+        let replay = recorded.map(|recorded| {
+            (
+                recorded.intent,
+                self.replay_state(&execution_id, &active, recorded.execution),
+            )
+        });
+        drop(active);
+        let mut run = Run {
+            o: self,
+            req,
+            usage: account_usage.unwrap_or(usage),
+            intent: None,
+            counted: false,
+            on_stage,
+            last_target_id: None,
+            last_launch_instances: Vec::new(),
+            trace,
+        };
+        if let Some((intent, replay)) = replay {
+            run.intent = Some(intent);
+            return Ok(Err(run.replay(replay)));
+        }
+        Ok(Ok(run))
+    }
+
+    /// Claims and meters one KalVoice Request for a command the renderer runs itself (KalTidy,
+    /// Operations, scene commands), exactly as a native command is claimed before execution.
+    /// `completed` means the UI may run it; `limit_reached` or `failed` means it must not.
+    pub fn meter_ui_command(&self, request: UiCommandRequest) -> Result<KalVoiceResponse> {
+        if !is_valid_id(&request.request_id) {
+            return Err(KalError::validation(
+                "invalid_request_id",
+                "KalVoice received an invalid request id.",
+            ));
+        }
+        if request
+            .workspace_id
+            .as_deref()
+            .is_some_and(|w| !is_valid_id(w))
+        {
+            return Err(KalError::validation(
+                "invalid_workspace",
+                "That workspace id is invalid.",
+            ));
+        }
+        let req = CommandRequest {
+            request_id: request.request_id,
+            text: String::new(),
+            input: request.input,
+            workspace_id: request.workspace_id,
+            thread_id: None,
+        };
+        let trace = LatencyTrace::default();
+        let mut run = match self.begin_run(&req, &|_| {}, &trace)? {
+            Ok(run) => run,
+            Err(replayed) => return Ok(replayed),
+        };
+        let kind = request.command.kind_name();
+        run.intent = Some(kind.to_owned());
+        if run.usage.exhausted() {
+            self.emit(vec![run.limit_event()]);
+            return Ok(run.respond(KalVoiceOutcome::LimitReached {
+                resets_at: run.usage.resets_at.clone(),
+            }));
+        }
+        self.emit(vec![
+            run.event(EventPayload::KalVoiceRequestStarted {
+                request_id: req.request_id.clone(),
+                input: req.input,
+            }),
+            run.event(EventPayload::KalVoiceCommandRecognized {
+                request_id: req.request_id.clone(),
+                intent: kind.to_owned(),
+            }),
+        ]);
+        let claim = match run.claim()? {
+            ClaimDecision::LimitReached => {
+                return Ok(run.respond(KalVoiceOutcome::LimitReached {
+                    resets_at: run.usage.resets_at.clone(),
+                }));
+            }
+            ClaimDecision::Replay(replay) => return Ok(run.replay(replay)),
+            ClaimDecision::Execute(claim) => claim,
+        };
+        let claim = match run.authorize(claim)? {
+            Ok(claim) => claim,
+            Err(refused) => return Ok(refused),
+        };
+        claim.finish(
+            self,
+            ExecutionResult::Completed,
+            vec![
+                run.event(EventPayload::KalVoiceCommandExecuted {
+                    request_id: req.request_id.clone(),
+                    intent: kind.to_owned(),
+                }),
+                run.event(EventPayload::KalVoiceRequestCompleted {
+                    request_id: req.request_id.clone(),
+                }),
+            ],
+        )?;
+        Ok(run.respond(KalVoiceOutcome::Completed {
+            summary: String::new(),
+        }))
+    }
+
     /// Handles a request with the immutable push-to-talk destination captured on key-down.
     /// Typed requests carry no destination. Keeping this native fact beside routing prevents a
     /// renderer bug or spoofed `thread_id` from turning "send that" into Enter in a raw shell.
@@ -909,48 +1075,10 @@ impl Orchestrator {
             ));
         }
 
-        let (allowance, anchor) = self.allowance();
-        let now = (self.clock)();
-        // Serialize this read with request claims so a newly inserted claim is never observed
-        // before its in-process owner is marked active.
-        let account_usage = self
-            .accounting
-            .as_ref()
-            .map(|accounting| accounting.usage())
-            .transpose()?;
-        let execution_id = self.execution_id(&req.request_id);
-        let active = self
-            .active_claims
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let (usage, recorded) = self.core.read(|c| {
-            Ok((
-                ledger::usage(c, now, anchor, allowance)?,
-                ledger::recorded_request(c, &execution_id)?,
-            ))
-        })?;
-        let replay = recorded.map(|recorded| {
-            (
-                recorded.intent,
-                self.replay_state(&execution_id, &active, recorded.execution),
-            )
-        });
-        drop(active);
-        let mut run = Run {
-            o: self,
-            req: &req,
-            usage: account_usage.unwrap_or(usage),
-            intent: None,
-            counted: false,
-            on_stage,
-            last_target_id: None,
-            last_launch_instances: Vec::new(),
-            trace,
+        let mut run = match self.begin_run(&req, on_stage, trace)? {
+            Ok(run) => run,
+            Err(replayed) => return Ok(replayed),
         };
-        if let Some((intent, replay)) = replay {
-            run.intent = Some(intent);
-            return Ok(run.replay(replay));
-        }
         let understood = grammar::understand(&req.text);
         // "Send that" and "clear that" are free (the voice form of pressing Send or clearing a
         // text box), so they work even when the allowance is used up.
@@ -1783,40 +1911,54 @@ impl Run<'_> {
         }
     }
 
+    /// Meters an owned claim with the account before any effect. A refusal finishes the claim
+    /// and returns the response to send instead of executing.
+    fn authorize(
+        &mut self,
+        claim: ActiveClaim,
+    ) -> Result<std::result::Result<ActiveClaim, KalVoiceResponse>> {
+        let Some(accounting) = &self.o.accounting else {
+            return Ok(Ok(claim));
+        };
+        match accounting.authorize(&self.req.request_id) {
+            Ok(decision) => {
+                self.usage = decision.usage;
+                if !decision.allowed {
+                    claim.finish(
+                        self.o,
+                        ExecutionResult::Failed {
+                            code: "limit_reached",
+                        },
+                        vec![self.limit_event()],
+                    )?;
+                    return Ok(Err(self.respond(KalVoiceOutcome::LimitReached {
+                        resets_at: self.usage.resets_at.clone(),
+                    })));
+                }
+                self.counted = true;
+                Ok(Ok(claim))
+            }
+            Err(error) => {
+                claim.finish(
+                    self.o,
+                    ExecutionResult::Failed { code: error.code },
+                    Vec::new(),
+                )?;
+                Ok(Err(self.fail(error.code, error.message)))
+            }
+        }
+    }
+
     fn execute(
         &mut self,
         intent: &KalVoiceIntent,
         ctx: &ExecContext,
         claim: ActiveClaim,
     ) -> Result<KalVoiceResponse> {
-        if let Some(accounting) = &self.o.accounting {
-            match accounting.authorize(&self.req.request_id) {
-                Ok(decision) => {
-                    self.usage = decision.usage;
-                    if !decision.allowed {
-                        claim.finish(
-                            self.o,
-                            ExecutionResult::Failed {
-                                code: "limit_reached",
-                            },
-                            vec![self.limit_event()],
-                        )?;
-                        return Ok(self.respond(KalVoiceOutcome::LimitReached {
-                            resets_at: self.usage.resets_at.clone(),
-                        }));
-                    }
-                    self.counted = true;
-                }
-                Err(error) => {
-                    claim.finish(
-                        self.o,
-                        ExecutionResult::Failed { code: error.code },
-                        Vec::new(),
-                    )?;
-                    return Ok(self.fail(error.code, error.message));
-                }
-            }
-        }
+        let claim = match self.authorize(claim)? {
+            Ok(claim) => claim,
+            Err(refused) => return Ok(refused),
+        };
         (self.on_stage)(RequestStage::Executing);
         self.trace.action_started();
         match self.o.executor.execute(intent, ctx) {

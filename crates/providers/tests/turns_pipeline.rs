@@ -565,7 +565,7 @@ fn gemini_turns_stream_to_done_and_resume_by_session_id() {
 }
 
 #[test]
-fn gemini_modes_never_use_yolo() {
+fn gemini_uses_yolo_only_in_bypass() {
     let fake = FakeInstall::new("gemini", json!({}));
     let provider = GeminiProvider::new(fake.env());
     for (mode, expected) in [
@@ -573,7 +573,8 @@ fn gemini_modes_never_use_yolo() {
         (PermissionMode::Approve, "default"),
         (PermissionMode::Auto, "auto_edit"),
         (PermissionMode::Custom, "default"),
-        (PermissionMode::Bypass, "auto_edit"),
+        // Bypass runs without approvals (owner directive 2026-10-03).
+        (PermissionMode::Bypass, "yolo"),
     ] {
         let (session, rx) = start(&provider, fake.config(mode, None));
         turn(session.as_ref(), &rx, "hello");

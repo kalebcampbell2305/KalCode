@@ -189,9 +189,10 @@ describe("account rows", () => {
     expect(within(work).queryByText("Default", { exact: true })).toBeNull();
     expect(within(personal).getByText("me@example.com")).toBeInTheDocument();
     expect(within(work).getByText("Identity not reported")).toBeInTheDocument();
-    // KalCode reads no provider usage: checked accounts say it's unavailable, unchecked ones say so.
-    expect(within(personal).getByText("Usage unavailable")).toBeInTheDocument();
-    expect(within(work).getByText("Usage not checked")).toBeInTheDocument();
+    // Usage is the canonical per-account state; with no provider reading it says so, never a number.
+    expect(within(personal).getByText("Not read yet")).toBeInTheDocument();
+    expect(within(work).getByText("Sign in to read usage")).toBeInTheDocument();
+    expect(within(personal).queryByText(/\d+% left/)).toBeNull();
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByRole("meter")).toBeNull();
     // The plan isn't reported either; details say so and never guess one.

@@ -97,7 +97,12 @@ function deps(overrides: Partial<Deps> = {}): Deps & { logs: Record<string, stri
     logs,
     store: fakeStore(),
     accountStore: {
-      accountProfile: async (accountId: string) => ({ id: accountId, email: "user@example.com", activatedAt: CREATED }),
+      accountProfile: async (accountId: string) => ({
+        id: accountId,
+        email: "user@example.com",
+        activatedAt: CREATED,
+        displayName: null,
+      }),
       activateFree: async () => true,
     } as unknown as AccountStore,
     auth: TEST_ONLY_AUTHENTICATOR,
@@ -153,6 +158,8 @@ describe("route table", () => {
   it("is exactly the account, auth, billing, entitlement and KalVoice routes", () => {
     expect(ROUTES.map(({ method, path, access }) => ({ method, path, access }))).toEqual([
       { method: "GET", path: "/v1/account", access: "account" },
+      { method: "GET", path: "/v1/account/profile", access: "account" },
+      { method: "POST", path: "/v1/account/profile", access: "account" },
       { method: "POST", path: "/v1/auth/github/start", access: "public" },
       { method: "GET", path: "/v1/auth/github/callback", access: "public" },
       { method: "POST", path: "/v1/auth/github/complete", access: "public" },
@@ -196,7 +203,9 @@ describe("route table", () => {
     "answers %s with 405 where not routed, 404 elsewhere",
     async (method) => {
       const d = deps();
-      for (const route of ROUTES.filter((r) => r.method !== method)) {
+      const unrouted = ROUTES.filter((r) => !ROUTES.some((other) => other.path === r.path && other.method === method));
+      for (const route of unrouted) {
+        const allowed = ROUTES.filter((r) => r.path === route.path).map((r) => r.method);
         const response = await handleRequest(
           new Request(`${BASE}${route.path}`, {
             method,
@@ -206,7 +215,7 @@ describe("route table", () => {
           d,
         );
         expect(response.status).toBe(405);
-        expect(response.headers.get("allow")).toBe(route.method);
+        expect(response.headers.get("allow")).toBe(allowed.join(", "));
       }
       for (const path of ["/v1/entitlement/grant", "/v1/admin/grant-owner", "/v1/tier", "/v1/owner", "/"]) {
         const response = await handleRequest(
@@ -248,7 +257,12 @@ describe("account activation gate", () => {
   it("blocks entitlement, usage reads and request counting until the user chooses a plan", async () => {
     const d = deps({
       accountStore: {
-        accountProfile: async (accountId: string) => ({ id: accountId, email: "user@example.com", activatedAt: null }),
+        accountProfile: async (accountId: string) => ({
+          id: accountId,
+          email: "user@example.com",
+          activatedAt: null,
+          displayName: null,
+        }),
       } as unknown as AccountStore,
     });
     const entitlement = await handleRequest(asAccount(FREE_ACCOUNT, ENTITLEMENT_PATH), d);

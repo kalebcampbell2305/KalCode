@@ -47,6 +47,8 @@ async function openSurface(page: Page, surface: Surface) {
       await page.goto("/");
       await nav("Providers").click();
       await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+      // Accounts is the default tab; the width check uses Setup's widest content.
+      await page.getByRole("tab", { name: "Setup" }).click();
       await expect(
         page.getByRole("region", { name: "Claude Code", exact: true }).getByText(/^Installed/),
       ).toBeVisible();

@@ -404,6 +404,40 @@ impl ManagedProfiles {
         self.ensure_directory(&["providers", provider.id(), "accounts", account_id, "home"])
     }
 
+    /// Returns one account's existing provider profile without creating anything, or `None` when
+    /// the account has never been prepared. Passive readers (provider usage) use this.
+    pub fn existing_profile_home(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> Result<Option<PathBuf>, ProviderError> {
+        let provider = ManagedProvider::parse(provider)?;
+        if !canonical_uuid(account_id) {
+            return Err(ProviderError::Start(
+                "managed profiles require a canonical account id".into(),
+            ));
+        }
+        self.verify_root()?;
+        let home = self
+            .root
+            .join("providers")
+            .join(provider.id())
+            .join("accounts")
+            .join(account_id)
+            .join("home");
+        match std::fs::symlink_metadata(&home) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error("couldn't inspect a managed directory", error)),
+        }
+        verify_existing_directory(&home)?;
+        let canonical = canonicalize_directory(&home)?;
+        if !canonical.starts_with(&self.root) {
+            return Err(ProviderError::Start(UNSAFE_PATH.into()));
+        }
+        Ok(Some(canonical))
+    }
+
     /// Returns a stable provider/account/thread directory outside every repository.
     pub fn session_dir(
         &self,

@@ -1,5 +1,4 @@
 import type { ProviderAccount, StatusTone, ThreadStatus, ThreadSummary } from "@kalcode/protocol";
-import { Badge, ProviderGlyph as SharedProviderGlyph } from "@kalcode/ui/components";
 import {
   Brain,
   Circle,
@@ -46,16 +45,16 @@ const ICONS: Record<ThreadStatus, LucideIcon> = {
   interrupted: CircleStop,
 };
 
-/** Shared identity mark: a published mark for supported providers and a generic fallback otherwise. */
-export function ProviderGlyph({ providerId }: { providerId: string; providerName?: string }) {
-  return <SharedProviderGlyph provider={providerId} size="lg" />;
-}
-
 export type PaneAccountState = "active" | "snapshot" | "archived_or_unavailable" | "status_unavailable" | "unmanaged";
 
 export interface PaneAccountIdentity {
   label: string;
   state: PaneAccountState;
+  /**
+   * The pane's own provider account, for its usage badge. Only ever this thread's exact account
+   * id (never another account's usage); absent when the account is unmanaged or gone.
+   */
+  usageAccount?: Pick<ProviderAccount, "id" | "displayName" | "providerId">;
 }
 
 /** Resolve display metadata only. Pane routing continues to use the thread's exact account id. */
@@ -65,14 +64,18 @@ export function resolvePaneAccount(
   loadFailed: boolean,
 ): PaneAccountIdentity | null {
   const snapshot = thread.accountLabel?.trim() || null;
-  if (!thread.providerAccountId) {
+  const accountId = thread.providerAccountId;
+  if (!accountId) {
     return snapshot ? { label: snapshot, state: "unmanaged" } : null;
   }
+  const usageAccount = (label: string) => ({ id: accountId, displayName: label, providerId: thread.providerId });
   if (loadFailed) {
-    return { label: snapshot ?? "Unknown account", state: "status_unavailable" };
+    const label = snapshot ?? "Unknown account";
+    return { label, state: "status_unavailable", usageAccount: usageAccount(label) };
   }
   if (accounts === null) {
-    return { label: snapshot ?? "Unknown account", state: "snapshot" };
+    const label = snapshot ?? "Unknown account";
+    return { label, state: "snapshot", usageAccount: usageAccount(label) };
   }
   const active = accounts.find(
     (account) =>
@@ -80,9 +83,9 @@ export function resolvePaneAccount(
       account.providerId === thread.providerId &&
       account.archivedAt === null,
   );
-  return active
-    ? { label: accountName(active), state: "active" }
-    : { label: snapshot ?? "Unknown account", state: "archived_or_unavailable" };
+  if (!active) return { label: snapshot ?? "Unknown account", state: "archived_or_unavailable" };
+  const label = accountName(active);
+  return { label, state: "active", usageAccount: usageAccount(label) };
 }
 
 export function paneAccountLabel(account: PaneAccountIdentity): string {
@@ -93,13 +96,32 @@ export function paneAccountLabel(account: PaneAccountIdentity): string {
   return account.label;
 }
 
+/** True when two resolved identities render the same (resolution makes a new object per render). */
+export function samePaneAccount(a: PaneAccountIdentity | null, b: PaneAccountIdentity | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.label === b.label &&
+    a.state === b.state &&
+    a.usageAccount?.id === b.usageAccount?.id &&
+    a.usageAccount?.displayName === b.usageAccount?.displayName &&
+    a.usageAccount?.providerId === b.usageAccount?.providerId
+  );
+}
+
+/** The account nickname in the pane header ("Personal", "Claude A"); state qualifiers in words. */
 export function PaneAccountChip({ account }: { account: PaneAccountIdentity }) {
   const label = paneAccountLabel(account);
   return (
-    <Badge tone="outline" title={`Provider account: ${label}`}>
-      <span className="visually-hidden">Provider </span>
-      Account · {label}
-    </Badge>
+    <span
+      className={`${styles.seg} ${styles.accountName}`}
+      title={`Provider account: ${label}`}
+      data-account-state={account.state}
+      data-pane-account
+    >
+      <span className="visually-hidden">Provider account </span>
+      {label}
+    </span>
   );
 }
 
@@ -109,10 +131,10 @@ export function PaneStatusChip({ status }: { status: ThreadStatus }) {
   const Icon = ICONS[status];
   const tone: StatusTone = view.tone;
   return (
-    <span className={styles.meta}>
+    <span className={styles.statusGroup}>
       <span className={styles.chip} data-tone={tone} data-pane-status={view.display}>
         <Icon aria-hidden="true" />
-        {view.label}
+        <span className={styles.chipLabel}>{view.label}</span>
       </span>
       {view.qualifier ? <span className={styles.qualifier}>{view.qualifier}</span> : null}
     </span>

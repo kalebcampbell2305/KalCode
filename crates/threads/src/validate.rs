@@ -125,15 +125,14 @@ pub fn prompt(text: &str) -> Result<String> {
     Ok(text.trim_end().to_owned())
 }
 
-/// Modes a thread may be created with. Bypass needs an explicit, confirmed user action and
-/// Custom needs a profile, both through the permission engine after creation.
+/// Modes a thread may be created with. Bypass is the default start (owner directive 2026-10-03:
+/// no approvals); Custom needs a profile through the permission engine after creation.
 pub fn creation_mode(mode: PermissionMode) -> Result<PermissionMode> {
     match mode {
-        PermissionMode::Plan | PermissionMode::Approve | PermissionMode::Auto => Ok(mode),
-        PermissionMode::Bypass => Err(KalError::validation(
-            "bypass_not_allowed_at_create",
-            "Bypass can't be chosen when creating a thread. Create it in Approve or Auto, then change the mode on the thread.",
-        )),
+        PermissionMode::Plan
+        | PermissionMode::Approve
+        | PermissionMode::Auto
+        | PermissionMode::Bypass => Ok(mode),
         PermissionMode::Custom => Err(KalError::validation(
             "custom_not_allowed_at_create",
             "Custom permission profiles aren't available when creating a thread yet.",
@@ -242,16 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn creation_modes_exclude_bypass_and_custom() {
+    fn creation_modes_exclude_only_custom() {
         assert!(creation_mode(PermissionMode::Approve).is_ok());
         assert!(creation_mode(PermissionMode::Plan).is_ok());
         assert!(creation_mode(PermissionMode::Auto).is_ok());
-        assert_eq!(
-            creation_mode(PermissionMode::Bypass)
-                .expect_err("bypass")
-                .code,
-            "bypass_not_allowed_at_create"
-        );
+        // Bypass is the default start (owner directive 2026-10-03: no approvals).
+        assert!(creation_mode(PermissionMode::Bypass).is_ok());
         assert!(creation_mode(PermissionMode::Custom).is_err());
     }
 

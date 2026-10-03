@@ -165,7 +165,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       .click();
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
-    await launcher.getByRole("radio", { name: "Codex", exact: true }).click();
+    await launcher.getByRole("group", { name: "Codex", exact: true }).getByRole("option").first().click();
     const accountPicker = launcher.getByLabel("Account", { exact: true });
     await expect(accountPicker.locator("option")).toHaveCount(2);
     await expect(accountPicker).toHaveValue(codexB.id);
@@ -194,7 +194,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     );
 
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
-    await launcher.getByRole("radio", { name: "Codex", exact: true }).click();
+    await launcher.getByRole("group", { name: "Codex", exact: true }).getByRole("option").first().click();
     await expect(accountPicker).toHaveValue(codexB.id);
     await launcher.getByRole("button", { name: "Launch Codex agent", exact: true }).click();
     await expect(launcher).not.toBeVisible({ timeout: 30_000 });
@@ -213,7 +213,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     );
 
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
-    await launcher.getByRole("radio", { name: "Claude Code", exact: true }).click();
+    await launcher.getByRole("group", { name: "Claude Code", exact: true }).getByRole("option").first().click();
     await expect(accountPicker.locator("option")).toHaveCount(2);
     await expect(accountPicker.locator(`option[value="${claudeB.id}"]`)).toContainText("Claude B");
     await accountPicker.selectOption(claudeB.id);

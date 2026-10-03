@@ -42,6 +42,7 @@ export interface AccountOperations {
   refresh(): Promise<AccountSnapshot>;
   logout(): Promise<AccountSnapshot>;
   usage(): Promise<AccountUsageSnapshot | null>;
+  setDisplayName(displayName: string | null): Promise<AccountSnapshot>;
 }
 
 export interface AccountActions {
@@ -60,6 +61,12 @@ export interface AccountActions {
    * call this when they open, so requests used during the session appear.
    */
   refreshUsage(): Promise<void>;
+  /**
+   * Saves the KalCode account display name (blank clears it). Every surface shows the new name at
+   * once; a failed save restores the saved name and resolves to the error (null on success).
+   * Never busy, never blocks other account actions.
+   */
+  setDisplayName(displayName: string): Promise<AccountUiError | null>;
 }
 
 export interface AccountContextValue extends AccountUiState {
@@ -376,6 +383,39 @@ export function AccountProvider({
     };
   }, [clearTimers, client, runSnapshot]);
 
+  // The latest display-name save: an older save's result or rollback never overwrites a newer one.
+  const displayNameSave = useRef(0);
+  const setDisplayName = useCallback(
+    async (raw: string): Promise<AccountUiError | null> => {
+      const account = latestState.current.snapshot.account;
+      if (!account) {
+        return { code: "authentication_required", message: "Sign in to continue.", retryable: false };
+      }
+      const save = ++displayNameSave.current;
+      const previous = account.displayName;
+      const requested = raw.trim() || null;
+      const show = (displayName: string | null) => {
+        if (mounted.current && save === displayNameSave.current) {
+          dispatch({ type: "displayName", accountId: account.id, displayName });
+        }
+      };
+      show(requested);
+      try {
+        const snapshot = await client.setDisplayName(requested);
+        const saved = snapshot.account?.id === account.id ? snapshot.account.displayName : requested;
+        show(saved);
+        return null;
+      } catch (error) {
+        show(previous);
+        const failure = safeError(error);
+        // The session ended: show the sign-in gate rather than a stale account.
+        if (failure.code === "authentication_required" && mounted.current) void runSnapshot(() => client.status());
+        return failure;
+      }
+    },
+    [client, runSnapshot],
+  );
+
   // Reads usage for the current authority; an account action that starts meanwhile wins.
   const refreshUsageNow = useCallback(
     () => refreshUsage(generation.current, latestState.current.snapshot, latestState.current.runtime),
@@ -407,8 +447,9 @@ export function AccountProvider({
             ? runSnapshot(() => client.refresh(), true)
             : runSnapshot(() => client.status()),
       refreshUsage: refreshUsageNow,
+      setDisplayName,
     }),
-    [client, refreshUsageNow, runSnapshot, state.snapshot.phase, state.runtime.phase],
+    [client, refreshUsageNow, runSnapshot, setDisplayName, state.snapshot.phase, state.runtime.phase],
   );
 
   const value = useMemo<AccountContextValue>(() => ({ ...state, usage, actions }), [actions, state, usage]);

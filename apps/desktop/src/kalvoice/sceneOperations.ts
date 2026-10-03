@@ -44,6 +44,8 @@ export type OperationsVoiceResult =
       message: string;
       target: OperationsVoiceTarget | null;
       choices?: OperationsVoiceChoice[];
+      /** The KalVoice Request was refused (limit reached) and the refusal is already shown. */
+      refused?: true;
     };
 
 export interface OperationsVoiceDependencies {
@@ -54,6 +56,17 @@ export interface OperationsVoiceDependencies {
   focus(target: OperationsVoiceTarget): Promise<boolean> | boolean;
   /** Cancels stale speech work before any UI or service side effect. */
   signal?: AbortSignal;
+  /**
+   * Takes this command's KalVoice Request immediately before it acts or answers. `false` means
+   * it was refused (and the refusal shown), so nothing runs.
+   */
+  claim?: () => Promise<boolean>;
+}
+
+const REFUSED: OperationsVoiceResult = { handled: true, status: "failed", message: "", target: null, refused: true };
+
+async function claimed(deps: OperationsVoiceDependencies): Promise<boolean> {
+  return deps.claim ? await deps.claim() : true;
 }
 
 const FINISHED = new Set<OperationRecord["status"]>(["succeeded", "failed", "cancelled", "interrupted"]);
@@ -471,6 +484,7 @@ async function executeAction(
   deps: OperationsVoiceDependencies,
 ): Promise<OperationsVoiceResult> {
   try {
+    if (!(await claimed(deps))) return REFUSED;
     const focused = await openTarget(deps, decision.target);
     if (!focused) {
       if (deps.signal?.aborted) {
@@ -544,6 +558,7 @@ export async function handleOperationsVoice(
     };
   }
   if (decision.kind === "query") {
+    if (!(await claimed(deps))) return REFUSED;
     return { handled: true, status: "completed", message: decision.message, target: decision.target };
   }
   if (decision.kind === "failed") {
@@ -575,6 +590,7 @@ export async function executeOperationsVoiceChoice(
           target: choice.target,
         };
       }
+      if (!(await claimed(deps))) return REFUSED;
       const focused = await openTarget(deps, choice.target);
       if (!focused && deps.signal?.aborted) {
         return { handled: true, status: "failed", message: "Voice request cancelled.", target: choice.target };
@@ -601,6 +617,7 @@ export async function executeOperationsVoiceChoice(
         target,
       };
     }
+    if (!(await claimed(deps))) return REFUSED;
     if (!(await openTarget(deps, target))) {
       return {
         handled: true,

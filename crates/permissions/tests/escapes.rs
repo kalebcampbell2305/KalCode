@@ -554,7 +554,7 @@ fn windows_path_tricks_are_outside_or_resolved() {
 // ---- policy under every mode ----
 
 #[test]
-fn bypass_keeps_remote_consequential_and_opaque_actions_asking() {
+fn bypass_runs_remote_and_opaque_actions_but_credentials_still_ask() {
     let h = Harness::new();
     let gate: &dyn PermissionGate = h.service.as_ref();
     let bypass_thread = h.add_thread(M::Bypass);
@@ -567,8 +567,6 @@ fn bypass_keeps_remote_consequential_and_opaque_actions_asking() {
         command("stripe charges create --amount 1"),
         command("terraform destroy"),
         command("echo $(whoami)"),
-        command("cat ~/.ssh/id_rsa"),
-        command("printenv"),
         ActionKind::Git {
             operation: GitOperation::Push,
             remote: Some("origin".into()),
@@ -584,6 +582,17 @@ fn bypass_keeps_remote_consequential_and_opaque_actions_asking() {
             path: "../outside/x".into(),
         },
     ] {
+        // Owner directive 2026-10-03: Bypass runs without approvals.
+        let decision = gate.evaluate(&action(kind.clone()), M::Bypass);
+        assert_eq!(
+            decision.effect,
+            PolicyEffect::Allow,
+            "{kind:?}: {}",
+            decision.reason
+        );
+    }
+    // Credentials and secrets still ask.
+    for kind in [command("cat ~/.ssh/id_rsa"), command("printenv")] {
         let decision = gate.evaluate(&action(kind.clone()), M::Bypass);
         assert_eq!(
             decision.effect,

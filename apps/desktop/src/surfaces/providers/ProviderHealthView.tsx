@@ -26,6 +26,7 @@ import {
   trendLabel,
   versionText,
 } from "./healthLabels.ts";
+import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import healthStyles from "./ProviderHealthView.module.css";
 import styles from "./ProvidersPage.module.css";
 import type { Label } from "./providerLabels.ts";
@@ -119,10 +120,15 @@ function HealthPanel({
   now: number;
 }) {
   const hint = recoveryHint(health, status);
+  const accounts = useOptionalProviderAccountSessions()?.accounts;
+  const own = accounts?.filter((account) => account.providerId === health.providerId) ?? null;
+  const signIns = own
+    ? { total: own.length, signedIn: own.filter((a) => a.authenticationState === "authenticated").length }
+    : null;
   const state: KeyValueItem[] = [
     { key: "health", label: "Health", value: <StatusValue label={healthStateLabel(health)} /> },
     { key: "process", label: "Process", value: processText(health) },
-    { key: "sign-in", label: "Sign-in", value: <StatusValue label={signInText(health, status)} /> },
+    { key: "sign-in", label: "Sign-in", value: <StatusValue label={signInText(health, status, signIns)} /> },
     { key: "version", label: "Version", value: versionText(health) },
     { key: "latency", label: "First output", value: latencyText(health) },
   ];

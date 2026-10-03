@@ -3,6 +3,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The form lays out by the pane's width: beside side panels it is much narrower than the window. */
+  container: new-thread / inline-size;
 }
 
 .inner {
@@ -221,6 +223,27 @@
 @media (max-width: 1100px) {
   .choices {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .accountNotice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* Narrow pane: one control per row, each spanning the form, so names and models never break mid-word. */
+@container new-thread (max-width: 40rem) {
+  .inner {
+    padding-inline: var(--space-5);
+  }
+
+  .choices {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3-5);
+  }
+
+  .choices .field {
+    align-items: stretch;
   }
 
   .accountNotice {

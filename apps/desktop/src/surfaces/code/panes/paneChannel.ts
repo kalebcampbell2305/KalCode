@@ -7,8 +7,8 @@ import type { ImportedTerminalImage } from "../../../ipc/terminalImages.ts";
 /** Input is sent in pieces of at most this many UTF-16 units (≤ 24 KB of UTF-8), as for terminals. */
 const WRITE_CHUNK = 8 * 1024;
 
-/** Permission modes a pane can start in (Bypass and Custom are set on the thread afterwards). */
-export const PANE_CREATE_MODES: readonly PermissionMode[] = ["plan", "approve", "auto"];
+/** Permission modes a pane can start in (Custom is set on the thread afterwards). */
+export const PANE_CREATE_MODES: readonly PermissionMode[] = ["plan", "approve", "auto", "bypass"];
 
 /** Providers that can run in a pane (mirrors `provider_pane_create`). */
 export const PANE_PROVIDERS = ["claude-code", "codex", "gemini-cli"] as const;
@@ -51,10 +51,12 @@ export function splitInput(data: string, chunk = WRITE_CHUNK): string[] {
   return parts;
 }
 
-/** A start mode the native command accepts without replaying Bypass or widening Custom. */
+/**
+ * Coding agents start without approvals (owner directive 2026-10-03): Bypass, unless the saved
+ * default is read-only Plan. Mirrors `startable_default_mode` in crates/permissions.
+ */
 export function paneStartMode(defaultMode: PermissionMode): PermissionMode {
-  if (PANE_CREATE_MODES.includes(defaultMode)) return defaultMode;
-  return defaultMode === "custom" || defaultMode === "bypass" ? "approve" : "auto";
+  return defaultMode === "plan" ? "plan" : "bypass";
 }
 
 /** Read the canonical local setting before launch when the provider has not loaded it yet. */

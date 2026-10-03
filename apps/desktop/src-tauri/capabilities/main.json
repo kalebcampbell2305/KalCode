@@ -16,6 +16,7 @@
     "allow-account-refresh",
     "allow-account-logout",
     "allow-account-usage",
+    "allow-account-set-display-name",
     "allow-runtime-status",
     "allow-runtime-retry",
 
@@ -76,6 +77,7 @@
     "allow-kalvoice-subscribe",
     "allow-kalvoice-status",
     "allow-kalvoice-request",
+    "allow-kalvoice-meter-ui-command",
     "allow-kalvoice-preferences-update",
     "allow-kalvoice-listen-start",
     "allow-kalvoice-listen-stop",
@@ -99,6 +101,7 @@
     "allow-provider-account-bind",
     "allow-provider-account-unbind",
     "allow-provider-account-bindings-list",
+    "allow-provider-account-usage",
     "allow-provider-codex-account-refresh",
     "allow-provider-codex-login-start",
     "allow-provider-codex-login-wait",

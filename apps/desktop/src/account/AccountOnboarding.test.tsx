@@ -17,7 +17,12 @@ function snapshot(phase: AccountSnapshot["phase"]): AccountSnapshot {
   return {
     phase,
     account: identified
-      ? { id: "acct_01", email: "owner@example.com", activatedAt: phase === "ready" ? "2026-09-25T12:00:00Z" : null }
+      ? {
+          id: "acct_01",
+          email: "owner@example.com",
+          activatedAt: phase === "ready" ? "2026-09-25T12:00:00Z" : null,
+          displayName: null,
+        }
       : null,
     tier: phase === "ready" || phase === "offline_grace" ? "pro" : null,
     sessionExpiresAt: identified ? "2026-10-25T12:00:00Z" : null,

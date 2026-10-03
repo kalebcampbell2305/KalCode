@@ -221,7 +221,12 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
     await expect(page.getByRole("heading", { level: 1, name: "codex-pane-site" })).toBeVisible();
     await waitForProviderAdmission(page);
     await page.getByRole("button", { name: "New agent", exact: true }).click();
-    await page.getByRole("dialog", { name: "New agent" }).getByRole("radio", { name: "Codex" }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("group", { name: "Codex", exact: true })
+      .getByRole("option")
+      .first()
+      .click();
     await page.getByRole("dialog", { name: "New agent" }).getByRole("button", { name: "Launch Codex agent" }).click();
     const pane = page.locator("[data-provider-pane]").first();
     await expect(pane).toBeVisible({ timeout: 30_000 });

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { forwardRef, useRef, useState } from "react";
 import { useOptionalAccount } from "../account/AccountProvider.tsx";
+import { kalcodeIdentity } from "../account/displayName.ts";
 import type { AccountPhase, AccountTier, AccountUsageSnapshot } from "../ipc/account.ts";
 import { publicVersion } from "../platform/version.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
@@ -37,6 +38,8 @@ export function useAccountHubShown(): boolean {
   return Boolean(useOptionalAccount()?.snapshot.account);
 }
 
+export { kalcodeIdentity };
+
 /** Settings sections the hub opens directly (their panel ids on the Settings page). */
 export const HUB_SECTIONS = {
   account: "kalcode-account",
@@ -46,25 +49,6 @@ export const HUB_SECTIONS = {
 } as const;
 
 const PAID: ReadonlySet<AccountTier> = new Set(["pro", "max", "max2x"]);
-
-/**
- * The name the hub shows: the display name set in Settings → Profile, else the email's local part.
- * Initials come from the first and last word of that name ("Ada Lovelace" → "AL", "ada.l" → "AL").
- */
-export function kalcodeIdentity(
-  displayName: string | null | undefined,
-  email: string,
-): {
-  name: string;
-  initials: string;
-} {
-  const at = email.lastIndexOf("@");
-  const name = displayName?.trim() || (at > 0 ? email.slice(0, at) : email);
-  const words = name.split(/[\s._+-]+/u).filter((word) => /[\p{L}\p{N}]/u.test(word));
-  const first = (word: string | undefined) => word?.match(/[\p{L}\p{N}]/u)?.[0] ?? "";
-  const letters = words.length > 1 ? first(words[0]) + first(words[words.length - 1]) : first(words[0]);
-  return { name, initials: (letters || "?").toLocaleUpperCase() };
-}
 
 /** "Pro plan", "Owner", "Free plan · Offline"; null while no plan is verified. */
 export function planLabel(tier: AccountTier | null, phase: AccountPhase): string | null {
@@ -94,7 +78,9 @@ export function AccountHub({ collapsed, onOpenPalette }: AccountHubProps) {
   const user = account?.snapshot.account;
   if (!account || !user) return null;
   const { snapshot, usage, busy, actions } = account;
-  const { name, initials } = kalcodeIdentity(settings.displayName, user.email);
+  // The KalCode account's synced display name; a name set on this computer before account
+  // names existed still shows until one is set.
+  const { name, initials } = kalcodeIdentity(user.displayName ?? settings.displayName, user.email);
   const plan = planLabel(snapshot.tier, snapshot.phase);
   const paid = snapshot.tier !== null && PAID.has(snapshot.tier);
   const premium = paid || snapshot.tier === "owner";

@@ -1,5 +1,7 @@
 /**
- * Command Deck layout state: whether the agents rail is open. Remembered per device. On the
+ * Command Deck layout state: whether the agents rail is open. Until the person pins it open or
+ * collapses it (remembered per device), the rail follows the agents: it stays a strip while no
+ * agent is running and nothing needs the person, and opens on its own when one is. On the
  * Dashboard — whose board already lists every agent — the rail starts as its strip of live counts
  * and opens there only on request, so the board keeps its width.
  */
@@ -8,7 +10,8 @@ import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 import { useNavigation } from "../navigation.tsx";
 
-const STORAGE_KEY = "kalcode.deck.agentsRail";
+// v2: choices made before the rail followed the agents are not carried over (everyone starts on auto).
+const STORAGE_KEY = "kalcode.deck.agentsRail.v2";
 const PROJECTS_KEY = "kalcode.deck.projectsCollapsed";
 /** Below this window width the agents rail starts as its narrow strip (until the person chooses). */
 const NARROW_PX = 1280;
@@ -17,22 +20,26 @@ interface DeckUiValue {
   projectsCollapsed: boolean;
   setProjectsCollapsed: (collapsed: boolean) => void;
   agentsOpen: boolean;
+  /** The person's own choice: pins the rail open or collapsed, remembered across restarts. */
   setAgentsOpen: (open: boolean) => void;
+  /** The agents rail reports whether any agent is running or needs the person (auto mode). */
+  setAgentsActive: (active: boolean) => void;
   /** Opens the rail and moves focus into it (from the top bar's "working" signal). */
   revealAgents: () => void;
 }
 
 const DeckUiContext = createContext<DeckUiValue | null>(null);
 
-function initialOpen(): boolean {
+type RailChoice = "open" | "closed" | null;
+
+function initialChoice(): RailChoice {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved === "open") return true;
-    if (saved === "closed") return false;
+    if (saved === "open" || saved === "closed") return saved;
   } catch {
-    // Storage unavailable: fall through to the width default.
+    // Storage unavailable: the rail follows the agents.
   }
-  return typeof window === "undefined" || window.innerWidth >= NARROW_PX;
+  return null;
 }
 
 export function DeckUiProvider({ children }: { children: ReactNode }) {
@@ -61,7 +68,10 @@ export function DeckUiProvider({ children }: { children: ReactNode }) {
   );
   const { current } = useNavigation();
   const onDashboard = current === "dashboard";
-  const [saved, setSaved] = useState(initialOpen);
+  const [choice, setChoice] = useState<RailChoice>(initialChoice);
+  const [agentsActive, setAgentsActive] = useState(false);
+  // A narrow window keeps the rail as its strip unless the person opens it.
+  const [wide] = useState(() => typeof window === "undefined" || window.innerWidth >= NARROW_PX);
   // Opened on the Dashboard for this visit only; leaving the Dashboard resets it.
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [lastOnDashboard, setLastOnDashboard] = useState(onDashboard);
@@ -70,13 +80,14 @@ export function DeckUiProvider({ children }: { children: ReactNode }) {
     setDashboardOpen(false);
   }
 
-  const setAgentsOpen = useCallback(
-    (open: boolean) => {
+  const choose = useCallback(
+    (open: boolean, remember: boolean) => {
       if (onDashboard) {
         setDashboardOpen(open);
         return;
       }
-      setSaved(open);
+      setChoice(open ? "open" : "closed");
+      if (!remember) return;
       try {
         window.localStorage.setItem(STORAGE_KEY, open ? "open" : "closed");
       } catch {
@@ -85,13 +96,15 @@ export function DeckUiProvider({ children }: { children: ReactNode }) {
     },
     [onDashboard],
   );
+  const setAgentsOpen = useCallback((open: boolean) => choose(open, true), [choose]);
+  // The top bar's "working" signal shows the rail now without pinning it for later.
   const revealAgents = useCallback(() => {
-    setAgentsOpen(true);
+    choose(true, false);
     requestAnimationFrame(() => document.getElementById("deck-agents")?.focus());
-  }, [setAgentsOpen]);
-  const agentsOpen = onDashboard ? dashboardOpen : saved;
+  }, [choose]);
+  const agentsOpen = onDashboard ? dashboardOpen : choice !== null ? choice === "open" : agentsActive && wide;
   const value = useMemo(
-    () => ({ agentsOpen, setAgentsOpen, revealAgents, projectsCollapsed, setProjectsCollapsed }),
+    () => ({ agentsOpen, setAgentsOpen, setAgentsActive, revealAgents, projectsCollapsed, setProjectsCollapsed }),
     [agentsOpen, setAgentsOpen, revealAgents, projectsCollapsed, setProjectsCollapsed],
   );
   return <DeckUiContext.Provider value={value}>{children}</DeckUiContext.Provider>;

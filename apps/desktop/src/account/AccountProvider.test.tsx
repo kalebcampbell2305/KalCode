@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountSnapshot, RuntimeStatus } from "../ipc/account.ts";
 import {
@@ -16,7 +17,12 @@ function snapshot(phase: AccountSnapshot["phase"]): AccountSnapshot {
   return {
     phase,
     account: identified
-      ? { id: "acct_01", email: "owner@example.com", activatedAt: phase === "ready" ? "2026-09-25T12:00:00Z" : null }
+      ? {
+          id: "acct_01",
+          email: "owner@example.com",
+          activatedAt: phase === "ready" ? "2026-09-25T12:00:00Z" : null,
+          displayName: null,
+        }
       : null,
     tier: phase === "ready" ? "pro" : null,
     sessionExpiresAt: identified ? "2026-10-25T12:00:00Z" : null,
@@ -51,6 +57,7 @@ function operations(overrides: Partial<AccountOperations> = {}): AccountOperatio
     refresh: vi.fn(async () => snapshot("ready")),
     logout: vi.fn(async () => snapshot("signed_out")),
     usage: vi.fn(async () => null),
+    setDisplayName: vi.fn(async () => snapshot("ready")),
     ...overrides,
   };
 }
@@ -269,5 +276,95 @@ describe("AccountProvider", () => {
     await act(async () => vi.advanceTimersByTimeAsync(20));
     expect(screen.getByLabelText("phase")).toHaveTextContent("authenticated_unactivated");
     expect(status).toHaveBeenCalledTimes(3);
+  });
+});
+
+function NameHarness({ name }: { name: string }) {
+  const account = useAccount();
+  const [result, setResult] = useState("idle");
+  return (
+    <div>
+      <output aria-label="name">{account.snapshot.account?.displayName ?? "(none)"}</output>
+      <output aria-label="busy">{String(account.busy)}</output>
+      <output aria-label="result">{result}</output>
+      <button
+        type="button"
+        onClick={() =>
+          void account.actions.setDisplayName(name).then((error) => setResult(error ? error.code : "saved"))
+        }
+      >
+        save name
+      </button>
+    </div>
+  );
+}
+
+function named(displayName: string | null): AccountSnapshot {
+  const ready = snapshot("ready");
+  return { ...ready, account: ready.account ? { ...ready.account, displayName } : null };
+}
+
+describe("AccountProvider display name", () => {
+  const readyClient = (setDisplayName: AccountOperations["setDisplayName"]) =>
+    operations({
+      status: vi.fn(async () => named("Kaleb Campbell")),
+      runtimeStatus: vi.fn<() => Promise<RuntimeStatus>>(async () => ({ phase: "ready", ready: true })),
+      setDisplayName,
+    });
+
+  it("shows the new name at once, never goes busy, and keeps the server's normalized name", async () => {
+    const pending = deferred<AccountSnapshot>();
+    const setDisplayName = vi.fn(() => pending.promise);
+    render(
+      <AccountProvider client={readyClient(setDisplayName)}>
+        <NameHarness name="  Kaleb  " />
+      </AccountProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell"));
+    await userEvent.click(screen.getByRole("button", { name: "save name" }));
+    // Optimistic: shown before the server answers; the rest of the account stays usable.
+    expect(screen.getByLabelText("name")).toHaveTextContent(/^Kaleb$/);
+    expect(screen.getByLabelText("busy")).toHaveTextContent("false");
+    expect(setDisplayName).toHaveBeenCalledWith("Kaleb");
+    await act(async () => pending.resolve(named("Kaleb")));
+    expect(screen.getByLabelText("result")).toHaveTextContent("saved");
+    expect(screen.getByLabelText("name")).toHaveTextContent(/^Kaleb$/);
+  });
+
+  it("rolls back to the saved name and reports why when the save fails", async () => {
+    const pending = deferred<AccountSnapshot>();
+    const setDisplayName = vi.fn(async () => {
+      await pending.promise;
+      throw {
+        code: "account_service_unavailable",
+        message: "KalCode could not reach the account service.",
+        retryable: true,
+      };
+    });
+    render(
+      <AccountProvider client={readyClient(setDisplayName)}>
+        <NameHarness name="Kaleb" />
+      </AccountProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell"));
+    await userEvent.click(screen.getByRole("button", { name: "save name" }));
+    expect(screen.getByLabelText("name")).toHaveTextContent(/^Kaleb$/);
+    await act(async () => pending.resolve(named("Kaleb")));
+    await waitFor(() => expect(screen.getByLabelText("result")).toHaveTextContent("account_service_unavailable"));
+    expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell");
+  });
+
+  it("clears the name with a blank value", async () => {
+    const setDisplayName = vi.fn(async () => named(null));
+    render(
+      <AccountProvider client={readyClient(setDisplayName)}>
+        <NameHarness name="   " />
+      </AccountProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText("name")).toHaveTextContent("Kaleb Campbell"));
+    await userEvent.click(screen.getByRole("button", { name: "save name" }));
+    await waitFor(() => expect(screen.getByLabelText("result")).toHaveTextContent("saved"));
+    expect(setDisplayName).toHaveBeenCalledWith(null);
+    expect(screen.getByLabelText("name")).toHaveTextContent("(none)");
   });
 });

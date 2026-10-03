@@ -30,7 +30,6 @@ import { AgentRail } from "./deck/AgentRail.tsx";
 import { CommandBar } from "./deck/CommandBar.tsx";
 import { DeckDataProvider } from "./deck/DeckData.tsx";
 import { DeckUiProvider } from "./deck/DeckUi.tsx";
-import { StatusStrip } from "./deck/StatusStrip.tsx";
 import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
 import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
@@ -113,7 +112,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   // refreshing) skip the kept-mounted Code subtree; it still updates from its own state.
   const codePage = useMemo(() => <CodePage />, []);
   // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot), and inside the Command
-  // Deck's chrome: below the top bar, above the status strip and left of the agents rail.
+  // Deck's chrome: below the top bar and left of the agents rail.
   useLayoutEffect(() => {
     const main = mainRef.current;
     const deck = deckRef.current;
@@ -160,7 +159,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
             <a className={styles.skipLink} href="#main">
               Skip to content
             </a>
-            {/* Command Deck: top bar · (projects · page · agents) · status strip. */}
+            {/* Command Deck: top bar · (projects · page · agents). */}
             <CommandBar onOpenPalette={() => setPaletteOpen(true)} sidebarCollapsed={settings.sidebarCollapsed} />
             <div
               ref={deckRef}
@@ -214,7 +213,6 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
               </main>
               <AgentRail />
             </div>
-            <StatusStrip />
             <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
             {kalvoice ? <FloatingAssistant /> : null}
             {kalvoice ? <PushToTalkActivity /> : null}

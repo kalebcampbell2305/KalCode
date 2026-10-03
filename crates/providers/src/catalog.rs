@@ -251,18 +251,25 @@ mod tests {
             );
             for mapping in &status.capabilities.permission_mappings {
                 assert_eq!(mapping.fidelity, MappingFidelity::ApproximateStricter);
-                for broad in [
-                    "bypassPermissions",
-                    "dangerously",
-                    "yolo",
-                    "--approval-mode=yolo",
-                ] {
+                for broad in ["dangerously", "--approval-mode=yolo"] {
                     assert!(
                         !mapping.provider_setting.contains(broad),
                         "{}: {}",
                         status.id,
                         mapping.provider_setting
                     );
+                }
+                // Bypass runs without approvals (owner directive 2026-10-03); no other mode
+                // uses a provider's no-prompt setting.
+                if mapping.mode != PermissionMode::Bypass {
+                    for broad in ["bypassPermissions", "yolo"] {
+                        assert!(
+                            !mapping.provider_setting.contains(broad),
+                            "{}: {}",
+                            status.id,
+                            mapping.provider_setting
+                        );
+                    }
                 }
                 let codex_native_bypass = status.id.as_str() == ProviderId::CODEX
                     && mapping.mode == PermissionMode::Bypass;

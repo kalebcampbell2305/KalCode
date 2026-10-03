@@ -127,8 +127,44 @@ export function isAnswerInProvider(activity: string | null): boolean {
   return activity?.startsWith("Answer in ") ?? false;
 }
 
-export function modelLabel(thread: ThreadSummary): string {
-  return thread.model ?? (thread.providerId === "claude-code" ? "Account default" : "Provider default");
+/** The exact model the agent was launched with; null when unknown (never a guess). */
+export function paneModel(thread: Pick<ThreadSummary, "model">): string | null {
+  return thread.model?.trim() || null;
+}
+
+const EFFORT_LABELS: Record<string, string> = { xhigh: "Extra high", max: "Max" };
+
+/** The provider-native reasoning effort, labelled; null for the provider default. */
+export function paneEffort(thread: Pick<ThreadSummary, "effort">): string | null {
+  const effort = thread.effort?.trim().toLowerCase();
+  if (!effort || effort === "default") return null;
+  return EFFORT_LABELS[effort] ?? `${effort[0]?.toUpperCase()}${effort.slice(1)}`;
+}
+
+/** An agent whose provider process ended (or never started) and can be started again. */
+export function canResumePane(status: ThreadStatus, running: boolean): boolean {
+  return (
+    !running && (status === "failed" || status === "interrupted" || status === "completed" || status === "offline")
+  );
+}
+
+/** One line for the ended bar: what happened to this agent's provider. */
+export function endedSummary(
+  status: ThreadStatus,
+  providerName: string,
+  exitCode: number | null,
+  errorMessage: string | null,
+): string {
+  // Short: the bar shares a narrow pane with Resume, and the tab already names the provider.
+  if (status === "failed") return errorMessage || `${providerName} stopped with an error`;
+  if (status === "interrupted") return "Stopped · resume to pick up where it left off";
+  if (status === "offline") return `${providerName} is offline`;
+  return exitCode !== null && exitCode !== 0 ? `Exited with code ${exitCode}` : "Finished";
+}
+
+/** The live line announced when KalCode starts holding a tool call for this pane. */
+export function approvalAnnouncement(providerName: string, paneName: string): string {
+  return `${providerName} needs approval in ${paneName}. Press Ctrl+Shift+E to answer.`;
 }
 
 /** The region's accessible name. */

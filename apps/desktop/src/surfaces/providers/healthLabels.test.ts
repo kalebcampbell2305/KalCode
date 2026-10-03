@@ -97,6 +97,22 @@ describe("provider health labels", () => {
     expect(signInText(health({ detection: "not_installed" }), codex).label).toBe("Not checked");
   });
 
+  it("answers an unknown provider sign-in from the connected accounts, never against the provider", () => {
+    const claudeUnknown = health({ providerId: "claude-code", displayName: "Claude Code", auth: "unknown" });
+    expect(signInText(claudeUnknown, claude, { total: 2, signedIn: 1 })).toEqual({
+      tone: "success",
+      label: "Signed in",
+      detail: "1 account signed in on this computer.",
+    });
+    expect(signInText(claudeUnknown, claude, { total: 1, signedIn: 0 }).label).toBe("Signed out");
+    // No accounts: the provider's own (unknown) answer stands.
+    expect(signInText(claudeUnknown, claude, { total: 0, signedIn: 0 }).label).toBe("Sign-in status unknown");
+    // A provider that answers for itself keeps its answer.
+    expect(signInText(health({ auth: "not_authenticated" }), codex, { total: 1, signedIn: 1 }).label).toBe(
+      "Signed out",
+    );
+  });
+
   it("lists recent failures with the last code and when", () => {
     expect(failuresText(health(), NOW)).toBe("None in the last hour");
     expect(

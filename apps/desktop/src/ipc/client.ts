@@ -40,6 +40,7 @@ import type {
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
+  ProviderAccountUsage,
   ProviderHealth,
   ProviderStatus,
   RailSection,
@@ -63,6 +64,7 @@ import type {
   ThreadSummary,
   ThreadWorktreeState,
   ToolCallRecord,
+  UiCommandRequest,
   Workspace,
   WorkspaceGroup,
   WorkspaceLayout,
@@ -321,6 +323,11 @@ export class KalCodeClient {
     return this.call("kalvoice_request", { request });
   }
 
+  /** Claims one KalVoice Request for a command the UI runs itself; run it only on `completed`. */
+  kalvoiceMeterUiCommand(request: UiCommandRequest): Promise<KalVoiceResponse> {
+    return this.call("kalvoice_meter_ui_command", { request });
+  }
+
   /** One push-to-talk utterance: routed natively to a command, dictation or a request. */
   kalvoiceTalk(request: TalkRequest): Promise<TalkResponse> {
     return this.call("kalvoice_talk", { request });
@@ -444,6 +451,14 @@ export class KalCodeClient {
       kind: filter.kind ?? null,
       scopeId: filter.scopeId ?? null,
     });
+  }
+
+  /**
+   * Real provider quota usage per active account (all, or only `accountIds`), read passively
+   * from what the provider CLI recorded. Never runs a provider command or touches credentials.
+   */
+  providerAccountUsage(accountIds?: readonly string[]): Promise<ProviderAccountUsage[]> {
+    return this.call("provider_account_usage", { accountIds: accountIds ? [...accountIds] : null });
   }
 
   refreshCodexAccount(accountId: string): Promise<ProviderAccount> {

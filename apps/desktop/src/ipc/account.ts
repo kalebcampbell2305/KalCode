@@ -21,7 +21,15 @@ export interface PublicAccount {
   id: string;
   email: string;
   activatedAt: string | null;
+  /**
+   * The KalCode account's display name, synced with the account. `null` = not set (surfaces
+   * show the email's local part). Cosmetic only: never identity, sign-in or billing.
+   */
+  displayName: string | null;
 }
+
+/** The longest KalCode account display name (characters), matching the API. */
+export const DISPLAY_NAME_MAX = 64;
 
 export interface AccountSnapshot {
   phase: AccountPhase;
@@ -70,6 +78,7 @@ export type AccountCommandName =
   | "account_refresh"
   | "account_logout"
   | "account_usage"
+  | "account_set_display_name"
   | "runtime_status"
   | "runtime_retry";
 
@@ -195,7 +204,11 @@ function parsePublicAccount(value: unknown): PublicAccount | null {
   const id = nullableString(item.id, "account id");
   const email = nullableString(item.email, "account email");
   if (id === null || email === null || !email.includes("@")) throw new Error("Invalid native account.");
-  return { id, email, activatedAt: nullableIso(item.activatedAt, "activation time") };
+  // Absent from native builds that predate display names.
+  const displayName = item.displayName === undefined ? null : nullableString(item.displayName, "display name");
+  if (displayName !== null && [...displayName].length > DISPLAY_NAME_MAX)
+    throw new Error("Invalid native display name.");
+  return { id, email, activatedAt: nullableIso(item.activatedAt, "activation time"), displayName };
 }
 
 export function parseAccountSnapshot(value: unknown): AccountSnapshot {
@@ -354,5 +367,10 @@ export class AccountClient {
 
   async usage(): Promise<AccountUsageSnapshot> {
     return parseAccountUsage(await this.transport.invoke("account_usage"));
+  }
+
+  /** Sets the account display name; `null` (or blank) clears it. Returns the updated account. */
+  setDisplayName(displayName: string | null): Promise<AccountSnapshot> {
+    return this.snapshot("account_set_display_name", { displayName });
   }
 }

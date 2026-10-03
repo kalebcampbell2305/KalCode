@@ -15,7 +15,15 @@ import { ChevronDown, Info, LogIn, LogOut, MoreHorizontal, PenLine, RefreshCw, S
 import { type FormEvent, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { agentsAndThreadsLabel } from "../dashboard/data/agents.ts";
+import { UsageMeter } from "./AccountUsageBadge.tsx";
 import { accountFullLabel, accountName, accountSessionState, accountSignIn } from "./accountIdentity.ts";
+import {
+  type AccountUsageState,
+  LOW_USAGE_PERCENT,
+  limitingWindow,
+  resetsIn,
+  useAccountUsage,
+} from "./accountUsage.ts";
 import styles from "./ProviderAccountsView.module.css";
 import { type AccountUsage, canRefreshProviderAuth, isBrowserAuthProvider } from "./useProviderAccounts.ts";
 
@@ -31,9 +39,9 @@ export interface AccountRowActions {
 
 /**
  * One account as a dense row: name (with a quiet Default marker) and identity, health and
- * sign-in, usage, then one contextual action and an overflow menu. Everything shown is what
- * KalCode actually knows; provider usage, limits and plans aren't reported to KalCode, so they
- * say so instead of showing a number.
+ * sign-in, provider usage, KalCode activity, then one contextual action and an overflow menu.
+ * Usage and plan are the canonical per-account state (accountUsage.ts), the same numbers every
+ * other surface shows; when the provider doesn't report them the row says so, never a guess.
  */
 export function AccountRow({
   account,
@@ -46,6 +54,7 @@ export function AccountRow({
   validationError = null,
   usageStale = false,
   usageRefreshing = false,
+  sameSignIn = null,
   actions,
 }: {
   account: ProviderAccount;
@@ -64,6 +73,8 @@ export function AccountRow({
   /** The last derived local activity snapshot is still shown after a refresh failure. */
   usageStale?: boolean;
   usageRefreshing?: boolean;
+  /** "Same sign-in as Work" when another account shares this provider identity. */
+  sameSignIn?: string | null;
   actions: AccountRowActions;
 }) {
   const id = useId();
@@ -81,6 +92,7 @@ export function AccountRow({
   const signedIn = account.authenticationState === "authenticated";
   const session = accountSessionState(account, checking, validationError);
   const signIn = accountSignIn(account);
+  const quota = useAccountUsage(account.id);
   const detailsId = `${id}-details`;
 
   const startRename = () => {
@@ -118,6 +130,11 @@ export function AccountRow({
           ) : (
             <span className={styles.muted}>Identity not reported</span>
           )}
+          {sameSignIn ? (
+            <span className={styles.shared} title="Both accounts use one provider sign-in, so they share its usage">
+              {sameSignIn}
+            </span>
+          ) : null}
         </div>
 
         <div className={styles.cellStatus}>
@@ -138,7 +155,23 @@ export function AccountRow({
         </div>
 
         <div className={styles.cellUsage}>
-          <span className={styles.muted}>{account.lastCheckedAt ? "Usage unavailable" : "Usage not checked"}</span>
+          {!signedIn && quota.status === "not_checked" ? (
+            // Nothing to read until the account signs in; the Sign in action is beside it.
+            <span className={styles.muted}>Sign in to read usage</span>
+          ) : (
+            <>
+              <span className={styles.usageLine}>
+                <UsageMeter usage={quota} />
+                {quota.plan ? <span className={styles.plan}>{quota.plan}</span> : null}
+              </span>
+              <span className={styles.sub} data-tone={quota.status === "stale" ? "stale" : undefined}>
+                {usageDetail(quota)}
+              </span>
+            </>
+          )}
+        </div>
+
+        <div className={styles.cellActivity}>
           <span className={styles.sub}>
             {usage
               ? `${activity(usage)}${usageStale ? " · stale" : usageRefreshing ? " · refreshing" : ""}`
@@ -266,7 +299,7 @@ export function AccountRow({
 
       {expanded ? (
         <div id={detailsId} className={styles.details}>
-          <AccountFacts account={account} providerName={providerName} usage={usage} />
+          <AccountFacts account={account} providerName={providerName} usage={usage} quota={quota} />
 
           {renaming ? (
             <form className={styles.inlineForm} onSubmit={(event) => void saveName(event)}>
@@ -351,12 +384,15 @@ function AccountFacts({
   account,
   providerName,
   usage,
+  quota,
 }: {
   account: ProviderAccount;
   providerName: string;
   usage: AccountUsage | null;
+  quota: AccountUsageState;
 }) {
   const now = Date.now();
+  const known = (quota.status === "fresh" || quota.status === "stale") && quota.windows.length > 0;
   const signIn = accountSignIn(account);
   return (
     <dl className={styles.facts}>
@@ -372,7 +408,7 @@ function AccountFacts({
       </div>
       <div>
         <dt>Plan</dt>
-        <dd className={styles.muted}>Not reported</dd>
+        {quota.plan ? <dd>{quota.plan}</dd> : <dd className={styles.muted}>Not reported</dd>}
       </div>
       <div>
         <dt>Sign-in</dt>
@@ -388,8 +424,30 @@ function AccountFacts({
       </div>
       <div>
         <dt>Usage and limits</dt>
-        <dd className={styles.muted}>Not available in KalCode</dd>
+        {known ? (
+          <dd>
+            <ul className={styles.windowList}>
+              {quota.windows.map((window) => (
+                <li key={window.id} data-tone={window.remainingPercent < LOW_USAGE_PERCENT ? "low" : undefined}>
+                  {window.label} · {Math.max(0, Math.min(100, Math.round(window.remainingPercent)))}% left
+                  {resetsIn(window.resetsAt, now) ? ` · ${resetsIn(window.resetsAt, now)?.toLowerCase()}` : ""}
+                </li>
+              ))}
+            </ul>
+          </dd>
+        ) : (
+          <dd className={styles.muted}>{usageDetail(quota)}</dd>
+        )}
       </div>
+      {known && quota.checkedAt ? (
+        <div>
+          <dt>Usage read</dt>
+          <dd>
+            <When iso={quota.checkedAt} now={now} />
+            {quota.status === "stale" ? " · may be out of date" : ""}
+          </dd>
+        </div>
+      ) : null}
       <div>
         <dt>Last used</dt>
         <dd>{account.lastUsedAt ? <When iso={account.lastUsedAt} now={now} /> : "Never"}</dd>
@@ -422,6 +480,24 @@ function AccountFacts({
       </div>
     </dl>
   );
+}
+
+/**
+ * The line under the meter: when the limiting window resets ("Weekly · resets in 3d 5h"), that a
+ * stale reading is old, or why there is no number ("Signed out", "Not reported by Gemini").
+ */
+function usageDetail(usage: AccountUsageState): string {
+  if (usage.status === "fresh" || usage.status === "stale") {
+    const window = limitingWindow(usage);
+    if (!window) return "No usage windows reported";
+    const reset = resetsIn(window.resetsAt);
+    const parts = [window.label, reset ? reset.toLowerCase() : null];
+    if (usage.status === "stale" && usage.checkedAt) parts.push(`read ${formatRelative(usage.checkedAt)}`);
+    return parts.filter(Boolean).join(" · ");
+  }
+  if (usage.status === "checking") return "Reading provider usage…";
+  if (usage.status === "unavailable") return usage.reason ?? "Not reported by this provider";
+  return usage.reason ?? "Not read yet";
 }
 
 function When({ iso, now }: { iso: string; now: number }) {

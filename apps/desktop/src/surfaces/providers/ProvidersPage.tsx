@@ -1,4 +1,4 @@
-import type { ProviderStatus } from "@kalcode/protocol";
+import type { ProviderAccount, ProviderStatus } from "@kalcode/protocol";
 import {
   Badge,
   Button,
@@ -16,12 +16,13 @@ import {
   TabsTrigger,
   useToast,
 } from "@kalcode/ui/components";
-import { Check, Copy, Minus, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Copy, LogIn, Minus, Plus, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { Page } from "../../shell/Page.tsx";
-import { ProviderAccountsView } from "./ProviderAccountsView.tsx";
+import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
+import { ProviderAccountsView, type ProviderSignInRequest } from "./ProviderAccountsView.tsx";
 import { ProviderHealthView } from "./ProviderHealthView.tsx";
 import styles from "./ProvidersPage.module.css";
 import {
@@ -32,6 +33,7 @@ import {
   detectionLabel,
   fidelityLabel,
   type Label,
+  managedSignInLabel,
   modeLabel,
   modelList,
   needsInstall,
@@ -39,6 +41,7 @@ import {
   settingGroups,
 } from "./providerLabels.ts";
 import { consumeProvidersTab, type ProvidersTab, useProvidersTabRequest } from "./providersTab.ts";
+import { isBrowserAuthProvider } from "./useProviderAccounts.ts";
 import { useProviderHealth } from "./useProviderHealth.ts";
 import { useProviders } from "./useProviders.ts";
 
@@ -56,7 +59,15 @@ export function ProvidersPage() {
   const now = useNow();
   const lastChecked = latestCheck(statuses);
   const request = useProvidersTabRequest();
-  const [tab, setTab] = useState<ProvidersTab>(request?.tab ?? "setup");
+  // Accounts first: it is where sign-in and usage live, and it opens without a provider check.
+  const [tab, setTab] = useState<ProvidersTab>(request?.tab ?? "accounts");
+  const [signInRequest, setSignInRequest] = useState<ProviderSignInRequest | null>(null);
+  // Setup reads sign-in from the same canonical accounts the Accounts tab shows.
+  const accounts = useOptionalProviderAccountSessions()?.accounts ?? null;
+  const requestSignIn = useCallback((providerId: string) => {
+    setTab("accounts");
+    setSignInRequest((current) => ({ providerId, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
   // Accounts reads it too, for provider-wide rate limits on each provider's section.
   const health = useProviderHealth(tab === "health" || tab === "accounts");
   const { refresh: refreshHealth } = health;
@@ -129,14 +140,26 @@ export function ProvidersPage() {
                 </ErrorState>
               ) : null}
               {statuses.map((status) => (
-                <ProviderSection key={status.id} status={status} checking={detecting} now={now} />
+                <ProviderSection
+                  key={status.id}
+                  status={status}
+                  checking={detecting}
+                  now={now}
+                  accounts={accounts ? accounts.filter((account) => account.providerId === status.id) : null}
+                  onSignIn={requestSignIn}
+                />
               ))}
             </>
           )}
         </TabsContent>
         <TabsContent value="accounts" className={styles.tabPanel}>
           <section aria-label="Provider accounts" className={styles.tabPanel}>
-            <ProviderAccountsView enabled={tab === "accounts"} statuses={statuses} health={health.list} />
+            <ProviderAccountsView
+              enabled={tab === "accounts"}
+              statuses={statuses}
+              health={health.list}
+              signInRequest={signInRequest}
+            />
           </section>
         </TabsContent>
         <TabsContent value="health" className={styles.tabPanel}>
@@ -163,11 +186,28 @@ function StatusValue({ label }: { label: Label }) {
   );
 }
 
-function ProviderSection({ status, checking, now }: { status: ProviderStatus; checking: boolean; now: number }) {
+function ProviderSection({
+  status,
+  checking,
+  now,
+  accounts,
+  onSignIn,
+}: {
+  status: ProviderStatus;
+  checking: boolean;
+  now: number;
+  /** This provider's KalCode accounts; null while they load. */
+  accounts: readonly ProviderAccount[] | null;
+  onSignIn: (providerId: string) => void;
+}) {
   const sectionId = `provider-${status.id}`;
   const adapter = adapterLabel(status.adapter);
   const detection = status.detection;
-  const auth = authLabel(status);
+  // A managed provider signs in per KalCode account, so its accounts are the one authority. The
+  // CLI's own standalone login (what detection checks) is a different profile KalCode doesn't use.
+  const managed = isBrowserAuthProvider(status.id);
+  const installed = detection !== null && detection.state !== "not_installed" && detection.state !== "error";
+  const auth = managed ? (installed ? managedSignInLabel(accounts) : null) : authLabel(status);
 
   const setup: KeyValueItem[] = [
     {
@@ -184,15 +224,37 @@ function ProviderSection({ status, checking, now }: { status: ProviderStatus; ch
         ),
     },
   ];
-  if (auth) setup.push({ key: "auth", label: "Sign-in", value: <StatusValue label={auth} /> });
-  if (needsSignIn(status)) {
-    const accountHint = accountSignInHint(status);
+  if (managed && installed) {
+    const signedIn = accounts?.some((account) => account.authenticationState === "authenticated") ?? false;
+    setup.push({
+      key: "auth",
+      label: "Sign-in",
+      value: signedIn ? (
+        <StatusValue label={auth as Label} />
+      ) : (
+        <span className={styles.signIn}>
+          <span className={styles.signInLine}>
+            {auth ? <StatusIndicator tone={auth.tone}>{auth.label}</StatusIndicator> : <Skeleton width="7rem" />}
+            <Button
+              size="sm"
+              variant="primary"
+              icon={accounts?.length === 0 ? <Plus /> : <LogIn />}
+              onClick={() => onSignIn(status.id)}
+              aria-label={`${accounts?.length === 0 ? "Add" : "Sign in to"} ${status.displayName} account`}
+            >
+              {accounts?.length === 0 ? "Add account" : "Sign in"}
+            </Button>
+          </span>
+          <span className={styles.statusDetail}>{accountSignInHint(status)}</span>
+        </span>
+      ),
+    });
+  } else if (auth) setup.push({ key: "auth", label: "Sign-in", value: <StatusValue label={auth} /> });
+  if (!managed && needsSignIn(status)) {
     setup.push({
       key: "sign-in",
       label: "How to sign in",
-      value: accountHint ? (
-        <span className={styles.prose}>{accountHint}</span>
-      ) : (
+      value: (
         <span className={styles.prose}>
           Run <code data-selectable>{status.signInCommand}</code> in a terminal to sign in to {status.displayName} with
           your own account, then choose Check again.

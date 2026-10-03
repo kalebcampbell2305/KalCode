@@ -328,11 +328,18 @@ export function PaneFrame(props: PaneFrameProps) {
                   {info.glyph}
                 </span>
                 <span className={styles.tabLabel}>{info.title}</span>
-                {info.stateLabel ? <span className={styles.tabState}>{info.stateLabel}</span> : null}
-                {info.tone ? <span className={styles.dot} data-tone={info.tone} aria-hidden="true" /> : null}
-                {/* Mouse affordance; keyboard users close with Delete. Closing never stops a process. */}
+                {/* A state word carries its tone itself; otherwise the dot does. */}
+                {info.stateLabel ? (
+                  <span className={styles.tabState} data-tone={info.tone}>
+                    {info.stateLabel}
+                  </span>
+                ) : info.tone ? (
+                  <span className={styles.dot} data-tone={info.tone} aria-hidden="true" />
+                ) : null}
+                {/* Mouse affordance; keyboard users close with Delete (or Ctrl+Shift+W in Code). */}
                 <span
                   className={styles.tabClose}
+                  data-tab-close
                   aria-hidden="true"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
@@ -348,7 +355,7 @@ export function PaneFrame(props: PaneFrameProps) {
         </div>
         <div className={styles.addTab} data-no-drag>
           <DropdownMenu>
-            <Tooltip content="Add to this pane">
+            <Tooltip content="Add to this pane" side="bottom">
               <DropdownMenuTrigger asChild>
                 <IconButton size="sm" label={`Add to pane ${index + 1}`} icon={<Plus />} />
               </DropdownMenuTrigger>
@@ -372,7 +379,7 @@ export function PaneFrame(props: PaneFrameProps) {
             </span>
           ) : null}
           {canSplit ? (
-            <Tooltip content={`Split right (${PANE_SHORTCUT_LABELS.splitRight})`}>
+            <Tooltip content={`Split right (${PANE_SHORTCUT_LABELS.splitRight})`} side="bottom">
               <IconButton
                 size="sm"
                 className={styles.optional}
@@ -383,7 +390,7 @@ export function PaneFrame(props: PaneFrameProps) {
             </Tooltip>
           ) : null}
           {multiple ? (
-            <Tooltip content={`${maximized ? "Restore" : "Maximize"} (${PANE_SHORTCUT_LABELS.maximize})`}>
+            <Tooltip content={`${maximized ? "Restore" : "Maximize"} (${PANE_SHORTCUT_LABELS.maximize})`} side="bottom">
               <IconButton
                 size="sm"
                 className={styles.optional}
@@ -395,7 +402,7 @@ export function PaneFrame(props: PaneFrameProps) {
             </Tooltip>
           ) : null}
           <DropdownMenu>
-            <Tooltip content="Pane actions">
+            <Tooltip content="Pane actions" side="bottom">
               <DropdownMenuTrigger asChild>
                 <IconButton size="sm" label={`Actions for pane ${index + 1}`} icon={<MoreHorizontal />} />
               </DropdownMenuTrigger>
@@ -467,7 +474,7 @@ export function PaneFrame(props: PaneFrameProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Tooltip content={`Close pane (${PANE_SHORTCUT_LABELS.close})`}>
+          <Tooltip content={`Close pane (${PANE_SHORTCUT_LABELS.close})`} side="bottom">
             <IconButton
               size="sm"
               className={styles.closePane}

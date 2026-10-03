@@ -55,6 +55,39 @@ interface Snapshot {
 
 const EMPTY: Snapshot = { workspaces: [], active: null, terminals: [], running: [] };
 
+/** Small IPC records (workspace, terminal): equal when their serialized fields are. */
+function sameRecord(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** `next`, reusing every unchanged item of `previous`, or `previous` itself when nothing changed. */
+function reuseList<T extends { id: string }>(previous: T[], next: T[]): T[] {
+  const byId = new Map(previous.map((item) => [item.id, item]));
+  const merged = next.map((item) => {
+    const before = byId.get(item.id);
+    return before && sameRecord(before, item) ? before : item;
+  });
+  return merged.length === previous.length && merged.every((item, i) => item === previous[i]) ? previous : merged;
+}
+
+/**
+ * The refreshed snapshot, keeping unchanged arrays and records (and the snapshot itself when
+ * nothing changed) so a quiet refresh re-renders no `useWorkspaces()` consumer.
+ */
+function mergeSnapshot(previous: Snapshot, next: Snapshot): Snapshot {
+  const workspaces = reuseList(previous.workspaces, next.workspaces);
+  const active =
+    next.active && previous.active && sameRecord(previous.active, next.active) ? previous.active : next.active;
+  const terminals = reuseList(previous.terminals, next.terminals);
+  const running = reuseList(previous.running, next.running);
+  return workspaces === previous.workspaces &&
+    active === previous.active &&
+    terminals === previous.terminals &&
+    running === previous.running
+    ? previous
+    : { workspaces, active, terminals, running };
+}
+
 /**
  * Workspace and terminal state for the whole shell (Code surface, sidebar switcher, palette,
  * Dashboard). Loaded from native on start and refreshed whenever a `workspace.*` or `shell.*`
@@ -136,7 +169,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (!isCurrent() || id !== lifecycle.generation) return;
       if (lifecycle.workspaceId !== (active?.id ?? null)) lifecycle.focusIntent += 1;
       lifecycle.workspaceId = active?.id ?? null;
-      setSnapshot({ workspaces, active, terminals, running });
+      setSnapshot((previous) => mergeSnapshot(previous, { workspaces, active, terminals, running }));
     },
     [client, lifecycle, isCurrent],
   );

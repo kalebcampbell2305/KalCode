@@ -78,13 +78,13 @@ test.describe("threads", () => {
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByRole("heading", { name: "New thread" })).toBeVisible();
 
-    // Defaults: first provider, its sole account and default model, first workspace, Auto.
+    // Defaults: first provider, its sole account and default model, first workspace, Bypass (no approvals).
     await expect(form.getByLabel("Provider")).toHaveValue("claude-code");
     await expect(form.getByRole("combobox", { name: "Account" })).toHaveCount(0);
     await expect(form.getByText(/^Personal(?: · Default)?$/)).toBeVisible();
     await expect(form.getByLabel("Model")).toHaveValue("");
-    await expect(form.getByRole("radio", { name: "Auto" })).toBeChecked();
-    await expect(form.getByText(/Recommended for everyday coding/)).toBeVisible();
+    await expect(form.getByRole("radio", { name: "Bypass" })).toBeChecked();
+    await expect(form.getByText(/No approval prompts/)).toBeVisible();
     await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
 
     await form.getByLabel("Model").selectOption("opus");
@@ -129,7 +129,7 @@ test.describe("threads", () => {
     ]);
     await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
     await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
-    await expect(form.getByText(/With Codex: Workspace writes run without approval prompts/)).toBeVisible();
+    await expect(form.getByText(/With Codex: Uses Codex's explicit danger-full-access sandbox/)).toBeVisible();
 
     await form.getByLabel("Provider").selectOption("gemini-cli");
     await expect(form.getByLabel("Model").locator("option")).toHaveText([
@@ -139,7 +139,7 @@ test.describe("threads", () => {
       "Flash",
       "Flash-Lite",
     ]);
-    await expect(form.getByText(/With Gemini CLI: File edits are approved automatically/)).toBeVisible();
+    await expect(form.getByText(/With Gemini CLI: Everything runs without approval prompts/)).toBeVisible();
 
     // A Codex thread runs like any other.
     await form.getByLabel("Provider").selectOption("codex");
@@ -176,8 +176,8 @@ test.describe("threads", () => {
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByLabel("Model")).toHaveValue("");
-    const approve = form.getByRole("radio", { name: "Approve" });
-    await approve.focus();
+    const bypass = form.getByRole("radio", { name: "Bypass" });
+    await bypass.focus();
     await page.keyboard.press("ArrowLeft");
     await expect(form.getByRole("radio", { name: "Plan" })).toBeChecked();
     await expect(form.getByText("Reads and plans. Nothing is changed.")).toBeVisible();

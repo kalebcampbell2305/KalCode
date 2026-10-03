@@ -48,6 +48,7 @@ mod provider_auth_commands;
 mod provider_commands;
 mod provider_health_commands;
 mod provider_pane_commands;
+mod provider_usage_commands;
 mod resource_commands;
 mod runtime_shutdown;
 mod session_resolver;
@@ -708,6 +709,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 account_commands::account_refresh,
                 account_commands::account_logout,
                 account_commands::account_usage,
+                account_commands::account_set_display_name,
                 provider_auth_commands::provider_claude_account_refresh,
                 provider_auth_commands::provider_claude_login_start,
                 provider_auth_commands::provider_claude_login_wait,
@@ -761,6 +763,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_subscribe,
                 kalvoice_commands::kalvoice_status,
                 kalvoice_commands::kalvoice_request,
+                kalvoice_commands::kalvoice_meter_ui_command,
                 kalvoice_commands::kalvoice_preferences_update,
                 kalvoice_commands::kalvoice_fn_input,
                 kalvoice_commands::kalvoice_listen_start,
@@ -789,6 +792,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 provider_account_commands::provider_account_bind,
                 provider_account_commands::provider_account_unbind,
                 provider_account_commands::provider_account_bindings_list,
+                provider_usage_commands::provider_account_usage,
                 provider_commands::providers_list,
                 provider_commands::providers_detect,
                 provider_health_commands::provider_health_list,

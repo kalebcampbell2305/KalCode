@@ -2836,3 +2836,109 @@ fn default_thread_target_resolution_fails_closed_for_intents_that_act_on_a_threa
             .is_some()
     );
 }
+
+fn ui_command(command: UiCommand) -> UiCommandRequest {
+    UiCommandRequest {
+        request_id: new_id(),
+        input: KalVoiceInput::Voice,
+        command,
+        workspace_id: None,
+    }
+}
+
+#[test]
+fn ui_commands_take_one_request_each_and_never_twice_for_a_retry() {
+    let h = harness();
+    for command in [UiCommand::Kaltidy, UiCommand::Operations, UiCommand::Scene] {
+        let req = ui_command(command);
+        let first = h.orchestrator.meter_ui_command(req.clone()).expect("meter");
+        assert!(matches!(first.outcome, KalVoiceOutcome::Completed { .. }));
+        assert!(first.counted);
+        let retry = h.orchestrator.meter_ui_command(req).expect("retry");
+        assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
+        assert!(!retry.counted);
+    }
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 3);
+    // The renderer runs the command; native executes nothing for it.
+    assert!(h.executor.executed.lock().expect("effects").is_empty());
+    let events = kalvoice_events(&h.core);
+    assert!(events.iter().any(
+        |e| e["type"] == "kalvoice.command_executed" && e["payload"]["intent"] == "ui_kaltidy"
+    ));
+}
+
+#[test]
+fn ui_commands_stop_at_the_monthly_limit() {
+    let h = harness();
+    h.core
+        .read(|c| {
+            for _ in 0..25 {
+                ledger::consume(
+                    c,
+                    ledger::RequestClaim {
+                        request_id: &new_id(),
+                        input: KalVoiceInput::Text,
+                        intent_kind: "navigate",
+                        execution_owner: EXECUTION_OWNER,
+                    },
+                    ledger::ConsumptionContext {
+                        now: NOW,
+                        anchor_day: 1,
+                        allowance: Some(25),
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .expect("fill");
+    let response = h
+        .orchestrator
+        .meter_ui_command(ui_command(UiCommand::Kaltidy))
+        .expect("meter");
+    assert!(matches!(
+        response.outcome,
+        KalVoiceOutcome::LimitReached { .. }
+    ));
+    assert!(!response.counted);
+    assert_eq!(response.usage.used, 25);
+}
+
+#[test]
+fn account_ui_commands_are_metered_by_the_account_once() {
+    let h = harness();
+    let meter = account_meter(&h, "account-a", 75, false);
+    let orchestrator =
+        Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
+    let req = ui_command(UiCommand::Scene);
+    assert!(
+        orchestrator
+            .meter_ui_command(req.clone())
+            .expect("meter")
+            .counted
+    );
+    assert!(!orchestrator.meter_ui_command(req).expect("retry").counted);
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
+
+    let exhausted = account_meter(&h, "account-b", 0, false);
+    let orchestrator =
+        Orchestrator::new_accounted(h.core.clone(), exhausted.clone(), h.executor.clone());
+    assert!(matches!(
+        orchestrator
+            .meter_ui_command(ui_command(UiCommand::Operations))
+            .expect("limit")
+            .outcome,
+        KalVoiceOutcome::LimitReached { .. }
+    ));
+    assert_eq!(exhausted.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn ui_command_ids_are_validated() {
+    let h = harness();
+    let mut req = ui_command(UiCommand::Scene);
+    req.request_id = "not an id".into();
+    assert!(h.orchestrator.meter_ui_command(req).is_err());
+    let mut req = ui_command(UiCommand::Scene);
+    req.workspace_id = Some("../x".into());
+    assert!(h.orchestrator.meter_ui_command(req).is_err());
+}

@@ -135,7 +135,7 @@ export function LaunchAccountPicker({
 }
 
 /** Uses the existing provider-owned authentication flow without leaving the launch form. */
-function LaunchSignIn({
+export function LaunchSignIn({
   providerId,
   providerName,
   account,

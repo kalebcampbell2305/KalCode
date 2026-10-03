@@ -323,7 +323,7 @@ test.describe("KalVoice voice widget", () => {
     await expect(w.getByRole("button", { name: "Hold to talk" })).toBeVisible();
   });
 
-  test("push-to-talk activity stays above the Command Deck status strip", async ({ page }) => {
+  test("push-to-talk activity stays inside the window", async ({ page }) => {
     for (const viewport of [
       { width: 1360, height: 860 },
       { width: 1024, height: 700 },
@@ -341,9 +341,8 @@ test.describe("KalVoice voice widget", () => {
       const activity = page.getByRole("status", { name: "Push to talk" });
       await expect(activity).toBeVisible();
       const activityBox = await activity.boundingBox();
-      const statusStripBox = await page.getByRole("contentinfo").boundingBox();
-      if (!activityBox || !statusStripBox) throw new Error("no activity or status strip layout");
-      expect(activityBox.y + activityBox.height).toBeLessThanOrEqual(statusStripBox.y);
+      if (!activityBox) throw new Error("no activity layout");
+      expect(activityBox.y + activityBox.height).toBeLessThanOrEqual(viewport.height);
 
       await page.keyboard.press("Escape");
       await page.keyboard.up("F8");

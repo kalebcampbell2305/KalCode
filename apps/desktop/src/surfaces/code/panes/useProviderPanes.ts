@@ -22,6 +22,16 @@ const WAITING_POLL_MS = 1500;
 const CODEX_WAITING_POLL_MS = 4000;
 const REFRESH_DEBOUNCE_MS = 120;
 
+/** Small IPC records (thread, pane info): equal when their serialized fields are. */
+function sameRecord(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Whether two id lists are the same ids in the same order. */
+function sameIds(previous: readonly string[], next: readonly string[]): boolean {
+  return previous.length === next.length && previous.every((id, i) => id === next[i]);
+}
+
 /** Codex and Gemini CLI panes are offered only when threads can use that provider (PROVIDERS-2). */
 const OPTIONAL_PANE_PROVIDERS: readonly PaneProviderId[] = ["codex", "gemini-cli"];
 
@@ -29,6 +39,11 @@ const OPTIONAL_PANE_PROVIDERS: readonly PaneProviderId[] = ["codex", "gemini-cli
 export function useProviderPanesEnabled(): boolean {
   const { info } = useRuntime();
   return info.flags.features?.some((f) => f.id === "provider_panes" && f.visible) ?? false;
+}
+
+export interface ProviderPanesOptions {
+  /** False while the Code surface is hidden: pauses the waiting poll (events still refresh). Default true. */
+  active?: boolean;
 }
 
 export interface ProviderPanes {
@@ -60,7 +75,7 @@ export interface ProviderPanes {
  * The provider pane threads of a workspace (Z7-W4), kept current from thread and approval
  * events. The pane canvas (Z7-W1) shows each one with `ProviderPane`.
  */
-export function useProviderPanes(workspace: Workspace): ProviderPanes {
+export function useProviderPanes(workspace: Workspace, { active = true }: ProviderPanesOptions = {}): ProviderPanes {
   const enabled = useProviderPanesEnabled() && workspace.available;
   const { client, feed } = useRuntime();
   const { settings } = usePermissions();
@@ -72,6 +87,8 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   const [offered, setOffered] = useState<readonly PaneProviderId[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  /** Panes whose last info read answered "no live pane" (ended/restored): no info will arrive by polling. */
+  const [settled, setSettled] = useState<string[]>([]);
   const generation = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -82,26 +99,32 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
       const candidates = threads.filter((t) => isPaneProvider(t.providerId));
       const infos = await Promise.allSettled(candidates.map((t) => channel.info(t.id)));
       if (current !== generation.current) return;
-      setChatIds(
-        candidates
-          .filter((thread, index) => {
-            const result = infos[index];
-            return thread.runtimeKind !== "interactive_pty" && result?.status === "fulfilled" && result.value === null;
-          })
-          .map((thread) => thread.id),
-      );
+      const answeredNone = (index: number) => {
+        const result = infos[index];
+        return result?.status === "fulfilled" && result.value === null;
+      };
+      const nextChatIds = candidates
+        .filter((thread, index) => thread.runtimeKind !== "interactive_pty" && answeredNone(index))
+        .map((thread) => thread.id);
+      setChatIds((previous) => (sameIds(previous, nextChatIds) ? previous : nextChatIds));
+      const nextSettled = candidates.filter((_, index) => answeredNone(index)).map((thread) => thread.id);
+      setSettled((previous) => (sameIds(previous, nextSettled) ? previous : nextSettled));
+      // Unchanged entries keep their identity, and an unchanged list stays the same array, so a
+      // quiet poll re-renders nothing.
       setPanes((previous) => {
         const next: ProviderPaneEntry[] = [];
         candidates.forEach((thread, i) => {
           const result = infos[i];
-          const info =
-            result?.status === "fulfilled"
-              ? result.value
-              : previous.find((entry) => entry.thread.id === thread.id)?.info;
-          if (info || thread.runtimeKind === "interactive_pty") next.push({ thread, info: info ?? null });
+          const before = previous.find((entry) => entry.thread.id === thread.id);
+          const info = result?.status === "fulfilled" ? result.value : before?.info;
+          if (!info && thread.runtimeKind !== "interactive_pty") return;
+          const entry = { thread, info: info ?? null };
+          next.push(
+            before && sameRecord(before.thread, thread) && sameRecord(before.info, entry.info) ? before : entry,
+          );
         });
         next.sort((a, b) => a.thread.createdAt.localeCompare(b.thread.createdAt));
-        return next;
+        return next.length === previous.length && next.every((entry, i) => entry === previous[i]) ? previous : next;
       });
       const failed = infos.find((result) => result.status === "rejected");
       setListError(failed?.status === "rejected" ? toKalCodeError(failed.reason).message : null);
@@ -175,15 +198,20 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   // Claude Code's hook channel connects on its own, soon after start. A Codex pane's channel
   // becomes active with its first `notify` (a finished turn), which may produce no thread event
   // (idle → idle), so it is polled too, more slowly (an in-memory read, no provider process).
+  // A pane without info is awaited (just launched, or a failed read) unless native already
+  // answered that it has no live pane: an ended or restored agent never gains info by polling.
+  // The poll pauses while the Code surface is hidden; thread events still refresh.
   const waiting = panes.some(
-    (p) => !p.info || (p.info.hookChannel === "waiting" && p.thread.providerId === "claude-code"),
+    (p) =>
+      (!p.info && !settled.includes(p.thread.id)) ||
+      (p.info?.hookChannel === "waiting" && p.thread.providerId === "claude-code"),
   );
   const codexWaiting = panes.some((p) => p.info?.hookChannel === "waiting" && p.thread.providerId === "codex");
   useEffect(() => {
-    if (!waiting && !codexWaiting) return;
+    if (!active || (!waiting && !codexWaiting)) return;
     const timer = setInterval(() => void refresh(), waiting ? WAITING_POLL_MS : CODEX_WAITING_POLL_MS);
     return () => clearInterval(timer);
-  }, [waiting, codexWaiting, refresh]);
+  }, [active, waiting, codexWaiting, refresh]);
 
   const create = useCallback(
     async (providerId: PaneProviderId = "claude-code", launch: AgentLaunch = {}) => {
@@ -205,6 +233,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
         // Creation owns this exact terminal identity. A list read can still describe
         // the instant before creation; never drop a fresh terminal on that snapshot.
         generation.current += 1;
+        setSettled((previous) => (previous.includes(thread.id) ? previous.filter((id) => id !== thread.id) : previous));
         setPanes((previous) => [...previous.filter((entry) => entry.thread.id !== thread.id), { thread, info: null }]);
         try {
           const info = await channel.info(thread.id);
@@ -235,19 +264,24 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     [refresh],
   );
 
-  return {
-    enabled,
-    channel,
-    panes,
-    chatIds,
-    loaded: loaded || !enabled,
-    creating: creating !== null,
-    creatingProvider: creating,
-    offered,
-    error: launchError ?? listError,
-    clearLaunchError,
-    create,
-    updated,
-    refresh,
-  };
+  const error = launchError ?? listError;
+  const isLoaded = loaded || !enabled;
+  return useMemo(
+    () => ({
+      enabled,
+      channel,
+      panes,
+      chatIds,
+      loaded: isLoaded,
+      creating: creating !== null,
+      creatingProvider: creating,
+      offered,
+      error,
+      clearLaunchError,
+      create,
+      updated,
+      refresh,
+    }),
+    [enabled, channel, panes, chatIds, isLoaded, creating, offered, error, clearLaunchError, create, updated, refresh],
+  );
 }

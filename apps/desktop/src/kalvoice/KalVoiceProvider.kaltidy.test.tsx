@@ -1,4 +1,4 @@
-import type { KalVoiceSignal } from "@kalcode/protocol";
+import type { KalVoiceResponse, KalVoiceSignal } from "@kalcode/protocol";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -16,6 +16,21 @@ const mocks = vi.hoisted(() => {
     kalvoiceListenCancel: vi.fn().mockResolvedValue(undefined),
     kalvoiceTalk: talk,
     kalvoiceRequest: request,
+    kalvoiceMeterUiCommand: vi.fn(
+      async (r: { requestId: string; command: string }): Promise<KalVoiceResponse> => ({
+        requestId: r.requestId,
+        intent: `ui_${r.command}`,
+        outcome: { kind: "completed", summary: "" },
+        usage: {
+          used: 1,
+          allowance: 25,
+          periodStart: "2026-10-01T00:00:00.000Z",
+          resetsAt: "2026-11-01T00:00:00.000Z",
+        },
+        counted: true,
+        directive: null,
+      }),
+    ),
   };
   return {
     signal: null as ((signal: KalVoiceSignal) => void) | null,
@@ -51,6 +66,10 @@ function kalTidyApi(): KalTidyApi {
   return {
     openReview: vi.fn(),
     stopIdle: vi.fn().mockResolvedValue({ stopped: 3, kept: 1, failed: 0, summary: "Stopped 3 idle terminals." }),
+    clearFailed: vi.fn(),
+    clearFinished: vi.fn(),
+    dismissAgent: vi.fn(),
+    closeAll: vi.fn(),
   };
 }
 
@@ -121,6 +140,7 @@ it("says KalTidy isn't available when it isn't mounted", async () => {
   const view = await start(null);
   await say("kill idle terminals");
   expect(mocks.talk).not.toHaveBeenCalled();
+  expect(mocks.client.kalvoiceMeterUiCommand).not.toHaveBeenCalled();
   expect(view.getByTestId("kalvoice-state")).toHaveTextContent("error: KalTidy isn't available here.");
 });
 
@@ -133,13 +153,44 @@ it("other terminal words still go to native routing", async () => {
   expect(kalTidy.openReview).not.toHaveBeenCalled();
 });
 
-it("a typed request on the KalVoice page runs KalTidy too, without a KalVoice Request", async () => {
+it("a typed request on the KalVoice page runs KalTidy too, as one KalVoice Request", async () => {
   const kalTidy = kalTidyApi();
   const view = await start(kalTidy);
   await act(async () => mocks.voice?.submit("tidy up terminals"));
   expect(kalTidy.stopIdle).toHaveBeenCalledOnce();
   expect(mocks.request).not.toHaveBeenCalled();
+  expect(mocks.client.kalvoiceMeterUiCommand).toHaveBeenCalledOnce();
+  expect(mocks.client.kalvoiceMeterUiCommand).toHaveBeenCalledWith(
+    expect.objectContaining({ command: "kaltidy", input: "text", workspaceId: "workspace" }),
+  );
   expect(view.getByTestId("kalvoice-state")).toHaveTextContent("done: Stopped 3 idle terminals.");
+});
+
+it("a spoken KalTidy command takes one KalVoice Request before it runs", async () => {
+  const kalTidy = kalTidyApi();
+  await start(kalTidy);
+  await say("kill idle terminals");
+  expect(mocks.client.kalvoiceMeterUiCommand).toHaveBeenCalledOnce();
+  expect(mocks.client.kalvoiceMeterUiCommand).toHaveBeenCalledWith(
+    expect.objectContaining({ command: "kaltidy", input: "voice" }),
+  );
+  expect(kalTidy.stopIdle).toHaveBeenCalledOnce();
+});
+
+it("KalTidy does not run once the monthly KalVoice limit is reached", async () => {
+  const kalTidy = kalTidyApi();
+  mocks.client.kalvoiceMeterUiCommand.mockImplementationOnce(async (r: { requestId: string; command: string }) => ({
+    requestId: r.requestId,
+    intent: `ui_${r.command}`,
+    outcome: { kind: "limit_reached", resetsAt: "2026-11-01T00:00:00.000Z" },
+    usage: { used: 25, allowance: 25, periodStart: "2026-10-01T00:00:00.000Z", resetsAt: "2026-11-01T00:00:00.000Z" },
+    counted: false,
+    directive: null,
+  }));
+  await start(kalTidy);
+  await say("kill idle terminals");
+  expect(kalTidy.stopIdle).not.toHaveBeenCalled();
+  expect(kalTidy.openReview).not.toHaveBeenCalled();
 });
 
 it("keeps pending KalTidy cleanup exclusive and preserves its outcome", async () => {

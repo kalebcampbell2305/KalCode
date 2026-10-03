@@ -92,3 +92,48 @@ pub struct ProviderAccountScopes {
     pub thread_id: Option<String>,
     pub provider_profile_id: Option<String>,
 }
+
+/// Whether KalCode could read real provider quota usage for an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderUsageStatus {
+    /// Real provider-reported numbers, as of `checked_at`.
+    Available,
+    /// The provider doesn't expose plan usage for this account (Gemini CLI, API keys).
+    Unavailable,
+    /// Nothing readable yet: signed out, never run, reset since the last read, or unreadable.
+    NotChecked,
+}
+
+/// One provider rate-limit window ("5-hour", "Weekly") as the provider last reported it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProviderUsageWindow {
+    /// Stable id: `five_hour`, `weekly`, `weekly_opus`, `primary`, `secondary`…
+    pub id: String,
+    pub label: String,
+    /// 0–100: how much of the window is left (100 − the provider's used percentage).
+    pub remaining_percent: f64,
+    /// RFC 3339 time the window resets, when the provider reports it.
+    pub resets_at: Option<String>,
+}
+
+/// Credential-free quota usage for one provider account. Values are only ever copied from data
+/// the provider itself recorded; KalCode never estimates them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProviderAccountUsage {
+    pub account_id: String,
+    pub status: ProviderUsageStatus,
+    /// Provider plan label ("Max 20x", "Pro"), when the provider recorded one.
+    pub plan: Option<String>,
+    /// Most constrained window first. Empty unless `status` is `available`.
+    pub windows: Vec<ProviderUsageWindow>,
+    /// RFC 3339 time of the provider read the numbers came from.
+    pub checked_at: Option<String>,
+    /// Short user-facing reason when unavailable / not checked.
+    pub reason: Option<String>,
+}

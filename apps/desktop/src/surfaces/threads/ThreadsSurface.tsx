@@ -127,6 +127,8 @@ export function ThreadsSurface() {
               ) : (
                 <EmptyState
                   headingLevel={2}
+                  align="center"
+                  framed={false}
                   art={<MessagesSquare />}
                   title="No threads yet"
                   actions={
