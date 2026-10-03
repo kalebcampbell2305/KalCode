@@ -84,7 +84,7 @@ test("a thread that completes live raises a notification and announces it", asyn
   await expect(bell(page)).toHaveAccessibleName("Notifications, 5 unread");
   await expect(page.getByTestId("announce-notification")).toHaveText("Completed: Fix flaky checkout test completed");
   const done = page.getByRole("region", { name: "Agents" }).getByRole("article", { name: "Fix flaky checkout test" });
-  await expect(done.getByText("Completed", { exact: true })).toBeVisible();
+  await expect(done.getByText("Done", { exact: true })).toBeVisible();
   await bell(page).click();
   await expect(item(page, "Fix flaky checkout test completed")).toBeVisible();
 });

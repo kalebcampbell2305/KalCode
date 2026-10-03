@@ -110,15 +110,9 @@ export function fleetFilterOf(chip: DashboardChip): FleetFilter {
   return chip === "waiting_for_you" ? "needs_you" : chip;
 }
 
-/**
- * Case-insensitive match on what a card shows: task, account, call sign, provider, workspace,
- * branch, model, effort, activity and status. Every word must match some field.
- */
-export function matchesQuery(thread: ThreadSummary, query: string, extra: readonly (string | undefined)[] = []): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
+function searchFields(thread: ThreadSummary, extra: readonly (string | undefined)[]): string[] {
   const group = fleetGroupOf(thread.status);
-  const fields = [
+  return [
     thread.name,
     thread.workspaceName,
     thread.branch,
@@ -131,22 +125,50 @@ export function matchesQuery(thread: ThreadSummary, query: string, extra: readon
     group === "needs_you" ? "waiting" : null,
     thread.error?.message,
     ...extra,
-  ];
-  return q
-    .split(/\s+/)
-    .every((word) => fields.some((field) => typeof field === "string" && field.toLowerCase().includes(word)));
+  ]
+    .filter((field): field is string => typeof field === "string")
+    .map((field) => field.toLowerCase());
 }
 
+/**
+ * Case-insensitive match on what a card shows: task, account, call sign, provider, workspace,
+ * branch, model, effort, activity and status. Every word must match some field.
+ */
+export function matchesQuery(
+  thread: ThreadSummary,
+  query: string,
+  extra: readonly (string | undefined)[] = [],
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const fields = searchFields(thread, extra);
+  return q.split(/\s+/).every((word) => fields.some((field) => field.includes(word)));
+}
+
+/** The query as one phrase inside one field ("Codex B" the account, not "Codex" plus any "b"). */
+function matchesPhrase(thread: ThreadSummary, phrase: string, extra: readonly (string | undefined)[]): boolean {
+  return searchFields(thread, extra).some((field) => field.includes(phrase));
+}
+
+/**
+ * The agents a filter and search show. A multi-word search that names something exactly (an
+ * account like "Claude B", a task title) shows those matches; otherwise every word must match.
+ */
 export function filterThreads(
   threads: readonly ThreadSummary[],
   filter: FleetFilter,
   query: string,
   extraFields?: (thread: ThreadSummary) => readonly (string | undefined)[],
 ): ThreadSummary[] {
-  return threads.filter(
-    (t) =>
-      (filter === "all" || fleetGroupOf(t.status) === filter) && matchesQuery(t, query, extraFields?.(t) ?? []),
-  );
+  const inFilter = filter === "all" ? [...threads] : threads.filter((t) => fleetGroupOf(t.status) === filter);
+  const q = query.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!q) return inFilter;
+  const extra = (t: ThreadSummary) => extraFields?.(t) ?? [];
+  if (q.includes(" ")) {
+    const exact = inFilter.filter((t) => matchesPhrase(t, q, extra(t)));
+    if (exact.length > 0) return exact;
+  }
+  return inFilter.filter((t) => matchesQuery(t, q, extra(t)));
 }
 
 export type GroupMode = "status" | "project" | "provider";
@@ -212,7 +234,6 @@ export interface ThreadGroup {
   needsYou: number;
   working: number;
 }
-
 
 function makeGroup(key: string, label: string, mode: GroupMode, threads: ThreadSummary[]): ThreadGroup {
   let needsYou = 0;

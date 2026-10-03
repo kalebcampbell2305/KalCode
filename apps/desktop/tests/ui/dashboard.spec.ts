@@ -71,9 +71,10 @@ test.describe("a fresh session", () => {
 test.describe("counts, filters, search and grouping", () => {
   test("the summary and chip counts come from real runtime state", async ({ page }) => {
     await open(page, "busy");
-    await expect(main(page).getByText("13 agents · 3 working · 4 waiting for you · 2 done · 4 idle")).toBeVisible();
+    await expect(main(page).getByText("13 agents · 3 working · 3 need you · 2 done · 4 idle · 1 failed")).toBeVisible();
     await expect(chip(page, "All")).toHaveAccessibleName("All, 13");
-    await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 4");
+    await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
+    await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 1");
     await expect(chip(page, "Working")).toHaveAccessibleName("Working, 3");
     await expect(chip(page, "Done")).toHaveAccessibleName("Done, 2");
     await expect(chip(page, "Idle")).toHaveAccessibleName("Idle, 4");
@@ -86,9 +87,12 @@ test.describe("counts, filters, search and grouping", () => {
     await expect(chip(page, "Working")).toHaveAttribute("aria-pressed", "true");
     await expect(cards(page)).toHaveCount(3);
     await expect(card(page, "Fix flaky checkout test")).toBeVisible();
-    await chip(page, "Waiting for you").click();
-    await expect(cards(page)).toHaveCount(4);
-    // FAILED needs attention, so it is waiting for you.
+    await chip(page, "Needs you").click();
+    await expect(cards(page)).toHaveCount(3);
+    // FAILED is its own group: a decision (retry or clear), not a question waiting for you.
+    await expect(card(page, "Deploy preview build")).toHaveCount(0);
+    await chip(page, "Failed").click();
+    await expect(cards(page)).toHaveCount(1);
     await expect(card(page, "Deploy preview build")).toBeVisible();
     await chip(page, "Done").click();
     await expect(cards(page)).toHaveCount(2);
@@ -117,9 +121,10 @@ test.describe("counts, filters, search and grouping", () => {
     const groupBy = page.getByRole("radiogroup", { name: "Group by" });
     await expect(groupBy.getByRole("radio")).toHaveText(["Status", "Project", "Provider"]);
     const headings = board(page).getByRole("heading", { level: 2 });
-    await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Done/, /^Idle/]);
+    await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Done/, /^Idle/, /^Failed/]);
     await groupBy.getByRole("radio", { name: "Project" }).click();
-    await expect(headings).toHaveText([/^kalcode/, /^atlas-api/, /^field-notes/]);
+    // Projects with agents that need you first (a failure is history, not a question).
+    await expect(headings).toHaveText([/^kalcode/, /^field-notes/, /^atlas-api/]);
     await groupBy.getByRole("radio", { name: "Provider" }).click();
     await expect(headings).toHaveCount(3);
     await expect(board(page).getByRole("heading", { level: 2, name: /Gemini CLI/ })).toBeVisible();
@@ -141,15 +146,20 @@ test.describe("cards", () => {
   test("show provider, name, workspace, branch, activity, status, mode and last activity", async ({ page }) => {
     await open(page, "busy");
     const fix = card(page, "Fix flaky checkout test");
-    // Agent Fleet call sign: the provider plus a letter.
-    await expect(fix.getByText(/^Codex [A-Z]+$/)).toBeVisible();
+    // Who it runs as, the provider and workspace, model and branch, what it does now, its state.
+    await expect(fix.getByTitle("Account: Work")).toBeVisible();
+    await expect(fix.getByText("Codex", { exact: true })).toBeVisible();
     await expect(fix.getByText("gpt-5-codex")).toBeVisible();
     await expect(fix.getByText("atlas-api")).toBeVisible();
     await expect(fix.getByText("fix/checkout-flake")).toBeVisible();
     await expect(fix.getByText("Running pnpm test checkout --repeat 20")).toBeVisible();
     await expect(fix.getByText("Working", { exact: true })).toBeVisible();
-    await expect(fix.getByText("Permission mode Auto")).toBeVisible();
+    await expect(fix.locator('time[data-kind="elapsed"]')).toHaveText("Running time 18 min");
     await expect(fix.locator('time[data-kind="last-activity"]')).toHaveText(/just now|minute/);
+    // Details expand in place: call sign, permission mode and start time.
+    await fix.getByRole("button", { name: "Show details for Fix flaky checkout test" }).click();
+    await expect(fix.getByText(/^Codex [A-Z]+$/)).toBeVisible();
+    await expect(fix.getByText("Permission mode Auto")).toBeVisible();
     await expect(fix.locator('time[data-kind="started"]')).toHaveText("Started 18 min ago");
   });
 
@@ -167,8 +177,10 @@ test.describe("cards", () => {
     await open(page, "busy");
     // (Add light theme tokens is ready to merge in this fixture; see fleet.spec.ts.)
     const done = card(page, "Generate API client");
-    await expect(done.getByText("Completed", { exact: true })).toBeVisible();
-    await expect(done.getByRole("button", { name: "Open" })).toBeVisible();
+    await expect(done.getByText("Done", { exact: true })).toBeVisible();
+    await expect(done.getByRole("button", { name: "Open Generate API client" })).toBeVisible();
+    // A finished agent can be cleared in one click.
+    await expect(done.getByRole("button", { name: "Clear Generate API client" })).toBeVisible();
     await done.getByRole("button", { name: "More actions for Generate API client" }).click();
     await expect(page.getByRole("menuitem")).toHaveText(["Open", "Archive"]);
   });
@@ -176,15 +188,14 @@ test.describe("cards", () => {
   test("ACTION NEEDED carries the inline approval in the app's order", async ({ page }) => {
     await open(page, "busy");
     const refactor = card(page, "Refactor auth middleware");
-    await expect(refactor.getByText("Action needed")).toBeVisible();
+    await expect(refactor.getByText("Needs approval", { exact: true })).toBeVisible();
     const approval = refactor.getByRole("group", { name: "Install zod" });
     await expect(approval.getByText("pnpm add install zod@4.1.0")).toBeVisible();
-    await expect(approval.getByRole("button")).toHaveText([
-      "Deny",
-      "Allow for workspace",
-      "Allow for thread",
-      "Approve once",
-    ]);
+    // The common answers inline; the broader grants in More, so the row never wraps.
+    await expect(approval.getByRole("button")).toHaveText(["Deny", "Approve once", "More"]);
+    await approval.getByRole("button", { name: "More" }).click();
+    await expect(page.getByRole("menuitem")).toHaveText(["Allow for workspace", "Allow for thread"]);
+    await page.keyboard.press("Escape");
     // Remote-consequential: only Deny and Approve once.
     await expect(
       card(page, "Bump dependencies")
@@ -194,7 +205,7 @@ test.describe("cards", () => {
     await approval.getByRole("button", { name: "Approve once" }).click();
     await expect(refactor.getByText("Installing zod@4.1.0")).toBeVisible();
     await expect(refactor.getByText("Working", { exact: true })).toBeVisible();
-    await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 3");
+    await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 2");
   });
 
   test("an approval that arrives live turns its card into ACTION NEEDED", async ({ page }) => {
@@ -252,7 +263,8 @@ test.describe("cards", () => {
     await more.click();
     await page.getByRole("menuitem", { name: "Stop…" }).click();
     await fix.getByRole("button", { name: "Stop agent" }).click();
-    await expect(fix.getByText("stopped · resumable")).toBeVisible();
+    await expect(fix.getByText("Stopped", { exact: true })).toBeVisible();
+    await expect(fix.getByRole("button", { name: "Resume Fix flaky checkout test" })).toBeVisible();
   });
 });
 
@@ -274,7 +286,8 @@ test.describe("scale", () => {
         .first()
         .evaluate((el) => el.getBoundingClientRect().width);
       expect(width).toBeGreaterThanOrEqual(290);
-      if (count <= 20) await expect(cards(page)).toHaveCount(count);
+      // Up to 12 rows render as they are; longer boards are virtualized (see the 50-agent test).
+      if (count <= 6) await expect(cards(page)).toHaveCount(count);
     });
   }
 
@@ -421,7 +434,7 @@ test.describe("widgets", () => {
 test.describe("KalVoice filters the Dashboard", () => {
   for (const [said, chipLabel, count] of [
     ["show only agents that are working", "Working", 3],
-    ["show everything waiting for me", "Waiting for you", 4],
+    ["show everything waiting for me", "Needs you", 3],
     ["show completed work", "Done", 2],
   ] as const) {
     test(`“${said}”`, async ({ page }) => {
@@ -495,7 +508,7 @@ test.describe("states", () => {
 
     await deploy.getByRole("button", { name: "Unarchive Deploy preview build" }).click();
     await expect(chip(page, "All")).toHaveAccessibleName("All, 1");
-    await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 1");
+    await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 1");
     await expect(board(page).getByRole("heading", { name: /agents are archived/ })).toHaveCount(0);
     await expect(archived.getByRole("article")).toHaveCount(2);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Thread restored")).toBeVisible();
@@ -508,16 +521,16 @@ test.describe("sidebar", () => {
     const nav = page
       .getByRole("navigation", { name: "Primary" })
       .getByRole("button", { name: "Dashboard", exact: true });
-    await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 4");
-    await expect(nav).toHaveText("Dashboard4");
-    await expect(nav).toHaveAccessibleDescription("4 sessions need you");
+    await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
+    await expect(nav).toHaveText("Dashboard3");
+    await expect(nav).toHaveAccessibleDescription("3 sessions need you");
     // Pausing the thread that waits for permission leaves three.
     await card(page, "Refactor auth middleware")
       .getByRole("button", { name: "More actions for Refactor auth middleware" })
       .click();
     await page.getByRole("menuitem", { name: "Pause" }).click();
-    await expect(nav).toHaveText("Dashboard3");
-    await expect(nav).toHaveAccessibleDescription("3 sessions need you");
+    await expect(nav).toHaveText("Dashboard2");
+    await expect(nav).toHaveAccessibleDescription("2 sessions need you");
   });
 
   test("the Dashboard item shows no count when nothing needs you", async ({ page }) => {
@@ -548,7 +561,7 @@ test.describe("accessibility", () => {
             .getByRole("button", { name: "More actions for Fix flaky checkout test" })
             .click();
           await page.getByRole("menuitem", { name: "Stop…" }).click();
-          await chip(page, "Waiting for you").click();
+          await chip(page, "Needs you").click();
           await page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "Project" }).click();
           await expectNoSeriousA11yViolations(page);
         }
@@ -556,17 +569,19 @@ test.describe("accessibility", () => {
     }
   }
 
-  test("keyboard order: chips, search, grouping, then the first card", async ({ page }) => {
+  test("keyboard order: chips, search, grouping, cleanup, then the first card", async ({ page }) => {
     await open(page, "busy");
     await chip(page, "All").focus();
-    for (let i = 0; i < 4; i += 1) await page.keyboard.press("Tab");
-    await expect(chip(page, "Idle")).toBeFocused();
+    for (let i = 0; i < 5; i += 1) await page.keyboard.press("Tab");
+    await expect(chip(page, "Failed")).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.getByRole("searchbox", { name: "Search agents" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.getByRole("radio", { name: "Status" })).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(board(page).getByRole("button", { name: /^Needs you/ })).toBeFocused();
+    await expect(board(page).getByRole("button", { name: "Clean up" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(board(page).getByRole("button", { name: /^Needs you ?, \d+ agents/i })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(
       card(page, "Refactor auth middleware").getByRole("button", { name: "Refactor auth middleware", exact: true }),

@@ -191,7 +191,10 @@ describe("AgentCard waiting states", () => {
 describe("AgentCard Fleet controls", () => {
   it("expands its details in place and says so", async () => {
     const onToggle = vi.fn();
-    const { rerender } = mount({ ...thread("Claude A"), model: "claude-opus-4-1", effort: "high" }, { onToggleExpanded: onToggle });
+    const { rerender } = mount(
+      { ...thread("Claude A"), model: "claude-opus-4-1", effort: "high" },
+      { onToggleExpanded: onToggle },
+    );
     const card = screen.getByRole("article", { name: "Research" });
     expect(card.textContent).toContain("claude-opus-4-1");
     expect(card.textContent).toContain("effort high");

@@ -38,7 +38,7 @@
 
 @container dashboard (min-width: 68rem) {
   .layout {
-    grid-template-columns: minmax(0, 1fr) 1.25rem var(--dock-w, clamp(20rem, 24cqi, 26rem));
+    grid-template-columns: minmax(0, 1fr) 1.25rem var(--dock-w, 22rem);
     gap: 0;
   }
 
@@ -62,7 +62,13 @@
   .splitterLine {
     width: 1px;
     height: 100%;
-    background: linear-gradient(180deg, transparent 0%, var(--color-border) 12%, var(--color-border) 88%, transparent 100%);
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      var(--color-border) 12%,
+      var(--color-border) 88%,
+      transparent 100%
+    );
     transition:
       background-color 160ms var(--ease-out),
       box-shadow 160ms var(--ease-out),

@@ -663,9 +663,12 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         ? scaleSeeds(scale)
         : BUSY_THREADS;
     const fleet = scenario === "fleet";
-    for (const [index, seed] of (fleet ? [...seeds, ...fleetFailedSeeds(120)] : seeds).entries()) {
+    const perProvider = new Map<string, number>();
+    for (const seed of fleet ? [...seeds, ...fleetFailedSeeds(120)] : seeds) {
       const provider = PROVIDERS[seed.provider];
       const fleetAccounts = FLEET_ACCOUNTS[seed.provider];
+      const index = perProvider.get(seed.provider) ?? 0;
+      perProvider.set(seed.provider, index + 1);
       const id = fixtureId(2, seed.n);
       if (seed.worktree) worktreeFacts.set(id, seed.worktree);
       threads.set(id, {

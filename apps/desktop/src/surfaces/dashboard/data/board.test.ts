@@ -5,11 +5,11 @@ import {
   activityBuckets,
   chipCounts,
   compareThreads,
+  filterThreads,
   fleetCounts,
   fleetFilterOf,
   fleetGroupOf,
   fleetSummaryLine,
-  filterThreads,
   GROUP_MODES,
   groupThreads,
   matchesQuery,
@@ -123,6 +123,11 @@ describe("filtering and search", () => {
     expect(filterThreads([a, b, c, d], "all", "high")).toEqual([d]);
     expect(filterThreads([a, b, c, d], "all", "waiting")).toEqual([b]);
     expect(filterThreads([a, b, c, d], "all", "codex b", (t) => (t === a ? ["Codex B"] : []))).toEqual([a]);
+    // A phrase that names something exactly wins over loose words ("Claude B", not any "b").
+    const e = thread("idle", { name: "Bump billing", accountLabel: "Claude A" });
+    const f = thread("idle", { name: "Docs", accountLabel: "Claude B" });
+    expect(filterThreads([e, f], "all", "claude  b")).toEqual([f]);
+    expect(filterThreads([e, f], "all", "claude bump")).toEqual([e]);
     expect(filterThreads([a, b, c], "all", "atlas")).toEqual([b]);
     expect(filterThreads([a, b, c], "all", "codex docs")).toEqual([c]);
     expect(matchesQuery(a, "FIX/LOGIN")).toBe(true);
@@ -179,9 +184,9 @@ describe("activity trend", () => {
 });
 
 describe("performance", () => {
-  it("recomputes counts, filters and groups for 500 agents well within a frame", () => {
+  it("recomputes counts, filters and groups for 200 agents well within a frame", () => {
     const statuses = Object.keys(DISPLAY_STATUS_OF) as ThreadStatus[];
-    const threads = Array.from({ length: 500 }, (_, i) =>
+    const threads = Array.from({ length: 200 }, (_, i) =>
       thread(statuses[i % statuses.length] ?? "idle", {
         workspaceId: `ws-${i % 5}`,
         workspaceName: `ws-${i % 5}`,

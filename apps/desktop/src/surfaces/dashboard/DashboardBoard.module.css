@@ -24,8 +24,7 @@
   border-radius: 14px;
   background:
     radial-gradient(90% 140% at 0% 0%, rgb(76 141 255 / 0.1) 0%, transparent 55%),
-    radial-gradient(60% 120% at 100% 0%, rgb(76 141 255 / 0.05) 0%, transparent 60%),
-    var(--panel-sheen),
+    radial-gradient(60% 120% at 100% 0%, rgb(76 141 255 / 0.05) 0%, transparent 60%), var(--panel-sheen),
     var(--color-surface-1);
   box-shadow: var(--shadow-panel);
   overflow: hidden;
@@ -109,8 +108,9 @@
 .segment[data-chip="idle"] {
   background: var(--status-muted-line);
 }
+/* Failures are history: present, but quieter than the live fleet. */
 .segment[data-chip="failed"] {
-  background: var(--status-failed);
+  background: color-mix(in srgb, var(--status-failed) 45%, transparent);
 }
 
 .toolbar {

@@ -16,7 +16,17 @@ import {
   IconButton,
   ProviderGlyph,
 } from "@kalcode/ui/components";
-import { Archive, ArrowUp, ChevronDown, Clock3, FolderGit2, GitBranch, GitMerge, MoreHorizontal, X } from "lucide-react";
+import {
+  Archive,
+  ArrowUp,
+  ChevronDown,
+  Clock3,
+  FolderGit2,
+  GitBranch,
+  GitMerge,
+  MoreHorizontal,
+  X,
+} from "lucide-react";
 import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { MODE_LABELS } from "../permissions/labels.ts";
@@ -96,8 +106,15 @@ export function stateLabel(thread: ThreadSummary, ready: boolean): string {
 }
 
 /** What the thread is doing, from structured runtime state only (never model prose). */
-function activityLine(thread: ThreadSummary, approval: ApprovalView | undefined): string {
+function activityLine(
+  thread: ThreadSummary,
+  approval: ApprovalView | undefined,
+  readiness: MergeReadiness | undefined,
+): string {
   const display = displayStatusOf(thread.status);
+  if (readiness?.ready) {
+    return `${readiness.ahead} ${readiness.ahead === 1 ? "commit" : "commits"} ahead of ${readiness.base ?? "base"} · merges cleanly`;
+  }
   if (display.status === "failed" && thread.error) return thread.error.message;
   if (display.status === "permission_required" && approval) {
     return `Wants to ${approval.action.summary ? approval.action.summary.charAt(0).toLowerCase() + approval.action.summary.slice(1) : "act"}`;
@@ -150,6 +167,7 @@ export const AgentCard = memo(function AgentCard({
   const tone = ready ? "working" : (resourceWait?.tone ?? DISPLAY_STATUS_TONE[display.status]);
   const group = fleetGroupOf(thread.status);
   // The provider account the agent runs on (text, never a credential), e.g. "Claude A".
+  // SEAM(kalcode-e4): show this account's usage via useAccountUsage(thread.providerAccountId) once it lands.
   const accountLabel = thread.accountLabel?.trim() || null;
   const provider = thread.providerName || providerName(thread.providerId);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -177,7 +195,7 @@ export const AgentCard = memo(function AgentCard({
   const failed = display.status === "failed";
   const elapsedMs = runDurationMs(thread, now);
   const started = startedText(thread.createdAt, now);
-  const activity = activityLine(thread, request);
+  const activity = activityLine(thread, request, archived ? undefined : readiness);
   const label = archived ? "Archived" : stateLabel(thread, ready);
   const resumable = actions.includes("resume");
   const dirty = worktree ? worktree.changed + worktree.untracked : 0;
@@ -315,7 +333,10 @@ export const AgentCard = memo(function AgentCard({
             </span>
           ) : null}
           {worktree?.ahead ? (
-            <span className={styles.ahead} title={`${worktree.ahead} commits ahead of ${worktree.baseBranch ?? "base"}`}>
+            <span
+              className={styles.ahead}
+              title={`${worktree.ahead} commits ahead of ${worktree.baseBranch ?? "base"}`}
+            >
               <ArrowUp aria-hidden="true" />
               <span className="visually-hidden">commits ahead </span>
               {worktree.ahead}
@@ -324,9 +345,12 @@ export const AgentCard = memo(function AgentCard({
         </p>
       ) : null}
 
-      <p className={styles.activity} data-tone={tone} data-group={group} title={activity}>
-        {activity}
-      </p>
+      {/* The inline approval already says what the agent asks for; anything else, say it here. */}
+      {actionNeeded && request ? null : (
+        <p className={styles.activity} data-tone={tone} data-group={group} title={activity}>
+          <span className={styles.activityText}>{activity}</span>
+        </p>
+      )}
 
       {actionNeeded && request ? (
         <InlineApproval
@@ -436,7 +460,11 @@ export const AgentCard = memo(function AgentCard({
             <div>
               <dt>Started</dt>
               <dd>
-                <time data-kind="started" dateTime={thread.createdAt} title={`Started ${formatAbsolute(thread.createdAt)}`}>
+                <time
+                  data-kind="started"
+                  dateTime={thread.createdAt}
+                  title={`Started ${formatAbsolute(thread.createdAt)}`}
+                >
                   {started}
                 </time>
               </dd>

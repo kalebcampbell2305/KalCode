@@ -17,8 +17,7 @@
   border-radius: 12px;
   background:
     radial-gradient(120% 70% at 0% 0%, color-mix(in srgb, var(--tone) 7%, transparent) 0%, transparent 60%),
-    var(--panel-sheen),
-    var(--color-surface-1);
+    var(--panel-sheen), var(--color-surface-1);
   box-shadow: var(--shadow-panel);
   overflow: hidden;
   cursor: pointer;
@@ -190,7 +189,10 @@
   box-shadow: 0 0 0 3px var(--status-waiting-soft);
 }
 
+/* The account keeps its name; the state pill gives way first on a narrow card. */
 .who {
+  flex: 0 0 auto;
+  max-width: 55%;
   min-width: 0;
   overflow: hidden;
   color: var(--color-text);
@@ -203,7 +205,10 @@
 
 .state {
   display: inline-flex;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   align-items: center;
   gap: 0.25rem;
   padding: 0.0625rem var(--space-1-5);
@@ -239,14 +244,15 @@
   opacity: 0.8;
 }
 
+/* The clear (X) waits until the card is hovered or focused, like the Agents rail's. */
 .dismiss {
   flex: none;
   margin: -0.25rem -0.375rem -0.25rem 0;
-  color: var(--color-text-faint);
-  opacity: 0.7;
+  color: var(--status-failed-text);
+  opacity: 0;
   transition:
-    opacity var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    opacity 160ms var(--ease-out),
+    background-color 160ms var(--ease-out);
 }
 
 .top:not(:has(.elapsed)) .dismiss {
@@ -254,9 +260,19 @@
 }
 
 .card:hover .dismiss,
-.dismiss:focus-visible {
-  color: var(--color-text);
+.card:focus-within .dismiss,
+.dismiss[aria-busy="true"] {
   opacity: 1;
+}
+
+.dismiss:hover {
+  background: var(--status-failed-soft);
+}
+
+@media (hover: none) {
+  .dismiss {
+    opacity: 0.8;
+  }
 }
 
 /* ---- task, where, tech ---- */
@@ -408,6 +424,10 @@
   color: var(--color-text-secondary);
   font-size: var(--type-small);
   line-height: 1.45;
+}
+
+.activityText {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -419,10 +439,15 @@
 
 .activity[data-group="needs_you"],
 .activity[data-group="failed"] {
-  display: -webkit-box;
   border-color: color-mix(in srgb, var(--tone) 28%, transparent);
   background: var(--tone-soft);
   color: var(--tone-text);
+}
+
+/* A reason or an error gets two lines, never more (the full text is in its title and details). */
+.activity[data-group="needs_you"] .activityText,
+.activity[data-group="failed"] .activityText {
+  display: -webkit-box;
   white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -482,8 +507,8 @@
   color: var(--color-text);
 }
 
-.detailError {
-  color: var(--status-failed-text) !important;
+.details dd.detailError {
+  color: var(--status-failed-text);
 }
 
 @keyframes reveal {

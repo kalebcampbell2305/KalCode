@@ -37,7 +37,8 @@ export function readLayout(): FleetLayout {
     if (!raw) return EMPTY;
     const value = JSON.parse(raw) as Partial<FleetLayout>;
     return {
-      dockWidth: typeof value.dockWidth === "number" && Number.isFinite(value.dockWidth) ? clampDock(value.dockWidth) : null,
+      dockWidth:
+        typeof value.dockWidth === "number" && Number.isFinite(value.dockWidth) ? clampDock(value.dockWidth) : null,
       folded:
         value.folded && typeof value.folded === "object"
           ? Object.fromEntries(Object.entries(value.folded).filter(([, v]) => typeof v === "boolean"))

@@ -31,10 +31,10 @@ import {
   FLEET_GROUPS,
   type FleetCounts,
   type FleetFilter,
+  filterThreads,
   fleetCounts,
   fleetFilterOf,
   fleetSummaryLine,
-  filterThreads,
   GROUP_MODE_LABELS,
   GROUP_MODES,
   type GroupMode,
@@ -511,7 +511,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
               </div>
               <div className={styles.groupBy}>
                 <span className={styles.groupLabel} id="dashboard-group-label">
-                  Group
+                  Group by
                 </span>
                 <SegmentedControl<GroupMode>
                   aria-labelledby="dashboard-group-label"
@@ -538,7 +538,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                   <DropdownMenuItem
                     icon={<ListX />}
                     disabled={cleanup.counts.finished === 0}
-                    description="Removes agents that finished their work"
+                    description="Removes finished, stopped and offline agents"
                     onSelect={() => void cleanup.clearFinished()}
                   >
                     Clear finished ({cleanup.counts.finished})
@@ -546,7 +546,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                   <DropdownMenuItem
                     icon={<Power />}
                     disabled={cleanup.counts.idle === 0}
-                    description="Closes idle and stopped agents; paused ones keep their turn"
+                    description="Closes agents idle at their prompt; paused ones keep their turn"
                     onSelect={() => void cleanup.closeIdle()}
                   >
                     Close idle ({cleanup.counts.idle})
@@ -573,9 +573,9 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                     icon={<Power />}
                     tone="danger"
                     disabled={cleanup.counts.all === 0}
-                    onSelect={() => setConfirmCloseAll(true)}
+                    onSelect={() => (cleanup.canonical ? void cleanup.closeAll() : setConfirmCloseAll(true))}
                   >
-                    Close all agents…
+                    {cleanup.canonical ? "Close all terminals and agents…" : "Close all agents…"}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -718,7 +718,13 @@ function GroupHeader({
       </h2>
       <span className={styles.groupRule} aria-hidden="true" />
       {action ? (
-        <Button size="sm" variant="ghost" icon={action.icon} className={styles.groupAction} onClick={() => void action.run()}>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={action.icon}
+          className={styles.groupAction}
+          onClick={() => void action.run()}
+        >
           {action.label}
         </Button>
       ) : null}

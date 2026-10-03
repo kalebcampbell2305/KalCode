@@ -98,7 +98,8 @@ function PanelSplitter({
     const state = drag.current;
     if (!state) return;
     drag.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
     cancelAnimationFrame(state.frame);
     onResize(state.last);
   };
