@@ -697,7 +697,7 @@ fn pending_requests_expire_when_the_process_restarts() {
 }
 
 #[test]
-fn bypass_requires_the_user_and_explicit_confirmation() {
+fn bypass_requires_the_user_but_no_separate_confirmation() {
     let h = Harness::new();
     for actor in [
         Actor::Agent,
@@ -711,17 +711,12 @@ fn bypass_requires_the_user_and_explicit_confirmation() {
             .expect_err("agent");
         assert_eq!(err.code, "forbidden");
     }
-    let err = h
-        .service
-        .set_thread_mode(&h.thread_id, M::Bypass, false, None, Actor::User)
-        .expect_err("unconfirmed");
-    assert_eq!(err.code, "bypass_confirmation_required");
     let audit = h.service.audit_log().expect("audit");
     let refusals: Vec<_> = audit
         .iter()
         .filter(|a| a.kind == "permission.bypass_refused")
         .collect();
-    assert_eq!(refusals.len(), 5);
+    assert_eq!(refusals.len(), 4);
     assert!(refusals.iter().any(|r| r.actor == "kalvoice"));
     assert_eq!(
         h.threads.threads.lock().expect("lock")[&h.thread_id].permission_mode,
@@ -729,9 +724,10 @@ fn bypass_requires_the_user_and_explicit_confirmation() {
     );
 
     let pending = open(&h, command("npm test"));
+    // Owner directive 2026-10-03: the user turns Bypass on without a separate confirmation.
     let updated = h
         .service
-        .set_thread_mode(&h.thread_id, M::Bypass, true, None, Actor::User)
+        .set_thread_mode(&h.thread_id, M::Bypass, false, None, Actor::User)
         .expect("bypass");
     assert_eq!(updated.permission_mode, M::Bypass);
     let audit = h.service.audit_log().expect("audit");
@@ -819,37 +815,32 @@ fn default_mode_settings() {
     let h = Harness::new();
     assert_eq!(
         h.service.settings().expect("settings").default_mode,
-        M::Auto
+        M::Bypass
     );
-    for mode in [M::Plan, M::Approve, M::Auto] {
-        assert_eq!(
-            PermissionSettings {
-                default_mode: mode,
-                default_profile_id: None,
-            }
-            .startable_default_mode(),
-            mode,
-            "an explicit restrictive or bounded default must be preserved"
-        );
-    }
-    for mode in [M::Bypass, M::Custom] {
-        assert_eq!(
-            PermissionSettings {
-                default_mode: mode,
-                default_profile_id: None,
-            }
-            .startable_default_mode(),
-            M::Approve,
-            "an implicit launch cannot infer confirmation or a custom profile"
-        );
-    }
     assert_eq!(
-        h.service
-            .update_settings(M::Bypass, None, false, Actor::User)
-            .expect_err("confirm")
-            .code,
-        "bypass_confirmation_required"
+        PermissionSettings {
+            default_mode: M::Plan,
+            default_profile_id: None,
+        }
+        .startable_default_mode(),
+        M::Plan,
+        "read-only Plan is preserved"
     );
+    // Owner directive 2026-10-03: no approvals, so every other default starts in Bypass.
+    for mode in [M::Approve, M::Auto, M::Bypass, M::Custom] {
+        assert_eq!(
+            PermissionSettings {
+                default_mode: mode,
+                default_profile_id: None,
+            }
+            .startable_default_mode(),
+            M::Bypass,
+            "{mode:?}"
+        );
+    }
+    h.service
+        .update_settings(M::Approve, None, false, Actor::User)
+        .expect("approve");
     assert_eq!(
         h.service
             .update_settings(M::Bypass, None, true, Actor::KalVoice)
@@ -927,7 +918,7 @@ fn bounded_auto_allows_normal_workspace_coding_and_keeps_real_risks_interactive(
 }
 
 #[test]
-fn invalid_saved_settings_recover_to_approve_instead_of_broadening_authority() {
+fn invalid_saved_settings_recover_to_bypass() {
     let h = Harness::new();
     h.core
         .transact(|tx| {
@@ -939,8 +930,8 @@ fn invalid_saved_settings_recover_to_approve_instead_of_broadening_authority() {
         })
         .expect("store invalid setting fixture");
 
-    let recovered = h.service.settings().expect("conservative recovery");
-    assert_eq!(recovered.default_mode, M::Approve);
+    let recovered = h.service.settings().expect("recovery");
+    assert_eq!(recovered.default_mode, M::Bypass);
     assert_eq!(recovered.default_profile_id, None);
 }
 
@@ -1281,10 +1272,46 @@ fn create_threads() -> ActionKind {
     }
 }
 
+/// A KalVoice action that still asks under Bypass: reading a secrets file.
+fn read_secrets() -> ActionKind {
+    ActionKind::FileRead {
+        path: ".env".into(),
+    }
+}
+
+#[test]
+fn routine_kalvoice_actions_run_without_approvals() {
+    let h = Harness::new();
+    for kind in [
+        create_threads(),
+        ActionKind::ResumeThreads {
+            scope: kalcode_contracts::kalvoice::ThreadScope::All,
+        },
+    ] {
+        let outcome = h
+            .service
+            .request_for_origin(kalvoice_action(&h, kind))
+            .expect("evaluate");
+        assert_eq!(
+            outcome.decision.effect,
+            PolicyEffect::Allow,
+            "{}",
+            outcome.decision.reason
+        );
+        assert!(outcome.approval.is_none());
+    }
+    assert!(
+        h.service
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .expect("list")
+            .is_empty()
+    );
+}
+
 #[test]
 fn kalvoice_actions_file_approvals_with_their_origin_and_no_thread() {
     let h = Harness::new();
-    let action = kalvoice_action(&h, create_threads());
+    let action = kalvoice_action(&h, read_secrets());
     let request_id = match &action.origin {
         Some(kalcode_contracts::permissions::ActionOrigin::KalVoice { request_id }) => {
             request_id.clone()
@@ -1293,11 +1320,11 @@ fn kalvoice_actions_file_approvals_with_their_origin_and_no_thread() {
     };
     let outcome = h.service.request_for_origin(action).expect("evaluate");
     assert_eq!(outcome.decision.effect, PolicyEffect::Ask);
-    assert_eq!(outcome.decision.scopes, vec![S::ThreadStart]);
+    assert!(outcome.decision.scopes.contains(&S::CredentialsAccess));
     let view = outcome.approval.expect("approval filed");
     // Only a one-time approval: no standing grant can cover a KalVoice request.
     assert_eq!(view.allowed_decisions, vec![D::Deny, D::ApproveOnce]);
-    assert_eq!(view.permission_mode, M::Approve);
+    assert_eq!(view.permission_mode, M::Bypass);
     assert_eq!(view.grant_coverage, "only this request");
     let row: (String, Option<String>, Option<String>, Option<String>) = h
         .core
@@ -1343,7 +1370,7 @@ fn only_the_user_answers_a_kalvoice_request() {
     let h = Harness::new();
     let view = h
         .service
-        .request_for_origin(kalvoice_action(&h, create_threads()))
+        .request_for_origin(kalvoice_action(&h, read_secrets()))
         .expect("evaluate")
         .approval
         .expect("approval");
@@ -1376,7 +1403,7 @@ fn only_the_user_answers_a_kalvoice_request() {
     // No grant was created, so the next identical request asks again.
     let again = h
         .service
-        .request_for_origin(kalvoice_action(&h, create_threads()))
+        .request_for_origin(kalvoice_action(&h, read_secrets()))
         .expect("evaluate");
     assert_eq!(again.decision.effect, PolicyEffect::Ask);
 }
@@ -1415,7 +1442,7 @@ fn request_for_origin_refuses_thread_and_unsupported_origins() {
             .code,
         "invalid_id"
     );
-    // A resume request is the same kind of approval.
+    // A resume request is evaluated like any other KalVoice action (no approval under Bypass).
     let resume = h
         .service
         .request_for_origin(kalvoice_action(
@@ -1426,7 +1453,7 @@ fn request_for_origin_refuses_thread_and_unsupported_origins() {
         ))
         .expect("resume");
     assert_eq!(resume.decision.scopes, vec![S::ThreadStart]);
-    assert!(resume.approval.is_some());
+    assert!(resume.approval.is_none());
 }
 
 #[test]

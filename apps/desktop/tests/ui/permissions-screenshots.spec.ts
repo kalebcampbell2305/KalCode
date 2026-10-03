@@ -44,11 +44,6 @@ for (const theme of ["dark", "light"] as const) {
         .getByRole("radiogroup", { name: "Default mode for new coding agents" })
         .getByRole("radio", { name: "Bypass" })
         .click();
-      const dialog = page.getByRole("alertdialog");
-      await dialog.getByRole("checkbox").check();
-      await shot(page, `permissions-bypass-confirm-${theme}-${size.name}`);
-      await dialog.getByRole("button", { name: "Turn on Bypass" }).click();
-      await expect(dialog).toBeHidden();
       await section.getByRole("heading", { name: "Permissions" }).scrollIntoViewIfNeeded();
       await shot(page, `permissions-bypass-on-${theme}-${size.name}`);
 
@@ -61,7 +56,6 @@ for (const theme of ["dark", "light"] as const) {
       await page.keyboard.press("Escape");
 
       if (size.name === "1440") {
-        await section.getByRole("button", { name: "Use Approve" }).click();
         await page.getByRole("button", { name: "Collapse sidebar" }).click();
         await page.getByRole("button", { name: "Dashboard" }).click();
         await shot(page, `permissions-sidebar-collapsed-${theme}-${size.name}`);

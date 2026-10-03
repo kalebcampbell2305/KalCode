@@ -143,7 +143,11 @@ export const PERMISSION_MODES: Record<PermissionMode, { label: string; descripti
     description:
       "Recommended for everyday coding. Workspace edits, development commands, tests, builds and local Git run automatically; real security boundaries and external effects still ask.",
   },
-  bypass: { label: "Bypass", description: "Broad local authority. Remote actions still follow their own rules." },
+  bypass: {
+    label: "Bypass",
+    description:
+      "No approval prompts: edits, commands, tests, builds, Git and pushes just run. Only access to credentials and secrets asks.",
+  },
   custom: { label: "Custom", description: "A named rule set." },
 };
 

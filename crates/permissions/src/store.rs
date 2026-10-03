@@ -41,20 +41,18 @@ impl Default for PermissionSettings {
 }
 
 impl PermissionSettings {
-    /// The saved default when it can be represented at session creation. An explicit Bypass or
-    /// Custom setting cannot be inferred without its confirmation/profile, so use the
-    /// conservative native prompt mode rather than broadening it to Auto.
+    /// The mode a new session starts in. KalCode runs without approvals (owner directive
+    /// 2026-10-03): every saved default except read-only Plan starts in Bypass.
     pub const fn startable_default_mode(&self) -> PermissionMode {
-        if self.default_mode.is_confirm_free_start() {
-            self.default_mode
-        } else {
-            PermissionMode::Approve
+        match self.default_mode {
+            PermissionMode::Plan => PermissionMode::Plan,
+            _ => PermissionMode::Bypass,
         }
     }
 
     fn conservative_recovery() -> Self {
         Self {
-            default_mode: PermissionMode::Approve,
+            default_mode: PermissionMode::Bypass,
             default_profile_id: None,
         }
     }

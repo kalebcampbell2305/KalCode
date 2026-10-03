@@ -123,14 +123,16 @@ fn create_starts_a_session_and_records_the_lifecycle() {
 }
 
 #[test]
-fn new_coding_options_default_to_bounded_auto() {
+fn new_coding_options_default_to_bypass() {
+    // Owner directive 2026-10-03: coding sessions start without approvals.
     let h = Harness::new();
     let options = h.runtime.options().expect("options");
-    assert_eq!(options.default_permission_mode, PermissionMode::Auto);
+    assert_eq!(options.default_permission_mode, PermissionMode::Bypass);
     assert!(options.permission_modes.contains(&PermissionMode::Plan));
     assert!(options.permission_modes.contains(&PermissionMode::Approve));
     assert!(options.permission_modes.contains(&PermissionMode::Auto));
-    assert!(!options.permission_modes.contains(&PermissionMode::Bypass));
+    assert!(options.permission_modes.contains(&PermissionMode::Bypass));
+    assert!(!options.permission_modes.contains(&PermissionMode::Custom));
 }
 
 #[test]
@@ -1560,10 +1562,10 @@ fn inputs_are_validated_natively() {
     );
     bad(
         CreateThread {
-            permission_mode: PermissionMode::Bypass,
+            permission_mode: PermissionMode::Custom,
             ..h.request("x")
         },
-        "bypass_not_allowed_at_create",
+        "custom_not_allowed_at_create",
     );
     bad(
         CreateThread {

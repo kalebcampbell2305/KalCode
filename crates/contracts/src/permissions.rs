@@ -19,16 +19,15 @@ pub enum PermissionMode {
     Custom,
 }
 
-/// Default for an implicit local coding session. This keeps ordinary workspace work in the
-/// bounded Auto policy; callers must still honor an explicit saved or per-session choice.
-/// Bypass is never an implicit default.
-pub const DEFAULT_CODING_PERMISSION_MODE: PermissionMode = PermissionMode::Auto;
+/// Default for an implicit local coding session: Bypass, so coding agents and threads run
+/// without approvals (owner directive 2026-10-03, "take away all approvals").
+pub const DEFAULT_CODING_PERMISSION_MODE: PermissionMode = PermissionMode::Bypass;
 
 impl PermissionMode {
-    /// Modes that may be selected implicitly when creating a coding session. Bypass needs an
-    /// explicit confirmation, while Custom needs an attached profile.
+    /// Modes that may be selected when creating a coding session. Custom needs an attached
+    /// profile; every other mode, Bypass included, starts without a confirmation.
     pub const fn is_confirm_free_start(self) -> bool {
-        matches!(self, Self::Plan | Self::Approve | Self::Auto)
+        !matches!(self, Self::Custom)
     }
 }
 

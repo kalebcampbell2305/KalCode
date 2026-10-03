@@ -2,7 +2,7 @@
  * In-memory permission commands for unit tests and the `ui-test` build ONLY (never bundled into
  * development or production builds). Mirrors the native service's validation and semantics:
  * only pending requests can be answered, only the decisions a request allows are accepted,
- * Bypass needs `confirmBypass: true`, and every change emits the same events.
+ * Bypass needs no confirmation, and every change emits the same events.
  *
  * Scenario `approvals` seeds pending requests from several providers and modes.
  */
@@ -109,9 +109,8 @@ export function baseline(mode: PermissionMode, scope: PermissionScope): RuleEffe
         ? "allow"
         : "ask";
     case "bypass":
-      return REMOTE.includes(scope) || scope === "credentials.access" || scope === "filesystem.outside_workspace"
-        ? "ask"
-        : "allow";
+      // No approvals (owner directive 2026-10-03): only credential access still asks.
+      return scope === "credentials.access" ? "ask" : "allow";
   }
 }
 
@@ -374,7 +373,7 @@ export function createPermissionMemory(options: {
     thread("Refactor settings", "gemini-cli", "Gemini CLI", "auto"),
     thread("Ship the landing page", "claude-code", "Claude Code", "bypass", { id: websiteId, name: "kalcode-website" }),
   ];
-  let settings: PermissionSettings = { defaultMode: "auto", defaultProfileId: null };
+  let settings: PermissionSettings = { defaultMode: "bypass", defaultProfileId: null };
   const approvals: ApprovalView[] = [];
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
@@ -402,15 +401,9 @@ export function createPermissionMemory(options: {
   }
 
   const findProfile = (id: unknown) => BUILTIN_PROFILES.find((p) => p.id === id);
-  const checkMode = (mode: unknown, confirm: unknown, profileId: unknown): string | null => {
+  // Bypass needs no separate confirmation (owner directive 2026-10-03), as natively.
+  const checkMode = (mode: unknown, _confirm: unknown, profileId: unknown): string | null => {
     if (typeof mode !== "string" || !MODES.includes(mode as PermissionMode)) rejected();
-    if (mode === "bypass" && confirm !== true)
-      fail({
-        category: "permission",
-        code: "bypass_confirmation_required",
-        message: "Bypass needs your explicit confirmation.",
-        retryable: false,
-      });
     if (mode !== "custom") return null;
     if (profileId === undefined || profileId === null)
       fail({

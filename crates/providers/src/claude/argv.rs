@@ -165,6 +165,12 @@ const ASK_FIRST_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit", "WebFetch", 
 /// Claude Code allow rules cover it (https://code.claude.com/docs/en/permissions#bash-rule-limits).
 pub fn deny_rules(mode: PermissionMode) -> Vec<String> {
     let mut rules = Vec::new();
+    // Bypass runs without approvals (owner directive 2026-10-03): only credential files stay
+    // unreadable; remote actions such as `git push` run like any other command.
+    if mode == PermissionMode::Bypass {
+        rules.extend(CREDENTIAL_PATHS.iter().map(|p| format!("Read({p})")));
+        return rules;
+    }
     if !matches!(mode, PermissionMode::Auto | PermissionMode::Bypass) {
         rules.extend(ASK_FIRST_TOOLS.iter().map(|t| (*t).to_owned()));
     }
@@ -206,12 +212,10 @@ pub fn permission_args(mode: PermissionMode) -> Vec<&'static str> {
             args.extend(["--permission-mode", "auto"]);
             args
         }
-        // File edits and common filesystem commands inside the working directory. Other
-        // commands and network are denied. `bypassPermissions` is never used: it would also
-        // allow remote-consequential actions such as `git push`.
+        // No approvals (owner directive 2026-10-03): Claude Code's bypassPermissions mode.
         PermissionMode::Bypass => {
             let mut args = USER_SETTINGS_ONLY.to_vec();
-            args.extend(["--permission-mode", "acceptEdits"]);
+            args.extend(["--permission-mode", "bypassPermissions"]);
             args
         }
     }
@@ -293,11 +297,9 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
             mode: PermissionMode::Bypass,
             fidelity: MappingFidelity::ApproximateStricter,
             provider_setting: setting(PermissionMode::Bypass),
-            notes: format!(
-                "File edits and common file commands in the workspace run without asking; \
-                 anything else that would ask is refused. Claude Code's bypassPermissions mode \
-                 is never used. {ENFORCED_BY_KALCODE} {NOT_YET_ENFORCED}"
-            ),
+            notes: "Everything runs without asking (Claude Code's bypassPermissions mode), with \
+                    your Claude Code user settings; only credential files stay unreadable."
+                .to_owned(),
         },
     ]
 }
@@ -455,7 +457,7 @@ mod tests {
             PermissionMode::Plan => 0,
             PermissionMode::Approve | PermissionMode::Custom => 2,
             PermissionMode::Auto => 4,
-            PermissionMode::Bypass => 3,
+            PermissionMode::Bypass => u8::MAX,
         };
         for mode in ALL {
             let args = args_for(mode);
@@ -464,10 +466,15 @@ mod tests {
                 claude_rank(&claude_mode) <= cap(mode),
                 "{mode:?} -> {claude_mode}"
             );
+            // Only Bypass runs without approvals (owner directive 2026-10-03).
+            if mode == PermissionMode::Bypass {
+                assert_eq!(claude_mode, "bypassPermissions");
+            } else {
+                assert!(!args.iter().any(|a| a == "bypassPermissions"), "{mode:?}");
+            }
             for forbidden in [
                 "--dangerously-skip-permissions",
                 "--allow-dangerously-skip-permissions",
-                "bypassPermissions",
                 "--allowedTools",
                 "--allowed-tools",
                 "--add-dir",
@@ -720,11 +727,14 @@ mod tests {
         for mode in ALL {
             let rules = passed_rules(&args_for(mode));
             assert_eq!(rules, deny_rules(mode), "{mode:?}");
+            // Bypass runs remote actions without approvals (owner directive 2026-10-03).
+            let denied = mode != PermissionMode::Bypass;
             for tool in ["Bash", "PowerShell"] {
                 for command in remote {
-                    assert!(
+                    assert_eq!(
                         rules.iter().any(|r| rule_matches(r, tool, command)),
-                        "{mode:?}: {tool} `{command}` is not denied"
+                        denied,
+                        "{mode:?}: {tool} `{command}`"
                     );
                 }
             }
@@ -773,11 +783,10 @@ mod tests {
                 );
             }
         }
-        // Auto and Bypass keep local edits; remote actions stay denied.
+        // Auto keeps local edits and denies remote actions; Bypass denies only credential reads.
         assert!(auto.iter().any(|r| r == "Bash(git push *)"));
         let bypass = deny_rules(PermissionMode::Bypass);
-        assert!(!bypass.iter().any(|r| r == "Edit" || r == "Write"));
-        assert!(bypass.iter().any(|r| r == "Bash(git push *)"));
+        assert!(bypass.iter().all(|r| r.starts_with("Read(")), "{bypass:?}");
     }
 
     #[test]
@@ -788,8 +797,9 @@ mod tests {
                 "{:?}",
                 mapping.mode
             );
-            assert!(
+            assert_eq!(
                 mapping.notes.contains("KalCode always denies git push"),
+                mapping.mode != PermissionMode::Bypass,
                 "{:?}",
                 mapping.mode
             );

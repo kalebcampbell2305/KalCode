@@ -459,6 +459,7 @@ mod tests {
             "plan" => 0,
             "default" => 1,
             "auto_edit" => 2,
+            "yolo" => 3,
             other => panic!("unexpected approval mode {other}"),
         };
         for mode in ALL {
@@ -475,7 +476,9 @@ mod tests {
                     .expect("mode");
                 let cap = match mode {
                     PermissionMode::Plan => 0,
-                    PermissionMode::Auto | PermissionMode::Bypass => 2,
+                    PermissionMode::Auto => 2,
+                    // Bypass runs without approvals (owner directive 2026-10-03).
+                    PermissionMode::Bypass => 3,
                     _ => 1,
                 };
                 assert!(rank(&args[at + 1]) <= cap, "{mode:?}");
@@ -487,7 +490,7 @@ mod tests {
         );
         assert_eq!(approval_mode(PermissionMode::Approve), "default");
         assert_eq!(approval_mode(PermissionMode::Auto), "auto_edit");
-        assert_eq!(approval_mode(PermissionMode::Bypass), "auto_edit");
+        assert_eq!(approval_mode(PermissionMode::Bypass), "yolo");
         assert!(FORBIDDEN.contains(&"--approval-mode=yolo"));
     }
 

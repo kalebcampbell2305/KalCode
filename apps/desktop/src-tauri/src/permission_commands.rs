@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(service.list_approvals(None).expect("list").len(), 0);
         assert_eq!(
             service.settings().expect("settings").default_mode,
-            PermissionMode::Auto
+            PermissionMode::Bypass
         );
         // Without threads (Z3), changing a thread's mode reports that the thread doesn't exist.
         let error = service

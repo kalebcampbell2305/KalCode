@@ -4,7 +4,6 @@ use kalcode_contracts::permissions::PermissionMode;
 
 /// Flags and values KalCode never passes to Gemini CLI.
 pub const FORBIDDEN: &[&str] = &[
-    "yolo",
     "--yolo",
     "-y",
     "--approval-mode=yolo",
@@ -14,11 +13,13 @@ pub const FORBIDDEN: &[&str] = &[
 ];
 
 /// Gemini CLI's approval mode for a KalCode mode. Auto uses Gemini's bounded auto-edit policy;
-/// shell and other tools still prompt. Custom runs as Approve, and unrestricted yolo is forbidden.
+/// shell and other tools still prompt. Custom runs as Approve. Bypass runs without approvals
+/// (`yolo`, owner directive 2026-10-03).
 pub fn approval_mode(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Plan => "plan",
-        PermissionMode::Auto | PermissionMode::Bypass => "auto_edit",
+        PermissionMode::Bypass => "yolo",
+        PermissionMode::Auto => "auto_edit",
         PermissionMode::Approve | PermissionMode::Custom => "default",
     }
 }
