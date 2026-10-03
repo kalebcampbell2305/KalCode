@@ -18,7 +18,7 @@ fn config(path: &std::path::Path) -> CoreConfig {
     }
 }
 
-fn create(core: &Core, store: &HandoffStore) {
+fn create(core: &Core, store: &HandoffStore) -> Result<(), KalError> {
     let hash = "a".repeat(64);
     core.write_with_events(|tx| {
         tx.execute(
@@ -29,27 +29,25 @@ fn create(core: &Core, store: &HandoffStore) {
             params![ID, hash, kalcode_core::time::now_rfc3339()],
         )?;
         Ok(((), vec![]))
-    })
-    .expect("context metadata");
-    store
-        .create(&NewHandoff {
-            id: ID,
-            context_package_id: ID,
-            source_thread_id: "10000000-0000-4000-8000-000000000001",
-            target_thread_id: "10000000-0000-4000-8000-000000000002",
-            source_workspace_id: "20000000-0000-4000-8000-000000000001",
-            target_workspace_id: "20000000-0000-4000-8000-000000000001",
-            source_name: "Claude A",
-            target_name: "Codex A",
-            task: HandoffTask::Review,
-            target_instance_id: "exact-process-1",
-            preview_hash: &hash,
-            source_commit: None,
-            source_branch: Some("main"),
-            source_dirty: false,
-            return_of_id: None,
-        })
-        .expect("queued handoff");
+    })?;
+    store.create(&NewHandoff {
+        id: ID,
+        context_package_id: ID,
+        source_thread_id: "10000000-0000-4000-8000-000000000001",
+        target_thread_id: "10000000-0000-4000-8000-000000000002",
+        source_workspace_id: "20000000-0000-4000-8000-000000000001",
+        target_workspace_id: "20000000-0000-4000-8000-000000000001",
+        source_name: "Claude A",
+        target_name: "Codex A",
+        task: HandoffTask::Review,
+        target_instance_id: "exact-process-1",
+        preview_hash: &hash,
+        source_commit: None,
+        source_branch: Some("main"),
+        source_dirty: false,
+        return_of_id: None,
+    })?;
+    Ok(())
 }
 
 #[test]
@@ -57,7 +55,7 @@ fn concurrent_dispatchers_can_claim_exactly_once_and_failure_rolls_back() {
     let dir = tempfile::tempdir().unwrap();
     let core = Arc::new(Core::open(config(dir.path())).unwrap());
     let store = HandoffStore::new(core.clone());
-    create(&core, &store);
+    create(&core, &store).expect("queued handoff fixture");
     assert!(
         store
             .claim_delivery(ID, |_| Err(KalError::validation("test-denied", "Denied")))
@@ -92,7 +90,7 @@ fn restart_interrupts_claimed_work_without_replaying_or_erasing_it() {
     {
         let core = Arc::new(Core::open(config(dir.path())).unwrap());
         let store = HandoffStore::new(core.clone());
-        create(&core, &store);
+        create(&core, &store).expect("queued handoff fixture");
         store.claim_delivery(ID, |_| Ok(())).unwrap();
         core.shutdown();
     }
@@ -118,7 +116,7 @@ fn delivered_work_requires_an_explicit_result_and_cannot_be_cancelled_as_queued(
     let dir = tempfile::tempdir().unwrap();
     let core = Arc::new(Core::open(config(dir.path())).unwrap());
     let store = HandoffStore::new(core.clone());
-    create(&core, &store);
+    create(&core, &store).expect("queued handoff fixture");
     assert!(
         store
             .complete(ID, HandoffStatus::Completed, "Premature")
@@ -163,7 +161,7 @@ fn handoff_migration_preserves_existing_state_and_allows_canonical_retention() {
         })
         .unwrap();
     assert_eq!(name, "Existing project");
-    create(&core, &store);
+    create(&core, &store).expect("queued handoff fixture");
     store.cancel(ID).unwrap();
     core.write_with_events(|tx| {
         tx.execute("DELETE FROM context_packages WHERE id=?1", [ID])?;
