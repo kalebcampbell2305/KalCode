@@ -7,7 +7,9 @@
  * launcher, the Agents rail. Every interactive element carries `data-do="<action>[:arg]"`.
  * No inline styles (the site's CSP forbids them): dynamic sizes are classes or data attributes.
  */
+
 import { formatKalVoiceAllowance, getPlan, PLANS } from "@kalcode/protocol/plans";
+import { renderAdaptiveCanvas, renderCanvasTools } from "./canvas";
 import type { LiveIcon } from "./icons";
 import {
   type Account,
@@ -328,17 +330,12 @@ function plusMenu(frameId: string): string {
 }
 
 function codeSurface(state: State): string {
-  const frames = state.maximized ? state.frames.filter((f) => f.id === state.focus) : state.frames;
-  const n = frames.length;
-  const cols = state.layout === "auto" ? n : Number(state.layout);
   const focusedFrame = state.frames.find((f) => f.id === state.focus);
   const focusedTab = focusedFrame ? state.tabs[focusedFrame.active] : undefined;
   const running = Object.values(state.tabs).filter(
     (t) => (t.agent && isWorking(state.agents[t.agent] as Agent)) || (t.kind === "terminal" && !t.idle),
   ).length;
-  const canvas = state.mobile
-    ? mobileCode(state)
-    : `<div class="lk-canvas" data-n="${n}" data-cols="${Math.min(cols, n)}">${frames.map((f, i) => frame(state, f, i)).join("")}${n === 0 ? emptyCode() : ""}</div>`;
+  const canvas = renderAdaptiveCanvas(state, frame);
   return `<div class="lk-code">
   <div class="lk-code__head">
     <span class="lk-code__ws"><strong>${WORKSPACE.name}</strong>${icon("chevron", "lk-caret")}<span class="lk-mono">${WORKSPACE.path}</span></span>
@@ -349,36 +346,10 @@ function codeSurface(state: State): string {
       <button type="button" class="lk-btn lk-btn--primary" data-do="launcher" data-tour="new-agent"${hint("Choose a provider, account, model and effort: a real coding agent in its own terminal.")}>${icon("bot")}<span>New agent</span></button>
     </span>
   </div>
+  ${renderCanvasTools(state)}
   ${canvas}
   <div class="lk-statusbar"><span>${focusedTab ? `${tabGlyph(state, focusedTab)} ${esc(tabTitle(state, focusedTab))}` : "No pane"}</span><span>${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys"><kbd>Ctrl Alt ←↑→↓</kbd> move <kbd>Ctrl Alt D</kbd> split</span></div>
 </div>`;
-}
-
-function emptyCode(): string {
-  return `<div class="lk-empty lk-empty--big"><p>Every pane is closed.</p><button type="button" class="lk-btn lk-btn--primary" data-do="launcher">${icon("bot")}New agent</button><button type="button" class="lk-btn" data-do="reset">Reset the demo</button></div>`;
-}
-
-/** Phones: one pane at a time, a strip of every pane above it, swipe to move between them. */
-function mobileCode(state: State): string {
-  const all = state.frames.flatMap((f) => f.tabs);
-  const focusedFrame = state.frames.find((f) => f.id === state.focus);
-  const current = focusedFrame?.active ?? all[0];
-  const tab = current ? state.tabs[current] : undefined;
-  const strip = all
-    .map((tid) => state.tabs[tid])
-    .filter((t): t is Tab => Boolean(t))
-    .map(
-      (t) =>
-        `<button type="button" class="lk-mtab" data-key="m-${t.id}" data-do="tab:${t.id}" aria-pressed="${t.id === current}">${tabGlyph(state, t)}<span>${esc(t.kind === "agent" ? (state.agents[t.agent ?? ""]?.sign ?? t.title) : t.title)}</span><span class="lk-dot" data-tone="${tabTone(state, t)}"></span></button>`,
-    )
-    .join("");
-  let body = emptyCode();
-  if (tab?.kind === "agent" && tab.agent && state.agents[tab.agent])
-    body = agentPane(state, state.agents[tab.agent] as Agent);
-  else if (tab?.kind === "terminal") body = terminalPane(tab);
-  else if (tab?.kind === "browser") body = browserPane(state, tab);
-  else if (tab?.kind === "widget") body = widgetPane(state, tab);
-  return `<div class="lk-mcode"><div class="lk-mstrip" role="group" aria-label="Panes">${strip}<button type="button" class="lk-mtab lk-mtab--add" data-do="launcher" aria-label="New agent">${icon("plus")}</button></div><section class="lk-frame lk-frame--mobile" data-swipe data-kind="${tab?.kind ?? "empty"}" data-focused="true" aria-label="${esc(tab ? tabTitle(state, tab) : "No pane")}"${tab?.kind === "browser" ? ` data-tour="browser"` : ""}>${body}</section><p class="lk-mhint">Swipe to switch panes</p></div>`;
 }
 
 function tidyMenu(): string {
