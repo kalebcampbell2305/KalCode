@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   ack: vi.fn(),
   resize: vi.fn(),
   voiceWrite: vi.fn(),
+  output: vi.fn(),
 }));
 
 vi.mock("@xterm/xterm", () => ({
@@ -38,6 +39,7 @@ vi.mock("@xterm/xterm", () => ({
     reset() {}
     focus() {}
     write(_data: unknown, done?: () => void) {
+      mocks.output(_data);
       done?.();
     }
   },
@@ -91,6 +93,7 @@ beforeEach(() => {
   mocks.ack.mockReset().mockResolvedValue(true);
   mocks.resize.mockReset().mockResolvedValue(undefined);
   mocks.voiceWrite.mockReset();
+  mocks.output.mockReset();
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -106,6 +109,51 @@ afterEach(() => {
 });
 
 describe("PaneTerminal voice delivery", () => {
+  it("shows a new session's actual startup failure instead of claiming it is historical", async () => {
+    mocks.attach.mockResolvedValue(null);
+    render(
+      <PaneTerminal
+        {...pane().props}
+        instanceId={null}
+        running={false}
+        status="failed"
+        errorMessage="KalCode's hook helper is missing, so the pane can't start safely."
+      />,
+    );
+    await act(async () => {});
+    const output = mocks.output.mock.calls.flat().join("");
+    expect(output).toContain("hook helper is missing");
+    expect(output).not.toContain("earlier run");
+  });
+
+  it("keeps queued launches distinct from historical sessions and updates a delayed failure", async () => {
+    mocks.attach.mockResolvedValue(null);
+    const view = render(
+      <PaneTerminal {...pane().props} instanceId={null} running={false} status="waiting_for_dependency" />,
+    );
+    await act(async () => {});
+    expect(mocks.output.mock.calls.flat().join("")).not.toContain("earlier run");
+    view.rerender(
+      <PaneTerminal
+        {...pane().props}
+        instanceId={null}
+        running={false}
+        status="failed"
+        errorMessage="Provider could not start."
+      />,
+    );
+    await act(async () => {});
+    expect(mocks.output.mock.calls.flat().join("")).toContain("Provider could not start.");
+    expect(mocks.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the historical resume explanation only for a stopped session", async () => {
+    mocks.attach.mockResolvedValue(null);
+    render(<PaneTerminal {...pane().props} instanceId={null} running={false} status="interrupted" />);
+    await act(async () => {});
+    expect(mocks.output.mock.calls.flat().join("")).toContain("Resume the agent");
+  });
+
   it("inserts without Enter, sends with one Enter, and submits only through the provider sink", async () => {
     const view = render(pane());
     await act(async () => {});

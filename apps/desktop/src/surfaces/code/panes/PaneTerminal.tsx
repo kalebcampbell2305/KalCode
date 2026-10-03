@@ -36,6 +36,8 @@ interface PaneTerminalProps {
   providerId: string;
   providerAccountId: string | null;
   status: ThreadStatus;
+  /** Native user-safe startup/runtime error, kept distinct from historical restoration. */
+  errorMessage?: string | null;
   /** Structured provider/runtime state only; never inferred from terminal output. */
   providerPromptActive: boolean;
   /** Accessible name of the terminal input. */
@@ -66,6 +68,7 @@ export function PaneTerminal({
   providerId,
   providerAccountId,
   status,
+  errorMessage = null,
   providerPromptActive,
   label,
   running,
@@ -84,6 +87,19 @@ export function PaneTerminal({
   const labelRef = useRef(label);
   labelRef.current = label;
   const inputRef = useRef<ReturnType<typeof createOrderedInputQueue> | null>(null);
+  const missingOutputRef = useRef<(() => void) | null>(null);
+  const missingMessage = running
+    ? "Connecting to the provider terminal…"
+    : errorMessage ||
+      (status === "failed"
+        ? "The provider could not start. Resume the agent to try again."
+        : status === "waiting_for_dependency"
+          ? "Waiting for resources to start this agent…"
+          : status === "interrupted" || status === "completed"
+            ? "This pane's provider ended in an earlier run. Resume the agent to start it again."
+            : "Starting the provider terminal…");
+  const missingMessageRef = useRef(missingMessage);
+  missingMessageRef.current = missingMessage;
   const contextRef = useRef({
     threadId,
     instanceId,
@@ -198,6 +214,15 @@ export function PaneTerminal({
     observer.observe(host);
 
     let attachment: number | null = null;
+    let missingOutput = false;
+    let lastMissingMessage: string | null = null;
+    const showMissingOutput = () => {
+      if (disposed || !missingOutput || lastMissingMessage === missingMessageRef.current) return;
+      lastMissingMessage = missingMessageRef.current;
+      term.reset();
+      term.write(lastMissingMessage);
+    };
+    missingOutputRef.current = showMissingOutput;
     let generation = 0;
     let unacked = 0;
     // Output of an unfocused pane renders in batches; bytes are acknowledged once rendered.
@@ -250,9 +275,8 @@ export function PaneTerminal({
           attachment = id;
           fitNow();
           if (id === null && !resync) {
-            term.write(
-              "\x1b[2mThis pane's provider ended in an earlier run. Resume the agent to start it again.\x1b[0m",
-            );
+            missingOutput = true;
+            showMissingOutput();
           }
         })
         .catch((error: unknown) => {
@@ -271,12 +295,20 @@ export function PaneTerminal({
       if (resizeTimer) clearTimeout(resizeTimer);
       if (attachment !== null) channel.detach(attachment).catch(() => undefined);
       input.dispose();
+      if (missingOutputRef.current === showMissingOutput) missingOutputRef.current = null;
       disposeReplayQueries();
       if (inputRef.current === input) inputRef.current = null;
       termRef.current = null;
       term.dispose();
     };
   }, [channel, instanceId, threadId]);
+
+  // A resource-held launch can fail before it ever gets a PTY instance. Update its explanation
+  // without recreating a live terminal or confusing that failure with restoration.
+  useEffect(() => {
+    void missingMessage;
+    missingOutputRef.current?.();
+  }, [missingMessage]);
 
   useEffect(() => {
     const host = hostRef.current;

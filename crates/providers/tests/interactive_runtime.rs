@@ -6,6 +6,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
@@ -243,6 +244,66 @@ impl Stack {
         thread.id
     }
 
+    /// Matches the desktop and KalVoice fan-out path: every request independently arms one
+    /// interactive creation, and the requests may arrive concurrently on different IPC threads.
+    fn new_panes(&self, count: usize, mode: PermissionMode) -> Vec<String> {
+        std::thread::scope(|scope| {
+            let starts: Vec<_> = (0..count)
+                .map(|_| scope.spawn(move || self.new_pane(mode)))
+                .collect();
+            starts
+                .into_iter()
+                .map(|start| start.join().expect("pane start thread"))
+                .collect()
+        })
+    }
+
+    fn pane_info(&self, thread_id: &str) -> kalcode_providers::interactive::PaneInfo {
+        self.panes.info(thread_id).expect("pane info")
+    }
+
+    fn wait_pane_stopped(&self, thread_id: &str) {
+        let deadline = Instant::now() + WAIT;
+        while self.pane_info(thread_id).running {
+            assert!(Instant::now() < deadline, "the provider kept running");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn set_fake_config(&self, json: &str) {
+        std::fs::write(
+            self._dir.path().join("bin").join("fake-provider.json"),
+            json,
+        )
+        .expect("fake provider config");
+    }
+
+    fn provider_launches(&self) -> Vec<Vec<String>> {
+        let log = std::fs::read_to_string(self._dir.path().join("bin").join("runs.log"))
+            .expect("provider run log");
+        log.lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|record| record.get("args").cloned())
+            .filter_map(|args| serde_json::from_value::<Vec<String>>(args).ok())
+            .filter(|args| args.iter().any(|arg| arg == "--settings"))
+            .collect()
+    }
+
+    fn wait_provider_launches(&self, count: usize) -> Vec<Vec<String>> {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let launches = self.provider_launches();
+            if launches.len() >= count {
+                return launches;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected {count} provider launches, saw {launches:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     fn text(&self, thread_id: &str) -> String {
         let outputs = self.output.lock().unwrap();
         let output = outputs
@@ -281,6 +342,21 @@ impl Stack {
             if Instant::now() > deadline {
                 panic!("never reached {status:?}: {thread:?}");
             }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wait_resumable(&self, thread_id: &str) -> ThreadSummary {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let thread = self.runtime.get(thread_id).expect("thread");
+            if thread.resumable {
+                return thread;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "provider session id never became durable: {thread:?}"
+            );
             std::thread::sleep(Duration::from_millis(25));
         }
     }
@@ -413,4 +489,188 @@ fn headless_and_interactive_threads_share_one_runtime_and_status_model() {
     }
     stack.runtime.stop(&pane).expect("stop");
     stack.runtime.stop(&headless.id).expect("stop");
+}
+
+#[test]
+fn new_claude_agents_fan_out_to_fresh_live_ptys_for_one_four_and_six() {
+    for count in [1, 4, 6] {
+        let stack = Stack::new(SessionLimits::default().ask_window);
+        let threads = stack.new_panes(count, PermissionMode::Approve);
+
+        assert_eq!(threads.len(), count);
+        assert_eq!(threads.iter().collect::<HashSet<_>>().len(), count);
+        let mut instances = HashSet::new();
+        for thread_id in &threads {
+            stack.wait_status(thread_id, ThreadStatus::Idle);
+            // The launch itself publishes Idle before the authenticated SessionStart hook can
+            // make the provider's resume identity durable. Wait for that exact lifecycle fact.
+            let thread = stack.wait_resumable(thread_id);
+            assert!(thread.error.is_none(), "fresh agent failed: {thread:?}");
+            assert!(
+                thread.resumable,
+                "Claude did not report a session id: {thread:?}"
+            );
+            let info = stack.pane_info(thread_id);
+            assert!(info.running, "fresh provider process is not live: {info:?}");
+            assert_eq!(info.thread_id, *thread_id);
+            assert!(
+                instances.insert(info.instance_id.expect("process instance id")),
+                "two panes shared one provider process identity"
+            );
+        }
+
+        let launches = stack.wait_provider_launches(count);
+        assert_eq!(
+            launches.len(),
+            count,
+            "unexpected Claude launches: {launches:?}"
+        );
+        let session_ids: HashSet<_> = launches
+            .iter()
+            .map(|args| {
+                let index = args
+                    .iter()
+                    .position(|arg| arg == "--session-id")
+                    .expect("new launch must use --session-id");
+                args.get(index + 1).expect("session id value").clone()
+            })
+            .collect();
+        assert_eq!(
+            session_ids.len(),
+            count,
+            "new agents reused a provider session id: {launches:?}"
+        );
+        assert!(
+            launches
+                .iter()
+                .all(|args| !args.iter().any(|arg| arg == "--resume")),
+            "a new agent resumed historical provider state: {launches:?}"
+        );
+
+        for thread_id in threads {
+            stack.runtime.stop(&thread_id).expect("stop");
+            stack.wait_pane_stopped(&thread_id);
+        }
+    }
+}
+
+#[test]
+fn one_claude_provider_failure_does_not_end_its_siblings() {
+    let stack = Stack::new(SessionLimits::default().ask_window);
+    stack.set_fake_config(r#"{"exitCode":17}"#);
+    let threads = stack.new_panes(4, PermissionMode::Approve);
+    let failed = &threads[0];
+
+    // A non-zero provider exit is a genuine failure, not an intentional stop.
+    stack.type_line(failed, "exit");
+    stack.wait_pane_stopped(failed);
+    let failed_thread = stack.wait_status(failed, ThreadStatus::Failed);
+    assert_eq!(
+        failed_thread
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("provider_exited")
+    );
+
+    for sibling in &threads[1..] {
+        assert!(stack.pane_info(sibling).running, "sibling process ended");
+        let thread = stack.wait_status(sibling, ThreadStatus::Idle);
+        assert!(
+            thread.error.is_none(),
+            "sibling inherited failure: {thread:?}"
+        );
+    }
+
+    for sibling in &threads[1..] {
+        stack.runtime.stop(sibling).expect("stop sibling");
+        stack.wait_pane_stopped(sibling);
+    }
+}
+
+#[test]
+fn a_fresh_claude_agent_never_inherits_an_ended_historical_pane() {
+    let stack = Stack::new(SessionLimits::default().ask_window);
+    let historical = stack.new_pane(PermissionMode::Approve);
+    stack.wait_resumable(&historical);
+    let historical_instance = stack
+        .pane_info(&historical)
+        .instance_id
+        .expect("historical instance");
+    let original_launch = stack
+        .wait_provider_launches(1)
+        .pop()
+        .expect("original launch");
+    let original_session = original_launch
+        .iter()
+        .position(|arg| arg == "--session-id")
+        .and_then(|index| original_launch.get(index + 1))
+        .cloned()
+        .expect("original provider session");
+
+    stack.runtime.stop(&historical).expect("stop historical");
+    stack.wait_pane_stopped(&historical);
+    assert!(
+        stack
+            .runtime
+            .get(&historical)
+            .expect("stopped historical")
+            .resumable,
+        "stopping a historical agent cleared its durable provider session"
+    );
+
+    let fresh = stack.new_pane(PermissionMode::Approve);
+    let fresh_info = stack.pane_info(&fresh);
+    let fresh_instance = fresh_info.instance_id.clone().expect("fresh instance");
+    assert!(fresh_info.running);
+    assert_ne!(fresh, historical);
+    assert_ne!(fresh_instance, historical_instance);
+    let fresh_launch = stack.wait_provider_launches(2).pop().expect("fresh launch");
+    let fresh_session = fresh_launch
+        .iter()
+        .position(|arg| arg == "--session-id")
+        .and_then(|index| fresh_launch.get(index + 1))
+        .cloned()
+        .expect("fresh provider session");
+    assert_ne!(fresh_session, original_session);
+    assert!(!fresh_launch.iter().any(|arg| arg == "--resume"));
+
+    // Resuming the historical agent is a separate path: it keeps the thread/provider session
+    // identity but receives a new process instance. The fresh agent remains untouched and live.
+    stack
+        .runtime
+        .resume(&historical, None)
+        .expect("resume historical");
+    stack.wait_status(&historical, ThreadStatus::Idle);
+    let resumed_info = stack.pane_info(&historical);
+    assert!(resumed_info.running);
+    assert_ne!(
+        resumed_info.instance_id.as_deref(),
+        Some(historical_instance.as_str())
+    );
+    assert_ne!(
+        resumed_info.instance_id.as_deref(),
+        Some(fresh_instance.as_str())
+    );
+    let resumed_launch = stack
+        .wait_provider_launches(3)
+        .pop()
+        .expect("resume launch");
+    let resumed_session = resumed_launch
+        .iter()
+        .position(|arg| arg == "--resume")
+        .and_then(|index| resumed_launch.get(index + 1))
+        .cloned()
+        .unwrap_or_else(|| panic!("resume provider session missing: {resumed_launch:?}"));
+    assert_eq!(resumed_session, original_session);
+    assert_eq!(
+        stack.pane_info(&fresh).instance_id.as_deref(),
+        Some(fresh_instance.as_str())
+    );
+    assert!(stack.pane_info(&fresh).running);
+
+    stack.runtime.stop(&historical).expect("stop resumed");
+    stack.runtime.stop(&fresh).expect("stop fresh");
+    stack.wait_pane_stopped(&historical);
+    stack.wait_pane_stopped(&fresh);
 }

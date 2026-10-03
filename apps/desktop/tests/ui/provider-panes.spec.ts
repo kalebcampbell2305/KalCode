@@ -71,6 +71,40 @@ async function expectNoSeriousA11yViolations(page: Page) {
 }
 
 test.describe("provider panes", () => {
+  for (const [provider, count] of [
+    ["Claude Code", 1],
+    ["Claude Code", 4],
+    ["Claude Code", 6],
+    ["Codex", 4],
+  ] as const) {
+    test(`launching ${count} ${provider} agents creates independent live panes`, async ({ page }) => {
+      await open(page);
+      await openWorkspace(page);
+      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await launcher(page).getByRole("radio", { name: provider, exact: true }).click();
+      await launcher(page).getByRole("spinbutton", { name: "Agents", exact: true }).fill(String(count));
+      await launcher(page)
+        .getByRole("button", {
+          name: count === 1 ? `Launch ${provider} agent` : `Launch ${count} ${provider} agents`,
+          exact: true,
+        })
+        .click();
+      const agents = page.locator("[data-provider-pane]");
+      await expect(agents).toHaveCount(count);
+      const ids = await agents.evaluateAll((panes) => panes.map((pane) => pane.getAttribute("data-provider-pane")));
+      expect(new Set(ids).size).toBe(count);
+      for (let i = 0; i < count; i += 1) {
+        await expect(agents.nth(i).locator("[data-pane-status]")).toHaveText("IDLE");
+        await expect(agents.nth(i).locator(".xterm-rows")).toContainText("KalCode fake provider");
+        await expect(agents.nth(i)).toHaveAttribute("aria-label", /account Personal/);
+        await expect(agents.nth(i)).not.toContainText("earlier run");
+      }
+      if (provider === "Claude Code" && count === 4) {
+        await page.screenshot({ path: new URL("fresh-four-agents.png", OUT).pathname.replace(/^\/([A-Za-z]:)/, "$1") });
+      }
+    });
+  }
+
   test("a pane shows the provider identity, title, model, mode and status from the runtime", async ({ page }) => {
     await open(page);
     await openWorkspace(page);
