@@ -10,6 +10,10 @@
   overflow-y: auto;
 }
 
+.detail {
+  container: thread / inline-size;
+}
+
 .detail > :not(.timeline) {
   flex: none;
 }
@@ -123,6 +127,7 @@
 
 .meta dd {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1-5);
   margin: 0;
@@ -452,5 +457,72 @@
 
   .notice {
     padding-block: var(--space-2);
+  }
+}
+
+/* A narrow thread pane (beside the rail and side panels): the actions drop under the title, and the
+   key/values become a tidy two-column grid instead of a hairline row that breaks mid-value. */
+@container thread (max-width: 34rem) {
+  .header {
+    padding-inline: var(--space-4);
+  }
+
+  .titleRow {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+
+  .title {
+    flex: 1 1 100%;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
+  /* The status chip never truncates; the activity line takes what is left. */
+  .status {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+
+  .status > :first-child {
+    flex: none;
+  }
+
+  .meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2-5) var(--space-4);
+  }
+
+  .meta div {
+    padding-right: 0;
+    margin-right: 0;
+    border-right: 0;
+  }
+
+  /* The provider line carries the account control: give it the full row. */
+  .meta div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .notice,
+  .timeline {
+    padding-inline: var(--space-4);
+  }
+
+  .composer {
+    padding-inline: var(--space-4);
+  }
+
+  .content,
+  .tool,
+  .message[data-role="user"] .content {
+    margin-left: 0;
+  }
+
+  .content {
+    padding-left: 0;
   }
 }

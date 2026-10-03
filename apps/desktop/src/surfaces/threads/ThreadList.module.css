@@ -233,9 +233,14 @@
 }
 
 .message {
-  padding: var(--space-4) var(--space-3);
+  /* An empty slot, not a stray sentence: a quiet dashed well where rows will appear. */
+  margin: var(--space-3);
+  padding: var(--space-5) var(--space-3);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
   color: var(--color-text-muted);
   font-size: var(--type-ui);
+  text-align: center;
 }
 
 .loading {

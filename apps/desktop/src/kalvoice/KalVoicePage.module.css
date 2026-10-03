@@ -76,6 +76,7 @@
 
 .tile {
   position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -85,6 +86,17 @@
   border-radius: var(--radius-panel);
   background: var(--panel-sheen), var(--color-surface-1);
   box-shadow: var(--shadow-panel);
+}
+
+/* The same lit top edge as the hero, so status reads as part of the KalVoice instrument. */
+.tile::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 16%;
+  left: 16%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border-lit-soft), transparent);
 }
 
 .tileTitle {
@@ -212,18 +224,37 @@
   color: var(--color-text-faint);
 }
 
+/* Privacy promises read as a quiet assurance card: each one marked by a lit check node. */
 .privacy {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-2-5);
   max-width: var(--prose-max);
   margin: 0;
-  padding-left: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: radial-gradient(24rem 8rem at 0% 0%, var(--color-accent-soft), transparent 70%), var(--color-surface-1);
+  list-style: none;
   color: var(--color-text-secondary);
   font-size: var(--type-ui);
   line-height: var(--leading-relaxed);
 }
 
-.privacy li::marker {
-  color: var(--color-accent-text);
+.privacy li {
+  position: relative;
+  padding-left: var(--space-6);
+}
+
+.privacy li::before {
+  content: "";
+  position: absolute;
+  top: 0.4em;
+  left: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 1px solid var(--color-border-lit);
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle, var(--color-accent-icy) 0 2px, transparent 2.5px), var(--color-accent-soft);
+  box-shadow: 0 0 10px -2px var(--color-glow);
 }

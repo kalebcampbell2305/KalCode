@@ -217,6 +217,7 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                 return (
                   <article className={styles.plan} key={plan.tier} data-featured={plan.popular || undefined}>
                     <div>
+                      {plan.popular ? <p className={styles.popular}>Most popular</p> : null}
                       <p className={styles.stage}>{plan.stage}</p>
                       <h2>{plan.name}</h2>
                       <p className={styles.price}>{price.amount}</p>
