@@ -74,8 +74,7 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
         ),
         map(
             PermissionMode::Bypass,
-            "File edits are approved automatically; other tools that need confirmation don't \
-             run. yolo mode is never used.",
+            "Everything runs without approval prompts (Gemini CLI's yolo mode).",
         ),
     ]
 }

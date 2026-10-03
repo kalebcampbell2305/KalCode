@@ -66,7 +66,7 @@ describe("memory transport providers", () => {
       "--approval-mode plan",
       "--approval-mode default",
       "--approval-mode auto_edit",
-      "--approval-mode auto_edit",
+      "--approval-mode yolo",
     ]);
     for (const mapping of codex?.capabilities.permissionMappings ?? []) {
       if (mapping.mode !== "bypass") expect(mapping.providerSetting).not.toContain("danger-full-access");
@@ -74,7 +74,7 @@ describe("memory transport providers", () => {
       expect(mapping.fidelity).toBe("approximate_stricter");
     }
     for (const mapping of gemini?.capabilities.permissionMappings ?? []) {
-      expect(mapping.providerSetting).not.toContain("yolo");
+      if (mapping.mode !== "bypass") expect(mapping.providerSetting).not.toContain("yolo");
       expect(mapping.fidelity).toBe("approximate_stricter");
     }
     expect(gemini?.capabilities.permissionMappings.find((mapping) => mapping.mode === "plan")?.notes).toContain(
