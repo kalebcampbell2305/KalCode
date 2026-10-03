@@ -204,7 +204,7 @@ describe("supported provider CLI versions", () => {
   it("names the certified release lines in the provider docs", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
     expect(copy).toContain(
-      "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.158 lines, and Gemini CLI 0.61. Pre-release builds aren't supported.",
+      "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.160 lines, and Gemini CLI 0.61. Pre-release builds aren't supported.",
     );
     // Claude Code refusals name the supported versions but no install command.
     expect(copy).toContain("threads stop with a message that names the supported versions.");

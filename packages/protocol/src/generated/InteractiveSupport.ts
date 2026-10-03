@@ -6,16 +6,16 @@ import type { StatusChannel } from "./StatusChannel.ts";
  * How a provider runs in a pane: the real CLI in a PTY, launched with a KalCode-chosen
  * permission mapping that is never broader than the thread's mode.
  */
-export type InteractiveSupport = {
+export type InteractiveSupport = { 
 /**
  * The interactive launch mapping per KalCode mode; never broader than the mode.
  */
-launchMappings: Array<PermissionMapping>, statusChannels: Array<StatusChannel>,
+launchMappings: Array<PermissionMapping>, statusChannels: Array<StatusChannel>, 
 /**
  * `false`: approvals are answered in the provider's own prompt and KalCode mirrors
  * PERMISSION REQUIRED.
  */
-kalcodeAnswersApprovals: boolean,
+kalcodeAnswersApprovals: boolean, 
 /**
  * Display form of the resume command, e.g. `<cli> --resume <id>`.
  */

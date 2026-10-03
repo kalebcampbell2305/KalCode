@@ -2769,16 +2769,22 @@ mod tests {
         #[cfg(windows)]
         let executable = {
             let script = dir.join("codex.cmd");
-            std::fs::write(&script, format!("@echo off\r\necho codex-cli {version}\r\n"))
-                .expect("fake codex");
+            std::fs::write(
+                &script,
+                format!("@echo off\r\necho codex-cli {version}\r\n"),
+            )
+            .expect("fake codex");
             script
         };
         #[cfg(unix)]
         let executable = {
             use std::os::unix::fs::PermissionsExt;
             let script = dir.join("codex");
-            std::fs::write(&script, format!("#!/bin/sh\nprintf 'codex-cli {version}\\n'\n"))
-                .expect("fake codex");
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\nprintf 'codex-cli {version}\\n'\n"),
+            )
+            .expect("fake codex");
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
                 .expect("executable fake codex");
             script

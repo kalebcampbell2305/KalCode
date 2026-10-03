@@ -239,7 +239,7 @@ test.describe("providers", () => {
     await openProviders(page, "providers-none");
     for (const [name, command] of [
       ["Claude Code", "irm https://claude.ai/install.ps1 | iex"],
-      ["Codex", "npm install -g @openai/codex@0.158.0"],
+      ["Codex", "npm install -g @openai/codex@0.160.0"],
       ["Gemini CLI", "npm install -g @google/gemini-cli@0.61.0"],
     ] as const) {
       const region = section(page, name);
