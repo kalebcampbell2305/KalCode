@@ -32,7 +32,8 @@
   position: relative;
   height: var(--lk-h);
   border-radius: inherit;
-  overflow: hidden;
+  /* clip, not hidden: focusing an element inside must never scroll the app sideways. */
+  overflow: clip;
   background: var(--color-bg);
   background-image: var(--app-backdrop);
   box-shadow:
@@ -750,6 +751,7 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  overflow: clip;
 }
 .lk-side {
   display: flex;

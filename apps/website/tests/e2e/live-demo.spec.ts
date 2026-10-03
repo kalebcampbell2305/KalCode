@@ -133,6 +133,20 @@ test.describe("live demo (phone)", () => {
     await expect(app(page).getByRole("log", { name: "Codex A terminal" })).toBeVisible();
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(width).toBeLessThanOrEqual(390);
+    // The tour moves focus around the demo; the app must never scroll sideways inside its frame.
+    await page.getByRole("button", { name: /Take the 2-minute tour/ }).click();
+    const card = app(page).locator("[data-tour-card]");
+    await expect(card).toContainText("Welcome to KalCode");
+    for (let i = 0; i < 20 && (await card.getByRole("button", { name: /Start|Next/ }).count()) > 0; i++) {
+      await card.getByRole("button", { name: /Start|Next/ }).click();
+    }
+    await expect(card).toContainText("Ready to build?");
+    const shifted = await page.evaluate(() =>
+      [...document.querySelectorAll("[data-live-app], [data-live-app] *")].some(
+        (el) => el.scrollLeft > 0 && !el.matches(".lk-mstrip, .lk-frame__strip, .lk-tabs, .lk-table-wrap"),
+      ),
+    );
+    expect(shifted).toBe(false);
     expect(errors).toEqual([]);
   });
 });
