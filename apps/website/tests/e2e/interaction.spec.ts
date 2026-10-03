@@ -40,6 +40,15 @@ test.describe("mobile navigation", () => {
     await page.mouse.click(195, 800);
     await expect(page.getByRole("navigation", { name: "Main" })).toBeHidden();
   });
+
+  test("the open sheet hides the page behind it", async ({ page }) => {
+    await page.goto("/pricing");
+    await page.getByRole("button", { name: "Menu" }).click();
+    await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+    // A blurred header would become the sheet's backdrop root and let the page text show through.
+    await expect(page.locator(".site-header")).toHaveCSS("backdrop-filter", "none");
+    await expect(page.locator(".site-nav")).toHaveCSS("backdrop-filter", "blur(16px)");
+  });
 });
 
 test.describe("desktop navigation", () => {
