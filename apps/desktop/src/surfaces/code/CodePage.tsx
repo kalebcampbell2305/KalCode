@@ -23,12 +23,15 @@ import {
   Bot,
   BroomSparkles,
   Check,
+  CheckCheck,
   ChevronDown,
+  CircleX,
   Equal,
   LayoutGrid,
   ListChecks,
   Minimize2,
   Plus,
+  PowerOff,
   Save,
   Settings2,
   SquareTerminal,
@@ -581,6 +584,30 @@ function KalTidyActions() {
             onSelect={() => kalTidy.openReview()}
           >
             Review terminals…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            icon={<CircleX />}
+            description="Failed agents leave Code, the Fleet and Needs You"
+            onSelect={() => void kalTidy.clearFailed()}
+          >
+            Clear failed agents
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            icon={<CheckCheck />}
+            description="Finished and stopped agents; working ones stay"
+            onSelect={() => void kalTidy.clearFinished()}
+          >
+            Clear finished agents
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            icon={<PowerOff />}
+            tone="danger"
+            description="Asks once, then ends everything in this workspace"
+            onSelect={() => kalTidy.closeAll()}
+          >
+            Close all terminals and agents…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
