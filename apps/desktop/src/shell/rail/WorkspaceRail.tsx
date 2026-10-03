@@ -51,7 +51,7 @@ export function WorkspaceRail() {
   if (!rail.enabled) return null;
   return (
     <>
-      {rail.hidden ? <RailStrip /> : <RailColumn onDialog={setDialog} />}
+      {rail.hidden ? <RailStrip onDialog={setDialog} /> : <RailColumn onDialog={setDialog} />}
       <RailDialogs dialog={dialog} onClose={() => setDialog(null)} />
     </>
   );
@@ -299,7 +299,7 @@ function RailResults({ query, onClear }: { query: string; onClear: () => void })
 }
 
 /** The collapsed rail: a narrow strip of workspace tiles. */
-function RailStrip() {
+function RailStrip({ onDialog }: { onDialog: (dialog: RailDialogHost) => void }) {
   const rail = useRail();
   const entries = rail.rail
     ? [...rail.rail.pinned, ...rail.rail.groups.flatMap((g) => g.workspaces), ...rail.rail.recent]
@@ -314,6 +314,7 @@ function RailStrip() {
           <WorkspaceTile
             key={entry.workspaceId}
             entry={entry}
+            onDialog={onDialog}
             onOpen={() => void rail.openWorkspace(entry.workspaceId)}
           />
         ))}

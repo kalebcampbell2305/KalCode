@@ -8,6 +8,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "../../src/components/DropdownMenu.tsx";
+import { ObjectContextMenu } from "../../src/components/ObjectContextMenu.tsx";
 import { ToastProvider, useToast } from "../../src/components/Toast.tsx";
 import { Tooltip, TooltipProvider } from "../../src/components/Tooltip.tsx";
 import "../../src/styles/tokens.css";
@@ -19,6 +20,23 @@ function Harness() {
 
   return (
     <main style={{ padding: 48 }}>
+      <ObjectContextMenu
+        label="Thread actions"
+        items={[
+          { id: "rename", label: "Rename", onSelect: () => setSelectionCount((count) => count + 1) },
+          {
+            id: "move",
+            label: "Move to workspace",
+            children: [
+              { id: "destination", label: "Destination", onSelect: () => setSelectionCount((count) => count + 1) },
+            ],
+          },
+          { id: "separate", separator: true },
+          { id: "archive", label: "Archive", tone: "danger", onSelect: () => setSelectionCount((count) => count + 1) },
+        ]}
+      >
+        <button type="button">Context thread</button>
+      </ObjectContextMenu>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button type="button">Editor options</button>

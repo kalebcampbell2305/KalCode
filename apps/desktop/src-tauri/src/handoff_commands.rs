@@ -1587,6 +1587,7 @@ mod tests {
 
     fn fixture(name: &str, provider: &str) -> ThreadSummary {
         ThreadSummary {
+            can_move_workspace: None,
             id: "10000000-0000-4000-8000-000000000001".into(),
             name: name.into(),
             provider_id: kalcode_contracts::agent::ProviderId::new(provider),

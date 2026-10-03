@@ -219,6 +219,8 @@ export type PaneCommand =
   | { kind: "open-provider-panes"; threadIds: string[] }
   /** Opens Code's + launcher using the last selection unless a provider is named. */
   | { kind: "open-agent-launcher"; providerId?: string }
+  /** Open Browser beside this exact coding agent, regardless of the active tab. */
+  | { kind: "agent-browser-beside"; threadId: string }
   /** Applies a named, deterministic layout operation. */
   | { kind: "control-pane"; command: PaneControlCommand }
   /** Applies one bounded action to an embedded browser pane. */

@@ -2,6 +2,11 @@ import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneTerminal } from "../surfaces/code/panes/PaneTerminal.tsx";
 import type { PaneChannel } from "../surfaces/code/panes/paneChannel.ts";
+
+vi.mock("../shell/context/ContentContextMenu.tsx", () => ({
+  ContentContextMenu: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 import {
   deliverToProviderTerminal,
   deliverToProviderThread,

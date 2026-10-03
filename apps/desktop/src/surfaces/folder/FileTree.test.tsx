@@ -4,6 +4,10 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileTree } from "./FileTree.tsx";
 
+vi.mock("../../shell/context/ContentContextMenu.tsx", () => ({
+  ContentContextMenu: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 const runtime = vi.hoisted(() => ({ client: { listFiles: vi.fn() } }));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => runtime }));
 

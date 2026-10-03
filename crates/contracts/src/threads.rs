@@ -257,6 +257,10 @@ impl ThreadErrorKind {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ThreadSummary {
+    /// Whether this conversation can safely move to another workspace right now.
+    #[serde(default)]
+    #[ts(optional)]
+    pub can_move_workspace: Option<bool>,
     pub id: String,
     pub name: String,
     pub provider_id: ProviderId,

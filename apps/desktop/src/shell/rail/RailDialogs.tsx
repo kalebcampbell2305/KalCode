@@ -1,5 +1,5 @@
-import { Button, Field, TextInput } from "@kalcode/ui/components";
-import { FolderGit2, FolderPlus, HardDriveDownload, Pencil, Trash2 } from "lucide-react";
+import { Button, Field, Select, TextInput } from "@kalcode/ui/components";
+import { FolderGit2, FolderPlus, HardDriveDownload, Pencil, Settings2, Trash2 } from "lucide-react";
 import { AlertDialog, Dialog } from "radix-ui";
 import { type FormEvent, type ReactNode, useEffect, useId, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
@@ -12,6 +12,8 @@ import type { RailDialog } from "./RailTree.tsx";
 export function RailDialogs({ dialog, onClose }: { dialog: RailDialogHost | null; onClose: () => void }) {
   if (!dialog) return null;
   switch (dialog.kind) {
+    case "settings":
+      return <WorkspaceSettings dialog={dialog} onClose={onClose} />;
     case "rename":
       return <RenameWorkspace dialog={dialog} onClose={onClose} />;
     case "remove":
@@ -155,6 +157,77 @@ function RenameWorkspace({
         hint="Leave it empty to show the folder's name again."
         onSubmit={async (name) => (await rail.update({ workspaceId: entry.workspaceId, name })) !== null}
         onClose={onClose}
+      />
+    </Frame>
+  );
+}
+
+function WorkspaceSettings({
+  dialog,
+  onClose,
+}: {
+  dialog: Extract<RailDialog, { kind: "settings" }>;
+  onClose: () => void;
+}) {
+  const rail = useRail();
+  const { entry } = dialog;
+  const [pinned, setPinned] = useState(entry.pinned);
+  const [indexMessages, setIndexMessages] = useState(entry.indexMessages);
+  const [groupId, setGroupId] = useState(entry.groupId ?? "");
+  const groupInput = useId();
+  return (
+    <Frame
+      title={`${entry.name} settings`}
+      description={<p>{entry.displayPath}</p>}
+      icon={<Settings2 />}
+      onClose={onClose}
+    >
+      <NameForm
+        label="Workspace name"
+        initial={entry.name}
+        submitLabel="Save settings"
+        allowEmpty
+        onClose={onClose}
+        hint="This display name does not rename the folder on disk."
+        onSubmit={async (name) =>
+          (await rail.update({
+            workspaceId: entry.workspaceId,
+            name,
+            pinned,
+            indexMessages,
+            ...(!pinned && !entry.archived ? { groupId } : {}),
+          })) !== null
+        }
+        extra={
+          <>
+            {!entry.archived ? (
+              <label className={styles.settingsCheck}>
+                <input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} />
+                Pin workspace
+              </label>
+            ) : null}
+            {!pinned && !entry.archived ? (
+              <Field label="Rail folder" htmlFor={groupInput}>
+                <Select id={groupInput} value={groupId} onChange={(event) => setGroupId(event.target.value)}>
+                  <option value="">No folder</option>
+                  {rail.rail?.groups.map(({ group }) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            ) : null}
+            <label className={styles.settingsCheck}>
+              <input
+                type="checkbox"
+                checked={indexMessages}
+                onChange={(event) => setIndexMessages(event.target.checked)}
+              />
+              Include message text in workspace search
+            </label>
+          </>
+        }
       />
     </Frame>
   );

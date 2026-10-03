@@ -215,6 +215,8 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "Workspace opened", detail: event.payload.name, tone: "idle" };
     case "workspace.removed":
       return { title: "Workspace removed from KalCode", detail: event.payload.name, tone: "idle" };
+    case "shell.renamed":
+      return { title: "Terminal renamed", detail: event.payload.title, tone: "idle" };
     case "shell.started":
       return { title: "Terminal started", detail: event.payload.shellName, tone: "live" };
     case "shell.completed":
@@ -261,6 +263,8 @@ export function describeEvent(event: EventEnvelope): EventDescription {
         detail: event.payload.detail ?? event.payload.to.replaceAll("_", " "),
         tone: "live",
       };
+    case "thread.moved":
+      return { title: "Thread moved", detail: null, tone: "idle" };
     case "thread.renamed":
       return { title: "Thread renamed", detail: event.payload.name, tone: "idle" };
     case "thread.completed":

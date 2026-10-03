@@ -8,7 +8,11 @@ import type { ThreadStatus } from "./ThreadStatus.ts";
 /**
  * The thread fields every surface shows (Threads list, Dashboard cards, KalVoice status reports).
  */
-export type ThreadSummary = { id: string, name: string, providerId: ProviderId, providerName: string, model: string | null,
+export type ThreadSummary = {
+/**
+ * Whether this conversation can safely move to another workspace right now.
+ */
+canMoveWorkspace?: boolean, id: string, name: string, providerId: ProviderId, providerName: string, model: string | null,
 /**
  * Provider-native reasoning effort. Missing means the provider default.
  */
