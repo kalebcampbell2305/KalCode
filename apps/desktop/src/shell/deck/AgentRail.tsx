@@ -7,9 +7,11 @@
  */
 import type { ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
-import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw, X } from "lucide-react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
+import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
+import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useArchivedCodingAgents, useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
@@ -129,6 +131,26 @@ function AgentList({
   const [showIdle, setShowIdle] = useState(false);
   const idleId = useId();
   const running = runningAgentCount(sections);
+  // An agent whose session is over can be cleared from its row (KalTidy's canonical removal).
+  // The row leaves at once; it comes back, with a toast, only if the removal fails.
+  const kalTidy = useKalTidy();
+  const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
+  const dismiss = useCallback(
+    (thread: ThreadSummary) => {
+      if (!kalTidy) return;
+      setLeaving((current) => new Set(current).add(thread.id));
+      void kalTidy.dismissAgent(thread.id).then((removed) => {
+        if (removed) return;
+        setLeaving((current) => {
+          const next = new Set(current);
+          next.delete(thread.id);
+          return next;
+        });
+      });
+    },
+    [kalTidy],
+  );
+  const rowActions = { leaving, onDismiss: kalTidy ? dismiss : undefined };
   // An agent opens its own terminal pane in Code (the focus intent finds and focuses it).
   const open = (thread: ThreadSummary) => {
     if (intents) void intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
@@ -155,7 +177,15 @@ function AgentList({
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} handles={handles} />
+      <Group
+        title="Needs you"
+        tone="waiting"
+        threads={sections.needsYou}
+        now={now}
+        onOpen={open}
+        handles={handles}
+        {...rowActions}
+      />
       <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} handles={handles} />
       <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
       {sections.idle.length > 0 ? (
@@ -174,13 +204,28 @@ function AgentList({
           {showIdle ? (
             <ul id={idleId} className={styles.list}>
               {sections.idle.map((thread) => (
-                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} handle={handles.get(thread.id)} />
+                <AgentRow
+                  key={thread.id}
+                  thread={thread}
+                  now={now}
+                  onOpen={open}
+                  handle={handles.get(thread.id)}
+                  {...rowActions}
+                />
               ))}
             </ul>
           ) : null}
         </section>
       ) : null}
-      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} handles={handles} />
+      <Group
+        title="Just finished"
+        tone="done"
+        threads={sections.finished}
+        now={now}
+        onOpen={open}
+        handles={handles}
+        {...rowActions}
+      />
     </>
   );
 }
@@ -192,9 +237,11 @@ interface GroupProps {
   now: number;
   onOpen: (thread: ThreadSummary) => void;
   handles: ReadonlyMap<string, string>;
+  leaving?: ReadonlySet<string>;
+  onDismiss?: (thread: ThreadSummary) => void;
 }
 
-function Group({ title, tone, threads, now, onOpen, handles }: GroupProps) {
+function Group({ title, tone, threads, now, onOpen, handles, leaving, onDismiss }: GroupProps) {
   const headingId = useId();
   if (threads.length === 0) return null;
   return (
@@ -205,7 +252,15 @@ function Group({ title, tone, threads, now, onOpen, handles }: GroupProps) {
       </h3>
       <ul className={styles.list}>
         {threads.map((thread) => (
-          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} handle={handles.get(thread.id)} />
+          <AgentRow
+            key={thread.id}
+            thread={thread}
+            now={now}
+            onOpen={onOpen}
+            handle={handles.get(thread.id)}
+            leaving={leaving}
+            onDismiss={onDismiss}
+          />
         ))}
       </ul>
     </section>
@@ -217,19 +272,31 @@ function AgentRow({
   now,
   onOpen,
   handle,
+  leaving,
+  onDismiss,
 }: {
   thread: ThreadSummary;
   now: number;
   onOpen: (t: ThreadSummary) => void;
   handle?: string;
+  leaving?: ReadonlySet<string>;
+  /** Present for agents whose session is over: the row's X clears them. */
+  onDismiss?: (t: ThreadSummary) => void;
 }) {
   const meta = STATUS_META[thread.status];
   const since = Date.parse(thread.lastActivityAt);
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
   const live = meta.group === "working";
   const detail = meta.group === "working" && thread.currentActivity ? thread.currentActivity : meta.label;
+  const dismissible = onDismiss !== undefined && isClearableAgent(thread);
+  const isLeaving = leaving?.has(thread.id) ?? false;
   return (
-    <li>
+    <li
+      className={styles.rowItem}
+      data-dismissible={dismissible || undefined}
+      data-leaving={isLeaving || undefined}
+      aria-hidden={isLeaving || undefined}
+    >
       <button
         type="button"
         className={styles.row}
@@ -258,6 +325,18 @@ function AgentRow({
           </span>
         </span>
       </button>
+      {dismissible ? (
+        <button
+          type="button"
+          className={styles.rowDismiss}
+          aria-label={`Clear ${thread.name}`}
+          title="Clear agent"
+          disabled={isLeaving}
+          onClick={() => onDismiss?.(thread)}
+        >
+          <X aria-hidden="true" />
+        </button>
+      ) : null}
     </li>
   );
 }

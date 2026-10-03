@@ -76,6 +76,7 @@ import { useThreadsIntent } from "../threads/intent.tsx";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
 import { HandOffDialog } from "./HandOffDialog.tsx";
+import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
 import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
@@ -292,6 +293,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
+  // KalTidy (Close all, agent clears) closes the panes of what it ended.
+  useKalTidyClosedPanes((keys) => controllerRef.current.forget(keys));
 
   useEffect(() => {
     if (!controller.ready) return;

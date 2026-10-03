@@ -1,6 +1,8 @@
+import type { ThreadSummary } from "@kalcode/protocol";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { thread } from "../../dashboard/data/testing.ts";
 import type { TidyEntry, TidyScan } from "./classify.ts";
 import { KalTidyDialog } from "./KalTidyDialog.tsx";
 import type { KalTidyClass } from "./kalTidyContext.ts";
@@ -59,7 +61,7 @@ function mount(scan: TidyScan | null = SCAN) {
 describe("KalTidy review dialog", () => {
   it("groups terminals by class with their reasons and preselects only idle ones", () => {
     const { dialog } = mount();
-    expect(within(dialog).getByRole("heading", { name: "KalTidy — Stop idle terminals" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "KalTidy — Review terminals and agents" })).toBeInTheDocument();
     for (const title of ["Idle", "Waiting for you", "Background", "Active", "Protected"]) {
       expect(within(dialog).getByRole("region", { name: new RegExp(`^${title}`) })).toBeInTheDocument();
     }
@@ -110,5 +112,40 @@ describe("KalTidy review dialog", () => {
     const { dialog } = mount({ at: 0, entries: [], blocked: "KalCode couldn't check: Operations didn't answer." });
     expect(within(dialog).getByText("No terminals open")).toBeInTheDocument();
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Operations didn't answer");
+  });
+
+  it("lists the agents each clear would remove, and runs a clear or Close all from the review", async () => {
+    const onClear = vi.fn();
+    const onCloseAll = vi.fn();
+    const agent = (name: string, status: ThreadSummary["status"]) =>
+      thread({ name, status, runtimeKind: "interactive_pty", workspaceId: "w1" });
+    render(
+      <KalTidyDialog
+        open
+        onOpenChange={() => undefined}
+        scan={SCAN}
+        scanning={false}
+        stopping={false}
+        onRescan={() => undefined}
+        onConfirm={() => undefined}
+        agents={{
+          list: [agent("Broke", "failed"), agent("Shipped", "completed"), agent("Busy", "editing")],
+          error: null,
+        }}
+        activeWorkspaceId="w1"
+        onClear={onClear}
+        onCloseAll={onCloseAll}
+      />,
+    );
+    const user = userEvent.setup();
+    const dialog = screen.getByRole("dialog");
+    const failed = within(dialog).getByRole("region", { name: /^Failed agents/ });
+    expect(failed).toHaveTextContent("Broke");
+    expect(within(dialog).getByRole("region", { name: /^Finished agents/ })).toHaveTextContent("Shipped");
+    expect(within(dialog).queryByText("Busy")).toBeNull();
+    await user.click(within(failed).getByRole("button", { name: "Clear failed" }));
+    expect(onClear).toHaveBeenCalledExactlyOnceWith("failed");
+    await user.click(within(dialog).getByRole("button", { name: "Close all…" }));
+    expect(onCloseAll).toHaveBeenCalledOnce();
   });
 });

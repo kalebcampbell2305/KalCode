@@ -159,7 +159,7 @@ describe("KalTidy in the Command Palette (Stable)", () => {
     // The toast offers the review of what was kept.
     const item = toast.closest("li") as HTMLElement;
     await user.click(within(item).getByRole("button", { name: "Review terminals" }));
-    const dialog = await screen.findByRole("dialog", { name: "KalTidy — Stop idle terminals" });
+    const dialog = await screen.findByRole("dialog", { name: "KalTidy — Review terminals and agents" });
     const waiting = await within(dialog).findByRole("region", { name: /^Waiting for you/ });
     expect(within(waiting).getByRole("checkbox", { name: /Git Bash/ })).not.toBeChecked();
     expect(within(waiting).getByText(/ping\.exe is open and quiet/)).toBeInTheDocument();
@@ -171,7 +171,7 @@ describe("KalTidy in the Command Palette (Stable)", () => {
     const palette = await openPalette(user);
     await user.type(palette.getByRole("combobox"), "tidy");
     await user.click(await palette.findByRole("option", { name: "KalTidy: Review terminals before stopping" }));
-    const dialog = await screen.findByRole("dialog", { name: "KalTidy — Stop idle terminals" });
+    const dialog = await screen.findByRole("dialog", { name: "KalTidy — Review terminals and agents" });
     const idle = await within(dialog).findByRole("region", { name: /^Idle/ });
     expect(within(idle).getAllByRole("checkbox")).toHaveLength(3);
     // Opt one idle terminal out: only two stop.
@@ -189,7 +189,7 @@ describe("KalTidy in the Command Palette (Stable)", () => {
     const palette = await openPalette(user);
     await user.type(palette.getByRole("combobox"), "tidy");
     await user.click(await palette.findByRole("option", { name: "KalTidy: Review terminals before stopping" }));
-    const dialog = await screen.findByRole("dialog", { name: "KalTidy — Stop idle terminals" });
+    const dialog = await screen.findByRole("dialog", { name: "KalTidy — Review terminals and agents" });
     const waiting = await within(dialog).findByRole("region", { name: /^Waiting for you/ });
     const draft = within(waiting).getByRole("checkbox", { name: /PowerShell 7/ });
     expect(draft).not.toBeChecked();

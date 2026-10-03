@@ -85,6 +85,10 @@ function api(overrides: Partial<KalTidyApi> = {}): KalTidyApi {
   return {
     openReview: vi.fn(),
     stopIdle: vi.fn().mockResolvedValue({ stopped: 3, kept: 2, failed: 0, summary: "Stopped 3 idle terminals." }),
+    clearFailed: vi.fn(),
+    clearFinished: vi.fn(),
+    dismissAgent: vi.fn(),
+    closeAll: vi.fn(),
     ...overrides,
   };
 }
