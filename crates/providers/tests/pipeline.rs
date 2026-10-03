@@ -421,10 +421,10 @@ fn a_hanging_version_command_times_out() {
 
 #[test]
 fn codex_sign_in_comes_from_its_documented_status_command() {
-    let fake = FakeInstall::new("codex", json!({"version": "codex-cli 0.155.1"}));
+    let fake = FakeInstall::new("codex", json!({"version": "codex-cli 0.160.0"}));
     let d = detect(&catalog::codex_spec(), &fake.env()).detection;
     assert_eq!(d.state, DetectionState::Installed);
-    assert_eq!(d.version.as_deref(), Some("0.155.1"));
+    assert_eq!(d.version.as_deref(), Some("0.160.0"));
     assert_eq!(d.auth, AuthState::Authenticated);
 
     let odd = FakeInstall::new(

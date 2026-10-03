@@ -101,6 +101,11 @@ pub fn interactive_args_with_overrides(
         }
         out.push("resume".into());
     }
+    // A shared daemon may still run an older binary after the CLI is upgraded. Keep Windows
+    // panes on the verified console-free runtime and inside this pane's supervised process tree.
+    // Codex 0.160's public --no-daemon flag preserves provider auth and resume behavior.
+    #[cfg(windows)]
+    out.push("--no-daemon".into());
     out.push("-C".into());
     out.push(args.workspace.as_os_str().to_owned());
     out.extend(permission_args(args.mode).into_iter().map(OsString::from));

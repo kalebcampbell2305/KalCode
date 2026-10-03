@@ -35,10 +35,34 @@ test("KalVoice shutdown retains custody until local interpretation settles", () 
   assert.match(voice, /downloads_settled && background_settled && local_settled/);
 });
 
-test("registered provider routes share the account runtime resource authority", () => {
-  assert.match(source("thread_commands"), /ResourceAdmissionProvider::wrap\(observed, resources\)/);
-  assert.match(source("thread_commands"), /AccountBoundProvider::managed\(\s*governed,/);
-  assert.match(source("thread_commands"), /resources: Arc<crate::resource_commands::ResourceGovernorState>/);
+test("provider routing preserves terminal identity before identical account and resource guards", () => {
+  const commands = source("thread_commands");
+  const guard = commands.match(/let guard = \|provider:[^\n]+\{([\s\S]*?)\n {4}\};/)?.[1];
+  assert.ok(guard, "the provider branches must share one guard factory");
+  assert.match(guard, /ObservedProvider::wrap\(provider, health\)/);
+  assert.match(guard, /ResourceAdmissionProvider::wrap\(observed, resources\.clone\(\)\)/);
+  assert.match(guard, /AccountBoundProvider::managed\(\s*governed,\s*runtime\.clone\(\),/);
+  assert.match(commands, /routes\.route_claude\(headless, guard\)/);
+  for (const provider of ["CODEX", "GEMINI_CLI"]) {
+    assert.match(commands, new RegExp(`routes\\.route_cli\\(ProviderId::${provider}, headless, guard\\)`));
+  }
+  const routes = source("provider_pane_commands");
+  assert.equal(
+    [...routes.matchAll(/Arc::new\(router\.with_session_guards\(guard\)\)/g)].length,
+    2,
+    "both Claude and CLI routes must keep the router outside the guards",
+  );
+  const router = readFileSync(new URL("../crates/providers/src/interactive/provider.rs", import.meta.url), "utf8");
+  assert.match(
+    router,
+    /self\.headless = guard\(self\.headless\);\s*self\.interactive = self\.interactive\.map\(guard\)/,
+  );
+  const routing = router.slice(router.indexOf("impl AgentProvider for RuntimeRouter"));
+  const persisted = routing.indexOf("self.mark(&config.thread_id)?");
+  const interactiveStart = routing.indexOf("provider.start_session(config, sink)");
+  const headlessStart = routing.indexOf("self.headless.start_session(config, sink)");
+  assert.ok(persisted >= 0 && interactiveStart > persisted && headlessStart > persisted);
+  assert.match(commands, /resources: Arc<crate::resource_commands::ResourceGovernorState>/);
   assert.match(source("runtime_coordinator"), /health\.monitor\(\),\s*resources\.clone\(\),/);
 });
 

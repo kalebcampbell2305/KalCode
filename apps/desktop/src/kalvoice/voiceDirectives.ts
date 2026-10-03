@@ -181,13 +181,13 @@ export async function composeInThread(
 
 /** A clarification's follow-up for the session the person picked. */
 export async function followUpChoice(
-  deps: ComposerDirectiveDeps & { focusThread(threadId: string): void },
+  deps: ComposerDirectiveDeps & { focusThread(threadId: string): void | Promise<void> },
   choice: SessionCandidate,
   followUp: SessionFollowUp,
 ): Promise<void> {
   if (deps.signal?.aborted) return;
   if (followUp.kind === "open") {
-    deps.focusThread(choice.threadId);
+    await deps.focusThread(choice.threadId);
     if (!deps.signal?.aborted) deps.report({ ok: true, message: `Opened ${quoted(choice.name)}.` });
     return;
   }

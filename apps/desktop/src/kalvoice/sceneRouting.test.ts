@@ -4,11 +4,12 @@ import { sceneReference } from "./sceneRouting.ts";
 it.each([
   [
     "Find Codex terminal working on the updater",
-    { kind: "named", query: "Codex terminal working on the updater", kinds: ["terminal", "thread"] },
+    { kind: "named", query: "Codex terminal working on the updater", kinds: ["terminal", "agent"] },
   ],
-  ["Go to my Release terminal", { kind: "named", query: "Release terminal", kinds: ["terminal", "thread"] }],
+  ["Go to my Release terminal", { kind: "named", query: "Release terminal", kinds: ["terminal", "agent"] }],
   ["Open it.", { kind: "last_target" }],
-  ["Show me this agent", { kind: "current" }],
+  ["Show me this agent", { kind: "current", agents: true }],
+  ["Open the same agent", { kind: "last_target", agents: true }],
   ["Open the terminal beside this", { kind: "beside_current" }],
   ["Open the other Codex session", { kind: "other", query: "Codex session", kinds: ["thread", "agent"] }],
   // "Agent" means a coding agent (a Code terminal pane); "thing" or "thread" means anything.
@@ -46,7 +47,7 @@ it("uses spoken object nouns to prevent collisions with another surface kind", (
   expect(sceneReference("Open the terminal working on Browser")).toEqual({
     kind: "named",
     query: "terminal working on Browser",
-    kinds: ["terminal", "thread"],
+    kinds: ["terminal", "agent"],
   });
   expect(sceneReference("Open the Website workspace")).toEqual({
     kind: "named",

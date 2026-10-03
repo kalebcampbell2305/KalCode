@@ -15,6 +15,7 @@ import { useWorkspaces } from "./WorkspaceProvider.tsx";
  * surface that shows it today.
  */
 export type FocusTarget =
+  | { kind: "agent"; agentId: string; workspaceId: string }
   | { kind: "thread"; threadId: string; workspaceId?: string | null }
   | { kind: "workspace"; workspaceId: string }
   | { kind: "provider"; providerId: string }
@@ -148,6 +149,16 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
       }
       const { navigate, workspaces, permissions, threadsIntent, client, info } = live.current;
       switch (target.kind) {
+        case "agent": {
+          // Agent identity is explicit. Transient metadata failures must never turn a
+          // coding terminal into a chat navigation request.
+          const ok = await workspaces.activate(target.workspaceId);
+          if (!isCurrent() || !ok) return;
+          recordFocus(target);
+          navigate("code");
+          setPaneState({ owner: session, request: { threadId: target.agentId, nonce: generation } });
+          return;
+        }
         case "approvals":
           permissions.setPanelOpen(true);
           return;
@@ -236,6 +247,10 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
     for (const entry of focusHistory().slice(1)) {
       if (!isLive()) return false;
       const { navigate, workspaces, client } = live.current;
+      if (entry.kind === "agent") {
+        await focus(entry);
+        return true;
+      }
       if (entry.kind === "terminal") {
         if (!workspaces.running.some((t) => t.id === entry.terminalId)) {
           forgetFocus("terminal", entry.terminalId);

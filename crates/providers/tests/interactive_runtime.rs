@@ -8,13 +8,18 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use kalcode_contracts::agent::AgentProvider;
+use kalcode_contracts::agent::{
+    AgentEventSink, AgentProvider, AgentSession, ProviderCapabilities, ProviderDetection,
+    ProviderError, ProviderId, SessionConfig,
+};
 use kalcode_contracts::permissions::{
     ApprovalDecision, ApprovalStatus, PermissionGate, PermissionMode,
 };
+use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::flags::BuildChannel;
 use kalcode_core::{Core, CoreConfig, KalError, Paths};
@@ -22,7 +27,7 @@ use kalcode_hook_bridge::Endpoint;
 use kalcode_hook_bridge::server::{BridgeServer, ServerConfig};
 use kalcode_permissions::{Actor, CoreWorkspaceRoots, PermissionService, ThreadModeStore};
 use kalcode_providers::interactive::provider::{
-    InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter,
+    InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, marked_interactive,
 };
 use kalcode_providers::interactive::session::SessionLimits;
 use kalcode_providers::interactive::{ApprovalExpiry, DecisionRouting, TitleSink};
@@ -108,8 +113,53 @@ struct Stack {
     output: Outputs,
 }
 
+/// Models the desktop admission wrapper: a held launch does not call the inner provider.
+struct HeldProvider {
+    inner: Arc<dyn AgentProvider>,
+    admitted: Arc<AtomicBool>,
+}
+
+impl AgentProvider for HeldProvider {
+    fn id(&self) -> ProviderId {
+        self.inner.id()
+    }
+
+    fn display_name(&self) -> &str {
+        self.inner.display_name()
+    }
+
+    fn detect(&self) -> ProviderDetection {
+        self.inner.detect()
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn start_session(
+        &self,
+        config: SessionConfig,
+        sink: Box<dyn AgentEventSink>,
+    ) -> Result<Box<dyn AgentSession>, ProviderError> {
+        if !self.admitted.load(Ordering::SeqCst) {
+            return Err(ProviderError::ResourcesHeld(LaunchHold {
+                kind: LaunchHoldKind::ConcurrencyLimit,
+                running: Some(1),
+                limit: Some(1),
+                retry_after: Duration::from_millis(15),
+                wait_limit: WAIT,
+            }));
+        }
+        self.inner.start_session(config, sink)
+    }
+}
+
 impl Stack {
     fn new(ask_window: Duration) -> Self {
+        Self::with_admission(ask_window, None)
+    }
+
+    fn with_admission(ask_window: Duration, admitted: Option<Arc<AtomicBool>>) -> Self {
         let dir = tempfile::tempdir().expect("dir");
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).expect("bin");
@@ -182,11 +232,18 @@ impl Stack {
             .with_titles(glue.clone()),
         );
         let providers = Arc::new(ProviderRegistry::new());
-        let router: Arc<dyn AgentProvider> = Arc::new(RuntimeRouter::new(
-            Arc::new(ClaudeCodeProvider::new(env)),
-            interactive,
-        ));
-        providers.register(router);
+        let router = RuntimeRouter::new(Arc::new(ClaudeCodeProvider::new(env)), interactive);
+        let router = if let Some(admitted) = admitted {
+            router.with_session_guards(|inner| {
+                Arc::new(HeldProvider {
+                    inner,
+                    admitted: admitted.clone(),
+                })
+            })
+        } else {
+            router
+        };
+        providers.register(Arc::new(router));
         let gate: Arc<dyn PermissionGate> = service.clone();
         let runtime = Arc::new(
             ThreadRuntime::new(
@@ -375,6 +432,97 @@ impl Stack {
             }
             assert!(Instant::now() < deadline, "no approval appeared");
             std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+#[test]
+fn resource_held_agent_keeps_terminal_identity_before_retry_and_after_resume() {
+    let admitted = Arc::new(AtomicBool::new(false));
+    let stack = Stack::with_admission(SessionLimits::default().ask_window, Some(admitted.clone()));
+    let thread = RuntimeRouter::create_interactive(|| {
+        stack.runtime.create_idle(CreateIdleThread {
+            provider_id: "claude-code".into(),
+            provider_account_id: None,
+            account_label: None,
+            workspace_id: stack.workspace_id.clone(),
+            model: Some("sonnet".into()),
+            effort: Some("high".into()),
+            permission_mode: PermissionMode::Approve,
+            name: None,
+        })
+    })
+    .expect("create held agent");
+    assert_eq!(thread.status, ThreadStatus::WaitingForDependency);
+    assert!(
+        !stack.panes.contains(&thread.id),
+        "no PTY starts before admission"
+    );
+    let sessions = stack._dir.path().join("data/sessions");
+    assert!(
+        marked_interactive(&sessions, &thread.id),
+        "a held agent must already be durably classified as a terminal"
+    );
+    admitted.store(true, Ordering::SeqCst);
+    assert!(
+        kalcode_providers::interactive::provider::wait_for_pane(&stack.panes, &thread.id, WAIT),
+        "the waiter must start a PTY, never a headless thread"
+    );
+    let started = stack.wait_status(&thread.id, ThreadStatus::Idle);
+    assert_eq!(started.workspace_id, stack.workspace_id);
+    assert_eq!(started.model.as_deref(), Some("sonnet"));
+    assert_eq!(started.effort.as_deref(), Some("high"));
+    stack.runtime.stop(&thread.id).expect("stop agent");
+    assert!(
+        marked_interactive(&sessions, &thread.id),
+        "terminal identity survives session shutdown"
+    );
+    stack
+        .runtime
+        .resume(&thread.id, None)
+        .expect("resume terminal");
+    stack.wait_status(&thread.id, ThreadStatus::Idle);
+    assert!(
+        stack
+            .panes
+            .info(&thread.id)
+            .is_some_and(|pane| pane.running)
+    );
+    stack.runtime.stop(&thread.id).expect("stop resumed agent");
+}
+
+#[test]
+fn one_and_four_claude_agents_start_fresh_live_terminals_in_current_workspace() {
+    let stack = Stack::new(SessionLimits::default().ask_window);
+    let mut previous = std::collections::HashSet::new();
+    for count in [1, 4] {
+        let agents = (0..count)
+            .map(|_| stack.new_pane(PermissionMode::Approve))
+            .collect::<Vec<_>>();
+        let mut instances = std::collections::HashSet::new();
+        for id in &agents {
+            assert!(
+                previous.insert(id.clone()),
+                "every launch creates a fresh session"
+            );
+            let thread = stack.wait_status(id, ThreadStatus::Idle);
+            assert_eq!(thread.workspace_id, stack.workspace_id);
+            let pane = stack.panes.info(id).expect("real provider terminal");
+            assert!(pane.running);
+            assert_eq!(pane.provider_id.as_str(), "claude-code");
+            assert!(instances.insert(pane.instance_id.expect("live PTY instance")));
+            assert!(
+                stack
+                    .runtime
+                    .messages(id, 10, None)
+                    .expect("messages")
+                    .is_empty(),
+                "terminal startup must not create a chat exchange"
+            );
+        }
+        assert_eq!(instances.len(), count);
+        for id in agents {
+            stack.runtime.stop(&id).expect("stop test terminal");
         }
     }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -27,6 +27,13 @@ after(() => {
 });
 
 describe("release on merge", () => {
+  test("background release commands and timeout cleanup never request Windows consoles", () => {
+    const source = readFileSync(new URL("./release-on-merge.mjs", import.meta.url), "utf8");
+    assert.match(source, /spawnSync\(command, args, \{[^}]*windowsHide: true/s);
+    assert.match(source, /spawn\(process\.execPath, args, \{[^}]*windowsHide: true/s);
+    assert.match(source, /spawnSync\("taskkill",[^;]*windowsHide: true/s);
+  });
+
   test("status descriptions fit GitHub's 140-character limit", () => {
     assert.equal(statusDescription("a\n  b"), "a b");
     const long = statusDescription("x".repeat(500));

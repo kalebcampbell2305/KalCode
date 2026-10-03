@@ -61,32 +61,44 @@ pub struct PaneRoutes {
     claude: Option<Arc<InteractiveClaudeProvider>>,
     codex: Option<Arc<InteractiveCliProvider>>,
     gemini: Option<Arc<InteractiveCliProvider>>,
+    sessions_dir: PathBuf,
 }
 
 impl PaneRoutes {
-    pub fn route_claude(&self, headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
-        match self.claude.as_ref() {
-            Some(interactive) => Arc::new(RuntimeRouter::new(headless, interactive.clone())),
-            None => headless,
-        }
+    pub fn route_claude(
+        &self,
+        headless: Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+    ) -> Arc<dyn AgentProvider> {
+        let router = match self.claude.as_ref() {
+            Some(interactive) => RuntimeRouter::new(headless, interactive.clone()),
+            None => RuntimeRouter::without_interactive(headless, self.sessions_dir.clone()),
+        };
+        Arc::new(router.with_session_guards(guard))
     }
 
     /// Codex or Gemini CLI as the thread runtime should see it: the per-thread router when panes
-    /// are enabled, otherwise the headless adapter unchanged.
-    pub fn route_cli(&self, id: &str, headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
+    /// are enabled; unavailable terminals refuse while ordinary chat remains available.
+    pub fn route_cli(
+        &self,
+        id: &str,
+        headless: Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+    ) -> Arc<dyn AgentProvider> {
         let interactive = match id {
             ProviderId::CODEX => self.codex.as_ref(),
             ProviderId::GEMINI_CLI => self.gemini.as_ref(),
             _ => None,
         };
-        match interactive {
-            Some(interactive) => Arc::new(RuntimeRouter::for_provider(
+        let router = match interactive {
+            Some(interactive) => RuntimeRouter::for_provider(
                 headless,
                 interactive.clone(),
                 interactive.sessions_dir(),
-            )),
-            None => headless,
-        }
+            ),
+            None => RuntimeRouter::without_interactive(headless, self.sessions_dir.clone()),
+        };
+        Arc::new(router.with_session_guards(guard))
     }
 }
 
@@ -219,7 +231,10 @@ impl ProviderPanesState {
         let panes = Arc::new(PaneRegistry::new());
         let glue = Arc::new(Glue::default());
         let disabled = |reason| Self {
-            routes: PaneRoutes::default(),
+            routes: PaneRoutes {
+                sessions_dir: app.paths.data_dir.join("sessions"),
+                ..PaneRoutes::default()
+            },
             enabled: false,
             bridge: None,
             panes: panes.clone(),
@@ -309,6 +324,7 @@ impl ProviderPanesState {
             claude: Some(Arc::new(provider)),
             codex,
             gemini,
+            sessions_dir: app.paths.data_dir.join("sessions"),
         };
         tracing::info!(event = "pane.enabled", routing = ?routing);
         Self {
@@ -522,10 +538,29 @@ pub fn provider_pane_create(
     })
     .map_err(|e| e.log_and_convert("provider_pane_create"))?;
     panes.stamp_runtime_kind(&mut thread);
-    if let Some(error) = pane_create_failure(thread.status, thread.error.as_ref()) {
+    if let Some(error) =
+        pane_creation_error(thread.status, thread.runtime_kind, thread.error.as_ref())
+    {
         return Err(error);
     }
     Ok(thread)
+}
+
+fn pane_creation_error(
+    status: ThreadStatus,
+    runtime_kind: Option<ThreadRuntimeKind>,
+    error: Option<&ThreadError>,
+) -> Option<IpcError> {
+    if let Some(error) = pane_create_failure(status, error) {
+        return Some(error);
+    }
+    (runtime_kind != Some(ThreadRuntimeKind::InteractivePty)).then(|| {
+        KalError::validation(
+            "provider_pane_failed",
+            "KalCode couldn't create a coding terminal. Try again.",
+        )
+        .to_ipc()
+    })
 }
 
 /// The provider-native effort a new pane starts with (`None`: the provider default). Gemini CLI
@@ -742,7 +777,10 @@ pub fn provider_pane_info(
     if let Some(info) = panes.panes.info(&thread_id) {
         return Ok(Some(info));
     }
-    if !marked_interactive(&panes.sessions_dir, &thread_id) {
+    if !panes
+        .is_interactive_thread(&thread_id)
+        .map_err(|error| error.log_and_convert("provider_pane_info_runtime"))?
+    {
         return Ok(None);
     }
     // A marker without an in-memory pane usually belongs to an earlier app run, but can also
@@ -784,6 +822,51 @@ pub fn drop_views(webview: &Webview) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_launch_returns_its_error_but_a_queued_terminal_remains_valid() {
+        let recorded = ThreadError {
+            code: "provider_start_failed".into(),
+            message: "The provider could not start. Try again.".into(),
+        };
+        let error = pane_creation_error(
+            ThreadStatus::Failed,
+            Some(ThreadRuntimeKind::InteractivePty),
+            Some(&recorded),
+        )
+        .expect("failed start");
+        assert_eq!(error.code, recorded.code);
+        assert_eq!(error.message, recorded.message);
+        assert!(
+            pane_creation_error(
+                ThreadStatus::WaitingForDependency,
+                Some(ThreadRuntimeKind::InteractivePty),
+                Some(&recorded)
+            )
+            .is_none()
+        );
+        assert!(
+            pane_creation_error(ThreadStatus::Idle, Some(ThreadRuntimeKind::Headless), None)
+                .is_some()
+        );
+        assert!(pane_creation_error(ThreadStatus::Idle, None, None).is_some());
+    }
+
+    #[test]
+    fn restored_terminal_preserves_its_actual_provider() {
+        for provider in [
+            ProviderId::CLAUDE_CODE,
+            ProviderId::CODEX,
+            ProviderId::GEMINI_CLI,
+        ] {
+            let id = kalcode_contracts::ids::new_id();
+            let info = ended_marker_info(id.clone(), provider.into(), DEFAULT_DECISION_ROUTING);
+            assert_eq!(info.thread_id, id);
+            assert_eq!(info.provider_id.as_str(), provider);
+            assert_eq!(info.hook_channel, HookChannelState::Ended);
+            assert!(!info.running);
+        }
+    }
 
     #[test]
     fn pane_errors_do_not_expose_backend_details() {

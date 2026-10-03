@@ -8,7 +8,8 @@ import {
   resetFocusHistoryForTests,
 } from "./focusHistory.ts";
 
-const ids = () => focusHistory().map((e) => (e.kind === "thread" ? e.threadId : e.terminalId));
+const ids = () =>
+  focusHistory().map((e) => (e.kind === "agent" ? e.agentId : e.kind === "thread" ? e.threadId : e.terminalId));
 
 describe("focus history", () => {
   beforeEach(() => resetFocusHistoryForTests());

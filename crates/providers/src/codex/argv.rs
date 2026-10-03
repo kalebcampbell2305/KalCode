@@ -28,7 +28,13 @@ use crate::version::Version;
 
 /// The oldest Codex CLI KalCode's headless adapter was verified against (`exec --json`,
 /// `exec resume`, `--ignore-rules`).
+#[cfg(not(windows))]
 pub const MINIMUM_VERSION: Version = Version::new(0, 155, 1);
+/// Windows needs the upstream detached-process console suppression fixes shipped in 0.160.
+/// See openai/codex#48483 and openai/codex#49164. Older providers can open desktop windows
+/// for piped tools even when KalCode correctly starts their root in an integrated PTY.
+#[cfg(windows)]
+pub const MINIMUM_VERSION: Version = Version::new(0, 160, 0);
 
 /// Shared scalar floor for panes and headless turns. The empty MCP table is defense in depth:
 /// Codex merges maps across layers, so managed profile reset, repository trust binding, and the

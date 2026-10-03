@@ -15,6 +15,29 @@ const target = (
 });
 
 describe("KalVoice scene target resolution", () => {
+  it("named and other agent references cannot select a chat with a matching name", () => {
+    const chat = target({ entityId: "chat", title: "Release", focused: true });
+    const agent = target({ entityId: "agent", title: "Release", codingAgent: true });
+    for (const kind of ["named", "other"] as const) {
+      expect(resolveVoiceSceneTarget({ kind, query: "Release agent" }, { targets: [chat, agent] })).toEqual({
+        kind: "resolved",
+        target: agent,
+      });
+      expect(resolveVoiceSceneTarget({ kind, query: "Release agent" }, { targets: [chat] })).toEqual({
+        kind: "not_found",
+      });
+    }
+  });
+
+  it("current and remembered agent references never substitute a chat", () => {
+    const chat = target({ entityId: "chat", title: "Release", focused: true });
+    for (const kind of ["current", "last_target"] as const) {
+      expect(resolveVoiceSceneTarget({ kind, agents: true }, { targets: [chat], lastTarget: chat })).toEqual({
+        kind: "not_found",
+      });
+    }
+  });
+
   it("matches a provider and task naturally, but never chooses equal best matches", () => {
     const choices = [
       target({ entityId: "website", title: "Website refresh", aliases: ["Claude 1"], providerId: "claude-code" }),

@@ -158,7 +158,7 @@ fn main() {
     if args.iter().any(|a| a == "--version") {
         sleep_ms(get_i64(&config, "versionDelayMs", 0));
         let default = match kind {
-            "codex" => "codex-cli 0.155.1",
+            "codex" => "codex-cli 0.160.0",
             "gemini" => "0.21.0",
             _ => "2.1.300 (Claude Code)",
         };

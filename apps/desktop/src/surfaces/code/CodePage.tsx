@@ -522,7 +522,7 @@ function StatusBar({ api }: { api: CodeCanvasApi }) {
   const panes = leaves(controller.layout.root);
   const focused = panes.find((p) => p.paneId === controller.focusedPaneId);
   const content = focused?.tabs[focused.activeTab];
-  const running = api.providerPanes.panes.filter((p) => p.info.running).length;
+  const running = api.providerPanes.panes.filter((p) => p.info?.running).length;
   const terminalsRunning = useWorkspaces().terminals.filter((t) => t.status === "running").length;
   return (
     <div className={styles.statusBar}>
