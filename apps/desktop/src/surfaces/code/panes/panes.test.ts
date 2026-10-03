@@ -160,12 +160,9 @@ describe("pane channel helpers", () => {
     for (const part of parts) expect(/[\ud800-\udbff]$/.test(part)).toBe(false);
   });
 
-  it("uses Auto for fresh panes while preserving explicit startable modes", () => {
-    expect(paneStartMode("auto")).toBe("auto");
-    expect(paneStartMode("approve")).toBe("approve");
+  it("starts coding agents without approvals unless the saved default is Plan", () => {
     expect(paneStartMode("plan")).toBe("plan");
-    expect(paneStartMode("bypass")).toBe("approve");
-    expect(paneStartMode("custom")).toBe("approve");
+    for (const mode of ["auto", "approve", "bypass", "custom"] as const) expect(paneStartMode(mode)).toBe("bypass");
   });
 
   it("waits for delayed canonical settings and preserves a saved Plan preference exactly", async () => {

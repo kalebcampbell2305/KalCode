@@ -156,53 +156,31 @@ test.describe("permission settings", () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = page.getByRole("region", { name: "Permissions" });
     const modes = section.getByRole("radiogroup", { name: "Default mode for new coding agents" });
-    await expect(modes.getByRole("radio", { name: "Auto" })).toBeChecked();
+    await expect(modes.getByRole("radio", { name: "Bypass" })).toBeChecked();
+    await expect(modes.getByRole("radio", { name: "Approve" })).toHaveCount(0);
     await modes.getByRole("radio", { name: "Plan" }).click();
     await expect(modes.getByRole("radio", { name: "Plan" })).toBeChecked();
     await expect(section.getByText("Read and plan only.")).toBeVisible();
-    await modes.getByRole("radio", { name: "Custom" }).click();
-    const profile = section.getByRole("radiogroup", { name: "Custom profile" });
-    await expect(profile.getByRole("radio", { name: "Code Reviewer" })).toBeChecked();
-    await profile.getByRole("radio", { name: "Local Builder" }).click();
-    await expect(profile.getByRole("radio", { name: "Local Builder" })).toBeChecked();
     await page.getByRole("button", { name: "Dashboard" }).click();
     await expect(
       page.getByRole("region", { name: "Activity" }).getByText("Permission mode changed").first(),
     ).toBeVisible();
   });
 
-  test("Bypass needs explicit confirmation and stays visible while on", async ({ page }) => {
+  test("Bypass turns on without a confirmation and raises no alarm", async ({ page }) => {
     await open(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = page.getByRole("region", { name: "Permissions" });
     const modes = section.getByRole("radiogroup", { name: "Default mode for new coding agents" });
+    await modes.getByRole("radio", { name: "Plan" }).click();
+    await expect(modes.getByRole("radio", { name: "Plan" })).toBeChecked();
     await modes.getByRole("radio", { name: "Bypass" }).click();
-    const dialog = page.getByRole("alertdialog", { name: "Save Bypass as your default?" });
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(/Codex uses its unrestricted local sandbox/)).toBeVisible();
-    await expect(
-      dialog.getByText(/Gemini CLI accepts file edits; shell commands and other tools still prompt/),
-    ).toBeVisible();
-    const confirm = dialog.getByRole("button", { name: "Turn on Bypass" });
-    await expect(confirm).toBeDisabled();
-    await dialog.getByRole("button", { name: "Keep current mode" }).click();
-    await expect(modes.getByRole("radio", { name: "Auto" })).toBeChecked();
-
-    await modes.getByRole("radio", { name: "Bypass" }).click();
-    await dialog.getByRole("checkbox").check();
-    await confirm.click();
-    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect(modes.getByRole("radio", { name: "Bypass" })).toBeChecked();
-    // Threads can't start in Bypass, so the saved default says so and the sidebar raises no alarm.
-    await expect(section.getByText("Bypass is your saved default")).toBeVisible();
-    await expect(section.getByText(/New coding agents start in Approve/).first()).toBeVisible();
+    await expect(section.getByText(/Coding agents work without approval prompts/)).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /Bypass/ })).toHaveCount(
       0,
     );
-
-    await section.getByRole("button", { name: "Use Approve" }).click();
-    await expect(modes.getByRole("radio", { name: "Approve" })).toBeChecked();
-    await expect(section.getByText("Bypass is your saved default")).toHaveCount(0);
   });
 
   test("profiles show what each mode allows", async ({ page }) => {
@@ -215,26 +193,18 @@ test.describe("permission settings", () => {
     await expect(push.getByText("Never")).toBeVisible();
     await section.getByText("Bypass", { exact: true }).last().click();
     const bypass = section.getByRole("table", { name: "Bypass rules" });
-    await expect(bypass.getByRole("row", { name: /Deploying or publishing/ }).getByText("Asks")).toBeVisible();
+    await expect(bypass.getByRole("row", { name: /Deploying or publishing/ }).getByText("Allowed")).toBeVisible();
   });
 });
 
 test.describe("permission accessibility", () => {
   for (const theme of ["dark", "light"] as const) {
-    test(`approvals panel, settings and Bypass dialog pass axe in ${theme} theme`, async ({ page }) => {
+    test(`approvals panel and settings pass axe in ${theme} theme`, async ({ page }) => {
       await open(page, "approvals");
       await setTheme(page, theme);
       const section = page.getByRole("region", { name: "Permissions" });
       await section.getByText("Code Reviewer", { exact: true }).click();
       await expectNoSeriousA11yViolations(page);
-
-      await section
-        .getByRole("radiogroup", { name: "Default mode for new coding agents" })
-        .getByRole("radio", { name: "Bypass" })
-        .click();
-      await expect(page.getByRole("alertdialog")).toBeVisible();
-      await expectNoSeriousA11yViolations(page);
-      await page.getByRole("button", { name: "Keep current mode" }).click();
 
       await approvalsButton(page).click();
       await expect(page.getByRole("dialog", { name: "Approvals" }).getByRole("region").first()).toBeVisible();

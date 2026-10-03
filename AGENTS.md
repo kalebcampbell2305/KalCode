@@ -27,14 +27,25 @@ Agents may open a separate KalCode instance for testing, using isolated applicat
 - Owner clarification (2026-10-03): preserve provider-native sessions, including credential files managed by the provider itself. The plaintext prohibition applies to new KalCode credential storage: do not create a second token cache, copy provider secrets, or switch existing native storage in a way that forces valid accounts to sign in again. Do not claim provider-owned files are encrypted when they are not.
 - Verify multiple accounts, complete application restart, immediate launch, transient validation failure and genuine expiration on both platforms. Tests must not mutate the owner's provider credentials.
 
-## Permanent permission UX rule (owner directive 2026-10-02)
+## Permanent permission UX rule (owner directive 2026-10-03, replaces 2026-10-02)
 
-**NORMAL CODING WORK = DO IT. REAL SECURITY / DESTRUCTIVE RISK = ASK.** Normal trusted development inside the user's own workspace must not repeatedly require Allow, Approve or Continue prompts for reading/editing/creating project files, ordinary development commands, tests, builds, Git, worktrees, dev servers and terminals.
+**KALCODE SHOULD NOT INTERRUPT NORMAL DEVELOPMENT WITH INTERNAL PERMISSION PROMPTS. NORMAL SAFE CODING WORK SHOULD EXECUTE DIRECTLY.** The owner: "take away all approvals in the entire KalCode." Routine development = no permission prompt. Genuinely risky or external security actions are handled appropriately.
 
-- Reuse canonical app/provider permission paths and simplify redundant prompts and confusing modes. Honor explicitly selected restrictive preferences.
-- Preserve OS/admin/UAC authorization, provider sign-in, credential/secret protection, billing/payment authorization, meaningful user-data deletion safeguards, irreversible production authorization and signing/certificate security. Ambiguous consequential actions still require clarification.
-- Do not implement the trusted coding experience by blindly accepting provider prompts or applying unrestricted approval bypass to every action. Test routine development and genuine risk boundaries together on Windows and macOS.
-
+- Coding agents (Claude Code, Codex, Gemini CLI), threads, KalVoice, Code terminals, orchestration, Squads, Handoffs, tests, builds, Git/worktrees (including push), dev servers and workspace edits run without Approve/Allow/Confirm/Continue prompts.
+- New sessions start in **Bypass** unless the saved default is read-only Plan (`startable_default_mode`, `paneStartMode`, `startModeFor`). Never downgrade a saved Bypass to Approve, and never require a Bypass confirmation. Only the user (never an agent or KalVoice) changes a mode.
+- Bypass means no provider prompts:
+  - Claude Code: `--permission-mode bypassPermissions`, with `skipDangerousModePermissionPrompt` pre-accepted in the account's managed profile.
+  - Codex: `-a never` with `danger-full-access`.
+  - Gemini CLI: `--approval-mode yolo`.
+- KalVoice and utility actions ("open four Claude Code agents", "run the tests", "start the dev server") execute without approval stubs. Environment Doctor repairs keep Approve.
+- Real security still exists. Keep:
+  - provider sign-in and authentication;
+  - OS/UAC/admin authorization;
+  - credential and secret protection (the credential-file read deny floor applies in every mode, and credential access still asks);
+  - billing and payment authorization;
+  - safeguards against meaningful user-data deletion;
+  - signing certificates;
+  - genuinely irreversible production authorization.
 
 ## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
 
@@ -373,6 +384,50 @@ The goal is fewer clicks, less hunting, less configuration, less waiting and les
 ## Permanent agent cleanup rule (owner directive 2026-10-03)
 
 Failed, stopped, finished and stale coding agents must be easy to clear. Each such agent card has a close (X) action where the user already is, and KalTidy is the one coherent cleanup tool: stop idle terminals, clear failed agents, clear finished/stopped agents, review what would be cleaned, and close all terminals and agents in the current workspace. Only Close all asks, with ONE confirmation ("Close all terminals and agents? Active agents, builds, tests, and running processes will be stopped." / Close all / Cancel). Every close terminates the underlying processes through the canonical close path (no orphan provider processes), removes dead agent state, and keeps Agent Fleet, Needs You and Runs truthful. Agents remain real coding terminals, never Threads.
+
+## Permanent Code tab and provider account state rule (owner directive 2026-10-03)
+
+"KALCODE SHOULD NOT INTERRUPT NORMAL DEVELOPMENT WITH INTERNAL PERMISSION PROMPTS.
+
+NORMAL SAFE CODING WORK SHOULD EXECUTE DIRECTLY.
+
+THE CODE TAB IS KALCODE'S PRIMARY WORKING SURFACE AND RECEIVES FIRST-CLASS UX, PERFORMANCE, AND VISUAL POLISH.
+
+EVERY PROVIDER ACCOUNT HAS ONE COHERENT IDENTITY INCLUDING ITS REAL AUTHENTICATION, HEALTH, PLAN, MODEL AVAILABILITY, AND USAGE STATE.
+
+AGENTS LAUNCHED WITH A SPECIFIC ACCOUNT MUST USE AND DISPLAY THAT EXACT ACCOUNT'S REAL STATE.
+
+USAGE MUST NEVER BE INVENTED OR DISCONNECTED FROM THE ACCOUNT IT BELONGS TO.
+
+NOTHING USER-FACING SHIPS BLAND."
+
+- **One account state, real data only, exact account.** See the account-usage rule: every surface reads one authoritative state per provider account (`useAccountUsage` / `ProviderAccountSessions`); usage is never invented; an agent launched on Claude B is Claude B everywhere.
+- **Low usage.** Show low usage clearly but subtly ("Claude A · 8% remaining ● Low"). KalCode may suggest another account, but never silently rebinds an agent.
+- **New Agent launcher.** Opens instantly from current account state and refreshes usage in place. The flow is account → exact model → effort → launch, skipping the account step when only one valid account exists.
+
+## Permanent Agents tab and Live Browser rule (owner directive 2026-10-03)
+
+"KALCODE AGENTS ARE REAL CODING TERMINALS, NOT THREADS.
+
+THE AGENTS TAB IS A BEAUTIFUL LIVE CONTROL SURFACE OVER THOSE REAL CODING AGENTS.
+
+IT MUST MAKE STATUS, TASK, PROVIDER, ACCOUNT, WORKSPACE, AND ATTENTION STATE OBVIOUS AT A GLANCE.
+
+KALCODE PANES SHOULD BE EXPANDABLE, RESIZABLE, MOVABLE, AND RESTORABLE WHERE APPROPRIATE.
+
+LIVE BROWSER IS A FIRST-CLASS CODE PANE AND SHOULD SUPPORT NORMAL SECURE WEBSITE/OAUTH AUTHENTICATION FLOWS.
+
+NOTHING USER-FACING SHIPS BLAND.
+
+KEEP EVERYTHING SIMPLE, BEAUTIFUL, FAST, AND UNMISTAKABLY KALCODE."
+
+- **Groups and summary.** The Agents tab groups agents as All, Needs You, Working, Done, Idle and Failed, under a summary such as "27 agents · 1 working · 2 need you · 9 done · 15 idle".
+- **Cards.** Compact cards show account, task, state, provider · workspace, exact model · effort, worktree and elapsed time. Where available, they add branch, files touched, current action, account usage and the Needs You reason.
+- **Click.** Clicking an agent focuses its real Code terminal. Never route an agent to Threads.
+- **Search, cleanup and layout.** Search and filter are instant. Cleanup is available per card (close failed or finished, open, retry/resume) and globally (Clear failed, Clear finished, Close idle, KalTidy, Close all). Groups and details expand and collapse, panels resize, and the layout persists across restarts. Never duplicate terminal UIs inside the Agents tab.
+- **Live Browser.** It opens from the Code + menu, the terminal ⋯ menu, agent actions and the Browser control, preferring the far right. It supports URL, back/forward/reload, Local/Preview/Production, viewport presets, screenshots, console errors, open externally, Ask Agent, and resize/move/dock/focus/close/restore. It connects to agents (for example, detecting a dev server and offering to open it beside that agent).
+- **Site sign-in.** Use legitimate browser/OAuth flows. Never capture or store Google credentials or bypass provider security. Persist site sessions securely. Where embedded sign-in is blocked, fall back to system-browser OAuth that returns to KalCode.
+- **Design.** Use BridgeMind / T3 Code only as inspiration for density and status clarity. Never copy them.
 
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 

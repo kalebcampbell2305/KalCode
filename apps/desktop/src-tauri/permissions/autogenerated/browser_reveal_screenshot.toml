@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-reveal-screenshot"
+description = "Enables the browser_reveal_screenshot command without any pre-configured scope."
+commands.allow = ["browser_reveal_screenshot"]
+
+[[permission]]
+identifier = "deny-browser-reveal-screenshot"
+description = "Denies the browser_reveal_screenshot command without any pre-configured scope."
+commands.deny = ["browser_reveal_screenshot"]

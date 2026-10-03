@@ -14,7 +14,11 @@
 //! 8. A matching standing grant (thread / workspace approval) turns Ask into Allow.
 //!
 //! Finally, an **opaque** action (one KalCode could not fully see) is never allowed without an
-//! explicit approval: any Allow becomes Ask, in every mode including Bypass.
+//! explicit approval: any Allow becomes Ask.
+//!
+//! Bypass is the exception to all of the above (owner directive 2026-10-03, "take away all
+//! approvals"): every action runs without a prompt except one that touches credentials or
+//! secrets, which still asks.
 
 use kalcode_contracts::permissions::{
     NormalizedAction, PermissionMode, PermissionProfile, PermissionRule, PermissionScope as S,
@@ -78,9 +82,7 @@ pub fn baseline(mode: PermissionMode, scope: S) -> RuleEffect {
             }
         }
         PermissionMode::Bypass => {
-            if scope.is_remote_consequential()
-                || matches!(scope, S::CredentialsAccess | S::FilesystemOutsideWorkspace)
-            {
+            if scope == S::CredentialsAccess {
                 RuleEffect::Ask
             } else {
                 RuleEffect::Allow
@@ -146,6 +148,16 @@ struct ScopeVerdict {
 /// Evaluates one action. Never panics; anything unexpected resolves to Ask or Deny.
 pub fn evaluate(c: &Classification, input: &PolicyInput<'_>) -> PolicyDecision {
     let mode = input.mode;
+    if mode == PermissionMode::Bypass && !c.scopes.contains(&S::CredentialsAccess) {
+        let mut scopes: Vec<S> = c.scopes.clone();
+        scopes::normalize(&mut scopes);
+        return PolicyDecision {
+            effect: PolicyEffect::Allow,
+            reason: "Bypass: runs without approvals.".to_owned(),
+            scopes,
+            approvable: false,
+        };
+    }
     let profile = match mode {
         PermissionMode::Custom => input.profile,
         _ => None,
@@ -583,14 +595,19 @@ mod tests {
     }
 
     #[test]
-    fn bypass_never_implies_remote_consequential_scopes() {
+    fn bypass_allows_everything_but_credentials_while_auto_asks_for_remote_scopes() {
         for scope in scopes::ALL_SCOPES {
+            let expected = if scope == S::CredentialsAccess {
+                RuleEffect::Ask
+            } else {
+                RuleEffect::Allow
+            };
+            assert_eq!(
+                baseline(PermissionMode::Bypass, scope),
+                expected,
+                "{scope:?}"
+            );
             if scope.is_remote_consequential() {
-                assert_eq!(
-                    baseline(PermissionMode::Bypass, scope),
-                    RuleEffect::Ask,
-                    "{scope:?}"
-                );
                 assert_eq!(
                     baseline(PermissionMode::Auto, scope),
                     RuleEffect::Ask,

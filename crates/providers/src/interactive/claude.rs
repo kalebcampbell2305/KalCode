@@ -43,7 +43,7 @@ pub const VERIFIED_PERMISSION_MODES: &[&str] = &[
 /// Claude Code modes KalCode never launches with, in any KalCode mode. Auto is intentionally
 /// allowed: supported Claude Code sessions use its native classifier and unsupported sessions
 /// fall back to Manual rather than broadening authority.
-pub const FORBIDDEN_PERMISSION_MODES: &[&str] = &["bypassPermissions", "dontAsk"];
+pub const FORBIDDEN_PERMISSION_MODES: &[&str] = &["dontAsk"];
 
 /// Flags KalCode never passes to an interactive session.
 pub const FORBIDDEN_FLAGS: &[&str] = &[
@@ -88,11 +88,12 @@ pub fn permission_args(mode: PermissionMode) -> Vec<&'static str> {
         PermissionMode::Auto => {
             vec!["--setting-sources", "user", "--permission-mode", "auto"]
         }
+        // No approvals (owner directive 2026-10-03).
         PermissionMode::Bypass => vec![
             "--setting-sources",
             "user",
             "--permission-mode",
-            "acceptEdits",
+            "bypassPermissions",
         ],
     }
 }
@@ -236,7 +237,7 @@ pub fn interactive_mappings(routing: DecisionRouting) -> Vec<PermissionMapping> 
         ),
         (
             PermissionMode::Bypass,
-            "Edits in the workspace run without asking; bypassPermissions is never used.",
+            "Everything runs without asking (bypassPermissions).",
         ),
         (
             PermissionMode::Custom,
@@ -324,11 +325,17 @@ mod tests {
             PermissionMode::Plan => 0,
             PermissionMode::Approve | PermissionMode::Custom => 2,
             PermissionMode::Auto => 4,
-            PermissionMode::Bypass => 3,
+            PermissionMode::Bypass => u8::MAX,
         };
         for mode in ALL {
             let args = args_for(mode);
             let claude_mode = value_after(&args, "--permission-mode").expect("mode");
+            // Only Bypass runs without approvals (owner directive 2026-10-03).
+            assert_eq!(
+                claude_mode == "bypassPermissions",
+                mode == PermissionMode::Bypass,
+                "{mode:?}"
+            );
             assert!(
                 VERIFIED_PERMISSION_MODES.contains(&claude_mode.as_str()),
                 "{mode:?} emits unverified mode {claude_mode}"
@@ -383,13 +390,16 @@ mod tests {
                 .expect("the variadic list is followed by an option");
             let rules = &args[start..end];
             assert_eq!(rules, interactive_deny_rules(mode).as_slice());
-            for rule in [
-                "Bash(git push *)",
-                "PowerShell(gh *)",
-                "Read(~/.ssh/**)",
-                "Read(//**/.env)",
-            ] {
+            for rule in ["Read(~/.ssh/**)", "Read(//**/.env)"] {
                 assert!(rules.iter().any(|r| r == rule), "{mode:?} lacks {rule}");
+            }
+            // Bypass runs remote actions without approvals (owner directive 2026-10-03).
+            for rule in ["Bash(git push *)", "PowerShell(gh *)"] {
+                assert_eq!(
+                    rules.iter().any(|r| r == rule),
+                    mode != PermissionMode::Bypass,
+                    "{mode:?}: {rule}"
+                );
             }
             let removes_edits = rules.iter().any(|r| r == "Edit");
             assert_eq!(removes_edits, mode == PermissionMode::Plan, "{mode:?}");
@@ -516,7 +526,10 @@ mod tests {
                     .provider_setting
                     .starts_with(&permission_args(mapping.mode).join(" "))
             );
-            assert!(!mapping.provider_setting.contains("bypassPermissions"));
+            assert_eq!(
+                mapping.provider_setting.contains("bypassPermissions"),
+                mapping.mode == PermissionMode::Bypass
+            );
         }
         assert!(prompt.status_channels.contains(&StatusChannel::Hooks));
     }

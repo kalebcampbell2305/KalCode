@@ -122,7 +122,7 @@ const WORKSPACES: WorkspaceOption[] = [
   { id: "0192f3c4-0000-7000-8000-00000000a002", name: "kalcoded.com" },
 ];
 
-const CREATE_MODES: PermissionMode[] = ["plan", "approve", "auto"];
+const CREATE_MODES: PermissionMode[] = ["plan", "approve", "auto", "bypass"];
 const MAX_PROMPT = 100_000;
 const MAX_NAME = 80;
 const MAX_PROMPT_REVIEWS = 64;
@@ -691,11 +691,6 @@ export function createThreadsMemory(
     if (typeof args.workspaceId !== "string" || !UUID.test(args.workspaceId))
       invalid("invalid_workspace_id", "That workspace reference isn't valid.");
     const mode = args.permissionMode as PermissionMode;
-    if (mode === "bypass")
-      invalid(
-        "bypass_not_allowed_at_create",
-        "Bypass can't be chosen when creating a thread. Create it in Approve or Auto, then change the mode on the thread.",
-      );
     if (!CREATE_MODES.includes(mode)) error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
     const prompt = readPrompt ? readPrompt(args) : null;
     const provider = offered().find((p) => p.id === providerId);
@@ -855,7 +850,7 @@ export function createThreadsMemory(
         providers: offered(),
         workspaces: workspaces(),
         permissionModes: CREATE_MODES,
-        defaultPermissionMode: "auto",
+        defaultPermissionMode: "bypass",
       };
     },
     thread_list: (args) => {

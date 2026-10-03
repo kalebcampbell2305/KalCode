@@ -35,7 +35,7 @@ import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { preselectLaunchAccount } from "../code/panes/agentLaunch.ts";
 import { PANE_PROVIDERS } from "../code/panes/paneChannel.ts";
 import { providerIdentity } from "../code/panes/paneLabels.ts";
-import { MODE_LABELS, startModeFor, usePermissions } from "../permissions/index.ts";
+import { DEFAULT_MODE_CHOICES, MODE_LABELS, startModeFor, usePermissions } from "../permissions/index.ts";
 import { accountName, sortAccounts } from "../providers/accountIdentity.ts";
 import { LaunchAccountPicker } from "../providers/LaunchAccountPicker.tsx";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
@@ -306,14 +306,16 @@ function NewThreadForm({
   // settings load, the runtime's answer applies the same rule natively.
   const { settings: permissionSettings } = usePermissions();
   const savedDefault = permissionSettings?.defaultMode ?? null;
+  // KalCode runs without approvals: offer Bypass and read-only Plan only.
+  const offeredModes = options.permissionModes.filter((m) => DEFAULT_MODE_CHOICES.includes(m));
+  const modes = offeredModes.length > 0 ? offeredModes : options.permissionModes;
   const defaultMode = savedDefault
-    ? startModeFor(savedDefault, options.permissionModes)
-    : options.defaultPermissionMode;
+    ? startModeFor(savedDefault, modes)
+    : startModeFor(options.defaultPermissionMode, modes);
   const [chosenMode, setMode] = useState<PermissionMode | null>(null);
   const mode = chosenMode ?? defaultMode;
-  // A saved Bypass or Custom default can't start a thread; the form names its safe fallback.
-  const unstartableDefault =
-    savedDefault !== null && chosenMode === null && !options.permissionModes.includes(savedDefault);
+  // A saved default that is no longer offered (Approve, Auto, Custom): the form says why.
+  const unstartableDefault = savedDefault !== null && chosenMode === null && !modes.includes(savedDefault);
   const [task, setTask] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<KalCodeError | null>(null);
@@ -329,7 +331,6 @@ function NewThreadForm({
   const providerAccount = providerAccounts.find((account) => account.id === providerAccountId);
   const workspaceBinding = bindingFor(bindings, providerId, workspaceId);
   const accountReady = providerAccount != null && providerAccount.authenticationState !== "not_authenticated";
-  const modes = options.permissionModes;
   const workspace = options.workspaces.find((w) => w.id === workspaceId);
   const modelName = provider?.models.find((m) => m.id === model)?.displayName ?? "Provider default";
   const promptScope = [
@@ -387,7 +388,7 @@ function NewThreadForm({
       permissionMode: mode,
       prompt: task,
       name: name.trim() || null,
-      confirmBypass: false,
+      confirmBypass: mode === "bypass",
       profileId: null,
       isolate: isolate && repository === true,
     };
@@ -602,8 +603,7 @@ function NewThreadForm({
           />
           {unstartableDefault && savedDefault ? (
             <p className={styles.hint} role="note">
-              Your default mode is {MODE_LABELS[savedDefault]}, which threads can't start in, so this thread starts in{" "}
-              {MODE_LABELS[defaultMode]}.
+              KalCode runs without approval prompts, so this thread starts in {MODE_LABELS[defaultMode]}.
             </p>
           ) : null}
           <p className={styles.hint} aria-live="polite">

@@ -1085,6 +1085,7 @@ impl ThreadRuntime {
                 PermissionMode::Plan,
                 PermissionMode::Approve,
                 PermissionMode::Auto,
+                PermissionMode::Bypass,
             ],
             default_permission_mode: DEFAULT_CODING_PERMISSION_MODE,
         })

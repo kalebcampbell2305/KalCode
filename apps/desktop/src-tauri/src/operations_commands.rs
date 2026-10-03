@@ -3163,8 +3163,9 @@ mod tests {
             operation_thread_matches(&legacy, &operation.spec, &operation.id),
             "an explicitly restrictive operation remains recoverable"
         );
+        // Owner directive 2026-10-03: Bypass is the default start, so it matches too.
         legacy.permission_mode = PermissionMode::Bypass;
-        assert!(!operation_thread_matches(
+        assert!(operation_thread_matches(
             &legacy,
             &operation.spec,
             &operation.id

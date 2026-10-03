@@ -302,8 +302,6 @@ export function createPanesMemory(options: {
       if (effort && effort !== "default" && !PANE_EFFORTS[kind].includes(effort))
         invalid("invalid_effort", "That provider doesn't support this effort level.");
       const mode = args.permissionMode as PermissionMode;
-      if (mode === "bypass" && args.confirmBypass !== true)
-        invalid("bypass_not_confirmed", "Bypass needs your explicit confirmation.");
       let created: Pane | null = null;
       const thread = threads.createPaneThread(args, () => {
         if (created) end(created, 1, true);

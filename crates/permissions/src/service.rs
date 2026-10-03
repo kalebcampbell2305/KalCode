@@ -2,8 +2,8 @@
 //! contract for the thread runtime (Z3) and the operations behind the permission IPC commands.
 //!
 //! Authority model:
-//! * Only [`Actor::User`] can answer approval requests or enable Bypass, and Bypass also needs
-//!   an explicit confirmation. Agents, KalVoice and automations are refused and audited.
+//! * Only [`Actor::User`] can answer approval requests or enable Bypass (no separate
+//!   confirmation since 2026-10-03). Agents, KalVoice and automations are refused and audited.
 //! * `open_request` never trusts the decision it is handed: it re-evaluates the action and
 //!   refuses to open a request the policy would not ask about.
 //! * Every consequential change (request, answer, expiry, grant, mode change, refusal) writes an
@@ -674,8 +674,9 @@ impl PermissionService {
     /// Doctor's fixed repair catalog. Every other non-thread origin remains denied until its own
     /// authority contract lands.
     ///
-    /// Rules: the action is always evaluated under **Approve** (a non-thread origin never selects
-    /// or changes a mode); standing grants and "Allow via rule" rules never apply to it, and its
+    /// Rules: a KalVoice action is evaluated under the start mode new sessions use (Bypass unless
+    /// the saved default is Plan); Doctor repairs and Utility effects under Approve. A non-thread origin never changes a
+    /// mode; standing grants and "Allow via rule" rules never apply to it, and its
     /// requests can only be approved once or denied. Only the user answers (`decide` refuses
     /// every other actor, KalVoice included).
     pub fn request_for_origin(&self, action: NormalizedAction) -> Result<OriginDecision> {
@@ -724,7 +725,17 @@ impl PermissionService {
         {
             return Err(invalid_id("action"));
         }
-        let mode = PermissionMode::Approve;
+        // KalVoice actions run like a coding session: without approvals unless the saved default
+        // is read-only Plan (owner directive 2026-10-03). Environment Doctor repairs and Utility
+        // Dock effects keep Approve: their callers execute only through a one-time approval claim.
+        let mode = if matches!(
+            origin,
+            ActionOrigin::Doctor { .. } | ActionOrigin::Utility { .. }
+        ) {
+            PermissionMode::Approve
+        } else {
+            self.settings().unwrap_or_default().startable_default_mode()
+        };
         let workspace = self.workspace(&action.workspace_id);
         let c = classify(&action.action, &workspace);
         let decision = policy::evaluate(
@@ -1372,20 +1383,8 @@ impl PermissionService {
                     "Only you can turn on Bypass. Agents and KalVoice can't.",
                 ));
             }
-            if !confirm_bypass {
-                self.audit_refusal(
-                    "permission.bypass_refused",
-                    actor,
-                    thread_id,
-                    None,
-                    "missing confirmation",
-                )?;
-                return Err(KalError::new(
-                    ErrorCategory::Permission,
-                    "bypass_confirmation_required",
-                    "Bypass needs your explicit confirmation.",
-                ));
-            }
+            // Bypass needs no separate confirmation (owner directive 2026-10-03).
+            let _ = confirm_bypass;
         } else if actor != Actor::User {
             // Only the user changes permission modes; agents may not loosen or tighten them.
             self.audit_refusal(

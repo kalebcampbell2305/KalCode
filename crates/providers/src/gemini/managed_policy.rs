@@ -366,7 +366,8 @@ fn floor_settings(mode: PermissionMode) -> Result<Vec<u8>, ProviderError> {
         "hooksConfig": { "enabled": false },
         "skills": { "enabled": false },
         "security": {
-            "disableYoloMode": true,
+            // Bypass runs Gemini's yolo mode (owner directive 2026-10-03: no approvals).
+            "disableYoloMode": mode != PermissionMode::Bypass,
             "disableAlwaysAllow": true
         },
         "mcpServers": {},
@@ -862,7 +863,10 @@ mod tests {
                 "{mode:?}: {settings}"
             );
             assert_eq!(settings["tools"]["allowed"], serde_json::json!([]));
-            assert_eq!(settings["security"]["disableYoloMode"], true);
+            assert_eq!(
+                settings["security"]["disableYoloMode"],
+                mode != PermissionMode::Bypass
+            );
             assert!(
                 !strings(launch.security_args())
                     .iter()

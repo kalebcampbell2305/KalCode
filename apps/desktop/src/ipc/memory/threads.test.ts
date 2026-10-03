@@ -104,7 +104,6 @@ describe("memory thread runtime", () => {
   it("validates like the native runtime", async () => {
     const { client } = await setup();
     expect(await code(create(client, "  "))).toBe("invalid_prompt");
-    expect(await code(create(client, "x", { permissionMode: "bypass" }))).toBe("bypass_not_allowed_at_create");
     expect(await code(create(client, "x", { providerId: "Bad Id" }))).toBe("invalid_provider");
     expect(await code(create(client, "x", { providerId: "other-cli" }))).toBe("provider_unavailable");
     expect(await code(create(client, "x", { workspaceId: "0192f3c4-0000-7000-8000-0000000000ff" }))).toBe(
@@ -272,7 +271,7 @@ describe("memory thread runtime", () => {
     const { client } = await setup("no-providers");
     const options = await client.threadOptions();
     expect(options.providers).toEqual([]);
-    expect(options.defaultPermissionMode).toBe("auto");
-    expect(options.permissionModes).toEqual(["plan", "approve", "auto"]);
+    expect(options.defaultPermissionMode).toBe("bypass");
+    expect(options.permissionModes).toEqual(["plan", "approve", "auto", "bypass"]);
   });
 });

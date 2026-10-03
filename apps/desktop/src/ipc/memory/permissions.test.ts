@@ -23,9 +23,9 @@ function codeOf(fn: () => unknown): string {
 }
 
 describe("in-memory permission commands", () => {
-  it("starts fresh installs in Auto without weakening explicit later choices", () => {
+  it("starts fresh installs in Bypass without weakening explicit later choices", () => {
     const { call } = memory(false);
-    expect(call<PermissionSettings>("permission_settings_get").defaultMode).toBe("auto");
+    expect(call<PermissionSettings>("permission_settings_get").defaultMode).toBe("bypass");
     expect(call<PermissionSettings>("permission_settings_update", { defaultMode: "approve" }).defaultMode).toBe(
       "approve",
     );
@@ -64,19 +64,14 @@ describe("in-memory permission commands", () => {
     );
   });
 
-  it("requires confirmation for Bypass and a profile for Custom", () => {
+  it("needs no confirmation for Bypass but a profile for Custom", () => {
     const { call, events } = memory(false);
-    expect(codeOf(() => call("permission_settings_update", { defaultMode: "bypass" }))).toBe(
-      "bypass_confirmation_required",
-    );
+    call("permission_settings_update", { defaultMode: "auto" });
     expect(codeOf(() => call("permission_settings_update", { defaultMode: "custom" }))).toBe("profile_required");
     expect(
       codeOf(() => call("permission_settings_update", { defaultMode: "custom", profileId: "builtin.approve" })),
     ).toBe("profile_not_found");
-    const settings = call<PermissionSettings>("permission_settings_update", {
-      defaultMode: "bypass",
-      confirmBypass: true,
-    });
+    const settings = call<PermissionSettings>("permission_settings_update", { defaultMode: "bypass" });
     expect(settings.defaultMode).toBe("bypass");
     expect(events.at(-1)).toMatchObject({
       type: "permission.mode_changed",
@@ -107,10 +102,12 @@ describe("built-in profiles", () => {
     }
   });
 
-  it("no mode allows remote-consequential scopes without asking", () => {
-    for (const mode of ["plan", "approve", "auto", "bypass", "custom"] as const)
+  it("only Bypass allows remote-consequential scopes without asking", () => {
+    for (const mode of ["plan", "approve", "auto", "custom"] as const)
       for (const scope of ["git.push", "deploy.production", "cloud.modify", "billing.spend", "messaging.send"] as const)
         expect(baseline(mode, scope)).not.toBe("allow");
+    expect(baseline("bypass", "git.push")).toBe("allow");
+    expect(baseline("bypass", "credentials.access")).toBe("ask");
   });
 });
 
@@ -121,11 +118,9 @@ describe("client", () => {
     expect(pending.length).toBeGreaterThan(0);
     const updated = await client.decideApproval((pending[0] as ApprovalView).id, "deny");
     expect(updated.status).toBe("denied");
-    await expect(client.updatePermissionSettings("bypass")).rejects.toBeInstanceOf(KalCodeError);
-    await expect(client.updatePermissionSettings("bypass")).rejects.toMatchObject({
-      code: "bypass_confirmation_required",
-    });
-    const settings = await client.updatePermissionSettings("bypass", { confirmBypass: true });
+    await expect(client.updatePermissionSettings("custom")).rejects.toBeInstanceOf(KalCodeError);
+    await expect(client.updatePermissionSettings("custom")).rejects.toMatchObject({ code: "profile_required" });
+    const settings = await client.updatePermissionSettings("bypass");
     expect(settings.defaultMode).toBe("bypass");
     expect((await client.listPermissionProfiles()).map((p) => p.name)).toContain("Code Reviewer");
   });

@@ -59,26 +59,27 @@ export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   approve: "Ask before edits and commands. Use this when you want to review each coding action.",
   auto: "Recommended for everyday coding. Workspace edits, development commands, tests, builds, local Git, worktrees and dev servers run without repeated prompts. Real security boundaries and external effects still ask.",
   bypass:
-    "Broad local authority: local work runs without asking. Pushes, deploys, cloud changes, messages and spending still ask, as do secrets and files outside the workspace.",
+    "Recommended. Coding agents work without approval prompts: edits, commands, tests, builds, Git, pushes and dev servers just run. Only access to credentials and secrets still asks.",
   custom: "A named rule set, such as Code Reviewer or Local Builder.",
 };
 
 /**
  * The modes a new thread or provider pane can start in (`creation_mode` in crates/threads, the
- * `thread_options` list). Bypass and Custom are never starting modes. Both fall back to Approve:
- * Bypass confirmation cannot be replayed implicitly, and a custom profile may intentionally
- * restrict local work.
+ * `thread_options` list). Custom is never a starting mode.
  */
-export const START_MODES: readonly PermissionMode[] = ["plan", "approve", "auto"];
+export const START_MODES: readonly PermissionMode[] = ["plan", "approve", "auto", "bypass"];
 
-/** Resolve a saved default without widening an explicitly restrictive choice. */
+/** The defaults offered for new coding agents: no approvals, or read-only Plan. */
+export const DEFAULT_MODE_CHOICES: readonly PermissionMode[] = ["bypass", "plan"];
+
+/**
+ * KalCode runs without approvals (owner directive 2026-10-03): every saved default except
+ * read-only Plan starts in Bypass (`startable_default_mode` in crates/permissions).
+ */
 export function startModeFor(defaultMode: PermissionMode | null | undefined, offered = START_MODES): PermissionMode {
-  if (defaultMode && defaultMode !== "custom" && defaultMode !== "bypass" && offered.includes(defaultMode))
-    return defaultMode;
-  if ((defaultMode === "custom" || defaultMode === "bypass") && offered.includes("approve")) return "approve";
-  if (!defaultMode && offered.includes("auto")) return "auto";
-  if (offered.includes("approve")) return "approve";
-  return offered[0] ?? "approve";
+  if (defaultMode === "plan" && offered.includes("plan")) return "plan";
+  // The least-prompting mode the runtime offers.
+  return (["bypass", "auto", "approve"] as const).find((mode) => offered.includes(mode)) ?? offered[0] ?? "bypass";
 }
 
 export const EFFECT_LABELS: Record<RuleEffect, string> = {

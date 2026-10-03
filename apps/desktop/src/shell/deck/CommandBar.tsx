@@ -24,7 +24,6 @@ import {
   Globe,
   Search,
   Settings2,
-  ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { forwardRef, type ReactNode, useMemo } from "react";
@@ -33,7 +32,7 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { WorkspaceMenuContent } from "../../surfaces/code/WorkspaceMenu.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { focusSection, useNow } from "../../surfaces/dashboard/useNow.ts";
-import { MODE_DESCRIPTIONS, MODE_LABELS, START_MODES } from "../../surfaces/permissions/labels.ts";
+import { DEFAULT_MODE_CHOICES, MODE_DESCRIPTIONS, MODE_LABELS } from "../../surfaces/permissions/labels.ts";
 import { usePermissions } from "../../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "../Brand.tsx";
 import { useNavigation, viewVisible } from "../navigation.tsx";
@@ -249,9 +248,8 @@ function ModeChip() {
       <Tooltip content={mode ? MODE_DESCRIPTIONS[mode] : "Loading the permission mode"}>
         <DropdownMenuTrigger asChild>
           <Chip
-            icon={mode === "bypass" ? <ShieldAlert /> : <ShieldCheck />}
+            icon={<ShieldCheck />}
             caption="Mode"
-            tone={mode === "bypass" ? "failed" : undefined}
             menu
             disabled={mode === null}
             aria-label={`Permission mode: ${mode ? MODE_LABELS[mode] : "loading"}`}
@@ -261,12 +259,12 @@ function ModeChip() {
         </DropdownMenuTrigger>
       </Tooltip>
       <DropdownMenuContent align="start" minWidth={18}>
-        <DropdownMenuLabel>New threads start in</DropdownMenuLabel>
+        <DropdownMenuLabel>New agents start in</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={mode ?? ""}
-          onValueChange={(next) => void setDefaultMode(next as PermissionMode)}
+          onValueChange={(next) => void setDefaultMode(next as PermissionMode, { confirmed: next === "bypass" })}
         >
-          {START_MODES.map((value) => (
+          {DEFAULT_MODE_CHOICES.map((value) => (
             <DropdownMenuRadioItem key={value} value={value} description={MODE_DESCRIPTIONS[value]}>
               {MODE_LABELS[value]}
             </DropdownMenuRadioItem>

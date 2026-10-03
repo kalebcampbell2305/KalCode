@@ -231,12 +231,23 @@ fn random_commands_never_break_the_invariants() {
             let (c, d) = decide(&kind, &ws, mode);
             assert!(!c.scopes.is_empty(), "{text:?}");
             assert!(!d.reason.is_empty());
+            // Bypass runs without approvals (owner directive 2026-10-03) except for
+            // credentials; every other mode keeps opaque and remote actions asking.
+            let credentials = c.scopes.contains(&S::CredentialsAccess);
+            if mode == M::Bypass {
+                assert_eq!(
+                    d.effect == PolicyEffect::Allow,
+                    !credentials,
+                    "{text:?} {:?}",
+                    c.scopes
+                );
+            }
             // Opaque actions are never allowed without an explicit approval.
-            if c.opaque {
+            if c.opaque && mode != M::Bypass {
                 assert_ne!(d.effect, PolicyEffect::Allow, "{text:?} {mode:?}");
             }
-            // Remote-consequential scopes are never allowed by a mode.
-            if c.scopes.iter().any(|s| s.is_remote_consequential()) {
+            // Remote-consequential scopes are never allowed by a mode other than Bypass.
+            if c.scopes.iter().any(|s| s.is_remote_consequential()) && mode != M::Bypass {
                 assert_ne!(d.effect, PolicyEffect::Allow, "{text:?} {mode:?}");
             }
             // Denials are never approvable; asks always are.
@@ -253,13 +264,6 @@ fn random_commands_never_break_the_invariants() {
                     "{text:?}: {:?}",
                     c.scopes
                 );
-            }
-            if mode == M::Bypass
-                && c.scopes
-                    .iter()
-                    .any(|s| matches!(s, S::CredentialsAccess | S::FilesystemOutsideWorkspace))
-            {
-                assert_ne!(d.effect, PolicyEffect::Allow, "{text:?}");
             }
             // Plan ⊒ Approve ⊒ Auto ⊒ Bypass in strictness.
             if mode != M::Custom {
@@ -312,11 +316,11 @@ fn mutated_dangerous_commands_stay_dangerous_or_opaque() {
                 c.scopes,
                 c.notes
             );
-            for mode in [M::Approve, M::Auto, M::Bypass] {
+            // Bypass runs without approvals (owner directive 2026-10-03); the classification
+            // above is what this property protects.
+            for mode in [M::Approve, M::Auto] {
                 let (_, d) = decide(&kind, &ws, mode);
-                if *scope != S::Destructive || mode != M::Bypass {
-                    assert_ne!(d.effect, PolicyEffect::Allow, "{out:?} {mode:?}");
-                }
+                assert_ne!(d.effect, PolicyEffect::Allow, "{out:?} {mode:?}");
             }
         }
     }

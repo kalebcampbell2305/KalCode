@@ -13,6 +13,7 @@ export { ApprovalsPanel } from "./ApprovalsPanel.tsx";
 export {
   actionDetail,
   DECISION_LABELS,
+  DEFAULT_MODE_CHOICES,
   MODE_DESCRIPTIONS,
   MODE_LABELS,
   SCOPE_LABELS,
