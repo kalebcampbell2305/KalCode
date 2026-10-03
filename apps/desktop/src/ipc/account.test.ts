@@ -23,7 +23,7 @@ const signedOut = {
 
 const ready = {
   phase: "ready",
-  account: { id: "acct_01", email: "owner@example.com", activatedAt: "2026-09-25T12:00:00Z" },
+  account: { id: "acct_01", email: "owner@example.com", activatedAt: "2026-09-25T12:00:00Z", displayName: null },
   tier: "max2x",
   sessionExpiresAt: "2026-10-25T12:00:00Z",
   entitlementExpiresAt: 1_800_000_000,
@@ -131,7 +131,7 @@ describe("AccountClient", () => {
     const confirming = {
       ...signedOut,
       phase: "confirming_plan",
-      account: { id: "acct_01", email: "owner@example.com", activatedAt: null },
+      account: { id: "acct_01", email: "owner@example.com", activatedAt: null, displayName: null },
     };
     const client = new AccountClient({
       invoke: vi.fn(async (command, args) => {
@@ -179,5 +179,34 @@ describe("AccountClient", () => {
     expect(PLAN_CATALOG.filter((plan) => plan.popular).map((plan) => plan.tier)).toEqual(["max"]);
     expect(tierName("max2x")).toBe("MAX 2X");
     expect(tierName("owner")).toBe("Owner");
+  });
+});
+
+describe("account display name", () => {
+  it("reads the synced name, and treats a native build without one as unnamed", () => {
+    const named = { ...ready, account: { ...ready.account, displayName: "Kaleb" } };
+    expect(parseAccountSnapshot(named).account?.displayName).toBe("Kaleb");
+    const { displayName: _omitted, ...legacy } = ready.account;
+    expect(parseAccountSnapshot({ ...ready, account: legacy }).account?.displayName).toBeNull();
+    expect(() => parseAccountSnapshot({ ...ready, account: { ...ready.account, displayName: "" } })).toThrow();
+    expect(() =>
+      parseAccountSnapshot({ ...ready, account: { ...ready.account, displayName: "x".repeat(65) } }),
+    ).toThrow();
+  });
+
+  it("sends only the name to native and returns the updated account", async () => {
+    const calls: Array<{ command: AccountCommandName; args?: Record<string, unknown> }> = [];
+    const client = new AccountClient({
+      invoke: vi.fn(async (command, args) => {
+        calls.push({ command, args });
+        return { ...ready, account: { ...ready.account, displayName: (args?.displayName as string | null) ?? null } };
+      }),
+    });
+    expect((await client.setDisplayName("Kaleb")).account?.displayName).toBe("Kaleb");
+    expect((await client.setDisplayName(null)).account?.displayName).toBeNull();
+    expect(calls).toEqual([
+      { command: "account_set_display_name", args: { displayName: "Kaleb" } },
+      { command: "account_set_display_name", args: { displayName: null } },
+    ]);
   });
 });

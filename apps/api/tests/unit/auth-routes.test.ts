@@ -25,6 +25,7 @@ function fakeStore(overrides: Partial<AccountStore> = {}): AccountStore {
     createOrGetGitHubAccount: vi.fn(async () => null),
     createOrGetOpenIdAccount: vi.fn(async () => null),
     accountProfile: vi.fn(async () => null),
+    setDisplayName: vi.fn(async () => null),
     createEmailAttempt: vi.fn(async () => undefined),
     deleteEmailAttempt: vi.fn(async () => undefined),
     emailAttempt: vi.fn(async () => null),

@@ -126,6 +126,8 @@ struct FakeApi {
     checkout_request_ids: Mutex<Vec<String>>,
     checkout_intervals: Mutex<Vec<BillingInterval>>,
     account_calls: AtomicUsize,
+    display_names: Mutex<VecDeque<Result<ApiAccount, ApiError>>>,
+    display_name_calls: Mutex<Vec<Option<String>>>,
 }
 
 type SocialCompleteCall = (SocialProvider, String, String, String, String);
@@ -245,6 +247,18 @@ impl AccountApi for FakeApi {
         pop(&self.accounts)
     }
 
+    fn set_display_name(
+        &self,
+        _: &str,
+        display_name: Option<&str>,
+    ) -> Result<ApiAccount, ApiError> {
+        self.display_name_calls
+            .lock()
+            .expect("display name calls")
+            .push(display_name.map(str::to_owned));
+        pop(&self.display_names)
+    }
+
     fn activate_free(&self, _: &str) -> Result<(), ApiError> {
         self.activate_calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -326,6 +340,7 @@ fn metering_account(
             id: ACCOUNT_ID.into(),
             email: "ordinary@example.com".into(),
             activated_at: Some("2026-09-01T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -411,6 +426,7 @@ fn verified_owner_usage_survives_windows_storage_and_offline_restart() {
             id: ACCOUNT_ID.into(),
             email: format!("{}@example.com", "a".repeat(58)),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -763,6 +779,7 @@ fn api_account(activated: bool) -> ApiAccount {
         id: ACCOUNT_ID.into(),
         email: "owner@example.com".into(),
         activated_at: activated.then(|| "2026-09-25T12:00:00.000Z".into()),
+        display_name: None,
     }
 }
 
@@ -915,6 +932,7 @@ fn first_launch_offline_stays_gated_but_matching_signed_cache_gets_bounded_grace
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -1101,6 +1119,7 @@ fn social_callback_is_exact_attempt_bound_and_success_clears_pending_into_keycha
             id: format!("acct_{}", "g".repeat(43)),
             email: "owner@example.com".into(),
             activated_at: None,
+            display_name: None,
         }));
     let signed_in = runtime
         .handle_social_callback_url(&format!(
@@ -1164,6 +1183,7 @@ fn cold_start_restores_persisted_social_pkce_before_completing_the_callback() {
             id: format!("acct_{}", "g".repeat(43)),
             email: "owner@example.com".into(),
             activated_at: None,
+            display_name: None,
         }));
 
     let runtime = Arc::new(runtime(api.clone(), store));
@@ -1364,6 +1384,7 @@ fn metered_receipt_write_failure_keeps_last_unit_reserved_after_cold_offline_res
                 id: ACCOUNT_ID.into(),
                 email: "metered@example.com".into(),
                 activated_at: Some("2026-09-01T12:00:00.000Z".into()),
+                display_name: None,
             },
         )
         .expect("cache");
@@ -1693,6 +1714,7 @@ fn signed_entitlement_for_another_account_never_unlocks() {
             id: "different-account".into(),
             email: "other@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         }));
     api.entitlements
         .lock()
@@ -1752,6 +1774,7 @@ fn active_lease_rechecks_signed_expiry_and_refresh_never_transiently_stops_valid
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -1812,6 +1835,7 @@ fn unpublished_logout_generation_invalidates_admission_before_observer_snapshot_
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -1858,6 +1882,7 @@ fn active_lease_exposes_only_its_generation_and_cancel_without_auth_work_preserv
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -1934,6 +1959,7 @@ fn duplicate_bootstrap_is_idempotent_and_does_not_repeat_remote_verification() {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -1966,6 +1992,7 @@ fn logout_revokes_first_and_waits_for_an_inflight_account_operation() {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -2047,6 +2074,7 @@ fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exi
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
             activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+            display_name: None,
         },
     )
     .expect("cache");
@@ -2255,4 +2283,192 @@ fn pending_checkout_is_never_reused_for_a_different_interval() {
         *api.checkout_intervals.lock().expect("intervals"),
         vec![BillingInterval::Month]
     );
+}
+
+fn named_account(display_name: Option<&str>) -> ApiAccount {
+    ApiAccount {
+        display_name: display_name.map(str::to_owned),
+        ..api_account(true)
+    }
+}
+
+fn sign_in_free(runtime: &AccountRuntime, api: &FakeApi) {
+    sign_in_unactivated(runtime, api);
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(named_account(Some("Kaleb Campbell"))));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: FREE_TOKEN.into(),
+        }));
+    let snapshot = runtime.activate_free().expect("activate");
+    assert_eq!(snapshot.phase, AccountPhase::Ready);
+    assert_eq!(
+        snapshot
+            .account
+            .as_ref()
+            .and_then(|account| account.display_name.as_deref()),
+        Some("Kaleb Campbell")
+    );
+}
+
+fn shown_name(snapshot: &account::model::AccountSnapshot) -> Option<&str> {
+    snapshot
+        .account
+        .as_ref()
+        .and_then(|account| account.display_name.as_deref())
+}
+
+#[test]
+fn display_name_saves_without_touching_authority_and_survives_an_offline_restart() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let runtime = runtime(api.clone(), store.clone());
+    sign_in_free(&runtime, &api);
+    let lease = runtime.acquire_active_lease().expect("active lease");
+    let before = runtime.snapshot();
+
+    api.display_names
+        .lock()
+        .expect("queue")
+        .push_back(Ok(named_account(Some("Kaleb"))));
+    let saved = runtime
+        .set_display_name(Some("  Kaleb ".into()))
+        .expect("saved");
+    assert_eq!(shown_name(&saved), Some("Kaleb"));
+    assert_eq!(
+        api.display_name_calls.lock().expect("calls").as_slice(),
+        [Some("  Kaleb ".to_owned())]
+    );
+    // Only the name changed: identity, plan, session and running work are untouched.
+    let expected = account::model::AccountSnapshot {
+        account: Some(PublicAccount {
+            display_name: Some("Kaleb".into()),
+            ..before.account.clone().expect("account")
+        }),
+        ..before.clone()
+    };
+    assert_eq!(saved, expected);
+    assert!(runtime.validate_active_lease(&lease));
+
+    // A cold start without the account service still shows the saved name.
+    let offline_api = Arc::new(FakeApi::default());
+    offline_api
+        .accounts
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let restarted = runtime_for(offline_api, store.clone());
+    let offline = restarted.bootstrap().expect("offline bootstrap");
+    assert_eq!(offline.phase, AccountPhase::OfflineGrace);
+    assert_eq!(shown_name(&offline), Some("Kaleb"));
+
+    // Clearing removes the cached name too.
+    api.display_names
+        .lock()
+        .expect("queue")
+        .push_back(Ok(named_account(None)));
+    assert_eq!(
+        shown_name(&runtime.set_display_name(None).expect("cleared")),
+        None
+    );
+    let offline_api = Arc::new(FakeApi::default());
+    offline_api
+        .accounts
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let restarted = runtime_for(offline_api, store);
+    assert_eq!(shown_name(&restarted.bootstrap().expect("offline")), None);
+}
+
+fn runtime_for(api: Arc<FakeApi>, store: Arc<TestStore>) -> AccountRuntime {
+    runtime(api, store)
+}
+
+#[test]
+fn display_name_failures_are_truthful_and_leave_the_saved_name() {
+    let api = Arc::new(FakeApi::default());
+    let runtime = runtime(api.clone(), Arc::new(TestStore::default()));
+    sign_in_free(&runtime, &api);
+
+    api.display_names.lock().expect("queue").extend([
+        Err(ApiError::Http {
+            status: 400,
+            code: "invalid_display_name".into(),
+            retry_after_seconds: None,
+        }),
+        Err(ApiError::Transport),
+        Err(ApiError::Http {
+            status: 404,
+            code: "not_found".into(),
+            retry_after_seconds: None,
+        }),
+        Err(ApiError::Http {
+            status: 429,
+            code: "rate_limited".into(),
+            retry_after_seconds: Some(5),
+        }),
+        // A response naming another account is never shown.
+        Ok(ApiAccount {
+            id: "someone-else".into(),
+            ..named_account(Some("Mallory"))
+        }),
+        // Nor is a name the server could never have stored.
+        Ok(named_account(Some("Bad\u{7}Name"))),
+    ]);
+    let codes: Vec<&str> = (0..6)
+        .map(|_| {
+            runtime
+                .set_display_name(Some("Kaleb".into()))
+                .expect_err("refused")
+                .code
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "invalid_display_name",
+            "account_service_unavailable",
+            "account_service_unavailable",
+            "rate_limited",
+            "account_identity_mismatch",
+            "invalid_account_response",
+        ]
+    );
+    assert_eq!(shown_name(&runtime.snapshot()), Some("Kaleb Campbell"));
+    assert_eq!(runtime.authority(), AccountAuthority::Active);
+
+    // Oversized input never reaches the network.
+    let calls = api.display_name_calls.lock().expect("calls").len();
+    let error = runtime
+        .set_display_name(Some("x".repeat(2000)))
+        .expect_err("too long");
+    assert_eq!(error.code, "invalid_display_name");
+    assert_eq!(api.display_name_calls.lock().expect("calls").len(), calls);
+}
+
+#[test]
+fn display_name_unauthorized_returns_the_sign_in_gate() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let runtime = runtime(api.clone(), store.clone());
+    sign_in_free(&runtime, &api);
+    api.display_names
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Http {
+            status: 401,
+            code: "unauthenticated".into(),
+            retry_after_seconds: None,
+        }));
+    let error = runtime
+        .set_display_name(Some("Kaleb".into()))
+        .expect_err("signed out");
+    assert_eq!(error.code, "authentication_required");
+    assert_eq!(runtime.authority(), AccountAuthority::SignedOut);
+    assert!(!stored_session_present(&store));
 }

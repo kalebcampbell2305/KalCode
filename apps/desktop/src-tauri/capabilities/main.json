@@ -16,6 +16,7 @@
     "allow-account-refresh",
     "allow-account-logout",
     "allow-account-usage",
+    "allow-account-set-display-name",
     "allow-runtime-status",
     "allow-runtime-retry",
 

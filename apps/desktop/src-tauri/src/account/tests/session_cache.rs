@@ -102,6 +102,7 @@ fn account() -> PublicAccount {
         id: "account-1".into(),
         email: "owner@example.com".into(),
         activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+        display_name: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn social_owner_usage_receipt_round_trips_with_windows_credential_capacity() {
         id: format!("acct_{}", "a".repeat(43)),
         email: "owner@example.com".into(),
         activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+        display_name: None,
     };
     let cached = CachedAccountSecret::new(social_token_shape("cases", "owner", &public.id), public)
         .expect("entitlement");

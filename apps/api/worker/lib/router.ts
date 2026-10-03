@@ -17,6 +17,7 @@ import { apiError, json } from "./http";
 import type { InsightsService } from "./insights";
 import { type PublicKeyEntry, publishedKeySet } from "./keys";
 import type { OpenIdAuthService } from "./openid-auth-routes";
+import { normalizeDisplayName, parseProfileUpdate } from "./profile";
 import type { AccountRecord, EntitlementStore, RequestSource, UsageStore } from "./store";
 import { type EntitlementSigningKey, signEntitlement, signUsageReceipt } from "./token";
 import { buildUsageReceipt, CLIENT_REQUEST_ID, type UsageContext, usageContext, usageSummary } from "./usage";
@@ -56,6 +57,7 @@ export const KEYS_PATH = "/v1/entitlement/keys";
 export const KALVOICE_USAGE_PATH = "/v1/kalvoice/usage";
 export const KALVOICE_REQUESTS_PATH = "/v1/kalvoice/requests";
 export const ACCOUNT_PATH = "/v1/account";
+export const ACCOUNT_PROFILE_PATH = "/v1/account/profile";
 export const AUTH_GITHUB_START_PATH = "/v1/auth/github/start";
 export const AUTH_GITHUB_CALLBACK_PATH = "/v1/auth/github/callback";
 export const AUTH_GITHUB_COMPLETE_PATH = "/v1/auth/github/complete";
@@ -110,11 +112,63 @@ function signInUnavailable(): Response {
   return apiError(503, "sign_in_unavailable", "This sign-in provider is not configured.");
 }
 
+const BODY_ERRORS = {
+  unsupported_media_type: [415, "Send the request as application/json."],
+  payload_too_large: [413, "The request body is too large."],
+  invalid_json: [400, "The request body is not valid JSON."],
+} as const;
+
 const getAccount: Handler = async (request, deps) => {
   const account = await authenticatedAccount(request, deps);
   if (!account) return unauthenticated();
   if (!deps.accountStore) return unavailable();
   const profile = await deps.accountStore.accountProfile(account.id);
+  if (!profile) return unauthenticated();
+  // Exactly the fields every shipped client accepts: installed desktop builds parse this body with
+  // `deny_unknown_fields`, so new account fields are served only by ACCOUNT_PROFILE_PATH.
+  const { id, email, activatedAt } = profile;
+  return json({ ok: true, account: { id, email, activatedAt } }, 200);
+};
+
+/** The caller's account including its profile (display name). */
+const getAccountProfile: Handler = async (request, deps) => {
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  if (!deps.accountStore) return unavailable();
+  const profile = await deps.accountStore.accountProfile(account.id);
+  return profile ? json({ ok: true, account: profile }, 200) : unauthenticated();
+};
+
+/**
+ * Sets or clears the caller's display name (`{"displayName": "<name>" | null}`; empty clears).
+ * Cosmetic only: the account id, email, sign-in identities, billing and signed documents are
+ * never touched. Same-site browser writes come only from kalcoded.com; a JSON body forces a CORS
+ * preflight, which only kalcoded.com passes.
+ */
+const updateAccountProfile: Handler = async (request, deps) => {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== "https://kalcoded.com") {
+    return apiError(403, "forbidden", "This request origin is not allowed.");
+  }
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  if (!deps.accountStore) return unavailable();
+  const body = await readJsonBody(request);
+  if (!body.ok) {
+    const [status, message] = BODY_ERRORS[body.reason];
+    return apiError(status, body.reason, message);
+  }
+  const update = parseProfileUpdate(body.value);
+  if (!update) return apiError(400, "invalid_request", 'Send {"displayName": "<name>" | null}.');
+  const name = normalizeDisplayName(update.displayName);
+  if (!name.ok) {
+    return apiError(
+      400,
+      "invalid_display_name",
+      "Use 1–64 characters, without control or invisible formatting characters.",
+    );
+  }
+  const profile = await deps.accountStore.setDisplayName(account.id, name.displayName);
   return profile ? json({ ok: true, account: profile }, 200) : unauthenticated();
 };
 
@@ -261,12 +315,6 @@ const getUsage: Handler = async (request, deps) => {
   return usageResponse(context, used, key, now);
 };
 
-const BODY_ERRORS = {
-  unsupported_media_type: [415, "Send the request as application/json."],
-  payload_too_large: [413, "The request body is too large."],
-  invalid_json: [400, "The request body is not valid JSON."],
-} as const;
-
 type RequestBody = { requestId: string; source: RequestSource };
 
 function parseRequestBody(value: unknown): RequestBody | null {
@@ -331,6 +379,8 @@ const postRequest: Handler = async (request, deps) => {
 
 export const ROUTES: readonly Route[] = [
   { method: "GET", path: ACCOUNT_PATH, access: "account", handler: getAccount },
+  { method: "GET", path: ACCOUNT_PROFILE_PATH, access: "account", handler: getAccountProfile },
+  { method: "POST", path: ACCOUNT_PROFILE_PATH, access: "account", handler: updateAccountProfile },
   { method: "POST", path: AUTH_GITHUB_START_PATH, access: "public", handler: authStart },
   { method: "GET", path: AUTH_GITHUB_CALLBACK_PATH, access: "public", handler: authCallback },
   { method: "POST", path: AUTH_GITHUB_COMPLETE_PATH, access: "public", handler: authComplete },

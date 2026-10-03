@@ -222,6 +222,7 @@ pub struct ApiAccount {
     pub id: String,
     pub email: String,
     pub activated_at: Option<String>,
+    pub display_name: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -327,6 +328,13 @@ pub trait AccountApi: Send + Sync {
     fn refresh_session(&self, bearer: &str) -> Result<SignedInResponse, ApiError>;
     fn logout(&self, bearer: &str) -> Result<(), ApiError>;
     fn account(&self, bearer: &str) -> Result<ApiAccount, ApiError>;
+    /// Sets (`Some`) or clears (`None`) the account's cosmetic display name and returns the
+    /// updated account. The server trims, validates and normalizes the name.
+    fn set_display_name(
+        &self,
+        bearer: &str,
+        display_name: Option<&str>,
+    ) -> Result<ApiAccount, ApiError>;
     fn activate_free(&self, bearer: &str) -> Result<(), ApiError>;
     fn checkout(
         &self,
@@ -549,15 +557,28 @@ impl AccountApi for HttpAccountApi {
     }
 
     fn account(&self, bearer: &str) -> Result<ApiAccount, ApiError> {
-        let wire: AccountWire = self.get("/v1/account", bearer)?;
-        if !wire.ok {
-            return Err(ApiError::InvalidResponse);
-        }
-        Ok(ApiAccount {
-            id: wire.account.id,
-            email: wire.account.email,
-            activated_at: wire.account.activated_at,
-        })
+        // The profile route is the account plus its display name. A service that predates it
+        // answers 404; the plain account route then still signs the person in, unnamed.
+        let wire: AccountWire = match self.get("/v1/account/profile", bearer) {
+            Err(error) if error.status() == Some(404) => self.get("/v1/account", bearer)?,
+            other => other?,
+        };
+        wire.into_account()
+    }
+
+    fn set_display_name(
+        &self,
+        bearer: &str,
+        display_name: Option<&str>,
+    ) -> Result<ApiAccount, ApiError> {
+        let wire: AccountWire = self
+            .post(
+                "/v1/account/profile",
+                Some(bearer),
+                Some(&DisplayNameRequest { display_name }),
+            )?
+            .ok_or(ApiError::InvalidResponse)?;
+        wire.into_account()
     }
 
     fn activate_free(&self, bearer: &str) -> Result<(), ApiError> {
@@ -906,6 +927,30 @@ struct AccountBody {
     id: String,
     email: String,
     activated_at: Option<String>,
+    /// Served only by `/v1/account/profile`; `/v1/account` keeps its shipped shape.
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+impl AccountWire {
+    fn into_account(self) -> Result<ApiAccount, ApiError> {
+        if !self.ok {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(ApiAccount {
+            id: self.account.id,
+            email: self.account.email,
+            activated_at: self.account.activated_at,
+            display_name: self.account.display_name,
+        })
+    }
+}
+
+/// `null` clears the name; the field is always sent.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DisplayNameRequest<'a> {
+    display_name: Option<&'a str>,
 }
 
 #[derive(Deserialize)]

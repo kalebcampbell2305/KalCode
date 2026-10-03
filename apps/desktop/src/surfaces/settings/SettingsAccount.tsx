@@ -11,6 +11,7 @@ import {
   tierName,
 } from "../../ipc/account.ts";
 import { usageLine } from "../../kalvoice/assistantState.ts";
+import { AccountDisplayName } from "./AccountDisplayName.tsx";
 import styles from "./SettingsAccount.module.css";
 
 /** Plan names for Account Hub and Settings, from the canonical catalog. */
@@ -35,6 +36,8 @@ export interface SettingsAccountViewProps {
   error: AccountUiError | null;
   onManage(): Promise<void>;
   onLogout(): Promise<void>;
+  /** Saves the account display name; without it the panel shows no name editor. */
+  onSaveDisplayName?(displayName: string): Promise<AccountUiError | null>;
 }
 
 export function SettingsAccount() {
@@ -52,11 +55,20 @@ export function SettingsAccount() {
       error={error}
       onManage={actions.portal}
       onLogout={actions.logout}
+      onSaveDisplayName={actions.setDisplayName}
     />
   );
 }
 
-export function SettingsAccountView({ account, usage, busy, error, onManage, onLogout }: SettingsAccountViewProps) {
+export function SettingsAccountView({
+  account,
+  usage,
+  busy,
+  error,
+  onManage,
+  onLogout,
+  onSaveDisplayName,
+}: SettingsAccountViewProps) {
   const paid = account.tier === "pro" || account.tier === "max" || account.tier === "max2x";
   const usageLabel = usage?.allowance === null ? "Unlimited requests" : usage ? usageLine(usage) : "Usage unavailable";
   // Share of this period's allowance used, for the meter beside the numbers (null when unlimited/unknown).
@@ -67,7 +79,7 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
       id="kalcode-account"
       title="KalCode account"
       icon={<UserRound />}
-      description="Your identity, verified plan, and KalVoice request allowance."
+      description="Your name, identity, verified plan, and KalVoice request allowance."
       padding="none"
       footer={
         <div className={styles.actions}>
@@ -82,6 +94,9 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
         </div>
       }
     >
+      {account.account && onSaveDisplayName ? (
+        <AccountDisplayName account={account.account} onSave={onSaveDisplayName} />
+      ) : null}
       <dl className={styles.details}>
         <div>
           <dt>Email</dt>

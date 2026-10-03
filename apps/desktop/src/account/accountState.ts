@@ -19,7 +19,12 @@ export type AccountUiEvent =
   | { type: "resolved"; generation: number; snapshot: AccountSnapshot; runtime: RuntimeStatus }
   | { type: "snapshot"; generation: number; snapshot: AccountSnapshot }
   | { type: "runtime"; generation: number; runtime: RuntimeStatus }
-  | { type: "error"; generation: number; error: AccountUiError };
+  | { type: "error"; generation: number; error: AccountUiError }
+  /**
+   * Shows `displayName` for account `accountId` without touching authority, busy or error state:
+   * the optimistic value of a display-name save, its confirmed value, or its rollback.
+   */
+  | { type: "displayName"; accountId: string; displayName: string | null };
 
 export const initialAccountUiState: AccountUiState = {
   generation: 0,
@@ -40,6 +45,11 @@ export const initialAccountUiState: AccountUiState = {
 };
 
 export function reduceAccountUi(state: AccountUiState, event: AccountUiEvent): AccountUiState {
+  if (event.type === "displayName") {
+    const account = state.snapshot.account;
+    if (account?.id !== event.accountId || account.displayName === event.displayName) return state;
+    return { ...state, snapshot: { ...state.snapshot, account: { ...account, displayName: event.displayName } } };
+  }
   if (event.generation < state.generation) return state;
   switch (event.type) {
     case "begin":
