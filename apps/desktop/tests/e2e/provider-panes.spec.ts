@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import type { PaneInfo, ThreadSummary } from "@kalcode/protocol";
 import { expect, type Page } from "@playwright/test";
 import {
+  ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
   closeGracefully,
+  createAccountFixtureDataDir,
   EXE,
   launch,
   processesMatching,
@@ -172,7 +174,7 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
 
 test("launching four Claude Code agents creates four fresh live terminals with the selected configuration", async () => {
   test.setTimeout(240_000);
-  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-four-"));
+  const dataDir = createAccountFixtureDataDir();
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-four-project-"));
   const project = join(root, "four-agent-site");
   const bin = join(root, "bin");
@@ -183,6 +185,7 @@ test("launching four Claude Code agents creates four fresh live terminals with t
   writeManagedFakeProviderConfig(bin);
 
   const env = {
+    KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
     KALCODE_E2E_PICK_FOLDER: project,
     KALCODE_E2E_HOOK_DECISIONS: "engine",
     KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
@@ -217,33 +220,64 @@ test("launching four Claude Code agents creates four fresh live terminals with t
     await launcher.getByRole("button", { name: "Launch 4 Claude Code agents", exact: true }).click();
     await expect(launcher).not.toBeVisible({ timeout: 30_000 });
 
-    const panes = page.locator("[data-provider-pane]");
-    await expect(panes).toHaveCount(4, { timeout: 30_000 });
-    for (const providerPane of await panes.all()) {
-      await expect(providerPane.locator("[data-pane-terminal] .xterm-rows")).toContainText(FAKE_BANNER, {
-        timeout: 30_000,
-      });
-      await expect(providerPane.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    const listThreads = async () =>
+      (
+        await invoke<ThreadSummary[]>(page, "thread_list", {
+          workspaceId: workspace?.id ?? null,
+          includeArchived: false,
+        })
+      ).filter(({ providerId }) => providerId === "claude-code");
+    let threadCountError: unknown = null;
+    try {
+      await expect.poll(async () => (await listThreads()).length, { timeout: 30_000 }).toBe(4);
+    } catch (error) {
+      threadCountError = error;
     }
+    const threads = await listThreads();
+    const panes = page.locator("[data-provider-pane]");
+    const paneIds = await panes.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-provider-pane")),
+    );
+    const diagnosticInfos = await Promise.all(
+      threads.map(async ({ id }) => {
+        try {
+          return await invoke<PaneInfo>(page, "provider_pane_info", { threadId: id });
+        } catch {
+          return { threadId: id, running: false, instanceId: null };
+        }
+      }),
+    );
+    const diagnosticLaunches = claudeLaunches(bin).map(({ args }) => ({
+      effort: argAfter(args, "--effort"),
+      model: argAfter(args, "--model"),
+      resumed: args.includes("--resume"),
+      sessionId: argAfter(args, "--session-id"),
+    }));
+    writeFileSync(
+      test.info().outputPath("four-agents-diagnostic.json"),
+      JSON.stringify(
+        {
+          domPaneIds: paneIds,
+          launchCount: diagnosticLaunches.length,
+          launches: diagnosticLaunches,
+          paneInfos: diagnosticInfos,
+          processCount: processesMatching(bin).length,
+          threads: threads.map(({ id, workspaceId, providerAccountId, model, effort, runtimeKind }) => ({
+            effort,
+            id,
+            model,
+            providerAccountId,
+            runtimeKind,
+            workspaceId,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+    await page.screenshot({ path: test.info().outputPath("four-agents-live.png") });
+    if (threadCountError) throw threadCountError;
 
-    await expect
-      .poll(
-        async () =>
-          (
-            await invoke<ThreadSummary[]>(page, "thread_list", {
-              workspaceId: workspace?.id ?? null,
-              includeArchived: false,
-            })
-          ).filter(({ providerId }) => providerId === "claude-code").length,
-        { timeout: 30_000 },
-      )
-      .toBe(4);
-    const threads = (
-      await invoke<ThreadSummary[]>(page, "thread_list", {
-        workspaceId: workspace?.id ?? null,
-        includeArchived: false,
-      })
-    ).filter(({ providerId }) => providerId === "claude-code");
     expect(new Set(threads.map(({ id }) => id)).size).toBe(4);
     for (const thread of threads) {
       expect(thread).toMatchObject({
@@ -272,6 +306,14 @@ test("launching four Claude Code agents creates four fresh live terminals with t
       expect(args).not.toContain("--resume");
       expect(argAfter(args, "--model")).toBe("sonnet");
       expect(argAfter(args, "--effort")).toBe("high");
+    }
+
+    await expect(panes).toHaveCount(4, { timeout: 30_000 });
+    for (const providerPane of await panes.all()) {
+      await expect(providerPane.locator("[data-pane-terminal] .xterm-rows")).toContainText(FAKE_BANNER, {
+        timeout: 30_000,
+      });
+      await expect(providerPane.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
     }
 
     const focused = threads[2];
