@@ -53,6 +53,7 @@ import {
   makeLeaf,
   migrateAgentContents,
   parseLayout,
+  removeContents,
   splitPane,
 } from "../../shell/panes/model.ts";
 import { PaneCanvas, type PaneHost } from "../../shell/panes/PaneCanvas.tsx";
@@ -237,13 +238,23 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [paneById, providerPanes, client],
   );
 
-  const initialState = useRef({ terminals, activeTerminalId, panes: providerPanes.panes.map((p) => p.thread.id) });
+  const initialState = useRef({
+    terminals,
+    activeTerminalId,
+    panes: providerPanes.panes.map((p) => p.thread.id),
+    chatIds: providerPanes.chatIds,
+  });
   const store = useMemo(
     () => ({
       load: async () => {
         const stored = await client.layoutGet(workspace.id);
         const layout = stored ? parseLayout(stored.layout) : null;
-        return layout ? migrateAgentContents(layout, new Set(initialState.current.panes)) : null;
+        return layout
+          ? removeContents(
+              migrateAgentContents(layout, new Set(initialState.current.panes)),
+              new Set(initialState.current.chatIds.map((id) => `thread:${id}`)),
+            )
+          : null;
       },
       save: async (layout: PaneLayout) => {
         await client.layoutSave(workspace.id, layout);
@@ -271,9 +282,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   useEffect(() => {
     if (!controller.ready) return;
-    const layout = migrateAgentContents(controller.layout, new Set(paneById.keys()));
+    const layout = removeContents(
+      migrateAgentContents(controller.layout, new Set(paneById.keys())),
+      new Set(providerPanes.chatIds.map((id) => `thread:${id}`)),
+    );
     if (layout !== controller.layout) controller.replace(layout);
-  }, [controller, paneById]);
+  }, [controller, paneById, providerPanes.chatIds]);
 
   // KalVoice reads the same live layout and identities that this canvas renders. The registry is
   // in-memory and publishes metadata only: terminal output, provider responses and browser URLs

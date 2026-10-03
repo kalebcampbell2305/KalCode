@@ -922,6 +922,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           report({ ok: false, message: "That agent is no longer available." });
           return true;
         }
+        if (/\bagent\b/.test(spoken) && !isCodingAgent(thread)) {
+          lastLifecycle.current = null;
+          lastCompletedThread.current = null;
+          lastSceneTarget.current = null;
+          // An unrelated chat callback cannot answer an agent question. The native resolver
+          // can still locate a coding session using its durable runtime identity.
+          return false;
+        }
         if (liveCallback?.workspaceId && thread.workspaceId !== liveCallback.workspaceId) {
           lastLifecycle.current = null;
           lastSceneTarget.current = null;
@@ -929,7 +937,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           return true;
         }
         const target: VoiceSceneTarget = {
-          kind: "thread",
+          kind: isCodingAgent(thread) ? "agent" : "thread",
+          codingAgent: isCodingAgent(thread),
           entityId: thread.id,
           title: thread.name,
           workspaceId: thread.workspaceId,

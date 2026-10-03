@@ -36,6 +36,8 @@ export interface ProviderPanes {
   channel: PaneChannel;
   /** This workspace's provider pane threads, oldest first. */
   panes: readonly ProviderPaneEntry[];
+  /** Confirmed chat sessions; remove only their obsolete Code layout references. */
+  chatIds: readonly string[];
   /** Whether the first read finished (so absence means "not a pane"). */
   loaded: boolean;
   creating: boolean;
@@ -61,6 +63,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   const { settings } = usePermissions();
   const channel = useMemo(() => new PaneChannel(client), [client]);
   const [panes, setPanes] = useState<ProviderPaneEntry[]>([]);
+  const [chatIds, setChatIds] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState<PaneProviderId | null>(null);
   const [offered, setOffered] = useState<readonly PaneProviderId[]>([]);
@@ -75,6 +78,14 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
       const candidates = threads.filter((t) => isPaneProvider(t.providerId));
       const infos = await Promise.allSettled(candidates.map((t) => channel.info(t.id)));
       if (current !== generation.current) return;
+      setChatIds(
+        candidates
+          .filter((thread, index) => {
+            const result = infos[index];
+            return thread.runtimeKind !== "interactive_pty" && result?.status === "fulfilled" && result.value === null;
+          })
+          .map((thread) => thread.id),
+      );
       setPanes((previous) => {
         const next: ProviderPaneEntry[] = [];
         candidates.forEach((thread, i) => {
@@ -218,6 +229,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     enabled,
     channel,
     panes,
+    chatIds,
     loaded: loaded || !enabled,
     creating: creating !== null,
     creatingProvider: creating,

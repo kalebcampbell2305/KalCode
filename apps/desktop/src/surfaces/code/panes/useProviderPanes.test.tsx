@@ -78,4 +78,25 @@ it("retains restored terminal identity when pane metadata is initially unavailab
   const view = renderHook(() => useProviderPanes(workspace));
   await waitFor(() => expect(view.result.current.loaded).toBe(true));
   expect(view.result.current.panes).toEqual([{ thread: agent, info: null }]);
+  expect(view.result.current.chatIds).toEqual([]);
+});
+
+it("identifies legacy chat references without treating a failed metadata read as a chat", async () => {
+  const chat = { ...agent, id: "chat", runtimeKind: "headless" };
+  state.client.listThreads.mockResolvedValue([chat]);
+  state.client.transport.invoke.mockResolvedValue(null);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  expect(view.result.current.chatIds).toEqual(["chat"]);
+  expect(view.result.current.panes).toEqual([]);
+  state.client.transport.invoke.mockRejectedValue({
+    category: "internal",
+    code: "unavailable",
+    message: "Temporarily unavailable",
+    retryable: true,
+  });
+  await act(async () => {
+    await view.result.current.refresh();
+  });
+  expect(view.result.current.chatIds).toEqual([]);
 });

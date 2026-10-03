@@ -324,6 +324,26 @@ beforeEach(() => {
 });
 
 describe("KalVoice scene integration", () => {
+  it("keeps a native agent directive bound to Code when session metadata cannot be read", async () => {
+    const requestId = "00000000-0000-4000-8000-000000000099";
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(requestId);
+    mocks.request.mockResolvedValue({
+      ...fallbackResponse(),
+      requestId,
+      directive: { kind: "open_agent", agentId: "agent-native", workspaceId: "workspace-kalcode" },
+    });
+    mocks.client.getThread.mockRejectedValue(new Error("Session metadata unavailable"));
+    await mount();
+    await say("open the native agent");
+    expect(mocks.focusIntent).toHaveBeenCalledWith({
+      kind: "agent",
+      agentId: "agent-native",
+      workspaceId: "workspace-kalcode",
+    });
+    expect(mocks.focusIntent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "thread" }));
+    expect(mocks.client.getThread).not.toHaveBeenCalled();
+  });
+
   it("settles a handled local scene command in typed history", async () => {
     await mount();
 
@@ -731,6 +751,18 @@ describe("KalVoice scene integration", () => {
       }),
     );
     expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("never answers an agent completion question with a chat callback", async () => {
+    const chat = { ...thread("chat-finished", "Chat result", "Finished chatting"), runtimeKind: "headless" as const };
+    mocks.client.getThread.mockResolvedValue(chat);
+    mocks.request.mockResolvedValue(fallbackResponse());
+    await mount();
+    lifecycle("completed", "thread", chat.id);
+    await say("which agent just finished");
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    expect(mocks.focusIntent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("voice-result")).not.toHaveTextContent("Chat result finished its task");
   });
 
   it("drops a completed-agent follow-up when the runtime client and feed are replaced", async () => {
