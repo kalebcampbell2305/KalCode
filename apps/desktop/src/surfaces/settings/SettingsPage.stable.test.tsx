@@ -79,7 +79,9 @@ describe("Settings on Stable", () => {
     });
     const note = await permissions().findByRole("status");
     expect(note).toHaveTextContent("Approve is your saved default");
-    expect(note).toHaveTextContent("KalCode runs coding agents without approval prompts, so new agents start in Bypass");
+    expect(note).toHaveTextContent(
+      "KalCode runs coding agents without approval prompts, so new agents start in Bypass",
+    );
     expect(primary.queryByRole("button", { name: /Bypass/ })).not.toBeInTheDocument();
 
     await user.click(within(note).getByRole("button", { name: "Use Bypass" }));
