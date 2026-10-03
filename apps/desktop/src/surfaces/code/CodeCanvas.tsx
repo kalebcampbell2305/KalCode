@@ -91,9 +91,11 @@ import { RebindThreadDialog } from "../threads/RebindThreadDialog.tsx";
 import { rebindBlocker } from "../threads/useThreadAccount.ts";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
+import { CodeContextOperationsRegistration } from "./CodeContextOperations.tsx";
 import { HandOffDialog } from "./HandOffDialog.tsx";
 import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
+import { readLaunchMemory } from "./panes/agentLaunch.ts";
 import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
 import "./paneContents.tsx";
@@ -165,7 +167,7 @@ export interface CodeCanvasApi {
   providerPanes: ProviderPanes;
   shells: readonly ShellOption[];
   newTerminal: (shellId: string | null) => void;
-  /** Opens the + launcher for coding agents (Claude Code by default; Codex / Gemini CLI when offered). */
+  /** Opens the coding-agent launcher with the last selection unless a provider is named. */
   openAgentLauncher: (providerId?: PaneProviderId) => void;
   titleOf: (content: PaneContent) => string;
   applyTaskLayout: (task: TaskLayout) => void;
@@ -684,9 +686,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   // A fresh launcher never shows the previous launch's refusal.
   const { clearLaunchError } = providerPanes;
   const openAgentLauncher = useCallback(
-    (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => {
+    (providerId?: PaneProviderId, paneId: string | null = null) => {
       clearLaunchError();
-      setLauncher({ providerId, paneId, returnToHandoff: false });
+      setLauncher({
+        providerId: providerId ?? readLaunchMemory().last?.providerId ?? "claude-code",
+        paneId,
+        returnToHandoff: false,
+      });
     },
     [clearLaunchError],
   );
@@ -1068,7 +1074,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         providerPanes={providerPanes}
         background={background}
         onTerminal={() => newTerminal(null)}
-        onProviderPane={() => openAgentLauncher("claude-code", paneId)}
+        onProviderPane={() => openAgentLauncher(undefined, paneId)}
         onShow={(content) => controllerRef.current.show(content, { paneId, focus: true })}
       />
     ),
@@ -1213,8 +1219,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       if (command.kind === "open-agent-launcher") {
         if (!providerPanes.enabled) return { handled: false, message: "Coding agents aren't available in this build." };
-        const providerId = command.providerId ?? "claude-code";
-        openAgentLauncher(isPaneProvider(providerId) ? providerId : "claude-code");
+        const providerId = command.providerId;
+        openAgentLauncher(providerId && isPaneProvider(providerId) ? providerId : undefined);
         return { handled: true };
       }
       if (command.kind === "browser-control") {
@@ -1411,6 +1417,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   return (
     <>
       <UtilityDockRegistration />
+      <CodeContextOperationsRegistration />
       {children(api, canvas)}
       {renaming && (renaming.content.kind === "terminal" || renaming.content.kind === "agent") ? (
         <RenamePaneDialog

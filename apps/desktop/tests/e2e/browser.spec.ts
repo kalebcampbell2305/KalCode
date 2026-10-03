@@ -383,10 +383,15 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     await firstFrame.getByRole("button", { name: /Actions for pane/ }).click();
     await page.getByRole("menuitem", { name: "Move pane right" }).click();
     await expect.poll(async () => (await state(page, firstId as string)).bounds.x).not.toBe(oldBounds.bounds.x);
-    const movedRect = await firstViewport.boundingBox();
-    const movedBounds = await state(page, firstId as string);
-    expect(movedRect).not.toBeNull();
-    expect(Math.abs(movedBounds.bounds.x - (movedRect?.x ?? -10_000))).toBeLessThan(2);
+    // A first position update can arrive before the adaptive layout has settled.
+    // Keep the exact alignment requirement while awaiting the native geometry update.
+    await expect
+      .poll(async () => {
+        const movedRect = await firstViewport.boundingBox();
+        const movedBounds = await state(page, firstId as string);
+        return Math.abs(movedBounds.bounds.x - (movedRect?.x ?? -10_000));
+      })
+      .toBeLessThan(2);
     await firstFrame.getByRole("button", { name: /Actions for pane/ }).click();
     await page.getByRole("menuitem", { name: "Move pane left" }).click();
     await expect.poll(async () => (await state(page, firstId as string)).bounds.x).toBe(oldBounds.bounds.x);
@@ -579,7 +584,6 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
 
     app = await launch(dataDir, env);
     page = app.page;
-    await codeNav(page).click();
     await expect(page.getByRole("heading", { level: 1, name: "browser-site" })).toBeVisible();
     panes = page.locator("[data-browser-id]");
     await expect(panes).toHaveCount(2);
@@ -593,8 +597,7 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     expect(restored.url).not.toContain("access-token");
     // Main-view reload closes every old native child before React recreates the persisted panes.
     await page.reload();
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await codeNav(page).click();
+    await expect(page.getByRole("heading", { level: 1, name: "browser-site" })).toBeVisible();
     await expect(page.locator(`[data-browser-id="${firstId}"]`)).toHaveCount(1);
     await expect
       .poll(async () => (await stateWhileAttaching(page, firstId as string))?.url ?? null)
@@ -657,7 +660,7 @@ test("native Browser cookies persist within one workspace and never cross worksp
     app = null;
     app = await launch(dataDir, env);
     page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "cookie-b" })).toBeVisible();
     await attach(page, browserA, workspaceA?.id as string, `${web.origin}/cookie-echo?who=a-after-restart`);
     await attach(page, browserB, workspaceB?.id as string, `${web.origin}/cookie-echo?who=b-after-restart`);
     await expect.poll(() => web.cookies.get("a-after-restart") ?? "").toContain("isolated=A");

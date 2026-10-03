@@ -20,6 +20,7 @@ import {
   nudge,
   openBrowser,
   openLauncher,
+  openOperationsContext,
   openTerminal,
   openWidget,
   type ProviderId,
@@ -223,6 +224,12 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
       case "browser":
         openBrowser(state);
         afterLaunch(state);
+        break;
+      case "context-operations":
+        openOperationsContext(state);
+        break;
+      case "context-tab":
+        if (arg === "runs" || arg === "services" || arg === "tests") state.contextTab = arg;
         break;
       case "widget":
         openWidget(state, arg as "approvals" | "agents");

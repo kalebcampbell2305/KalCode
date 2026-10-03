@@ -105,7 +105,7 @@ export interface OperationsPageProps {
   providerAccounts?: () => Promise<ProviderAccount[]>;
 }
 
-type DetailTab = "overview" | "logs" | "timeline" | "files" | "artifacts" | "tests";
+export type OperationsDetailTab = "overview" | "logs" | "timeline" | "files" | "artifacts" | "tests";
 
 const STATUS_TONE: Record<
   OperationStatus,
@@ -255,6 +255,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   } | null>(null);
   const voiceFocusRetry = useRef<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const mutation = useRef<string | null>(null);
   const operationsReady = state.snapshot !== null;
 
   useEffect(() => {
@@ -335,7 +336,8 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
 
   const mutate = useCallback(
     async (key: string, action: () => Promise<unknown>, success?: string) => {
-      if (busy) return false;
+      if (mutation.current !== null) return false;
+      mutation.current = key;
       setBusy(key);
       try {
         await action();
@@ -351,10 +353,11 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
         });
         return false;
       } finally {
+        mutation.current = null;
         setBusy(null);
       }
     },
-    [busy, state, toast],
+    [state, toast],
   );
 
   const showRun = useCallback((id: string) => setSelectedRun(id), []);
@@ -551,7 +554,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
       </Tabs>
 
       {selectedRun ? (
-        <RunDetail
+        <OperationsRunDetail
           key={selectedRun}
           client={client}
           id={selectedRun}
@@ -767,7 +770,11 @@ function kindIcon(kind: OperationKind): ReactNode {
   return <TerminalSquare />;
 }
 
-type MutationRunner = (key: string, action: () => Promise<unknown>, success?: string) => Promise<boolean>;
+export type OperationsMutationRunner = (
+  key: string,
+  action: () => Promise<unknown>,
+  success?: string,
+) => Promise<boolean>;
 
 function QueueView({
   snapshot,
@@ -781,7 +788,7 @@ function QueueView({
   snapshot: OperationsSnapshot;
   client: OperationsApi;
   busy: string | null;
-  mutate: MutationRunner;
+  mutate: OperationsMutationRunner;
   threadOptions: () => Promise<ThreadOptions>;
   providerAccounts?: () => Promise<ProviderAccount[]>;
   onRun: (id: string) => void;
@@ -1413,7 +1420,7 @@ function ServicesView({
   snapshot: OperationsSnapshot;
   client: OperationsApi;
   busy: string | null;
-  mutate: MutationRunner;
+  mutate: OperationsMutationRunner;
   onRun: (id: string) => void;
   onTerminal: (service: DevelopmentService) => Promise<void>;
 }) {
@@ -1571,7 +1578,7 @@ function EnvironmentsView({
   snapshot: OperationsSnapshot;
   client: OperationsApi;
   onRun: (id: string) => void;
-  mutate: MutationRunner;
+  mutate: OperationsMutationRunner;
   workspaceNames: ReadonlyMap<string, string>;
 }) {
   const workspaceIds = [
@@ -1887,21 +1894,25 @@ function ActivityEvent({ event, onRun }: { event: OperationActivity; onRun: (id:
   );
 }
 
-function RunDetail({
+export function OperationsRunDetail({
   client,
   id,
   snapshot,
   busy,
   mutate,
   refreshKey,
+  initialTab = "overview",
+  role,
   onClose,
 }: {
   client: OperationsApi;
   id: string;
   snapshot: OperationsSnapshot;
   busy: string | null;
-  mutate: MutationRunner;
+  mutate: OperationsMutationRunner;
   refreshKey: string;
+  initialTab?: OperationsDetailTab;
+  role?: "dialog";
   onClose: () => void;
 }) {
   const loader = useMemo(
@@ -1910,7 +1921,7 @@ function RunDetail({
   );
   const [detail, setDetail] = useState<{ owner: object; id: string; value: OperationDetail } | null>(null);
   const [error, setError] = useState<{ owner: object; message: string } | null>(null);
-  const [tab, setTab] = useState<DetailTab>("overview");
+  const [tab, setTab] = useState<OperationsDetailTab>(initialTab);
 
   const pump = useCallback(() => {
     if (!loader.active || loader.inFlight || loader.pending === null) return;
@@ -1957,7 +1968,7 @@ function RunDetail({
   const value = detail?.owner === loader && detail.id === id ? detail.value : null;
   const errorMessage = error?.owner === loader ? error.message : null;
   return (
-    <aside className={styles.detail} aria-label="Run details">
+    <aside className={styles.detail} aria-label="Run details" role={role}>
       <header className={styles.detailHeader}>
         <div>
           <span className={styles.detailKind}>{value ? titleCase(value.run.spec.kind) : "Run"}</span>
@@ -1991,9 +2002,13 @@ function RunDetail({
         </ErrorState>
       ) : null}
       {value ? (
-        <Tabs value={tab} onValueChange={(next) => setTab(next as DetailTab)} className={styles.detailContent}>
+        <Tabs
+          value={tab}
+          onValueChange={(next) => setTab(next as OperationsDetailTab)}
+          className={styles.detailContent}
+        >
           <TabsList className={styles.detailTabs} aria-label="Run evidence">
-            {(["overview", "logs", "timeline", "files", "artifacts", "tests"] as DetailTab[]).map((value) => (
+            {(["overview", "logs", "timeline", "files", "artifacts", "tests"] as OperationsDetailTab[]).map((value) => (
               <TabsTrigger key={value} value={value}>
                 {titleCase(value)}
               </TabsTrigger>

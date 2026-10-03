@@ -136,7 +136,7 @@ test("message search opt-out is immediate and survives restart", async () => {
     await closeGracefully(app);
     expect(processesMatching(bin)).toEqual([]);
     const restarted = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
-    await expect(restarted.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(restarted.page.getByRole("heading", { level: 1, name: "providers2-site" })).toBeVisible();
     expect(await privateMatches(restarted.page)).toEqual([]);
     await closeGracefully(restarted);
   } finally {

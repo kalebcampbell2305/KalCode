@@ -274,7 +274,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
 
     app = await launch(dataDir, env);
     page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "voice-site" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
     // The signed baseline plus the typed local command, spoken local command and direct native

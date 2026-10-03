@@ -217,6 +217,7 @@ test("a v4 database from the installed app is upgraded to the latest schema with
     createDatabase(dataDir, projectDir, 4);
     const app = await launch(dataDir);
     const page = app.page;
+    // This legacy fixture has a workspace row but no saved active workspace.
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
