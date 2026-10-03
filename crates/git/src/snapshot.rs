@@ -31,7 +31,7 @@ use crate::paths::{RelPath, WorkspaceRoot, plain};
 use crate::repo::is_object_id;
 use crate::runner::{Git, git_error};
 
-const MANIFEST: &str = "kalcode-manifest";
+pub(crate) const MANIFEST: &str = "kalcode-manifest";
 const RACY: Duration = Duration::from_secs(2);
 /// Repack when this many packs have accumulated (one per snapshot with new content).
 const MAX_PACKS: usize = 48;

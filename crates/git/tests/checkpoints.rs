@@ -567,6 +567,42 @@ fn pruning_deletes_refs_and_reclaims_space() {
     assert_eq!(store.usage_bytes(fx.ws.id()).expect("usage"), 0);
 }
 
+#[test]
+fn checkpoints_keep_working_after_pruning_reclaims_every_checkpoint() {
+    let fx = Fixture::plain_folder();
+    let store = CheckpointStore::new(
+        fx.data.join("checkpoints"),
+        CheckpointOptions {
+            quota_bytes: 0,
+            ..CheckpointOptions::default()
+        },
+    );
+    fx.write("a.txt", "unchanged across the prune\n");
+    // Old enough that the stat manifest trusts it (not "racy").
+    std::fs::File::options()
+        .write(true)
+        .open(fx.path("a.txt"))
+        .expect("open")
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .expect("age the file");
+    let first = new_id();
+    created(
+        store
+            .create(&fx.git, &fx.ws, &first, None, None)
+            .expect("create"),
+    );
+    // The workspace is over quota on its own, so every unpinned checkpoint goes.
+    let pruned = store
+        .prune_to_quota(&fx.git, fx.ws.id(), std::slice::from_ref(&first))
+        .expect("prune");
+    assert_eq!(pruned, vec![first]);
+
+    fx.write("b.txt", "new after the prune\n");
+    store
+        .create(&fx.git, &fx.ws, &new_id(), None, None)
+        .expect("a checkpoint after pruning still snapshots unchanged files");
+}
+
 /// Creates a directory link: a junction on Windows (no privilege needed), a symlink elsewhere.
 fn dir_link(link: &std::path::Path, target: &std::path::Path) -> bool {
     #[cfg(windows)]
