@@ -322,6 +322,22 @@ A feature is not visually finished just because its happy-path screen looks good
 
 If any answer is no, polish it before shipping. Give subagents doing user-facing work these criteria explicitly.
 
+## Permanent simplicity and UX polish rule (owner directive 2026-10-03)
+
+**KALCODE MUST BE EXTREMELY SIMPLE TO USE. EVERY WORKFLOW SHOULD USE THE FEWEST SAFE STEPS POSSIBLE. IF KALCODE ALREADY KNOWS SOMETHING, DO NOT ASK THE USER AGAIN. PUT ACTIONS WHERE THEY ARE NEEDED INSTEAD OF MAKING USERS HUNT THROUGH SETTINGS. CODE IS THE PRIMARY DAILY WORK SURFACE AND SHOULD RECEIVE FIRST-CLASS UX. EVERY USER-FACING SURFACE MUST BE BEAUTIFUL, FAST, POLISHED, AND UNMISTAKABLY KALCODE. SIMPLE DOES NOT MEAN BLAND. REMOVE UNNECESSARY FRICTION WITHOUT REMOVING USEFUL POWER.**
+
+The goal is fewer clicks, less hunting, less configuration, less waiting and less repetition. This applies to Claude Code, Codex and every future agent, for every surface.
+
+- **Fewest safe steps.** If three clicks can safely be one, make it one. Combine mechanical steps. When only one valid choice exists, use it automatically. When several exist, show the choice where the action happens, never behind a Settings detour.
+- **Never ask twice.** Reuse what KalCode already knows: the current workspace, provider account, preferred model and effort, layout, previous choices, recent terminal, Browser URL and project path. Remember reasonable preferences across restarts.
+- **No empty friction.** Remove confirmations that add no real safety, and modals where an inline action would do. Never remove a confirmation that protects user data, credentials, billing or running work.
+- **Errors lead to recovery.** Every failure shows what happened plus the most useful next action, for example "Claude session expired [Reconnect]", or "Port 3000 already in use [Stop conflicting process] [Use another port]".
+- **Remove clutter, keep power.** Drop UI that no longer serves a purpose, even if "it was already there". Use progressive disclosure: common actions visible, advanced actions available when needed.
+- **Code first.** Users should be able to do nearly all coding work without leaving Code: launch agents, pick the provider account, see account usage, pick the exact model and effort, run terminals, open Live Browser and Widgets, see Needs You and agent state, use KalVoice, review changes, run tests and switch accounts.
+- **Never slower.** Every simplification preserves or improves responsiveness (see the responsiveness rule). Menus, panels, launchers and navigation open immediately; slow work happens asynchronously.
+- **Keep account types distinct.** The KalCode account (the user's profile and login, with an editable display name) is separate from provider accounts (Claude A, Codex B). Renaming one never touches the other's identity or authentication.
+- Fix friction with the smallest correct change that has the biggest UX impact (see Scope discipline). An audit is not a license for a giant redesign.
+
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 
 **BUILD CONTINUOUSLY. SHIP CONTINUOUSLY. THE PUBLIC VERSION IS JUST AN OWNER-CONTROLLED LABEL. WHEN THE OWNER REQUESTS A VERSION CHANGE, UPDATE THE VERSION CONSISTENTLY AND CONTINUE WORKING.**
