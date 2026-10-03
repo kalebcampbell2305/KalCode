@@ -84,7 +84,6 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::EnvironmentDoctor
         | FeatureId::Blueprints
         | FeatureId::CommandCenter
-        | FeatureId::ProviderHandoff
         | FeatureId::BenchmarkLab
         | FeatureId::FailureAutopsy
         | FeatureId::WorkspaceHome
@@ -94,7 +93,9 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::SafeRestore
         | FeatureId::AutomationKillSwitch => SurfaceState::Gated,
         // Z7-W1: the pane canvas and its governed provider terminals are the Code surface.
-        FeatureId::PaneSystem | FeatureId::ProviderPanes => SurfaceState::Available,
+        FeatureId::PaneSystem | FeatureId::ProviderPanes | FeatureId::ProviderHandoff => {
+            SurfaceState::Available
+        }
         // 0.1.5 zero-setup (E1-E3, E7): these ship unconditionally on Stable (Providers › Health
         // and Accounts, the Notifications panel, the sign-in gate); nothing gates on the flag.
         FeatureId::ProviderHealth
@@ -224,9 +225,10 @@ mod tests {
         // Shipped in every channel: the pane system and provider terminals (Z7-W1), plus the
         // 0.1.5 features whose UI is unconditional (provider health/accounts, notifications,
         // KalCode sign-in).
-        const AVAILABLE: [FeatureId; 6] = [
+        const AVAILABLE: [FeatureId; 7] = [
             FeatureId::PaneSystem,
             FeatureId::ProviderPanes,
+            FeatureId::ProviderHandoff,
             FeatureId::ProviderHealth,
             FeatureId::ProviderProfiles,
             FeatureId::NotificationCenter,

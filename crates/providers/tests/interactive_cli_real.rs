@@ -5,7 +5,7 @@
 //! It verifies what the fake can't (docs/PROVIDER_PANES.md §7): that `-c notify=[…]` and
 //! `-c tui.notifications=['approval-requested']` / `tui.notification_method='osc9'` are accepted
 //! by the installed codex-cli, that `notify` runs KalCode's helper with the documented payload
-//! (`agent-turn-complete` with `thread-id`), and that an approval request raises OSC 9 under
+//! (`agent-turn-complete` with `thread-id` and `turn-id`), and that an approval request raises OSC 9 under
 //! ConPTY. The helper is the real `kalcode-hook` (`KALCODE_HOOK_PROGRAM`).
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]

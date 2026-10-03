@@ -175,6 +175,12 @@ per-session key in the provider environment, fail-open because it is status only
 watchdog: `notify` fires only at the end of a turn. Pane info: hook channel `waiting` until the
 first notify, then `active`; `kalcodeAnswersApprovals` is always false.
 
+Automated handoff readiness additionally requires a validated opaque `turn-id`,
+correlated with a locally observed submission. Duplicate or orphan completion
+notifications never establish readiness. A fresh Codex pane must complete one
+tracked native turn before accepting a handoff; ambiguous extra submissions keep
+automated delivery blocked. See [Agent Hand Off](AGENT_HANDOFF.md).
+
 ### Gemini CLI
 
 Hooks are configured in `settings.json` (`BeforeTool`, `AfterTool`, `SessionStart`,

@@ -45,7 +45,7 @@ describe("deterministic account memory adapter", () => {
   });
 
   it("keeps every fixture free of credential-shaped fields", async () => {
-    for (const scenario of ["fresh", "unactivated", "ready", "expired", "offline_grace"] as const) {
+    for (const scenario of ["fresh", "unactivated", "ready", "ready_pro", "expired", "offline_grace"] as const) {
       expect(JSON.stringify(await createAccountMemory(scenario).handlers.account_status())).not.toMatch(
         /token|secret|verifier|receipt|credential/i,
       );

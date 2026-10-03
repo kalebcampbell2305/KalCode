@@ -52,7 +52,8 @@ fn migrations_are_numbered_contiguously() {
             (18, "context_delivery"),
             (19, "kalvoice_account_usage"),
             (20, "operations"),
-            (21, "threads_effort")
+            (21, "threads_effort"),
+            (22, "handoffs")
         ]
     );
 }

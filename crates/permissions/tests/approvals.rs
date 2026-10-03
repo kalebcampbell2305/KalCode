@@ -1169,7 +1169,8 @@ fn migrations_keep_permissions_at_v4() {
             (18, "context_delivery"),
             (19, "kalvoice_account_usage"),
             (20, "operations"),
-            (21, "threads_effort")
+            (21, "threads_effort"),
+            (22, "handoffs")
         ]
     );
 }

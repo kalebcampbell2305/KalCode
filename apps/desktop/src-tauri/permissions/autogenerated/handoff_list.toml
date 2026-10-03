@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-list"
+description = "Enables the handoff_list command without any pre-configured scope."
+commands.allow = ["handoff_list"]
+
+[[permission]]
+identifier = "deny-handoff-list"
+description = "Denies the handoff_list command without any pre-configured scope."
+commands.deny = ["handoff_list"]

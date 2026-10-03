@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-send"
+description = "Enables the handoff_send command without any pre-configured scope."
+commands.allow = ["handoff_send"]
+
+[[permission]]
+identifier = "deny-handoff-send"
+description = "Denies the handoff_send command without any pre-configured scope."
+commands.deny = ["handoff_send"]

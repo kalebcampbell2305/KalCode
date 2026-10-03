@@ -39,6 +39,9 @@ export interface NewAgentDialogProps {
   initialProvider: PaneProviderId;
   busy: boolean;
   error: string | null;
+  /** Handoff launches create exactly one recipient while keeping the prepared draft in Code. */
+  fixedCount?: number;
+  purpose?: "standard" | "handoff";
   /** Starts the agents; resolves true when at least one started (the dialog then closes). */
   onLaunch: (spec: AgentLaunchSpec) => Promise<boolean>;
   onClose: () => void;
@@ -54,6 +57,8 @@ export function NewAgentDialog({
   initialProvider,
   busy,
   error,
+  fixedCount,
+  purpose = "standard",
   onLaunch,
   onClose,
 }: NewAgentDialogProps) {
@@ -77,7 +82,7 @@ export function NewAgentDialog({
   const [localAccountError, setLocalAccountError] = useState<string | null>(null);
   // What the person typed; the launch uses it clamped, so editing "1" to "5" never passes through 15.
   const [countText, setCountText] = useState("1");
-  const count = clampAgentCount(Number(countText));
+  const count = fixedCount ?? clampAgentCount(Number(countText));
 
   const reloadAccounts = useCallback(async () => {
     try {
@@ -196,9 +201,12 @@ export function NewAgentDialog({
                 <Bot />
               </span>
               <div>
-                <Dialog.Title className={styles.title}>New agent</Dialog.Title>
+                <Dialog.Title className={styles.title}>
+                  {purpose === "handoff" ? "New recipient agent" : "New agent"}
+                </Dialog.Title>
                 <Dialog.Description id={`${id}-desc`} className={styles.description}>
                   A real coding agent in its own terminal in <strong>{workspace.name}</strong>.
+                  {purpose === "handoff" ? " Your handoff draft stays open for review." : ""}
                 </Dialog.Description>
               </div>
             </div>
@@ -261,37 +269,44 @@ export function NewAgentDialog({
               ) : null}
             </div>
 
-            <Field htmlFor={`${id}-count`} label="Agents" hint="Each agent gets its own terminal.">
-              <div className={styles.stepper}>
-                <IconButton
-                  size="sm"
-                  label="One fewer agent"
-                  icon={<Minus />}
-                  disabled={busy || count <= 1}
-                  onClick={() => setCountText(String(clampAgentCount(count - 1)))}
-                />
-                <TextInput
-                  id={`${id}-count`}
-                  className={styles.count}
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={MAX_AGENTS_PER_LAUNCH}
-                  value={countText}
-                  disabled={busy}
-                  aria-describedby={`${id}-count-hint`}
-                  onChange={(e) => setCountText(e.target.value)}
-                  onBlur={() => setCountText(String(count))}
-                />
-                <IconButton
-                  size="sm"
-                  label="One more agent"
-                  icon={<Plus />}
-                  disabled={busy || count >= MAX_AGENTS_PER_LAUNCH}
-                  onClick={() => setCountText(String(clampAgentCount(count + 1)))}
-                />
-              </div>
-            </Field>
+            {fixedCount === undefined ? (
+              <Field htmlFor={`${id}-count`} label="Agents" hint="Each agent gets its own terminal.">
+                <div className={styles.stepper}>
+                  <IconButton
+                    size="sm"
+                    label="One fewer agent"
+                    icon={<Minus />}
+                    disabled={busy || count <= 1}
+                    onClick={() => setCountText(String(clampAgentCount(count - 1)))}
+                  />
+                  <TextInput
+                    id={`${id}-count`}
+                    className={styles.count}
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={MAX_AGENTS_PER_LAUNCH}
+                    value={countText}
+                    disabled={busy}
+                    aria-describedby={`${id}-count-hint`}
+                    onChange={(e) => setCountText(e.target.value)}
+                    onBlur={() => setCountText(String(count))}
+                  />
+                  <IconButton
+                    size="sm"
+                    label="One more agent"
+                    icon={<Plus />}
+                    disabled={busy || count >= MAX_AGENTS_PER_LAUNCH}
+                    onClick={() => setCountText(String(clampAgentCount(count + 1)))}
+                  />
+                </div>
+              </Field>
+            ) : (
+              <p className={styles.handoffCount}>
+                <span className={styles.label}>Recipient</span>
+                <span>One agent · draft returns for review before sending</span>
+              </p>
+            )}
 
             {error ? (
               <p className={styles.error} role="alert">

@@ -343,7 +343,8 @@ fn registrations_reject_records_from_the_other_provider_channel() {
         &serde_json::json!({
             "event": "CodexNotify",
             "providerSessionId": "0192f3c4-0000-7000-8000-000000000001",
-            "codexType": "agent-turn-complete"
+            "codexType": "agent-turn-complete",
+            "codexTurnId": "turn-1"
         })
         .to_string(),
     );
@@ -363,7 +364,8 @@ fn registrations_reject_records_from_the_other_provider_channel() {
         &serde_json::json!({
             "event": "CodexNotify",
             "providerSessionId": "0192f3c4-0000-7000-8000-000000000001",
-            "codexType": "agent-turn-complete"
+            "codexType": "agent-turn-complete",
+            "codexTurnId": "turn-1"
         })
         .to_string(),
     );
@@ -391,7 +393,7 @@ fn codex_notify_requires_a_canonical_thread_id_and_supported_type() {
     send_raw(
         &server,
         &reg,
-        &serde_json::json!({"event": "CodexNotify", "providerSessionId": id, "codexType": "agent-turn-complete"}).to_string(),
+        &serde_json::json!({"event": "CodexNotify", "providerSessionId": id, "codexType": "agent-turn-complete", "codexTurnId": "turn-1"}).to_string(),
     );
 
     assert_eq!(handler.calls.load(Ordering::SeqCst), 1);

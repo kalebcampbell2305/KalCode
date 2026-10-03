@@ -282,8 +282,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 307);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 307);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 310);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 310);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -291,9 +291,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 307);
+  assert.equal(functional.size, 310);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 363);
+  assert.equal(established.size, 366);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

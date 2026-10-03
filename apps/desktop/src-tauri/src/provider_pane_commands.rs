@@ -193,6 +193,33 @@ fn routing() -> DecisionRouting {
 }
 
 impl ProviderPanesState {
+    pub(crate) fn handoff_info(&self, thread_id: &str) -> Option<PaneInfo> {
+        self.panes.info(thread_id)
+    }
+
+    pub(crate) fn deliver_handoff<F>(
+        &self,
+        thread_id: &str,
+        expected_instance_id: &str,
+        text: &str,
+        before_write: F,
+    ) -> Result<(), kalcode_providers::interactive::provider::HandoffDeliveryError>
+    where
+        F: FnOnce() -> Result<(), kalcode_providers::interactive::provider::HandoffDeliveryError>,
+    {
+        self.panes
+            .deliver_handoff(thread_id, expected_instance_id, text, before_write)
+    }
+
+    pub(crate) fn handoff_readiness(
+        &self,
+        thread_id: &str,
+        expected_instance_id: &str,
+    ) -> Result<(), kalcode_providers::interactive::provider::HandoffDeliveryError> {
+        self.panes
+            .handoff_readiness(thread_id, expected_instance_id)
+    }
+
     /// Returns whether `thread_id` belongs to an interactive provider pane in this runtime or
     /// was durably marked as one by an earlier runtime. Callers use this read-only preflight
     /// before claiming one-shot work that pane sessions cannot accept through the headless send

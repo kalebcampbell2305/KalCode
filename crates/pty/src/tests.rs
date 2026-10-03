@@ -183,7 +183,7 @@ impl ChildKiller for ReaderTestKiller {
     }
 }
 
-fn reader_fixture(listeners: Vec<Listener>) -> (Inner, std::sync::mpsc::Receiver<Vec<u8>>) {
+fn reader_fixture(listeners: Vec<Listener>) -> (Inner, std::sync::mpsc::Receiver<InputWrite>) {
     let (input, queued) = sync_channel(8);
     let listeners = listeners
         .into_iter()
@@ -354,6 +354,70 @@ fn accepts_interactive_input() {
 }
 
 #[test]
+fn acknowledged_write_reaches_the_terminal_writer_before_returning() {
+    let run = start(interactive_spec());
+    run.session
+        .write_acknowledged(b"echo acknowledged-write-ok\r")
+        .expect("acknowledged write");
+    assert!(
+        wait_until(Duration::from_secs(15), || run
+            .text()
+            .contains("acknowledged-write-ok")),
+        "acknowledged input did not reach the shell: {:?}",
+        run.text()
+    );
+    run.session.kill().expect("kill");
+}
+
+#[test]
+fn writer_failure_is_returned_to_an_acknowledged_write() {
+    struct FailedWriter;
+
+    impl std::io::Write for FailedWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected writer failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (queued, receiver) = sync_channel(1);
+    let (acknowledge, acknowledged) = sync_channel(1);
+    queued
+        .send(InputWrite {
+            data: b"guarded input".to_vec(),
+            acknowledgement: Some(acknowledge),
+        })
+        .expect("queue write");
+    drop(queued);
+
+    write_loop(Box::new(FailedWriter), &receiver);
+
+    let failure = acknowledged
+        .recv_timeout(Duration::from_secs(1))
+        .expect("writer acknowledgement")
+        .expect_err("writer failure");
+    assert!(failure.contains("injected writer failure"), "{failure}");
+}
+
+#[test]
+fn acknowledged_write_timeout_is_bounded_and_truthful() {
+    let (inner, _undrained) = reader_fixture(vec![]);
+    let session = PtySession {
+        inner: Arc::new(inner),
+    };
+    let error = session
+        .write_acknowledged_with_timeout(b"guarded input", Duration::from_millis(10))
+        .expect_err("undrained writer queue must time out");
+    assert!(
+        matches!(&error, PtyError::Io(message) if message.contains("uncertain")),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn resizes_and_validates_sizes() {
     let run = start(interactive_spec());
     run.session
@@ -481,7 +545,8 @@ fn reader_answers_once_after_the_final_listener_rejects_a_cursor_request() {
     assert_eq!(
         replies
             .recv_timeout(Duration::from_secs(1))
-            .expect("cursor fallback reply"),
+            .expect("cursor fallback reply")
+            .data,
         CURSOR_POSITION_REPLY
     );
     assert!(matches!(
@@ -524,7 +589,8 @@ fn reader_answers_once_when_a_cursor_request_starts_without_listeners() {
     assert_eq!(
         replies
             .recv_timeout(Duration::from_secs(1))
-            .expect("cursor fallback reply"),
+            .expect("cursor fallback reply")
+            .data,
         CURSOR_POSITION_REPLY
     );
     assert!(matches!(

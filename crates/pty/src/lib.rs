@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 use portable_pty::{Child, ExitStatus as PortableExitStatus};
@@ -29,6 +30,10 @@ pub const SCROLLBACK_BYTES: usize = 512 * 1024;
 const READ_CHUNK: usize = 16 * 1024;
 /// Input writes queued for the writer thread before `write` reports the terminal busy.
 const INPUT_QUEUE: usize = 256;
+/// Guarded programmatic submissions are intentionally bounded independently of ordinary typing.
+const MAX_ACKNOWLEDGED_WRITE_BYTES: usize = 64 * 1024;
+/// A handoff must never hold its provider lifecycle lock indefinitely behind a stalled PTY.
+const ACKNOWLEDGED_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalSize {
@@ -212,11 +217,16 @@ struct Shared {
     listeners: HashMap<AttachId, Listener>,
 }
 
+struct InputWrite {
+    data: Vec<u8>,
+    acknowledgement: Option<SyncSender<Result<(), String>>>,
+}
+
 struct Inner {
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     /// Input queue drained by the writer thread, so `write` never blocks its caller (a shell
     /// that stops reading would otherwise stall it) and writes keep their order.
-    input: Mutex<Option<SyncSender<Vec<u8>>>>,
+    input: Mutex<Option<SyncSender<InputWrite>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     shared: Mutex<Shared>,
     exit: Mutex<Option<ExitInfo>>,
@@ -741,7 +751,7 @@ impl PtySession {
             return Err(PtyError::Spawn("injected PTY I/O setup failure".into()));
         }
         let killer = child.clone_killer();
-        let (input, queued) = sync_channel::<Vec<u8>>(INPUT_QUEUE);
+        let (input, queued) = sync_channel::<InputWrite>(INPUT_QUEUE);
         let inner = Arc::new(Inner {
             master: Mutex::new(Some(pair.master)),
             input: Mutex::new(Some(input)),
@@ -891,10 +901,58 @@ impl PtySession {
     pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
         let input = lock(&self.inner.input);
         let input = input.as_ref().ok_or(PtyError::Exited)?;
-        input.try_send(data.to_vec()).map_err(|e| match e {
-            TrySendError::Full(_) => PtyError::Busy,
-            TrySendError::Disconnected(_) => PtyError::Exited,
-        })
+        input
+            .try_send(InputWrite {
+                data: data.to_vec(),
+                acknowledgement: None,
+            })
+            .map_err(|e| match e {
+                TrySendError::Full(_) => PtyError::Busy,
+                TrySendError::Disconnected(_) => PtyError::Exited,
+            })
+    }
+
+    /// Writes one bounded programmatic submission and waits until the PTY writer has completed
+    /// both `write_all` and `flush`. This is deliberately separate from [`Self::write`], whose
+    /// non-blocking enqueue semantics are required for ordinary interactive typing.
+    pub fn write_acknowledged(&self, data: &[u8]) -> Result<(), PtyError> {
+        self.write_acknowledged_with_timeout(data, ACKNOWLEDGED_WRITE_TIMEOUT)
+    }
+
+    fn write_acknowledged_with_timeout(
+        &self,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<(), PtyError> {
+        if data.is_empty() || data.len() > MAX_ACKNOWLEDGED_WRITE_BYTES {
+            return Err(PtyError::Io(
+                "acknowledged terminal write is empty or too large".into(),
+            ));
+        }
+        let (completed, completion) = sync_channel(1);
+        {
+            let input = lock(&self.inner.input);
+            let input = input.as_ref().ok_or(PtyError::Exited)?;
+            input
+                .try_send(InputWrite {
+                    data: data.to_vec(),
+                    acknowledgement: Some(completed),
+                })
+                .map_err(|error| match error {
+                    TrySendError::Full(_) => PtyError::Busy,
+                    TrySendError::Disconnected(_) => PtyError::Exited,
+                })?;
+        }
+        match completion.recv_timeout(timeout) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(PtyError::Io(error)),
+            Err(RecvTimeoutError::Timeout) => Err(PtyError::Io(
+                "terminal write acknowledgement timed out; delivery is uncertain".into(),
+            )),
+            Err(RecvTimeoutError::Disconnected) => Err(PtyError::Io(
+                "terminal writer ended before acknowledging delivery; delivery is uncertain".into(),
+            )),
+        }
     }
 
     pub fn resize(&self, size: TerminalSize) -> Result<(), PtyError> {
@@ -1128,10 +1186,17 @@ fn escalate_kill(session: &PtySession) {
 const CURSOR_POSITION_REQUEST: &[u8] = b"\x1b[6n";
 const CURSOR_POSITION_REPLY: &[u8] = b"\x1b[1;1R";
 
-fn write_loop(mut writer: Box<dyn Write + Send>, queued: &Receiver<Vec<u8>>) {
+fn write_loop(mut writer: Box<dyn Write + Send>, queued: &Receiver<InputWrite>) {
     // Ends when the session drops its sender (exit or kill) or the pseudo-terminal closes.
-    for data in queued {
-        if let Err(error) = writer.write_all(&data).and_then(|()| writer.flush()) {
+    for input in queued {
+        let result = writer
+            .write_all(&input.data)
+            .and_then(|()| writer.flush())
+            .map_err(|error| error.to_string());
+        if let Some(acknowledgement) = input.acknowledgement {
+            let _ = acknowledgement.send(result.clone());
+        }
+        if let Err(error) = result {
             tracing::debug!(event = "pty.write_ended", error = %error);
             break;
         }
@@ -1210,7 +1275,10 @@ fn answer_cursor_requests<'a>(chunk: &'a [u8], inner: &Inner) -> std::borrow::Co
     }
     if let Some(input) = lock(&inner.input).as_ref() {
         for _ in 0..count {
-            let _ = input.try_send(CURSOR_POSITION_REPLY.to_vec());
+            let _ = input.try_send(InputWrite {
+                data: CURSOR_POSITION_REPLY.to_vec(),
+                acknowledgement: None,
+            });
         }
     }
     std::borrow::Cow::Owned(strip_all(chunk, CURSOR_POSITION_REQUEST))

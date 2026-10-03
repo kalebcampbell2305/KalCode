@@ -75,6 +75,7 @@ import { setSelectedCodeContext } from "../threads/accountIntent.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
+import { HandOffDialog } from "./HandOffDialog.tsx";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
 import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
@@ -568,7 +569,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   // Coding agents (AGENTS.md): each one is a real provider CLI in its own terminal pane, so a
   // launch of N agents starts N panes and lays them out together.
-  const [launcher, setLauncher] = useState<{ providerId: PaneProviderId; paneId: string | null } | null>(null);
+  const [launcher, setLauncher] = useState<{
+    providerId: PaneProviderId;
+    paneId: string | null;
+    returnToHandoff: boolean;
+  } | null>(null);
+  const [handoffSource, setHandoffSource] = useState<ThreadSummary | null>(null);
+  const [handoffTargetId, setHandoffTargetId] = useState<string | null>(null);
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
   // A fresh launcher never shows the previous launch's refusal.
@@ -576,12 +583,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const openAgentLauncher = useCallback(
     (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => {
       clearLaunchError();
-      setLauncher({ providerId, paneId });
+      setLauncher({ providerId, paneId, returnToHandoff: false });
     },
     [clearLaunchError],
   );
   const launchAgents = useCallback(
-    async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null) => {
+    async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null, returnToHandoff = false) => {
       const created: string[] = [];
       setLaunching(true);
       try {
@@ -614,6 +621,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       // Any started agent closes the launcher, so a retry never duplicates them; a failure that
       // stopped the batch stays visible in the Code toolbar.
+      if (returnToHandoff && first) setHandoffTargetId(first);
       return created.length > 0;
     },
     [providerPanes],
@@ -730,6 +738,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             focusRequest={context.focusRequest}
             throttled={!context.focused}
             onChanged={providerPanes.updated}
+            onHandOff={() => {
+              setHandoffSource(entry.thread);
+              setHandoffTargetId(null);
+            }}
           />
         );
       }
@@ -1091,6 +1103,21 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     <>
       <UtilityDockRegistration />
       {children({ controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf }, canvas)}
+      {handoffSource ? (
+        <HandOffDialog
+          open={launcher?.returnToHandoff !== true}
+          source={handoffSource}
+          preferredTargetId={handoffTargetId}
+          onNewAgent={() => {
+            clearLaunchError();
+            setLauncher({ providerId: "claude-code", paneId: null, returnToHandoff: true });
+          }}
+          onClose={() => {
+            setHandoffSource(null);
+            setHandoffTargetId(null);
+          }}
+        />
+      ) : null}
       {launcher ? (
         <NewAgentDialog
           workspace={workspace}
@@ -1098,7 +1125,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           initialProvider={launcher.providerId}
           busy={launching || providerPanes.creating}
           error={providerPanes.error}
-          onLaunch={(spec) => launchAgents(spec, launcher.paneId)}
+          fixedCount={launcher.returnToHandoff ? 1 : undefined}
+          purpose={launcher.returnToHandoff ? "handoff" : "standard"}
+          onLaunch={(spec) => launchAgents(spec, launcher.paneId, launcher.returnToHandoff)}
           onClose={() => setLauncher(null)}
         />
       ) : null}

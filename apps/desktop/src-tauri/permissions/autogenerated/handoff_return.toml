@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-return"
+description = "Enables the handoff_return command without any pre-configured scope."
+commands.allow = ["handoff_return"]
+
+[[permission]]
+identifier = "deny-handoff-return"
+description = "Denies the handoff_return command without any pre-configured scope."
+commands.deny = ["handoff_return"]

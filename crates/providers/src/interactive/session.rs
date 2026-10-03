@@ -19,7 +19,7 @@
 //! The runtime ignores `waiting_for_permission` from providers (it owns approval state), so a
 //! prompt shown by the provider itself is reported as WAITING FOR YOU with a detail.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -49,8 +49,15 @@ pub const MAX_HELD_APPROVALS: usize = 8;
 pub const MAX_OPEN_TOOLS: usize = 64;
 /// Largest single write from a pane view (as for Z1 terminals).
 pub const MAX_WRITE_BYTES: usize = 64 * 1024;
+/// Bracketed-paste framing plus the one submit byte must fit in one bounded PTY write.
+pub const MAX_HANDOFF_TEXT_BYTES: usize = MAX_WRITE_BYTES - 13;
 
 const ANSWER_IN_PROVIDER: &str = "Answer in Claude Code";
+const MAX_SUBMIT_BOUNDARIES: usize = 64;
+const MAX_CODEX_PENDING_SUBMITS: usize = 64;
+const MAX_CODEX_SEEN_TURNS: usize = 4096;
+const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
+const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 /// Fixed reasons an automated voice submit cannot enter a provider PTY. Provider output is never
 /// included: callers can safely map these variants to stable UI errors.
@@ -62,6 +69,56 @@ pub enum PaneVoiceWriteError {
     Unverified,
     Io,
 }
+
+/// Why KalCode did not deliver an automated handoff into a provider pane.
+///
+/// These reasons contain no provider output or user text and are safe to surface directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffDeliveryError {
+    /// The authenticated provider lifecycle says a turn is still active.
+    ReadyBusy,
+    /// The provider is showing a permission, authentication, or other native question.
+    ProviderPrompt,
+    /// KalCode has no authenticated structured signal proving the native prompt is ready.
+    Unverified,
+    /// Human input has reached the pane since the last verified native prompt boundary.
+    InputPending,
+    /// The thread now names a different provider-process instance.
+    TargetChanged,
+    /// The provider process has ended or is being reconfigured.
+    SessionEnded,
+    /// The text is empty, too large, or contains terminal-control characters.
+    InvalidText,
+    /// The guarded PTY write could not be verified after the caller's durable claim.
+    Io,
+}
+
+impl std::fmt::Display for HandoffDeliveryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::ReadyBusy => "The receiving agent is still working.",
+            Self::ProviderPrompt => {
+                "The receiving agent is waiting on a provider permission or sign-in prompt."
+            }
+            Self::Unverified => {
+                "KalCode cannot verify that the receiving agent is at an idle native prompt."
+            }
+            Self::InputPending => {
+                "The receiving terminal has unsubmitted or unverified human input."
+            }
+            Self::TargetChanged => {
+                "The receiving agent restarted before the handoff was delivered."
+            }
+            Self::SessionEnded => "The receiving agent session has ended.",
+            Self::InvalidText => {
+                "The handoff text is empty, too large, or contains unsafe controls."
+            }
+            Self::Io => "KalCode could not verify terminal delivery of the handoff.",
+        })
+    }
+}
+
+impl std::error::Error for HandoffDeliveryError {}
 
 /// What differs between the providers a pane can run (PROVIDERS-2). Claude Code is the default:
 /// hooks, and KalCode answers approvals with engine routing.
@@ -115,11 +172,37 @@ struct HookState {
     last_status: Option<(ThreadStatus, Option<String>)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum HandoffReadiness {
+    #[default]
+    Unverified,
+    Ready,
+    Busy,
+    ProviderPrompt,
+}
+
+#[derive(Debug)]
+struct ClaudeSubmitBoundary {
+    generation: u64,
+    trailing_input: bool,
+    clears_input: bool,
+}
+
 #[derive(Default)]
 struct LifecycleState {
     events: VecDeque<AgentEvent>,
     draining: bool,
     input_writes: u64,
+    input_pending: bool,
+    input_pending_generation: u64,
+    claude_submit_boundaries: VecDeque<ClaudeSubmitBoundary>,
+    claude_submit_tracking_failed: bool,
+    codex_pending_submits: usize,
+    codex_seen_turn_ids: HashSet<String>,
+    codex_tracking_failed: bool,
+    codex_in_bracketed_paste: bool,
+    codex_paste_prefix: Vec<u8>,
+    handoff_readiness: HandoffReadiness,
     reconfigure_reserved: bool,
 }
 
@@ -227,6 +310,107 @@ impl Shared {
         self.ended.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst)
     }
 
+    fn record_codex_submit_locked(&self, lifecycle: &mut LifecycleState) {
+        if lifecycle.codex_tracking_failed {
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return;
+        }
+        let Some(pending) = lifecycle.codex_pending_submits.checked_add(1) else {
+            lifecycle.codex_tracking_failed = true;
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return;
+        };
+        if pending > MAX_CODEX_PENDING_SUBMITS {
+            lifecycle.codex_tracking_failed = true;
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return;
+        }
+        lifecycle.codex_pending_submits = pending;
+        lifecycle.handoff_readiness = HandoffReadiness::Busy;
+    }
+
+    fn record_claude_submit_boundary_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        generation: u64,
+        trailing_input: bool,
+        clears_input: bool,
+    ) {
+        if lifecycle.claude_submit_tracking_failed {
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return;
+        }
+        if lifecycle.claude_submit_boundaries.len() >= MAX_SUBMIT_BOUNDARIES {
+            lifecycle.claude_submit_tracking_failed = true;
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return;
+        }
+        lifecycle
+            .claude_submit_boundaries
+            .push_back(ClaudeSubmitBoundary {
+                generation,
+                trailing_input,
+                clears_input,
+            });
+    }
+
+    fn observe_codex_input_locked(&self, lifecycle: &mut LifecycleState, data: &[u8]) {
+        let mut buffered = std::mem::take(&mut lifecycle.codex_paste_prefix);
+        buffered.extend_from_slice(data);
+        let mut cursor = 0;
+        while cursor < buffered.len() {
+            let marker = if lifecycle.codex_in_bracketed_paste {
+                BRACKETED_PASTE_END
+            } else {
+                BRACKETED_PASTE_START
+            };
+            let remaining = &buffered[cursor..];
+            if marker.starts_with(remaining) {
+                // A partial marker is still real human input until subsequent bytes prove it is
+                // terminal framing. In particular, a lone Escape must dirty a ready prompt.
+                lifecycle.input_pending = true;
+                lifecycle.codex_paste_prefix.extend_from_slice(remaining);
+                break;
+            }
+            if remaining.starts_with(marker) {
+                lifecycle.input_pending = true;
+                lifecycle.codex_in_bracketed_paste = !lifecycle.codex_in_bracketed_paste;
+                cursor += marker.len();
+                continue;
+            }
+            let byte = buffered[cursor];
+            cursor += 1;
+            if lifecycle.codex_in_bracketed_paste {
+                lifecycle.input_pending = true;
+            } else if byte == b'\r' {
+                self.record_codex_submit_locked(lifecycle);
+                lifecycle.input_pending = false;
+            } else {
+                lifecycle.input_pending = true;
+            }
+        }
+    }
+
+    fn observe_input_write_locked(&self, lifecycle: &mut LifecycleState, data: &[u8]) {
+        lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+        let generation = lifecycle.input_writes;
+        if self.provider_id == "codex" {
+            self.observe_codex_input_locked(lifecycle, data);
+            return;
+        }
+        lifecycle.input_pending = true;
+        lifecycle.input_pending_generation = generation;
+        let Some(last_submit) = data.iter().rposition(|byte| matches!(byte, b'\r' | b'\n')) else {
+            return;
+        };
+        let trailing_input = last_submit + 1 < data.len();
+        if self.provider_id.as_str() == "claude-code" {
+            // The authenticated UserPromptSubmit that follows consumes this exact boundary.
+            // A later write has a higher generation and therefore survives that hook.
+            self.record_claude_submit_boundary_locked(lifecycle, generation, trailing_input, true);
+        }
+    }
+
     pub(crate) fn write(&self, data: &[u8]) -> Result<(), ProviderError> {
         let mut lifecycle = lock(&self.lifecycle);
         let protocol_reply = terminal_protocol_reply(data);
@@ -242,7 +426,7 @@ impl Shared {
         pty.write(data)
             .map_err(|error| ProviderError::Io(error.to_string()))?;
         if !protocol_reply {
-            lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+            self.observe_input_write_locked(&mut lifecycle, data);
         }
         Ok(())
     }
@@ -370,6 +554,7 @@ impl Shared {
             {
                 return;
             }
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
             tracing::warn!(event = "pane.hooks_inactive", thread_id = %self.ctx.thread_id);
             self.queue_events_locked(
                 &mut lifecycle,
@@ -505,6 +690,7 @@ impl Shared {
                 };
             }
             self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+            lifecycle.handoff_readiness = HandoffReadiness::Busy;
 
             match self.routing {
                 DecisionRouting::ProviderPrompt => {
@@ -796,29 +982,161 @@ impl Shared {
             }
             // Codex `notify` (docs/PROVIDER_PANES.md §3): the thread id, and turn completion.
             HookEvent::CodexNotify => {
-                let mut events = Vec::new();
-                let Some(id) = record
-                    .provider_session_id
-                    .as_ref()
-                    .filter(|id| kalcode_contracts::ids::is_valid_id(id))
-                else {
-                    return events;
-                };
-                let (accepted, started) = self.observe_session_id(id, true);
-                if !accepted {
-                    return events;
-                }
-                events.extend(started);
-                if record.codex_type.as_deref() == Some("agent-turn-complete") {
-                    events.push(AgentEvent::TurnCompleted { ok: true });
-                }
-                events
+                // Codex completion is correlated and deduplicated under the lifecycle lock in
+                // `accept_codex_notify_locked`; reaching this arm would split those decisions.
+                Vec::new()
             }
             // Activity detail only, and lifecycle the process exit reports better.
             HookEvent::SubagentStart
             | HookEvent::SubagentStop
             | HookEvent::SessionEnd
             | HookEvent::PreToolUse => Vec::new(),
+        }
+    }
+
+    fn accept_codex_notify_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        record: &HookRecord,
+    ) -> Vec<AgentEvent> {
+        let (Some(provider_session_id), Some(turn_id)) = (
+            record
+                .provider_session_id
+                .as_deref()
+                .filter(|id| kalcode_contracts::ids::is_valid_id(id)),
+            record.codex_turn_id.as_deref(),
+        ) else {
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return Vec::new();
+        };
+        if self.provider_id != "codex"
+            || record.codex_type.as_deref() != Some("agent-turn-complete")
+        {
+            return Vec::new();
+        }
+        let session_matches = {
+            let mut known = lock(&self.provider_session_id);
+            match known.as_deref() {
+                None => {
+                    *known = Some(provider_session_id.to_owned());
+                    true
+                }
+                Some(expected) => expected == provider_session_id,
+            }
+        };
+        if !session_matches {
+            tracing::warn!(event = "pane.session_id_mismatch", thread_id = %self.ctx.thread_id);
+            return Vec::new();
+        }
+        if lifecycle.codex_seen_turn_ids.contains(turn_id) {
+            return Vec::new();
+        }
+        let remembered = lifecycle.codex_seen_turn_ids.len() < MAX_CODEX_SEEN_TURNS;
+        if remembered {
+            lifecycle.codex_seen_turn_ids.insert(turn_id.to_owned());
+        } else {
+            lifecycle.codex_tracking_failed = true;
+        }
+        let mut events = Vec::new();
+        if !self.session_started_emitted.swap(true, Ordering::SeqCst) {
+            events.push(AgentEvent::SessionStarted {
+                provider_session_id: provider_session_id.to_owned(),
+                model: None,
+            });
+        }
+        events.push(AgentEvent::TurnCompleted { ok: true });
+        if lifecycle.codex_tracking_failed || !remembered {
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return events;
+        }
+        if lifecycle.codex_pending_submits == 0 {
+            // A delayed completion without a locally observed submit cannot establish which
+            // prompt is now visible. Remember its id so it can never consume a future submit.
+            lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+            return events;
+        }
+
+        lifecycle.codex_pending_submits -= 1;
+        lifecycle.handoff_readiness = if lifecycle.codex_pending_submits == 0 {
+            HandoffReadiness::Ready
+        } else {
+            HandoffReadiness::Busy
+        };
+        events
+    }
+
+    /// Updates only from authenticated structured lifecycle records. Provider output and timing
+    /// never establish handoff readiness.
+    fn observe_handoff_lifecycle_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        record: &HookRecord,
+    ) {
+        match record.event {
+            Some(HookEvent::SessionStart)
+                if self.provider_id == "claude-code"
+                    && matches!(
+                        record.source.as_deref(),
+                        None | Some("startup" | "resume" | "clear")
+                    )
+                    && record.provider_session_id.as_deref()
+                        == lock(&self.provider_session_id).as_deref() =>
+            {
+                lifecycle.handoff_readiness = HandoffReadiness::Ready;
+            }
+            Some(HookEvent::UserPromptSubmit) => {
+                // Claude has consumed input through the matching native submit boundary. Preserve
+                // anything typed after Enter but before this authenticated hook arrived.
+                if let Some(boundary) = lifecycle.claude_submit_boundaries.pop_front()
+                    && boundary.clears_input
+                    && lifecycle.input_pending_generation <= boundary.generation
+                    && !boundary.trailing_input
+                {
+                    lifecycle.input_pending = false;
+                }
+                lifecycle.handoff_readiness = if lifecycle.claude_submit_tracking_failed {
+                    HandoffReadiness::Unverified
+                } else {
+                    HandoffReadiness::Busy
+                };
+            }
+            Some(HookEvent::PermissionRequest) => {
+                lifecycle.handoff_readiness = HandoffReadiness::ProviderPrompt;
+            }
+            Some(HookEvent::Notification)
+                if matches!(
+                    record.notification_type.as_deref(),
+                    Some(
+                        "permission_prompt"
+                            | "idle_prompt"
+                            | "elicitation_dialog"
+                            | "elicitation_url_dialog"
+                            | "agent_needs_input"
+                    )
+                ) =>
+            {
+                lifecycle.handoff_readiness = HandoffReadiness::ProviderPrompt;
+            }
+            Some(HookEvent::Stop) => {
+                lifecycle.handoff_readiness = HandoffReadiness::Ready;
+            }
+            Some(HookEvent::StopFailure)
+                if matches!(
+                    record.error_type.as_deref(),
+                    Some(
+                        "authentication_failed"
+                            | "oauth_org_not_allowed"
+                            | "billing_error"
+                            | "account_on_hold"
+                    )
+                ) =>
+            {
+                lifecycle.handoff_readiness = HandoffReadiness::ProviderPrompt;
+            }
+            Some(HookEvent::StopFailure) => {
+                lifecycle.handoff_readiness = HandoffReadiness::Ready;
+            }
+            _ => {}
         }
     }
 
@@ -883,7 +1201,13 @@ impl Shared {
             } else {
                 None
             };
-            let events = self.status_events(&record);
+            let events = if record.event == Some(HookEvent::CodexNotify) {
+                self.accept_codex_notify_locked(&mut lifecycle, &record)
+            } else {
+                let events = self.status_events(&record);
+                self.observe_handoff_lifecycle_locked(&mut lifecycle, &record);
+                events
+            };
             (
                 self.queue_events_locked(&mut lifecycle, events),
                 first_prompt,
@@ -902,6 +1226,117 @@ impl Shared {
 
     pub(crate) fn instance_id(&self) -> &str {
         &self.instance_id
+    }
+
+    fn handoff_blocker_locked(&self, lifecycle: &LifecycleState) -> Option<HandoffDeliveryError> {
+        if self.is_terminal() || lifecycle.reconfigure_reserved {
+            return Some(HandoffDeliveryError::SessionEnded);
+        }
+        if !lock(&self.pending).is_empty()
+            || lifecycle.handoff_readiness == HandoffReadiness::ProviderPrompt
+        {
+            return Some(HandoffDeliveryError::ProviderPrompt);
+        }
+        if self.provider_id == "codex" && lifecycle.codex_tracking_failed {
+            return Some(HandoffDeliveryError::Unverified);
+        }
+        if self.provider_id == "claude-code"
+            && (lifecycle.claude_submit_tracking_failed
+                || lifecycle.claude_submit_boundaries.len() >= MAX_SUBMIT_BOUNDARIES)
+        {
+            return Some(HandoffDeliveryError::Unverified);
+        }
+        if !matches!(self.provider_id.as_str(), "claude-code" | "codex")
+            || self.channel_state() != HookChannelState::Active
+        {
+            return Some(HandoffDeliveryError::Unverified);
+        }
+        match lifecycle.handoff_readiness {
+            HandoffReadiness::Unverified => Some(HandoffDeliveryError::Unverified),
+            HandoffReadiness::Busy => Some(HandoffDeliveryError::ReadyBusy),
+            HandoffReadiness::ProviderPrompt => Some(HandoffDeliveryError::ProviderPrompt),
+            HandoffReadiness::Ready if lifecycle.input_pending => {
+                Some(HandoffDeliveryError::InputPending)
+            }
+            HandoffReadiness::Ready => None,
+        }
+    }
+
+    pub(crate) fn handoff_readiness(&self) -> Result<(), HandoffDeliveryError> {
+        let lifecycle = lock(&self.lifecycle);
+        self.handoff_blocker_locked(&lifecycle).map_or(Ok(()), Err)
+    }
+
+    /// Atomically claims and submits one handoff at an authenticated native prompt boundary.
+    ///
+    /// `before_write` runs under the provider lifecycle lock after every readiness check and
+    /// immediately before the first PTY byte. It must not call back into this pane. A callback
+    /// failure writes zero bytes; an [`HandoffDeliveryError::Io`] happens after the callback, so
+    /// the caller must treat that durable claim as interrupted rather than replayable.
+    pub(crate) fn deliver_handoff<F>(
+        &self,
+        text: &str,
+        before_write: F,
+    ) -> Result<(), HandoffDeliveryError>
+    where
+        F: FnOnce() -> Result<(), HandoffDeliveryError>,
+    {
+        if text.is_empty()
+            || text.len() > MAX_HANDOFF_TEXT_BYTES
+            || text.chars().any(|character| {
+                character == '\u{1b}'
+                    || (character.is_control() && !matches!(character, '\n' | '\t'))
+            })
+        {
+            return Err(HandoffDeliveryError::InvalidText);
+        }
+
+        let mut lifecycle = lock(&self.lifecycle);
+        if let Some(blocked) = self.handoff_blocker_locked(&lifecycle) {
+            return Err(blocked);
+        }
+        let pty = self.pty().ok_or(HandoffDeliveryError::SessionEnded)?;
+
+        before_write()?;
+
+        let mut framed = Vec::with_capacity(text.len() + 13);
+        framed.extend_from_slice(b"\x1b[200~");
+        framed.extend_from_slice(text.as_bytes());
+        framed.extend_from_slice(b"\x1b[201~\r");
+        debug_assert!(framed.len() <= MAX_WRITE_BYTES);
+        lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+        // KalCode wrote one complete bracketed paste plus its submit byte atomically. Any later
+        // ordinary pane write sets this back to true and survives turn completion.
+        lifecycle.input_pending = false;
+        if self.provider_id == "codex" {
+            self.record_codex_submit_locked(&mut lifecycle);
+        } else if self.provider_id == "claude-code" {
+            let generation = lifecycle.input_writes;
+            self.record_claude_submit_boundary_locked(&mut lifecycle, generation, false, false);
+            if !lifecycle.claude_submit_tracking_failed {
+                lifecycle.handoff_readiness = HandoffReadiness::Busy;
+            }
+        } else {
+            lifecycle.handoff_readiness = HandoffReadiness::Busy;
+        }
+        pty.write_acknowledged(&framed)
+            .map_err(|_| HandoffDeliveryError::Io)?;
+        Ok(())
+    }
+
+    /// Sends the provider-native interrupt key under the same lifecycle barrier used by handoff
+    /// delivery. Readiness is invalidated before the byte is written, so an interrupt racing a
+    /// queued handoff either happens entirely before its claim or entirely after its submit.
+    pub(crate) fn interrupt(&self) -> Result<(), ProviderError> {
+        let mut lifecycle = lock(&self.lifecycle);
+        if self.is_terminal() || lifecycle.reconfigure_reserved {
+            return Err(ProviderError::SessionEnded);
+        }
+        lifecycle.handoff_readiness = HandoffReadiness::Busy;
+        lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+        let pty = self.pty().ok_or(ProviderError::SessionEnded)?;
+        pty.write(b"\x1b")
+            .map_err(|error| ProviderError::Io(error.to_string()))
     }
 
     fn voice_submit_blocker_locked(&self) -> Option<PaneVoiceWriteError> {
@@ -952,7 +1387,7 @@ impl Shared {
         let pty = self.pty().ok_or(PaneVoiceWriteError::SessionEnded)?;
         pty.write(data).map_err(|_| PaneVoiceWriteError::Io)?;
         if !protocol_reply {
-            lifecycle.input_writes = lifecycle.input_writes.saturating_add(1);
+            self.observe_input_write_locked(&mut lifecycle, data);
         }
         Ok(())
     }
@@ -1188,9 +1623,7 @@ impl AgentSession for InteractiveSession {
 
     fn interrupt(&self) -> Result<(), ProviderError> {
         // A user action from KalCode's UI: the same key the person would press in the pane.
-        let pty = self.shared.pty().ok_or(ProviderError::SessionEnded)?;
-        pty.write(b"\x1b")
-            .map_err(|e| ProviderError::Io(e.to_string()))
+        self.shared.interrupt()
     }
 
     fn terminate(&self) -> Result<(), ProviderError> {
@@ -1354,6 +1787,14 @@ mod tests {
         routing: DecisionRouting,
         limits: SessionLimits,
     ) -> (Arc<Shared>, mpsc::Receiver<AgentEvent>) {
+        shared_for("claude-code", routing, limits)
+    }
+
+    fn shared_for(
+        provider_id: &str,
+        routing: DecisionRouting,
+        limits: SessionLimits,
+    ) -> (Arc<Shared>, mpsc::Receiver<AgentEvent>) {
         let (tx, rx) = mpsc::channel();
         let sink = move |event: AgentEvent| {
             let _ = tx.send(event);
@@ -1364,7 +1805,7 @@ mod tests {
                 workspace_id: new_id(),
                 working_directory: "/work".into(),
             },
-            provider_id: "claude-code".into(),
+            provider_id: provider_id.into(),
             routing,
             sink: Box::new(sink),
             provider_session_id: new_id(),
@@ -1579,16 +2020,26 @@ mod tests {
 
     #[test]
     fn codex_new_session_latches_the_first_valid_thread_id() {
-        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
         s.forget_session_id();
         let first = new_id();
         let different = new_id();
+        s.record_codex_submit_locked(&mut lock(&s.lifecycle));
 
-        for id in [&first, &first, &different] {
+        for (id, turn_id) in [
+            (&first, "turn-1"),
+            (&first, "turn-1"),
+            (&different, "turn-2"),
+        ] {
             s.handle(HookRecord {
                 event: Some(HookEvent::CodexNotify),
                 provider_session_id: Some(id.clone()),
                 codex_type: Some("agent-turn-complete".into()),
+                codex_turn_id: Some(turn_id.into()),
                 ..HookRecord::default()
             });
         }
@@ -1607,8 +2058,48 @@ mod tests {
     }
 
     #[test]
+    fn codex_orphan_completion_preserves_events_but_not_handoff_readiness() {
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let provider_session_id = new_id();
+        let completion = HookRecord {
+            event: Some(HookEvent::CodexNotify),
+            provider_session_id: Some(provider_session_id.clone()),
+            codex_type: Some("agent-turn-complete".into()),
+            codex_turn_id: Some("orphan-turn".into()),
+            ..HookRecord::default()
+        };
+
+        s.handle(completion.clone());
+        s.handle(completion);
+
+        assert_eq!(
+            drain(&rx),
+            [
+                AgentEvent::SessionStarted {
+                    provider_session_id,
+                    model: None,
+                },
+                AgentEvent::TurnCompleted { ok: true },
+            ]
+        );
+        assert_eq!(
+            lock(&s.lifecycle).handoff_readiness,
+            HandoffReadiness::Unverified
+        );
+    }
+
+    #[test]
     fn malformed_codex_notify_does_not_activate_the_hook_channel() {
-        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        let (s, rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
         s.forget_session_id();
         assert_eq!(s.channel_state(), HookChannelState::Waiting);
 
@@ -1622,6 +2113,105 @@ mod tests {
 
         assert_eq!(s.channel_state(), HookChannelState::Waiting);
         assert!(drain(&rx).is_empty());
+    }
+
+    #[test]
+    fn codex_pending_submit_cap_fails_closed_permanently() {
+        let (s, _rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        let mut lifecycle = lock(&s.lifecycle);
+        lifecycle.codex_pending_submits = MAX_CODEX_PENDING_SUBMITS;
+        lifecycle.handoff_readiness = HandoffReadiness::Ready;
+
+        s.record_codex_submit_locked(&mut lifecycle);
+
+        assert!(lifecycle.codex_tracking_failed);
+        assert_eq!(lifecycle.handoff_readiness, HandoffReadiness::Unverified);
+        lifecycle.handoff_readiness = HandoffReadiness::Ready;
+        s.record_codex_submit_locked(&mut lifecycle);
+        assert_eq!(
+            lifecycle.handoff_readiness,
+            HandoffReadiness::Unverified,
+            "a later submit cannot recover exhausted correlation state"
+        );
+    }
+
+    #[test]
+    fn claude_submit_boundary_cap_fails_closed_permanently() {
+        let (s, _rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        s.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+        let mut lifecycle = lock(&s.lifecycle);
+        lifecycle.claude_submit_boundaries = (0..MAX_SUBMIT_BOUNDARIES)
+            .map(|generation| ClaudeSubmitBoundary {
+                generation: generation as u64,
+                trailing_input: false,
+                clears_input: true,
+            })
+            .collect();
+        lifecycle.handoff_readiness = HandoffReadiness::Ready;
+
+        s.record_claude_submit_boundary_locked(&mut lifecycle, u64::MAX, false, true);
+
+        assert!(lifecycle.claude_submit_tracking_failed);
+        assert_eq!(lifecycle.handoff_readiness, HandoffReadiness::Unverified);
+        lifecycle.handoff_readiness = HandoffReadiness::Ready;
+        assert_eq!(
+            s.handoff_blocker_locked(&lifecycle),
+            Some(HandoffDeliveryError::Unverified),
+            "later lifecycle status cannot recover exhausted submit correlation"
+        );
+    }
+
+    #[test]
+    fn codex_seen_turn_cap_never_evicts_or_recovers() {
+        let (s, _rx) = shared_for(
+            "codex",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        let provider_session_id = lock(&s.provider_session_id)
+            .clone()
+            .expect("provider session id");
+        let mut lifecycle = lock(&s.lifecycle);
+        lifecycle.codex_seen_turn_ids = (0..MAX_CODEX_SEEN_TURNS)
+            .map(|index| format!("seen-{index}"))
+            .collect();
+        lifecycle.codex_pending_submits = 1;
+        lifecycle.handoff_readiness = HandoffReadiness::Busy;
+        let completion = |turn_id: &str| HookRecord {
+            event: Some(HookEvent::CodexNotify),
+            provider_session_id: Some(provider_session_id.clone()),
+            codex_type: Some("agent-turn-complete".into()),
+            codex_turn_id: Some(turn_id.into()),
+            ..HookRecord::default()
+        };
+
+        assert_eq!(
+            s.accept_codex_notify_locked(&mut lifecycle, &completion("new-turn")),
+            [
+                AgentEvent::SessionStarted {
+                    provider_session_id: provider_session_id.clone(),
+                    model: None,
+                },
+                AgentEvent::TurnCompleted { ok: true },
+            ]
+        );
+        assert!(lifecycle.codex_tracking_failed);
+        assert_eq!(lifecycle.handoff_readiness, HandoffReadiness::Unverified);
+        lifecycle.handoff_readiness = HandoffReadiness::Ready;
+        assert_eq!(
+            s.accept_codex_notify_locked(&mut lifecycle, &completion("later-turn")),
+            [AgentEvent::TurnCompleted { ok: true }]
+        );
+        assert_eq!(
+            lifecycle.handoff_readiness,
+            HandoffReadiness::Unverified,
+            "later completions cannot recover exhausted correlation state"
+        );
+        assert!(lifecycle.codex_tracking_failed);
     }
 
     #[test]
