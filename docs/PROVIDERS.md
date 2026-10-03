@@ -559,11 +559,11 @@ signed-in users; a new line or major fails closed until its first release is cer
 binary and added (`crates/providers/src/version_window.rs`, `codex::MANAGED_VERSIONS`,
 `gemini::MANAGED_VERSIONS`). Thread start, panes and sign-in use the same predicate. A refusal
 names the version found, the supported lines and the command that installs the newest certified
-release (`npm install -g @openai/codex@0.158.0`, `npm install -g @google/gemini-cli@0.61.0`).
+release (`npm install -g @openai/codex@0.160.0`, `npm install -g @google/gemini-cli@0.61.0`).
 
 | CLI | Certified lines (floor) | Refused examples |
 | --- | --- | --- |
-| Codex CLI | 0.155 (0.155.1), 0.156 (0.156.0), 0.157 (0.157.0), 0.158 (0.158.0) | 0.155.0, 0.159.0, 0.158.0-alpha.15, 1.0.0 |
+| Codex CLI | 0.155 (0.155.1), 0.156 (0.156.0), 0.157 (0.157.0), 0.158 (0.158.0), 0.159 (0.159.0), 0.160 (0.160.0) | 0.155.0, 0.161.0, 0.160.0-alpha.1, 1.0.0 |
 | Gemini CLI | 0.61 (0.61.0) | 0.60.x, 0.62.0, 0.61.0-preview.1, 1.0.0 |
 
 Certification (2026-09-28) ran the official npm packages installed into scratch prefixes
@@ -576,7 +576,8 @@ the guardian: version gate, app-server `initialize` reporting the managed `codex
 `account/read` shape, `account/login/start` returning an official-origin `authUrl` and a
 `loginId`, and `account/login/cancel`); select a binary with `KALCODE_CERTIFY_CODEX` and pin its
 version with `KALCODE_CERTIFY_CODEX_VERSION`. Gemini: `tests/gemini_sign_in_real.rs`
-(`KALCODE_REAL_GEMINI`).
+(`KALCODE_REAL_GEMINI`). Codex 0.159.0 and 0.160.0 were certified on 2026-10-03 with the same two
+tests on Windows and macOS.
 
 | Package | dist.integrity (sha512, prefix) | Result |
 | --- | --- | --- |
@@ -586,6 +587,8 @@ version with `KALCODE_CERTIFY_CODEX_VERSION`. Gemini: `tests/gemini_sign_in_real
 | `@openai/codex@0.157.0` | `st1R2MhP3ndngOqj` | PASS |
 | `@openai/codex@0.157.1` | `qJ/UZ0bmYP+/Umav` | PASS |
 | `@openai/codex@0.158.0` | `GBhcKpQmVLsCtEP5` | PASS |
+| `@openai/codex@0.159.0` | `nQWxAkzn+Rhr8Tgt` | PASS |
+| `@openai/codex@0.160.0` | `kEtVGzjRAYAMOwJx` | PASS |
 | `@google/gemini-cli@0.61.0` | `dbQ9A0qBtFJNi6XB` | PASS |
 
 ### 8.8 `codex app-server` — the long-term Codex surface (plan)

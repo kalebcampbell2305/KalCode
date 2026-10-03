@@ -486,7 +486,14 @@ impl CodexAccountAuthManager {
                     &launch.cwd,
                     version_job,
                 )
-                .map_err(|_| CodexAccountAuthError::UnsupportedVersion)?;
+                .map_err(|error| match error {
+                    // Only a version outside the certified window is a version refusal; a CLI
+                    // that can't report a version is a start failure.
+                    kalcode_contracts::agent::ProviderError::Refused { .. } => {
+                        CodexAccountAuthError::UnsupportedVersion
+                    }
+                    _ => CodexAccountAuthError::StartFailed,
+                })?;
                 (launch.args, false)
             }
             #[cfg(test)]

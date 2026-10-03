@@ -136,7 +136,7 @@ export function providerCatalog(): ProviderStatus[] {
       integration:
         "Headless mode (codex exec --json) with JSON Lines events, one process per turn resumed by thread id",
       signInCommand: "codex login",
-      installCommand: "npm install -g @openai/codex@0.158.0",
+      installCommand: "npm install -g @openai/codex@0.160.0",
       docsUrl: "https://github.com/openai/codex",
     },
     {
