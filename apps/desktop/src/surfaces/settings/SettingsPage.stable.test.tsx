@@ -63,29 +63,28 @@ const defaultModes = () =>
   within(permissions().getByRole("radiogroup", { name: "Default mode for new coding agents" }));
 
 describe("Settings on Stable", () => {
-  it("offers only startable modes and recommends Auto by default", async () => {
+  it("offers no-approval Bypass by default, plus read-only Plan", async () => {
     await mount("stable");
-    await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Auto" })).toBeChecked());
+    await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Bypass" })).toBeChecked());
     expect(
       defaultModes()
         .getAllByRole("radio")
         .map((radio) => radio.textContent),
-    ).toEqual(["Plan", "Approve", "Auto"]);
+    ).toEqual(["Bypass", "Plan"]);
   });
 
-  it("says a saved Bypass default starts coding agents in Approve, with no sidebar alarm", async () => {
+  it("moves a saved Approve default to Bypass in one click, with no sidebar alarm", async () => {
     const { user, primary } = await mount("stable", async (client) => {
-      await client.updatePermissionSettings("bypass", { confirmBypass: true });
+      await client.updatePermissionSettings("approve");
     });
     const note = await permissions().findByRole("status");
-    expect(note).toHaveTextContent("Bypass is your saved default");
-    expect(note).toHaveTextContent("New coding agents start in Approve");
-    expect(note).toHaveTextContent("Bypass cannot be selected at launch");
+    expect(note).toHaveTextContent("Approve is your saved default");
+    expect(note).toHaveTextContent("KalCode runs coding agents without approval prompts, so new agents start in Bypass");
     expect(primary.queryByRole("button", { name: /Bypass/ })).not.toBeInTheDocument();
 
-    await user.click(within(note).getByRole("button", { name: "Use Approve" }));
-    await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Approve" })).toBeChecked());
-    expect(permissions().queryByText("Bypass is your saved default")).not.toBeInTheDocument();
+    await user.click(within(note).getByRole("button", { name: "Use Bypass" }));
+    await waitFor(() => expect(defaultModes().getByRole("radio", { name: "Bypass" })).toBeChecked());
+    expect(permissions().queryByText("Approve is your saved default")).not.toBeInTheDocument();
   });
 
   it("hides the display name, which only Home shows, when Home isn't in the build", async () => {
@@ -106,7 +105,7 @@ describe("Settings on Stable", () => {
 describe("Settings on a Development build", () => {
   it("keeps the engineering choices and the Profile that Home uses", async () => {
     await mount("development");
-    await waitFor(() => expect(defaultModes().getAllByRole("radio")).toHaveLength(5));
+    await waitFor(() => expect(defaultModes().getAllByRole("radio")).toHaveLength(2));
     expect(screen.getByRole("region", { name: "Profile" })).toBeInTheDocument();
     const updates = within(await screen.findByRole("region", { name: "Updates" }));
     const channels = within(await updates.findByRole("radiogroup", { name: "Update channel" }));
