@@ -76,9 +76,9 @@ test("every signed artifact and clean-machine verification enforce the durable p
 test("publishing verifies content-addressed objects before atomically advancing D1", () => {
   const immutableReadback = publishSource.indexOf('upload.name === "immutable updater version descriptor"');
   const versionClaim = publishSource.indexOf("buildVersionClaimStatement(pointerCandidate)");
-  const pointerAdvance = publishSource.indexOf(
-    "buildPointerAdvanceStatement(pointerCandidate, authoritativePreviousRow)",
-  );
+  // The compare-and-set starts from the authoritative read and retries only from a fresh one.
+  assert.match(publishSource, /let expectedPointer = authoritativePreviousRow;/);
+  const pointerAdvance = publishSource.indexOf("buildPointerAdvanceStatement(pointerCandidate, expectedPointer)");
   const publicReadback = publishSource.indexOf("const verificationNonce", pointerAdvance);
   assert.ok(immutableReadback >= 0 && versionClaim > immutableReadback);
   assert.ok(pointerAdvance > versionClaim && publicReadback > pointerAdvance);
