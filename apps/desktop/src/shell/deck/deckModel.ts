@@ -4,29 +4,31 @@
  * what is working, what needs me, what is shipping. Nothing here invents state: an empty input
  * produces an honest "none" rather than a placeholder.
  */
-import {
-  displayStatusOf,
-  type OperationEnvironment,
-  type OperationKind,
-  type OperationRecord,
-  type ProviderHealth,
-  type StatusTone,
-  type ThreadSummary,
+import type {
+  OperationEnvironment,
+  OperationKind,
+  OperationRecord,
+  ProviderHealth,
+  StatusTone,
+  ThreadSummary,
 } from "@kalcode/protocol";
+import { fleetGroupOf } from "../../surfaces/dashboard/data/board.ts";
 import { recentOutcomes, STATUS_META, sortOpenThreads } from "../../surfaces/dashboard/data/status.ts";
 
 // ---- Agents (right rail) ----
 
 export interface AgentSections {
-  /** Can't continue until the person acts (approval, reply, a failure to look at). */
+  /** Can't continue until the person answers (an approval or a reply). */
   needsYou: ThreadSummary[];
+  /** Failed runs, newest first: a decision (retry or clear), not a question; never in needsYou. */
+  failed: ThreadSummary[];
   /** A provider process is doing work now. */
   working: ThreadSummary[];
   /** Waiting on something other than the person. */
   blocked: ThreadSummary[];
   /** Open but not doing anything. */
   idle: ThreadSummary[];
-  /** Completed or stopped within the recent window, newest first. */
+  /** Completed, stopped or failed within the recent window, newest first. */
   finished: ThreadSummary[];
 }
 
@@ -39,18 +41,20 @@ function at(iso: string | null | undefined): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-/** The Fleet's "Waiting for you" chip (approval, reply or failed), so every surface counts alike. */
+/** The Fleet's "Needs you" group (an approval or a reply), so every surface counts alike. */
 function waitsForYou(thread: ThreadSummary): boolean {
-  return displayStatusOf(thread.status).chip === "waiting_for_you";
+  return fleetGroupOf(thread.status) === "needs_you";
 }
+
+const newestFirst = (a: ThreadSummary, b: ThreadSummary) =>
+  at(b.lastActivityAt) - at(a.lastActivityAt) || a.name.localeCompare(b.name);
 
 export function agentSections(threads: readonly ThreadSummary[], now: number): AgentSections {
   const open = threads.filter((t) => t.archivedAt === null);
   const sections: AgentSections = {
-    // Failed agents stay here until someone acts, however long ago they failed.
-    needsYou: open
-      .filter(waitsForYou)
-      .sort((a, b) => at(b.lastActivityAt) - at(a.lastActivityAt) || a.name.localeCompare(b.name)),
+    needsYou: open.filter(waitsForYou).sort(newestFirst),
+    // Failures are history: hundreds of old ones must never inflate "need you".
+    failed: open.filter((t) => t.status === "failed").sort(newestFirst),
     working: [],
     blocked: [],
     idle: [],
@@ -70,13 +74,9 @@ export function agentSections(threads: readonly ThreadSummary[], now: number): A
   return sections;
 }
 
-/**
- * Agents that are running in the deck's sense: working, needing the person, or blocked. A failed
- * agent needs the person too, but it has stopped, so it isn't counted as running.
- */
+/** Agents that are running in the deck's sense: working, needing the person, or blocked. */
 export function runningAgentCount(sections: AgentSections): number {
-  const waiting = sections.needsYou.filter((thread) => thread.status !== "failed").length;
-  return waiting + sections.working.length + sections.blocked.length;
+  return sections.needsYou.length + sections.working.length + sections.blocked.length;
 }
 
 /**

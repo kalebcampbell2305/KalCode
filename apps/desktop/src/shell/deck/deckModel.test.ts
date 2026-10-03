@@ -131,7 +131,7 @@ describe("agentSections", () => {
     expect(runningAgentCount(sections)).toBe(4);
   });
 
-  it("puts failed agents in needs-you (like the Sidebar badge and Fleet chips), however old", () => {
+  it("keeps failed agents out of needs-you (like the Fleet's Failed group and the Sidebar badge)", () => {
     const sections = agentSections(
       [
         thread({ name: "failed-old", status: "failed", lastActivityAt: minutesAgo(120) }),
@@ -141,11 +141,29 @@ describe("agentSections", () => {
       ],
       NOW,
     );
-    expect(sections.needsYou.map((t) => t.name)).toEqual(["failed-new", "reply", "failed-old"]);
-    expect(sections.finished.map((t) => t.name)).toEqual(["done"]);
-    expect(needsYouCount(sections.needsYou, [])).toBe(3);
-    // Failed agents have stopped: they need the person but aren't running.
+    expect(sections.needsYou.map((t) => t.name)).toEqual(["reply"]);
+    expect(sections.failed.map((t) => t.name)).toEqual(["failed-new", "failed-old"]);
+    // A recent failure still shows as just finished; old ones age out of the rail.
+    expect(sections.finished.map((t) => t.name)).toEqual(["done", "failed-new"]);
+    expect(needsYouCount(sections.needsYou, [])).toBe(1);
+    // Failed agents have stopped: they aren't running.
     expect(runningAgentCount(sections)).toBe(1);
+  });
+
+  it("counts 4 need you, not 125, beside 121 old failures (the top bar's number)", () => {
+    const old = Array.from({ length: 121 }, (_, i) =>
+      thread({ name: `failed-${i}`, status: "failed", lastActivityAt: minutesAgo(600 + i) }),
+    );
+    const waiting = [
+      thread({ name: "a", status: "waiting_for_permission" }),
+      thread({ name: "b", status: "waiting_for_permission" }),
+      thread({ name: "c", status: "waiting_for_user" }),
+      thread({ name: "d", status: "waiting_for_user" }),
+    ];
+    const sections = agentSections([...old, ...waiting], NOW);
+    expect(needsYouCount(sections.needsYou, [])).toBe(4);
+    expect(sections.failed).toHaveLength(121);
+    expect(sections.finished).toEqual([]);
   });
 
   it("is empty for no threads", () => {
