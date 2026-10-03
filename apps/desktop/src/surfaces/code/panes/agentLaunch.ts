@@ -1,4 +1,4 @@
-import type { ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol";
+import type { PaneInfo, ProviderAccount, ProviderAccountBinding, ThreadSummary } from "@kalcode/protocol";
 import type { PaneProviderId } from "./paneChannel.ts";
 
 /**
@@ -51,4 +51,16 @@ export function preselectLaunchAccount(
 /** "Launch agent", "Launch 6 Claude Code agents". */
 export function launchLabel(count: number, providerName: string): string {
   return count === 1 ? `Launch ${providerName} agent` : `Launch ${count} ${providerName} agents`;
+}
+
+/**
+ * Whether closing an agent's pane has something to stop: a live provider session, or a launch the
+ * Resource Governor is still holding (no PTY yet). A held launch left alone would start later with
+ * no pane, and occupies a parallel-agent slot meanwhile; native `thread_stop` cancels the wait.
+ */
+export function stopsOnClose(
+  entry: { thread: Pick<ThreadSummary, "status">; info: Pick<PaneInfo, "running"> } | undefined,
+): boolean {
+  if (!entry) return false;
+  return entry.info.running || entry.thread.status === "waiting_for_dependency";
 }

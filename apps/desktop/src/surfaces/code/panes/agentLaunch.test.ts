@@ -8,6 +8,7 @@ import {
   launchLabel,
   MAX_AGENTS_PER_LAUNCH,
   preselectLaunchAccount,
+  stopsOnClose,
 } from "./agentLaunch.ts";
 
 const account = (id: string, partial: Partial<ProviderAccount> = {}): ProviderAccount =>
@@ -75,5 +76,21 @@ describe("what counts as an agent", () => {
     expect(isCodingAgent({ ...base, terminalId: "t-1" } as never)).toBe(true);
     expect(isCodingAgent({ ...base, runtimeKind: "headless" } as never)).toBe(false);
     expect(isCodingAgent({ ...base } as never)).toBe(false);
+  });
+});
+
+describe("closing an agent's pane", () => {
+  const entry = (status: string, running: boolean) =>
+    ({ thread: { status }, info: { running } }) as unknown as Parameters<typeof stopsOnClose>[0];
+  it("stops a live agent", () => {
+    expect(stopsOnClose(entry("active", true))).toBe(true);
+  });
+  it("cancels a launch the resource governor is holding (no live PTY yet)", () => {
+    expect(stopsOnClose(entry("waiting_for_dependency", false))).toBe(true);
+  });
+  it("leaves an agent that already ended alone", () => {
+    expect(stopsOnClose(entry("interrupted", false))).toBe(false);
+    expect(stopsOnClose(entry("completed", false))).toBe(false);
+    expect(stopsOnClose(undefined)).toBe(false);
   });
 });

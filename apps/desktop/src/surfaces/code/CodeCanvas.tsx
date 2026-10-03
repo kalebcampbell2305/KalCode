@@ -83,6 +83,7 @@ import {
   updateBrowserUrl,
 } from "../browser/index.ts";
 import { resolveBrowserTarget } from "./browserTarget.ts";
+import { stopsOnClose } from "./panes/agentLaunch.ts";
 import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
@@ -222,10 +223,11 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [terminalById, labels, paneById, accountFor],
   );
 
-  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running.
+  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running,
+  // and a launch still held for resources is cancelled rather than starting later without a pane.
   const stopAgent = useCallback(
     async (threadId: string) => {
-      if (!paneById.get(threadId)?.info.running) return;
+      if (!stopsOnClose(paneById.get(threadId))) return;
       try {
         providerPanes.updated(await client.stopThread(threadId));
       } catch (error) {
