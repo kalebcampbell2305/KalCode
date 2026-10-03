@@ -181,6 +181,23 @@
   box-sizing: content-box;
 }
 
+.tilePin {
+  position: absolute;
+  bottom: 0.125rem;
+  right: 0.3125rem;
+  display: inline-flex;
+  padding: 0.0625rem;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-1);
+  color: var(--color-text-muted);
+}
+
+.tile .tilePin svg {
+  width: 0.5625rem;
+  height: 0.5625rem;
+  stroke-width: 2;
+}
+
 .tileDot[data-tone="waiting"] {
   background: var(--status-waiting);
 }

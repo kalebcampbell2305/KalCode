@@ -73,7 +73,10 @@ describe("SettingsAccountView", () => {
       />,
     );
     expect(screen.getByText("Free")).toBeInTheDocument();
-    expect(screen.getByText(/No subscription\. Pro, Max and Max 2X/)).toHaveTextContent("kalcoded.com/pricing");
+    // Plan names come from the canonical catalog (packages/protocol/src/plans.ts), never hand-typed.
+    expect(screen.getByText(/No subscription\. Pro, MAX and MAX 2X add more/)).toHaveTextContent(
+      "kalcoded.com/pricing",
+    );
     expect(screen.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
   });
 

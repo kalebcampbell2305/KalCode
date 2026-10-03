@@ -3,7 +3,13 @@ import { LogOut, UserRound } from "lucide-react";
 import { useEffect } from "react";
 import { useAccount } from "../../account/AccountProvider.tsx";
 import type { AccountUiError } from "../../account/accountState.ts";
-import { type AccountSnapshot, type AccountTier, type AccountUsageSnapshot, tierName } from "../../ipc/account.ts";
+import {
+  type AccountSnapshot,
+  type AccountTier,
+  type AccountUsageSnapshot,
+  PLAN_CATALOG,
+  tierName,
+} from "../../ipc/account.ts";
 import { usageLine } from "../../kalvoice/assistantState.ts";
 import styles from "./SettingsAccount.module.css";
 
@@ -15,6 +21,12 @@ export const TIER_NAMES: Record<AccountTier, string> = {
   max2x: tierName("max2x"),
   owner: tierName("owner"),
 };
+
+/** "Pro, MAX and MAX 2X": every paid plan, named and ordered as the canonical catalog has them. */
+const PAID_PLAN_NAMES = (() => {
+  const names = PLAN_CATALOG.filter((plan) => plan.tier !== "free").map((plan) => plan.name);
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
+})();
 
 export interface SettingsAccountViewProps {
   account: AccountSnapshot;
@@ -88,7 +100,7 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
           <div>
             <dt>Billing</dt>
             <dd>
-              No subscription. Pro, Max and Max 2X add more KalVoice requests; compare plans at{" "}
+              No subscription. {PAID_PLAN_NAMES} add more KalVoice requests; compare plans at{" "}
               <span data-selectable>kalcoded.com/pricing</span>.
             </dd>
           </div>
