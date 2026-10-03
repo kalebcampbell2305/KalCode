@@ -12,7 +12,6 @@ use kalcode_contracts::events::{
     CorrelationFilter, EventEnvelope, EventPayload, EventQuery, SeqOrder,
 };
 use kalcode_contracts::operations::*;
-use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_core::confirm::{NativeConfirmation, confirm};
 use kalcode_core::operations::{ACTIVITY_MOMENT_LIMIT, OperationsStore};
@@ -2201,6 +2200,7 @@ pub async fn operations_open_url(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use kalcode_contracts::permissions::PermissionMode;
     use kalcode_core::{CoreConfig, Paths, flags::BuildChannel};
 
     fn fixture(
