@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { classifyChanges, classifyRange, dependentsOf, renderClassify, workspaceGraph } from "./lifecycle/classify.mjs";
-import { gateForWorktree, recordGate, runGates, selectGates } from "./lifecycle/gate.mjs";
+import { gateForWorktree, recordGate, runGates, selectGates, TIMED_OUT } from "./lifecycle/gate.mjs";
 import { makeGit, parseNameStatus } from "./lifecycle/git.mjs";
 import { evaluateStop } from "./lifecycle/hook.mjs";
 import { changedImporters, LockfileError, parsePnpmLock } from "./lifecycle/lockfile.mjs";
@@ -827,7 +827,7 @@ describe("gate", () => {
     ]);
   });
 
-  test("runs every command in order, stops at the first failure, and never hides a missing tool", () => {
+  test("runs every command in order, stops at the first failure, and never hides a missing tool", async () => {
     const plan = selectGates(policy, classification(["apps/website/a.ts"], ["website"], ["website"]));
     const ran = [];
     const exec =
@@ -836,36 +836,125 @@ describe("gate", () => {
         ran.push({ command, env });
         return command === fail ? 3 : 0;
       };
-    const ok = runGates(plan, { repo: ".", exec: exec(null), baseEnv: { STAGE_URL: "x", PATH: "p" } });
+    const ok = await runGates(plan, { repo: ".", exec: exec(null), baseEnv: { STAGE_URL: "x", PATH: "p" } });
     assert.equal(ok.status, "PASS");
     const checkout = ran.find((r) => r.command.includes("website-checkout-enabled-e2e"));
     assert.equal(checkout.env.KALCODE_CHECKOUT_ENABLED_GATE, "1");
     assert.equal(checkout.env.STAGE_URL, undefined, "unset like ci.yml");
     assert.equal(checkout.env.PATH, "p");
     ran.length = 0;
-    const failed = runGates(plan, { repo: ".", exec: exec("pnpm --filter @kalcode/website build") });
+    const failed = await runGates(plan, { repo: ".", exec: exec("pnpm --filter @kalcode/website build") });
     assert.equal(failed.status, "FAIL");
     assert.deepEqual(
       failed.results.map((r) => r.state),
       ["pass", "pass", "pass", "pass", "pass", "fail", "not-run", "not-run"],
     );
     assert.ok(!ran.some((r) => r.command.includes("--suite website-unit")), "later commands of a failed gate skip");
-    const kept = runGates(plan, { repo: ".", exec: exec("pnpm exec biome ci ."), keepGoing: true });
+    const kept = await runGates(plan, { repo: ".", exec: exec("pnpm exec biome ci ."), keepGoing: true });
     assert.equal(kept.status, "FAIL");
     assert.equal(kept.results.filter((r) => r.state === "pass").length, plan.length - 1);
     const deny = selectGates(policy, classification(["Cargo.lock"], ["desktop"], ["desktop"]), {
       only: ["cargo-deny"],
     });
-    const missing = runGates(deny, { repo: ".", exec: (c) => (c === "cargo deny --version" ? 101 : 0) });
+    const missing = await runGates(deny, { repo: ".", exec: (c) => (c === "cargo deny --version" ? 101 : 0) });
     assert.equal(missing.status, "FAIL");
     assert.match(missing.results[0].why, /missing tool: cargo deny --version/);
     const unavailable = selectGates(policy, classification(["crates/a.rs"], ["desktop"], ["desktop"]), {
       platform: "darwin",
       only: ["desktop-native-e2e"],
     });
-    const u = runGates(unavailable, { repo: ".", exec: () => 1 });
+    const u = await runGates(unavailable, { repo: ".", exec: () => 1 });
     assert.equal(u.status, "PASS");
     assert.equal(u.results[0].state, "unavailable");
+  });
+
+  test("a gate's timeoutMs bounds all of its commands together and fails clearly when overrun", async () => {
+    const rust = selectGates(policy, classification(["crates/a.rs"], ["desktop"], ["desktop"]), { only: ["rust"] });
+    assert.ok(rust[0].timeoutMs > 0, "the rust lane has a timeout");
+    assert.equal(selectGates(policy, classification(["tooling/a"], ["internal"], []))[0].timeoutMs, null);
+    assert.deepEqual(validatePolicy({ ...policy, gates: [{ id: "x", run: ["y"], timeoutMs: 0 }] }), [
+      "gate x: timeoutMs must be a positive integer",
+    ]);
+
+    let clock = 0;
+    const budgets = [];
+    const plan = [{ ...rust[0], builtin: null, requires: [], timeoutMs: 1000, run: ["a", "b", "c"] }];
+    const exec = (command, { timeoutMs }) => {
+      budgets.push([command, timeoutMs]);
+      clock += 600; // each command takes 600 ms; the third never gets a chance
+      return command === "b" ? TIMED_OUT : 0;
+    };
+    const outcome = await runGates(plan, { repo: ".", exec, now: () => clock });
+    assert.equal(outcome.status, "FAIL");
+    assert.deepEqual(budgets, [
+      ["a", 1000],
+      ["b", 400],
+    ]);
+    assert.match(
+      outcome.results[0].why,
+      /^b timed out: the rust gate exceeded its 1 s limit; its process tree was killed$/,
+    );
+
+    clock = 0;
+    budgets.length = 0;
+    const spent = await runGates([{ ...plan[0], run: ["a", "b"], timeoutMs: 500 }], {
+      repo: ".",
+      exec: (command, options) => {
+        budgets.push([command, options.timeoutMs]);
+        clock += 600;
+        return 0;
+      },
+      now: () => clock,
+    });
+    assert.equal(spent.status, "FAIL", "a budget already spent fails before starting the next command");
+    assert.deepEqual(budgets, [["a", 500]]);
+    assert.match(spent.results[0].why, /^b timed out/);
+  });
+
+  test("an overrunning command's whole process tree is killed, not just its shell", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kc-gate-timeout-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    const pidFile = join(dir, "grandchild.pid");
+    const fixture = join(dir, "hang.mjs");
+    writeFileSync(
+      fixture,
+      [
+        'import { spawn } from "node:child_process";',
+        'import { writeFileSync } from "node:fs";',
+        'const c = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+        "writeFileSync(process.argv[2], String(c.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+    const alive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const plan = [
+      {
+        id: "hang",
+        run: [`"${process.execPath}" "${fixture}" "${pidFile}"`],
+        env: {},
+        unsetEnv: [],
+        requires: [],
+        builtin: null,
+        timeoutMs: 4000,
+        state: "selected",
+      },
+    ];
+    const started = Date.now();
+    const outcome = await runGates(plan, { repo: dir });
+    assert.equal(outcome.status, "FAIL");
+    assert.match(outcome.results[0].why, /timed out: the hang gate exceeded its 4 s limit/);
+    assert.ok(Date.now() - started < 30_000, "the gate failed fast instead of waiting on the hung command");
+    const grandchild = Number(readFileSync(pidFile, "utf8"));
+    const deadline = Date.now() + 10_000;
+    while (alive(grandchild) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(alive(grandchild), false, `grandchild ${grandchild} survived the timeout`);
   });
 
   test("the worktree gate sees uncommitted and untracked files, and records a receipt only for a clean PASS", () => {

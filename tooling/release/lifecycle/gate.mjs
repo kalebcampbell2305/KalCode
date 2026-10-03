@@ -1,7 +1,7 @@
 // `ship.mjs gate`: the local merge gate. Runs the local equivalents of the ci.yml checks for the lanes a
 // change touches (policy.json "gates"), so a merge can be gated even when GitHub Actions cannot run.
 // Never skips a failing check; a check that cannot run on this platform is reported as unavailable.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyChanges } from "./classify.mjs";
@@ -40,6 +40,7 @@ export function selectGates(policy, classification, { platform = process.platfor
       unsetEnv: g.unsetEnv ?? [],
       requires: g.requires ?? [],
       builtin: g.builtin ?? null,
+      timeoutMs: g.timeoutMs ?? null,
       state: available ? "selected" : "unavailable",
       why: available ? null : `not on ${platform}: ${g.unavailable ?? "platform-specific"}`,
     });
@@ -47,17 +48,65 @@ export function selectGates(policy, classification, { platform = process.platfor
   return plan;
 }
 
+/** What an exec resolves to when its command overran the gate's `timeoutMs`. */
+export const TIMED_OUT = "timed-out";
+
+/** Kills a command's whole process tree: the shell and everything it started. */
+export function killTree(pid, { platform = process.platform } = {}) {
+  if (platform === "win32") {
+    spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL"); // the command leads its own process group (spawned detached)
+  } catch {
+    // already gone
+  }
+}
+
 function defaultExec(repo) {
-  return (command, { env, quiet = false } = {}) => {
-    const r = spawnSync(command, {
-      cwd: repo,
-      env,
-      shell: true,
-      stdio: quiet ? "ignore" : "inherit",
-      windowsHide: true,
+  return (command, { env, quiet = false, timeoutMs = null } = {}) =>
+    new Promise((resolve) => {
+      const unix = process.platform !== "win32";
+      let child;
+      try {
+        child = spawn(command, {
+          cwd: repo,
+          env,
+          shell: true,
+          stdio: quiet ? "ignore" : "inherit",
+          windowsHide: true,
+          detached: unix,
+        });
+      } catch {
+        resolve(127);
+        return;
+      }
+      let timedOut = false;
+      const timer =
+        timeoutMs === null
+          ? null
+          : setTimeout(() => {
+              timedOut = true;
+              killTree(child.pid);
+            }, timeoutMs);
+      // A detached Unix group no longer receives the terminal's Ctrl+C: end it with the gate.
+      const interrupt = () => {
+        killTree(child.pid);
+        process.exit(130);
+      };
+      if (unix) for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(s, interrupt);
+      let settled = false;
+      const finish = (code) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (unix) for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.removeListener(s, interrupt);
+        resolve(timedOut ? TIMED_OUT : code);
+      };
+      child.once("error", () => finish(127));
+      child.once("close", (code) => finish(code ?? 1));
     });
-    return r.error ? 127 : (r.status ?? 1);
-  };
 }
 
 const BUILTINS = {
@@ -71,10 +120,14 @@ const BUILTINS = {
   },
 };
 
-/** Runs a gate plan in order. Stops at the first failure unless keepGoing. */
-export function runGates(
+/**
+ * Runs a gate plan in order. Stops at the first failure unless keepGoing. A gate with `timeoutMs` fails once its
+ * commands together overrun it, and the overrunning command's process tree is killed, so a hung test cannot hold a
+ * shared runner.
+ */
+export async function runGates(
   plan,
-  { repo, exec = defaultExec(repo), log = () => {}, keepGoing = false, baseEnv = process.env },
+  { repo, exec = defaultExec(repo), log = () => {}, keepGoing = false, baseEnv = process.env, now = Date.now },
 ) {
   const results = [];
   let failed = false;
@@ -90,7 +143,8 @@ export function runGates(
     }
     const env = { ...baseEnv, ...g.env };
     for (const k of g.unsetEnv) delete env[k];
-    const missing = g.requires.filter((probe) => exec(probe, { env, quiet: true }) !== 0);
+    const missing = [];
+    for (const probe of g.requires) if ((await exec(probe, { env, quiet: true })) !== 0) missing.push(probe);
     if (missing.length) {
       log(`FAIL ${g.id}: required tool missing (${missing.join("; ")}); install it and rerun`);
       results.push({ id: g.id, state: "fail", why: `missing tool: ${missing.join("; ")}` });
@@ -98,11 +152,13 @@ export function runGates(
       continue;
     }
     if (g.builtin) BUILTINS[g.builtin](repo);
+    const deadline = g.timeoutMs === null || g.timeoutMs === undefined ? null : now() + g.timeoutMs;
     let code = 0;
     let failedCommand = null;
     for (const command of g.run) {
       log(`>>   ${g.id}: ${command}`);
-      code = exec(command, { env });
+      const remaining = deadline === null ? null : deadline - now();
+      code = remaining !== null && remaining <= 0 ? TIMED_OUT : await exec(command, { env, timeoutMs: remaining });
       if (code !== 0) {
         failedCommand = command;
         break;
@@ -112,8 +168,12 @@ export function runGates(
       log(`PASS ${g.id}`);
       results.push({ id: g.id, state: "pass" });
     } else {
-      log(`FAIL ${g.id}: ${failedCommand} exited ${code}`);
-      results.push({ id: g.id, state: "fail", why: `${failedCommand} exited ${code}` });
+      const why =
+        code === TIMED_OUT
+          ? `${failedCommand} timed out: the ${g.id} gate exceeded its ${g.timeoutMs >= 60000 ? `${+(g.timeoutMs / 60000).toFixed(1)} min` : `${g.timeoutMs / 1000} s`} limit; its process tree was killed`
+          : `${failedCommand} exited ${code}`;
+      log(`FAIL ${g.id}: ${why}`);
+      results.push({ id: g.id, state: "fail", why });
       failed = true;
     }
   }
