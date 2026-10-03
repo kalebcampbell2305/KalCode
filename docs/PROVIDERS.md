@@ -766,3 +766,34 @@ credentials, native approvals, and workspace trust remain enforced by Claude.
 
 The compatibility change applies on Windows and macOS without a database migration. Rollback is
 a revert PR and a newer internal build; do not erase provider profiles or reset users' sign-ins.
+
+### Codex local execution host (2026-10-03)
+
+KalCode's shared Codex launch policy used to pass `features.code_mode_host=false` and
+`features.code_mode=false` to both headless turns and real coding panes. This prevented the
+provider's local Code Mode host from initializing; the stream adapter also discarded its
+host-disabled error. It was a launch-policy defect, not a missing desktop IPC registration,
+Stable/Dev identity mismatch, workspace permission, or failed native PTY service.
+
+The shared policy now explicitly enables the stable `code_mode_host` and leaves experimental
+`code_mode` selection to Codex. Codex starts its local host automatically; see the
+[official host documentation](https://learn.chatgpt.com/docs/app-server#connect-a-remote-code-mode-host).
+Every new or resumed headless turn and coding pane receives that policy on Windows and macOS.
+The selected native sandbox/approval mode, account binding, credentials, administrator policy,
+managed profile isolation, network restrictions and process supervision remain authoritative.
+Ordinary shells and Claude panes use the existing independent native PTY launch path.
+
+Host errors now follow the normal recoverable provider-error path with their original bounded
+message. Headless execution creates a fresh supervised provider process on the next turn;
+interactive execution retains provider-owned host recovery and KalCode's existing Resume path.
+Never silently replay a command or turn after a host failure: it may already have changed files.
+An app restart rebuilds native runtime services and the next provider launch gets the same
+host-enabled policy, without a manual enable switch or persisted configuration migration.
+
+Regression coverage: `code_host_is_available_for_new_and_resumed_turns_in_every_mode`,
+`code_host_is_available_for_new_and_resumed_panes_in_every_mode`,
+`code_host_failures_are_visible_alongside_other_provider_errors`, and
+`memoryProviders.test.ts`. The real-CLI config-isolation certification checks the installed
+provider against synthetic profiles. Tests and a source change alone are not evidence of
+production delivery: signed Windows/macOS packages and normal updater receipt still need proof.
+Rollback uses a revert PR and a newer signed internal build; do not reset or delete user profiles.

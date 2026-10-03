@@ -18,6 +18,7 @@ import {
   publicationRowProblems,
   resolvePublicationState,
   semverPrecedenceKey,
+  supersedingVersion,
 } from "./publication-safety.mjs";
 import {
   buildPublishPlan,
@@ -154,6 +155,67 @@ test("bootstrap resumes from clean N after an exact manifest write and formatter
   assert.deepEqual(JSON.parse(readFileSync(freshWorkspaceManifest, "utf8")), candidate);
   assert.deepEqual(publicationRowProblems(readPointer()[0], candidate), []);
   assert.equal(JSON.stringify(candidate), frozenCandidate, "the frozen publication identity must remain unchanged");
+});
+
+test("parallel release jobs: only the pointer write is serialized and the newest build wins", () => {
+  const migration = readFileSync(
+    new URL("../../apps/website/migrations/0003_release_publication_pointers.sql", import.meta.url),
+    "utf8",
+  );
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(migration);
+  const execute = (statement) => db.prepare(statement).all();
+  const job = (build, hex) =>
+    Object.freeze({
+      channel: "stable",
+      version: `0.1.9+${build}`,
+      updaterDescriptorKey: `releases/updater/stable/0.1.9+${build}/${hex.repeat(64)}.json`,
+      downloadDescriptorKey: `releases/0.1.9+${build}/${hex.repeat(64)}.json`,
+      updaterDescriptorSha256: hex.repeat(64),
+      downloadDescriptorSha256: hex.repeat(64),
+      publishedAt: "2026-10-03T22:00:00.000Z",
+    });
+  const read = () => execute(buildPointerReadStatement("stable"))[0] ?? null;
+  // The publish step of one job, as publish.mjs runs it: claim, then compare-and-set from what it read.
+  const publish = (candidate, expected) => {
+    if (supersedingVersion(read(), candidate)) return "superseded";
+    if (execute(buildVersionClaimStatement(candidate)).length === 0) {
+      return supersedingVersion(read(), candidate) ? "superseded" : "claim-failed";
+    }
+    let pointer = expected;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const advanced = execute(buildPointerAdvanceStatement(candidate, pointer));
+      if (advanced.length === 1 && advanced[0].version === candidate.version) return "published";
+      const current = read();
+      if (supersedingVersion(current, candidate)) return "superseded";
+      pointer = current;
+    }
+    return "failed";
+  };
+
+  const [b1340, b1371, b1372, b1373] = [job(1340, "1"), job(1371, "2"), job(1372, "3"), job(1373, "4")];
+  assert.equal(publish(b1340, null), "published");
+  // Three jobs built and staged concurrently against live 1340.
+  const sawLive = read();
+  // 1371 publishes first; 1373's compare-and-set from the stale read is rejected, re-reads, advances.
+  assert.equal(publish(b1371, sawLive), "published");
+  assert.equal(publish(b1373, sawLive), "published");
+  assert.equal(read().version, "0.1.9+1373");
+  // 1372 and a late 1371 retry finish their artifacts but can never move the feed back.
+  assert.equal(publish(b1372, sawLive), "superseded");
+  assert.equal(publish(b1371, sawLive), "superseded");
+  assert.equal(supersedingVersion(read(), b1372), "0.1.9+1373");
+  assert.equal(supersedingVersion(read(), b1373), null, "the live build is not superseded by itself");
+  assert.deepEqual(execute(buildPointerAdvanceStatement(b1372)), [], "an unguarded older advance writes nothing");
+  assert.throws(
+    () =>
+      db.exec(
+        `UPDATE release_publication_pointers SET version = '0.1.9+1372', precedence_key = '${semverPrecedenceKey("0.1.9+1372")}' WHERE channel = 'stable'`,
+      ),
+    "the database itself refuses a downgrade",
+  );
+  assert.equal(read().version, "0.1.9+1373");
 });
 
 test("bootstrap rejects every non-exact existing pointer before publication effects", () => {

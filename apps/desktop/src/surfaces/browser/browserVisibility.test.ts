@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { blockingBrowserOverlayOpen, browserSurfaceVisible } from "./browserVisibility.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { blockingBrowserOverlayOpen, browserSurfaceVisible, subscribeBrowserLayout } from "./browserVisibility.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -46,4 +46,39 @@ describe("browser native child visibility", () => {
     host.remove();
     expect(browserSurfaceVisible(host, true)).toBe(false);
   });
+});
+
+it("hides a native browser when its scrolled viewport would paint over canvas chrome", () => {
+  const canvas = document.createElement("div");
+  canvas.setAttribute("data-pane-canvas", "");
+  canvas.getBoundingClientRect = () => new DOMRect(100, 100, 700, 500);
+  const host = document.createElement("div");
+  host.getBoundingClientRect = () => new DOMRect(110, 130, 400, 300);
+  canvas.append(host);
+  document.body.append(canvas);
+  expect(browserSurfaceVisible(host, true)).toBe(true);
+  host.getBoundingClientRect = () => new DOMRect(90, 130, 400, 300);
+  expect(browserSurfaceVisible(host, true)).toBe(false);
+});
+
+it("notifies native browser bounds subscribers when a canvas scrolls", () => {
+  const canvas = document.createElement("div");
+  document.body.append(canvas);
+  const changed = vi.fn();
+  const stop = subscribeBrowserLayout(changed);
+  canvas.dispatchEvent(new Event("scroll"));
+  expect(changed).toHaveBeenCalledTimes(1);
+  stop();
+  canvas.dispatchEvent(new Event("scroll"));
+  expect(changed).toHaveBeenCalledTimes(1);
+});
+
+it("ignores dialogs in kept-mounted hidden content", () => {
+  const hiddenPane = document.createElement("div");
+  hiddenPane.hidden = true;
+  hiddenPane.innerHTML = '<div role="alertdialog">Stop provider?</div>';
+  document.body.append(hiddenPane);
+  expect(blockingBrowserOverlayOpen()).toBe(false);
+  hiddenPane.hidden = false;
+  expect(blockingBrowserOverlayOpen()).toBe(true);
 });

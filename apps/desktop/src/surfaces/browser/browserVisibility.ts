@@ -14,7 +14,9 @@ export function blockingBrowserOverlayOpen(): boolean {
     '[data-radix-dialog-content][data-state="open"]',
     '[data-radix-alert-dialog-content][data-state="open"]',
   ];
-  return document.querySelector(selectors.join(",")) !== null;
+  return [...document.querySelectorAll(selectors.join(","))].some(
+    (overlay) => !overlay.closest('[hidden], [aria-hidden="true"], [inert]'),
+  );
 }
 
 function changed() {
@@ -41,6 +43,7 @@ function start() {
     attributeFilter: ["hidden", "aria-hidden", "data-state", "role", "style", "class"],
   });
   document.addEventListener("visibilitychange", changed);
+  document.addEventListener("scroll", changed, true);
 }
 
 function stop() {
@@ -48,6 +51,7 @@ function stop() {
   observer.disconnect();
   observer = null;
   document.removeEventListener("visibilitychange", changed);
+  document.removeEventListener("scroll", changed, true);
 }
 
 /** Shared modal/document visibility signal so native WebView2 never paints over trusted chrome. */
@@ -73,6 +77,14 @@ export function browserSurfaceVisible(host: HTMLElement | null, routeVisible: bo
     return false;
   }
   const rect = host.getBoundingClientRect();
+  // Native child windows are not clipped by CSS overflow. Hide a partly scrolled child
+  // until its viewport fits again, so it cannot cover the workspace toolbar or side rail.
+  const canvas = host.closest("[data-pane-canvas]")?.getBoundingClientRect();
+  if (
+    canvas &&
+    (rect.left < canvas.left || rect.top < canvas.top || rect.right > canvas.right || rect.bottom > canvas.bottom)
+  )
+    return false;
   return (
     rect.width > 1 &&
     rect.height > 1 &&

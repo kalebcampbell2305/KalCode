@@ -77,6 +77,7 @@ const SCENES: Scene[] = [
     scenario: "home",
     prepare: async (page) => {
       await item(page, /^atlas-api/).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Open", exact: true }).hover();
       await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
       await expect(page.getByRole("tab", { name: /^Project/ })).toBeVisible();
       await expect(page.locator('[role="menu"]')).toHaveCount(0);

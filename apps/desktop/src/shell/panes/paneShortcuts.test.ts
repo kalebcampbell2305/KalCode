@@ -17,6 +17,20 @@ function key(
 }
 
 describe("pane shortcuts", () => {
+  it.each(["windows", "macos"] as const)(
+    "moves panes and tidies without stealing ordinary terminal keys on %s",
+    (platform) => {
+      expect(paneShortcut(key("H", { code: "KeyH", ctrlKey: true, altKey: true, shiftKey: true }), platform)).toEqual({
+        kind: "move",
+        direction: "left",
+      });
+      expect(paneShortcut(key("t", { code: "KeyT", ctrlKey: true, altKey: true }), platform)).toEqual({ kind: "tidy" });
+      expect(paneShortcut(key("z", { code: "KeyZ", ctrlKey: true, altKey: true }), platform)).toEqual({
+        kind: "undo-layout",
+      });
+      expect(paneShortcut(key("h"), platform)).toBeNull();
+    },
+  );
   it("preserves the Windows Control+Alt contract", () => {
     expect(paneShortcut(key("d", { code: "KeyD", ctrlKey: true, altKey: true }), "windows")).toEqual({
       kind: "split-right",

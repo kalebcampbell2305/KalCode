@@ -15,6 +15,8 @@ import {
   registerDictationSink,
   throwIfDictationCancelled,
 } from "../../../kalvoice/dictation.ts";
+import { ContentContextMenu } from "../../../shell/context/ContentContextMenu.tsx";
+import { terminalContext } from "../../../shell/context/terminalContext.ts";
 import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
@@ -49,6 +51,7 @@ interface PaneTerminalProps {
   /** The provider process is running (input is accepted). */
   running: boolean;
   focusRequest: number;
+  visible?: boolean;
   theme: "light" | "dark";
   /** The pane isn't focused: output renders in batches (≤ 4 a second). */
   throttled?: boolean;
@@ -72,6 +75,7 @@ export const PaneTerminal = memo(function PaneTerminal({
   label,
   running,
   focusRequest,
+  visible = true,
   theme,
   throttled = false,
 }: PaneTerminalProps) {
@@ -147,6 +151,7 @@ export const PaneTerminal = memo(function PaneTerminal({
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       if (event.defaultPrevented) return false;
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) return false;
       if (isTerminalShortcut(event)) return false;
       const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
       const paste = (event.ctrlKey || event.metaKey) && !event.altKey;
@@ -524,7 +529,7 @@ export const PaneTerminal = memo(function PaneTerminal({
       focusSeen.current = focusRequest;
       if (focusRequest !== 0) focusPending.current = true;
     }
-    if (focusRequest === 0) return;
+    if (focusRequest === 0 || !visible) return;
     if (!focusPending.current) {
       const active = document.activeElement;
       const lostWithOldTerminal =
@@ -536,29 +541,40 @@ export const PaneTerminal = memo(function PaneTerminal({
       termRef.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusRequest, instanceId]);
+  }, [focusRequest, instanceId, visible]);
 
   return (
     <>
-      <div ref={hostRef} className={codeStyles.xtermHost} data-pane-terminal={threadId} data-selectable />
+      <ContentContextMenu
+        sourceAgentId={threadId}
+        context={{ kind: "output", label: `${label} output`, text: "" }}
+        getContext={(target, keyboard) => terminalContext(termRef.current, target, label, keyboard)}
+      >
+        <div ref={hostRef} className={codeStyles.xtermHost} data-pane-terminal={threadId} data-selectable />
+      </ContentContextMenu>
       {connectError ? (
-        <div className={styles.connectError} role="alert">
-          <Unplug aria-hidden="true" />
-          <span className={styles.connectErrorText} title={connectError}>
-            {connectError}
-          </span>
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={<RotateCcw />}
-            onClick={() => {
-              setConnectError(null);
-              reconnectRef.current?.();
-            }}
-          >
-            Reconnect
-          </Button>
-        </div>
+        <ContentContextMenu
+          sourceAgentId={threadId}
+          context={{ kind: "error", label: `${label} connection error`, text: connectError }}
+        >
+          <div className={styles.connectError} role="alert">
+            <Unplug aria-hidden="true" />
+            <span className={styles.connectErrorText} title={connectError}>
+              {connectError}
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<RotateCcw />}
+              onClick={() => {
+                setConnectError(null);
+                reconnectRef.current?.();
+              }}
+            >
+              Reconnect
+            </Button>
+          </div>
+        </ContentContextMenu>
       ) : null}
     </>
   );

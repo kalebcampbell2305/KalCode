@@ -473,6 +473,39 @@ export function createMemoryWorkspaces({
       }
       return undefined;
     },
+    terminal_rename: (args) => {
+      requireCore();
+      const tab = tabOr404(requireId(args.terminalId));
+      if (typeof args.title !== "string") fail(rejected());
+      const title = args.title.trim();
+      if (
+        !title ||
+        [...title].length > 256 ||
+        [...title].some((char) => {
+          const code = char.codePointAt(0) ?? 0;
+          return code < 32 || (code >= 127 && code <= 159);
+        })
+      )
+        fail(
+          validation(
+            "invalid_terminal_title",
+            "Use a terminal name of 1 to 256 characters without control characters.",
+          ),
+        );
+      if (tab.info.title !== title) {
+        tab.info = { ...tab.info, title };
+        emit({ type: "shell.renamed", payload: { terminalId: tab.info.id, title } }, tab.info.workspaceId);
+      }
+      return tab.info;
+    },
+    terminal_stop: (args) => {
+      requireCore();
+      const tab = tabOr404(requireId(args.terminalId));
+      if (tab.info.shellId.startsWith("operation:"))
+        fail(validation("terminal_operation_owned", "Stop this operation from Operations."));
+      if (status(tab) === "running") endSession(tab, 0, false);
+      return tab.info;
+    },
     terminal_write: (args) => {
       requireCore();
       const id = requireId(args.terminalId);

@@ -281,6 +281,35 @@ pub fn terminal_restart(
         .map_err(|e| e.log_and_convert("terminal_restart"))
 }
 
+/// Renames a terminal while preserving its process and output.
+#[tauri::command(async)]
+pub fn terminal_rename(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    terminal_id: String,
+    title: String,
+) -> Result<TerminalInfo, IpcError> {
+    _runtime_access.revalidate()?;
+    state
+        .core()?
+        .rename_terminal(&terminal_id, &title)
+        .map_err(|e| e.log_and_convert("terminal_rename"))
+}
+
+/// Stops a shell without discarding its tab or output.
+#[tauri::command(async)]
+pub fn terminal_stop(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    terminal_id: String,
+) -> Result<TerminalInfo, IpcError> {
+    _runtime_access.revalidate()?;
+    state
+        .core()?
+        .stop_terminal(&terminal_id)
+        .map_err(|e| e.log_and_convert("terminal_stop"))
+}
+
 /// Closes a tab, ending its shell and the programs started in it.
 #[tauri::command(async)]
 pub fn terminal_close(

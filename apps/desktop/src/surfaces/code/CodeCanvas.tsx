@@ -14,21 +14,29 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   EmptyState,
+  type ObjectMenuItem,
   ProviderGlyph,
   Skeleton,
+  useToast,
 } from "@kalcode/ui/components";
 import {
   Bot,
+  Copy,
+  Focus,
   GitBranch,
   Globe,
   LayoutDashboard,
   LayoutPanelLeft,
+  PenLine,
   PowerOff,
   RotateCcw,
+  Square,
   SquareTerminal,
+  UserRoundCog,
   X,
 } from "lucide-react";
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toKalCodeError } from "../../ipc/errors.ts";
 import type { VoiceSceneTarget } from "../../kalvoice/sceneTargets.ts";
 import {
   registerVoicePaneScene,
@@ -42,12 +50,14 @@ import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
 import { useNavigation, viewVisible } from "../../shell/navigation.tsx";
+import { suggestTask, type TaskLayout } from "../../shell/panes/adaptiveCanvas.ts";
 import { PaneNotice } from "../../shell/panes/builtinContent.tsx";
 import type { PaneRenderContext, TabInfo } from "../../shell/panes/contentRegistry.ts";
 import { registeredWidgets } from "../../shell/panes/contentRegistry.ts";
 import {
   allContents,
   arrangeContents,
+  canSplit,
   contentKey,
   emptyLayout,
   findContent,
@@ -73,9 +83,12 @@ import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
 import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "../../shell/rail/paneIds.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
+import { accountName } from "../providers/accountIdentity.ts";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import { setSelectedCodeContext } from "../threads/accountIntent.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
+import { RebindThreadDialog } from "../threads/RebindThreadDialog.tsx";
+import { rebindBlocker } from "../threads/useThreadAccount.ts";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
 import { HandOffDialog } from "./HandOffDialog.tsx";
@@ -93,9 +106,11 @@ import {
   updateBrowserUrl,
 } from "../browser/index.ts";
 import { resolveBrowserTarget } from "./browserTarget.ts";
+import { canStopPane, duplicatePaneInput, paneRebindAccounts } from "./paneContextActions.ts";
 import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
+import { RenamePaneDialog } from "./RenamePaneDialog.tsx";
 import { CODE_SHORTCUT_LABELS } from "./shortcuts.ts";
 import { TerminalImageButton } from "./TerminalImageButton.tsx";
 import { TerminalView } from "./TerminalView.tsx";
@@ -153,6 +168,8 @@ export interface CodeCanvasApi {
   /** Opens the + launcher for coding agents (Claude Code by default; Codex / Gemini CLI when offered). */
   openAgentLauncher: (providerId?: PaneProviderId) => void;
   titleOf: (content: PaneContent) => string;
+  applyTaskLayout: (task: TaskLayout) => void;
+  layoutSuggestion: ReturnType<typeof suggestTask>;
 }
 
 interface CodeCanvasProps {
@@ -203,6 +220,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const [browserBridge] = useState(createBrowserBridge);
   const initialBrowserUrls = useRef(new Map<string, string>());
   const { client, info } = useRuntime();
+  const toast = useToast();
   const accountSessions = useOptionalProviderAccountSessions();
   const hasSharedAccountSessions = accountSessions !== null;
   const { current, navigate } = useNavigation();
@@ -219,6 +237,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     closeTerminal,
     restartTerminal,
     selectTerminal,
+    refresh: refreshWorkspaces,
   } = useWorkspaces();
   const labels = useMemo(() => tabLabels(terminals), [terminals]);
   const terminalById = useMemo(() => new Map(terminals.map((t) => [t.id, t])), [terminals]);
@@ -724,6 +743,156 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   const restartById = useCallback((terminalId: string) => void restartTerminal(terminalId), [restartTerminal]);
+  const [renaming, setRenaming] = useState<{ content: PaneContent; name: string } | null>(null);
+  const focusMenuObject = (content: PaneContent) => {
+    document.querySelector<HTMLElement>(`[data-content-key="${CSS.escape(contentKey(content))}"]`)?.focus();
+  };
+  const [rebinding, setRebinding] = useState<{ threadId: string; account: ProviderAccount } | null>(null);
+  const [rebindBusy, setRebindBusy] = useState(false);
+  const rebindSubmitting = useRef(false);
+  const pendingMenuActions = useRef(new Set<string>());
+  const runMenuAction = useCallback(
+    (key: string, label: string, action: () => Promise<unknown>) => {
+      if (pendingMenuActions.current.has(key)) return;
+      pendingMenuActions.current.add(key);
+      controllerRef.current.announce(label);
+      void action()
+        .catch((cause) => {
+          toast.show({ tone: "danger", title: label, description: toKalCodeError(cause).message });
+        })
+        .finally(() => pendingMenuActions.current.delete(key));
+    },
+    [toast],
+  );
+
+  const contextMenu = useCallback(
+    (content: PaneContent, paneId: string): readonly ObjectMenuItem[] => {
+      if (content.kind !== "terminal" && content.kind !== "agent") return [];
+      const terminal = content.kind === "terminal" ? terminalById.get(content.terminalId) : null;
+      const entry = content.kind === "agent" ? paneById.get(content.agentId) : null;
+      if (!terminal && !entry) return [];
+      const items: ObjectMenuItem[] = [];
+      const key = contentKey(content);
+      if (canSplit(controllerRef.current.layout, paneId, "horizontal")) {
+        items.push({
+          id: "browser",
+          label: "Open Browser beside",
+          icon: <Globe />,
+          onSelect: () => {
+            controllerRef.current.split(paneId, "horizontal", browserContent());
+          },
+        });
+      }
+      const duplicateAllowed =
+        workspace.available &&
+        (terminal
+          ? shells.some((shell) => shell.id === terminal.shellId)
+          : entry &&
+            providerPanes.enabled &&
+            entry.thread.permissionMode !== "custom" &&
+            isPaneProvider(entry.thread.providerId) &&
+            (entry.thread.providerId === "claude-code" || providerPanes.offered.includes(entry.thread.providerId)));
+      if (duplicateAllowed)
+        items.push({
+          id: "duplicate",
+          label: terminal ? "Duplicate terminal" : "Duplicate agent",
+          icon: <Copy />,
+          onSelect: () => {
+            runMenuAction(`duplicate:${key}`, terminal ? "Duplicating terminal" : "Duplicating agent", async () => {
+              if (terminal) {
+                const created = await createTerminal(terminal.shellId, workspace.id);
+                if (created) controllerRef.current.show(terminalContent(created.id), { paneId, focus: true });
+              } else if (entry && isPaneProvider(entry.thread.providerId)) {
+                const input = duplicatePaneInput(entry.thread);
+                if (!input) return;
+                const created = await providerPanes.channel.create(input);
+                pendingAgents.current.add(created.id);
+                await providerPanes.refresh();
+                controllerRef.current.show(agentContent(created.id), { paneId, focus: true });
+              }
+            });
+          },
+        });
+      items.push({
+        id: "rename",
+        label: "Rename",
+        icon: <PenLine />,
+        onSelect: () => {
+          setRenaming({ content, name: terminal?.title ?? entry?.thread.name ?? "" });
+        },
+      });
+      if (entry) {
+        const accounts = paneRebindAccounts(entry.thread, entry.info, restoredProviderAccounts ?? []);
+        if (accounts.length)
+          items.push({
+            id: "account",
+            label: "Change account",
+            icon: <UserRoundCog />,
+            children: accounts.map((account) => ({
+              id: account.id,
+              label: accountName(account),
+              onSelect: () => setRebinding({ threadId: entry.thread.id, account }),
+            })),
+          });
+      }
+      items.push({
+        id: "focus",
+        label: "Focus",
+        icon: <Focus />,
+        onSelect: () => controllerRef.current.show(content, { paneId, focus: true }),
+      });
+      items.push({ id: "destructive", separator: true });
+      const canStop =
+        (terminal?.status === "running" && !terminal.shellId.startsWith("operation:")) ||
+        (entry && canStopPane(entry.thread, entry.info));
+      if (canStop)
+        items.push({
+          id: "stop",
+          label: terminal ? "Stop terminal" : "Stop agent",
+          icon: <Square />,
+          tone: "danger",
+          onSelect: () => {
+            runMenuAction(`stop:${key}`, terminal ? "Stopping terminal" : "Stopping agent", async () => {
+              if (terminal) {
+                await client.stopTerminal(terminal.id);
+                await refreshWorkspaces();
+              } else if (entry) {
+                providerPanes.updated(await client.stopThread(entry.thread.id));
+                await providerPanes.refresh();
+              }
+            });
+          },
+        });
+      items.push({
+        id: "close",
+        label: terminal ? "Close terminal" : "Close agent",
+        icon: <X />,
+        tone: "danger",
+        onSelect: () => {
+          if (terminal) closeTerminalTab(terminal.id);
+          else if (entry)
+            runMenuAction(`close:${key}`, "Closing agent", async () => {
+              providerPanes.updated(await client.stopThread(entry.thread.id));
+              controllerRef.current.forget(new Set([key]));
+            });
+        },
+      });
+      return items;
+    },
+    [
+      terminalById,
+      paneById,
+      workspace,
+      shells,
+      providerPanes,
+      createTerminal,
+      runMenuAction,
+      restoredProviderAccounts,
+      client,
+      refreshWorkspaces,
+      closeTerminalTab,
+    ],
+  );
 
   const describe = useCallback(
     (content: PaneContent): TabInfo | null => {
@@ -785,7 +954,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             workspaceId={workspace.id}
             context={context}
             controllerRef={controllerRef}
-            visible={current === "code"}
+            visible={current === "code" && context.visible !== false}
             initialUrl={initialBrowserUrls.current.get(content.browserId)}
           />
         );
@@ -799,6 +968,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             focused={context.focused}
             focusRequest={context.focusRequest}
             codeShown={codeShown}
+            visible={context.visible !== false}
             theme={theme}
             workspace={workspace}
             onRestart={restartById}
@@ -819,6 +989,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             account={accountFor(entry.thread)}
             theme={theme}
             focusRequest={context.focusRequest}
+            visible={context.visible !== false && codeShown}
             throttled={!context.focused || !codeShown}
             onChanged={providerPanes.updated}
             onHandOff={handOffFor(entry.thread.id)}
@@ -1030,6 +1201,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const onCommand = useCallback(
     (command: PaneCommand): PaneCommandResult | null => {
       const current = controllerRef.current;
+      if (command.kind === "agent-browser-beside") {
+        const content = agentContent(command.threadId);
+        const target = findContent(current.layout, contentKey(content))?.paneId ?? current.focusedPaneId;
+        if (!target || !canSplit(current.layout, target, "horizontal")) {
+          return { handled: false, message: "There isn't room for another pane in this layout." };
+        }
+        current.show(content, { paneId: target, focus: false });
+        current.split(target, "horizontal", browserContent());
+        return { handled: true };
+      }
       if (command.kind === "open-agent-launcher") {
         if (!providerPanes.enabled) return { handled: false, message: "Coding agents aren't available in this build." };
         const providerId = command.providerId ?? "claude-code";
@@ -1167,8 +1348,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   const host: PaneHost = useMemo(
-    () => ({ describe, render, renderEmpty, addMenu, onCommand }),
-    [describe, render, renderEmpty, addMenu, onCommand],
+    () => ({ describe, render, renderEmpty, addMenu, onCommand, contextMenu }),
+    [describe, render, renderEmpty, addMenu, onCommand, contextMenu],
   );
 
   const canvas = controller.ready ? (
@@ -1183,15 +1364,103 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     <CanvasSkeleton label="Loading the layout" />
   );
 
+  const applyTaskLayout = useCallback((task: TaskLayout) => {
+    const current = controllerRef.current;
+    const contents = allContents(current.layout);
+    const companions: PaneContent[] = [];
+    if (task === "build" || task === "debug")
+      companions.push(contents.find((content) => content.kind === "browser") ?? browserContent());
+    if (task === "debug" || task === "ship") companions.push({ kind: "widget", widgetId: "activity" });
+    current.taskLayout(task, companions);
+  }, []);
+  const layoutSuggestion = useMemo(
+    () =>
+      suggestTask(
+        controller.layout,
+        terminals.some(
+          (terminal) => terminal.status === "exited" && terminal.exitCode !== null && terminal.exitCode !== 0,
+        ),
+      ),
+    [controller.layout, terminals],
+  );
   const api = useMemo<CodeCanvasApi>(
-    () => ({ controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf }),
-    [controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf],
+    () => ({
+      controller,
+      background,
+      providerPanes,
+      shells,
+      newTerminal,
+      openAgentLauncher,
+      titleOf,
+      applyTaskLayout,
+      layoutSuggestion,
+    }),
+    [
+      controller,
+      background,
+      providerPanes,
+      shells,
+      newTerminal,
+      openAgentLauncher,
+      titleOf,
+      applyTaskLayout,
+      layoutSuggestion,
+    ],
   );
 
   return (
     <>
       <UtilityDockRegistration />
       {children(api, canvas)}
+      {renaming && (renaming.content.kind === "terminal" || renaming.content.kind === "agent") ? (
+        <RenamePaneDialog
+          name={renaming.name}
+          returnFocus={() => focusMenuObject(renaming.content)}
+          kind={renaming.content.kind}
+          onClose={() => setRenaming(null)}
+          onSave={async (name) => {
+            if (renaming.content.kind === "terminal") {
+              await client.renameTerminal(renaming.content.terminalId, name);
+              await refreshWorkspaces();
+            } else if (renaming.content.kind === "agent") {
+              providerPanes.updated(await client.renameThread(renaming.content.agentId, name));
+            }
+          }}
+        />
+      ) : null}
+      {rebinding ? (
+        <RebindThreadDialog
+          objectKind="agent"
+          returnFocus={() => focusMenuObject(agentContent(rebinding.threadId))}
+          open
+          from={paneById.get(rebinding.threadId)?.thread.accountLabel ?? "Default account"}
+          to={accountName(rebinding.account)}
+          busy={rebindBusy}
+          blocker={(() => {
+            const entry = paneById.get(rebinding.threadId);
+            return !entry?.info || entry.info.running
+              ? "Stop this coding agent before changing its account."
+              : rebindBlocker(entry.thread);
+          })()}
+          signInRequired={false}
+          onSignIn={() => {}}
+          onCancel={() => setRebinding(null)}
+          onConfirm={() => {
+            if (rebindSubmitting.current) return;
+            rebindSubmitting.current = true;
+            setRebindBusy(true);
+            runMenuAction(`rebind:${rebinding.threadId}`, "Changing agent account", async () => {
+              try {
+                providerPanes.updated(await client.rebindThreadAccount(rebinding.threadId, rebinding.account.id));
+                setRebinding(null);
+              } finally {
+                rebindSubmitting.current = false;
+                setRebindBusy(false);
+              }
+            });
+          }}
+        />
+      ) : null}
       {handoffSource ? (
         <HandOffDialog
           open={launcher?.returnToHandoff !== true}
@@ -1251,6 +1520,7 @@ const TerminalPanel = memo(function TerminalPanel({
   focused,
   focusRequest,
   codeShown,
+  visible,
   theme,
   workspace,
   onRestart,
@@ -1261,6 +1531,7 @@ const TerminalPanel = memo(function TerminalPanel({
   focused: boolean;
   focusRequest: number;
   codeShown: boolean;
+  visible: boolean;
   theme: "light" | "dark";
   workspace: Workspace;
   onRestart: (terminalId: string) => void;
@@ -1302,7 +1573,7 @@ const TerminalPanel = memo(function TerminalPanel({
         key={`${terminal.id}:${terminal.startedAt ?? ""}`}
         terminal={terminal}
         label={label}
-        visible
+        visible={visible && codeShown}
         focusRequest={focusRequest}
         theme={theme}
         throttled={!focused || !codeShown}

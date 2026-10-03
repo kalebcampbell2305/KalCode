@@ -67,6 +67,25 @@ describe("nameFromPrompt (mirrors crates/threads/src/naming.rs)", () => {
 });
 
 describe("memory thread runtime", () => {
+  it("duplicates history without starting a provider and moves only inactive threads", async () => {
+    const { client, transport } = await setup();
+    const source = await create(client, "Keep this conversation");
+    transport.workspaces.queueFolders("destination");
+    const destination = await client.openWorkspaceDialog();
+    if (!destination) throw new Error("destination missing");
+    expect(await code(client.moveThread(source.id, destination.id))).toBe("thread_move_busy");
+    await client.stopThread(source.id);
+    const copy = await client.duplicateThread(source.id);
+    expect(copy).toMatchObject({ name: `${source.name} (copy)`, status: "idle", resumable: false, worktreeId: null });
+    expect(copy.id).not.toBe(source.id);
+    const original = await client.threadMessages(source.id, 100);
+    const messages = await client.threadMessages(copy.id, 100);
+    expect(messages.map((m) => m.content)).toEqual(original.map((m) => m.content));
+    expect(messages[0]?.id).not.toBe(original[0]?.id);
+    expect(await client.moveThread(copy.id, destination.id)).toMatchObject({ workspaceId: destination.id });
+    expect(await client.getThread(source.id)).toMatchObject({ workspaceId: source.workspaceId });
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });

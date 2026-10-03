@@ -1,25 +1,15 @@
 import type { PaneContent } from "@kalcode/protocol";
 import { TooltipProvider } from "@kalcode/ui/components";
-import { render } from "@testing-library/react";
-import { useEffect } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { PaneRenderContext, TabInfo } from "./contentRegistry.ts";
+import type { TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, makeLeaf } from "./model.ts";
 import { PaneFrame, type PaneFrameProps } from "./PaneFrame.tsx";
 
 const terminal = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const browser: PaneContent = { kind: "browser", browserId: "web", url: null };
 
-function setup() {
-  const mounts = new Map<string, number>();
-  const contexts = new Map<string, PaneRenderContext>();
-  function Body({ id, context }: { id: string; context: PaneRenderContext }) {
-    contexts.set(id, context);
-    useEffect(() => {
-      mounts.set(id, (mounts.get(id) ?? 0) + 1);
-    }, [id]);
-    return <div data-testid={id}>{id}</div>;
-  }
+function setup(initial: Partial<PaneFrameProps> = {}) {
   const describe = (content: PaneContent): TabInfo => ({
     title: contentKey(content),
     glyph: null,
@@ -41,7 +31,6 @@ function setup() {
     multiple: true,
     dropTarget: false,
     tabs: leaf.tabs.map(describe),
-    renderContent: (content, context) => <Body id={contentKey(content)} context={context} />,
     renderEmpty: () => <p>Empty</p>,
     addMenu: () => null,
     onFocus: vi.fn(),
@@ -65,7 +54,7 @@ function setup() {
   });
   const view = render(
     <TooltipProvider>
-      <PaneFrame {...props(leaf(0))} />
+      <PaneFrame {...props(leaf(0), initial)} />
     </TooltipProvider>,
   );
   const show = (next: LeafNode, extra: Partial<PaneFrameProps> = {}) =>
@@ -74,44 +63,59 @@ function setup() {
         <PaneFrame {...props(next, extra)} />
       </TooltipProvider>,
     );
-  const visiblePanels = () => [...view.container.querySelectorAll('[role="tabpanel"]:not([hidden])')];
-  return { mounts, contexts, leaf, show, view, visiblePanels };
+  return { leaf, show, view };
 }
 
-it("keeps terminal tabs mounted across tab switches, maximize and collapse, with one visible panel", () => {
-  const { mounts, contexts, leaf, show, view, visiblePanels } = setup();
-  const a = contentKey(terminal("a"));
-  const b = contentKey(terminal("b"));
+it("keeps the content slot in the pane while minimizing, hiding and restoring", () => {
+  const { leaf, show, view } = setup();
+  const slot = view.container.querySelector("[data-pane-body]");
+  expect(slot).toHaveAttribute("id", "pane-pane-body");
   show(leaf(1));
-  show(leaf(0));
-  show(leaf(1));
-  expect(mounts.get(a)).toBe(1);
-  expect(mounts.get(b)).toBe(1);
-  expect(visiblePanels()).toHaveLength(1);
-  expect(visiblePanels()[0]?.contains(view.getByTestId(b))).toBe(true);
-  expect(visiblePanels()[0]?.id).toBe("pane-pane-panel");
-  // The terminal behind the one in front renders throttled and takes no focus requests.
-  expect(contexts.get(a)).toMatchObject({ focused: false, focusRequest: 0 });
-  expect(contexts.get(b)).toMatchObject({ focused: true });
-
+  expect(view.container.querySelector("[data-pane-body]")).toBe(slot);
   show(leaf(1), { hidden: true });
-  expect(visiblePanels()).toHaveLength(0);
+  expect(slot).toHaveAttribute("hidden");
   show(leaf(1, true));
-  expect(visiblePanels()).toHaveLength(0);
+  expect(view.container.querySelector("[data-pane-body]")).toBe(slot);
+  expect(slot).toHaveAttribute("hidden");
   show(leaf(1));
-  expect(mounts.get(a)).toBe(1);
-  expect(mounts.get(b)).toBe(1);
-  expect(visiblePanels()).toHaveLength(1);
+  expect(slot).not.toHaveAttribute("hidden");
 });
 
-it("renders other contents only while they are in front", () => {
-  const { mounts, leaf, show, view, visiblePanels } = setup();
-  const web = contentKey(browser);
+it("exposes the selected tab and its persistent content panel relationship", () => {
+  const { leaf, show, view } = setup();
   show(leaf(2));
-  expect(view.getByTestId(web)).toBeInTheDocument();
-  expect(visiblePanels()).toHaveLength(1);
-  show(leaf(0));
-  expect(view.queryByTestId(web)).toBeNull();
-  show(leaf(2));
-  expect(mounts.get(web)).toBe(2);
+  const tab = view.getByRole("tab", { name: "browser:web" });
+  expect(tab).toHaveAttribute("aria-selected", "true");
+  expect(tab).toHaveAttribute("aria-controls", "pane-pane-panel");
+});
+
+it("targets the right-clicked inactive terminal tab without switching tabs", async () => {
+  const action = vi.fn();
+  const activate = vi.fn();
+  const { view } = setup({
+    onActivate: activate,
+    contextMenu: (content, paneId) => [
+      { id: "stop", label: "Stop terminal", onSelect: () => action(contentKey(content), paneId) },
+    ],
+  });
+  const inactive = view.container.querySelector('[data-content-key="terminal:b"]');
+  expect(inactive).not.toBeNull();
+  fireEvent.contextMenu(inactive as Element);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Stop terminal" }));
+  expect(action).toHaveBeenCalledWith("terminal:b", "pane");
+  expect(activate).not.toHaveBeenCalled();
+});
+
+it("opens terminal actions from the keyboard and preserves its tab role and label", async () => {
+  const action = vi.fn();
+  const { view } = setup({
+    contextMenu: (content) => [{ id: "focus", label: "Focus", onSelect: () => action(contentKey(content)) }],
+  });
+  const tab = view.container.querySelector('[data-content-key="terminal:a"]') as HTMLElement;
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "F10", shiftKey: true });
+  expect(await screen.findByRole("menu", { name: "terminal:a actions" })).toBeVisible();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Focus" }));
+  expect(action).toHaveBeenCalledWith("terminal:a");
+  expect(tab).toHaveAttribute("role", "tab");
 });

@@ -7,6 +7,6 @@ export type TerminalInfo = { id: string, workspaceId: string,
  */
 shellId: string,
 /**
- * The shell's display name.
+ * The tab's name, initially the shell's display name.
  */
 title: string, position: number, status: TerminalStatus, startedAt: string | null, endedAt: string | null, exitCode: number | null, };

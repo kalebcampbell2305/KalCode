@@ -13,6 +13,8 @@ import {
 } from "../../kalvoice/dictation.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
+import { terminalContext } from "../../shell/context/terminalContext.ts";
 import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../shell/panes/outputScheduler.ts";
 import styles from "./Code.module.css";
@@ -97,6 +99,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       // The window-level push-to-talk handler runs in capture phase. Never encode that already
       // consumed key (for example F8 as ESC [19~) into the PTY.
       if (event.defaultPrevented) return false;
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) return false;
       if (isTerminalShortcut(event)) return false;
       const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
       const paste = (event.ctrlKey || event.metaKey) && !event.altKey;
@@ -408,5 +411,13 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     return () => cancelAnimationFrame(frame);
   }, [visible, focusRequest]);
 
-  return <div ref={hostRef} className={styles.xtermHost} data-terminal-id={terminalId} data-selectable />;
+  return (
+    <ContentContextMenu
+      workspaceId={terminal.workspaceId}
+      context={{ kind: "output", label: `${label} output`, text: "" }}
+      getContext={(target, keyboard) => terminalContext(termRef.current, target, label, keyboard)}
+    >
+      <div ref={hostRef} className={styles.xtermHost} data-terminal-id={terminalId} data-selectable />
+    </ContentContextMenu>
+  );
 }
