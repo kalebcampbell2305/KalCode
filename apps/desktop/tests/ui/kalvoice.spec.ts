@@ -208,6 +208,39 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect.poll(overlap).toBeLessThanOrEqual(0);
   });
 
+  for (const [width, height] of [
+    [1100, 700],
+    [1440, 900],
+  ] as const) {
+    test(`floated near the top it rests in its band, clear of the Code header (${width}x${height})`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height });
+      await page.goto("/?scenario=code&channel=stable");
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Code", exact: true })
+        .click();
+      await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
+      await expectState(page, "Ready");
+      // Drag it a little down and right, into the strip where the Code header sits.
+      const from = await widget(page).boundingBox();
+      if (!from) throw new Error("widget not laid out");
+      await page.mouse.move(from.x + 60, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 160, from.y + from.height / 2 + 40, { steps: 10 });
+      await page.mouse.up();
+      const overlap = async () => {
+        const w = await widget(page).boundingBox();
+        const header = await page.getByRole("main").locator("header").first().boundingBox();
+        if (!w || !header) throw new Error("no layout");
+        return w.y + w.height - header.y;
+      };
+      await expect.poll(overlap).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `test-results/kalvoice-free-code-${width}x${height}.png` });
+    });
+  }
+
   test("reports a blocked microphone with one click to the privacy settings", async ({ page }) => {
     await open(page, "?scenario=kalvoice-mic-denied");
     await page.keyboard.down("F8");

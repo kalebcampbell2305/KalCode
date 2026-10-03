@@ -6,6 +6,7 @@ import {
   ago,
   environmentTone,
   humanize,
+  needsChipTarget,
   needsYouCount,
   primaryEnvironment,
   runningAgentCount,
@@ -89,6 +90,16 @@ describe("needsYouCount", () => {
       [{ action: { threadId: waiting.id } }, { action: { threadId: "other" } }, { action: { threadId: null } }],
     );
     expect(count).toBe(3);
+  });
+});
+
+describe("needsChipTarget", () => {
+  it("opens Approvals only when every need is an approval", () => {
+    expect(needsChipTarget(2, 2)).toBe("approvals");
+    // Busy: 2 approvals plus a reply and a failure. Approvals would show only 2 of 4.
+    expect(needsChipTarget(4, 2)).toBe("agents");
+    expect(needsChipTarget(1, 0)).toBe("agents");
+    expect(needsChipTarget(0, 0)).toBe("dashboard");
   });
 });
 

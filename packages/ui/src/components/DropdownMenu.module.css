@@ -88,12 +88,13 @@
   white-space: nowrap;
 }
 
+/* Descriptions wrap instead of truncating: they explain the choice, so every word counts. */
 .description {
-  overflow: hidden;
   color: var(--color-text-muted);
   font-size: var(--type-small);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+  text-wrap: pretty;
 }
 
 .item[data-highlighted] .description {

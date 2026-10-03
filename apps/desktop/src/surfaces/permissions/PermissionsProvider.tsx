@@ -154,6 +154,8 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     };
   }, [client, toast, lifecycle, isCurrent, update]);
 
+  // "Try again" on a failed answer re-sends it through the current `decide`.
+  const decideRef = useRef<(requestId: string, decision: ApprovalDecision) => Promise<unknown>>(async () => null);
   const decide = useCallback(
     async (requestId: string, decision: ApprovalDecision) => {
       if (!isCurrent()) return null;
@@ -172,13 +174,19 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         if (!isCurrent(epoch)) return null;
         const failure = toKalCodeError(error);
-        toast.show({ tone: "danger", title: "Couldn't record your answer", description: failure.message });
+        toast.show({
+          tone: "danger",
+          title: "Couldn't record your answer",
+          description: failure.message,
+          action: { label: "Try again", onSelect: () => void decideRef.current(requestId, decision) },
+        });
         void refreshPending();
         return null;
       }
     },
     [client, toast, refreshPending, lifecycle, isCurrent],
   );
+  decideRef.current = decide;
 
   const setDefaultMode = useCallback(
     async (mode: PermissionMode, options: { profileId?: string | null; confirmed?: boolean } = {}) => {

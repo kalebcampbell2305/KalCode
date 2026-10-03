@@ -1,6 +1,8 @@
 import type { KalVoiceStatus } from "@kalcode/protocol";
 import { Badge, Button, EmptyState, Section } from "@kalcode/ui/components";
-import { AudioLines, MessageSquareText, Sparkles } from "lucide-react";
+import { AudioLines, MessageSquareText, RefreshCw, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { Page } from "../shell/Page.tsx";
@@ -19,15 +21,18 @@ function Key({ name }: { name: string }) {
   return <kbd>{displayKey(name)}</kbd>;
 }
 
-/** The Intelligence tile's call to action for each state (settings holds the controls). */
-function intelligenceAction(status: KalVoiceStatus): string | null {
+/**
+ * The Intelligence tile's call to action for each state: a failed local startup retries right
+ * here; setup and resuming live in settings.
+ */
+function intelligenceAction(status: KalVoiceStatus): { label: string; retry: boolean } | null {
   const view = localIntelligence(status);
   if (status.localReasoning === "not_installed") {
     // Preparing on its own needs nothing from the owner; a pause is resumed in Settings.
-    if (view.resumable) return "Open KalVoice settings";
-    return view.pausable ? null : "Set up local intelligence";
+    if (view.resumable) return { label: "Open KalVoice settings", retry: false };
+    return view.pausable ? null : { label: "Set up local intelligence", retry: false };
   }
-  return view.retry ? "Open KalVoice settings" : null;
+  return view.retry ? { label: "Retry", retry: true } : null;
 }
 
 function historyKind(item: HistoryItem): string {
@@ -61,7 +66,22 @@ export function KalVoicePage() {
     history,
     submit,
     setPanelVisible,
+    retryReasoning,
   } = kv;
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  // The same local startup retry as KalVoice settings, without leaving the page.
+  const retryIntelligence = async () => {
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await retryReasoning();
+    } catch (error) {
+      setRetryError(toKalCodeError(error).message);
+    } finally {
+      setRetrying(false);
+    }
+  };
   const { navigate } = useNavigation();
   const { info } = useRuntime();
   const providerPanes = useProviderPanesEnabled();
@@ -166,10 +186,14 @@ export function KalVoicePage() {
             <li className={styles.tile}>
               <p className={styles.tileTitle}>Intelligence</p>
               {intelligence ? <Badge tone={intelligence.tone}>{intelligence.label}</Badge> : null}
-              <p className={styles.tileDetail}>{intelligence?.detail}</p>
-              {intelligence?.action ? (
+              <p className={styles.tileDetail}>{retryError ?? intelligence?.detail}</p>
+              {intelligence?.action?.retry ? (
+                <Button size="sm" icon={<RefreshCw />} busy={retrying} onClick={() => void retryIntelligence()}>
+                  {intelligence.action.label}
+                </Button>
+              ) : intelligence?.action ? (
                 <Button size="sm" onClick={() => navigate("settings")}>
-                  {intelligence.action}
+                  {intelligence.action.label}
                 </Button>
               ) : null}
             </li>

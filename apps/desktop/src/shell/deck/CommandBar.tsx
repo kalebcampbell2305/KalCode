@@ -48,6 +48,7 @@ import {
   ENVIRONMENT_LABELS,
   environmentTone,
   humanize,
+  needsChipTarget,
   needsYouCount,
   primaryEnvironment,
 } from "./deckModel.ts";
@@ -121,9 +122,30 @@ const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
 });
 
 function WorkspaceChip() {
-  const { active, state } = useWorkspaces();
+  const { active, state, workspaces, openFolder, picking } = useWorkspaces();
   const { navigate } = useNavigation();
   const name = active?.name ?? "No workspace";
+  // With no workspaces the menu would hold one choice, so the chip opens the folder picker itself.
+  if (state === "ready" && workspaces.length === 0) {
+    return (
+      <Tooltip content="Open a project folder">
+        <Chip
+          icon={<FolderClosed />}
+          caption="Workspace"
+          disabled={picking}
+          aria-label="Workspace: none. Open a project folder"
+          data-empty
+          onClick={() =>
+            void openFolder().then((opened) => {
+              if (opened) navigate("code");
+            })
+          }
+        >
+          {name}
+        </Chip>
+      </Tooltip>
+    );
+  }
   return (
     <DropdownMenu>
       <Tooltip content={active ? active.displayPath : "Open a project folder"}>
@@ -260,8 +282,8 @@ function ModeChip() {
           </Chip>
         </DropdownMenuTrigger>
       </Tooltip>
-      <DropdownMenuContent align="start" minWidth={18}>
-        <DropdownMenuLabel>New threads start in</DropdownMenuLabel>
+      <DropdownMenuContent align="start" minWidth={22}>
+        <DropdownMenuLabel>New agents start in</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={mode ?? ""}
           onValueChange={(next) => void setDefaultMode(next as PermissionMode)}
@@ -309,7 +331,12 @@ function Signals() {
         type="button"
         className={styles.signal}
         data-tone={needs > 0 ? "waiting" : "muted"}
-        onClick={() => (pending.length > 0 ? setPanelOpen(true) : navigate("dashboard"))}
+        onClick={() => {
+          const target = needsChipTarget(needs, pending.length);
+          if (target === "approvals") setPanelOpen(true);
+          else if (target === "agents") revealAgents();
+          else navigate("dashboard");
+        }}
         aria-label={needs === 1 ? "1 thing needs you" : `${needs} things need you`}
       >
         <span className={styles.signalDot} aria-hidden="true" />

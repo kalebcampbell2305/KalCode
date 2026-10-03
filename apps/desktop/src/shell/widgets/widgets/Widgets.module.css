@@ -99,6 +99,7 @@
 .footer {
   display: flex;
   justify-content: flex-end;
+  gap: var(--space-1-5);
   padding-top: var(--space-2);
 }
 

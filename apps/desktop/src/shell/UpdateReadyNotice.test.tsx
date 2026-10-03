@@ -1,9 +1,11 @@
+import type { TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdatePhase, UpdateStatus } from "../ipc/updater.ts";
-import { UpdateReadyNotice, type UpdateReadyNoticeClient } from "./UpdateReadyNotice.tsx";
+import { thread } from "../surfaces/dashboard/data/testing.ts";
+import { UpdateReadyNotice, type UpdateReadyNoticeClient, workIsRunning } from "./UpdateReadyNotice.tsx";
 
 const base: UpdateStatus = {
   channel: "stable",
@@ -19,10 +21,25 @@ const base: UpdateStatus = {
 
 const ready: UpdateStatus = { ...base, phase: "ready", availableVersion: "0.1.6", downloadedBytes: 10, totalBytes: 10 };
 
-function fakeClient(status: () => Promise<UpdateStatus>) {
+const RUNNING_TERMINAL: TerminalInfo = {
+  id: "t1",
+  workspaceId: "w1",
+  shellId: "sh",
+  title: "Shell",
+  position: 0,
+  status: "running",
+  startedAt: null,
+  endedAt: null,
+  exitCode: null,
+};
+
+/** By default a terminal is running, so "Restart to update" confirms first. */
+function fakeClient(status: () => Promise<UpdateStatus>, work: { terminals?: TerminalInfo[] } = {}) {
   return {
     updaterStatus: vi.fn(status),
     updaterInstall: vi.fn(async () => undefined),
+    runningTerminals: vi.fn(async () => work.terminals ?? [RUNNING_TERMINAL]),
+    listThreads: vi.fn(async () => [] as ThreadSummary[]),
   } satisfies UpdateReadyNoticeClient;
 }
 
@@ -158,6 +175,50 @@ describe("UpdateReadyNotice", () => {
     await screen.findByRole("alertdialog");
     await userEvent.click(screen.getByRole("button", { name: "Restart and install 0.1.6" }));
     await waitFor(() => expect(client.updaterInstall).toHaveBeenCalledOnce());
+  });
+
+  it("restarts at once, without a confirmation, when nothing is running", async () => {
+    const client = fakeClient(async () => ready, { terminals: [] });
+    renderNotice(client);
+    await findNotice();
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    await waitFor(() => expect(client.updaterInstall).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("offers Try again when the install fails", async () => {
+    const client = fakeClient(async () => ready, { terminals: [] });
+    client.updaterInstall.mockRejectedValueOnce({
+      category: "update",
+      code: "update_failed",
+      message: "Install failed",
+      retryable: true,
+    });
+    renderNotice(client);
+    await findNotice();
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(client.updaterInstall).toHaveBeenCalledTimes(2));
+  });
+
+  it("counts running terminals and working or waiting threads as running work", async () => {
+    const quiet = { runningTerminals: async () => [], listThreads: async () => [thread({ status: "idle" })] };
+    expect(await workIsRunning(quiet)).toBe(false);
+    expect(await workIsRunning({ ...quiet, listThreads: async () => [thread({ status: "completed" })] })).toBe(false);
+    expect(await workIsRunning({ ...quiet, listThreads: async () => [thread({ status: "thinking" })] })).toBe(true);
+    expect(
+      await workIsRunning({ ...quiet, listThreads: async () => [thread({ status: "waiting_for_permission" })] }),
+    ).toBe(true);
+    expect(await workIsRunning({ ...quiet, runningTerminals: async () => [RUNNING_TERMINAL] })).toBe(true);
+    // When it can't tell, it asks.
+    expect(
+      await workIsRunning({
+        ...quiet,
+        runningTerminals: async () => {
+          throw new Error("offline");
+        },
+      }),
+    ).toBe(true);
   });
 
   it("stays hidden and quiet when the status read fails", async () => {
