@@ -292,7 +292,7 @@ function frame(state: State, f: Frame, index: number): string {
     .filter((t): t is Tab => Boolean(t))
     .map(
       (t) =>
-        `<div class="lk-tab" data-key="tab-${t.id}" data-selected="${t.id === f.active}"><button type="button" class="lk-tab__btn" aria-pressed="${t.id === f.active}" data-do="tab:${t.id}">${tabGlyph(state, t)}<span>${esc(tabTitle(state, t))}</span><span class="lk-dot" data-tone="${tabTone(state, t)}"></span></button><button type="button" class="lk-tab__x" data-do="close:${t.id}" aria-label="Close ${esc(tabTitle(state, t))}">${icon("close")}</button></div>`,
+        `<div class="lk-tab" data-key="tab-${t.id}" data-selected="${t.id === f.active}"><button type="button" class="lk-tab__btn" aria-pressed="${t.id === f.active}" aria-label="${esc(tabTitle(state, t))}" data-do="tab:${t.id}">${tabGlyph(state, t)}<span>${esc(tabTitle(state, t))}</span><span class="lk-dot" data-tone="${tabTone(state, t)}"></span></button><button type="button" class="lk-tab__x" data-do="close:${t.id}" aria-label="Close ${esc(tabTitle(state, t))}">${icon("close")}</button></div>`,
     )
     .join("");
   let body = "";
