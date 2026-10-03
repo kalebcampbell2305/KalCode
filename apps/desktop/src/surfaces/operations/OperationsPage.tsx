@@ -77,6 +77,7 @@ import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
 import { accountProviderName } from "../../shell/accountCommands.ts";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
+import { PERMISSION_MODE_HINTS, PERMISSION_MODE_LABELS } from "../dashboard/data/format.ts";
 import { focusSection } from "../dashboard/useNow.ts";
 import { accountFullLabel, accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
 import {
@@ -1247,8 +1248,16 @@ function TaskEditor({
       {isAgent ? (
         <>
           <div className={styles.permissionNotice}>
-            Agent tasks start in <strong>Auto</strong>: routine workspace coding runs without repeated prompts, while
-            security boundaries and external effects still ask.
+            {/* Native starts operation agents in the saved startable default, which `thread_options`
+                reports as `defaultPermissionMode`. */}
+            {options ? (
+              <>
+                Agent tasks start in <strong>{PERMISSION_MODE_LABELS[options.defaultPermissionMode]}</strong>, your
+                default permission mode: {PERMISSION_MODE_HINTS[options.defaultPermissionMode].toLowerCase()}.
+              </>
+            ) : (
+              "Agent tasks start in your default permission mode."
+            )}
           </div>
           <div className={styles.formGrid}>
             <Field htmlFor={`${formId}-provider`} label="Provider">

@@ -341,7 +341,7 @@ fn api_error_label(error: &str) -> &'static str {
 fn api_error_message(error: &str) -> String {
     match error {
         "authentication_failed" | "oauth_org_not_allowed" => {
-            "Claude Code isn't signed in. Run `claude` in a terminal to sign in, then try again."
+            "Claude Code isn't signed in for this account. Sign in to it again in Providers, then try again."
         }
         "account_on_hold" => "Your Claude account is on hold.",
         "billing_error" => "Claude reported a billing problem with your account.",
@@ -494,6 +494,18 @@ mod tests {
         assert!(!events.iter().any(
             |event| matches!(event, AgentEvent::Error { code, .. } if code == "turn_success")
         ));
+    }
+
+    #[test]
+    fn auth_failures_point_to_the_account_sign_in() {
+        // Managed sessions use the account's own profile, so `claude` in a terminal signs in a
+        // different profile. KalCode also marks the account expired and refuses new launches
+        // until that account signs in again from Providers.
+        for code in ["authentication_failed", "oauth_org_not_allowed"] {
+            let message = api_error_message(code);
+            assert!(message.contains("in Providers"), "{message}");
+            assert!(!message.contains("terminal"), "{message}");
+        }
     }
 
     #[test]
