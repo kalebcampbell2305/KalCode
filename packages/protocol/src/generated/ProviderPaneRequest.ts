@@ -6,11 +6,11 @@ import type { ProviderId } from "./ProviderId.ts";
  * One group of independent provider panes requested by the user. A missing provider uses
  * the user's selected/default provider; an account label must resolve uniquely, never guess.
  */
-export type ProviderPaneRequest = { providerId: ProviderId | null, count: number, accountQuery: string | null, model: string | null,
+export type ProviderPaneRequest = { providerId: ProviderId | null, count: number, accountQuery: string | null, model: string | null, 
 /**
  * Exact provider effort level. `None` preserves the provider/account default.
  */
-effort: string | null,
+effort: string | null, 
 /**
  * Optional per-agent task groups. Counts must add up to `count`; an empty list opens
  * idle provider sessions that wait for the user's first prompt.

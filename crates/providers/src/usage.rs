@@ -561,7 +561,15 @@ mod tests {
 
     fn profiles() -> (tempfile::TempDir, ManagedProfiles) {
         let temp = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
-        let profiles = ManagedProfiles::for_data_dir(temp.path())
+        // macOS temp lives under the /var -> /private/var link, which managed profiles refuse.
+        let root = if cfg!(target_os = "macos") {
+            temp.path()
+                .canonicalize()
+                .unwrap_or_else(|error| panic!("canonical temp: {error}"))
+        } else {
+            temp.path().to_path_buf()
+        };
+        let profiles = ManagedProfiles::for_data_dir(&root)
             .unwrap_or_else(|error| panic!("profiles: {error}"));
         (temp, profiles)
     }

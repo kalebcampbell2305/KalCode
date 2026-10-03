@@ -6,7 +6,7 @@
  * `agent_id`, `task_id`, `automation_id` and `causation_id` were added in CA-1 / L-1 (protocol
  * v1-compatible, EVENT_PROTOCOL.md §6; stored by schema v5). They default to `null` when absent.
  */
-export type Correlation = { workspaceId: string | null, threadId: string | null, missionId: string | null, providerId: string | null, requestId: string | null, agentId: string | null, taskId: string | null, automationId: string | null,
+export type Correlation = { workspaceId: string | null, threadId: string | null, missionId: string | null, providerId: string | null, requestId: string | null, agentId: string | null, taskId: string | null, automationId: string | null, 
 /**
  * Id of the event that directly caused this one (Time Machine causality, automation loop
  * detection). Set when a domain operation is a reaction to an event.

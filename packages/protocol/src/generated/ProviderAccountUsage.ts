@@ -6,19 +6,19 @@ import type { ProviderUsageWindow } from "./ProviderUsageWindow.ts";
  * Credential-free quota usage for one provider account. Values are only ever copied from data
  * the provider itself recorded; KalCode never estimates them.
  */
-export type ProviderAccountUsage = { accountId: string, status: ProviderUsageStatus,
+export type ProviderAccountUsage = { accountId: string, status: ProviderUsageStatus, 
 /**
  * Provider plan label ("Max 20x", "Pro"), when the provider recorded one.
  */
-plan: string | null,
+plan: string | null, 
 /**
  * Most constrained window first. Empty unless `status` is `available`.
  */
-windows: Array<ProviderUsageWindow>,
+windows: Array<ProviderUsageWindow>, 
 /**
  * RFC 3339 time of the provider read the numbers came from.
  */
-checkedAt: string | null,
+checkedAt: string | null, 
 /**
  * Short user-facing reason when unavailable / not checked.
  */

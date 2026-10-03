@@ -5,19 +5,19 @@ import type { DoctorArea } from "./DoctorArea.ts";
 /**
  * One check's result in a run.
  */
-export type CheckResult = {
+export type CheckResult = { 
 /**
  * Stable id, e.g. `kalcode.database`, `tools.node`, `providers.claude-code`.
  */
-id: string, area: DoctorArea, title: string, status: CheckStatus,
+id: string, area: DoctorArea, title: string, status: CheckStatus, 
 /**
  * One line: what was found ("Git 2.45.1", "OK", "3 entries to look at").
  */
-summary: string,
+summary: string, 
 /**
  * Why it couldn't be checked or was skipped.
  */
-reason: string | null, durationMs: number | null,
+reason: string | null, durationMs: number | null, 
 /**
  * Codes of this check's findings.
  */

@@ -2,20 +2,20 @@
 import type { KalVoiceResponse } from "./KalVoiceResponse.ts";
 import type { TalkRoute } from "./TalkRoute.ts";
 
-export type TalkResponse = { route: TalkRoute,
+export type TalkResponse = { route: TalkRoute, 
 /**
  * The command or request result (none for dictation).
  */
-response: KalVoiceResponse | null,
+response: KalVoiceResponse | null, 
 /**
  * Final transcript → route decided, in milliseconds.
  */
-recognizedMs: number,
+recognizedMs: number, 
 /**
  * Route decided → intent resolved (parsed, target bound), in milliseconds. Absent when no
  * intent was resolved (dictation, a rejection, a clarification).
  */
-intentMs?: number,
+intentMs?: number, 
 /**
  * Intent resolved → the executor starts the action, in milliseconds. Absent when nothing
  * was executed.

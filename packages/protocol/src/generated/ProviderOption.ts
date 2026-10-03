@@ -7,11 +7,11 @@ import type { ProviderId } from "./ProviderId.ts";
  * A provider the user can start a thread with (from the provider registry). Moved from
  * `kalcode_threads::types` in CA-1 with identical JSON.
  */
-export type ProviderOption = { id: ProviderId, displayName: string,
+export type ProviderOption = { id: ProviderId, displayName: string, 
 /**
  * Account label such as "Personal"; never a credential.
  */
-accountLabel: string | null, models: Array<ModelInfo>, supportsResume: boolean, supportsInterrupt: boolean,
+accountLabel: string | null, models: Array<ModelInfo>, supportsResume: boolean, supportsInterrupt: boolean, 
 /**
  * The provider routes permission prompts to KalCode for a decision.
  */

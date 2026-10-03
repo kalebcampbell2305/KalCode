@@ -3,11 +3,11 @@ import type { InteractiveSupport } from "./InteractiveSupport.ts";
 import type { ModelInfo } from "./ModelInfo.ts";
 import type { PermissionMapping } from "./PermissionMapping.ts";
 
-export type ProviderCapabilities = { streaming: boolean, interrupt: boolean, resume: boolean,
+export type ProviderCapabilities = { streaming: boolean, interrupt: boolean, resume: boolean, 
 /**
  * The provider routes permission prompts to the host (KalCode) for a decision.
  */
-hostApprovals: boolean, models: Array<ModelInfo>, permissionMappings: Array<PermissionMapping>,
+hostApprovals: boolean, models: Array<ModelInfo>, permissionMappings: Array<PermissionMapping>, 
 /**
  * How the provider runs in an interactive PTY pane (`docs/PROVIDER_PANES.md` §3–4).
  * `None` until the adapter declares it. Adopted in CA-1.

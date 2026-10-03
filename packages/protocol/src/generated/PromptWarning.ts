@@ -3,11 +3,11 @@
 /**
  * Content-free information safe to return when a user prompt needs owner confirmation.
  */
-export type PromptWarning = {
+export type PromptWarning = { 
 /**
  * Opaque, random, process-local confirmation handle.
  */
-reviewId: string,
+reviewId: string, 
 /**
  * Detector identifiers and counts only. Secret values and offsets are intentionally absent.
  */

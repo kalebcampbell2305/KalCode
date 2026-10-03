@@ -5,15 +5,15 @@ import type { ProcessRole } from "./ProcessRole.ts";
  * One process of the KalCode-owned tree. Only the executable name is collected — never the
  * command line or environment, which can carry secrets.
  */
-export type TrackedProcess = { pid: number, parentPid: number | null, name: string, role: ProcessRole,
+export type TrackedProcess = { pid: number, parentPid: number | null, name: string, role: ProcessRole, 
 /**
  * CPU use over the last process refresh as percent of the whole machine (0–100).
  */
-cpuPercent: number | null,
+cpuPercent: number | null, 
 /**
  * Resident set (working set on Windows), bytes.
  */
-rssBytes: number,
+rssBytes: number, 
 /**
  * The pid of the registered root this process belongs to (itself for a root).
  */
