@@ -300,6 +300,11 @@ export interface PlanFeatureGroup {
 
 /** The live build the `available` features below were verified in. */
 const LIVE = "0.1.8+923";
+/**
+ * The 0.1.9 build the features flipped for 0.1.9 were verified in. The release lead replaces the
+ * placeholder with the production-verified build number before merge (the roadmap test rejects it).
+ */
+const V019 = "0.1.9+1106";
 
 export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
   {
@@ -405,7 +410,8 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         id: "kalvoice-followups",
         label: "Contextual follow-ups and completion callbacks",
         from: "pro",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: V019,
       },
       {
         id: "kalvoice-agents",
@@ -512,7 +518,8 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         id: "agent-fleet",
         label: "Agent Fleet",
         from: "pro",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: V019,
         values: { pro: "Up to 4 agents", max: "Up to 10 agents", max2x: "Unlimited" },
       },
       { id: "squads", label: "Squads: reusable agent teams", from: "max", status: "coming_soon" },
