@@ -383,10 +383,15 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     await firstFrame.getByRole("button", { name: /Actions for pane/ }).click();
     await page.getByRole("menuitem", { name: "Move pane right" }).click();
     await expect.poll(async () => (await state(page, firstId as string)).bounds.x).not.toBe(oldBounds.bounds.x);
-    const movedRect = await firstViewport.boundingBox();
-    const movedBounds = await state(page, firstId as string);
-    expect(movedRect).not.toBeNull();
-    expect(Math.abs(movedBounds.bounds.x - (movedRect?.x ?? -10_000))).toBeLessThan(2);
+    // A first position update can arrive before the adaptive layout has settled.
+    // Keep the exact alignment requirement while awaiting the native geometry update.
+    await expect
+      .poll(async () => {
+        const movedRect = await firstViewport.boundingBox();
+        const movedBounds = await state(page, firstId as string);
+        return Math.abs(movedBounds.bounds.x - (movedRect?.x ?? -10_000));
+      })
+      .toBeLessThan(2);
     await firstFrame.getByRole("button", { name: /Actions for pane/ }).click();
     await page.getByRole("menuitem", { name: "Move pane left" }).click();
     await expect.poll(async () => (await state(page, firstId as string)).bounds.x).toBe(oldBounds.bounds.x);
