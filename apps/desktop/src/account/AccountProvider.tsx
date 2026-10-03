@@ -55,6 +55,11 @@ export interface AccountActions {
   refresh(): Promise<void>;
   logout(): Promise<void>;
   retry(): Promise<void>;
+  /**
+   * Re-reads KalVoice usage in the background (never busy, never blocks): surfaces that show it
+   * call this when they open, so requests used during the session appear.
+   */
+  refreshUsage(): Promise<void>;
 }
 
 export interface AccountContextValue extends AccountUiState {
@@ -102,6 +107,8 @@ export function AccountProvider({
 }) {
   const [state, dispatch] = useReducer(reduceAccountUi, initialAccountUiState);
   const [usage, setUsage] = useState<AccountUsageSnapshot | null>(null);
+  const latestState = useRef(state);
+  latestState.current = state;
   const generation = useRef(0);
   const confirmationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runtimeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -369,6 +376,12 @@ export function AccountProvider({
     };
   }, [clearTimers, client, runSnapshot]);
 
+  // Reads usage for the current authority; an account action that starts meanwhile wins.
+  const refreshUsageNow = useCallback(
+    () => refreshUsage(generation.current, latestState.current.snapshot, latestState.current.runtime),
+    [refreshUsage],
+  );
+
   const actions = useMemo<AccountActions>(
     () => ({
       startEmail: (email) => runSnapshot(() => client.startEmail(email)),
@@ -393,8 +406,9 @@ export function AccountProvider({
           : state.snapshot.phase === "confirming_plan"
             ? runSnapshot(() => client.refresh(), true)
             : runSnapshot(() => client.status()),
+      refreshUsage: refreshUsageNow,
     }),
-    [client, runSnapshot, state.snapshot.phase, state.runtime.phase],
+    [client, refreshUsageNow, runSnapshot, state.snapshot.phase, state.runtime.phase],
   );
 
   const value = useMemo<AccountContextValue>(() => ({ ...state, usage, actions }), [actions, state, usage]);

@@ -12,7 +12,12 @@ import { billingPriceCatalog } from "./billing-plans";
 import { billingService } from "./billing-routes";
 import { d1BillingStore } from "./billing-store";
 import { emailAuthService } from "./email-auth";
-import { type DistributionStatsBinding, insightsService, isDistributionStatsBinding } from "./insights";
+import {
+  type DistributionStatsBinding,
+  type InsightsCache,
+  insightsService,
+  isDistributionStatsBinding,
+} from "./insights";
 import { importSigningKey, parsePreviousPublicKeys } from "./keys";
 import { openIdAuthService } from "./openid-auth-routes";
 import type { OpenIdClientConfig } from "./openid-connect";
@@ -73,6 +78,19 @@ function loadSigningKey(secret: string | undefined): Promise<EntitlementSigningK
     });
   }
   return cachedKey;
+}
+
+// Owner revenue reads page through Stripe; keep the last lists for the isolate (the service itself
+// is rebuilt per request). Keyed by the Stripe key so a rotated key or account never sees old data.
+let insightsCacheKey: string | undefined;
+let insightsCache: InsightsCache = { data: null };
+
+function insightsCacheFor(stripeKey: string): InsightsCache {
+  if (stripeKey !== insightsCacheKey) {
+    insightsCacheKey = stripeKey;
+    insightsCache = { data: null };
+  }
+  return insightsCache;
 }
 
 export function depsFromEnv(env: Env): Deps {
@@ -153,6 +171,7 @@ export function depsFromEnv(env: Env): Deps {
     catalog: prices.ok ? prices : null,
     now,
     log,
+    cache: insightsCacheFor(env.STRIPE_SECRET_KEY ?? ""),
   });
   return {
     store: d1Store(env.DB),

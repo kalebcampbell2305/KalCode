@@ -1,3 +1,5 @@
+import { randomBase64Url } from "./crypto";
+
 export interface OAuthAttempt {
   stateHash: string;
   codeChallenge: string;
@@ -52,6 +54,16 @@ interface OpenIdAttemptRow extends OAuthAttemptRow {
 }
 
 export function d1AccountStore(db: D1Database) {
+  /**
+   * The id for a brand-new identity account. Identity-derived ids are reused by a person who
+   * deleted their account and signs up again; a deleted account is never restored, so that
+   * person gets a fresh id while the deleted row keeps its redacted history.
+   */
+  const newIdentityAccountId = async (derivedId: string): Promise<string> => {
+    const taken = await db.prepare("SELECT 1 AS taken FROM accounts WHERE id = ?1").bind(derivedId).first();
+    return taken ? `acct_${randomBase64Url(24)}` : derivedId;
+  };
+
   return {
     async allowRateLimit(input: {
       bucketHash: string;
@@ -271,8 +283,17 @@ export function d1AccountStore(db: D1Database) {
 
       const existing = await this.identityAccount("github", input.subject);
       if (existing) return reconcile(existing);
+      const accountId = await newIdentityAccountId(input.accountId);
       try {
         await db.batch([
+          // An identity still bound to a deleted account no longer signs anyone in; release it.
+          db
+            .prepare(
+              `DELETE FROM account_identities
+               WHERE provider = 'github' AND subject = ?1
+                 AND account_id IN (SELECT id FROM accounts WHERE deleted_at IS NOT NULL)`,
+            )
+            .bind(input.subject),
           db
             .prepare(
               `INSERT INTO accounts (id, email, email_verified_at, created_at)
@@ -282,13 +303,13 @@ export function d1AccountStore(db: D1Database) {
                )
                ON CONFLICT (id) DO NOTHING`,
             )
-            .bind(input.accountId, input.email, input.now, input.subject),
+            .bind(accountId, input.email, input.now, input.subject),
           db
             .prepare(
               `INSERT INTO account_identities (provider, subject, account_id, created_at)
                VALUES ('github', ?1, ?2, ?3) ON CONFLICT (provider, subject) DO NOTHING`,
             )
-            .bind(input.subject, input.accountId, input.now),
+            .bind(input.subject, accountId, input.now),
         ]);
       } catch {
         const raced = await this.identityAccount("github", input.subject);
@@ -353,8 +374,17 @@ export function d1AccountStore(db: D1Database) {
 
       const existing = await this.identityAccount(input.provider, input.subject);
       if (existing) return reconcile(existing);
+      const accountId = await newIdentityAccountId(input.accountId);
       try {
         await db.batch([
+          // An identity still bound to a deleted account no longer signs anyone in; release it.
+          db
+            .prepare(
+              `DELETE FROM account_identities
+               WHERE provider = ?1 AND subject = ?2
+                 AND account_id IN (SELECT id FROM accounts WHERE deleted_at IS NOT NULL)`,
+            )
+            .bind(input.provider, input.subject),
           db
             .prepare(
               `INSERT INTO accounts (id, email, email_verified_at, created_at)
@@ -364,13 +394,13 @@ export function d1AccountStore(db: D1Database) {
                )
                ON CONFLICT (id) DO NOTHING`,
             )
-            .bind(input.accountId, input.email, input.now, input.provider, input.subject),
+            .bind(accountId, input.email, input.now, input.provider, input.subject),
           db
             .prepare(
               `INSERT INTO account_identities (provider, subject, account_id, created_at)
                VALUES (?1, ?2, ?3, ?4) ON CONFLICT (provider, subject) DO NOTHING`,
             )
-            .bind(input.provider, input.subject, input.accountId, input.now),
+            .bind(input.provider, input.subject, accountId, input.now),
         ]);
       } catch {
         const raced = await this.identityAccount(input.provider, input.subject);

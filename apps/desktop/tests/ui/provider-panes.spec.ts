@@ -303,6 +303,12 @@ test.describe("provider panes", () => {
       .click();
     await expect(launcher(page).getByText("Provider panes aren't available in this build yet.")).toBeVisible();
     await expect(pane(page)).toHaveCount(0);
+    // A freshly opened launcher starts clean: the previous launch's refusal isn't shown again.
+    await launcher(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(launcher(page)).toHaveCount(0);
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await expect(launcher(page)).toBeVisible();
+    await expect(page.getByText("Provider panes aren't available in this build yet.")).toHaveCount(0);
   });
 
   test("a Codex pane: limited status, approvals in Codex's own prompt, never an Approve button", async ({ page }) => {

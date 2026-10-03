@@ -118,7 +118,7 @@ describe("agentSections", () => {
         thread({ name: "blocked", status: "waiting_for_dependency" }),
         thread({ name: "idle", status: "idle" }),
         thread({ name: "done-recent", status: "completed", lastActivityAt: minutesAgo(10) }),
-        thread({ name: "done-old", status: "failed", lastActivityAt: minutesAgo(120) }),
+        thread({ name: "done-old", status: "completed", lastActivityAt: minutesAgo(120) }),
         thread({ name: "archived", status: "editing", archivedAt: minutesAgo(5) }),
       ],
       NOW,
@@ -129,6 +129,23 @@ describe("agentSections", () => {
     expect(sections.idle.map((t) => t.name)).toEqual(["idle"]);
     expect(sections.finished.map((t) => t.name)).toEqual(["done-recent"]);
     expect(runningAgentCount(sections)).toBe(4);
+  });
+
+  it("puts failed agents in needs-you (like the Sidebar badge and Fleet chips), however old", () => {
+    const sections = agentSections(
+      [
+        thread({ name: "failed-old", status: "failed", lastActivityAt: minutesAgo(120) }),
+        thread({ name: "failed-new", status: "failed", lastActivityAt: minutesAgo(2) }),
+        thread({ name: "reply", status: "waiting_for_user", lastActivityAt: minutesAgo(5) }),
+        thread({ name: "done", status: "completed", lastActivityAt: minutesAgo(1) }),
+      ],
+      NOW,
+    );
+    expect(sections.needsYou.map((t) => t.name)).toEqual(["failed-new", "reply", "failed-old"]);
+    expect(sections.finished.map((t) => t.name)).toEqual(["done"]);
+    expect(needsYouCount(sections.needsYou, [])).toBe(3);
+    // Failed agents have stopped: they need the person but aren't running.
+    expect(runningAgentCount(sections)).toBe(1);
   });
 
   it("is empty for no threads", () => {

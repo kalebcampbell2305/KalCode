@@ -85,3 +85,20 @@ test("unavailable projects stay pinned and visible; escape cancels a drag", asyn
   await page.setViewportSize({ width: 1100, height: 720 });
   await page.screenshot({ path: "test-results/projects-pinned.png" });
 });
+
+test("pinned projects stay distinguishable in the narrow sidebar", async ({ page }) => {
+  await open(page);
+  await pin(page, "kalcode-site");
+  await pin(page, "api-server");
+  await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+  const tiles = rows(page);
+  await expect(tiles.first()).toHaveAccessibleName("kalcode-site, pinned");
+  // Each tile shows its project's initial; the pin is a badge beside it, not a replacement.
+  await expect(tiles.nth(0)).toContainText("K");
+  await expect(tiles.nth(1)).toContainText("A");
+  await expect(tiles.nth(0).locator("svg")).toHaveCount(1);
+  await page.screenshot({
+    path: "test-results/projects-narrow-pins.png",
+    clip: { x: 0, y: 0, width: 260, height: 860 },
+  });
+});

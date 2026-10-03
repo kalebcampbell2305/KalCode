@@ -148,9 +148,10 @@ describe("Providers → Accounts (Stable)", () => {
     expect(usage(claude, "Workspace default in")).toBe("None");
 
     const codexWork = card("Codex · Work");
-    expect(within(codexWork).getByText("No threads")).toBeInTheDocument();
+    expect(within(codexWork).getByText("No agents or threads")).toBeInTheDocument();
     expect(within(codexWork).getByText("Signed out", { exact: true })).toBeInTheDocument();
     await openDetails(user, codexWork, "Work");
+    expect(usage(codexWork, "Active agents")).toBe("None");
     expect(usage(codexWork, "Active threads")).toBe("None");
 
     const gemini = card("Gemini CLI · Personal");

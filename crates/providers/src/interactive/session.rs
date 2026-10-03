@@ -775,7 +775,7 @@ impl Shared {
                     Some("rate_limit") => "Claude Code hit a rate limit. Try again in a moment.",
                     Some("overloaded") => "Claude Code's service is overloaded. Try again soon.",
                     Some("authentication_failed" | "oauth_org_not_allowed") => {
-                        "Claude Code couldn't sign in. Sign in again in the pane."
+                        "Claude Code's sign-in for this account ended. Sign in to it again in Providers, then start a new agent."
                     }
                     Some("billing_error" | "account_on_hold") => {
                         "Claude Code reported an account or billing problem."
@@ -1471,6 +1471,18 @@ mod tests {
             matches!(&events[0], AgentEvent::Error { code, recoverable: true, .. } if code == "provider_rate_limit")
         );
         assert_eq!(events[1], AgentEvent::TurnCompleted { ok: false });
+
+        // KalCode marks the account expired on this code and refuses its next launch, so a
+        // sign-in inside this pane alone can't restore it: point to the account's sign-in.
+        s.handle(record(
+            HookEvent::StopFailure,
+            json!({"error": "authentication_failed"}),
+        ));
+        let events = drain(&rx);
+        assert!(matches!(&events[0], AgentEvent::Error { code, message, .. }
+                if code == "provider_authentication_failed"
+                    && message.contains("in Providers")
+                    && !message.contains("in the pane")));
     }
 
     #[test]

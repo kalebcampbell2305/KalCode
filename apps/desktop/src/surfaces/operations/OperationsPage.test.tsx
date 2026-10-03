@@ -1016,6 +1016,20 @@ describe("OperationsPage", () => {
     expect(screen.queryByText("Wrong workspace history")).not.toBeInTheDocument();
   });
 
+  it("names the saved permission mode agent tasks actually start in", async () => {
+    // Native starts operation agents in the saved startable default (the same value
+    // `thread_options` reports), so the notice must not promise Auto to a Plan or Approve user.
+    const user = userEvent.setup();
+    renderPage(operations());
+    await user.click(screen.getByRole("tab", { name: "Queue" }));
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "agent");
+    await screen.findByRole("combobox", { name: "Provider" });
+    const notice = screen.getByText(/Agent tasks start in/);
+    expect(notice).toHaveTextContent("Agent tasks start in Approve");
+    expect(notice).not.toHaveTextContent("Auto");
+  });
+
   it("lists a provider's accounts default first in natural order, with sign-in state", async () => {
     const accounts = [
       account("c10", "Codex 10"),

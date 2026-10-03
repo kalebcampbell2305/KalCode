@@ -124,6 +124,11 @@ export function providerPaneAliases(
   return aliases;
 }
 
+/** A pane content's provider ordinal names. Agent panes are keyed by their thread id. */
+export function providerPaneAliasesOf(aliases: ReadonlyMap<string, string[]>, content: PaneContent): string[] {
+  return aliases.get(content.kind === "agent" ? `thread:${content.agentId}` : contentKey(content)) ?? [];
+}
+
 export type PaneMutationResult =
   | { handled: true; layout: PaneLayout; paneId?: string }
   | { handled: false; message: string };
