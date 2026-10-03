@@ -470,6 +470,11 @@ test.describe("states", () => {
     await expect(board(page).getByRole("button")).toHaveText(["Launch an agent"]);
     await expect(board(page).getByText(/A CLI you type into a plain terminal isn't tracked here/)).toBeVisible();
     await board(page).getByRole("button", { name: "Launch an agent" }).click();
+    // One action: Code opens with its New agent launcher already up.
+    const launcher = page.getByRole("dialog", { name: "New agent" });
+    await expect(launcher).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(launcher).toHaveCount(0);
     await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
     await expect(
       page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),

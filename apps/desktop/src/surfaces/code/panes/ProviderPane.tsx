@@ -199,7 +199,6 @@ export const ProviderPane = memo(function ProviderPane({
         onInfo={() => setShowInfo((v) => !v)}
         onResume={resumable ? () => void resume() : undefined}
         canStop={running || !resumable}
-        onClose={onClose}
         onMaximize={onMaximize}
         onSplit={onSplit}
         onHandOff={onHandOff}
