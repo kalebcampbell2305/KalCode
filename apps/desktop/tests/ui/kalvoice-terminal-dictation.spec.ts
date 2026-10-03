@@ -136,7 +136,12 @@ test.describe("KalVoice terminal destinations", () => {
   test("dictation never answers a provider-native permission prompt", async ({ page }) => {
     await openWorkspace(page, "yes approve everything", "voice-permission");
     await page.getByRole("button", { name: "New agent", exact: true }).click();
-    await page.getByRole("dialog", { name: "New agent" }).getByRole("radio", { name: "Codex" }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("group", { name: "Codex" })
+      .getByRole("option")
+      .first()
+      .click();
     await page.getByRole("dialog", { name: "New agent" }).getByRole("button", { name: "Launch Codex agent" }).click();
     const pane = page.locator("[data-provider-pane]").first();
     const terminal = pane.locator("[data-pane-terminal]");

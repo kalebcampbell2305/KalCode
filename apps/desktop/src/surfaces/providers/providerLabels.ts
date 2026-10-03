@@ -2,6 +2,7 @@ import type {
   AdapterState,
   MappingFidelity,
   PermissionMode,
+  ProviderAccount,
   ProviderCapabilities,
   ProviderDetection,
   ProviderStatus,
@@ -79,23 +80,68 @@ export function needsSignIn(status: ProviderStatus): boolean {
 }
 
 /**
- * Sign-in guidance for a provider whose only supported sign-in for KalCode threads is the
- * managed account card. Threads never use a CLI's standalone profile, so a terminal command
- * would sign in the wrong place. `null` keeps the provider's own command guidance.
+ * One line under Setup's Sign in button for a provider whose only supported sign-in for KalCode
+ * is the managed account (its own isolated profile). `null` keeps the provider's own command
+ * guidance. A terminal login would sign in a different profile, so it is never suggested.
  */
 export function accountSignInHint(status: Pick<ProviderStatus, "id" | "displayName">): string | null {
-  const managed: Record<string, { opens: string; command: string }> = {
-    "gemini-cli": { opens: "Gemini opens Google sign-in", command: "gemini" },
-    "claude-code": { opens: "Claude Code opens its sign-in", command: "claude" },
-    codex: { opens: "Codex opens ChatGPT sign-in", command: "codex" },
+  const opens: Record<string, string> = {
+    "gemini-cli": "Gemini opens Google sign-in",
+    "claude-code": "Claude Code opens its sign-in",
+    codex: "Codex opens ChatGPT sign-in",
   };
-  const provider = managed[status.id];
-  if (!provider) return null;
-  return (
-    `Open Accounts, add a ${status.displayName} account and choose Sign in. ${provider.opens} in ` +
-    `your browser for that account only. Running ${provider.command} in a terminal signs in a separate ` +
-    "profile that KalCode threads don't use."
+  const provider = opens[status.id];
+  return provider ? `${provider} in your browser for that account only.` : null;
+}
+
+/**
+ * Sign-in for a managed provider, read from KalCode's own accounts: the one authoritative state
+ * the Accounts tab shows too. `null` while the accounts haven't loaded.
+ */
+export function managedSignInLabel(
+  accounts: readonly Pick<ProviderAccount, "authenticationState">[] | null,
+): Label | null {
+  if (!accounts) return null;
+  const signedIn = accounts.filter((account) => account.authenticationState === "authenticated").length;
+  if (signedIn > 0) {
+    return {
+      tone: "success",
+      label: `Signed in (${signedIn} ${signedIn === 1 ? "account" : "accounts"})`,
+      detail: null,
+    };
+  }
+  if (accounts.length === 0) return { tone: "idle", label: "No account yet", detail: null };
+  return { tone: "waiting", label: "Not signed in", detail: null };
+}
+
+/**
+ * "Same sign-in as Work" when another KalCode account of the same provider reports the same
+ * provider identity: both names share one provider login, so they share its plan and usage.
+ */
+export function sameSignInLabel(
+  account: Pick<ProviderAccount, "id" | "providerId" | "providerReportedIdentity">,
+  accounts: readonly Pick<
+    ProviderAccount,
+    "id" | "providerId" | "providerReportedIdentity" | "displayName" | "isDefault" | "archivedAt"
+  >[],
+): string | null {
+  const identity = account.providerReportedIdentity?.trim().toLowerCase();
+  if (!identity) return null;
+  const twins = accounts.filter(
+    (other) =>
+      other.id !== account.id &&
+      other.archivedAt === null &&
+      other.providerId === account.providerId &&
+      other.providerReportedIdentity?.trim().toLowerCase() === identity,
   );
+  if (twins.length === 0) return null;
+  const [first] = [...twins].sort(
+    (a, b) =>
+      Number(b.isDefault) - Number(a.isDefault) ||
+      a.displayName.localeCompare(b.displayName, undefined, { numeric: true, sensitivity: "base" }),
+  );
+  const name = first?.displayName.trim() || "Unnamed account";
+  return twins.length === 1 ? `Same sign-in as ${name}` : `Same sign-in as ${name} +${twins.length - 1}`;
 }
 
 /** Whether to show install guidance. */

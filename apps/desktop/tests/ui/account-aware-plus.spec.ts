@@ -76,7 +76,11 @@ test("Dashboard Launch an agent routes through Code, implicitly uses sole Claude
   await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   const dialog = launcher(page);
   await expect(dialog).toBeVisible();
-  await expectSoleAccount(dialog, "Personal");
+  // Claude Code's sole account is already chosen; there is no account step to take.
+  const claude = dialog.getByRole("group", { name: "Claude Code" });
+  await expectSoleAccount(claude, "Personal");
+  await expect(claude.getByRole("option")).toHaveCount(1);
+  await expect(claude.getByRole("option")).toHaveAttribute("aria-selected", "true");
   await expect(dialog.getByRole("button", { name: "Launch Claude Code agent" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Launch Claude Code agent" }).click();
 
@@ -92,20 +96,20 @@ test("Code + immediately offers multiple Codex accounts, signs Work in inline an
   await openWorkspace(page, "agent-picker");
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   const dialog = launcher(page);
-  await dialog.getByRole("radio", { name: "Codex" }).click();
-
-  const accounts = dialog.getByRole("combobox", { name: "Account" });
-  await expect(accounts).toBeVisible();
-  await expect(accounts.locator("option")).toHaveText([/Personal.*Default/, /Work.*Signed out/]);
-  await accounts.selectOption(CODEX_WORK);
+  // Every account of every provider is one list; Codex's two accounts are its own group.
+  const accounts = dialog.getByRole("group", { name: "Codex" }).getByRole("option");
+  await expect(accounts).toHaveText([/Personal/, /Work.*Signed out/]);
+  const work = accounts.filter({ hasText: "Work" });
+  await work.click();
+  await expect(work).toHaveAttribute("aria-selected", "true");
   await expect(dialog.getByRole("button", { name: "Sign in to Work" })).toBeVisible();
   await page.screenshot({ path: fileURLToPath(new URL("agent-picker-1040x760.png", OUT)) });
   await expectNoSeriousA11yViolations(page, '[role="dialog"]');
 
   await dialog.getByRole("button", { name: "Sign in to Work" }).click();
   await expect(dialog.getByRole("button", { name: "Sign in to Work" })).toHaveCount(0);
-  await expect(accounts).toHaveValue(CODEX_WORK);
-  await expect(accounts.locator("option:checked")).toHaveText("Work");
+  await expect(work).toHaveAttribute("aria-selected", "true");
+  await expect(dialog.getByRole("option", { selected: true })).toContainText("Work");
   await expect(dialog.getByRole("button", { name: "Launch Codex agent" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Launch Codex agent" }).click();
 

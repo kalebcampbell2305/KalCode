@@ -94,6 +94,7 @@ const SCENES: Scene[] = [
     run: async (page, theme) => {
       await open(page, "", theme);
       await nav(page, "Providers");
+      await page.getByRole("tab", { name: "Setup" }).click();
       await expect(page.getByText("Installed, version 2.1.282")).toBeVisible();
     },
   },

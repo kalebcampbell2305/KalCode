@@ -2,7 +2,14 @@
  * Deterministic provider-account test double for unit tests and the ui-test build only.
  * It models public metadata and opaque login handles; it never models or stores credentials.
  */
-import type { IpcError, ProviderAccount, ProviderAccountBinding, ProviderAccountBindingKind } from "@kalcode/protocol";
+import type {
+  IpcError,
+  ProviderAccount,
+  ProviderAccountBinding,
+  ProviderAccountBindingKind,
+  ProviderAccountUsage,
+  ProviderUsageWindow,
+} from "@kalcode/protocol";
 import type { DashboardHandlers } from "./dashboard.ts";
 
 const IDS = {
@@ -97,6 +104,40 @@ function account(
     lastErrorCode: null,
     archivedAt: null,
   };
+}
+
+const MINUTE = 60_000;
+
+function usageWindow(id: string, remainingPercent: number, resetsInMinutes: number, now: number): ProviderUsageWindow {
+  const label = id === "five_hour" ? "5-hour" : "Weekly";
+  return { id, label, remainingPercent, resetsAt: new Date(now + resetsInMinutes * MINUTE).toISOString() };
+}
+
+/**
+ * Realistic fixture usage, relative to now so reset countdowns read naturally in ui-test
+ * screenshots. Seeded accounts: Claude "Personal" 64% 5-hour / 42% weekly; Codex "Personal"
+ * 56% weekly; Codex "Work" signed out; Gemini unavailable. Accounts created during a test get a
+ * second profile per provider: Claude at 91%, Codex at 8% (running low).
+ */
+function fixtureUsage(account: ProviderAccount, now: number): ProviderAccountUsage {
+  const base = { accountId: account.id, plan: null, windows: [], checkedAt: null };
+  if (account.providerId !== "claude-code" && account.providerId !== "codex") {
+    return { ...base, status: "unavailable", reason: "This provider doesn't report plan usage" };
+  }
+  if (account.authenticationState === "not_authenticated") {
+    return { ...base, status: "not_checked", reason: "Signed out" };
+  }
+  const checkedAt = new Date(now - 40_000).toISOString();
+  const windows: ProviderUsageWindow[] =
+    account.id === IDS.claudePersonal
+      ? [usageWindow("weekly", 42, 3 * 1440 + 5 * 60, now), usageWindow("five_hour", 64, 2 * 60 + 14, now)]
+      : account.id === IDS.codexPersonal
+        ? [usageWindow("weekly", 56, 4 * 1440 + 9 * 60, now), usageWindow("five_hour", 88, 3 * 60 + 2, now)]
+        : account.providerId === "claude-code"
+          ? [usageWindow("five_hour", 91, 4 * 60 + 40, now), usageWindow("weekly", 96, 6 * 1440, now)]
+          : [usageWindow("weekly", 8, 1440 + 6 * 60, now)];
+  const plan = account.providerId === "claude-code" ? "Max 20x" : account.id === IDS.codexPersonal ? "Plus" : "Pro";
+  return { ...base, status: "available", plan, windows, checkedAt, reason: null };
 }
 
 export interface ProviderAccountsMemory {
@@ -254,6 +295,14 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
         requireCore();
         const provider = providerId(args.providerId);
         return bindings.delete(`${provider}:${bindingKind(args.kind)}:${accountId(args.scopeId)}`);
+      },
+      provider_account_usage: (args) => {
+        requireCore();
+        const ids = Array.isArray(args.accountIds) ? new Set(args.accountIds.map(accountId)) : null;
+        const now = Date.now();
+        return accounts
+          .filter((candidate) => candidate.archivedAt === null && (ids === null || ids.has(candidate.id)))
+          .map((candidate) => fixtureUsage(candidate, now));
       },
       provider_account_bindings_list: (args) => {
         requireCore();

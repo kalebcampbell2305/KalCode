@@ -966,4 +966,33 @@ describe("WorkspaceProvider lifecycle", () => {
     expect(await retained.activate("c")).toBe(false);
     expect(activate).toHaveBeenCalledTimes(1);
   });
+  it("keeps the context value when a refresh reads back an unchanged snapshot", async () => {
+    const f = await fixture("old");
+    let status: TerminalInfo["status"] = "running";
+    vi.mocked(f.client.listWorkspaces).mockImplementation(async () => [workspace("old"), workspace("other")]);
+    vi.mocked(f.client.activeWorkspace).mockImplementation(async () => workspace("old"));
+    vi.mocked(f.client.listTerminals).mockImplementation(async () => [{ ...terminal, workspaceId: "old", status }]);
+    vi.mocked(f.client.runningTerminals).mockImplementation(async () => [{ ...terminal, workspaceId: "old" }]);
+    const view = await mount(f);
+    await act(async () => {
+      await view.result.current.refresh();
+    });
+    const before = view.result.current;
+    await act(async () => {
+      await before.refresh();
+    });
+    // Fresh objects with the same fields: same value, arrays and records.
+    expect(view.result.current).toBe(before);
+    status = "exited";
+    await act(async () => {
+      await before.refresh();
+    });
+    const after = view.result.current;
+    expect(after).not.toBe(before);
+    expect(after.terminals).not.toBe(before.terminals);
+    expect(after.terminals[0]?.status).toBe("exited");
+    expect(after.workspaces).toBe(before.workspaces);
+    expect(after.active).toBe(before.active);
+    expect(after.running).toBe(before.running);
+  });
 });

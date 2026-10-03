@@ -11,14 +11,24 @@ import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import { KalCodeClient } from "../../../ipc/client.ts";
 import { createMemoryTransport, type MemoryTransport } from "../../../ipc/memoryTransport.ts";
-import { PaneAccountChip, paneAccountLabel, resolvePaneAccount } from "./PaneParts.tsx";
+import {
+  PaneAccountChip,
+  PaneStatusChip,
+  paneAccountLabel,
+  resolvePaneAccount,
+  samePaneAccount,
+} from "./PaneParts.tsx";
 import { PaneChannel, paneStartMode, resolvePaneStartMode, splitInput } from "./paneChannel.ts";
 import {
+  approvalAnnouncement,
+  canResumePane,
   channelNote,
+  endedSummary,
   isAnswerInProvider,
-  modelLabel,
+  paneEffort,
   paneInfoCopy,
   paneLabel,
+  paneModel,
   paneStatus,
   providerIdentity,
 } from "./paneLabels.ts";
@@ -104,11 +114,32 @@ describe("pane labels", () => {
     expect(isAnswerInProvider(null)).toBe(false);
   });
 
-  it("labels the pane region and the model", () => {
+  it("labels the pane region, and shows the exact model and effort or nothing (never a guess)", () => {
     const thread = { name: "Fix login", providerId: "claude-code", providerName: "Claude Code", model: null };
     expect(paneLabel(thread as ThreadSummary)).toBe("Fix login, Claude Code agent");
-    expect(modelLabel(thread as ThreadSummary)).toBe("Account default");
-    expect(modelLabel({ ...thread, providerId: "codex" } as ThreadSummary)).toBe("Provider default");
+    expect(paneModel({ model: null })).toBeNull();
+    expect(paneModel({ model: "  " })).toBeNull();
+    expect(paneModel({ model: "claude-opus-4-1" })).toBe("claude-opus-4-1");
+    expect(paneEffort({ effort: null })).toBeNull();
+    expect(paneEffort({ effort: "default" })).toBeNull();
+    expect(paneEffort({ effort: "high" })).toBe("High");
+    expect(paneEffort({ effort: "xhigh" })).toBe("Extra high");
+    expect(paneEffort({ effort: "minimal" })).toBe("Minimal");
+  });
+
+  it("offers Resume only for an agent whose provider ended, and says what happened", () => {
+    expect(canResumePane("failed", false)).toBe(true);
+    expect(canResumePane("interrupted", false)).toBe(true);
+    expect(canResumePane("completed", false)).toBe(true);
+    expect(canResumePane("idle", false)).toBe(false);
+    expect(canResumePane("failed", true), "a live process is never offered a second start").toBe(false);
+    expect(endedSummary("failed", "Codex", null, "Codex isn't signed in.")).toBe("Codex isn't signed in.");
+    expect(endedSummary("completed", "Claude Code", 0, null)).toBe("Finished");
+    expect(endedSummary("completed", "Claude Code", 2, null)).toBe("Exited with code 2");
+    expect(endedSummary("interrupted", "Codex", null, null)).toBe("Stopped · resume to pick up where it left off");
+    expect(approvalAnnouncement("Claude Code", "Fix login")).toBe(
+      "Claude Code needs approval in Fix login. Press Ctrl+Shift+E to answer.",
+    );
   });
 
   it("uses the exact managed account and marks stale account snapshots truthfully", () => {
@@ -124,12 +155,27 @@ describe("pane labels", () => {
       archivedAt: null,
     } as ProviderAccount;
 
-    expect(resolvePaneAccount(thread, [active], false)).toEqual({ label: "Work profile", state: "active" });
+    const usageAccount = (displayName: string) => ({ id: thread.providerAccountId, displayName, providerId: "codex" });
+    expect(resolvePaneAccount(thread, [active], false)).toEqual({
+      label: "Work profile",
+      state: "active",
+      usageAccount: usageAccount("Work profile"),
+    });
     // The shared account name, so a blank-named account reads the same here as everywhere else.
     expect(resolvePaneAccount(thread, [{ ...active, displayName: "  " }], false)).toEqual({
       label: "Unnamed account",
       state: "active",
+      usageAccount: usageAccount("Unnamed account"),
     });
+    // Usage is only ever this thread's exact account; a gone or unmanaged account shows none.
+    expect(resolvePaneAccount(thread, [], false)?.usageAccount).toBeUndefined();
+    expect(resolvePaneAccount({ ...thread, providerAccountId: null }, [active], false)?.usageAccount).toBeUndefined();
+    expect(
+      samePaneAccount(resolvePaneAccount(thread, [active], false), resolvePaneAccount(thread, [{ ...active }], false)),
+    ).toBe(true);
+    expect(samePaneAccount(resolvePaneAccount(thread, [active], false), resolvePaneAccount(thread, null, false))).toBe(
+      false,
+    );
     expect(paneAccountLabel(requirePaneAccount(resolvePaneAccount(thread, null, false)))).toBe(
       "Work (checking status)",
     );
@@ -145,10 +191,17 @@ describe("pane labels", () => {
     ).toEqual({ label: "Work", state: "archived_or_unavailable" });
   });
 
-  it("exposes provider context for the visible account chip without an unsupported ARIA label", () => {
+  it("exposes provider context for the visible account name without an unsupported ARIA label", () => {
     render(createElement(PaneAccountChip, { account: { label: "Work profile", state: "active" } }));
-    expect(screen.getByText("Provider")).toHaveClass("visually-hidden");
-    expect(screen.getByText(/Account .* Work profile/)).toBeVisible();
+    expect(screen.getByText("Provider account")).toHaveClass("visually-hidden");
+    expect(screen.getByTitle("Provider account: Work profile")).toHaveTextContent("Provider account Work profile");
+  });
+
+  it("renders the status chip as glyph + words that never shrink into each other", () => {
+    const { container } = render(createElement(PaneStatusChip, { status: "idle" }));
+    const chip = container.querySelector("[data-pane-status]");
+    expect(chip).toHaveTextContent(/^IDLE$/);
+    expect(chip?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 });
 

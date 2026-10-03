@@ -1,0 +1,304 @@
+import type { EventEnvelope, ProviderAccount, ProviderAccountUsage } from "@kalcode/protocol";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { KalCodeClient } from "../../ipc/client.ts";
+import { EventFeed } from "../../runtime/eventFeed.ts";
+import { usageSummary, useAccountUsage } from "./accountUsage.ts";
+import {
+  nextUsageMap,
+  toAccountUsageState,
+  USAGE_AFTER_SESSION_DELAY_MS,
+  USAGE_FOCUS_THROTTLE_MS,
+  USAGE_REFRESH_MS,
+  USAGE_STALE_AFTER_MS,
+  useAccountUsageReader,
+} from "./accountUsageReader.ts";
+import { ProviderAccountSessionsProvider } from "./ProviderAccountSessions.tsx";
+
+const runtime = vi.hoisted(() => ({ client: null as unknown as KalCodeClient, feed: null as EventFeed | null }));
+vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => runtime }));
+
+const NOW = Date.parse("2026-10-03T17:00:00.000Z");
+const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
+
+function account(id: string, providerId: string): ProviderAccount {
+  return {
+    id,
+    providerId,
+    displayName: id,
+    providerReportedIdentity: null,
+    authenticationState: "authenticated",
+    isDefault: true,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    lastUsedAt: null,
+    lastCheckedAt: null,
+    lastErrorCode: null,
+    archivedAt: null,
+  };
+}
+
+const CLAUDE = account("claude-a", "claude-code");
+const CODEX = account("codex-b", "codex");
+const GEMINI = account("gemini-c", "gemini-cli");
+
+function claudeUsage(checkedAgoMs = 30_000): ProviderAccountUsage {
+  return {
+    accountId: CLAUDE.id,
+    status: "available",
+    plan: "Max 20x",
+    windows: [
+      { id: "weekly", label: "Weekly", remainingPercent: 42, resetsAt: iso(3 * 86_400_000) },
+      { id: "five_hour", label: "5-hour", remainingPercent: 64, resetsAt: iso(134 * 60_000) },
+    ],
+    checkedAt: iso(-checkedAgoMs),
+    reason: null,
+  };
+}
+
+const CODEX_LOW: ProviderAccountUsage = {
+  accountId: CODEX.id,
+  status: "available",
+  plan: "Pro",
+  windows: [{ id: "weekly", label: "Weekly", remainingPercent: 8, resetsAt: iso(86_400_000) }],
+  checkedAt: iso(-60_000),
+  reason: null,
+};
+
+const GEMINI_NONE: ProviderAccountUsage = {
+  accountId: GEMINI.id,
+  status: "unavailable",
+  plan: null,
+  windows: [],
+  checkedAt: null,
+  reason: "This provider doesn't report plan usage",
+};
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function usageClient(read: () => Promise<ProviderAccountUsage[]>) {
+  const providerAccountUsage = vi.fn(read);
+  return { client: { providerAccountUsage } as unknown as KalCodeClient, providerAccountUsage };
+}
+
+describe("usage state mapping", () => {
+  it("labels real numbers fresh or stale by the provider read's age", () => {
+    expect(toAccountUsageState(claudeUsage(), NOW)).toMatchObject({ status: "fresh", plan: "Max 20x" });
+    expect(toAccountUsageState(claudeUsage(USAGE_STALE_AFTER_MS + 1), NOW).status).toBe("stale");
+    expect(usageSummary(toAccountUsageState(CODEX_LOW, NOW))).toEqual({ short: "8% left", low: true, tone: "low" });
+    expect(toAccountUsageState(GEMINI_NONE, NOW)).toMatchObject({
+      status: "unavailable",
+      windows: [],
+      reason: "This provider doesn't report plan usage",
+    });
+  });
+
+  it("drops windows whose reset passed instead of showing an outdated number", () => {
+    const later = NOW + 135 * 60_000;
+    expect(toAccountUsageState(claudeUsage(), later).windows.map((window) => window.id)).toEqual(["weekly"]);
+    expect(toAccountUsageState(claudeUsage(), NOW + 4 * 86_400_000)).toMatchObject({
+      status: "not_checked",
+      windows: [],
+      reason: "Usage reset since the last agent run",
+    });
+  });
+
+  it("keeps the map and entry identity when nothing changed", () => {
+    const first = nextUsageMap(new Map(), [CLAUDE, CODEX], [claudeUsage(), CODEX_LOW], NOW);
+    const same = nextUsageMap(first, [CLAUDE, CODEX], [claudeUsage(), CODEX_LOW], NOW + 1_000);
+    expect(same).toBe(first);
+    const moved = nextUsageMap(first, [CLAUDE, CODEX], [claudeUsage(), { ...CODEX_LOW, checkedAt: iso(0) }], NOW);
+    expect(moved).not.toBe(first);
+    expect(moved.get(CLAUDE.id)).toBe(first.get(CLAUDE.id));
+    // A removed account disappears; a checking pass keeps known numbers in place.
+    const removed = nextUsageMap(first, [CLAUDE], "checking", NOW);
+    expect([...removed.keys()]).toEqual([CLAUDE.id]);
+    expect(removed.get(CLAUDE.id)).toBe(first.get(CLAUDE.id));
+  });
+});
+
+describe("useAccountUsageReader", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flush = () => act(async () => vi.advanceTimersByTimeAsync(0));
+
+  it("reads after accounts restore without blocking, showing checking until the read lands", async () => {
+    const pending = deferred<ProviderAccountUsage[]>();
+    const { client, providerAccountUsage } = usageClient(() => pending.promise);
+    const view = renderHook(({ accounts }) => useAccountUsageReader(client, accounts, null), {
+      initialProps: { accounts: null as ProviderAccount[] | null },
+    });
+    expect(view.result.current.size).toBe(0);
+    expect(providerAccountUsage).not.toHaveBeenCalled();
+
+    view.rerender({ accounts: [CLAUDE, CODEX, GEMINI] });
+    await flush();
+    expect(providerAccountUsage).toHaveBeenCalledTimes(1);
+    expect(view.result.current.get(CLAUDE.id)?.status).toBe("checking");
+
+    pending.resolve([claudeUsage(), CODEX_LOW, GEMINI_NONE]);
+    await flush();
+    expect(view.result.current.get(CLAUDE.id)).toMatchObject({ status: "fresh", plan: "Max 20x" });
+    expect(usageSummary(view.result.current.get(CLAUDE.id) ?? toAccountUsageState(GEMINI_NONE, NOW)).short).toBe(
+      "42% left",
+    );
+    expect(view.result.current.get(CODEX.id)?.windows[0]?.remainingPercent).toBe(8);
+    expect(view.result.current.get(GEMINI.id)?.status).toBe("unavailable");
+  });
+
+  it("refreshes on an interval only while visible, and throttles focus refreshes", async () => {
+    const { client, providerAccountUsage } = usageClient(async () => [claudeUsage()]);
+    let visibility: DocumentVisibilityState = "visible";
+    const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    try {
+      const view = renderHook(() => useAccountUsageReader(client, [CLAUDE], null));
+      await flush();
+      expect(providerAccountUsage).toHaveBeenCalledTimes(1);
+      const first = view.result.current;
+
+      await act(async () => vi.advanceTimersByTimeAsync(USAGE_REFRESH_MS));
+      expect(providerAccountUsage).toHaveBeenCalledTimes(2);
+      // Same provider numbers: the map identity is unchanged, so nothing re-renders downstream.
+      expect(view.result.current).toBe(first);
+
+      visibility = "hidden";
+      await act(async () => vi.advanceTimersByTimeAsync(USAGE_REFRESH_MS * 3));
+      expect(providerAccountUsage).toHaveBeenCalledTimes(2);
+
+      visibility = "visible";
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await flush();
+      expect(providerAccountUsage).toHaveBeenCalledTimes(3);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+      expect(providerAccountUsage).toHaveBeenCalledTimes(3);
+      await act(async () => vi.advanceTimersByTimeAsync(USAGE_FOCUS_THROTTLE_MS));
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+      expect(providerAccountUsage).toHaveBeenCalledTimes(4);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("re-reads shortly after an agent session ends", async () => {
+    const feed = new EventFeed();
+    const { client, providerAccountUsage } = usageClient(async () => [claudeUsage()]);
+    renderHook(() => useAccountUsageReader(client, [CLAUDE], feed));
+    await flush();
+    expect(providerAccountUsage).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      feed.merge([{ seq: 10, type: "thread.status_changed", payload: {} } as unknown as EventEnvelope]);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(USAGE_AFTER_SESSION_DELAY_MS));
+    expect(providerAccountUsage).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      feed.merge([
+        { seq: 11, type: "agent.turn_completed", payload: {} } as unknown as EventEnvelope,
+        { seq: 12, type: "thread.completed", payload: {} } as unknown as EventEnvelope,
+      ]);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(USAGE_AFTER_SESSION_DELAY_MS - 1));
+    expect(providerAccountUsage).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(providerAccountUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("never invents numbers when a read fails, and keeps last real numbers on a later failure", async () => {
+    let result: () => Promise<ProviderAccountUsage[]> = async () => {
+      throw new Error("Runtime starting");
+    };
+    const { client, providerAccountUsage } = usageClient(() => result());
+    const view = renderHook(() => useAccountUsageReader(client, [CLAUDE], null));
+    await flush();
+    expect(view.result.current.get(CLAUDE.id)).toMatchObject({
+      status: "not_checked",
+      windows: [],
+      reason: "Usage couldn't be read",
+    });
+
+    result = async () => [claudeUsage()];
+    await act(async () => vi.advanceTimersByTimeAsync(USAGE_REFRESH_MS));
+    expect(view.result.current.get(CLAUDE.id)?.status).toBe("fresh");
+
+    result = async () => {
+      throw new Error("transient");
+    };
+    vi.setSystemTime(NOW + USAGE_STALE_AFTER_MS + 60_000);
+    await act(async () => vi.advanceTimersByTimeAsync(USAGE_REFRESH_MS));
+    expect(providerAccountUsage).toHaveBeenCalledTimes(3);
+    // Still the real reading, now honestly labelled stale.
+    expect(view.result.current.get(CLAUDE.id)).toMatchObject({ status: "stale", checkedAt: iso(-30_000) });
+  });
+
+  it("coalesces triggers that arrive during a read into one follow-up read", async () => {
+    const reads: ReturnType<typeof deferred<ProviderAccountUsage[]>>[] = [];
+    const { client, providerAccountUsage } = usageClient(() => {
+      const next = deferred<ProviderAccountUsage[]>();
+      reads.push(next);
+      return next.promise;
+    });
+    const view = renderHook(({ accounts }) => useAccountUsageReader(client, accounts, null), {
+      initialProps: { accounts: [CLAUDE] },
+    });
+    await flush();
+    view.rerender({ accounts: [CLAUDE, CODEX] });
+    view.rerender({ accounts: [CLAUDE, CODEX, GEMINI] });
+    await flush();
+    expect(providerAccountUsage).toHaveBeenCalledTimes(1);
+    reads[0]?.resolve([claudeUsage()]);
+    await flush();
+    expect(providerAccountUsage).toHaveBeenCalledTimes(2);
+    reads[1]?.resolve([claudeUsage(), CODEX_LOW, GEMINI_NONE]);
+    await flush();
+    expect([...view.result.current.keys()]).toEqual([CLAUDE.id, CODEX.id, GEMINI.id]);
+    expect(view.result.current.get(CODEX.id)?.status).toBe("fresh");
+  });
+});
+
+describe("ProviderAccountSessions usage slot", () => {
+  it("publishes the background read through useAccountUsage", async () => {
+    runtime.feed = new EventFeed();
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [CLAUDE]),
+      refreshClaudeAccount: vi.fn(),
+      refreshCodexAccount: vi.fn(),
+      refreshGeminiAccount: vi.fn(),
+      providerAccountUsage: vi.fn(async () => [claudeUsage()]),
+    } as unknown as KalCodeClient;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ProviderAccountSessionsProvider>{children}</ProviderAccountSessionsProvider>
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const view = renderHook(() => useAccountUsage(CLAUDE.id), { wrapper });
+      await waitFor(() => expect(view.result.current.status).toBe("fresh"));
+      expect(view.result.current.windows.map((window) => window.label)).toEqual(["Weekly", "5-hour"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -40,6 +40,7 @@ import type {
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
+  ProviderAccountUsage,
   ProviderHealth,
   ProviderStatus,
   RailSection,
@@ -443,6 +444,14 @@ export class KalCodeClient {
       kind: filter.kind ?? null,
       scopeId: filter.scopeId ?? null,
     });
+  }
+
+  /**
+   * Real provider quota usage per active account (all, or only `accountIds`), read passively
+   * from what the provider CLI recorded. Never runs a provider command or touches credentials.
+   */
+  providerAccountUsage(accountIds?: readonly string[]): Promise<ProviderAccountUsage[]> {
+    return this.call("provider_account_usage", { accountIds: accountIds ? [...accountIds] : null });
   }
 
   refreshCodexAccount(accountId: string): Promise<ProviderAccount> {

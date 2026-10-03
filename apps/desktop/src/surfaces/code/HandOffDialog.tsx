@@ -7,7 +7,7 @@ import {
   type HandoffTask,
   type ThreadSummary,
 } from "@kalcode/protocol";
-import { Badge, Button, Field, ProviderGlyph, SegmentedControl, TextArea } from "@kalcode/ui/components";
+import { Badge, Button, Field, ProviderGlyph, SegmentedControl, Skeleton, TextArea } from "@kalcode/ui/components";
 import {
   ArrowLeft,
   ArrowRight,
@@ -71,6 +71,18 @@ const STATUS_TONE: Record<HandoffStatus, "neutral" | "accent" | "success" | "wai
   interrupted: "danger",
 };
 
+/** Handoffs that can still change on their own (delivery, the receiver's progress). */
+const LIVE_STATUSES: ReadonlySet<HandoffStatus> = new Set(["queued", "delivered", "working", "needs_you"]);
+const POLL_MS = 2_500;
+
+/** What went wrong plus the most useful next step. */
+interface DialogError {
+  message: string;
+  retry?: { label: string; run: () => void };
+  /** Offer to go back to the recipient list (only meaningful from the review step). */
+  chooseAnother?: boolean;
+}
+
 interface PreviewDraft {
   sourceThreadId: string;
   targetThreadId: string;
@@ -104,12 +116,14 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const [previewDraft, setPreviewDraft] = useState<PreviewDraft | null>(null);
   const [previewText, setPreviewText] = useState("");
   const [busy, setBusy] = useState<"preview" | "send" | "return" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DialogError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [records, setRecords] = useState<HandoffRecord[]>([]);
   const [recordsState, setRecordsState] = useState<"loading" | "ready" | "error">("loading");
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const recordsRequest = useRef(0);
+  // Read by the poller without re-subscribing it every time the list length changes.
+  const recordsCount = useRef(0);
   const featureAvailable = account ? featureIncluded(planTier(account.snapshot), "provider_handoff") : true;
 
   const allAgents = codingAgents.state.status === "ready" ? codingAgents.state.data : [];
@@ -117,6 +131,12 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
   const handles = useMemo(() => fleetHandles(allAgents), [allAgents]);
   const selectedTarget = recipients.find((agent) => agent.id === targetId) ?? null;
   const staleTarget = targetId.length > 0 && selectedTarget === null;
+  const soleRecipientId = recipients.length === 1 ? (recipients[0]?.id ?? null) : null;
+
+  // One valid recipient: choose it, don't ask. Never overrides a choice (or a stale one) already made.
+  useEffect(() => {
+    if (soleRecipientId && targetId === "") setTargetId(soleRecipientId);
+  }, [soleRecipientId, targetId]);
 
   useEffect(() => {
     if (!preferredTargetId) return;
@@ -134,16 +154,18 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
       try {
         const next = await client.handoffs.list(source.id);
         if (request !== recordsRequest.current) return;
+        recordsCount.current = next.length;
         setRecords([...next].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
         setRecordsState("ready");
         setRecordsError(null);
       } catch (cause) {
         if (request !== recordsRequest.current) return;
         setRecordsError(toKalCodeError(cause).message);
-        setRecordsState(quiet && records.length > 0 ? "ready" : "error");
+        // A failed background refresh keeps the list it already shows.
+        setRecordsState(quiet && recordsCount.current > 0 ? "ready" : "error");
       }
     },
-    [client, records.length, source.id],
+    [client, source.id],
   );
 
   useEffect(() => {
@@ -152,12 +174,18 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
       return;
     }
     void loadRecords();
-    const timer = window.setInterval(() => void loadRecords(true), 2_500);
     return () => {
-      window.clearInterval(timer);
       recordsRequest.current += 1;
     };
   }, [open, loadRecords]);
+
+  // Poll quietly only while a handoff can still move on its own; settled history needs no polling.
+  const hasLiveRecord = records.some((record) => LIVE_STATUSES.has(record.status));
+  useEffect(() => {
+    if (!open || !hasLiveRecord) return;
+    const timer = window.setInterval(() => void loadRecords(true), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [open, hasLiveRecord, loadRecords]);
 
   const prepare = async (draft: PreviewDraft, editedText?: string, priorPreviewId?: string) => {
     setBusy("preview");
@@ -169,7 +197,14 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
       setPreviewDraft(draft);
       setPreviewText(next.text);
     } catch (cause) {
-      setError(toKalCodeError(cause).message);
+      const failure = toKalCodeError(cause);
+      // A stale prior preview can't be revived; retry from the same text as a fresh preview.
+      const prior = failure.code === "handoff_preview_stale" ? undefined : priorPreviewId;
+      setError({
+        message: failure.message,
+        retry: { label: "Try again", run: () => void prepare(draft, editedText, prior) },
+        chooseAnother: editedText !== undefined,
+      });
     } finally {
       setBusy(null);
     }
@@ -177,11 +212,13 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
   const prepareCurrent = () => {
     if (!featureAvailable) {
-      setError("Agent handoff is included with Pro and above.");
+      setError({ message: "Agent handoff is included with Pro and above." });
       return;
     }
     if (!selectedTarget) {
-      setError(staleTarget ? "That agent is no longer available. Choose another recipient." : "Choose a recipient.");
+      setError({
+        message: staleTarget ? "That agent is no longer available. Choose another recipient." : "Choose a recipient.",
+      });
       return;
     }
     void prepare({
@@ -194,12 +231,15 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
   const previewChanged = preview !== null && previewText !== preview.text;
   const send = async () => {
-    if (!preview || previewChanged) return;
+    if (!preview || previewChanged || !previewDraft) return;
+    const draft = previewDraft;
+    const sent = preview;
+    const sentText = previewText;
     setBusy("send");
     setError(null);
     setNotice(null);
     try {
-      const record = await client.handoffs.send(preview.id, preview.previewHash);
+      const record = await client.handoffs.send(sent.id, sent.previewHash);
       setPreview(null);
       setPreviewDraft(null);
       setPreviewText("");
@@ -208,13 +248,23 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
       } else if (record.status === "delivered" || record.status === "working" || record.status === "needs_you") {
         setNotice(`Delivered to ${record.targetName}.`);
       } else if (record.status === "failed" || record.status === "interrupted") {
-        setError(record.blocker ?? `The handoff ${STATUS_LABEL[record.status].toLowerCase()} before delivery.`);
+        setError({
+          message: record.blocker ?? `The handoff ${STATUS_LABEL[record.status].toLowerCase()} before delivery.`,
+          retry: { label: "Prepare again", run: () => void prepare(draft, sentText) },
+        });
       } else {
         setNotice(`Handoff is ${STATUS_LABEL[record.status].toLowerCase()}.`);
       }
       await loadRecords(true);
     } catch (cause) {
-      setError(toKalCodeError(cause).message);
+      // A failed send keeps the reviewed preview. Preparing again refreshes a stale one with the same
+      // reviewed text; the prior preview is only referenced while it can still be valid.
+      const prior = Date.parse(sent.expiresAt) > Date.now() ? sent.id : undefined;
+      setError({
+        message: toKalCodeError(cause).message,
+        retry: { label: "Prepare again", run: () => void prepare(draft, sentText, prior) },
+        chooseAnother: true,
+      });
     } finally {
       setBusy(null);
     }
@@ -238,7 +288,10 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
       setPreviewDraft(draft);
       setPreviewText(next.text);
     } catch (cause) {
-      setError(toKalCodeError(cause).message);
+      setError({
+        message: toKalCodeError(cause).message,
+        retry: { label: "Try again", run: () => void beginReturn(record) },
+      });
     } finally {
       setBusy(null);
     }
@@ -389,13 +442,14 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
               {codingAgents.state.status === "loading" ? (
                 <div className={styles.agentLoading} role="status" aria-label="Loading coding agents">
-                  <span />
-                  <span />
+                  <Skeleton height="3.25rem" />
+                  <Skeleton height="3.25rem" />
+                  <Skeleton height="3.25rem" />
                 </div>
               ) : codingAgents.state.status === "error" ? (
                 <div className={styles.inlineError} role="alert">
                   <span>{codingAgents.state.error.message}</span>
-                  <Button size="sm" variant="ghost" onClick={codingAgents.reload}>
+                  <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={codingAgents.reload}>
                     Try again
                   </Button>
                 </div>
@@ -410,6 +464,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                   {recipients.map((agent) => {
                     const selected = agent.id === targetId;
                     const status = STATUS_META[agent.status];
+                    const handle = handles.get(agent.id) ?? agent.name;
                     return (
                       <label key={agent.id} className={styles.recipient} data-selected={selected || undefined}>
                         <input
@@ -426,15 +481,15 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                         <ProviderGlyph provider={agent.providerId} size="sm" />
                         <span className={styles.recipientCopy}>
                           <span className={styles.recipientName}>
-                            {handles.get(agent.id) ?? agent.name}
-                            {agent.name !== handles.get(agent.id) ? <span>{agent.name}</span> : null}
+                            <span className={styles.recipientHandle}>{handle}</span>
+                            {agent.name !== handle ? <span className={styles.recipientAlias}>{agent.name}</span> : null}
                           </span>
                           <span className={styles.recipientMeta}>
                             {agent.workspaceName} · {status.label}
                           </span>
                         </span>
                         <span className={styles.selectMark} aria-hidden="true">
-                          {selected ? <Check /> : <ArrowRight />}
+                          {selected ? <Check /> : null}
                         </span>
                       </label>
                     );
@@ -489,9 +544,35 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
           )}
 
           {error ? (
-            <p className={styles.error} role="alert">
-              {error}
-            </p>
+            <div className={styles.error} role="alert">
+              <p>{error.message}</p>
+              {error.retry || (error.chooseAnother && preview) ? (
+                <div className={styles.errorActions}>
+                  {error.chooseAnother && preview ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<ArrowLeft />}
+                      disabled={busy !== null}
+                      onClick={resetPreview}
+                    >
+                      Choose another agent
+                    </Button>
+                  ) : null}
+                  {error.retry ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={<RotateCcw />}
+                      disabled={busy !== null}
+                      onClick={error.retry.run}
+                    >
+                      {error.retry.label}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null}
           {notice ? (
             <p className={styles.notice} role="status">
@@ -516,15 +597,18 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
               </Button>
             </div>
             {recordsState === "loading" ? (
-              <p className={styles.activityState} role="status">
-                Loading handoffs…
-              </p>
+              <div className={styles.recordList} role="status" aria-label="Loading handoffs">
+                <Skeleton height="4.5rem" />
+              </div>
             ) : recordsState === "error" ? (
-              <p className={styles.inlineError} role="alert">
-                {recordsError ?? "Handoff activity is unavailable."}
-              </p>
+              <div className={styles.inlineError} role="alert">
+                <span>{recordsError ?? "Handoff activity is unavailable."}</span>
+                <Button size="sm" variant="secondary" icon={<RefreshCw />} onClick={() => void loadRecords()}>
+                  Try again
+                </Button>
+              </div>
             ) : records.length === 0 ? (
-              <p className={styles.activityState}>No handoffs for this agent yet.</p>
+              <p className={styles.activityEmpty}>No handoffs for this agent yet.</p>
             ) : (
               <div className={styles.recordList}>
                 {records.slice(0, 8).map((record) => (
@@ -571,15 +655,19 @@ function HandoffRecordRow({
   const [result, setResult] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only a failed cancel has a one-click retry; a failed result keeps its form and submit button.
+  const [cancelFailed, setCancelFailed] = useState(false);
 
   const cancel = async () => {
     setBusy(true);
     setError(null);
+    setCancelFailed(false);
     try {
       await client.handoffs.cancel(record.id);
       await onRefresh();
     } catch (cause) {
       setError(toKalCodeError(cause).message);
+      setCancelFailed(true);
     } finally {
       setBusy(false);
     }
@@ -594,6 +682,7 @@ function HandoffRecordRow({
     }
     setBusy(true);
     setError(null);
+    setCancelFailed(false);
     try {
       await client.handoffs.complete(record.id, outcome, text);
       setReporting(false);
@@ -692,9 +781,14 @@ function HandoffRecordRow({
         </div>
       )}
       {error ? (
-        <p className={styles.inlineError} role="alert">
-          {error}
-        </p>
+        <div className={styles.inlineError} role="alert">
+          <span>{error}</span>
+          {cancelFailed ? (
+            <Button size="sm" variant="secondary" icon={<RotateCcw />} busy={busy} onClick={() => void cancel()}>
+              Try again
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </article>
   );

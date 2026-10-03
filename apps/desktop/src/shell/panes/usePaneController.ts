@@ -272,7 +272,14 @@ export function usePaneController({
       close: (paneId) => {
         const title = paneTitle(paneId);
         const result = closePane(latest.current, paneId);
-        if (result.closed) setClosed((list) => [result.closed as ClosedPane, ...list].slice(0, CLOSED_KEPT));
+        // A pane holding only terminals and agents ends them as it closes: reopening it would
+        // bring back dead content, so it isn't remembered.
+        const kept = result.closed;
+        const ended =
+          kept !== null &&
+          kept.pane.tabs.length > 0 &&
+          kept.pane.tabs.every((content) => content.kind === "terminal" || content.kind === "agent");
+        if (kept && !ended) setClosed((list) => [kept, ...list].slice(0, CLOSED_KEPT));
         for (const content of result.closed?.pane.tabs ?? []) onCloseContentRef.current?.(content);
         apply(result.layout, result.closed?.pane.tabs.length ? `Closed the ${title} pane.` : "Closed the pane.");
         const remaining = leaves(result.layout.root);

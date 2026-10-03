@@ -1,15 +1,25 @@
 import type { ProviderAccount, ProviderAccountBinding } from "@kalcode/protocol";
 import { ProviderGlyph } from "@kalcode/ui/components";
-import { Check, ChevronDown, Plus, RefreshCw, Users, X } from "lucide-react";
+import { Check, ChevronDown, Link2, LogIn, Plus, RefreshCw, Users, X } from "lucide-react";
 import { Popover } from "radix-ui";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useId, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import { formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { accountFullLabel, accountName, sortAccounts } from "../../surfaces/providers/accountIdentity.ts";
+import {
+  type AccountUsageState,
+  LOW_USAGE_PERCENT,
+  resetsIn,
+  type UsageWindow,
+  usageSummary,
+  useAccountUsage,
+} from "../../surfaces/providers/accountUsage.ts";
 import { rateLimitText } from "../../surfaces/providers/healthLabels.ts";
 import { useOptionalProviderAccountSessions } from "../../surfaces/providers/ProviderAccountSessions.tsx";
+import { sameSignInLabel } from "../../surfaces/providers/providerLabels.ts";
 import {
   canRefreshProviderAuth,
   isBrowserAuthProvider,
@@ -56,9 +66,16 @@ export function AccountUsageCenter() {
   const launchAccount =
     bindings && providerId ? selectedLaunchAccount(accounts, bindings, providerId, active?.id ?? null) : null;
   const chipAccount = focused ? focusedAccount : launchAccount;
-  const chipStatus = chipAccount
+  const signInStatus = chipAccount
     ? accountCenterStatus(chipAccount, model.checking.has(chipAccount.id), model.validationErrors.get(chipAccount.id))
     : null;
+  // A ready account shows its canonical usage on the chip ("64% left"); anything else, its state.
+  const chipUsage = useAccountUsage(chipAccount?.id);
+  const chipSummary = usageSummary(chipUsage);
+  const chipStatus =
+    signInStatus?.tone === "healthy" && (chipUsage.status === "fresh" || chipUsage.status === "stale")
+      ? { label: chipSummary.short, tone: chipSummary.low ? "attention" : "healthy" }
+      : signInStatus;
   const ready = accounts.filter((a) => a.authenticationState === "authenticated").length;
 
   const readBindings = useCallback(async () => {
@@ -126,11 +143,7 @@ export function AccountUsageCenter() {
       if (!sessions) await model.load();
       const restored = sessions ? await sessions.reload() : model.accounts;
       await readBindings();
-      setNotice(
-        restored
-          ? "Account information refreshed. Provider usage is unavailable."
-          : "Account information could not be refreshed.",
-      );
+      setNotice(restored ? "Account information refreshed." : "Account information could not be refreshed.");
     });
   const disabled = pending || model.busyKey !== null || model.activeLogin !== null;
   const providers = [...new Set(accounts.map((a) => a.providerId))];
@@ -272,6 +285,7 @@ export function AccountUsageCenter() {
                       canSwitch={active !== null && bindings !== null}
                       onSwitch={switchAccount}
                       run={run}
+                      sameSignIn={sameSignInLabel(account, accounts)}
                     />
                   ))}
                 </div>
@@ -321,6 +335,28 @@ export function AccountUsageCenter() {
 }
 
 type AccountModel = ReturnType<typeof useProviderAccounts>;
+
+/** Ticks while the center is open so "Resets in…" and "Updated…" stay honest. */
+function useClock(intervalMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+function percentLeft(window: UsageWindow): number {
+  return Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
+}
+
+/** Why there is no number: never a guess, always the canonical state's own words. */
+function usageAbsence(usage: AccountUsageState): string {
+  if (usage.status === "checking") return "Checking usage…";
+  if (usage.status === "unavailable") return "Usage unavailable";
+  return "Usage not checked";
+}
+
 function AccountEntry({
   account,
   model,
@@ -330,6 +366,7 @@ function AccountEntry({
   canSwitch,
   onSwitch,
   run,
+  sameSignIn,
 }: {
   account: ProviderAccount;
   model: AccountModel;
@@ -339,21 +376,36 @@ function AccountEntry({
   canSwitch: boolean;
   onSwitch: (account: ProviderAccount) => Promise<void>;
   run: (operation: () => Promise<void>) => Promise<void>;
+  sameSignIn: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(account.displayName);
   const detailsId = useId();
   const nameId = useId();
+  const now = useClock();
+  const usage = useAccountUsage(account.id);
   const status = accountCenterStatus(account, model.checking.has(account.id), model.validationErrors.get(account.id));
+  const label = accountName(account);
+  const known = (usage.status === "fresh" || usage.status === "stale") && usage.windows.length > 0;
+  const low = known && usageSummary(usage).low;
+  const signedIn = account.authenticationState === "authenticated";
+  // Sign-in is the one next step for a signed-out browser-auth account: right in the row.
+  const canSignIn = !signedIn && isBrowserAuthProvider(account.providerId);
+  const signingIn = model.activeLogin?.accountId === account.id;
+  // "Usage not checked" beside Sign in would only repeat the status; say what the action doesn't.
+  const showAbsence = !known && !(canSignIn && usage.status === "not_checked");
   return (
     <section
       className={styles.account}
       aria-label={accountFullLabel(account)}
       data-selected={active || selected || undefined}
+      data-low={low || undefined}
     >
       <div className={styles.accountTop}>
-        <strong className={styles.name}>{accountName(account)}</strong>
+        <strong className={styles.name}>{label}</strong>
+        {usage.plan ? <span className={styles.plan}>{usage.plan}</span> : null}
+        <span className={styles.spacer} />
         {active && (
           <span className={styles.selected}>
             <Check size={11} />
@@ -373,32 +425,91 @@ function AccountEntry({
           <ChevronDown size={14} className={expanded ? styles.rotated : undefined} />
         </button>
       </div>
-      {account.providerReportedIdentity && (
-        <p className={styles.identity} title={account.providerReportedIdentity}>
-          {account.providerReportedIdentity}
-        </p>
-      )}
       <div className={styles.accountMeta}>
         <span className={styles.status} data-tone={status.tone}>
           <i />
           {status.label}
         </span>
-        <span className={styles.usage}>Usage unavailable</span>
+        {account.providerReportedIdentity && (
+          <span className={styles.identity} title={account.providerReportedIdentity}>
+            {account.providerReportedIdentity}
+          </span>
+        )}
+        <span className={styles.metaEnd}>
+          {known && usage.status === "fresh" && usage.checkedAt && (
+            <span className={styles.updated}>Updated {formatRelative(usage.checkedAt, now)}</span>
+          )}
+          {showAbsence && (
+            <span
+              className={styles.usage}
+              data-checking={usage.status === "checking" || undefined}
+              title={usage.reason ?? undefined}
+            >
+              {usageAbsence(usage)}
+            </span>
+          )}
+          {canSignIn &&
+            (signingIn ? (
+              <span className={styles.waiting} role="status">
+                Waiting for browser…
+              </span>
+            ) : (
+              <button
+                type="button"
+                className={styles.signIn}
+                disabled={disabled}
+                aria-label={`Sign in ${label}`}
+                onClick={() => void run(() => model.signInAuth(account))}
+              >
+                <LogIn size={12} aria-hidden="true" />
+                Sign in
+              </button>
+            ))}
+        </span>
       </div>
+      {sameSignIn && (
+        <p className={styles.shared} title="Both accounts use one provider sign-in, so they share its usage">
+          <Link2 size={11} aria-hidden="true" />
+          {sameSignIn}
+        </p>
+      )}
+      {known && (
+        <ul className={styles.windows} aria-label={`${label} usage`}>
+          {usage.windows.map((window) => {
+            const left = percentLeft(window);
+            const reset = resetsIn(window.resetsAt, now);
+            return (
+              <li key={window.id} className={styles.window} data-tone={left < LOW_USAGE_PERCENT ? "low" : undefined}>
+                <span className={styles.windowLabel}>{window.label}</span>
+                <span className={styles.windowValue}>
+                  <strong>{left}%</strong> left
+                </span>
+                <span className={styles.windowTrack} aria-hidden="true">
+                  <span className={styles.windowFill} style={{ "--fill": `${left}%` } as CSSProperties} />
+                </span>
+                <span className={styles.windowReset}>{reset ?? "Reset time not reported"}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {known && usage.status === "stale" && usage.checkedAt && (
+        <p className={styles.stale}>Last read {formatRelative(usage.checkedAt, now)} · may be out of date</p>
+      )}
       {expanded && (
         <div className={styles.details} id={detailsId}>
           <dl>
             <div>
               <dt>Plan</dt>
-              <dd>Plan not reported</dd>
+              <dd>{usage.plan ?? "Plan not reported"}</dd>
             </div>
             <div>
-              <dt>Current / weekly</dt>
-              <dd>Usage unavailable</dd>
-            </div>
-            <div>
-              <dt>Reset time</dt>
-              <dd>Not reported</dd>
+              <dt>Usage</dt>
+              <dd>
+                {known && usage.checkedAt
+                  ? `Updated ${formatRelative(usage.checkedAt, now)}`
+                  : [usageAbsence(usage), usage.reason].filter(Boolean).join(" · ")}
+              </dd>
             </div>
             <div>
               <dt>Sign-in checked</dt>
@@ -475,24 +586,19 @@ function AccountEntry({
                   Check sign-in
                 </button>
               )}
-              {isBrowserAuthProvider(account.providerId) &&
-                (account.authenticationState === "authenticated" ? (
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() =>
-                      void run(async () => {
-                        await model.logoutAuth(account);
-                      })
-                    }
-                  >
-                    Sign out
-                  </button>
-                ) : (
-                  <button type="button" disabled={disabled} onClick={() => void run(() => model.signInAuth(account))}>
-                    Sign in
-                  </button>
-                ))}
+              {isBrowserAuthProvider(account.providerId) && signedIn && (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() =>
+                    void run(async () => {
+                      await model.logoutAuth(account);
+                    })
+                  }
+                >
+                  Sign out
+                </button>
+              )}
             </div>
           )}
         </div>

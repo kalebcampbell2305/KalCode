@@ -209,7 +209,7 @@
 .columns,
 .rowMain {
   display: grid;
-  grid-template-columns: minmax(10rem, 1.6fr) minmax(7.5rem, 1fr) minmax(7.5rem, 1fr) 11.25rem;
+  grid-template-columns: minmax(9rem, 1.4fr) minmax(7rem, 0.9fr) minmax(9.5rem, 1.25fr) minmax(7rem, 1fr) 11.25rem;
   align-items: center;
   gap: var(--space-3);
   padding-inline: var(--panel-px);
@@ -247,7 +247,8 @@
 
 .cellName,
 .cellStatus,
-.cellUsage {
+.cellUsage,
+.cellActivity {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -311,6 +312,58 @@
 .sub {
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* Provider usage: the canonical meter, then the plan as a quiet outlined tag. */
+.usageLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.usageLine > :first-child {
+  font-size: var(--type-small);
+}
+
+.plan {
+  flex: none;
+  padding: 0.0625rem var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.sub[data-tone="stale"] {
+  color: var(--status-waiting-text);
+}
+
+/* Two names on one provider login: they share its usage, so say so quietly. */
+.shared {
+  overflow: hidden;
+  color: var(--status-waiting-text);
+  font-size: var(--type-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.windowList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.windowList > [data-tone="low"] {
+  color: var(--status-waiting-text);
 }
 
 .cellActions {
@@ -416,7 +469,8 @@
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
       "name actions"
-      "status usage";
+      "status usage"
+      "activity usage";
     row-gap: var(--space-1);
   }
 
@@ -432,9 +486,14 @@
     grid-area: usage;
   }
 
+  .cellActivity {
+    grid-area: activity;
+  }
+
   /* Each fact and its detail share one line here, keeping rows compact. */
   .cellStatus,
-  .cellUsage {
+  .cellUsage,
+  .cellActivity {
     flex-direction: row;
     flex-wrap: wrap;
     align-items: baseline;
@@ -455,6 +514,7 @@
       "name"
       "status"
       "usage"
+      "activity"
       "actions";
   }
 

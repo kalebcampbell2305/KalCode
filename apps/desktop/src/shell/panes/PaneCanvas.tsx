@@ -336,7 +336,11 @@ function PaneCanvasSurface({
         target &&
         !(target.paneId === source.paneId && (source.kind === "pane" || target.zone === "center")) &&
         !(source.kind === "tab" && target.paneId === source.paneId && currentSource.tabs.length < 2);
-      const next = { ...current, active: true, target: valid ? target : null };
+      const nextTarget = valid ? target : null;
+      // Pointer moves inside the same drop zone change nothing on screen: skip the render.
+      if (current.active && current.target?.paneId === nextTarget?.paneId && current.target?.zone === nextTarget?.zone)
+        return;
+      const next = { ...current, active: true, target: nextTarget };
       dragRef.current = next;
       setDrag(next);
     };

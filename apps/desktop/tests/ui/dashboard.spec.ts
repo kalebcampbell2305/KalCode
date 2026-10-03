@@ -367,7 +367,7 @@ test.describe("widgets", () => {
     // Detection runs on the Providers page; the widget only reads the health snapshot.
     await page.getByRole("button", { name: "Providers" }).click();
     await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
-    await expect(page.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
     await page.getByRole("button", { name: "Dashboard" }).click();
 
     const health = page.getByRole("region", { name: "Provider health" });
@@ -389,7 +389,7 @@ test.describe("widgets", () => {
     // A later plain visit opens the default tab again.
     await page.getByRole("button", { name: "Dashboard" }).click();
     await page.getByRole("button", { name: "Providers" }).click();
-    await expect(page.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("provider health shows sign-in, install and reported rate-limit states in words", async ({ page }) => {

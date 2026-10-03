@@ -3,6 +3,8 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import type { KalCodeClient } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import type { AccountUsageState } from "./accountUsage.ts";
+import { useAccountUsageReader } from "./accountUsageReader.ts";
 
 function supportsPassiveValidation(providerId: string): providerId is "codex" | "gemini-cli" {
   // Claude's auth-status command can refresh provider-owned OAuth state before exiting. Running it
@@ -24,6 +26,8 @@ interface ProviderAccountSessionsValue {
   replace: (account: ProviderAccount) => ProviderAccount;
   /** Invalidates an older validation before a user-driven mutation starts. */
   supersede: (accountId: string) => void;
+  /** Canonical provider-quota usage per account id (see accountUsage.ts). */
+  usage: ReadonlyMap<string, AccountUsageState>;
 }
 
 const ProviderAccountSessionsContext = createContext<ProviderAccountSessionsValue | null>(null);
@@ -426,9 +430,13 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     };
   }, [client, feed, version]);
 
+  // Real provider quota usage, read passively in the background (accountUsageReader.ts). It
+  // never blocks restore, menus or launches; entries update in place when a read lands.
+  const usage = useAccountUsageReader(client, accounts, feed);
+
   const value = useMemo<ProviderAccountSessionsValue>(
-    () => ({ accounts, loadError, checking, validationErrors, reload, validate, replace, supersede }),
-    [accounts, loadError, checking, validationErrors, reload, validate, replace, supersede],
+    () => ({ accounts, loadError, checking, validationErrors, reload, validate, replace, supersede, usage }),
+    [accounts, loadError, checking, validationErrors, reload, validate, replace, supersede, usage],
   );
   return <ProviderAccountSessionsContext.Provider value={value}>{children}</ProviderAccountSessionsContext.Provider>;
 }
