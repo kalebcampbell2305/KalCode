@@ -304,7 +304,7 @@ const LIVE = "0.1.8+923";
  * The 0.1.9 build the features flipped for 0.1.9 were verified in. The release lead replaces the
  * placeholder with the production-verified build number before merge (the roadmap test rejects it).
  */
-const V019 = "0.1.9+1089";
+const V019 = "0.1.9+1106";
 
 export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
   {
