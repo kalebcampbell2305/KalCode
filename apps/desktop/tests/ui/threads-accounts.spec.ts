@@ -28,7 +28,12 @@ async function expectNoSeriousA11yViolations(page: Page) {
   ).toEqual([]);
 }
 
-/** Adds "Gemini B", then starts a Gemini thread on Personal and waits for its turn to finish. */
+/**
+ * Adds "Gemini B" and signs Personal in, then starts a Gemini thread on Personal and waits for its
+ * turn to finish. The shell checks Gemini accounts in the background (#129): a managed Gemini
+ * profile without its own credentials reads as signed out, and a signed-out account can neither
+ * start a thread nor take one, so both accounts sign in through Gemini's login flow first.
+ */
 async function geminiThreadWithTwoAccounts(page: Page) {
   await page.goto("/?scenario=threads");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
@@ -41,12 +46,15 @@ async function geminiThreadWithTwoAccounts(page: Page) {
   await page.getByLabel("Name for the new Gemini CLI account").fill("Gemini B");
   await page.getByRole("button", { name: "Add and sign in" }).click();
   await expect(page.getByRole("region", { name: "Gemini CLI · Gemini B" })).toBeVisible();
+  const personal = page.getByRole("region", { name: "Gemini CLI · Personal" });
+  await personal.getByRole("button", { name: "Sign in Personal" }).click();
+  await expect(personal.getByText("Connected", { exact: true })).toBeVisible();
 
   await primary.getByRole("button", { name: "Threads" }).click();
   await page.getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
   await form.getByLabel("Provider").selectOption("gemini-cli");
-  await form.getByLabel("Account", { exact: true }).selectOption({ label: "Personal · Default · Not checked" });
+  await form.getByLabel("Account", { exact: true }).selectOption({ label: "Personal · Default" });
   await form.getByLabel("Task").fill("tighten the release notes wording");
   await form.getByLabel("Name").fill("Release notes pass");
   await form.getByRole("button", { name: "Start thread" }).click();
