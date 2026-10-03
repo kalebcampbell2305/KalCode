@@ -70,6 +70,7 @@ import { type PaneController, usePaneController } from "../../shell/panes/usePan
 import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "../../shell/rail/paneIds.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
+import { setSelectedCodeContext } from "../threads/accountIntent.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
@@ -527,6 +528,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const focusedLeaf = leaves(controller.layout.root).find((l) => l.paneId === controller.focusedPaneId);
   const focusedContent = focusedLeaf?.tabs[focusedLeaf.activeTab];
   const focusedTerminalId = focusedContent?.kind === "terminal" ? focusedContent.terminalId : null;
+  const focusedAgentId = focusedContent?.kind === "agent" ? focusedContent.agentId : null;
+  // The shell reads only the visible pane's identity; it resolves account metadata from the
+  // existing session summaries and registry. Hidden Code must never replace Threads context.
+  useEffect(() => {
+    if (!codeShown || !controller.ready) return;
+    return setSelectedCodeContext({
+      workspaceId: workspace.id,
+      content: focusedAgentId
+        ? { kind: "agent", agentId: focusedAgentId }
+        : focusedTerminalId
+          ? { kind: "terminal", terminalId: focusedTerminalId }
+          : null,
+    });
+  }, [codeShown, controller.ready, workspace.id, focusedAgentId, focusedTerminalId]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: follow the focused pane only.
   useEffect(() => {
     if (focusedTerminalId && focusedTerminalId !== activeTerminalId && terminalById.has(focusedTerminalId)) {

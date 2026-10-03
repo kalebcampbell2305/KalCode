@@ -15,6 +15,54 @@ export interface SelectedThread {
   providerAccountId: string | null;
 }
 
+/** The focused Code pane's identity only; account facts stay in the canonical registry. */
+export interface SelectedCodeContext {
+  workspaceId: string;
+  content: { kind: "agent"; agentId: string } | { kind: "terminal"; terminalId: string } | null;
+}
+
+let selectedCode: SelectedCodeContext | null = null;
+let codeSelectionOwner = 0;
+const codeListeners = new Set<() => void>();
+
+function sameCodeContext(left: SelectedCodeContext | null, right: SelectedCodeContext | null): boolean {
+  if (left === null || right === null) return left === right;
+  if (left.workspaceId !== right.workspaceId) return false;
+  const a = left.content;
+  const b = right.content;
+  if (a === null || b === null) return a === b;
+  return a.kind === "agent"
+    ? b.kind === "agent" && a.agentId === b.agentId
+    : b.kind === "terminal" && a.terminalId === b.terminalId;
+}
+
+/** Publishes visible Code focus and returns cleanup that cannot clear a newer canvas. */
+export function setSelectedCodeContext(context: SelectedCodeContext | null): () => void {
+  const owner = ++codeSelectionOwner;
+  if (!sameCodeContext(selectedCode, context)) {
+    selectedCode = context === null ? null : { ...context, content: context.content && { ...context.content } };
+    for (const listener of codeListeners) listener();
+  }
+  return () => {
+    if (codeSelectionOwner === owner) setSelectedCodeContext(null);
+  };
+}
+
+function subscribeCode(listener: () => void): () => void {
+  codeListeners.add(listener);
+  return () => {
+    codeListeners.delete(listener);
+  };
+}
+
+export function useSelectedCodeContext(): SelectedCodeContext | null {
+  return useSyncExternalStore(
+    subscribeCode,
+    () => selectedCode,
+    () => selectedCode,
+  );
+}
+
 /** Ask the Threads surface to confirm switching `threadId` to `accountId`. */
 export interface RebindRequest {
   threadId: string;
@@ -128,4 +176,5 @@ export function useSelectedThread(): SelectedThread | null {
 /** Test-only: forget every selection and request. */
 export function resetAccountIntentForTests(): void {
   update({ selected: null, rebind: null });
+  setSelectedCodeContext(null);
 }

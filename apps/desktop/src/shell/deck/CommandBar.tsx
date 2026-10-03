@@ -38,6 +38,7 @@ import { usePermissions } from "../../surfaces/permissions/PermissionsProvider.t
 import { Mark, Wordmark } from "../Brand.tsx";
 import { useNavigation, viewVisible } from "../navigation.tsx";
 import { MOD_LABEL } from "../shortcuts.ts";
+import { AccountUsageCenter } from "./AccountUsageCenter.tsx";
 import styles from "./CommandBar.module.css";
 import { useDeckData } from "./DeckData.tsx";
 import { useDeckUi } from "./DeckUi.tsx";
@@ -77,7 +78,10 @@ export function CommandBar({
           <kbd className={styles.kbd}>{MOD_LABEL} K</kbd>
         </button>
       </div>
-      <Signals />
+      <div className={styles.actions}>
+        <Signals />
+        <AccountUsageCenter />
+      </div>
     </header>
   );
 }
