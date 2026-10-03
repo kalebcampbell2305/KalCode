@@ -32,6 +32,7 @@ kalcode-providers = { path = "../../../crates/providers" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }
 kalcode-entitlements = { path = "../../../crates/entitlements" }
 base64 = "=0.22.1"
+png = "=0.18.1"
 getrandom = "=0.3.4"
 sha2 = "=0.10.9"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }

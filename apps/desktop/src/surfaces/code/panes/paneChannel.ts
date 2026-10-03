@@ -2,6 +2,7 @@ import type { PaneInfo, PermissionMode, PermissionSettings, ThreadSummary } from
 import type { KalCodeClient, TerminalSize } from "../../../ipc/client.ts";
 import { clampTerminalSize } from "../../../ipc/client.ts";
 import { toKalCodeError } from "../../../ipc/errors.ts";
+import type { ImportedTerminalImage } from "../../../ipc/terminalImages.ts";
 
 /** Input is sent in pieces of at most this many UTF-16 units (≤ 24 KB of UTF-8), as for terminals. */
 const WRITE_CHUNK = 8 * 1024;
@@ -108,6 +109,14 @@ export class PaneChannel {
     for (const part of splitInput(data)) {
       await this.call<void>("provider_pane_write", { threadId, instanceId, data: part, voice: true });
     }
+  }
+
+  importImage(threadId: string, instanceId: string, pngBase64: string): Promise<ImportedTerminalImage> {
+    return this.client.importTerminalImage({ kind: "agent", threadId, instanceId }, pngBase64);
+  }
+
+  discardImage(threadId: string, instanceId: string, imageId: string): Promise<void> {
+    return this.client.discardTerminalImage({ kind: "agent", threadId, instanceId }, imageId);
   }
 
   resize(threadId: string, size: TerminalSize): Promise<void> {

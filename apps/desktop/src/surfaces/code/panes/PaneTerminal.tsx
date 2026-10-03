@@ -18,6 +18,7 @@ import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
 import { suppressReplayQueries } from "../replayQueries.ts";
 import { isTerminalShortcut } from "../shortcuts.ts";
+import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "../terminalImages.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "../terminalTheme.ts";
 import type { PaneChannel } from "./paneChannel.ts";
 
@@ -148,10 +149,11 @@ export function PaneTerminal({
       if (event.defaultPrevented) return false;
       if (isTerminalShortcut(event)) return false;
       const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
+      const paste = (event.ctrlKey || event.metaKey) && !event.altKey;
       const key = event.key.toLowerCase();
       if (ctrl && key === "c" && term.hasSelection()) return false;
       if (ctrl && key === "c" && event.shiftKey) return false;
-      if (ctrl && key === "v") return false;
+      if (paste && key === "v") return false;
       return true;
     });
 
@@ -174,11 +176,64 @@ export function PaneTerminal({
     inputRef.current = input;
     let replaying = false;
     const disposeReplayQueries = suppressReplayQueries(term, () => replaying);
+    let imagePasteCapture: ((data: string) => void) | null = null;
     const send = (data: string) => {
+      const capture = imagePasteCapture;
+      if (capture) {
+        capture(data);
+        return;
+      }
       if (disposed || !runningRef.current) return;
       input.send(data);
     };
     term.onData(send);
+
+    const guardProviderImagePaste = () => {
+      const current = contextRef.current;
+      if (disposed || current.threadId !== threadId || current.instanceId !== instanceId) {
+        throw new DictationDeliveryError("target_closed", "That provider destination changed.");
+      }
+      if (!runningRef.current) {
+        throw new DictationDeliveryError("terminal_not_running", "That provider session is no longer running.");
+      }
+      if (current.providerPromptActive || current.status === "waiting_for_permission") {
+        throw new DictationDeliveryError(
+          "provider_permission_prompt",
+          "The provider is waiting for an answer to its native prompt.",
+        );
+      }
+    };
+    const unregisterImageTarget = instanceId
+      ? registerTerminalImageTarget(host, {
+          key: terminalImageTargetKey("agent", threadId),
+          importImage: (pngBase64) => channel.importImage(threadId, instanceId, pngBase64),
+          discardImage: (imported) => channel.discardImage(threadId, instanceId, imported.imageId),
+          focus: () => term.focus(),
+          async pasteInsertion(insertion, beforeWrite) {
+            if (imagePasteCapture) {
+              throw new TerminalImageError("image_paste_busy", "Wait for the current image to finish attaching.");
+            }
+            const writes: Promise<void>[] = [];
+            imagePasteCapture = (data) => {
+              writes.push(
+                input.deliver(data, undefined, () => {
+                  beforeWrite();
+                  guardProviderImagePaste();
+                }),
+              );
+            };
+            try {
+              term.paste(insertion);
+            } finally {
+              imagePasteCapture = null;
+            }
+            if (writes.length === 0) {
+              throw new TerminalImageError("image_paste_failed", "KalCode couldn't paste the image into that agent.");
+            }
+            await Promise.all(writes);
+          },
+        })
+      : () => undefined;
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     term.onResize(({ cols, rows }) => {
@@ -287,6 +342,7 @@ export function PaneTerminal({
 
     return () => {
       disposed = true;
+      unregisterImageTarget();
       observer.disconnect();
       cancelAnimationFrame(frame);
       waitingForResize?.();

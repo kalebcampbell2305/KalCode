@@ -52,6 +52,7 @@ mod provider_pane_commands;
 mod resource_commands;
 mod runtime_shutdown;
 mod session_resolver;
+mod terminal_image_commands;
 mod thread_commands;
 mod update_preparation;
 mod updater_commands;
@@ -809,6 +810,8 @@ pub fn run(removed_overrides: Vec<String>) {
                 code_commands::terminal_restart,
                 code_commands::terminal_close,
                 code_commands::terminal_write,
+                terminal_image_commands::terminal_image_import,
+                terminal_image_commands::terminal_image_discard,
                 code_commands::terminal_resize,
                 code_commands::terminal_attach,
                 code_commands::terminal_detach,

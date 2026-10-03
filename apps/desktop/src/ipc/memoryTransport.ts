@@ -35,12 +35,14 @@ import type {
   EventPayload,
   EventQuery,
   IpcError,
+  PaneInfo,
   ProviderStatus,
   SecureStoreCheck,
   SessionResolution,
   Settings,
   SettingsPatch,
   SurfaceFlag,
+  TerminalInfo,
   ThreadSummary,
   Workspace,
 } from "@kalcode/protocol";
@@ -70,6 +72,7 @@ import { createUpdaterMemory } from "./memory/updater.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
+import type { TerminalImageTarget } from "./terminalImages.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
 export type MemoryScenario =
@@ -536,6 +539,47 @@ export function createMemoryTransport(
     ...updater.handlers,
     ...account.handlers,
     ...operations.handlers,
+    // UI-test fixture only: native owns PNG decoding, private storage and target leases.
+    terminal_image_import: (args) => {
+      requireCore();
+      const target = args.target as TerminalImageTarget;
+      const png = String(args.pngBase64 ?? "");
+      if (!png.startsWith("iVBORw0KGgo") || png.length > 11_184_812) {
+        fail({
+          category: "validation",
+          code: "terminal_image_invalid",
+          message: "Choose a valid PNG image.",
+          retryable: false,
+        });
+      }
+      const running =
+        target?.kind === "agent"
+          ? (() => {
+              const pane = panes.handlers.provider_pane_info({ threadId: target.threadId }) as PaneInfo | null;
+              return pane?.running && pane.instanceId === target.instanceId;
+            })()
+          : target?.kind === "terminal" &&
+            ((code.handlers.terminals_running?.({}) ?? []) as TerminalInfo[]).some(
+              (terminal) => terminal.id === target.terminalId,
+            );
+      if (!running) {
+        fail({
+          category: "validation",
+          code: "terminal_image_target_changed",
+          message: "This terminal changed. Choose the image again.",
+          retryable: false,
+        });
+      }
+      const imageId = crypto.randomUUID();
+      const path = `/ui-test-only/terminal-images/${imageId}.png`;
+      return {
+        imageId,
+        path,
+        insertion: `'${path}'`,
+        ...(target.kind === "terminal" ? { terminalGeneration: 1 } : {}),
+      };
+    },
+    terminal_image_discard: () => true,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {

@@ -378,6 +378,40 @@ fn terminal_identity_is_generation_bound_and_disappears_on_close() {
 }
 
 #[test]
+fn delayed_image_paste_rejects_a_different_shell_generation() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let shell = test_shell(&core);
+    let terminal = core
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
+        .expect("terminal");
+    let identity = core
+        .terminal_session_identity(&terminal.id)
+        .expect("identity");
+    let output = Output::attach(&core, &terminal.id);
+    let (command, expected) = echo_computed("image-generation");
+    let error = core
+        .write_terminal_for_generation(
+            &terminal.id,
+            command.as_bytes(),
+            Some(identity.generation + 1),
+        )
+        .expect_err("stale paste must fail");
+    assert_eq!(error.code, "terminal_image_target_changed");
+    core.write_terminal_for_generation(&terminal.id, command.as_bytes(), Some(identity.generation))
+        .expect("matching generation");
+    output.wait_for(&expected);
+    core.close_terminal(&terminal.id)
+        .expect("close own test shell");
+    assert!(
+        core.write_terminal_for_generation(&terminal.id, b"image.png", Some(identity.generation))
+            .is_err()
+    );
+}
+
+#[test]
 fn terminal_runs_in_the_workspace_folder_with_input_and_output() {
     let data = tempfile::tempdir().expect("data");
     let projects = tempfile::tempdir().expect("projects");

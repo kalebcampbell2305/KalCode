@@ -97,28 +97,35 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const header = (toolbar: ReactNode) => (
     <header className={styles.header}>
       <div className={styles.heading}>
-        <div className={styles.titleRow}>
-          <h1 className={styles.title}>{workspace.name}</h1>
-          {workspace.available ? null : <Badge tone="waiting">Folder not found</Badge>}
+        <span className={styles.workspaceGlyph} aria-hidden="true">
+          <SquareTerminal />
+        </span>
+        <div className={styles.workspaceIdentity}>
+          <div className={styles.titleRow}>
+            <h1 className={styles.title}>{workspace.name}</h1>
+            {workspace.available ? null : <Badge tone="waiting">Folder not found</Badge>}
+          </div>
+          <p className={styles.path} title={workspace.rootPath} data-selectable>
+            {workspace.displayPath}
+          </p>
         </div>
-        <p className={styles.path} title={workspace.rootPath} data-selectable>
-          {workspace.displayPath}
-        </p>
       </div>
       <div className={styles.headerActions} id="code-actions" tabIndex={-1}>
-        {toolbar}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm">
-              Switch workspace
-              <ChevronDown aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <WorkspaceMenuContent align="end" />
-        </DropdownMenu>
-        <Button size="sm" icon={<FolderOpen />} onClick={() => void openFolder()} busy={picking}>
-          Open folder…
-        </Button>
+        <div className={styles.canvasTools}>{toolbar}</div>
+        <div className={styles.workspaceTools}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm">
+                Switch workspace
+                <ChevronDown aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <WorkspaceMenuContent align="end" />
+          </DropdownMenu>
+          <Button size="sm" icon={<FolderOpen />} onClick={() => void openFolder()} busy={picking}>
+            Open folder…
+          </Button>
+        </div>
       </div>
     </header>
   );
@@ -312,15 +319,22 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
   const defaultShell = shells.find((s) => s.isDefault) ?? shells[0];
   return (
     <>
+      {providerPanes.enabled ? (
+        <Button
+          variant="primary"
+          size="sm"
+          icon={<Bot />}
+          busy={providerPanes.creating}
+          onClick={() => api.openAgentLauncher()}
+        >
+          New agent
+        </Button>
+      ) : null}
       <div className={styles.toolGroup}>
         <Tooltip content={`New ${defaultShell?.name ?? "terminal"} terminal (${CODE_SHORTCUT_LABELS["new-terminal"]})`}>
-          <IconButton
-            size="sm"
-            label="New terminal"
-            icon={<Plus />}
-            disabled={shells.length === 0}
-            onClick={() => api.newTerminal(null)}
-          />
+          <Button size="sm" icon={<Plus />} disabled={shells.length === 0} onClick={() => api.newTerminal(null)}>
+            New terminal
+          </Button>
         </Tooltip>
         <DropdownMenu>
           <Tooltip content="Choose a shell">
@@ -353,12 +367,6 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <KalTidyActions />
-      {providerPanes.enabled ? (
-        <Button size="sm" icon={<Bot />} busy={providerPanes.creating} onClick={() => api.openAgentLauncher()}>
-          New agent
-        </Button>
-      ) : null}
       {providerPanes.error ? (
         <span className={styles.toolError} role="alert">
           {providerPanes.error}
@@ -432,6 +440,7 @@ function Toolbar({ api }: { api: CodeCanvasApi }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <KalTidyActions />
       {background.length > 0 ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
