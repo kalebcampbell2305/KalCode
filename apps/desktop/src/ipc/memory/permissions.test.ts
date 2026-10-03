@@ -102,10 +102,12 @@ describe("built-in profiles", () => {
     }
   });
 
-  it("no mode allows remote-consequential scopes without asking", () => {
-    for (const mode of ["plan", "approve", "auto", "bypass", "custom"] as const)
+  it("only Bypass allows remote-consequential scopes without asking", () => {
+    for (const mode of ["plan", "approve", "auto", "custom"] as const)
       for (const scope of ["git.push", "deploy.production", "cloud.modify", "billing.spend", "messaging.send"] as const)
         expect(baseline(mode, scope)).not.toBe("allow");
+    expect(baseline("bypass", "git.push")).toBe("allow");
+    expect(baseline("bypass", "credentials.access")).toBe("ask");
   });
 });
 
