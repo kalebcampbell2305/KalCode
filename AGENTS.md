@@ -64,6 +64,35 @@ KalCode agents must never spam the Windows desktop with external terminal window
 For Codex tool execution on Windows, use the existing PTY execution mode (`exec_command` with `tty: true`) so commands stay contained. Any explicitly launched background helper must use the platform's no-window creation mechanism (`windowsHide`, `CREATE_NO_WINDOW`, or `Start-Process -WindowStyle Hidden` as applicable). Test the actual owning spawn path and observe window/focus events; reduced popup frequency is not completion.
 
 
+## Permanent multi-shipper / parallel release rule (owner directive 2026-10-03)
+
+> "KALCODE HAS NO SINGLE SHIPPER TERMINAL.
+>
+> ANY VALIDATED CODING AGENT/TERMINAL MAY MERGE WORK AND INITIATE SHIPPING.
+>
+> MULTIPLE RELEASE JOBS MAY BUILD, PACKAGE, SIGN, VALIDATE, AND PREPARE IN PARALLEL.
+>
+> ONLY THE FINAL SHARED PRODUCTION-PUBLISH MUTATION MAY USE A SHORT EXCLUSIVE LOCK.
+>
+> NEVER LET ONE RELEASE DRIVER HOLD THE WHOLE SHIPPING PIPELINE FOR HOURS.
+>
+> NEWEST VALID BUILD WINS.
+> OLDER RELEASE JOBS MUST NOT OVERWRITE NEWER PRODUCTION BUILDS.
+>
+> LONG RELEASE QUEUES CAUSED BY ONE GLOBAL SHIPPER ARE A PIPELINE BUG."
+
+This replaces the single-release-driver model, including the old "one release at a time" and `target/lanes/release.lock` slot rules. Where an older instruction conflicts, this rule wins.
+
+- **Any terminal ships.** Any coding agent that finishes validated user-facing work merges it and starts its own release job: OWNER REQUEST → BUILD → FOCUSED VALIDATION → AUTO-MERGE → AUTO-START RELEASE JOB → BUILD/PACKAGE/SIGN IN PARALLEL → SHORT FINAL PUBLISH LOCK → USERS RECEIVE NEWEST BUILD → VERIFY → CLEAN UP. It never hands work to a special shipper. The release harness is the shared executor. No owner approval is needed for normal validated work, and no job waits for a new public version.
+- **Release jobs run concurrently.** Build, packaging-relevant tests, Windows and macOS packaging, signing, notarization, artifacts, release metadata, upload preparation, staging uploads, updater-metadata preparation and smoke validation may all run for several builds at once. No lock may cover any of that work.
+- **Release job identity.** Every job is identified by commit SHA, internal build number, public version and release job ID. Jobs never share mutable temporary state: each uses its own build, staging and state directories (for example `target/release-pipeline/<version>-<sha12>`). A genuinely shared physical resource, such as one QA account or one signing device, is held only for the minutes it is used, never across a whole release.
+- **Platforms are independent.** Windows build/sign/package never waits on macOS, and macOS build/sign/notarize never waits on Windows. When stable publication needs both platforms, prepare both concurrently and wait only at the final publish boundary.
+- **Only the final production mutation is serialized.** Mutating shared production state (stable updater feed, stable release pointer, latest-build metadata, canonical production manifest, final publication record) takes a short exclusive lease, `target/lanes/publish.lock` (one line: session, job, commit, build N, UTC start). Hold it only around the atomic feed/pointer write and its immediate readback, never during builds, signing, notarization or QA. A lease older than 30 minutes, or held by a session that no longer appears in ListAgents, is stale, and any session may take it over.
+- **Newest valid build wins; the feed only moves forward.** Inside the lease, read the live feed's build number first. If live ≥ this job's build N, do not publish. Record the job as SUPERSEDED (artifacts may finish and be kept as evidence) and retire it. An older job never overwrites a newer published build.
+- **Scope blockers to the smallest component.** A Mac-only blocker never freezes Windows preparation, and a Windows QA blocker never stops macOS packaging. A signing problem with one artifact never stops another build from compiling. One QA decision, old build, open app instance or release-driver session never holds the release system hostage unless there is a real technical dependency.
+- **Failure and supersession.** A failed job never stops the other jobs: isolate it, then fix and retry only that job or component. When a newer build contains the same changes and ships, mark the older blocked job SUPERSEDED and retire it safely. Never finish obsolete releases in order.
+- **Shipped** still means: the user closes KalCode, reopens it, the production update path serves the newest valid build, and the feature is there.
+
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 
 **KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.**
@@ -88,7 +117,7 @@ Default lifecycle: **IMPLEMENT -> TEST WHAT CHANGED -> REVIEW -> MERGE -> BUILD 
 
 Fastest possible does not mean careless: maximum speed with high quality and correctness. Don't stop between stages without a real blocker. On a blocker, IDENTIFY → FIX → RERUN ONLY THE INVALIDATED CHECK → CONTINUE, never restarting the pipeline. Long releases are pipeline problems to fix, not something to accept. These practices, learned on the 2026-10-03 trains, keep it fast:
 
-- **One release at a time, so ride the train.** Before cutting a release, check `target/lanes/release.lock`, the latest `target/lanes/merge-log.md` lines, `train/*` branches and PRs titled `train:`. If a train is close, put your PR on it instead of shipping a separate build right after it.
+- **Trains are for gates, not releases.** Combine ready PRs on one `train/<topic>` branch to share one gate run. Releases are not serialized: see the multi-shipper rule. Any session starts its own release job, and only the final feed write takes `target/lanes/publish.lock`.
 - **One gate per train, on idle runners.** The PR's Gate (Windows) job runs the full `ship.mjs gate` on the shared Windows PC. Don't run a second full gate locally at the same time, and don't run heavy local cargo/Playwright work while a release is packaging: contention causes timeouts and memory-guard aborts. Use local `--only <lanes> --keep-going` for fast diagnosis.
 - **Speculative builds.** Start the signed Windows and macOS builds from the exact commit under test while its gate runs. Publish only after the gate passes and the commit is on main. If only test files change afterwards, the build stays valid.
 - **Rerun only what changed.** After a fix, rerun the invalidated lanes, not the whole gate. Classify every remaining failure truthfully: train regression, intended behavior with a stale test, already failing on main, or environmental. Only real product risk blocks shipping. Record the classification and file follow-ups.
@@ -304,10 +333,10 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 
 **5. Announce shared hot spots.** Before merging changes to these areas, send a one-line SendMessage to the live sessions (ListAgents): KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater. Never force-push, rebase or merge another session's branch without asking that session.
 
-**6. One release build and one website deploy at a time** (shared hardware and a shared Worker); merges never wait for either.
-- **Release.** Claim it in `target/lanes/release.lock` (one line: session, commit C, build N, UTC start) and remove it after production verification. A release pins its commit C, so merges during a release don't restart it; they ride the next build. When a release publishes and main has unshipped desktop changes, the releasing session starts the next build immediately.
+**6. Release jobs run in parallel; one website deploy at a time** (shared Worker); merges never wait for either.
+- **Release.** Follow the multi-shipper rule. Any session starts a release job for its merged commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
 - **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
-- **Takeover.** If a lock's session no longer appears in ListAgents, any session may take the lock over and finish the work (the kit and state are in `target/recovery-*`).
+- **Takeover.** If a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take the lock over. A stalled older release job is superseded by any newer build that ships, never waited on.
 
 **7. Log merges.** Append one line per merge to `target/lanes/merge-log.md`: UTC time, session, PR, merged sha, and the areas touched. Sessions read it to see what just landed.
 
