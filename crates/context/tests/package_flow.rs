@@ -208,8 +208,6 @@ fn a_named_pipe_never_blocks_package_building() {
         .recv_timeout(std::time::Duration::from_secs(20))
         .expect("package building returned instead of waiting on the pipe");
     assert_eq!(items, 1);
-    // Unblock the reader thread if the build is still stuck on the pipe.
-    drop(std::fs::OpenOptions::new().write(true).open(&fifo));
 }
 
 #[test]
