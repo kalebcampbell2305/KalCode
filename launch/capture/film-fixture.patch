@@ -1033,10 +1033,80 @@ index e7726f5d..139a6bdd 100644
  
    // Pane layouts (Z7-W1), stored per workspace like native.
 diff --git a/apps/desktop/src/ipc/memoryWorkspaces.ts b/apps/desktop/src/ipc/memoryWorkspaces.ts
-index bdcdea26..4c5a3dbd 100644
+index 5440f9b0..c737509a 100644
 --- a/apps/desktop/src/ipc/memoryWorkspaces.ts
 +++ b/apps/desktop/src/ipc/memoryWorkspaces.ts
-@@ -118,7 +118,7 @@ export function createMemoryWorkspaces({
+@@ -110,6 +110,69 @@ interface Tab {
+ const encoder = new TextEncoder();
+ const ESC = "\x1b";
+ const c = (code: string, text: string) => `${ESC}[${code}m${text}${ESC}[0m`;
++// Film staging (capture-only): what each agent session does in its pane.
++const AGENT_JOBS: Record<string, { delay: number; pace: number; steps: [string, string, string][]; done: string }> = {
++  "Tighten the Browser toolbar": {
++    delay: 0,
++    pace: 420,
++    steps: [
++      ["Read", "browser/toolbar.tsx", "Read 142 lines"],
++      ["Update", "browser/toolbar.tsx", "6 additions, 4 removals"],
++      ["Bash", "pnpm test toolbar", `${c("32", "✓")} 9 passed`],
++    ],
++    done: "Toolbar tightened. 9 tests pass.",
++  },
++  "Add retry backoff to the updater": {
++    delay: 250,
++    pace: 470,
++    steps: [
++      ["Explored", "", "Read updater/src/download.rs"],
++      ["Edited", "download.rs", `${c("32", "+18")} ${c("31", "-3")}`],
++      ["Ran", "cargo test -p updater", `test result: ${c("32", "ok")}. 24 passed`],
++    ],
++    done: "Retry with backoff added.",
++  },
++  "Smooth the KalVoice waveform": {
++    delay: 500,
++    pace: 440,
++    steps: [
++      ["Read", "kalvoice/Waveform.tsx", "Read 88 lines"],
++      ["Update", "kalvoice/Waveform.tsx", "12 additions, 7 removals"],
++      ["Bash", "pnpm test waveform", `${c("32", "✓")} 6 passed`],
++    ],
++    done: "Waveform eases while it listens.",
++  },
++  "Test the download page": {
++    delay: 750,
++    pace: 500,
++    steps: [
++      ["Explored", "", "Read website/src/download"],
++      ["Edited", "download.test.ts", `${c("32", "+64")} ${c("31", "-0")}`],
++      ["Ran", "pnpm test download", `${c("32", "✓")} 11 passed`],
++    ],
++    done: "Download page covered.",
++  },
++  "Fix the loading bar flicker": {
++    delay: 350,
++    pace: 450,
++    steps: [
++      ["Read", "browser/loading.tsx", "Read 51 lines"],
++      ["Update", "browser/loading.tsx", "3 additions, 2 removals"],
++      ["Bash", "pnpm test loading", `${c("32", "✓")} 6 passed`],
++    ],
++    done: "Flicker fixed. 6 tests pass.",
++  },
++  "Draft the release notes": {
++    delay: 600,
++    pace: 480,
++    steps: [
++      ["Explored", "", "Read 14 merged changes"],
++      ["Edited", "docs/release-notes.md", `${c("32", "+42")} ${c("31", "-0")}`],
++      ["Ran", "pnpm lint:docs", `${c("32", "✓")} no issues`],
++    ],
++    done: "Release notes drafted.",
++  },
++};
+ 
+ export function createMemoryWorkspaces({
+   emit,
+@@ -120,7 +183,7 @@ export function createMemoryWorkspaces({
    const tabs = new Map<string, Tab>();
    let activeWorkspaceId: string | null = null;
    const pickQueue: PickedFolder[] = [];
@@ -1045,7 +1115,7 @@ index bdcdea26..4c5a3dbd 100644
    let clock = Date.now() - 120_000;
    const now = () => {
      clock += 1000;
-@@ -179,14 +179,16 @@ export function createMemoryWorkspaces({
+@@ -181,14 +244,16 @@ export function createMemoryWorkspaces({
  
    const gitLog = () =>
      [
@@ -1069,7 +1139,7 @@ index bdcdea26..4c5a3dbd 100644
  
    const endSession = (tab: Tab, code: number, closedByUser: boolean) => {
      const session = tab.session;
-@@ -229,8 +231,43 @@ export function createMemoryWorkspaces({
+@@ -231,8 +296,86 @@ export function createMemoryWorkspaces({
        case "dir":
          out(listing());
          break;
@@ -1101,6 +1171,49 @@ index bdcdea26..4c5a3dbd 100644
 +          `test result: ${c("32", "ok")}. 24 passed; 0 failed`,
 +        ]);
 +        break;
++      case "claude":
++      case "codex": {
++        // Film staging (capture-only): the provider's own CLI working in a KalCode terminal.
++        const task = rest.join(" ").replaceAll('"', "");
++        const job = AGENT_JOBS[task] ?? AGENT_JOBS["Tighten the Browser toolbar"];
++        const or = (t: string) => c("38;5;209", t);
++        const dim = (t: string) => c("90", t);
++        const lines =
++          name.toLowerCase() === "claude"
++            ? [
++                or("╭──────────────────────────────────────────╮"),
++                `${or("│")} ${or("✻")} Welcome to ${c("1", "Claude Code")}!                ${or("│")}`,
++                `${or("│")}   ${dim("cwd: C:\\Users\\you\\Projects\\kalcode")}     ${or("│")}`,
++                or("╰──────────────────────────────────────────╯"),
++                "",
++                `${dim(">")} ${task}`,
++                "",
++                ...job.steps.flatMap(([tool, arg, res]) => [
++                  `${c("32", "⏺")} ${c("1", tool)}(${arg})`,
++                  `  ${dim("⎿")}  ${res}`,
++                ]),
++                "",
++                `${c("37", "⏺")} ${job.done}`,
++              ]
++            : [
++                `${c("1", ">_")} ${c("1", "OpenAI Codex")}`,
++                `   ${dim("directory:")} ~\\Projects\\kalcode`,
++                "",
++                `${c("1", "›")} ${task}`,
++                "",
++                ...job.steps.flatMap(([tool, arg, res]) => [
++                  `${c("1", "•")} ${c("1", tool)} ${arg}`,
++                  `  ${dim("└")} ${res}`,
++                ]),
++                dim("─ Worked for 1m 12s ─"),
++                `${c("1", "•")} ${job.done}`,
++              ];
++        deliver(session, `${ESC}[2J${ESC}[H`);
++        lines.forEach((line, i) =>
++          setTimeout(() => deliver(session, `${line}\r\n`), job.delay + (i < 6 ? i * 60 : 360 + (i - 6) * job.pace)),
++        );
++        return;
++      }
        case "git":
          if (rest[0] === "log") out(gitLog());
 +        else if (rest[0] === "push")
@@ -1113,7 +1226,7 @@ index bdcdea26..4c5a3dbd 100644
          else out(`${c("1;31", "fatal:")} only 'git log' works in this test shell`);
          break;
        case "colors":
-@@ -351,7 +388,7 @@ export function createMemoryWorkspaces({
+@@ -353,7 +496,7 @@ export function createMemoryWorkspaces({
      // A tab restored after KalCode closed while its shell was running.
      const restored = addTab(api, "pwsh");
      restored.info = { ...restored.info, startedAt: now(), endedAt: now() };

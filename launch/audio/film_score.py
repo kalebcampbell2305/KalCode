@@ -92,19 +92,28 @@ def section(t0, t1, drums=True, clap_on=True, arp=False, bass_cut=1400, hat_g=0.
         k += 1
 
 
-section(10.0, S(1140))                                   # one workspace
-section(S(1140), S(1620), arp=True, hat_g=0.36)          # multi-agent
-section(S(1620), S(2100), drums=True, clap_on=False, arp=True, half=True, hat_g=0.18)   # KalVoice breakdown
-section(S(2100), S(2548), arp=True, hat_g=0.38)          # build loop
-section(S(2580), S(3000), arp=True, hat_g=0.42)          # cockpit
-section(S(3060), S(3340), drums=False, arp=True, filt=lambda t: 500 + 2800 * ((t - S(3060)) / (S(3340) - S(3060))) ** 2)
-m.add("sfx", S(2440), riser(S(2548) - S(2440), 300, 9000, 0.25))
-m.add("sfx", S(3180), riser(S(3350) - S(3180), 200, 10000, 0.22))
+section(10.0, S(1200))                                   # one workspace + Providers
+section(S(1200), S(1540), arp=True, hat_g=0.36)          # four panes
+section(S(1540), S(1940), arp=True, hat_g=0.42)          # six panes
+section(S(1940), S(2122), arp=True, hat_g=0.38)          # Build. Test. Ship.
+section(S(2122), S(2602), arp=True, hat_g=0.36)          # multi-agent
+section(S(2602), S(3022), drums=True, clap_on=False, arp=True, half=True, hat_g=0.18)   # KalVoice breakdown
+section(S(3022), S(3250), arp=True, hat_g=0.42)          # cockpit
+section(S(3250), S(3340), drums=False, arp=True, filt=lambda t: 500 + 2800 * ((t - S(3250)) / (S(3340) - S(3250))) ** 2)
+m.add("sfx", S(1840), riser(S(1948) - S(1840), 300, 9000, 0.25))
+m.add("sfx", S(3200), riser(S(3350) - S(3200), 200, 10000, 0.22))
 
 # ---------------------------------------------------------------- act sfx
 for f in cues("key"):
     m.add("sfx", S(f), key_click(), pan=0.1)
 m.add("sfx", S(703), key_click() * 1.4)
+for f in cues("enter"):
+    if f > 1000:  # the agent CLIs launching in each pane
+        m.add("sfx", S(f), key_click() * 1.2, pan=0.2 * np.sin(f))
+for f in cues("pane"):
+    if f > 1000:  # Layout presets: 4 panes, 6 panes
+        m.add("sfx", S(f), whoosh(0.6, 400, 5000, 0.2), pan=0.3, send=0.2)
+        m.add("drums", S(f) + 0.1, kick(0.5, 60), send=0.1)
 for i, f in enumerate(cues("pass")):
     m.add("sfx", S(f), tick(midi(88 + i * 2), 0.09, 0.13), send=0.3)
 m.add("sfx", S(751), bell(88, 1.2, gain=0.09), send=0.4)
@@ -113,8 +122,8 @@ for f in cues("state"):
     if f > 700:
         m.add("sfx", S(f), whoosh(0.35, 800, 7000, 0.1), send=0.15)
 for i, f in enumerate(cues("card")):
-    m.add("sfx", S(f), whoosh(0.5, 400, 5000, 0.14), pan=(-0.6, -0.2, 0.2, 0.6)[i], send=0.2)
-    m.add("sfx", S(f) + 0.12, pluck(76 + (0, 3, 7, 10)[i], 0.5, 0.1), pan=(-0.6, -0.2, 0.2, 0.6)[i], send=0.4)
+    m.add("sfx", S(f), whoosh(0.5, 400, 5000, 0.14), pan=(-0.6, -0.2, 0.2, 0.6)[i % 4], send=0.2)
+    m.add("sfx", S(f) + 0.12, pluck(76 + (0, 3, 7, 10)[i % 4], 0.5, 0.1), pan=(-0.6, -0.2, 0.2, 0.6)[i % 4], send=0.4)
 for f in cues("status"):
     m.add("sfx", S(f), tick(midi(93), 0.1, 0.12), send=0.35)
 for on, off in zip(cues("voice_on"), cues("voice_off")):
@@ -122,24 +131,18 @@ for on, off in zip(cues("voice_on"), cues("voice_off")):
     m.add("voice", S(on) + 0.09, bell(83, 1.4, ratio=2.0, index=1.0, gain=0.14), send=0.5)
     m.add("voice", S(on) + 0.03, voice_texture(S(off) - S(on), 0.09), send=0.2)
     m.add("voice", S(on) + 0.03, shimmer(S(off) - S(on) + 0.6, 88, 0.035), send=0.5)
-m.add("voice", S(1764), zap(0.2, 700, 3400, 0.16), send=0.3)
-m.add("voice", S(1774), bell(88, 2.2, ratio=3.0, index=1.6, gain=0.16), send=0.55)
-m.add("voice", S(1774), bell(81, 2.2, ratio=3.0, index=1.2, gain=0.1), send=0.55)
-m.add("drums", S(1774), sub_drop(1.2, 70, 40) * 0.35)
-m.add("voice", S(1896), bell(84, 1.6, ratio=2.0, index=0.8, gain=0.12), send=0.5)       # sent
-m.add("voice", S(1896) + 0.12, bell(88, 1.6, ratio=2.0, index=0.8, gain=0.1), send=0.5)
-for i, f in enumerate(cues("step")):
-    m.add("sfx", S(f), pluck((69, 72, 76, 79, 81)[i] + 12, 0.6, 0.12), send=0.4)
-    m.add("sfx", S(f), tick(midi(93), 0.06, 0.08))
-for f in (2548, 2562, 2576):  # Build. Test. Ship.
+m.add("voice", S(2746), zap(0.2, 700, 3400, 0.16), send=0.3)
+m.add("voice", S(2756), bell(88, 2.2, ratio=3.0, index=1.6, gain=0.16), send=0.55)
+m.add("voice", S(2756), bell(81, 2.2, ratio=3.0, index=1.2, gain=0.1), send=0.55)
+m.add("drums", S(2756), sub_drop(1.2, 70, 40) * 0.35)
+m.add("voice", S(2878), bell(84, 1.6, ratio=2.0, index=0.8, gain=0.12), send=0.5)       # sent
+m.add("voice", S(2878) + 0.12, bell(88, 1.6, ratio=2.0, index=0.8, gain=0.1), send=0.5)
+for f in (1948, 1962, 1976):  # Build. Test. Ship.
     m.add("drums", S(f), kick(1.0, 46))
     m.add("music", S(f), pad([57, 64, 69], 0.5, gain=0.14, attack=0.005, release=0.3, cutoff=3500), send=0.4)
-m.add("sfx", S(2640), whoosh(0.6, 600, 8000, 0.16))
-m.add("drums", S(3004), impact(1.2) * 0.6, send=0.3)                                        # not another wrapper
-m.add("music", S(3004), pad([57, 64, 69, 71], 1.0, gain=0.12, attack=0.01, release=0.6, cutoff=3000), send=0.5)
-for f in (3228, 3248):
-    m.add("drums", S(f), kick(0.7, 50), send=0.2)
-m.add("music", S(3228), bell(81, 2.0, gain=0.12), send=0.5)
+m.add("sfx", S(3074), whoosh(0.6, 600, 8000, 0.16))
+m.add("drums", S(3250), impact(1.2) * 0.6, send=0.3)                                        # not another wrapper
+m.add("music", S(3250), pad([57, 64, 69, 71], 1.0, gain=0.12, attack=0.01, release=0.6, cutoff=3000), send=0.5)
 
 # ---------------------------------------------------------------- end card: sonic signature
 m.add("drums", S(3352), impact(1.6) * 0.7, send=0.4)
@@ -147,7 +150,7 @@ sonic_logo(m, S(3364) - BEAT)
 m.add("music", S(3364), shimmer(4.0, 81, 0.05), send=0.6)
 m.add("music", S(3404), pad([57, 64, 69, 76, 83], 3.2, gain=0.1, attack=0.8, release=1.6, cutoff=2400), send=0.5)
 
-mix = render(m, duckers=[(S(1702), S(1780), 8), (S(1830), S(1900), 8)])
+mix = render(m, duckers=[(S(2684), S(2762), 8), (S(2812), S(2882), 8)])
 n = int(DUR * SR)
 mix = mix[:, :n]
 fade = int(1.2 * SR)
