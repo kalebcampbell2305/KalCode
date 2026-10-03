@@ -147,6 +147,17 @@ pub(super) fn after_exit_attempt(
     }
 }
 
+/// Windows is logging off or shutting down, so the staged build's install is deferred to a later
+/// quit. That ending is expected, not a fault in the silent path, so it isn't a skipped exit.
+pub(super) fn after_session_end(
+    record: Option<SilentInstallRecord>,
+) -> Option<SilentInstallRecord> {
+    record.map(|mut record| {
+        record.staged_for_exit = false;
+        record
+    })
+}
+
 /// A missing, unreadable or malformed record reads as none: the worst case is one more silent
 /// attempt, which this record then catches.
 pub(super) fn load(path: &Path) -> Option<SilentInstallRecord> {
@@ -184,6 +195,17 @@ mod tests {
 
     const OLD: &str = "0.1.8+5";
     const NEW: &str = "0.1.8+6";
+
+    #[test]
+    fn a_windows_shutdown_with_kalcode_open_is_never_a_skipped_exit() {
+        let mut record = after_staging_success(None, NEW);
+        for _ in 0..5 {
+            record = count_skipped_exit(after_session_end(record));
+            record = after_staging_success(record, NEW);
+        }
+        assert_eq!(record.as_ref().map(|r| r.skipped_exits), Some(0));
+        assert!(!prompt_instead(record.as_ref(), NEW));
+    }
 
     #[test]
     fn sessions_that_staged_a_build_but_never_started_its_install_offer_it_with_the_prompt() {

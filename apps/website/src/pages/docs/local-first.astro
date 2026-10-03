@@ -61,9 +61,12 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
   <p>
     Current builds send no telemetry and no user data off your device. Apart from your
     KalCode account (sign-in, plan and KalVoice Request counts), KalCode contacts kalcoded.com only
-    for its signed update feed, at launch and about every six hours while it is open, and to
+    for its signed update feed, at launch and about every ten minutes while it is open, and to
     download KalVoice's signed components when they are needed. None of these requests carry
-    telemetry, audio or text. When you run a
+    telemetry, audio or text. To show each provider account's current plan usage, KalCode asks
+    that provider's own usage service (Anthropic for Claude Code, OpenAI for Codex) with the
+    sign-in the provider's CLI already keeps for that account; the request reads usage only and
+    changes nothing. When you run a
     provider, that provider's own CLI talks to its service under your account, exactly as it does
     when you use it directly. KalVoice interprets commands on your computer and never sends them
     to a provider; words you dictate into a provider thread go to that provider.

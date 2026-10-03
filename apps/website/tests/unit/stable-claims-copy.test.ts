@@ -214,7 +214,7 @@ describe("KalVoice voice-to-thread docs", () => {
   it("names what KalCode itself contacts kalcoded.com for", async () => {
     const copy = text(await render(LocalFirstDocs, "/docs/local-first"));
     expect(copy).toContain(
-      "KalCode contacts kalcoded.com only for its signed update feed, at launch and about every six hours while it is open, and to download KalVoice's signed components when they are needed. None of these requests carry telemetry, audio or text.",
+      "KalCode contacts kalcoded.com only for its signed update feed, at launch and about every ten minutes while it is open, and to download KalVoice's signed components when they are needed. None of these requests carry telemetry, audio or text.",
     );
   });
 });
