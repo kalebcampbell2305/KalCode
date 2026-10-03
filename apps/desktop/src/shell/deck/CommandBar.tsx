@@ -26,7 +26,7 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import { forwardRef, type ReactNode, useMemo } from "react";
+import { forwardRef, type ReactNode, useMemo, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { WorkspaceMenuContent } from "../../surfaces/code/WorkspaceMenu.tsx";
@@ -36,6 +36,11 @@ import { DEFAULT_MODE_CHOICES, MODE_DESCRIPTIONS, MODE_LABELS } from "../../surf
 import { usePermissions } from "../../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "../Brand.tsx";
 import { useNavigation, viewVisible } from "../navigation.tsx";
+import { allEntries } from "../rail/model.ts";
+import { RailDialogs } from "../rail/RailDialogs.tsx";
+import { useRail } from "../rail/RailProvider.tsx";
+import type { RailDialog } from "../rail/RailTree.tsx";
+import { WorkspaceContextMenu } from "../rail/WorkspaceContextMenu.tsx";
 import { MOD_LABEL } from "../shortcuts.ts";
 import { AccountUsageCenter } from "./AccountUsageCenter.tsx";
 import styles from "./CommandBar.module.css";
@@ -122,25 +127,39 @@ const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
 function WorkspaceChip() {
   const { active, state } = useWorkspaces();
   const { navigate } = useNavigation();
+  const rail = useRail();
+  const [dialog, setDialog] = useState<RailDialog | null>(null);
+  const entry = rail.rail ? allEntries(rail.rail).find((workspace) => workspace.workspaceId === active?.id) : null;
   const name = active?.name ?? "No workspace";
+  const trigger = (
+    <DropdownMenuTrigger asChild>
+      <Chip
+        icon={<FolderClosed />}
+        caption="Workspace"
+        menu
+        disabled={state === "loading"}
+        aria-label={`Workspace ${name}`}
+        title={active?.displayPath}
+        data-empty={active ? undefined : true}
+      >
+        {name}
+      </Chip>
+    </DropdownMenuTrigger>
+  );
   return (
-    <DropdownMenu>
-      <Tooltip content={active ? active.displayPath : "Open a project folder"}>
-        <DropdownMenuTrigger asChild>
-          <Chip
-            icon={<FolderClosed />}
-            caption="Workspace"
-            menu
-            disabled={state === "loading"}
-            aria-label={`Workspace ${name}`}
-            data-empty={active ? undefined : true}
-          >
-            {name}
-          </Chip>
-        </DropdownMenuTrigger>
-      </Tooltip>
-      <WorkspaceMenuContent onChosen={() => navigate("code")} />
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        {entry ? (
+          <WorkspaceContextMenu entry={entry} onDialog={setDialog}>
+            {trigger}
+          </WorkspaceContextMenu>
+        ) : (
+          trigger
+        )}
+        <WorkspaceMenuContent onChosen={() => navigate("code")} />
+      </DropdownMenu>
+      <RailDialogs dialog={dialog} onClose={() => setDialog(null)} />
+    </>
   );
 }
 

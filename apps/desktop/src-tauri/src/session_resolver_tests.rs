@@ -56,6 +56,7 @@ fn summary(
     archived: bool,
 ) -> ThreadSummary {
     ThreadSummary {
+        can_move_workspace: None,
         id: thread_id(key),
         name: name.into(),
         provider_id: ProviderId::new(provider),

@@ -497,6 +497,7 @@ mod tests {
 
     fn thread() -> ThreadSummary {
         ThreadSummary {
+            can_move_workspace: None,
             id: "thread-1".into(),
             name: "Agent task".into(),
             provider_id: ProviderId::new(ProviderId::CODEX),

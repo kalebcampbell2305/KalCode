@@ -1,4 +1,5 @@
 import type { PaneContent, PaneNode } from "@kalcode/protocol";
+import type { ObjectMenuItem } from "@kalcode/ui/components";
 import {
   memo,
   type PointerEvent,
@@ -48,6 +49,8 @@ export interface PaneHost {
   renderEmpty(paneId: string): ReactNode;
   /** Items of a pane's "Add" menu. */
   addMenu(paneId: string): ReactNode;
+  /** Actions bound to the exact tab or body the user invoked. */
+  contextMenu?(content: PaneContent, paneId: string): readonly ObjectMenuItem[];
   /** Commands the host handles itself (return null to let the canvas handle it). */
   onCommand?(command: PaneCommand): PaneCommandResult | null;
 }
@@ -472,6 +475,7 @@ function PaneCanvasSurface({
             renderContent={renderContent}
             renderEmpty={host.renderEmpty}
             addMenu={host.addMenu}
+            contextMenu={host.contextMenu}
             onFocus={(paneId) => {
               if (controller.focusedPaneId !== paneId) controller.focusPane(paneId, false);
             }}
@@ -666,6 +670,7 @@ export function runCommand(
     case "arrange-providers":
     case "open-provider-panes":
     case "open-agent-launcher":
+    case "agent-browser-beside":
     case "control-pane":
       return { handled: false, message: "Provider panes aren't available here." };
     case "browser-control":

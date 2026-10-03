@@ -590,7 +590,15 @@ export function createThreadsMemory(
     return summary(t);
   };
 
-  const summary = (t: MemThread): ThreadSummary => t.summary;
+  const summary = (t: MemThread): ThreadSummary => ({
+    ...t.summary,
+    canMoveWorkspace:
+      !t.archived &&
+      t.summary.runtimeKind !== "interactive_pty" &&
+      !t.summary.worktreeId &&
+      !t.summary.pendingApprovals &&
+      ["idle", "waiting_for_user", "completed", "interrupted", "failed", "offline"].includes(t.summary.status),
+  });
 
   /** The user's answer reached the session: run the install (approved) or go on without it. */
   const continueAfterApproval = (t: MemThread, approved: boolean) => {
@@ -997,6 +1005,98 @@ export function createThreadsMemory(
         t.summary = { ...t.summary, name };
         emit({ type: "thread.renamed", payload: { threadId: t.summary.id, name } }, corr(t), "ui");
       }
+      return summary(t);
+    },
+    thread_duplicate: (args) => {
+      const source = get(args);
+      if (source.summary.runtimeKind === "interactive_pty")
+        invalid("thread_is_coding_agent", "Duplicate coding agents from their Code pane.");
+      if (!workspaces().some((w) => w.id === source.summary.workspaceId))
+        invalid("workspace_not_found", "That workspace is no longer available.");
+      const id = uuid();
+      const createdAt = now();
+      const copy: MemThread = {
+        summary: {
+          ...source.summary,
+          id,
+          name: `${[...source.summary.name].slice(0, 73).join("")} (copy)`,
+          status: "idle",
+          currentActivity: "Copied conversation; starts a new provider session",
+          createdAt,
+          lastActivityAt: createdAt,
+          pendingApprovals: 0,
+          unreadMessages: 0,
+          filesChanged: 0,
+          branch: null,
+          worktreeId: null,
+          error: null,
+          archivedAt: null,
+          resumable: false,
+          runtimeKind: "headless",
+          terminalId: null,
+        },
+        messages: source.messages.map((message) => ({ ...message, id: uuid(), threadId: id })),
+        tools: [],
+        live: false,
+        timers: [],
+        buffers: new Map(),
+        providerSessionId: null,
+        readThrough: source.messages.length,
+        archived: false,
+        resumeStatus: null,
+        pendingRequest: null,
+      };
+      threads.set(id, copy);
+      emit(
+        {
+          type: "thread.created",
+          payload: {
+            threadId: id,
+            name: copy.summary.name,
+            providerId: copy.summary.providerId,
+            workspaceId: copy.summary.workspaceId,
+          },
+        },
+        corr(copy),
+        "ui",
+      );
+      return summary(copy);
+    },
+    thread_move: (args) => {
+      const t = get(args);
+      if (typeof args.workspaceId !== "string" || !UUID.test(args.workspaceId))
+        invalid("invalid_workspace_id", "That workspace reference isn't valid.");
+      const workspace = workspaces().find((w) => w.id === args.workspaceId);
+      if (!workspace) return invalid("workspace_not_found", "That workspace is no longer available.");
+      if (t.summary.runtimeKind === "interactive_pty")
+        invalid("thread_is_coding_agent", "Coding agents remain in the workspace of their Code pane.");
+      if (t.archived) invalid("thread_archived", "This thread is archived.");
+      if (t.summary.worktreeId)
+        invalid("thread_move_worktree", "Threads with their own worktree cannot move to another workspace.");
+      if (
+        t.summary.pendingApprovals > 0 ||
+        !["idle", "waiting_for_user", "completed", "interrupted", "failed", "offline"].includes(t.summary.status)
+      )
+        invalid("thread_move_busy", "Stop the thread before moving it.");
+      if (t.summary.workspaceId === workspace.id) return summary(t);
+      const fromWorkspaceId = t.summary.workspaceId;
+      if (t.live) endSession(t, "Moved to another workspace");
+      t.providerSessionId = null;
+      t.summary = {
+        ...t.summary,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        status: "idle",
+        currentActivity: "Moved to another workspace",
+        error: null,
+        resumable: false,
+        lastActivityAt: now(),
+      };
+      emit(
+        { type: "thread.moved", payload: { threadId: t.summary.id, fromWorkspaceId, workspaceId: workspace.id } },
+        { ...corr(t), workspaceId: fromWorkspaceId },
+        "ui",
+      );
       return summary(t);
     },
     thread_archive: (args) => {

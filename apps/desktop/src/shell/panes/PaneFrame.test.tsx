@@ -1,6 +1,6 @@
 import type { PaneContent } from "@kalcode/protocol";
 import { TooltipProvider } from "@kalcode/ui/components";
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { expect, it, vi } from "vitest";
 import type { PaneRenderContext, TabInfo } from "./contentRegistry.ts";
@@ -10,7 +10,7 @@ import { PaneFrame, type PaneFrameProps } from "./PaneFrame.tsx";
 const terminal = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const browser: PaneContent = { kind: "browser", browserId: "web", url: null };
 
-function setup() {
+function setup(initial: Partial<PaneFrameProps> = {}) {
   const mounts = new Map<string, number>();
   const contexts = new Map<string, PaneRenderContext>();
   function Body({ id, context }: { id: string; context: PaneRenderContext }) {
@@ -65,7 +65,7 @@ function setup() {
   });
   const view = render(
     <TooltipProvider>
-      <PaneFrame {...props(leaf(0))} />
+      <PaneFrame {...props(leaf(0), initial)} />
     </TooltipProvider>,
   );
   const show = (next: LeafNode, extra: Partial<PaneFrameProps> = {}) =>
@@ -102,6 +102,45 @@ it("keeps terminal tabs mounted across tab switches, maximize and collapse, with
   expect(mounts.get(a)).toBe(1);
   expect(mounts.get(b)).toBe(1);
   expect(visiblePanels()).toHaveLength(1);
+});
+
+it("targets the right-clicked inactive terminal tab without switching or remounting terminals", async () => {
+  const action = vi.fn();
+  const activate = vi.fn();
+  const options: Partial<PaneFrameProps> = {
+    onActivate: activate,
+    contextMenu: (content, paneId) => [
+      { id: "stop", label: "Stop terminal", onSelect: () => action(contentKey(content), paneId) },
+    ],
+  };
+  const { leaf, show, mounts, view } = setup(options);
+  show(leaf(0), options);
+  const inactive = view.container.querySelector('[data-content-key="terminal:b"]');
+  expect(inactive).not.toBeNull();
+  fireEvent.contextMenu(inactive as Element);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Stop terminal" }));
+  expect(action).toHaveBeenCalledWith("terminal:b", "pane");
+  expect(activate).not.toHaveBeenCalled();
+  expect(mounts.get("terminal:b")).toBeUndefined();
+  expect(mounts.get("terminal:a")).toBe(1);
+  show(leaf(0), { ...options, contextMenu: () => [] });
+  show(leaf(0), options);
+  expect(mounts.get("terminal:a")).toBe(1);
+});
+
+it("opens terminal actions from the keyboard and preserves its tab role and label", async () => {
+  const { leaf, show, view } = setup();
+  const action = vi.fn();
+  show(leaf(0), {
+    contextMenu: (content) => [{ id: "focus", label: "Focus", onSelect: () => action(contentKey(content)) }],
+  });
+  const tab = view.container.querySelector('[data-content-key="terminal:a"]') as HTMLElement;
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "F10", shiftKey: true });
+  expect(await screen.findByRole("menu", { name: "terminal:a actions" })).toBeVisible();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Focus" }));
+  expect(action).toHaveBeenCalledWith("terminal:a");
+  expect(tab).toHaveAttribute("role", "tab");
 });
 
 it("renders other contents only while they are in front", () => {

@@ -35,6 +35,7 @@ export {
 } from "./DropdownMenu.tsx";
 export { Field, type FieldProps, Select, TextArea, TextInput } from "./Field.tsx";
 export { Kbd, type KeyValueItem, KeyValueList, Section, type SectionProps } from "./Layout.tsx";
+export { ObjectContextMenu, type ObjectMenuItem, openObjectContextMenu } from "./ObjectContextMenu.tsx";
 export { Eyebrow, Panel, type PanelProps, Surface, type SurfaceProps } from "./Panel.tsx";
 export {
   PermissionPrompt,

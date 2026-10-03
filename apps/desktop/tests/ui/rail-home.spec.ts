@@ -49,6 +49,22 @@ async function setTheme(page: Page, theme: "light" | "dark") {
 }
 
 test.describe("workspace rail", () => {
+  test("the workspace chip keeps switching and offers direct contextual settings", async ({ page }) => {
+    await open(page, "rail");
+    const chip = page.getByRole("button", { name: "Workspace kalcode", exact: true });
+    await chip.click();
+    await expect(page.getByRole("menuitemradio", { name: /atlas-api/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await chip.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Workspace settings…" }).click();
+    const settings = page.getByRole("dialog", { name: "kalcode settings" });
+    await expect(settings.getByRole("textbox", { name: "Workspace name" })).toHaveValue("kalcode");
+    await settings.getByRole("button", { name: "Cancel" }).click();
+    await chip.focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(page.getByRole("menuitem", { name: "Open Browser", exact: true })).toBeVisible();
+  });
+
   test("groups pinned, folder and recent workspaces with provider rows, counts and badges", async ({ page }) => {
     await open(page, "rail");
     await expect(item(page, /^Pinned, 2$/)).toBeVisible();
@@ -122,11 +138,12 @@ test.describe("workspace rail", () => {
     await expect(item(page, /^Atlas API \(prod\)/)).toBeVisible();
     // Into the Client work folder.
     await item(page, /^Atlas API \(prod\)/).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Organize", exact: true }).hover();
     await page.getByRole("menuitem", { name: "Move to Client work" }).click();
     await expect(item(page, /^Folder Client work, 3 workspaces$/)).toBeVisible();
     // Archive hides it; unarchive brings it back.
     await item(page, /^Atlas API \(prod\)/).click({ button: "right" });
-    await page.getByRole("menuitem", { name: "Archive (hide from the rail)" }).click();
+    await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
     await expect(item(page, /^Archived, 2$/)).toBeVisible();
     await item(page, /^Atlas API \(prod\)/).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Unarchive" }).click();
@@ -413,6 +430,7 @@ test.describe("in panes (Z7-W1 pane system)", () => {
 
     // The project page of another workspace, from the rail's menu, in a pane of that workspace.
     await item(page, /^atlas-api/).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open", exact: true }).hover();
     await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "atlas-api" })).toBeVisible();
     // The menu is gone although the active workspace changed while it closed.
@@ -442,6 +460,7 @@ test.describe("in panes (Z7-W1 pane system)", () => {
       await open(page, "home");
       await setTheme(page, theme);
       await item(page, /^atlas-api/).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Open", exact: true }).hover();
       await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
       await expect(page.getByRole("tab", { name: /^Project/ })).toBeVisible();
       await expect(page.locator('[role="menu"]')).toHaveCount(0);

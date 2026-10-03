@@ -7,6 +7,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
+  ObjectContextMenu,
+  type ObjectMenuItem,
   Tooltip,
 } from "@kalcode/ui/components";
 import {
@@ -27,7 +29,15 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { Fragment, type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef } from "react";
+import {
+  Fragment,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useRef,
+} from "react";
 import type { PaneRenderContext, TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, type Rect } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
@@ -58,6 +68,7 @@ export interface PaneFrameProps {
   renderContent: (content: PaneContent, context: PaneRenderContext) => ReactNode;
   renderEmpty: (paneId: string) => ReactNode;
   addMenu: (paneId: string) => ReactNode;
+  contextMenu?: (content: PaneContent, paneId: string) => readonly ObjectMenuItem[];
   onFocus: (paneId: string) => void;
   onActivate: (index: number, focusContent: boolean) => void;
   onCloseTab: (index: number) => void;
@@ -107,6 +118,7 @@ export function PaneFrame(props: PaneFrameProps) {
     renderContent,
     renderEmpty,
     addMenu,
+    contextMenu,
     onFocus,
     onActivate,
     onCloseTab,
@@ -140,22 +152,35 @@ export function PaneFrame(props: PaneFrameProps) {
   const tabKeys = new Set(leaf.tabs.map(contentKey));
   for (const key of keptTerminals.current) if (!tabKeys.has(key)) keptTerminals.current.delete(key);
   if (shownBody && active && activeInfo?.terminal) keptTerminals.current.add(activeKey);
-  const panel = (content: PaneContent, i: number, front: boolean) => (
-    <div
-      id={front ? panelDomId(leaf.paneId) : undefined}
-      role="tabpanel"
-      aria-labelledby={tabDomId(leaf.paneId, i)}
-      className={styles.panel}
-      hidden={!front}
-    >
-      {renderContent(content, {
-        paneId: leaf.paneId,
-        tabId: tabDomId(leaf.paneId, i),
-        focused: front && focused,
-        focusRequest: front ? contentFocusRequest : 0,
-      })}
-    </div>
-  );
+  const panel = (content: PaneContent, i: number, front: boolean) =>
+    menuFor(
+      content,
+      tabs[i]?.title ?? "Pane",
+      <div
+        id={front ? panelDomId(leaf.paneId) : undefined}
+        role="tabpanel"
+        aria-labelledby={tabDomId(leaf.paneId, i)}
+        className={styles.panel}
+        hidden={!front}
+      >
+        {renderContent(content, {
+          paneId: leaf.paneId,
+          tabId: tabDomId(leaf.paneId, i),
+          focused: front && focused,
+          focusRequest: front ? contentFocusRequest : 0,
+        })}
+      </div>,
+    );
+  function menuFor(content: PaneContent, title: string, child: ReactElement) {
+    const items = contextMenu?.(content, leaf.paneId);
+    return contextMenu ? (
+      <ObjectContextMenu key={contentKey(content)} label={`${title} actions`} items={items ?? []}>
+        {child}
+      </ObjectContextMenu>
+    ) : (
+      child
+    );
+  }
   // Keyed so the same element survives collapsing and expanding the pane.
   const body = (
     <div key="body" className={styles.body} data-pane-body hidden={!shownBody}>
@@ -298,7 +323,9 @@ export function PaneFrame(props: PaneFrameProps) {
             const info = tabs[i];
             if (!info) return null;
             const selected = i === leaf.activeTab;
-            return (
+            return menuFor(
+              content,
+              info.title,
               // biome-ignore lint/a11y/useKeyWithClickEvents: the tablist handles keys for every tab (roving focus).
               <div
                 key={contentKey(content)}
@@ -349,7 +376,7 @@ export function PaneFrame(props: PaneFrameProps) {
                 >
                   <X />
                 </span>
-              </div>
+              </div>,
             );
           })}
         </div>

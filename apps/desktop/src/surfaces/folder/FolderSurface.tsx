@@ -1,4 +1,4 @@
-import type { Branch, Commit, ThreadSummary, WorkspaceRailEntry } from "@kalcode/protocol";
+import type { Branch, Commit, FileRef, ThreadSummary, WorkspaceRailEntry } from "@kalcode/protocol";
 import { displayStatusOf } from "@kalcode/protocol";
 import {
   Button,
@@ -38,6 +38,8 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
+import { FilePreview } from "../../shell/context/FilePreview.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
 import { allEntries, relativeTime } from "../../shell/rail/model.ts";
@@ -277,7 +279,7 @@ function Project({ workspaceId }: { workspaceId: string }) {
 
         <div className={`${styles.column} ${styles.gitColumn}`}>
           <GitPanel git={git} workspaceId={workspaceId} />
-          <RecentFilesPanel files={files} commits={commits} />
+          <RecentFilesPanel files={files} commits={commits} workspaceId={workspaceId} />
         </div>
 
         <div className={`${styles.column} ${styles.contextColumn}`}>
@@ -404,6 +406,8 @@ function GitPanel({
   inGitPane?: boolean;
 }) {
   const scope = useSurfaceScope();
+  const [preview, setPreview] = useState<FileRef | null>(null);
+  const fileRows = useRef(new Map<string, HTMLLIElement>());
   const openInPane = useOpenInPane();
   const count = git.state === "ready" ? (git.value.files.totalEstimate ?? git.value.files.items.length) : undefined;
   return (
@@ -432,9 +436,14 @@ function GitPanel({
           <Skeleton width="50%" />
         </div>
       ) : git.state === "error" ? (
-        <p className={styles.note} role="alert">
-          {git.message}
-        </p>
+        <ContentContextMenu
+          workspaceId={workspaceId}
+          context={{ kind: "error", label: "Git status error", text: git.message }}
+        >
+          <p className={styles.note} role="alert">
+            {git.message}
+          </p>
+        </ContentContextMenu>
       ) : !git.value.repository ? (
         <p className={styles.note}>
           This folder isn't a Git repository. Run git init in a terminal to start tracking it.
@@ -450,27 +459,64 @@ function GitPanel({
             const change = changeOf(file);
             const { dir, name } = splitPath(file.path);
             return (
-              <li key={file.path} className={styles.change}>
-                <span className={styles.changeLetter} data-tone={change.tone} title={change.words} aria-hidden="true">
-                  {change.letter}
-                </span>
-                <span className="visually-hidden">{`${change.words}${change.staged ? ", staged" : ""}: `}</span>
-                <span className={styles.changePath}>
-                  <span className={styles.dir}>{dir}</span>
-                  {name}
-                </span>
-                {change.staged ? <span className={styles.staged}>staged</span> : null}
-              </li>
+              <ContentContextMenu
+                key={file.path}
+                workspaceId={workspaceId}
+                context={{
+                  kind: "file",
+                  label: file.path,
+                  path: file.path,
+                  text: `${change.words}${change.staged ? ", staged" : ""}`,
+                }}
+                onOpen={
+                  file.file && file.unstaged !== "deleted" && file.staged !== "deleted"
+                    ? () => setPreview(file.file)
+                    : undefined
+                }
+              >
+                <li
+                  className={styles.change}
+                  ref={(node) => {
+                    if (node) fileRows.current.set(file.path, node);
+                    else fileRows.current.delete(file.path);
+                  }}
+                >
+                  <span className={styles.changeLetter} data-tone={change.tone} title={change.words} aria-hidden="true">
+                    {change.letter}
+                  </span>
+                  <span className="visually-hidden">{`${change.words}${change.staged ? ", staged" : ""}: `}</span>
+                  <span className={styles.changePath}>
+                    <span className={styles.dir}>{dir}</span>
+                    {name}
+                  </span>
+                  {change.staged ? <span className={styles.staged}>staged</span> : null}
+                </li>
+              </ContentContextMenu>
             );
           })}
           {git.value.truncated ? <li className={styles.note}>More changes than shown.</li> : null}
         </ul>
       )}
+      {preview ? (
+        <FilePreview
+          file={preview}
+          returnFocus={fileRows.current.get(preview.displayPath)}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </Panel>
   );
 }
 
-function RecentFilesPanel({ files, commits }: { files: RecentFile[] | null; commits: Loaded<Commit[]> }) {
+function RecentFilesPanel({
+  files,
+  commits,
+  workspaceId,
+}: {
+  files: RecentFile[] | null;
+  commits: Loaded<Commit[]>;
+  workspaceId: string;
+}) {
   const scope = useSurfaceScope();
   const now = Date.now();
   return (
@@ -493,16 +539,22 @@ function RecentFilesPanel({ files, commits }: { files: RecentFile[] | null; comm
           {files.map((file) => {
             const { dir, name } = splitPath(file.path);
             return (
-              <li key={file.path} className={styles.recentFile}>
-                <span className={styles.changePath}>
-                  <span className={styles.dir}>{dir}</span>
-                  {name}
-                </span>
-                <span className={styles.fileChange} data-change={file.change}>
-                  {file.change}
-                </span>
-                <span className={styles.age}>{relativeTime(file.at, now)}</span>
-              </li>
+              <ContentContextMenu
+                key={file.path}
+                workspaceId={workspaceId}
+                context={{ kind: "file", label: file.path, path: file.path, text: `Change: ${file.change}` }}
+              >
+                <li className={styles.recentFile}>
+                  <span className={styles.changePath}>
+                    <span className={styles.dir}>{dir}</span>
+                    {name}
+                  </span>
+                  <span className={styles.fileChange} data-change={file.change}>
+                    {file.change}
+                  </span>
+                  <span className={styles.age}>{relativeTime(file.at, now)}</span>
+                </li>
+              </ContentContextMenu>
             );
           })}
         </ul>
