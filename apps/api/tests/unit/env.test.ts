@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SIGN_IN_UNAVAILABLE } from "../../worker/lib/auth";
 import { depsFromEnv, type Env } from "../../worker/lib/env";
 
@@ -124,5 +124,61 @@ describe("production auth and billing configuration", () => {
     expect(depsFromEnv({ ...complete, STRIPE_SECRET_KEY: "sk_test_secret" }).billing).toBeNull();
     expect(depsFromEnv({ ...complete, STRIPE_SECRET_KEY: "rk_test_restricted" }).billing).toBeNull();
     expect(depsFromEnv({ ...complete, STRIPE_SECRET_KEY: "pk_live_publishable" }).billing).toBeNull();
+  });
+});
+
+describe("owner revenue insights", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A D1 stand-in with no snapshots or grants; revenue only needs empty reads and writes. */
+  const emptyDb = (): D1Database => {
+    const statement = {
+      bind: () => statement,
+      all: async () => ({ results: [] }),
+      run: async () => ({ meta: {} }),
+      first: async () => null,
+    };
+    return { prepare: () => statement } as unknown as D1Database;
+  };
+
+  const liveEnv = (STRIPE_SECRET_KEY: string): Env => ({
+    DB: emptyDb(),
+    STRIPE_SECRET_KEY,
+    STRIPE_PRICE_PRO: "price_pro",
+    STRIPE_PRICE_MAX: "price_max",
+    STRIPE_PRICE_MAX_2X: "price_max2x",
+    STRIPE_PRICE_PRO_YEARLY: "price_pro_year",
+    STRIPE_PRICE_MAX_YEARLY: "price_max_year",
+    STRIPE_PRICE_MAX_2X_YEARLY: "price_max2x_year",
+  });
+
+  it("reuses live Stripe data across requests within a minute, per Stripe key, unless fresh=1", async () => {
+    const subscriptionCalls: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("/v1/subscriptions")) {
+        subscriptionCalls.push(new Headers(init?.headers).get("authorization") ?? "");
+      }
+      return Response.json({ object: "list", data: [], has_more: false });
+    });
+    const revenue = async (env: Env, query = "") => {
+      const insights = depsFromEnv(env).insights;
+      if (!insights) throw new Error("insights must be configured");
+      const response = await insights.revenue(new Request(`https://api.kalcoded.com/v1/insights/revenue${query}`));
+      expect(response.status).toBe(200);
+    };
+
+    // Every request builds its own dependencies, exactly as the Worker's fetch handler does.
+    await revenue(liveEnv("sk_live_insights_a"));
+    await revenue(liveEnv("sk_live_insights_a"), "?range=30d");
+    expect(subscriptionCalls).toEqual(["Bearer sk_live_insights_a"]);
+
+    await revenue(liveEnv("sk_live_insights_b"));
+    expect(subscriptionCalls).toEqual(["Bearer sk_live_insights_a", "Bearer sk_live_insights_b"]);
+
+    await revenue(liveEnv("sk_live_insights_b"), "?fresh=1");
+    expect(subscriptionCalls).toHaveLength(3);
   });
 });

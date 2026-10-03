@@ -188,6 +188,7 @@ describe("D1 account authority", () => {
     expect(await store.emailAttempt("verify", "a".repeat(43))).toBeNull();
     expect(await store.emailAttempt("verify", "d".repeat(43))).toBeNull();
     expect(await store.identityAccount("github", "909")).toBeNull();
+    // Signing up again with the same GitHub identity creates a new account; the deleted one is never restored.
     expect(
       await store.createOrGetGitHubAccount({
         accountId: "acct_replacement_909",
@@ -195,10 +196,9 @@ describe("D1 account authority", () => {
         email: "passwordless@example.com",
         now: "2026-09-25T12:01:03.000Z",
       }),
-    ).toBeNull();
-    expect(
-      await db.prepare("SELECT id FROM accounts WHERE id = 'acct_replacement_909'").first<{ id: string }>(),
-    ).toBeNull();
+    ).toBe("acct_replacement_909");
+    expect(await store.identityAccount("github", "909")).toBe("acct_replacement_909");
+    expect(await store.accountProfile("acct_passwordless_101")).toBeNull();
     await expect(
       db
         .prepare(
