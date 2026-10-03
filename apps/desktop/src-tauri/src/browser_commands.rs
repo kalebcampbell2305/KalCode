@@ -1702,6 +1702,10 @@ pub struct BrowserScreenshot {
 }
 
 fn screenshot_dir(app: &tauri::AppHandle, data_dir: &Path) -> PathBuf {
+    // E2E runs keep every file inside their disposable data root, never the person's Pictures.
+    if cfg!(feature = "e2e") {
+        return data_dir.join("browser-screenshots");
+    }
     app.path()
         .picture_dir()
         .map(|pictures| pictures.join("KalCode"))

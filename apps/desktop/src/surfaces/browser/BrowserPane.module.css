@@ -345,7 +345,7 @@
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.22),
     0 6px 18px -8px var(--color-glow, rgb(76 141 255 / 0.45));
-  color: #04070e;
+  color: var(--color-accent-fg, #04070e);
   font: inherit;
   font-size: 12px;
   font-weight: 600;
