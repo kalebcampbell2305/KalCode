@@ -10,7 +10,7 @@
 
   It checks what the fake provider cannot (docs/PROVIDER_PANES.md section 7):
     - `-c notify=[...]` runs KalCode's hook helper with the documented payload
-      (agent-turn-complete, thread-id)
+      (agent-turn-complete, thread-id, turn-id)
     - `-c tui.notifications=['approval-requested']` with `tui.notification_method='osc9'` and
       `tui.notification_condition='always'` raises OSC 9 under ConPTY
     - nothing is written in Plan mode

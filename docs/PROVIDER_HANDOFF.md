@@ -1,5 +1,7 @@
 # Provider Hot-Swap with Intelligent Handoff
-Status: **planned — not built.** Nothing described here exists in KalCode yet. Plan and
+
+Manual task handoff between coding-agent terminals is documented in [Agent terminal Hand Off](AGENT_HANDOFF.md). The broader hot-swap and automatic-failover proposal below remains planned.
+Status: **planned — not built.** Automatic hot-swap and failover remain proposals. Plan and
 acceptance criteria: `docs/campaigns/ADVANCED.md`; proposed types, events, IPC and tables:
 `docs/CONTRACTS_ADVANCED.md` (PROPOSED, pending lead approval).
 

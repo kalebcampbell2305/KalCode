@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-cancel"
+description = "Enables the handoff_cancel command without any pre-configured scope."
+commands.allow = ["handoff_cancel"]
+
+[[permission]]
+identifier = "deny-handoff-cancel"
+description = "Denies the handoff_cancel command without any pre-configured scope."
+commands.deny = ["handoff_cancel"]

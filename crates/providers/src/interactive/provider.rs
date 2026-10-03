@@ -25,6 +25,7 @@ use kalcode_hook_bridge::server::BridgeServer;
 use kalcode_pty::{AttachId, ProgramSpec, PtySession, TerminalSize};
 
 use super::claude::{HookCommand, InteractiveArgs, interactive_args, settings_json};
+pub use super::session::HandoffDeliveryError;
 use super::session::{
     HandlerRef, InteractiveSession, PaneVoiceWriteError, SessionLimits, SessionParts, Shared,
 };
@@ -193,6 +194,49 @@ impl PaneRegistry {
             return Err(PaneVoiceWriteError::TargetChanged);
         }
         shared.write_voice(data)
+    }
+
+    /// Delivers one automated handoff to exactly the observed provider instance.
+    ///
+    /// The registry generation lock and provider lifecycle lock cover the final readiness check,
+    /// `before_write`, and the single bracketed-paste + Enter write. `before_write` is where the
+    /// caller durably claims a queued handoff; it must not re-enter this registry. It is never
+    /// called for a stale, busy, prompted, unverified, dirty, or ended target.
+    pub fn deliver_handoff<F>(
+        &self,
+        thread_id: &str,
+        expected_instance_id: &str,
+        text: &str,
+        before_write: F,
+    ) -> Result<(), HandoffDeliveryError>
+    where
+        F: FnOnce() -> Result<(), HandoffDeliveryError>,
+    {
+        let panes = lock(&self.panes);
+        let shared = panes
+            .get(thread_id)
+            .ok_or(HandoffDeliveryError::SessionEnded)?;
+        if shared.instance_id() != expected_instance_id {
+            return Err(HandoffDeliveryError::TargetChanged);
+        }
+        shared.deliver_handoff(text, before_write)
+    }
+
+    /// Advisory readiness check for queue backoff. Delivery always repeats the same checks while
+    /// holding the registry and lifecycle locks before the durable claim.
+    pub fn handoff_readiness(
+        &self,
+        thread_id: &str,
+        expected_instance_id: &str,
+    ) -> Result<(), HandoffDeliveryError> {
+        let panes = lock(&self.panes);
+        let shared = panes
+            .get(thread_id)
+            .ok_or(HandoffDeliveryError::SessionEnded)?;
+        if shared.instance_id() != expected_instance_id {
+            return Err(HandoffDeliveryError::TargetChanged);
+        }
+        shared.handoff_readiness()
     }
 
     pub fn resize(&self, thread_id: &str, cols: u16, rows: u16) -> Result<(), ProviderError> {

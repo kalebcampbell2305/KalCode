@@ -27,6 +27,7 @@ mod files_commands;
 mod doctor_commands;
 #[allow(dead_code)]
 mod git_commands;
+mod handoff_commands;
 mod kalvoice_accounting;
 mod kalvoice_callbacks;
 mod kalvoice_commands;
@@ -178,9 +179,11 @@ fn install_panic_hook(log_dir: PathBuf) {
 }
 
 fn reconcile_core_startup(core: &Arc<Core>) -> kalcode_core::Result<usize> {
-    let recovered = context_commands::recover_deliveries(core)?;
+    let recovered_context = context_commands::recover_deliveries(core)?;
+    let recovered_handoffs =
+        kalcode_core::handoffs::HandoffStore::new(core.clone()).recover_interrupted()?;
     core.require_terminal_guardian()?;
-    Ok(recovered)
+    Ok(recovered_context + recovered_handoffs)
 }
 
 /// Opens Core only after the update recovery guard for a forward-only migration is durable.
@@ -291,7 +294,7 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
                 Ok(recovered) => {
                     if recovered > 0 {
                         tracing::info!(
-                            event = "context.interrupted_deliveries_recovered",
+                            event = "runtime.interrupted_work_recovered",
                             count = recovered
                         );
                     }
@@ -728,6 +731,12 @@ pub fn run(removed_overrides: Vec<String>) {
                 context_commands::context_item_confirm,
                 context_commands::context_discard,
                 context_commands::context_send,
+                handoff_commands::handoff_preview,
+                handoff_commands::handoff_send,
+                handoff_commands::handoff_list,
+                handoff_commands::handoff_cancel,
+                handoff_commands::handoff_complete,
+                handoff_commands::handoff_return,
                 browser_commands::browser_set_view,
                 browser_commands::browser_navigate,
                 browser_commands::browser_action,

@@ -12,11 +12,11 @@ use crate::account::runtime::{AccountRuntime, AuthorityLease};
 use crate::runtime_lifecycle::{Lease, Lifecycle, Phase};
 use crate::{
     AppState, context_commands::ContextState, git_commands::GitState,
-    kalvoice_commands::KalVoiceState, locator_commands::LocatorState,
-    notification_commands::NotificationsState, permission_commands::PermissionState,
-    provider_auth_commands::ProviderAuthState, provider_commands::ProviderState,
-    provider_health_commands::ProviderHealthState, provider_pane_commands::ProviderPanesState,
-    thread_commands::ThreadsState,
+    handoff_commands::HandoffState, kalvoice_commands::KalVoiceState,
+    locator_commands::LocatorState, notification_commands::NotificationsState,
+    permission_commands::PermissionState, provider_auth_commands::ProviderAuthState,
+    provider_commands::ProviderState, provider_health_commands::ProviderHealthState,
+    provider_pane_commands::ProviderPanesState, thread_commands::ThreadsState,
 };
 
 #[derive(Default)]
@@ -38,6 +38,7 @@ pub struct RuntimeBundle {
     pub doctor: Option<Arc<crate::doctor_commands::DoctorState>>,
     pub utilities: Option<Arc<crate::utility_commands::UtilityState>>,
     pub operations: Option<Arc<crate::operations_commands::OperationsState>>,
+    pub handoffs: Option<Arc<HandoffState>>,
 }
 
 impl RuntimeBundle {
@@ -238,6 +239,21 @@ impl RuntimeBundle {
                 Err(error) => tracing::error!(event = "operations.start_failed", code = error.code),
             }
         }
+        if let Some(git) = &bundle.git {
+            match HandoffState::start(
+                core.clone(),
+                threads.clone(),
+                panes.clone(),
+                git.clone(),
+                account,
+                app,
+            ) {
+                Ok(handoffs) => bundle.handoffs = Some(handoffs),
+                Err(error) => {
+                    tracing::error!(event = "handoffs.start_failed", code = error.code)
+                }
+            }
+        }
         panes.bind(permissions.service().as_ref(), threads.runtime().ok());
         notifications.bind(threads.runtime_handle());
     }
@@ -265,6 +281,9 @@ impl RuntimeBundle {
         // Source-bearing Context previews are the exception: leases are already drained here,
         // so erase them before any cleanup retry and never carry them into another account.
         let mut clean = true;
+        if let Some(handoffs) = &self.handoffs {
+            clean &= handoffs.shutdown_checked();
+        }
         if let Some(operations) = &self.operations {
             clean &= operations.shutdown_checked();
         }
@@ -947,6 +966,7 @@ service!(crate::resource_commands::ResourceGovernorState, resources);
 service!(crate::doctor_commands::DoctorState, doctor);
 service!(crate::utility_commands::UtilityState, utilities);
 service!(crate::operations_commands::OperationsState, operations);
+service!(HandoffState, handoffs);
 
 pub struct RuntimeState<T: RuntimeService> {
     service: Arc<T>,

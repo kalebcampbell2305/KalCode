@@ -74,6 +74,7 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     OPERATIONS_MIGRATION,
     THREADS_EFFORT_MIGRATION,
+    HANDOFFS_MIGRATION,
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -180,6 +181,13 @@ pub const THREADS_EFFORT_MIGRATION: Migration = Migration {
     version: 21,
     name: "threads_effort",
     sql: include_str!("../migrations/0021_threads_effort.sql"),
+};
+
+/// Durable handoff metadata and one-shot delivery state. Prompt content is never stored here.
+pub const HANDOFFS_MIGRATION: Migration = Migration {
+    version: 22,
+    name: "handoffs",
+    sql: include_str!("../migrations/0022_handoffs.sql"),
 };
 
 /// How many pre-migration backups to keep.

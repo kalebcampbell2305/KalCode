@@ -126,6 +126,8 @@ pub struct HookRecord {
     pub prompt: Option<String>,
     /// Codex notify `type` (e.g. `agent-turn-complete`).
     pub codex_type: Option<String>,
+    /// Opaque Codex root-turn id used only to correlate and deduplicate completion status.
+    pub codex_turn_id: Option<String>,
 }
 
 impl HookRecord {
@@ -151,6 +153,7 @@ impl HookRecord {
             || !valid_id(self.error_type.as_deref(), MAX_WORD_CHARS)
             || !valid_id(self.end_reason.as_deref(), MAX_WORD_CHARS)
             || !valid_id(self.codex_type.as_deref(), MAX_WORD_CHARS)
+            || !valid_id(self.codex_turn_id.as_deref(), MAX_ID_CHARS)
         {
             return Err(RecordError::Invalid);
         }
@@ -174,12 +177,16 @@ impl HookRecord {
                 .provider_session_id
                 .as_deref()
                 .is_some_and(valid_provider_id)
-                || self.codex_type.as_deref() != Some("agent-turn-complete"))
+                || self.codex_type.as_deref() != Some("agent-turn-complete")
+                || self.codex_turn_id.is_none())
         {
             return Err(RecordError::Invalid);
         }
 
         let tool_event = event.has_tool_matcher();
+        if event != HookEvent::CodexNotify && self.codex_turn_id.is_some() {
+            return Err(RecordError::Invalid);
+        }
         if !tool_event
             && (self.tool_name.is_some()
                 || self.tool_use_id.is_some()
@@ -418,7 +425,8 @@ pub fn from_claude_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecord, R
 }
 
 /// Builds the record for a Codex `notify` call. Codex passes the JSON payload as the program's
-/// last argument. Only the payload's `type` is forwarded (status only); message text is dropped.
+/// last argument. Only its type and opaque session/turn correlation ids are forwarded; message
+/// text is dropped.
 pub fn from_codex_notify(json_arg: &str) -> Result<HookRecord, RecordError> {
     if json_arg.len() > MAX_STDIN_BYTES {
         return Err(RecordError::TooLarge);
@@ -432,6 +440,10 @@ pub fn from_codex_notify(json_arg: &str) -> Result<HookRecord, RecordError> {
             MAX_ID_CHARS,
         ),
         codex_type: clean_id(object.get("type"), MAX_WORD_CHARS),
+        codex_turn_id: clean_id(
+            object.get("turn-id").or_else(|| object.get("turn_id")),
+            MAX_ID_CHARS,
+        ),
         ..HookRecord::default()
     })
 }
@@ -608,13 +620,14 @@ mod tests {
     }
 
     #[test]
-    fn codex_notify_keeps_only_the_type() {
+    fn codex_notify_keeps_only_correlation_fields() {
         let r = from_codex_notify(
-            r#"{"type":"agent-turn-complete","thread-id":"t-1","last-assistant-message":"secret prose","input-messages":["x"]}"#,
+            r#"{"type":"agent-turn-complete","thread-id":"t-1","turn-id":"turn-1","last-assistant-message":"secret prose","input-messages":["x"]}"#,
         )
         .expect("record");
         assert_eq!(r.codex_type.as_deref(), Some("agent-turn-complete"));
         assert_eq!(r.provider_session_id.as_deref(), Some("t-1"));
+        assert_eq!(r.codex_turn_id.as_deref(), Some("turn-1"));
         assert!(
             !serde_json::to_string(&r)
                 .expect("json")

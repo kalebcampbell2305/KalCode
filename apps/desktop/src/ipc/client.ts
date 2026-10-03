@@ -70,6 +70,7 @@ import type {
 } from "@kalcode/protocol";
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
+import { HandoffsClient } from "./handoffs.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 import type { UpdateChannel, UpdateStatus } from "./updater.ts";
 
@@ -140,7 +141,11 @@ function clampPage(limit: number): number {
 
 /** The only module that talks to the native runtime. Every failure becomes a KalCodeError. */
 export class KalCodeClient {
-  constructor(readonly transport: Transport) {}
+  readonly handoffs: HandoffsClient;
+
+  constructor(readonly transport: Transport) {
+    this.handoffs = new HandoffsClient((command, args) => this.call(command, args));
+  }
 
   private async call<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
     try {

@@ -57,6 +57,8 @@ export interface PaneControls {
 
 export interface PanesMemory {
   handlers: Record<PaneCommand, Handler>;
+  /** Atomic delivery test double; the real native lifecycle lock owns production delivery. */
+  deliverHandoff(threadId: string, instanceId: string, text: string): void;
   attach(threadId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
   /** An approval was answered (forwarded from the permission engine, like native events). */
   resolveApproval(view: ApprovalView): void;
@@ -400,6 +402,19 @@ export function createPanesMemory(options: {
 
   return {
     handlers,
+    deliverHandoff(threadId, instanceId, text) {
+      requireEnabled();
+      const p = pane({ threadId });
+      if (!p.running) invalid("pane_not_running", "This agent has stopped.");
+      if (p.instanceId !== instanceId) invalid("provider_target_changed", "The receiving agent restarted.");
+      const current = threads.handlers.thread_get({ threadId }) as ThreadSummary;
+      if (p.pending || p.askingInPane || current.pendingApprovals > 0)
+        invalid("provider_permission_prompt", "The provider is waiting for an answer.");
+      if (p.line || current.status !== "idle") invalid("handoff_busy", "The receiving input is not empty and idle.");
+      if (p.hookChannel !== "active") invalid("provider_input_unverified", "The receiving input is not verified.");
+      print(p, text);
+      submit(p, text);
+    },
     async attach(threadId, onOutput) {
       await Promise.resolve();
       requireEnabled();

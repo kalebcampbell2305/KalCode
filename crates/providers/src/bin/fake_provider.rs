@@ -582,6 +582,40 @@ mod turns {
             .find_map(|c| c.strip_prefix("notify=").map(literal_array))
     }
 
+    #[derive(Default)]
+    struct InteractiveInput {
+        bracketed: Option<String>,
+    }
+
+    impl InteractiveInput {
+        fn is_bracketed(&self) -> bool {
+            self.bracketed.is_some()
+        }
+
+        fn push_line(&mut self, line: &str) -> Option<String> {
+            const START: &str = "\x1b[200~";
+            const END: &str = "\x1b[201~";
+
+            if let Some(buffer) = self.bracketed.as_mut() {
+                if let Some(end) = line.find(END) {
+                    buffer.push_str(&line[..end]);
+                    return self.bracketed.take();
+                }
+                buffer.push_str(line);
+                return None;
+            }
+            if let Some(start) = line.find(START) {
+                let payload = &line[start + START.len()..];
+                if let Some(end) = payload.find(END) {
+                    return Some(payload[..end].to_owned());
+                }
+                self.bracketed = Some(payload.to_owned());
+                return None;
+            }
+            Some(line.trim().to_owned())
+        }
+    }
+
     pub fn interactive(kind: &str, config: &Value, args: &[String]) -> ! {
         let name = if kind == "codex" {
             "Codex"
@@ -594,8 +628,10 @@ mod turns {
         let thread = uuid::Uuid::new_v4().to_string();
         let notify = notify_command(args);
         let mut line = String::new();
+        let mut turn = 0u64;
+        let mut input = InteractiveInput::default();
         loop {
-            {
+            if !input.is_bracketed() {
                 let mut out = std::io::stdout().lock();
                 let _ = write!(out, "> ");
                 let _ = out.flush();
@@ -605,7 +641,9 @@ mod turns {
                 Ok(0) | Err(_) => exit(0),
                 Ok(_) => {}
             }
-            let text = line.trim();
+            let Some(text) = input.push_line(&line) else {
+                continue;
+            };
             if text == "exit" {
                 exit(get_i64(config, "exitCode", 0));
             }
@@ -622,11 +660,12 @@ mod turns {
                 && let Some(command) = &notify
                 && let Some((program, rest)) = command.split_first()
             {
+                turn = turn.saturating_add(1);
                 // `notify`: Codex runs the program with the JSON payload as its last argument.
                 let payload = serde_json::json!({
                     "type": "agent-turn-complete",
                     "thread-id": thread,
-                    "turn-id": "turn-1",
+                    "turn-id": format!("turn-{turn}"),
                     "cwd": std::env::current_dir()
                         .map(|p| p.display().to_string())
                         .unwrap_or_default(),
@@ -641,6 +680,30 @@ mod turns {
                     .stderr(std::process::Stdio::null())
                     .status();
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::InteractiveInput;
+
+        #[test]
+        fn bracketed_multiline_input_is_one_submitted_turn() {
+            let mut input = InteractiveInput::default();
+            let submissions = [
+                input.push_line("\x1b[200~context marker\n"),
+                input.push_line("review details\n"),
+                input.push_line("final line\x1b[201~\r\n"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+            assert_eq!(submissions, ["context marker\nreview details\nfinal line"]);
+            assert_eq!(
+                input.push_line("ordinary prompt\r\n"),
+                Some("ordinary prompt".into())
+            );
         }
     }
 }

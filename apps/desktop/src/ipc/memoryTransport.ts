@@ -55,6 +55,7 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createHandoffsMemory } from "./memory/handoffs.ts";
 import { createHealthMemory, type HealthControls } from "./memory/health.ts";
 import { createLayoutsMemory, type LayoutControls } from "./memory/layouts.ts";
 import { createNotificationsMemory, type NotificationsMemory } from "./memory/notifications.ts";
@@ -83,6 +84,7 @@ export type MemoryScenario =
   | "account-fresh"
   | "account-unactivated"
   | "account-ready"
+  | "account-ready-pro"
   | "account-expired"
   | "account-offline-grace"
   | "approvals"
@@ -115,6 +117,7 @@ const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
 const AVAILABLE_FEATURES: ReadonlySet<string> = new Set([
   "pane_system",
   "provider_panes",
+  "provider_handoff",
   "provider_health",
   "provider_profiles",
   "notification_center",
@@ -419,15 +422,17 @@ export function createMemoryTransport(
   const providerAccounts = createProviderAccountsMemory(requireCore, scenario === "provider-accounts-empty");
   const updater = createUpdaterMemory(info.version);
   const accountScenario: AccountMemoryScenario =
-    scenario === "account-fresh"
-      ? "fresh"
-      : scenario === "account-unactivated"
-        ? "unactivated"
-        : scenario === "account-expired"
-          ? "expired"
-          : scenario === "account-offline-grace"
-            ? "offline_grace"
-            : "ready";
+    scenario === "account-ready-pro"
+      ? "ready_pro"
+      : scenario === "account-fresh"
+        ? "fresh"
+        : scenario === "account-unactivated"
+          ? "unactivated"
+          : scenario === "account-expired"
+            ? "expired"
+            : scenario === "account-offline-grace"
+              ? "offline_grace"
+              : "ready";
   const account = createAccountMemory(accountScenario);
 
   const ensureDetected = async () => {
@@ -505,6 +510,12 @@ export function createMemoryTransport(
   threadsMemory = threads;
   // Provider panes (Z7-W4) hold their tool calls until the person answers, like native.
   const panes = createPanesMemory({ requireCore, threads, permissions, beforeCreate: ensureDetected });
+  const handoffs = createHandoffsMemory({
+    requireCore,
+    thread: (threadId) => threads.handlers.thread_get({ threadId }) as ThreadSummary,
+    info: (threadId) => panes.handlers.provider_pane_info({ threadId }) as import("@kalcode/protocol").PaneInfo | null,
+    deliver: (threadId, instanceId, text) => panes.deliverHandoff(threadId, instanceId, text),
+  });
   answer = (view) => {
     threads.resolveApproval(view.id, view.status === "approved");
     panes.resolveApproval(view);
@@ -516,6 +527,7 @@ export function createMemoryTransport(
     ...context.handlers,
     ...permissions.handlers,
     ...panes.handlers,
+    ...handoffs,
     ...rail.handlers,
     ...layouts.handlers,
     ...notificationsMemory.handlers,
@@ -829,6 +841,7 @@ function readScenario(): MemoryScenario {
     value === "account-fresh" ||
     value === "account-unactivated" ||
     value === "account-ready" ||
+    value === "account-ready-pro" ||
     value === "account-expired" ||
     value === "account-offline-grace" ||
     value === "approvals" ||

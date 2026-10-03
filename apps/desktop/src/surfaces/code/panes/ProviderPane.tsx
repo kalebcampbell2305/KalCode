@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger,
   IconButton,
 } from "@kalcode/ui/components";
-import { Info, MessageCircleQuestion, MoreHorizontal, PenLine, Square, Unplug } from "lucide-react";
+import { Handshake, Info, MessageCircleQuestion, MoreHorizontal, PenLine, Square, Unplug } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
@@ -50,6 +50,8 @@ export interface ProviderPaneProps {
   onClose?: () => void;
   onMaximize?: () => void;
   onSplit?: () => void;
+  /** Opens the governed agent-to-agent handoff flow for this coding terminal. */
+  onHandOff?: () => void;
 }
 
 /**
@@ -67,6 +69,7 @@ export function ProviderPane({
   onClose,
   onMaximize,
   onSplit,
+  onHandOff,
   throttled = false,
 }: ProviderPaneProps) {
   const { client } = useRuntime();
@@ -143,6 +146,7 @@ export function ProviderPane({
         onClose={onClose}
         onMaximize={onMaximize}
         onSplit={onSplit}
+        onHandOff={onHandOff}
       />
       {confirmStop ? (
         <div className={styles.confirm} role="alertdialog" aria-label="Stop this provider">
@@ -223,6 +227,7 @@ interface PaneHeaderProps {
   onClose?: () => void;
   onMaximize?: () => void;
   onSplit?: () => void;
+  onHandOff?: () => void;
 }
 
 function PaneHeader({
@@ -237,6 +242,7 @@ function PaneHeader({
   onClose,
   onMaximize,
   onSplit,
+  onHandOff,
 }: PaneHeaderProps) {
   const { client } = useRuntime();
   const [editing, setEditing] = useState(false);
@@ -333,6 +339,18 @@ function PaneHeader({
           {MODE_LABELS[thread.permissionMode]}
         </Badge>
         <PaneStatusChip status={thread.status} />
+        {onHandOff ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className={styles.handoffButton}
+            icon={<Handshake />}
+            aria-label={`Hand off work from ${thread.name}`}
+            onClick={onHandOff}
+          >
+            <span className={styles.handoffLabel}>Hand Off</span>
+          </Button>
+        ) : null}
         {onSplit ? (
           <Button size="sm" variant="ghost" onClick={onSplit}>
             Split
