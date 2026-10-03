@@ -958,10 +958,17 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           return { handled: false, message: "None of those providers has a pane in this workspace yet." };
         }
         const [first, ...rest] = found;
-        if (first) current.show(first, { focus: true });
+        // `current` is a snapshot: its focus doesn't follow show() or split(). Start from where
+        // `first` lands (its existing pane, else the focused one) and put each next provider
+        // beside the previous one, so they come out in order.
+        let target: string | null = null;
+        if (first) {
+          target = findContent(current.layout, contentKey(first))?.paneId ?? current.focusedPaneId;
+          current.show(first, { focus: true });
+        }
         for (const content of rest) {
-          const target = current.focusedPaneId;
-          if (target) current.split(target, command.axis, content);
+          if (!target) break;
+          target = current.split(target, command.axis, content) ?? target;
         }
         return selected.missing.length > 0
           ? { handled: true, message: `Arranged the available panes. No pane yet for ${selected.missing.join(", ")}.` }

@@ -106,4 +106,31 @@ test.describe("KalVoice pane intents", () => {
     await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
     expect(await running(page)).toBe(processes);
   });
+
+  test("arranging two providers splits next to the first one, not the previously focused pane", async ({ page }) => {
+    await openCode(page);
+    const launch = async (provider: "Claude Code" | "Codex") => {
+      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "New agent" });
+      if (provider === "Codex") await dialog.getByRole("radio", { name: "Codex" }).click();
+      await dialog.getByRole("button", { name: `Launch ${provider} agent` }).click();
+      await expect(dialog).toHaveCount(0);
+    };
+    await launch("Claude Code");
+    await launch("Codex");
+    await expect(page.locator("[data-provider-pane]")).toHaveCount(2);
+    // Focus the shell pane, away from both agents.
+    await pane(page, 0).getByRole("tab").first().click();
+
+    await ask(page, "put claude code and codex side by side");
+    const claude = page.locator('[data-provider-pane][aria-label*="Claude Code agent"]');
+    const codex = page.locator('[data-provider-pane][aria-label*="Codex agent"]');
+    await expect(claude).toBeVisible();
+    await expect(codex).toBeVisible();
+    const a = await box(claude);
+    const b = await box(codex);
+    // Codex lands directly to the right of Claude Code.
+    expect(b.x).toBeGreaterThan(a.x + a.width - 1);
+    expect(b.x - (a.x + a.width)).toBeLessThan(40);
+  });
 });
