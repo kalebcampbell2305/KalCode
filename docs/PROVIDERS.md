@@ -115,7 +115,7 @@ is `true` only when KalCode's adapter implements it.
 | Interrupt | `interrupt` control request, advertised by `interrupt_receipt_v1` [3] · **used** (§8.4) | Kill the turn's process tree (the SDK's documented cancellation) [14] · **used**; app-server `turn/interrupt` [8] planned | Kill the turn's process tree · **used** |
 | Resume | `--resume <id>`, `--session-id <uuid>` [2] · **used** | `codex exec … resume <thread id> -` [5] · **used** | `--resume <session uuid>` [10][16] · **used** (never `latest` or an index) |
 | Host approvals | `--permission-prompt-tool` (MCP) [2] · not used until Z4 | app-server approval requests (accept/decline) [8] · planned (§8.8) | None documented for headless |
-| Auth status check | `claude auth status`: exit 0 signed in, 1 not [2] · exit code only | `codex login status` [11]; exit codes and wording undocumented | None side-effect-free → unknown |
+| Auth status check | None safe to run passively → unknown until a coding session validates the provider-native session | `codex login status` [11]; exit codes and wording undocumented | None side-effect-free → unknown |
 | Model listing | Documented aliases [4]; KalCode lists `default`, `opus`, `sonnet`, `haiku`, `fable` | app-server `model/list` only → not discoverable; "Provider default" | Documented `--model` aliases (`auto`, `pro`, `flash`, `flash-lite`) [10] · listed |
 | Rate limits | `assistant.error = rate_limit`, `StopFailure rate_limit` (structured) · used by Provider Health | No structured shape in the exec stream → never reported | `result.error.type` `RetryableQuotaError` / `TerminalQuotaError` [17] · used by Provider Health |
 | KalCode adapter | **Implemented** (Z2), minimum version 2.1.259 | **Implemented** (PROVIDERS-2), minimum version 0.155.1 | **Implemented** (PROVIDERS-2), no minimum declared (not installed on the verification machine) |
@@ -341,12 +341,13 @@ type definitions and fixtures only (smoke script written, not run).
    | Gemini CLI | `/opt/homebrew/bin`, `/usr/local/bin`, `%APPDATA%\npm` |
 
 2. **Version:** run only `<exe> --version` (15 s timeout) and compare with the adapter's minimum.
-3. **Sign-in:** run the documented status command, if any (15 s timeout), and read only its
-   documented signal. Verified 2026-09-25 against the real install on the verification machine
-   (`real_codex_detection`: codex-cli 0.155.1 through its npm shim, signed in). `claude auth status` stdout is discarded unread (it contains the account
-   email and organization); only the exit code counts (0 / 1; anything else is unknown). For
-   `codex login status` only a leading `Logged in` with exit 0, or `Not logged in`, counts;
-   anything else is unknown. Gemini CLI is always unknown.
+3. **Sign-in:** run a documented side-effect-free status command when one exists (15 s timeout),
+   and read only its documented signal. Verified 2026-09-25 against the real install on the
+   verification machine (`real_codex_detection`: codex-cli 0.155.1 through its npm shim, signed
+   in). For `codex login status` only a leading `Logged in` with exit 0, or `Not logged in`,
+   counts; anything else is unknown. Claude Code and Gemini CLI are always unknown during passive
+   detection. Claude Code sign-in is validated by the real coding session because its status
+   command can refresh OAuth credentials and exit before persisting the rotation.
 
 Probes run with the sanitized provider environment, a neutral working directory (the temp folder,
 never a project), 16 KiB output caps and tree kill on timeout.
@@ -361,7 +362,7 @@ never a project), 16 KiB output caps and tree kill on timeout.
 Sign-in is `authenticated`, `not_authenticated` or `unknown`.
 
 **Shown** (`ProviderStatus`): name, state, path with the home folder as `~`, version, minimum
-version, sign-in state, user-safe message, checked-at, the auth-check command, sign-in command,
+version, sign-in state, user-safe message, checked-at, any safe auth-check command, sign-in command,
 install command, docs link, capabilities and permission mappings, adapter state, model source.
 **Never read or shown:** account email, organization, plan or tokens.
 
@@ -392,9 +393,9 @@ stream-JSON on stdin and stdout.
 
 ### 8.1 Starting a session
 
-`start_session` re-runs detection and refuses to start when Claude Code is not installed,
-outdated, in error, or signed out, or when `secretRef` is set. The working directory must be an
-existing absolute folder resolved natively. argv:
+`start_session` re-runs version-only detection and refuses to start when Claude Code is not
+installed, outdated or in error, or when `secretRef` is set. The provider-native coding session
+validates sign-in. The working directory must be an existing absolute folder resolved natively. argv:
 
 ```text
 claude -p --input-format stream-json --output-format stream-json --verbose
@@ -544,8 +545,8 @@ not away from other processes of the same OS user. KalCode checks **existence on
 never opens, reads, copies or stores any credential file. **One display-only exception** (release-lead
 security sign-off): for a signed-in account, KalCode reads only the `active` field of
 `<GEMINI_CLI_HOME>/.gemini/google_accounts.json` inside that account's own managed profile and shows
-it as the account's provider-reported identity (as Claude Code's `auth status --json` email and
-Codex's `account/read` email are). The file must be an ordinary file (no symlink, junction or reparse
+it as the account's provider-reported identity (as Codex's `account/read` email is). Claude Code
+does not expose identity through a safe passive probe. The file must be an ordinary file (no symlink, junction or reparse
 point, checked before and after opening; the opened handle must be the very file at that path inside
 the account's canonical home, so a `.gemini` swapped for a link mid-read is refused) of at most 16 KiB that parses as JSON with an `active`
 string that looks like an email (at most 320 characters, printable ASCII, one `@`, dotted domain);
@@ -655,8 +656,8 @@ backing off to 30 minutes). Recording an observation never delays a thread event
   argv, and refusal to start when unusable.
 - **Unit tests** cover the permission invariants, env sanitization, bounded line reading, stderr
   redaction, parsing and normalization.
-- **Real-provider tests are `#[ignore]`d.** `real_claude_detection` runs only `--version` and
-  `auth status`. `real_claude_session_smoke` consumes AI quota: it additionally needs
+- **Real-provider tests are `#[ignore]`d.** `real_claude_detection` runs only `--version`.
+  `real_claude_session_smoke` consumes AI quota: it additionally needs
   `KALCODE_REAL_PROVIDER_SMOKE=1` and the owner's explicit approval.
 - **Provider panes (Z7-W4).** The fake provider has an interactive mode (started with
   `--settings`): a minimal TUI that fires the hooks in KalCode's settings file with the documented

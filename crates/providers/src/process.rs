@@ -252,7 +252,7 @@ fn run_probe_inner(
 }
 
 fn terminate_probe_tree(
-    child: &mut platform::PlatformChild,
+    child: &mut platform::Child,
     guardian: Option<&GuardedJob>,
 ) -> Result<(), ProcessError> {
     let termination = kill_tree(child);
@@ -265,7 +265,7 @@ fn terminate_probe_tree(
             .map_err(|error| ProcessError::Guardian(error.to_string()))?;
         Ok(())
     } else {
-        termination.map_err(ProcessError::Terminate)
+        termination
     }
 }
 

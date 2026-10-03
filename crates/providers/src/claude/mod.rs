@@ -30,8 +30,8 @@ pub const MANAGED_CLAUDE_CEILING: Version = Version::new(2, 2, 0);
 /// line and fail closed everywhere else, including every pre-release or build suffix.
 ///
 /// Certified on real binaries on 2026-09-28: 2.1.282 (floor) and 2.1.283 (the latest published
-/// release) have identical `auth`, `auth login`, `auth status` help, `auth status --json` shape
-/// and exit code, `auth login --claudeai` browser hand-off with piped stdio under
+/// release) have identical `auth`, `auth login` and `auth logout` command surfaces,
+/// `auth login --claudeai` browser hand-off with piped stdio under
 /// `CLAUDE_CONFIG_DIR` + `CLAUDE_SECURESTORAGE_CONFIG_DIR`, and every session flag and permission
 /// mode KalCode passes (top-level `--help` gained only the unrelated `--client-data-url`).
 pub(crate) fn managed_version_supported(version: &Version) -> bool {

@@ -545,7 +545,9 @@ fn text_turn_flows_from_process_to_normalized_events() {
     assert_eq!(after("--permission-prompts").as_deref(), Some("none"));
     assert_eq!(after("--model").as_deref(), Some("sonnet"));
     assert!(
-        fake.runs().iter().all(|run| run["args"] != json!(["auth", "status"])),
+        fake.runs()
+            .iter()
+            .all(|run| run["args"] != json!(["auth", "status"])),
         "headless launch must never run Claude's unsafe short-lived status command"
     );
     let env: Vec<String> = serde_json::from_value(fake.read_json("last-env.json")).expect("env");

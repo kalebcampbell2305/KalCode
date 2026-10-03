@@ -198,12 +198,10 @@ fn arg0(run: &Value) -> String {
 }
 
 fn is_claude_auth_status(run: &Value) -> bool {
-    run["args"]
-        .as_array()
-        .is_some_and(|args| {
-            args.windows(2)
-                .any(|pair| pair[0] == "auth" && pair[1] == "status")
-        })
+    run["args"].as_array().is_some_and(|args| {
+        args.windows(2)
+            .any(|pair| pair[0] == "auth" && pair[1] == "status")
+    })
 }
 
 #[test]

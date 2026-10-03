@@ -295,13 +295,6 @@ mod tests {
     #[test]
     fn auth_checks_are_documented_commands() {
         let checks: Vec<_> = statuses().into_iter().map(|s| s.auth_check).collect();
-        assert_eq!(
-            checks,
-            [
-                None,
-                Some("codex login status".to_owned()),
-                None
-            ]
-        );
+        assert_eq!(checks, [None, Some("codex login status".to_owned()), None]);
     }
 }

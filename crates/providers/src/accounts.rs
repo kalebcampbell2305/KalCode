@@ -950,6 +950,7 @@ mod tests {
     use super::*;
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
 
     use crate::managed::ManagedProfiles;
     use kalcode_contracts::agent::ProviderError;

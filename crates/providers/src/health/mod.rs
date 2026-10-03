@@ -357,7 +357,9 @@ fn assess(p: &ProviderState) -> Assessment {
             if detection.provider_id.as_str() == ProviderId::CLAUDE_CODE {
                 "Claude Code sign-in is checked when a coding session starts.".to_owned()
             } else {
-                format!("{name} has no documented safe way to check sign-in, so it shows as unknown.")
+                format!(
+                    "{name} has no documented safe way to check sign-in, so it shows as unknown."
+                )
             }
         }),
     }
