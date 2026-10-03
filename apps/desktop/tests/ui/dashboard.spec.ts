@@ -371,7 +371,9 @@ test.describe("widgets", () => {
   test("provider health is read-only: it never starts a detection", async ({ page }) => {
     await open(page, "busy");
     const health = page.getByRole("region", { name: "Provider health" });
-    await expect(health.getByText("Not checked yet")).toHaveCount(3);
+    // Never-checked providers show their accounts' sign-in (or "Not checked yet"); none is detected.
+    await expect(health.locator("[data-provider-health]")).toHaveCount(3);
+    await expect(health.locator('[data-provider-health] >> text="Healthy"')).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
   });
 

@@ -162,7 +162,7 @@ test.describe("startup failure", () => {
     await open(page, "startup-error");
     await expect(page.getByRole("heading", { name: "KalCode couldn't start" })).toBeVisible();
     await expect(page.getByText("created by a newer version of KalCode")).toBeVisible();
-    await expect(page.getByText("Nothing was deleted or changed.")).toBeVisible();
+    await expect(page.getByText("your data has not been changed", { exact: false })).toBeVisible();
     await expect(page.getByText("Error code: database/schema_too_new")).toBeVisible();
     await expect(page.getByRole("button", { name: "Open data folder" })).toBeVisible();
   });
