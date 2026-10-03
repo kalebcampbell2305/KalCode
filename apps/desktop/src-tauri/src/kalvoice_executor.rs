@@ -115,7 +115,7 @@ fn provider_launch_permission_mode(permissions: Option<&PermissionService>) -> P
     match permissions {
         Some(service) => match service.settings() {
             Ok(settings) => settings.startable_default_mode(),
-            Err(_) => return PermissionMode::Approve,
+            Err(_) => PermissionMode::Approve,
         },
         None => DEFAULT_CODING_PERMISSION_MODE,
     }
@@ -1068,6 +1068,7 @@ impl DesktopExecutor {
         let (workspace, requests) =
             self.prepare_provider_panes(groups, workspace_id, provider_hint)?;
         let runtime = self.threads()?;
+        let sessions_dir = self.core.paths().data_dir.join("sessions");
         let total = requests.len();
         let mut started_ids = Vec::new();
         let mut created_ids = Vec::new();
@@ -1075,10 +1076,16 @@ impl DesktopExecutor {
         let mut failed = 0usize;
         let mut first_error = None;
         for request in requests {
-            match kalcode_providers::interactive::provider::RuntimeRouter::create_interactive(
-                || match request {
-                    PreparedProviderLaunch::Idle(request) => runtime.create_idle(request),
-                    PreparedProviderLaunch::Assigned(request) => runtime.create(request),
+            match crate::provider_pane_commands::create_pane_thread(
+                runtime,
+                &sessions_dir,
+                |thread_id| match request {
+                    PreparedProviderLaunch::Idle(request) => {
+                        runtime.create_idle_with_id(thread_id, request)
+                    }
+                    PreparedProviderLaunch::Assigned(request) => {
+                        runtime.create_with_id(thread_id, request)
+                    }
                 },
             ) {
                 Ok(thread) => {
@@ -4140,6 +4147,64 @@ mod tests {
                 .expect("threads")
                 .iter()
                 .all(|thread| thread.status == ThreadStatus::Failed)
+        );
+    }
+
+    /// A launched agent stays a pane even when its first start never reaches the pane router
+    /// (the Resource Governor holds it, or the account binding refuses it): the marker is written
+    /// before the thread is created, so the later relaunch or Resume starts a pane, not a
+    /// headless chat thread.
+    #[test]
+    fn voice_launch_marks_agents_as_panes_before_their_first_start() {
+        let f = accounts_fixture_with_start_failure(true);
+        f.account(ProviderId::CODEX, "Codex A", AuthState::Authenticated);
+        let intent = KalVoiceIntent::CreateThreads {
+            provider_id: ProviderId::new(ProviderId::CODEX),
+            count: 2,
+            workspace_id: None,
+            account_query: Some("Codex A".into()),
+            model: None,
+            effort: None,
+            assignments: Vec::new(),
+        };
+        f.run(&intent, &ctx()).expect_err("provider starts fail");
+        let sessions = f.executor.core.paths().data_dir.join("sessions");
+        let threads = f.runtime.list(None, false).expect("threads");
+        assert_eq!(threads.len(), 2);
+        for thread in threads {
+            assert!(
+                kalcode_providers::interactive::provider::marked_interactive(&sessions, &thread.id),
+                "{} must stay a pane",
+                thread.id
+            );
+        }
+
+        // A launch refused before its thread exists leaves no marker behind.
+        let refused =
+            crate::provider_pane_commands::create_pane_thread(&f.runtime, &sessions, |thread_id| {
+                f.runtime.create_idle_with_id(
+                    thread_id,
+                    CreateIdleThread {
+                        provider_id: ProviderId::CODEX.into(),
+                        provider_account_id: None,
+                        account_label: None,
+                        workspace_id: "missing-workspace".into(),
+                        model: None,
+                        effort: None,
+                        permission_mode: PermissionMode::Approve,
+                        name: None,
+                    },
+                )
+            });
+        assert!(refused.is_err());
+        let left: Vec<_> = std::fs::read_dir(&sessions)
+            .expect("sessions")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .collect();
+        assert_eq!(
+            left.len(),
+            2,
+            "only the two created agents keep markers: {left:?}"
         );
     }
 

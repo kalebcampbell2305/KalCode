@@ -45,8 +45,9 @@ describe("native E2E helper inventory", () => {
   it("binds every real-app launch spec to the per-test owned-process fixture", () => {
     const specs = readdirSync(e2eDirectory).filter((name) => name.endsWith(".spec.ts"));
     const launchSpecs = specs.filter((name) => readFileSync(resolve(e2eDirectory, name), "utf8").includes("launch"));
-    expect(launchSpecs).toHaveLength(15);
+    expect(launchSpecs).toHaveLength(16);
     expect(launchSpecs).toContain("operations.spec.ts");
+    expect(launchSpecs).toContain("provider-session-restart.spec.ts");
     for (const name of launchSpecs) {
       const source = readFileSync(resolve(e2eDirectory, name), "utf8");
       expect(source, name).not.toMatch(/import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*"@playwright\/test"/s);
@@ -69,7 +70,7 @@ describe("native E2E helper inventory", () => {
     expect(operations).toContain("await closeGracefully(app)");
   });
 
-  it("allows the deterministic resource sample only in the six explicit provider specs", () => {
+  it("allows the deterministic resource sample only in the seven explicit provider specs", () => {
     const optedIn = readdirSync(e2eDirectory)
       .filter((name) => name.endsWith(".spec.ts"))
       .filter((name) => readFileSync(resolve(e2eDirectory, name), "utf8").includes("KALCODE_E2E_RESOURCE_FIXTURE"))
@@ -80,6 +81,7 @@ describe("native E2E helper inventory", () => {
       "notifications.spec.ts",
       "panes.spec.ts",
       "provider-panes.spec.ts",
+      "provider-session-restart.spec.ts",
       "providers2.spec.ts",
     ]);
     expect(harnessSource).toContain('upper === "KALCODE_E2E_RESOURCE_FIXTURE"');

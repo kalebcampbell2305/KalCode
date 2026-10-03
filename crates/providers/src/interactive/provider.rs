@@ -457,6 +457,34 @@ pub fn marked_interactive(sessions_dir: &Path, thread_id: &str) -> bool {
     marked_interactive_checked(sessions_dir, thread_id).unwrap_or(false)
 }
 
+/// Durably marks `thread_id` as a pane before its thread exists, so the thread starts and resumes
+/// in a pane whatever happens to its first launch. Pane launchers call this with a pre-chosen id
+/// before creating the thread: the router sits under wrappers (the Resource Governor, account
+/// binding) that can hold or refuse a start before the router runs, and a held launch is retried
+/// later by the thread runtime on another OS thread, where [`RuntimeRouter::create_interactive`]
+/// no longer applies.
+pub fn mark_interactive(sessions_dir: &Path, thread_id: &str) -> Result<(), ProviderError> {
+    let marker = marker_path(sessions_dir, thread_id)
+        .ok_or_else(|| ProviderError::Start("The thread id is not valid.".into()))?;
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|_| ProviderError::Start("KalCode couldn't prepare the session.".into()))?;
+    }
+    std::fs::write(&marker, b"")
+        .map_err(|_| ProviderError::Start("KalCode couldn't prepare the session.".into()))
+}
+
+/// Removes a marker written by [`mark_interactive`] for a thread that was never created. Best
+/// effort: the session folder is removed only when nothing else is in it.
+pub fn unmark_interactive(sessions_dir: &Path, thread_id: &str) {
+    if let Some(marker) = marker_path(sessions_dir, thread_id) {
+        let _ = std::fs::remove_file(&marker);
+        if let Some(dir) = marker.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
 /// Fallible form used by authority preflights that must never collapse marker I/O or object-type
 /// failures into a false (headless) classification.
 pub fn marked_interactive_checked(sessions_dir: &Path, thread_id: &str) -> std::io::Result<bool> {
@@ -631,26 +659,13 @@ impl RuntimeRouter {
         create()
     }
 
-    fn marker(&self, thread_id: &str) -> Option<PathBuf> {
-        marker_path(&self.sessions_dir, thread_id)
-    }
-
     /// Whether a thread runs in a pane.
     pub fn is_interactive(&self, thread_id: &str) -> bool {
         marked_interactive(&self.sessions_dir, thread_id)
     }
 
     fn mark(&self, thread_id: &str) -> Result<(), ProviderError> {
-        let marker = self
-            .marker(thread_id)
-            .ok_or_else(|| ProviderError::Start("The thread id is not valid.".into()))?;
-        if let Some(dir) = marker.parent() {
-            std::fs::create_dir_all(dir).map_err(|_| {
-                ProviderError::Start("KalCode couldn't prepare the session.".into())
-            })?;
-        }
-        std::fs::write(&marker, b"")
-            .map_err(|_| ProviderError::Start("KalCode couldn't prepare the session.".into()))
+        mark_interactive(&self.sessions_dir, thread_id)
     }
 }
 

@@ -44,6 +44,8 @@ function thread(id: string, providerId: string, accountId: string | null, extra:
     pendingApprovals: 0,
     archivedAt: null,
     error: null,
+    runtimeKind: null,
+    terminalId: null,
     ...extra,
   } as unknown as ThreadSummary;
 }
@@ -73,13 +75,29 @@ describe("dock accounts", () => {
     );
     const [a, b] = entries;
     if (!a || !b) throw new Error("expected two accounts");
-    expect(a).toMatchObject({ threads: 3, running: 1, waiting: 1 });
-    expect(b).toMatchObject({ threads: 0, running: 0, waiting: 0 });
+    expect(a).toMatchObject({ agents: 0, threads: 3, running: 1, waiting: 1 });
+    expect(b).toMatchObject({ agents: 0, threads: 0, running: 0, waiting: 0 });
     expect(usageLine(a)).toBe("1 needs you · 1 running · 3 threads");
-    expect(usageLine(b)).toBe("No threads");
-    expect(usageLine({ threads: 2, running: 0, waiting: 0 })).toBe("Idle · 2 threads");
+    expect(usageLine(b)).toBe("No agents or threads");
+    expect(usageLine({ agents: 0, threads: 2, running: 0, waiting: 0 })).toBe("Idle · 2 threads");
     expect(activityShare(a)).toBeCloseTo(1 / 3);
     expect(activityShare(b)).toBe(0);
+  });
+
+  it("counts coding agents as agents, never as threads", () => {
+    const [a] = dockAccounts(
+      [claudeA],
+      [
+        thread("1", "claude-code", "c-a", { runtimeKind: "interactive_pty", status: "editing" }),
+        thread("2", "claude-code", "c-a", { runtimeKind: "interactive_pty" }),
+        thread("3", "claude-code", "c-a"),
+      ],
+    );
+    if (!a) throw new Error("expected an account");
+    expect(a).toMatchObject({ agents: 2, threads: 1, running: 1 });
+    expect(usageLine(a)).toBe("1 running · 2 agents · 1 thread");
+    expect(usageLine({ agents: 1, threads: 0, running: 0, waiting: 0 })).toBe("Idle · 1 agent");
+    expect(activityShare(a)).toBeCloseTo(1 / 3);
   });
 
   it("names chips without repeating the provider", () => {

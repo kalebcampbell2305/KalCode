@@ -311,7 +311,9 @@ describe("providerModeNote with the Codex and Gemini CLI mappings", () => {
 
   it("reads as one sentence per mode, from the provider's own mapping note", () => {
     expect(providerModeNote(option(codex), "plan")).toMatch(/^ With Codex: Reads and read-only commands inside/);
-    expect(providerModeNote(option(codex), "bypass")).toContain("danger-full-access is never used.");
+    expect(providerModeNote(option(codex), "bypass")).toContain(
+      "Uses Codex's explicit danger-full-access sandbox with approval prompts disabled",
+    );
     expect(providerModeNote(option(gemini), "plan")).toMatch(/^ With Gemini CLI: Gemini CLI's read-only plan mode\./);
     expect(providerModeNote(option(gemini), "custom")).toContain("it runs as Approve");
   });

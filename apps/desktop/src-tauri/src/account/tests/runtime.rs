@@ -580,6 +580,36 @@ fn kalvoice_invalid_receipt_never_admits_execution_and_unknown_claim_stays_onlin
     );
 }
 
+/// A request the service rejected outright (4xx other than 429) was never counted and its
+/// action never ran, so it is not replayed (and counted) later.
+#[test]
+fn kalvoice_definitive_rejection_is_never_replayed() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", Some("pro-receipt"), false);
+    let (_directory, core) = metering_core();
+    let meter =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account).expect("meter");
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Http {
+            status: 403,
+            code: "forbidden".into(),
+            retry_after_seconds: None,
+        }));
+    let id = kalcode_contracts::ids::new_id();
+    assert!(meter.authorize(&id).is_err());
+    assert!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("settled")
+            .is_none()
+    );
+    meter.synchronize();
+    assert_eq!(*api.request_calls.lock().expect("calls"), vec![(id, false)]);
+    assert_eq!(meter.usage().expect("usage").used, 41);
+}
+
 #[test]
 fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
     use kalcode_kalvoice::accounting::{self, RequestAccounting};
@@ -673,6 +703,59 @@ fn kalvoice_server_receipt_replaces_provisional_count_for_allow_and_deny() {
                 .is_none()
         );
     }
+}
+
+/// Without a current receipt the device estimate counts the calendar month, which can include
+/// the previous server cycle (anchored to the billing date). Online, that estimate never refuses
+/// on its own: the server decides. It still refuses when the server can't be reached.
+#[test]
+fn kalvoice_expired_receipt_lets_the_server_decide_after_a_billing_cycle_reset() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", None, false);
+    let (_directory, core) = metering_core();
+    // 150 requests already synced earlier this calendar month, in the previous server cycle.
+    core.transact(|conn| {
+        for _ in 0..150 {
+            let id = kalcode_contracts::ids::new_id();
+            accounting::reserve(conn, ACCOUNT_ID, &id, NOW - 60, false)?;
+            accounting::settle(conn, ACCOUNT_ID, &id, true)?;
+        }
+        Ok(((), Vec::new()))
+    })
+    .expect("seed");
+    let meter =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account).expect("meter");
+    assert!(meter.usage().expect("estimate").exhausted());
+
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Ok(request_receipt("pro-receipt", true)));
+    let id = kalcode_contracts::ids::new_id();
+    let decision = meter.authorize(&id).expect("server decision");
+    assert!(decision.allowed, "the server's fresh cycle admits it");
+    assert_eq!(decision.usage.used, 41);
+    assert_eq!(*api.request_calls.lock().expect("calls"), vec![(id, false)]);
+
+    // Still without a receipt, an unreachable server leaves the conservative estimate in charge:
+    // it refuses, and the refused claim is never replayed.
+    let fresh = metering_account(api.clone(), "pro", None, false);
+    let meter =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), fresh).expect("meter");
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let refused = meter
+        .authorize(&kalcode_contracts::ids::new_id())
+        .expect("estimate decision");
+    assert!(!refused.allowed);
+    assert!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("nothing to replay")
+            .is_none()
+    );
 }
 
 fn api_account(activated: bool) -> ApiAccount {

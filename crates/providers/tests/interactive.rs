@@ -485,7 +485,7 @@ fn launch_uses_kalcode_settings_the_deny_floor_and_a_clean_environment() {
     let args: Vec<String> = serde_json::from_value(rig.read_json("last-args.json")).expect("args");
     assert!(
         rig.runs().iter().all(|run| {
-            run["args"].as_array().map_or(true, |args| {
+            run["args"].as_array().is_none_or(|args| {
                 !args
                     .windows(2)
                     .any(|pair| pair[0] == "auth" && pair[1] == "status")

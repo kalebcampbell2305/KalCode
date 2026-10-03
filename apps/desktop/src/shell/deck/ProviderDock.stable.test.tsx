@@ -15,6 +15,9 @@ import { Shell } from "../Shell.tsx";
 
 // The Provider Dock in the Stable Command Deck, against the memory transport's accounts: Claude
 // Personal, Codex Personal, Codex Work (signed out), Gemini Personal, plus Gemini B and Codex B.
+// The shell checks Codex and Gemini accounts in the background (#129), and a managed Gemini
+// profile without its own credentials reads as signed out natively, so both Gemini accounts sign in
+// through the provider's login flow first: a thread can only move onto a signed-in account.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 
 const GEMINI_PERSONAL = "0192f3c4-0000-7000-8000-000000000301";
@@ -36,6 +39,11 @@ afterEach(() => {
   resetAccountIntentForTests();
   Reflect.deleteProperty(document, "elementFromPoint");
 });
+
+async function signInGemini(client: KalCodeClient, accountId: string) {
+  const { loginHandle } = await client.startGeminiLogin(accountId);
+  return client.waitForGeminiLogin(loginHandle);
+}
 
 async function settledThread(client: KalCodeClient, providerId: string, providerAccountId: string, name: string) {
   const options = await client.threadOptions();
@@ -84,7 +92,8 @@ async function mountStable(
   boot.info.flags.surfaces = (nativeStableSurfaces as SurfaceFlag[]).map((flag) => ({ ...flag }));
   boot.info.flags.features = boot.info.flags.features.map((flag) => ({ ...flag, visible: flag.state === "available" }));
   await client.detectProviders();
-  const geminiB = await client.createProviderAccount("gemini-cli", "Gemini B");
+  await signInGemini(client, GEMINI_PERSONAL);
+  const geminiB = await signInGemini(client, (await client.createProviderAccount("gemini-cli", "Gemini B")).id);
   await client.createProviderAccount("codex", "B");
   const gemini = await settledThread(client, "gemini-cli", GEMINI_PERSONAL, "Gemini docs pass");
   const codex = await settledThread(client, "codex", CODEX_PERSONAL, "Codex cleanup");
@@ -134,19 +143,19 @@ function dragOnto(row: HTMLElement, target: HTMLElement) {
 describe("Provider Dock on Stable", () => {
   it("shows every active account in provider order with health and usage", async () => {
     await mountStable();
+    // The background account check settles each label; Codex B was checked but reports no state.
     const buttons = await waitFor(async () => {
       const found = (await dock()).getAllByRole("button");
-      expect(found).toHaveLength(6);
+      expect(found.map((button) => button.getAttribute("aria-label"))).toEqual([
+        "Claude Code · Personal: Healthy, No agents or threads",
+        "Codex · Personal: Healthy, Idle · 1 thread",
+        "Codex · B: Unknown, No agents or threads",
+        "Codex · Work: Signed out, No agents or threads",
+        "Gemini CLI · Personal: Healthy, Idle · 1 thread",
+        "Gemini CLI · Gemini B: Healthy, No agents or threads",
+      ]);
       return found;
     });
-    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Claude Code · Personal: Healthy, No threads",
-      "Codex · Personal: Healthy, Idle · 1 thread",
-      "Codex · B: Not checked, No threads",
-      "Codex · Work: Signed out, No threads",
-      "Gemini CLI · Personal: Not checked, Idle · 1 thread",
-      "Gemini CLI · Gemini B: Not checked, No threads",
-    ]);
     expect(buttons[3]).toHaveAttribute("data-health", "signed_out");
     expect(buttons[0]).toHaveTextContent("Claude Personal");
     expect(buttons[5]).toHaveTextContent("Gemini B");

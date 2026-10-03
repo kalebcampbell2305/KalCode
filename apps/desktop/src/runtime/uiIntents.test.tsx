@@ -76,6 +76,9 @@ describe("coding agent focus never falls back to Threads", () => {
     expect(mocks.activate).toHaveBeenCalledWith("missing");
     expect(mocks.navigate).not.toHaveBeenCalledWith("threads");
     expect(mocks.request).not.toHaveBeenCalled();
+    // The click still lands in Code (never a silent no-op), with no pane to focus.
+    expect(mocks.navigate.mock.calls).toEqual([["code"]]);
+    expect(view.result.current.paneFocus).toBeNull();
   });
 
   it("returns to the previous coding agent without consulting chat metadata", async () => {
@@ -230,6 +233,15 @@ describe("UI focus intent lifecycle", () => {
     });
     expect(mocks.navigate).toHaveBeenCalledWith("code");
     expect(result.current.paneFocus?.threadId).toBe("current-pane");
+  });
+
+  it("keeps a coding agent in Code, never Threads, when its workspace can't be opened", async () => {
+    mocks.activate.mockResolvedValueOnce(false);
+    const { result } = mount();
+    await act(async () => result.current.focus({ kind: "thread", threadId: "current-pane" }));
+    expect(mocks.navigate.mock.calls).toEqual([["code"]]);
+    expect(mocks.request).not.toHaveBeenCalled();
+    expect(result.current.paneFocus).toBeNull();
   });
 
   it("does not navigate to an old thread after a newer focus request", async () => {

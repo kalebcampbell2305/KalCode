@@ -52,6 +52,16 @@ interface Mounted {
   failRebind: (code: string, message?: string) => void;
 }
 
+/**
+ * The shell checks Gemini accounts in the background (#129), and a managed Gemini profile without
+ * its own credentials reads as signed out natively. Accounts a thread switches between sign in
+ * through Gemini's login flow first, as they must in the app.
+ */
+async function signInGemini(client: KalCodeClient, accountId: string): Promise<ProviderAccount> {
+  const { loginHandle } = await client.startGeminiLogin(accountId);
+  return client.waitForGeminiLogin(loginHandle);
+}
+
 async function settledThread(
   client: KalCodeClient,
   providerId: string,
@@ -103,7 +113,8 @@ async function mountStable(): Promise<Mounted> {
     visible: flag.state === "available",
   }));
   await client.detectProviders();
-  const geminiB = await client.createProviderAccount("gemini-cli", "Gemini B");
+  await signInGemini(client, GEMINI_PERSONAL);
+  const geminiB = await signInGemini(client, (await client.createProviderAccount("gemini-cli", "Gemini B")).id);
   const gemini = await settledThread(client, "gemini-cli", GEMINI_PERSONAL, "Gemini docs pass");
   const codex = await settledThread(client, "codex", CODEX_PERSONAL, "Codex cleanup");
   counts.clear();
@@ -178,8 +189,8 @@ describe("thread account switch on Stable", () => {
     expect(within(menu).getByText("Switch account")).toBeInTheDocument();
     const radios = within(menu).getAllByRole("menuitemradio");
     expect(radios.map((item) => item.textContent)).toEqual([
-      "PersonalDefaultActiveNot checked",
-      "Gemini Bb@example.com · Not checked",
+      "PersonalDefaultActiveSigned in",
+      "Gemini Bb@example.com · Signed in",
     ]);
     expect(radios[0]).toHaveAttribute("aria-checked", "true");
     expect(radios[1]).toHaveAttribute("aria-checked", "false");
@@ -196,7 +207,7 @@ describe("thread account switch on Stable", () => {
     const menu = await openMenu(user, "Personal");
     const names = within(menu)
       .getAllByRole("menuitemradio")
-      .map((item) => item.textContent?.split(/Default|Active|b@example|Not checked/)[0]);
+      .map((item) => item.textContent?.split(/Default|Active|b@example|Not checked|Signed/)[0]);
     expect(names).toEqual(["Personal", "Gemini 2", "Gemini 10", "Gemini B"]);
   });
 

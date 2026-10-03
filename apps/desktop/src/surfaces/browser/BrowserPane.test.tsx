@@ -341,4 +341,48 @@ describe("BrowserPane address editing", () => {
       vi.useRealTimers();
     }
   });
+
+  it("lets a custom viewport width be typed digit by digit and bounds it when committed", async () => {
+    render(pane(testBridge()));
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText("Responsive viewport"), "custom");
+    const width = screen.getByLabelText("Custom viewport width");
+    expect(width).toHaveValue(900);
+
+    await user.clear(width);
+    await user.type(width, "1280");
+    expect(width).toHaveValue(1280);
+    await user.tab();
+    expect(width).toHaveValue(1280);
+
+    await user.clear(width);
+    await user.type(width, "90{Enter}");
+    expect(width).toHaveValue(320);
+    await user.clear(width);
+    await user.type(width, "9999");
+    await user.tab();
+    expect(width).toHaveValue(3840);
+    await user.clear(width);
+    await user.tab();
+    expect(width).toHaveValue(3840);
+  });
+
+  it("confirms Copy URL, and reports a clipboard that refuses", async () => {
+    render(pane(testBridge()));
+    const user = userEvent.setup();
+    // user-event installs its own clipboard; observe that one.
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    await waitFor(() => expect(screen.getByText("localhost", { selector: "span" })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Copy URL" }));
+    expect(writeText).toHaveBeenCalledWith("http://localhost:3000/");
+    expect(await screen.findByRole("button", { name: "URL copied" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy URL" })).toBeInTheDocument(), {
+      timeout: 2500,
+    });
+
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await user.click(screen.getByRole("button", { name: "Copy URL" }));
+    expect(await screen.findByText("KalCode couldn't copy the address.")).toBeInTheDocument();
+  });
 });

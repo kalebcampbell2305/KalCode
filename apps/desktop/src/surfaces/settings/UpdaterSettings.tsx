@@ -10,6 +10,9 @@ import { channelOptions, installsWhenClosed, restartAndInstall, updatePresentati
 
 type Operation = "channel" | "check" | "cancel" | "install" | "restore";
 
+/** `updater_status` reads local state only, so following an in-flight check costs no network. */
+const STATUS_POLL_MS = 1_000;
+
 export function UpdaterSettings() {
   const { client, info } = useRuntime();
   const toast = useToast();
@@ -30,6 +33,20 @@ export function UpdaterSettings() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Native checks on its own (at launch and periodically), so a phase read here goes stale. While
+  // anything is in flight, follow it: a frozen "checking" keeps Check disabled and leaves a Cancel
+  // that would discard the build native has since staged.
+  const inFlight =
+    operation === "check" ||
+    status?.phase === "checking" ||
+    status?.phase === "downloading" ||
+    status?.phase === "installing";
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = window.setInterval(() => void load(), STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [inFlight, load]);
 
   const run = useCallback(
     async (name: Operation, action: () => Promise<UpdateStatus | undefined>) => {
