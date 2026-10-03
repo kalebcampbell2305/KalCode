@@ -86,11 +86,15 @@ jobs:
             '-CandidateVersion', $env:CANDIDATE_VERSION, '-ExpectSchema', $env:EXPECT_SCHEMA, '-OutDir', $out)
           if ($env:CHANGES_DATA -eq 'true') { $a += '-ChangesData' }
           if ($liveInst) { $a += @('-LiveInstaller', $liveInst) }
-          $p = Start-Process -FilePath powershell.exe -ArgumentList $a -NoNewWindow -Wait -PassThru
+          $processTimeoutMs = 40 * 60 * 1000
+          $p = Start-Process -FilePath powershell.exe -ArgumentList $a -NoNewWindow -PassThru
+          if (-not $p.WaitForExit($processTimeoutMs)) { throw 'update-from-live wrapper timed out after 40 minutes; owned QA descendants were left running for evidence preservation' }
+          $p.Refresh()
+          $exitCode = $p.ExitCode
           $r = Get-Content -Raw -LiteralPath (Join-Path $out 'update-from-live-receipt.json') | ConvertFrom-Json
           $r | Add-Member -NotePropertyName github -NotePropertyValue ([ordered]@{ runId = [int64]$env:GITHUB_RUN_ID; sha = $env:GITHUB_SHA; workflowRef = $env:GITHUB_WORKFLOW_REF; packetSums = $env:SUMS_SHA256; scriptSha256 = $env:SCRIPT_SHA256 })
           [IO.File]::WriteAllText((Join-Path $out 'update-from-live-receipt.json'), ($r | ConvertTo-Json -Depth 8) + "`n")
-          if ($p.ExitCode -ne 0 -or $r.status -ne 'PASS') { throw "update-from-live FAILED (exit $($p.ExitCode), status $($r.status)): $($r.error)" }
+          if ($exitCode -ne 0 -or $r.status -ne 'PASS') { throw "update-from-live FAILED (exit $exitCode, status $($r.status)): $($r.error)" }
       - name: Upload the receipt and evidence
         if: always()
         uses: actions/upload-artifact@v4

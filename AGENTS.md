@@ -63,6 +63,29 @@ This directive applies to Claude Code, Codex, and future agents. It replaces old
 
 Default lifecycle: **IMPLEMENT -> TEST WHAT CHANGED -> REVIEW -> MERGE -> BUILD -> SHIP -> VERIFY -> CLEAN UP.** Use the fastest technically safe merge, build, shipment, and production verification.
 
+**Owner reaffirmation (2026-10-03), verbatim. This is the core KalCode engineering rule:**
+
+> "KALCODE ALWAYS USES THE FASTEST CORRECT PATH FROM OWNER REQUEST TO USERS.
+>
+> BUILD THE REQUESTED WORK.
+> VALIDATE THE RELEVANT CHANGE.
+> AUTO-MERGE TO MAIN.
+> AUTO-SHIP IMMEDIATELY.
+> VERIFY USERS CAN RECEIVE IT.
+> CLEAN UP.
+>
+> DO NOT ADD UNNECESSARY QA, APPROVALS, WAITING, RELEASE CEREMONY, OR VERSION GATES.
+>
+> FASTEST POSSIBLE WHILE STILL WORKING CORRECTLY IS THE DEFAULT."
+
+Fastest possible does not mean careless: maximum speed with high quality and correctness. Don't stop between stages without a real blocker. On a blocker, IDENTIFY → FIX → RERUN ONLY THE INVALIDATED CHECK → CONTINUE, never restarting the pipeline. Long releases are pipeline problems to fix, not something to accept. These practices, learned on the 2026-10-03 trains, keep it fast:
+
+- **One release at a time, so ride the train.** Before cutting a release, check `target/lanes/release.lock`, the latest `target/lanes/merge-log.md` lines, `train/*` branches and PRs titled `train:`. If a train is close, put your PR on it instead of shipping a separate build right after it.
+- **One gate per train, on idle runners.** The PR's Gate (Windows) job runs the full `ship.mjs gate` on the shared Windows PC. Don't run a second full gate locally at the same time, and don't run heavy local cargo/Playwright work while a release is packaging: contention causes timeouts and memory-guard aborts. Use local `--only <lanes> --keep-going` for fast diagnosis.
+- **Speculative builds.** Start the signed Windows and macOS builds from the exact commit under test while its gate runs. Publish only after the gate passes and the commit is on main. If only test files change afterwards, the build stays valid.
+- **Rerun only what changed.** After a fix, rerun the invalidated lanes, not the whole gate. Classify every remaining failure truthfully: train regression, intended behavior with a stale test, already failing on main, or environmental. Only real product risk blocks shipping. Record the classification and file follow-ups.
+- **Update tests with behavior.** When a change alters a default, schema version, launcher structure or spec inventory, update the unit, UI and native e2e specs that encode it in the same PR. Check `git merge-tree` against other open PRs touching the same files, not just main.
+
 ### Only relevant risk may block delivery
 
 Every gate must answer: **What specific realistic failure does this gate protect against for this change?** If it has no strong answer, it must not block merge or release.
