@@ -357,6 +357,8 @@ export type { ToolCallStatus } from "./ToolCallStatus.ts";
 export type { TrackedProcess } from "./TrackedProcess.ts";
 export type { TranslationPlan } from "./TranslationPlan.ts";
 export type { TransportProtocol } from "./TransportProtocol.ts";
+export type { UiCommand } from "./UiCommand.ts";
+export type { UiCommandRequest } from "./UiCommandRequest.ts";
 export type { UiDirective } from "./UiDirective.ts";
 export type { Usage } from "./Usage.ts";
 export type { UtilityEffectOutcome } from "./UtilityEffectOutcome.ts";

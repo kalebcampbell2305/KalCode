@@ -39,7 +39,7 @@ use kalcode_kalvoice::latency::{LatencyLog, LatencySnapshot};
 use kalcode_kalvoice::models::{self, SpeechModelInfo, SpeechModelState};
 use kalcode_kalvoice::orchestrator::{
     CommandRequest, KalVoiceResponse, Orchestrator, ProviderChoice, ProviderDirectory,
-    RequestStage, TalkRequest, TalkResponse, provider_display_name,
+    RequestStage, TalkRequest, TalkResponse, UiCommandRequest, provider_display_name,
 };
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
 use kalcode_kalvoice::shortcuts;
@@ -2519,6 +2519,27 @@ pub async fn kalvoice_request(
             .handle_with_stages(request, &on_stage)
             .map_err(to_ipc("kalvoice_request"))?;
         speak_reply(&runtime, &response);
+        synchronize_usage(&runtime);
+        Ok(response)
+    })
+    .await
+}
+
+/// Claims one KalVoice Request for a command the UI runs itself (KalTidy, Operations, scene
+/// commands). The UI runs it only on a `completed` outcome.
+#[tauri::command]
+pub async fn kalvoice_meter_ui_command(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
+    request: UiCommandRequest,
+) -> Result<KalVoiceResponse, IpcError> {
+    _runtime_access.revalidate()?;
+    let runtime = state.runtime()?.clone();
+    blocking(_runtime_access, "kalvoice_meter_ui_command", move || {
+        let response = runtime
+            .orchestrator
+            .meter_ui_command(request)
+            .map_err(to_ipc("kalvoice_meter_ui_command"))?;
         synchronize_usage(&runtime);
         Ok(response)
     })

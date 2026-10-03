@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-meter-ui-command"
+description = "Enables the kalvoice_meter_ui_command command without any pre-configured scope."
+commands.allow = ["kalvoice_meter_ui_command"]
+
+[[permission]]
+identifier = "deny-kalvoice-meter-ui-command"
+description = "Denies the kalvoice_meter_ui_command command without any pre-configured scope."
+commands.deny = ["kalvoice_meter_ui_command"]

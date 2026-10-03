@@ -76,6 +76,7 @@
     "allow-kalvoice-subscribe",
     "allow-kalvoice-status",
     "allow-kalvoice-request",
+    "allow-kalvoice-meter-ui-command",
     "allow-kalvoice-preferences-update",
     "allow-kalvoice-listen-start",
     "allow-kalvoice-listen-stop",

@@ -760,6 +760,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_subscribe,
                 kalvoice_commands::kalvoice_status,
                 kalvoice_commands::kalvoice_request,
+                kalvoice_commands::kalvoice_meter_ui_command,
                 kalvoice_commands::kalvoice_preferences_update,
                 kalvoice_commands::kalvoice_fn_input,
                 kalvoice_commands::kalvoice_listen_start,
