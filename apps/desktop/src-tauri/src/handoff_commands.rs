@@ -186,6 +186,8 @@ impl HandoffState {
         Ok(())
     }
 
+    // Keep the validated preview fields explicit, matching the IPC contract and return path.
+    #[allow(clippy::too_many_arguments)]
     fn preview(
         &self,
         source_thread_id: &str,
@@ -792,10 +794,10 @@ impl HandoffState {
                     .map(|queued_at| (queued_at, id.clone()))
             })
             .collect();
-        if let Some(id) = next_fifo_id(ids) {
-            if let Err(error) = self.dispatch_one(&id) {
-                tracing::warn!(event = "handoff.dispatch_item_failed", code = error.code);
-            }
+        if let Some(id) = next_fifo_id(ids)
+            && let Err(error) = self.dispatch_one(&id)
+        {
+            tracing::warn!(event = "handoff.dispatch_item_failed", code = error.code);
         }
         Ok(())
     }
@@ -1078,6 +1080,8 @@ impl HandoffState {
 }
 
 #[tauri::command(async)]
+// Runtime arguments are injected; the remaining arguments are the existing flat IPC contract.
+#[allow(clippy::too_many_arguments)]
 pub async fn handoff_preview(
     _runtime_access: RuntimeAccess,
     state: RuntimeState<HandoffState>,
@@ -1216,6 +1220,8 @@ fn warnings(
     warnings
 }
 
+// Render the individually observed repository facts without introducing another stored context.
+#[allow(clippy::too_many_arguments)]
 fn capsule_text(
     source: &ThreadSummary,
     target: &ThreadSummary,
