@@ -1,10 +1,11 @@
 /**
  * The Provider Dock's model: one chip per connected Claude/Codex/Gemini account with what KalCode
- * actually knows about it (sign-in, last error, the threads it carries) and which accounts can take
+ * actually knows about it (sign-in, last error, the agents and threads it carries) and which accounts can take
  * a given thread. Compatibility mirrors the native rebind rules (`rebind_target`): same provider,
  * not removed, not signed out, and a thread that is quiet. Nothing here switches an account.
  */
 import type { ProviderAccount, ThreadSummary } from "@kalcode/protocol";
+import { agentsAndThreadsLabel, isCodingAgent } from "../../surfaces/dashboard/data/agents.ts";
 import { accountHealth, accountName, sortAccounts } from "../../surfaces/providers/accountIdentity.ts";
 import { isWaitingForResources, presentStatus } from "../../surfaces/threads/model.ts";
 import { rebindBlocker } from "../../surfaces/threads/useThreadAccount.ts";
@@ -49,9 +50,11 @@ export interface DockAccount {
   hue: number;
   health: DockHealth;
   healthLabel: string;
-  /** Open threads bound to this account. */
+  /** Open coding agents (terminal panes in Code) bound to this account. */
+  agents: number;
+  /** Open chat threads bound to this account (never coding agents). */
   threads: number;
-  /** Those with a turn starting or running right now. */
+  /** Agents and threads with a turn starting or running right now. */
   running: number;
   /** Those waiting on the person (an approval). */
   waiting: number;
@@ -111,7 +114,8 @@ export function dockAccounts(accounts: readonly ProviderAccount[], threads: read
         hue: accountHue(account.id),
         health,
         healthLabel: accountHealth(account).label,
-        threads: mine.length,
+        agents: mine.filter(isCodingAgent).length,
+        threads: mine.filter((thread) => !isCodingAgent(thread)).length,
         running: mine.filter(isRunning).length,
         waiting: mine.filter((thread) => thread.status === "waiting_for_permission" || thread.pendingApprovals > 0)
           .length,
@@ -120,10 +124,10 @@ export function dockAccounts(accounts: readonly ProviderAccount[], threads: read
   );
 }
 
-/** "2 running · 5 threads", "1 needs you · 3 threads", "Idle · 2 threads", "No threads". */
-export function usageLine(entry: Pick<DockAccount, "threads" | "running" | "waiting">): string {
-  if (entry.threads === 0) return "No threads";
-  const total = entry.threads === 1 ? "1 thread" : `${entry.threads} threads`;
+/** "2 running · 4 agents · 1 thread", "1 needs you · 3 threads", "Idle · 2 agents", "No agents or threads". */
+export function usageLine(entry: Pick<DockAccount, "agents" | "threads" | "running" | "waiting">): string {
+  const total = agentsAndThreadsLabel(entry.agents, entry.threads);
+  if (entry.agents + entry.threads === 0) return total;
   const live = [
     entry.waiting > 0 ? (entry.waiting === 1 ? "1 needs you" : `${entry.waiting} need you`) : null,
     entry.running > 0 ? `${entry.running} running` : null,
@@ -131,9 +135,10 @@ export function usageLine(entry: Pick<DockAccount, "threads" | "running" | "wait
   return [...(live.length > 0 ? live : ["Idle"]), total].join(" · ");
 }
 
-/** The activity ring's fill, 0..1: the share of the account's threads that are running. */
-export function activityShare(entry: Pick<DockAccount, "threads" | "running">): number {
-  return entry.threads === 0 ? 0 : Math.min(1, entry.running / entry.threads);
+/** The activity ring's fill, 0..1: the share of the account's agents and threads that are running. */
+export function activityShare(entry: Pick<DockAccount, "agents" | "threads" | "running">): number {
+  const open = entry.agents + entry.threads;
+  return open === 0 ? 0 : Math.min(1, entry.running / open);
 }
 
 export type Compatibility =

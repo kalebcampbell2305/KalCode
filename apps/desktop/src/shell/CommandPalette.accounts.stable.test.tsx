@@ -46,7 +46,13 @@ async function mountStable() {
   boot.info.flags.surfaces = (nativeStableSurfaces as SurfaceFlag[]).map((flag) => ({ ...flag }));
   boot.info.flags.features = boot.info.flags.features.map((flag) => ({ ...flag, visible: flag.state === "available" }));
   const geminiA = await client.createProviderAccount("gemini-cli", "Gemini A");
-  const geminiB = await client.createProviderAccount("gemini-cli", "Gemini B");
+  // The shell checks Gemini accounts in the background (#129); a managed Gemini profile without its
+  // own credentials reads as signed out, and a signed-out account asks for sign-in instead of a
+  // rebind. Gemini B, the account the thread switches to, signs in through Gemini's login flow.
+  const { loginHandle } = await client.startGeminiLogin(
+    (await client.createProviderAccount("gemini-cli", "Gemini B")).id,
+  );
+  const geminiB = await client.waitForGeminiLogin(loginHandle);
   render(
     <ToastProvider>
       <TooltipProvider>
@@ -116,7 +122,12 @@ describe("palette account commands (Stable)", () => {
       "Use Gemini A (Gemini CLI)",
       "Use Gemini B (Gemini CLI)",
     ]);
-    expect(options[0]).toHaveTextContent("Default · Not checked");
+    // The default was checked in the background and has no Gemini sign-in of its own.
+    await waitFor(async () =>
+      expect((await palette.findAllByRole("option", { name: /for this thread/ }))[0]).toHaveTextContent(
+        "Default · Signed out",
+      ),
+    );
     expect(options[1]).not.toHaveTextContent("Default");
   });
 

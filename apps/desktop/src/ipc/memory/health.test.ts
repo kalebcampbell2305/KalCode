@@ -48,7 +48,7 @@ describe("in-memory provider health", () => {
     await client.detectProviders();
     const events = (await client.recentEvents(100)).filter((e) => e.type === "provider.health_changed");
     expect(events.map((e) => [e.correlation.providerId, e.payload]).reverse()).toEqual([
-      ["claude-code", { providerId: "claude-code", from: "unknown", to: "healthy", reason: "healthy" }],
+      ["claude-code", { providerId: "claude-code", from: "unknown", to: "healthy", reason: "auth_unknown" }],
       ["codex", { providerId: "codex", from: "unknown", to: "degraded", reason: "recent_failures" }],
       ["gemini-cli", { providerId: "gemini-cli", from: "unknown", to: "healthy", reason: "auth_unknown" }],
     ]);

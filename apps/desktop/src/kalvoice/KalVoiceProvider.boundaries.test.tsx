@@ -9,7 +9,9 @@ const mocks = vi.hoisted(() => ({
   talk: vi.fn(),
   request: vi.fn(),
   navigate: vi.fn(),
+  focus: vi.fn(),
   client: {
+    getThread: vi.fn(),
     subscribeKalVoice: vi.fn(),
     renewKalVoiceSubscription: vi.fn().mockResolvedValue(undefined),
     kalvoiceStatus: vi.fn().mockResolvedValue(null),
@@ -24,7 +26,7 @@ vi.mock("../runtime/RuntimeProvider.tsx", () => {
   return { useRuntime: () => ({ client }) };
 });
 vi.mock("../runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => ({ active: { id: "workspace" } }) }));
-vi.mock("../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: vi.fn() }) }));
+vi.mock("../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: mocks.focus }) }));
 vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ current: "code", navigate: mocks.navigate }) }));
 vi.mock("../shell/rail/search/SearchProvider.tsx", () => ({ useOptionalSearch: () => null }));
 vi.mock("../surfaces/permissions/index.ts", () => ({ usePermissions: () => ({}) }));
@@ -350,6 +352,42 @@ it("keeps a typed native request exclusive and preserves its final truth", async
   );
   expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith("threads");
   expect(mocks.request).toHaveBeenCalledOnce();
+});
+
+it("sends to a coding agent whose pane mounts only after KalVoice focuses it", async () => {
+  // "Tell Claude B to run the tests" while Claude B's terminal isn't mounted: focusing the agent
+  // opens its pane on a later render, and the words must reach it once its terminal is there.
+  const mounted: { pane: ReturnType<typeof destination> | null } = { pane: null };
+  mocks.client.getThread.mockResolvedValue({
+    id: "claude-code-work",
+    workspaceId: "workspace",
+    runtimeKind: "interactive_pty",
+    terminalId: null,
+  });
+  mocks.focus.mockImplementation(async () => {
+    setTimeout(() => {
+      mounted.pane = destination("claude-code");
+    }, 30);
+  });
+  mocks.request.mockImplementation(async (request) => ({
+    requestId: request.requestId,
+    outcome: { kind: "completed", summary: "Sending to Claude B." },
+    directive: { kind: "compose_in_thread", threadId: "claude-code-work", text: "Run the tests.", submit: true },
+  }));
+  try {
+    const view = await start();
+    fireEvent.click(view.getByRole("button", { name: "Ask native" }));
+    await waitFor(() => expect(mounted.pane?.deliver).toHaveBeenCalledOnce());
+    expect(mocks.focus).toHaveBeenCalledExactlyOnceWith({
+      kind: "agent",
+      agentId: "claude-code-work",
+      workspaceId: "workspace",
+    });
+    expect(mounted.pane?.deliver).toHaveBeenCalledWith("Run the tests.", expect.objectContaining({ mode: "send" }));
+    await waitFor(() => expect(view.getByTestId("kalvoice-state")).toHaveTextContent("Sent to the agent."));
+  } finally {
+    mounted.pane?.dispose();
+  }
 });
 
 it("attributes delivery failure to its provider destination without copying provider error prose into KalVoice", async () => {

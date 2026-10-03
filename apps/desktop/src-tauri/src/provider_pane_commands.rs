@@ -28,8 +28,8 @@ use kalcode_permissions::PermissionService;
 use kalcode_providers::DetectEnv;
 use kalcode_providers::interactive::cli_pane::{InteractiveCliProvider, PaneCli};
 use kalcode_providers::interactive::provider::{
-    InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, marked_interactive,
-    marked_interactive_checked,
+    InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, mark_interactive,
+    marked_interactive, marked_interactive_checked, unmark_interactive,
 };
 use kalcode_providers::interactive::session::PaneVoiceWriteError;
 use kalcode_providers::interactive::session::SessionLimits;
@@ -524,17 +524,20 @@ pub fn provider_pane_create(
     let effort = pane_effort(&provider_id, effort)?;
     threads.ensure_providers(app.core.as_ref());
     let runtime = threads.runtime()?;
-    let mut thread = RuntimeRouter::create_interactive(|| {
-        runtime.create_idle(CreateIdleThread {
-            provider_id,
-            provider_account_id: account.as_ref().map(|account| account.id.clone()),
-            account_label: account.map(|account| account.display_name),
-            workspace_id,
-            model,
-            effort,
-            permission_mode,
-            name,
-        })
+    let mut thread = create_pane_thread(runtime, &panes.sessions_dir, |thread_id| {
+        runtime.create_idle_with_id(
+            thread_id,
+            CreateIdleThread {
+                provider_id,
+                provider_account_id: account.as_ref().map(|account| account.id.clone()),
+                account_label: account.map(|account| account.display_name),
+                workspace_id,
+                model,
+                effort,
+                permission_mode,
+                name,
+            },
+        )
     })
     .map_err(|e| e.log_and_convert("provider_pane_create"))?;
     panes.stamp_runtime_kind(&mut thread);
@@ -544,6 +547,35 @@ pub fn provider_pane_create(
         return Err(error);
     }
     Ok(thread)
+}
+
+/// Creates a provider-pane thread (a coding agent): `create` creates the thread with the id it
+/// is given. The id is chosen and durably marked as a pane first, because the pane router sits
+/// under the Resource Governor and the account binding: a launch they hold (max agents busy) or
+/// refuse never reaches the router, and the runtime's later relaunch or a Resume must still start
+/// a pane, not a headless provider. A marker whose thread was never created is removed.
+pub(crate) fn create_pane_thread(
+    runtime: &ThreadRuntime,
+    sessions_dir: &Path,
+    create: impl FnOnce(&str) -> kalcode_core::Result<ThreadSummary>,
+) -> kalcode_core::Result<ThreadSummary> {
+    let thread_id = kalcode_contracts::ids::new_id();
+    mark_interactive(sessions_dir, &thread_id).map_err(|error| {
+        KalError::new(
+            ErrorCategory::Filesystem,
+            "interactive_marker_unavailable",
+            "KalCode couldn't prepare the agent's session.",
+        )
+        .retryable()
+        .with_source(error)
+    })?;
+    let created = RuntimeRouter::create_interactive(|| create(&thread_id));
+    if created.is_err()
+        && matches!(runtime.get(&thread_id), Err(error) if error.code == "thread_not_found")
+    {
+        unmark_interactive(sessions_dir, &thread_id);
+    }
+    created
 }
 
 fn pane_creation_error(

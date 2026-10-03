@@ -360,6 +360,15 @@ export interface InsightsDeps {
   catalog: Extract<BillingPriceCatalog, { ok: true }> | null;
   now: () => Date;
   log: (entry: Record<string, string>) => void;
+  /**
+   * Where the last Stripe lists live. The Worker builds a service per request, so production
+   * passes an isolate-scoped cache (env.ts); without one, the cache lasts as long as the service.
+   */
+  cache?: InsightsCache;
+}
+
+export interface InsightsCache {
+  data: StripeData | null;
 }
 
 export interface InsightsService {
@@ -369,7 +378,7 @@ export interface InsightsService {
   snapshot(): Promise<void>;
 }
 
-interface StripeData {
+export interface StripeData {
   at: number;
   subscriptions: unknown[];
   charges: unknown[];
@@ -391,11 +400,12 @@ function parseQuery(request: Request): { range: InsightsRange; tzOffsetMinutes: 
 const badQuery = () => apiError(400, "invalid_request", "Use ?range=24h|7d|30d|90d|all&tz=<minutes>.");
 
 export function insightsService(deps: InsightsDeps): InsightsService {
-  let cached: StripeData | null = null;
+  const cache: InsightsCache = deps.cache ?? { data: null };
 
   /** Live Stripe lists, reused for a minute unless the owner asks for fresh data. */
   async function stripeData(fresh: boolean): Promise<{ data: StripeData; fetched: boolean }> {
     const now = deps.now().getTime();
+    const cached = cache.data;
     if (!fresh && cached && now - cached.at < CACHE_MS) return { data: cached, fetched: false };
     const stripe = deps.stripe as InsightsStripe;
     // Two months back covers "this month" and "last month" in any owner time zone.
@@ -405,8 +415,9 @@ export function insightsService(deps: InsightsDeps): InsightsService {
       stripe.listCharges(since),
       stripe.listRefunds(since),
     ]);
-    cached = { at: now, subscriptions, charges, refunds };
-    return { data: cached, fetched: true };
+    const data = { at: now, subscriptions, charges, refunds };
+    cache.data = data;
+    return { data, fetched: true };
   }
 
   async function saveSnapshot(scan: SubscriptionScan, now: Date): Promise<void> {

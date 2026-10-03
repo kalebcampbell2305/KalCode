@@ -143,3 +143,49 @@ describe("atomic D1 account deletion", () => {
     expect(await auditCount(accountId)).toBe(0);
   });
 });
+
+describe("signing up again after deletion", () => {
+  for (const provider of ["github", "google", "microsoft"] as const) {
+    it(`gives a deleted ${provider} identity a fresh, active account`, async () => {
+      const store = d1AccountStore(db);
+      const subject = provider === "github" ? "9100" : `resignup-${provider}`;
+      // Production derives the account id from the identity, so the second sign-in asks for the same id.
+      const derivedId = `acct_resignup_${provider}`;
+      const email = `resignup-${provider}@example.invalid`;
+      const create = (now: string) =>
+        provider === "github"
+          ? store.createOrGetGitHubAccount({ accountId: derivedId, subject, email, now })
+          : store.createOrGetOpenIdAccount({ accountId: derivedId, provider, subject, email, now });
+      expect(await create(CREATED)).toBe(derivedId);
+      const verifyHash = `${provider[0]}${"z".repeat(42)}`;
+      await store.createEmailAttempt({
+        verifyHash,
+        pollHash: `${provider[0]}${"Z".repeat(42)}`,
+        email,
+        clientKind: "website",
+        purpose: "delete",
+        accountId: derivedId,
+        codeChallenge: null,
+        createdAt: CREATED,
+        expiresAt: EXPIRES,
+      });
+      expect(
+        await store.softDeleteAccount({ verifyHash, accountId: derivedId, consumeNonce: "5".repeat(43), now: NOW }),
+      ).toBe(true);
+
+      const fresh = await create("2026-09-25T12:02:00.000Z");
+      expect(fresh).toMatch(/^acct_/);
+      expect(fresh).not.toBe(derivedId);
+      expect(await store.identityAccount(provider, subject)).toBe(fresh);
+      expect(await store.accountProfile(fresh as string)).toMatchObject({ email, activatedAt: null });
+      // The deleted account stays deleted and redacted; its audit history stays with it.
+      expect(await store.accountProfile(derivedId)).toBeNull();
+      expect(
+        await db.prepare("SELECT email FROM accounts WHERE id = ?1").bind(derivedId).first<{ email: string }>(),
+      ).toEqual({ email: `${derivedId}@deleted.invalid` });
+      expect(await auditCount(derivedId)).toBe(1);
+      // Signing in again returns the same new account.
+      expect(await create("2026-09-25T12:03:00.000Z")).toBe(fresh);
+    });
+  }
+});

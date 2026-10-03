@@ -1,4 +1,14 @@
-import { ArrowLeft, ArrowRight, Copy, ExternalLink, LoaderCircle, Maximize2, RefreshCw, Square } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Copy,
+  ExternalLink,
+  LoaderCircle,
+  Maximize2,
+  RefreshCw,
+  Square,
+} from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import type { PaneRenderContext } from "../../shell/panes/contentRegistry.ts";
@@ -79,7 +89,18 @@ export function BrowserPane({
   const [attachAttempt, setAttachAttempt] = useState(0);
   const [preset, setPreset] = useState<ViewportPreset>("fluid");
   const [customWidth, setCustomWidth] = useState(900);
+  // The width field's text while it is edited; bounding every keystroke would turn "1" into 320.
+  const [customDraft, setCustomDraft] = useState<string | null>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
+  // "Copy URL" confirms itself briefly, so the click is visibly acknowledged.
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
   const attached = useRef(false);
   const addressEditing = useRef(false);
   const alive = useRef(true);
@@ -299,6 +320,23 @@ export function BrowserPane({
       });
   };
 
+  const copyUrl = () => {
+    void navigator.clipboard.writeText(state?.url ?? address).then(
+      () => {
+        if (!alive.current) return;
+        setCopied(true);
+        if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+        copiedTimer.current = window.setTimeout(() => {
+          copiedTimer.current = null;
+          setCopied(false);
+        }, 1500);
+      },
+      () => {
+        if (alive.current) setError("KalCode couldn't copy the address.");
+      },
+    );
+  };
+
   const openExternally = () => {
     let url: string;
     try {
@@ -385,11 +423,26 @@ export function BrowserPane({
             min={320}
             max={3840}
             aria-label="Custom viewport width"
-            value={customWidth}
-            onChange={(event) => setCustomWidth(clampCustomViewport(event.currentTarget.valueAsNumber))}
+            value={customDraft ?? customWidth}
+            onChange={(event) => {
+              const typed = event.currentTarget.valueAsNumber;
+              setCustomDraft(event.currentTarget.value);
+              // Preview a width as soon as it is in range; out-of-range text is bounded on commit.
+              if (clampCustomViewport(typed) === typed) setCustomWidth(typed);
+            }}
+            onBlur={() => {
+              if (customDraft === null) return;
+              // An emptied field keeps the last width.
+              const typed = Number.parseFloat(customDraft);
+              if (Number.isFinite(typed)) setCustomWidth(clampCustomViewport(typed));
+              setCustomDraft(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
           />
         ) : null}
-        {button("Copy URL", <Copy size={14} />, () => void navigator.clipboard.writeText(state?.url ?? address))}
+        {copied ? button("URL copied", <Check size={14} />, copyUrl) : button("Copy URL", <Copy size={14} />, copyUrl)}
         {button("Open externally", <ExternalLink size={14} />, openExternally)}
       </div>
       <div className={styles.stage}>

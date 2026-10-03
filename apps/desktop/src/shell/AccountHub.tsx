@@ -133,7 +133,14 @@ export function AccountHub({ collapsed, onOpenPalette }: AccountHubProps) {
   );
 
   return (
-    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+    <DropdownMenu
+      open={menuOpen}
+      onOpenChange={(open) => {
+        setMenuOpen(open);
+        // The menu opens at once with the last usage; fresh numbers fill in when they arrive.
+        if (open) void actions.refreshUsage();
+      }}
+    >
       {collapsed ? (
         <Tooltip content={plan ? `${name} · ${plan}` : name} side="right" hidden={menuOpen}>
           {trigger}

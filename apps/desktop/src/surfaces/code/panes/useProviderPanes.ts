@@ -45,7 +45,10 @@ export interface ProviderPanes {
   creatingProvider: PaneProviderId | null;
   /** Codex / Gemini CLI when `thread_options` offers them (Claude Code is always offered). */
   offered: readonly PaneProviderId[];
+  /** A refused launch, else a failed list read (cleared by the next successful read). */
   error: string | null;
+  /** Forgets a previous launch's refusal (the launcher opening again starts fresh). */
+  clearLaunchError: () => void;
   /** Starts a coding agent (Claude Code by default): the real CLI in a PTY pane. */
   create: (providerId?: PaneProviderId, launch?: AgentLaunch) => Promise<ThreadSummary | null>;
   /** A thread changed (rename, stop). */
@@ -67,7 +70,8 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState<PaneProviderId | null>(null);
   const [offered, setOffered] = useState<readonly PaneProviderId[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const generation = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -100,11 +104,11 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
         return next;
       });
       const failed = infos.find((result) => result.status === "rejected");
-      setError(failed?.status === "rejected" ? toKalCodeError(failed.reason).message : null);
+      setListError(failed?.status === "rejected" ? toKalCodeError(failed.reason).message : null);
       setLoaded(true);
     } catch (cause) {
       if (current === generation.current) {
-        setError(toKalCodeError(cause).message);
+        setListError(toKalCodeError(cause).message);
         setLoaded(true);
       }
     }
@@ -184,7 +188,7 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   const create = useCallback(
     async (providerId: PaneProviderId = "claude-code", launch: AgentLaunch = {}) => {
       setCreating(providerId);
-      setError(null);
+      setLaunchError(null);
       try {
         // The spinner is already visible. If the provider-wide settings read is still in flight,
         // read the canonical local value now rather than guessing Auto or Approve and widening a
@@ -208,11 +212,11 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
         } catch (cause) {
           // The session already exists. A metadata read cannot undo it or make the
           // launcher offer to create a duplicate; keep its terminal identity visible.
-          setError(toKalCodeError(cause).message);
+          setListError(toKalCodeError(cause).message);
         }
         return thread;
       } catch (cause) {
-        setError(toKalCodeError(cause).message);
+        setLaunchError(toKalCodeError(cause).message);
         return null;
       } finally {
         setCreating(null);
@@ -220,6 +224,8 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     },
     [channel, client, workspace.id, settings],
   );
+
+  const clearLaunchError = useCallback(() => setLaunchError(null), []);
 
   const updated = useCallback(
     (thread: ThreadSummary) => {
@@ -238,7 +244,8 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     creating: creating !== null,
     creatingProvider: creating,
     offered,
-    error,
+    error: launchError ?? listError,
+    clearLaunchError,
     create,
     updated,
     refresh,

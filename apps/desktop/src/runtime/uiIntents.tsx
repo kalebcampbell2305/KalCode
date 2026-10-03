@@ -153,9 +153,12 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
           // Agent identity is explicit. Transient metadata failures must never turn a
           // coding terminal into a chat navigation request.
           const ok = await workspaces.activate(target.workspaceId);
-          if (!isCurrent() || !ok) return;
-          recordFocus(target);
+          if (!isCurrent()) return;
+          // The click always lands in Code. When the workspace can't be opened (activation
+          // already reported why) there is no pane to focus, but the agent never opens elsewhere.
           navigate("code");
+          if (!ok) return;
+          recordFocus(target);
           setPaneState({ owner: session, request: { threadId: target.agentId, nonce: generation } });
           return;
         }
@@ -202,11 +205,11 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
             // Even the displayed workspace must supersede an older activation still in flight.
             const ok = await workspaces.activate(workspaceId);
             if (!isCurrent()) return;
-            if (ok) {
-              navigate("code");
-              setPaneState({ owner: session, request: { threadId: target.threadId, nonce: generation } });
-              return;
-            }
+            // A coding agent lives in Code, never Threads: when its workspace can't be opened
+            // (activation already reported why), stay in Code without a pane to focus.
+            navigate("code");
+            if (ok) setPaneState({ owner: session, request: { threadId: target.threadId, nonce: generation } });
+            return;
           }
           navigate("threads");
           threadsIntent.request("open", target.threadId);

@@ -264,9 +264,24 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                         if (workspace.available) choose(workspace.id);
                       }}
                     >
-                      <span className={styles.initial} data-pin={workspace.pinned || undefined} aria-hidden="true">
-                        {workspace.pinned ? <Pin /> : workspace.name.trim().charAt(0).toUpperCase() || "·"}
+                      {/* A narrow tile keeps the project's initial (pinned tiles would all look alike)
+                          and marks the pin with a small badge. */}
+                      <span
+                        className={styles.initial}
+                        data-pin={(workspace.pinned && !collapsed) || undefined}
+                        aria-hidden="true"
+                      >
+                        {workspace.pinned && !collapsed ? (
+                          <Pin />
+                        ) : (
+                          workspace.name.trim().charAt(0).toUpperCase() || "·"
+                        )}
                       </span>
+                      {collapsed && workspace.pinned ? (
+                        <span className={styles.tilePin} aria-hidden="true">
+                          <Pin />
+                        </span>
+                      ) : null}
                       {collapsed ? (
                         c.needsYou > 0 || c.working > 0 ? (
                           <span
