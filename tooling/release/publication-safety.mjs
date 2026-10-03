@@ -406,6 +406,21 @@ function compareVersions(left, right) {
   return leftKey === rightKey ? 0 : leftKey < rightKey ? -1 : 1;
 }
 
+/**
+ * The live version when the channel pointer already names a strictly newer build than the
+ * candidate, otherwise null. A release job whose candidate is superseded must not publish; it
+ * records SUPERSEDED and retires (newest valid build wins; the feed only moves forward).
+ */
+export function supersedingVersion(row, candidate) {
+  const value = validatePointerCandidate(candidate);
+  if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.version !== "string") return null;
+  try {
+    return compareVersions(row.version, value.version) > 0 ? row.version : null;
+  } catch {
+    return null;
+  }
+}
+
 export function publicationRowProblems(row, candidate) {
   const value = validatePointerCandidate(candidate);
   if (row === null || row === undefined) return [];
