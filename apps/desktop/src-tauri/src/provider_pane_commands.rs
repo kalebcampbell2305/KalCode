@@ -245,6 +245,9 @@ impl ProviderPanesState {
     pub(crate) fn stamp_runtime_kind(&self, summary: &mut ThreadSummary) {
         let interactive = self.panes.info(&summary.id).is_some()
             || marked_interactive(&self.sessions_dir, &summary.id);
+        if interactive {
+            summary.can_move_workspace = Some(false);
+        }
         summary.runtime_kind = Some(if interactive {
             ThreadRuntimeKind::InteractivePty
         } else {

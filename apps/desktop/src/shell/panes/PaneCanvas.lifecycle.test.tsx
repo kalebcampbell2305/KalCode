@@ -1,6 +1,6 @@
 import type { PaneContent, PaneLayout } from "@kalcode/protocol";
 import { TooltipProvider } from "@kalcode/ui/components";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { computeGeometry, contentKey, makeLeaf } from "./model.ts";
@@ -52,11 +52,23 @@ it.each(["terminal", "browser", "widget", "agent"] as const)(
       dock: [],
     };
     let controller: PaneController;
+    let menuAvailable = true;
+    const menuAction = vi.fn();
     const host: PaneHost = {
       describe: (content) => ({ title: contentKey(content), glyph: null }),
       render: (content) => <Session id={contentKey(content).split(":")[1] ?? ""} />,
       renderEmpty: () => null,
       addMenu: () => null,
+      contextMenu: (content, paneId) =>
+        menuAvailable
+          ? [
+              {
+                id: "inspect",
+                label: "Inspect clicked object",
+                onSelect: () => menuAction(contentKey(content), paneId),
+              },
+            ]
+          : [],
     };
     const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
     function Harness() {
@@ -71,7 +83,9 @@ it.each(["terminal", "browser", "widget", "agent"] as const)(
     await waitFor(() => expect(view.getByLabelText("one", { selector: "input" })).toBeTruthy());
     const original = view.getByLabelText("one", { selector: "input" });
     expect(attached).toHaveBeenCalledTimes(2);
+    menuAvailable = false;
     act(() => controller.activate("left", 1));
+    menuAvailable = true;
     act(() => controller.activate("left", 0));
     const count = attached.mock.calls.length;
     expect(count).toBe(3);
@@ -83,6 +97,9 @@ it.each(["terminal", "browser", "widget", "agent"] as const)(
     act(() => controller.moveTab("left", 0, "right", "center"));
     expect(view.getByLabelText("one", { selector: "input" })).toBe(original);
     expect(original.closest("[data-pane-id]")?.getAttribute("data-pane-id")).toBe("right");
+    fireEvent.contextMenu(original);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Inspect clicked object" }));
+    expect(menuAction).toHaveBeenLastCalledWith(`${kind}:one`, "right");
     act(() => controller.dock("right"));
     act(() => controller.undock(1));
     expect(view.getByLabelText("one", { selector: "input" })).toBe(original);

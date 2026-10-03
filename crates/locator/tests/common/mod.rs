@@ -229,6 +229,7 @@ pub fn thread(
     last_activity_at: &str,
 ) -> ThreadSummary {
     ThreadSummary {
+        can_move_workspace: None,
         id: new_id(),
         name: name.to_owned(),
         provider_id: ProviderId::new(provider),

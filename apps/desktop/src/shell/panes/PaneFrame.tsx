@@ -1,4 +1,4 @@
-import type { PaneDirection } from "@kalcode/protocol";
+import type { PaneContent, PaneDirection } from "@kalcode/protocol";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -7,6 +7,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
+  ObjectContextMenu,
+  type ObjectMenuItem,
   Tooltip,
 } from "@kalcode/ui/components";
 import {
@@ -27,7 +29,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef } from "react";
+import { type KeyboardEvent, type PointerEvent, type ReactElement, type ReactNode, useEffect, useRef } from "react";
 import type { TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, type Rect } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
@@ -58,6 +60,7 @@ export interface PaneFrameProps {
   tabs: TabInfo[];
   renderEmpty: (paneId: string) => ReactNode;
   addMenu: (paneId: string) => ReactNode;
+  contextMenu?: (content: PaneContent, paneId: string) => readonly ObjectMenuItem[];
   onFocus: (paneId: string) => void;
   onActivate: (index: number, focusContent: boolean) => void;
   onCloseTab: (index: number) => void;
@@ -103,6 +106,7 @@ export function PaneFrame(props: PaneFrameProps) {
     tabs,
     renderEmpty,
     addMenu,
+    contextMenu,
     onFocus,
     onActivate,
     onCloseTab,
@@ -123,6 +127,15 @@ export function PaneFrame(props: PaneFrameProps) {
   const title = activeInfo?.title ?? "Empty pane";
   const label = `Pane ${index + 1} of ${count}: ${title}`;
   const collapsed = leaf.collapsed;
+  function menuFor(content: PaneContent, title: string, child: ReactElement) {
+    return contextMenu ? (
+      <ObjectContextMenu key={contentKey(content)} label={`${title} actions`} items={contextMenu(content, leaf.paneId)}>
+        {child}
+      </ObjectContextMenu>
+    ) : (
+      child
+    );
+  }
   const body = (
     <div key="body" id={bodyDomId(leaf.paneId)} className={styles.body} data-pane-body hidden={hidden || collapsed}>
       {!active && !hidden && !collapsed ? renderEmpty(leaf.paneId) : null}
@@ -259,7 +272,9 @@ export function PaneFrame(props: PaneFrameProps) {
             const info = tabs[i];
             if (!info) return null;
             const selected = i === leaf.activeTab;
-            return (
+            return menuFor(
+              content,
+              info.title,
               // biome-ignore lint/a11y/useKeyWithClickEvents: the tablist handles keys for every tab (roving focus).
               <div
                 key={contentKey(content)}
@@ -310,7 +325,7 @@ export function PaneFrame(props: PaneFrameProps) {
                 >
                   <X />
                 </span>
-              </div>
+              </div>,
             );
           })}
         </div>

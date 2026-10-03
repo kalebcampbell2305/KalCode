@@ -123,6 +123,78 @@ fn echo_cwd() -> &'static str {
 }
 
 #[test]
+fn terminal_context_actions_preserve_output_and_target_only_the_selected_tab() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let events = collect_events(&core);
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let shell = test_shell(&core);
+    let terminal = core
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
+        .expect("terminal");
+    let other = core
+        .create_terminal(&workspace.id, Some(&shell), size(), None)
+        .expect("other");
+    let output = Output::attach(&core, &terminal.id);
+    let (command, expected) = echo_computed("retained");
+    core.write_terminal(&terminal.id, command.as_bytes())
+        .expect("write");
+    output.wait_for(&expected);
+    assert_eq!(
+        core.rename_terminal(&terminal.id, "  Build logs  ")
+            .expect("rename")
+            .title,
+        "Build logs"
+    );
+    core.rename_terminal(&terminal.id, "Build logs")
+        .expect("unchanged name");
+    assert_eq!(events.lock().expect("events").iter().filter(|event| matches!(
+        &event.event,
+        EventPayload::ShellRenamed { terminal_id, title } if terminal_id == &terminal.id && title == "Build logs"
+    )).count(), 1);
+    for title in ["", " \n ", "bad\u{001b}title", &"x".repeat(257)] {
+        assert_eq!(
+            core.rename_terminal(&terminal.id, title).unwrap_err().code,
+            "invalid_terminal_title"
+        );
+    }
+    let stopped = core.stop_terminal(&terminal.id).expect("stop");
+    assert_eq!(stopped.status, TerminalStatus::Exited);
+    assert_eq!(stopped.title, "Build logs");
+    assert_eq!(core.terminals(&workspace.id).expect("tabs").len(), 2);
+    assert_eq!(
+        core.terminal(&other.id).expect("other").status,
+        TerminalStatus::Running
+    );
+    assert!(
+        Output::attach(&core, &terminal.id)
+            .text()
+            .contains(&expected)
+    );
+    assert_eq!(
+        core.write_terminal(&terminal.id, b"x").unwrap_err().code,
+        "terminal_not_running"
+    );
+    core.stop_terminal(&terminal.id).expect("idempotent stop");
+    assert!(wait_until(Duration::from_secs(5), || {
+        events.lock().expect("events").iter().any(|event| matches!(&event.event, EventPayload::ShellCompleted { terminal_id, closed_by_user: false, .. } if terminal_id == &terminal.id))
+    }));
+    let restarted = core
+        .restart_terminal(&terminal.id, size())
+        .expect("restart");
+    assert_eq!(restarted.title, "Build logs");
+    core.shutdown();
+    drop(core);
+    let restored = open(data.path());
+    assert_eq!(
+        restored.terminal(&terminal.id).expect("restored").title,
+        "Build logs"
+    );
+    restored.shutdown();
+}
+
+#[test]
 fn opening_a_folder_creates_one_workspace_per_canonical_path() {
     let data = tempfile::tempdir().expect("data");
     let projects = tempfile::tempdir().expect("projects");

@@ -42,6 +42,7 @@ import {
 import { forgetVoiceText } from "../../kalvoice/voiceSpans.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
 import { AccountSwitcher } from "./AccountSwitcher.tsx";
@@ -272,18 +273,23 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: T
       </header>
 
       {thread.error && problem ? (
-        <div className={styles.notice} data-tone={problem.tone} role={problem.tone === "danger" ? "alert" : "status"}>
-          {problem.tone === "danger" ? (
-            <CircleX className={styles.noticeIcon} aria-hidden="true" />
-          ) : (
-            <Hourglass className={styles.noticeIcon} aria-hidden="true" />
-          )}
-          <p className={styles.noticeTitle}>{problem.title}</p>
-          <p>{thread.error.message}</p>
-          <p className={styles.noticeCode}>
-            {problem.tone === "danger" ? "Error code" : "Code"}: {thread.error.code}
-          </p>
-        </div>
+        <ContentContextMenu
+          workspaceId={thread.workspaceId}
+          context={{ kind: "error", label: problem.title, text: `${thread.error.code}: ${thread.error.message}` }}
+        >
+          <div className={styles.notice} data-tone={problem.tone} role={problem.tone === "danger" ? "alert" : "status"}>
+            {problem.tone === "danger" ? (
+              <CircleX className={styles.noticeIcon} aria-hidden="true" />
+            ) : (
+              <Hourglass className={styles.noticeIcon} aria-hidden="true" />
+            )}
+            <p className={styles.noticeTitle}>{problem.title}</p>
+            <p>{thread.error.message}</p>
+            <p className={styles.noticeCode}>
+              {problem.tone === "danger" ? "Error code" : "Code"}: {thread.error.code}
+            </p>
+          </div>
+        </ContentContextMenu>
       ) : null}
       {thread.status === "waiting_for_permission" ? (
         <div className={styles.notice} data-tone="waiting">
@@ -501,9 +507,18 @@ function Timeline({
                     {formatRelative(item.message.createdAt)}
                   </time>
                 </p>
-                <div className={styles.content} data-selectable>
-                  {item.message.content}
-                </div>
+                <ContentContextMenu
+                  workspaceId={detail.thread?.workspaceId}
+                  context={{
+                    kind: "output",
+                    label: `${item.message.role === "user" ? "Your" : providerName} message`,
+                    text: item.message.content,
+                  }}
+                >
+                  <div className={styles.content} data-selectable>
+                    {item.message.content}
+                  </div>
+                </ContentContextMenu>
               </li>
             ) : (
               <li key={item.key} className={styles.tool}>
@@ -513,7 +528,18 @@ function Timeline({
                 <StatusIndicator tone={TOOL_STATUS[item.tool.status].tone} pulse={item.tool.status === "running"}>
                   {TOOL_STATUS[item.tool.status].label}
                 </StatusIndicator>
-                {item.tool.resultSummary ? <span className={styles.toolResult}>{item.tool.resultSummary}</span> : null}
+                {item.tool.resultSummary ? (
+                  <ContentContextMenu
+                    workspaceId={detail.thread?.workspaceId}
+                    context={{
+                      kind: item.tool.status === "failed" ? "error" : "output",
+                      label: item.tool.tool,
+                      text: item.tool.resultSummary,
+                    }}
+                  >
+                    <span className={styles.toolResult}>{item.tool.resultSummary}</span>
+                  </ContentContextMenu>
+                ) : null}
               </li>
             ),
           )}
