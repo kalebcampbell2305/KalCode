@@ -16,7 +16,7 @@ use kalcode_core::time::now_rfc3339;
 use kalcode_core::{Core, ErrorCategory, KalError, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::managed::{ManagedProfiles, ProfileLifecycleLeaseError};
+use crate::managed::{ManagedProfiles, ProfileLease, ProfileLifecycleLeaseError};
 
 const ACCOUNT_COLUMNS: &str = "id, provider_id, display_name, provider_reported_identity, \
 authentication_state, is_default, created_at, last_used_at, last_checked_at, last_error_code, \
@@ -216,7 +216,34 @@ impl AccountStore {
             .core
             .read(|conn| get_active_account_for_provider(conn, account_id, &provider))
             .map_err(account_launch_error)?;
-        let launched = launch(&account)?;
+        if account.authentication_state == AuthState::NotAuthenticated {
+            return Err(ProviderError::NotAuthenticated);
+        }
+        let launched = match launch(&account) {
+            Ok(launched) => launched,
+            Err(ProviderError::NotAuthenticated) => {
+                // A real provider launch is authoritative evidence that this exact native session
+                // expired. Clear only this account; startup and transient probes never do this.
+                self.mark_authentication(account_id, AuthState::NotAuthenticated, None, None)
+                    .map_err(account_launch_error)?;
+                return Err(ProviderError::NotAuthenticated);
+            }
+            Err(error) => {
+                if matches!(
+                    &error,
+                    ProviderError::Start(_)
+                        | ProviderError::Io(_)
+                        | ProviderError::Protocol(_)
+                        | ProviderError::SessionEnded
+                ) {
+                    // A failed launch is not evidence of expiry. Preserve the last safe auth and
+                    // identity while surfacing a truthful transient error state.
+                    self.mark_validation_error(account_id, "provider_launch_failed")
+                        .map_err(account_launch_error)?;
+                }
+                return Err(error);
+            }
+        };
         if let Err(error) = self.mark_used(account_id) {
             // A successfully-created runtime must not escape when its authoritative account
             // metadata could not record the launch. Dropping it while the shared lease is still
@@ -225,6 +252,29 @@ impl AccountStore {
             return Err(account_launch_error(error));
         }
         Ok(launched)
+    }
+
+    /// Executes a credential-read-only background observer under the exact account's shared
+    /// observer lease. Explicit sign-in, sign-out, and archive operations cancel and drain this
+    /// lease through [`ManagedProfiles`] before taking their exclusive writer lease.
+    pub fn observe_with_active_account<T>(
+        &self,
+        profiles: &ManagedProfiles,
+        provider: &str,
+        account_id: &str,
+        observe: impl FnOnce(&ProviderAccount, ProfileLease) -> std::result::Result<T, ProviderError>,
+    ) -> std::result::Result<T, ProviderError> {
+        let provider = checked_provider(provider).map_err(account_launch_error)?;
+        check_id(account_id).map_err(account_launch_error)?;
+        self.core
+            .read(|conn| get_active_account_for_provider(conn, account_id, &provider))
+            .map_err(account_launch_error)?;
+        let lease = profiles.acquire_observer_lease(provider.as_str(), account_id)?;
+        let account = self
+            .core
+            .read(|conn| get_active_account_for_provider(conn, account_id, &provider))
+            .map_err(account_launch_error)?;
+        observe(&account, lease)
     }
 
     /// Executes one bounded authentication operation with the exact account's exclusive profile
@@ -285,33 +335,83 @@ impl AccountStore {
         Ok(account)
     }
 
-    pub fn mark_used(&self, id: &str) -> Result<ProviderAccount> {
+    /// Records a failed validation attempt without discarding the last provider-confirmed
+    /// authentication state or identity. A transient CLI, network, or provider failure is not
+    /// evidence that a previously valid native session expired.
+    pub fn mark_validation_error(&self, id: &str, error_code: &str) -> Result<ProviderAccount> {
         check_id(id)?;
-        let used_at = now_rfc3339();
+        let error_code = checked_error_code(Some(error_code))?;
+        let checked_at = now_rfc3339();
         let (account, _) = self.core.transact(|tx| {
             get_active_account(tx, id)?;
             tx.execute(
-                "UPDATE provider_accounts SET last_used_at = ?2
+                "UPDATE provider_accounts
+                 SET last_checked_at = ?2, last_error_code = ?3
                  WHERE id = ?1 AND archived_at IS NULL",
-                params![id, used_at],
+                params![id, checked_at, error_code],
             )?;
             Ok((get_account(tx, id)?, Vec::new()))
         })?;
         Ok(account)
     }
 
-    /// Cached positive authentication is not durable truth across process restarts. Active
-    /// authenticated accounts return to `Unknown`; labels, identity, timestamps, and errors stay.
-    pub fn invalidate_cached_auth_on_start(&self) -> Result<u64> {
+    /// Clears one obsolete validation error without claiming a fresh provider check or changing
+    /// the last provider-confirmed authentication state and identity.
+    pub fn clear_validation_error(&self, id: &str) -> Result<ProviderAccount> {
+        check_id(id)?;
+        let (account, _) = self.core.transact(|tx| {
+            get_active_account(tx, id)?;
+            tx.execute(
+                "UPDATE provider_accounts SET last_error_code = NULL
+                 WHERE id = ?1 AND archived_at IS NULL",
+                params![id],
+            )?;
+            Ok((get_account(tx, id)?, Vec::new()))
+        })?;
+        Ok(account)
+    }
+
+    /// Repairs metadata written by KalCode builds that downgraded every authenticated account to
+    /// `unknown` on startup. Those builds intentionally retained the provider-confirmed identity;
+    /// a never-validated account has no identity, so it remains unknown. This restores only the
+    /// last known safe UI state and never reads or changes provider-native credentials.
+    pub fn restore_legacy_startup_invalidations(&self) -> Result<u64> {
         let (changed, _) = self.core.transact(|tx| {
             let changed = tx.execute(
-                "UPDATE provider_accounts SET authentication_state = 'unknown'
-                 WHERE archived_at IS NULL AND authentication_state = 'authenticated'",
+                "UPDATE provider_accounts SET authentication_state = 'authenticated'
+                 WHERE archived_at IS NULL
+                   AND authentication_state = 'unknown'
+                   AND provider_reported_identity IS NOT NULL",
+                [],
+            )?;
+            // `claude_auth_failed` came only from the retired short-lived `auth status` probe,
+            // which current Claude Code may exit before its OAuth refresh drains. It is no longer
+            // authoritative. Preserve real launch errors and every auth/identity field.
+            tx.execute(
+                "UPDATE provider_accounts SET last_error_code = NULL
+                 WHERE archived_at IS NULL
+                   AND provider_id = 'claude-code'
+                   AND last_error_code = 'claude_auth_failed'",
                 [],
             )?;
             Ok((u64::try_from(changed).unwrap_or(u64::MAX), Vec::new()))
         })?;
         Ok(changed)
+    }
+
+    pub fn mark_used(&self, id: &str) -> Result<ProviderAccount> {
+        check_id(id)?;
+        let used_at = now_rfc3339();
+        let (account, _) = self.core.transact(|tx| {
+            get_active_account(tx, id)?;
+            tx.execute(
+                "UPDATE provider_accounts SET last_used_at = ?2, last_error_code = NULL
+                 WHERE id = ?1 AND archived_at IS NULL",
+                params![id, used_at],
+            )?;
+            Ok((get_account(tx, id)?, Vec::new()))
+        })?;
+        Ok(account)
     }
 
     pub fn bind(
@@ -1275,6 +1375,108 @@ mod tests {
     }
 
     #[test]
+    fn launch_proceeds_during_read_only_observation_and_lifecycle_stays_exclusive() {
+        let fixture = Fixture::new();
+        let account = fixture.store.create("codex", "Personal").expect("account");
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("person@example.test"),
+                None,
+            )
+            .expect("connected");
+        let observation = fixture
+            .profiles
+            .acquire_observer_lease("codex", &account.id)
+            .expect("observer lease");
+        let started = Instant::now();
+        fixture
+            .store
+            .launch_with_active_account(&fixture.profiles, "codex", &account.id, |_| Ok(()))
+            .expect("launch during observer");
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(
+            fixture
+                .profiles
+                .acquire_account_lifecycle_lease("codex", &account.id)
+                .is_err()
+        );
+        drop(observation);
+    }
+
+    #[test]
+    fn authoritative_expiry_clears_auth_but_transient_launch_failure_preserves_it() {
+        let fixture = Fixture::new();
+        let account = fixture
+            .store
+            .create("claude-code", "Claude")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("claude@example.test"),
+                Some("claude_auth_failed"),
+            )
+            .expect("connected");
+        assert_eq!(
+            fixture.store.launch_with_active_account(
+                &fixture.profiles,
+                "claude-code",
+                &account.id,
+                |_| Err::<(), _>(ProviderError::NotAuthenticated),
+            ),
+            Err(ProviderError::NotAuthenticated)
+        );
+        let expired = fixture.store.get(&account.id).expect("expired");
+        assert_eq!(expired.authentication_state, AuthState::NotAuthenticated);
+        assert_eq!(expired.provider_reported_identity, None);
+
+        fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("claude@example.test"),
+                None,
+            )
+            .expect("reconnected");
+        assert!(matches!(
+            fixture.store.launch_with_active_account(
+                &fixture.profiles,
+                "claude-code",
+                &account.id,
+                |_| Err::<(), _>(ProviderError::Io("offline".into())),
+            ),
+            Err(ProviderError::Io(_))
+        ));
+        let preserved = fixture.store.get(&account.id).expect("preserved");
+        assert_eq!(preserved.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            preserved.provider_reported_identity.as_deref(),
+            Some("claude@example.test")
+        );
+        assert_eq!(
+            preserved.last_error_code.as_deref(),
+            Some("provider_launch_failed")
+        );
+        fixture
+            .store
+            .launch_with_active_account(&fixture.profiles, "claude-code", &account.id, |_| Ok(()))
+            .expect("native session launched");
+        let launched = fixture.store.get(&account.id).expect("launched");
+        assert_eq!(launched.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            launched.provider_reported_identity.as_deref(),
+            Some("claude@example.test")
+        );
+        assert_eq!(launched.last_error_code, None);
+    }
+
+    #[test]
     fn launch_rejects_cross_provider_and_archived_accounts_before_callback() {
         let fixture = Fixture::new();
         let gemini = fixture
@@ -1585,44 +1787,189 @@ mod tests {
     }
 
     #[test]
-    fn restart_invalidates_cached_auth_without_losing_metadata() {
+    fn transient_validation_error_preserves_last_known_safe_auth_and_identity() {
+        let fixture = Fixture::new();
+        let account = fixture.store.create("codex", "Work").expect("account");
+        let connected = fixture
+            .store
+            .mark_authentication(
+                &account.id,
+                AuthState::Authenticated,
+                Some("fixture-identity"),
+                None,
+            )
+            .expect("connected");
+
+        let failed = fixture
+            .store
+            .mark_validation_error(&account.id, "codex_auth_failed")
+            .expect("validation error");
+
+        assert_eq!(failed.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            failed.provider_reported_identity,
+            connected.provider_reported_identity
+        );
+        assert_eq!(failed.last_error_code.as_deref(), Some("codex_auth_failed"));
+        assert!(failed.last_checked_at >= connected.last_checked_at);
+    }
+
+    #[test]
+    fn legacy_startup_unknown_with_confirmed_identity_restores_last_safe_auth_once() {
+        let fixture = Fixture::new();
+        let never_checked = fixture.store.create("claude-code", "New").expect("new");
+        let connected = fixture
+            .store
+            .create("claude-code", "Existing")
+            .expect("existing");
+        fixture
+            .store
+            .mark_authentication(
+                &connected.id,
+                AuthState::Authenticated,
+                Some("person@example.test"),
+                Some("claude_auth_failed"),
+            )
+            .expect("connected");
+        fixture
+            .core
+            .transact(|tx| {
+                tx.execute(
+                    "UPDATE provider_accounts SET authentication_state = 'unknown' WHERE id = ?1",
+                    params![connected.id],
+                )?;
+                Ok(((), Vec::new()))
+            })
+            .expect("simulate legacy startup invalidation");
+
+        assert_eq!(
+            fixture
+                .store
+                .restore_legacy_startup_invalidations()
+                .unwrap(),
+            1
+        );
+        let restored = fixture.store.get(&connected.id).expect("restored");
+        assert_eq!(restored.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            restored.provider_reported_identity.as_deref(),
+            Some("person@example.test")
+        );
+        assert_eq!(restored.last_error_code, None);
+        assert_eq!(
+            fixture
+                .store
+                .get(&never_checked.id)
+                .expect("never checked")
+                .authentication_state,
+            AuthState::Unknown
+        );
+        assert_eq!(
+            fixture
+                .store
+                .restore_legacy_startup_invalidations()
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn restart_restores_multiple_accounts_without_losing_safe_state() {
         let temp = tempfile::tempdir().expect("temp");
         let config = || CoreConfig {
             paths: Paths::new(temp.path()),
             app_version: "0.0.0-test".into(),
             channel: BuildChannel::Development,
         };
-        let before = {
+        let (before, ordered_ids, bindings) = {
             let core = Arc::new(Core::open(config()).expect("first core"));
             let store = AccountStore::new(core.clone());
-            let account = store.create("codex", "Restart").expect("account");
-            let account = store
-                .mark_authentication(
-                    &account.id,
-                    AuthState::Authenticated,
-                    Some("fixture-identity"),
-                    None,
-                )
-                .expect("authenticated");
+            let connect = |provider: &str, label: &str, identity: &str| {
+                let account = store.create(provider, label).expect("account");
+                store
+                    .mark_authentication(
+                        &account.id,
+                        AuthState::Authenticated,
+                        Some(identity),
+                        None,
+                    )
+                    .expect("authenticated")
+            };
+            let claude_a = connect("claude-code", "Claude A", "claude-a");
+            let claude_b = connect("claude-code", "Claude B", "claude-b");
+            let codex_a = connect("codex", "Codex A", "codex-a");
+            let codex_b = connect("codex", "Codex B", "codex-b");
+            let expired = store
+                .create("gemini-cli", "Expired")
+                .expect("expired account");
+            let expired = store
+                .mark_authentication(&expired.id, AuthState::NotAuthenticated, None, None)
+                .expect("expired");
+
+            let claude_b = store.set_default(&claude_b.id).expect("Claude B default");
+            let codex_b = store.set_default(&codex_b.id).expect("Codex B default");
+            let workspace_id = kalcode_contracts::ids::new_id();
+            core.transact(|tx| {
+                tx.execute(
+                    "INSERT INTO workspaces (
+                       id, name, root_path, created_at, last_opened_at
+                     ) VALUES (?1, 'Restart', 'C:/fixture/restart', ?2, ?2)",
+                    params![workspace_id, now_rfc3339()],
+                )?;
+                Ok(((), Vec::new()))
+            })
+            .expect("workspace");
+            store
+                .bind("claude-code", Kind::Workspace, &workspace_id, &claude_b.id)
+                .expect("Claude binding");
+            store
+                .bind("codex", Kind::Workspace, &workspace_id, &codex_b.id)
+                .expect("Codex binding");
+
+            let expected_ids = [claude_a.id, claude_b.id, codex_a.id, codex_b.id, expired.id];
+            let accounts = store.list(None).expect("ordered accounts");
+            assert!(
+                accounts
+                    .iter()
+                    .all(|account| expected_ids.contains(&account.id))
+            );
+            let ordered_ids = accounts
+                .iter()
+                .map(|account| account.id.clone())
+                .collect::<Vec<_>>();
+            let bindings = store.list_bindings(None, None, None).expect("bindings");
             core.shutdown();
-            account
+            (accounts, ordered_ids, bindings)
         };
 
         let core = Arc::new(Core::open(config()).expect("second core"));
         let store = AccountStore::new(core.clone());
+        for expected in before {
+            let after = store.get(&expected.id).expect("after restart");
+            assert_eq!(after.authentication_state, expected.authentication_state);
+            assert_eq!(after.display_name, expected.display_name);
+            assert_eq!(
+                after.provider_reported_identity,
+                expected.provider_reported_identity
+            );
+            assert_eq!(after.is_default, expected.is_default);
+            assert_eq!(after.created_at, expected.created_at);
+            assert_eq!(after.last_checked_at, expected.last_checked_at);
+            assert_eq!(after.last_error_code, expected.last_error_code);
+        }
         assert_eq!(
-            store.invalidate_cached_auth_on_start().expect("invalidate"),
-            1
+            store
+                .list(None)
+                .expect("restored order")
+                .into_iter()
+                .map(|account| account.id)
+                .collect::<Vec<_>>(),
+            ordered_ids
         );
-        let after = store.get(&before.id).expect("after restart");
-        assert_eq!(after.authentication_state, AuthState::Unknown);
-        assert_eq!(after.display_name, before.display_name);
         assert_eq!(
-            after.provider_reported_identity,
-            before.provider_reported_identity
+            store.list_bindings(None, None, None).expect("bindings"),
+            bindings
         );
-        assert_eq!(after.created_at, before.created_at);
-        assert_eq!(after.last_checked_at, before.last_checked_at);
         core.shutdown();
     }
 }

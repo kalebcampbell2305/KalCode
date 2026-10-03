@@ -62,6 +62,8 @@ pub enum ProcessError {
     Spawn(#[source] std::io::Error),
     #[error("the program did not finish within {0:?}")]
     TimedOut(Duration),
+    #[error("the program was canceled for a higher-priority account operation")]
+    Canceled,
     #[error("waiting for the program failed: {0}")]
     Wait(#[source] std::io::Error),
     #[error("terminating the program tree failed: {0}")]
@@ -116,7 +118,7 @@ pub fn run_probe(
     capture_stdout: bool,
     max_output: usize,
 ) -> Result<ProbeOutput, ProcessError> {
-    run_probe_inner(spec, None, timeout, capture_stdout, max_output)
+    run_probe_inner(spec, None, timeout, capture_stdout, max_output, None)
 }
 
 /// Runs a short process through a PREPARED guardian job. The typed admission remains owned until
@@ -128,7 +130,35 @@ pub fn run_probe_guarded(
     capture_stdout: bool,
     max_output: usize,
 ) -> Result<ProbeOutput, ProcessError> {
-    run_probe_inner(spec, Some(admission), timeout, capture_stdout, max_output)
+    run_probe_inner(
+        spec,
+        Some(admission),
+        timeout,
+        capture_stdout,
+        max_output,
+        None,
+    )
+}
+
+/// Runs a guarded read-only provider observer that yields to an explicit authentication or
+/// lifecycle writer. Cancellation kills and proves the complete process tree quiescent before
+/// returning, so the writer cannot overlap credential or profile mutation with a stale observer.
+pub fn run_probe_guarded_cancelable(
+    spec: &ProcessSpec,
+    admission: RegisteredJob,
+    timeout: Duration,
+    capture_stdout: bool,
+    max_output: usize,
+    cancellation: &dyn Fn() -> bool,
+) -> Result<ProbeOutput, ProcessError> {
+    run_probe_inner(
+        spec,
+        Some(admission),
+        timeout,
+        capture_stdout,
+        max_output,
+        Some(cancellation),
+    )
 }
 
 fn run_probe_inner(
@@ -137,6 +167,7 @@ fn run_probe_inner(
     timeout: Duration,
     capture_stdout: bool,
     max_output: usize,
+    cancellation: Option<&dyn Fn() -> bool>,
 ) -> Result<ProbeOutput, ProcessError> {
     let started = Instant::now();
     let mut command = command(spec);
@@ -181,28 +212,20 @@ fn run_probe_inner(
     });
 
     let status = loop {
+        if cancellation.is_some_and(|cancellation| cancellation()) {
+            terminate_probe_tree(&mut child, guardian_job.as_ref())?;
+            return Err(ProcessError::Canceled);
+        }
         match platform::try_wait(&mut child) {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                if kill_tree(&mut child).is_ok()
-                    && let Some(guardian) = &guardian_job
-                {
-                    guardian
-                        .cancel_and_prove_quiescence()
-                        .map_err(|error| ProcessError::Guardian(error.to_string()))?;
-                }
+                terminate_probe_tree(&mut child, guardian_job.as_ref())?;
                 // Reader threads end once the pipes close with the process.
                 return Err(ProcessError::TimedOut(timeout));
             }
             Ok(None) => thread::sleep(Duration::from_millis(15)),
             Err(error) => {
-                if kill_tree(&mut child).is_ok()
-                    && let Some(guardian) = &guardian_job
-                {
-                    guardian
-                        .cancel_and_prove_quiescence()
-                        .map_err(|cleanup| ProcessError::Guardian(cleanup.to_string()))?;
-                }
+                terminate_probe_tree(&mut child, guardian_job.as_ref())?;
                 return Err(ProcessError::Wait(error));
             }
         }
@@ -226,6 +249,24 @@ fn run_probe_inner(
         stderr,
         duration: started.elapsed(),
     })
+}
+
+fn terminate_probe_tree(
+    child: &mut platform::PlatformChild,
+    guardian: Option<&GuardedJob>,
+) -> Result<(), ProcessError> {
+    let termination = kill_tree(child);
+    if let Some(guardian) = guardian {
+        // The guardian proof is authoritative even when the direct platform kill reported an
+        // error (the root may have exited between calls). If proof fails, GuardianAuthority
+        // quarantines the runtime before this function can release the outer profile lease.
+        guardian
+            .cancel_and_prove_quiescence()
+            .map_err(|error| ProcessError::Guardian(error.to_string()))?;
+        Ok(())
+    } else {
+        termination.map_err(ProcessError::Terminate)
+    }
 }
 
 /// Bounded buffer holding the end of a child's stderr.

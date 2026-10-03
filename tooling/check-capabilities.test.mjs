@@ -200,7 +200,10 @@ function cliFixture() {
 }
 
 function runCli(root) {
-  const result = spawnSync(process.execPath, [join(root, "tooling/check-capabilities.mjs")], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [join(root, "tooling/check-capabilities.mjs")], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
   assert.ifError(result.error);
   return result;
 }

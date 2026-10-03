@@ -20,6 +20,7 @@ async function shot(page: Page, name: string) {
 
 for (const theme of ["dark", "light"] as const) {
   test(`@screenshots permission UI in ${theme} theme`, async ({ page }) => {
+    test.setTimeout(120_000);
     for (const size of SIZES) {
       await page.setViewportSize({ width: size.width, height: size.height });
       await page.goto("/?scenario=approvals");
@@ -40,7 +41,7 @@ for (const theme of ["dark", "light"] as const) {
       await shot(page, `permissions-profile-rules-${theme}-${size.name}`);
 
       await section
-        .getByRole("radiogroup", { name: "Default mode for new threads" })
+        .getByRole("radiogroup", { name: "Default mode for new coding agents" })
         .getByRole("radio", { name: "Bypass" })
         .click();
       const dialog = page.getByRole("alertdialog");
@@ -60,7 +61,7 @@ for (const theme of ["dark", "light"] as const) {
       await page.keyboard.press("Escape");
 
       if (size.name === "1440") {
-        await section.getByRole("button", { name: "Switch to Approve" }).click();
+        await section.getByRole("button", { name: "Use Approve" }).click();
         await page.getByRole("button", { name: "Collapse sidebar" }).click();
         await page.getByRole("button", { name: "Dashboard" }).click();
         await shot(page, `permissions-sidebar-collapsed-${theme}-${size.name}`);

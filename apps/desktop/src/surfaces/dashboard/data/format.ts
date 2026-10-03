@@ -49,8 +49,8 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
 
 export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
   plan: "Read and plan only; nothing changes without a new mode",
-  approve: "Asks before changing files or running commands",
-  auto: "Runs routine work; asks for anything consequential",
+  approve: "Asks before edits and commands",
+  auto: "Runs routine workspace coding; security boundaries and external effects still ask",
   bypass: "Runs without asking, except actions that leave this machine",
   custom: "Follows a custom permission profile",
 };

@@ -354,7 +354,11 @@ fn assess(p: &ProviderState) -> Assessment {
         recoverability: Recoverability::None,
         reason_code: auth_unknown.then_some("auth_unknown"),
         reason: auth_unknown.then(|| {
-            format!("{name} has no documented way to check sign-in, so it shows as unknown.")
+            if detection.provider_id.as_str() == ProviderId::CLAUDE_CODE {
+                "Claude Code sign-in is checked when a coding session starts.".to_owned()
+            } else {
+                format!("{name} has no documented safe way to check sign-in, so it shows as unknown.")
+            }
         }),
     }
 }
@@ -844,6 +848,19 @@ mod tests {
         assert_eq!(h.state, HealthState::Healthy);
         assert_eq!(h.auth, AuthState::Unknown);
         assert_eq!(h.reason_code.as_deref(), Some("auth_unknown"));
+
+        m.detected(&[detection(
+            ProviderId::CLAUDE_CODE,
+            DetectionState::Installed,
+            AuthState::Unknown,
+        )]);
+        let claude = m
+            .get(&ProviderId::new(ProviderId::CLAUDE_CODE))
+            .expect("Claude");
+        assert_eq!(
+            claude.reason.as_deref(),
+            Some("Claude Code sign-in is checked when a coding session starts.")
+        );
     }
 
     #[test]

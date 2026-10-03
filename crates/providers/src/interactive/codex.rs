@@ -5,7 +5,7 @@
 //! hooks need persisted hook trust, and KalCode never passes `--dangerously-bypass-hook-trust`,
 //! so no Codex hook decides anything.
 //!
-//! Verified on 2026-09-25 against the installed `codex --help` (codex-cli 0.157.0; supported
+//! Verified on 2026-10-03 against the installed `codex --help` (codex-cli 0.160.0; supported
 //! minimum 0.155.1): `-C/--cd`,
 //! `-s/--sandbox` (`read-only`, `workspace-write`, `danger-full-access`), `-a/--ask-for-approval`
 //! (`on-request`, `never`), `-m/--model`, `-c key=value` (TOML value), `codex resume <id>`.
@@ -34,10 +34,9 @@ pub const FORBIDDEN: &[&str] = &[
 pub fn permission_args(mode: PermissionMode) -> [&'static str; 4] {
     match mode {
         PermissionMode::Plan => ["-s", "read-only", "-a", "never"],
-        PermissionMode::Approve | PermissionMode::Custom => {
+        PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
             ["-s", "workspace-write", "-a", "on-request"]
         }
-        PermissionMode::Auto => ["-s", "workspace-write", "-a", "never"],
         PermissionMode::Bypass => ["-s", "danger-full-access", "-a", "never"],
     }
 }
@@ -297,8 +296,10 @@ mod tests {
             };
             assert_eq!(sandbox, expected, "{mode:?}");
             let expected_approval = match mode {
-                PermissionMode::Approve | PermissionMode::Custom => "on-request",
-                PermissionMode::Plan | PermissionMode::Auto | PermissionMode::Bypass => "never",
+                PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
+                    "on-request"
+                }
+                PermissionMode::Plan | PermissionMode::Bypass => "never",
             };
             assert_eq!(
                 args[args.iter().position(|a| a == "-a").expect("-a") + 1],
@@ -389,7 +390,7 @@ mod tests {
             [
                 (PermissionMode::Plan, "-s read-only -a never"),
                 (PermissionMode::Approve, "-s workspace-write -a on-request"),
-                (PermissionMode::Auto, "-s workspace-write -a never"),
+                (PermissionMode::Auto, "-s workspace-write -a on-request"),
                 (PermissionMode::Bypass, "-s danger-full-access -a never"),
                 (PermissionMode::Custom, "-s workspace-write -a on-request"),
             ],
@@ -415,8 +416,10 @@ mod tests {
             let args = args(mode, None);
             let approval = args.iter().position(|arg| arg == "-a").expect("approval");
             let expected = match mode {
-                PermissionMode::Approve | PermissionMode::Custom => "on-request",
-                PermissionMode::Plan | PermissionMode::Auto | PermissionMode::Bypass => "never",
+                PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
+                    "on-request"
+                }
+                PermissionMode::Plan | PermissionMode::Bypass => "never",
             };
             assert_eq!(args[approval + 1], expected);
             for required in [

@@ -198,6 +198,14 @@ impl Rig {
         let text = std::fs::read_to_string(self.dir.path().join(file)).expect(file);
         serde_json::from_str(&text).expect("json")
     }
+
+    fn runs(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.dir.path().join("runs.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("run"))
+            .collect()
+    }
 }
 
 struct Pane {
@@ -475,6 +483,16 @@ fn launch_uses_kalcode_settings_the_deny_floor_and_a_clean_environment() {
         )
     });
     let args: Vec<String> = serde_json::from_value(rig.read_json("last-args.json")).expect("args");
+    assert!(
+        rig.runs().iter().all(|run| {
+            run["args"].as_array().map_or(true, |args| {
+                !args
+                    .windows(2)
+                    .any(|pair| pair[0] == "auth" && pair[1] == "status")
+            })
+        }),
+        "interactive launch must never run Claude's unsafe short-lived status command"
+    );
     let value_after = |flag: &str| {
         args.iter()
             .position(|a| a == flag)

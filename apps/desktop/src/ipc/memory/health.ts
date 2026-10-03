@@ -222,7 +222,11 @@ export function assessHealth(status: ProviderStatus, observed: HealthObservation
     capacity: "available",
     recoverability: "none",
     reasonCode: authUnknown ? "auth_unknown" : null,
-    reason: authUnknown ? `${name} has no documented way to check sign-in, so it shows as unknown.` : null,
+    reason: authUnknown
+      ? status.id === "claude-code"
+        ? "Claude Code sign-in is checked when a session starts."
+        : `${name} has no documented way to check sign-in, so it shows as unknown.`
+      : null,
   };
 }
 

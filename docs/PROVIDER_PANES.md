@@ -3,18 +3,19 @@
 Status: **BUILT for Claude Code on `z7/provider-panes`, and for Codex (provider-native modes) and Gemini
 CLI (process state only) in PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`), behind the
 `provider_panes` feature flag.**
-The current Claude Code hook path can route decisions through the engine
-(`DecisionRouting::Engine`, §9); Codex and Gemini keep execution permissions in the provider.
+The Claude Code hook path can route decisions through the engine for adapter tests, while
+production uses `DecisionRouting::ProviderPrompt`; all three providers retain native execution
+permission authority.
 Campaign Z7,
 writer W4 (`docs/campaigns/ADVANCED.md` §16; evidence in `docs/campaigns/Z7-W4.md`, threat model
 in `docs/campaigns/Z7-W4-THREATS.md`). Researched through 2026-09-25 from official provider documentation
-and the installed `--help` output of Claude Code 2.1.282 and codex-cli 0.157.0 (Gemini CLI is not
+and the installed `--help` output of Claude Code 2.1.288 and codex-cli 0.160.0 (Gemini CLI is not
 installed on the verification machine). No provider session was started and no AI quota was
 used; the owner-approved smoke run is written but not run (§7).
 
 Until this ships, Claude Code threads are headless and KalCode enforces for them through launch
 flags only: a mapped permission mode, `--permission-prompts none`, and KalCode deny rules
-(`--disallowedTools`) for remote actions, credential files and, outside Bypass, the edit and web
+(`--disallowedTools`) for remote actions, credential files and, in Plan/Approve/Custom, edit and web
 tools. The user's own Claude Code user settings still decide other commands. See
 `docs/PROVIDERS.md` §5 ("What KalCode enforces for Claude Code threads today"). The same deny
 rules should be passed to interactive panes as the floor under the hook.
@@ -106,7 +107,7 @@ process-tree kill on stop. The launch goes through the new Z1 PTY launch API.
 ### Claude Code
 
 ```text
-claude [--restricted] --permission-mode <plan|manual|acceptEdits>   # Plan: --restricted instead of
+claude [--restricted] --permission-mode <plan|manual|auto|acceptEdits>   # Plan: --restricted instead of
        [--setting-sources user] --strict-mcp-config                 #   --setting-sources user (K4)
        --settings <data>/sessions/<thread>/claude-settings.json     # KalCode hooks only
        --disallowedTools <KalCode deny floor…>                      # Z2 rules, as headless
@@ -154,6 +155,9 @@ Until it is verified: process/PTY status only, approvals in the provider's own p
 "limited status" badge. As built (PROVIDERS-2): `gemini --approval-mode <plan|default|auto_edit>
 [--model] [--resume <uuid>]` (never `yolo`, never `--skip-trust`), hook channel `limited` from
 the start, `Exited` on process exit; nothing else is inferred.
+KalCode Plan maps to `plan`; Approve and Custom map to `default`; Auto and the provider-limited
+Bypass map to `auto_edit`. Auto-edit approves file edits only, while shell and other tools keep
+their native prompts. KalCode never maps a mode to Gemini's unrestricted `yolo` policy.
 
 ## 4. Permissions for interactive panes
 
@@ -162,39 +166,37 @@ KalCode UI operations do not require approval. For Codex, the real CLI owns comm
 native prompts; KalCode neither synthesizes nor answers those prompts. The Claude Code hook column
 records its existing adapter path and is owned by the separate provider-policy reconciliation.
 
-| KalCode mode | Claude Code launch | KalCode `PreToolUse` hook returns | Codex launch (until hooks are trusted) |
+| KalCode mode | Claude Code launch | Permission authority under KalCode's deny floor | Codex launch (until hooks are trusted) |
 | --- | --- | --- | --- |
-| Plan | `--permission-mode plan --restricted` | TK decision (deny modifying actions) | `-s read-only -a never` |
-| Approve | `--permission-mode manual` | TK: allow reads; **ask** for writes/commands (KalCode approval) | `-s workspace-write -a on-request` |
-| Auto | `--permission-mode manual` | TK Auto policy: allow what it covers, ask otherwise | `-s workspace-write -a never` |
-| Bypass | `--permission-mode acceptEdits` | TK Bypass: allow local actions; ask for remote-consequential, opaque, outside-workspace and credentials | `-s danger-full-access -a never` |
-| Custom | `--permission-mode manual` (Custom `never` rules in the deny floor: not yet) | TK profile decision | as Approve (`-s workspace-write -a on-request`) |
+| Plan | `--permission-mode plan --restricted` | Claude Code Plan denies modifying actions | `-s read-only -a never` |
+| Approve | `--permission-mode manual` | Claude Code shows its native prompt | `-s workspace-write -a on-request` |
+| Auto | `--permission-mode auto` | Claude Code's native classifier under KalCode's deny floor | `-s workspace-write -a on-request` |
+| Bypass | `--permission-mode acceptEdits` | Claude Code accepts edits; native prompts and the deny floor still apply | `-s danger-full-access -a never` |
+| Custom | `--permission-mode manual` (Custom `never` rules in the deny floor: not yet) | Claude Code shows its native prompt | as Approve (`-s workspace-write -a on-request`) |
 
-Reconciled: `claude --help` 2.1.282 lists `acceptEdits, auto, bypassPermissions, manual, dontAsk,
-plan`; panes pass `manual` (the hooks reference reports that mode as `default` in payloads, and
-Z2's headless argv still passes `default`). `interactive_modes_are_verified_and_never_broader`
+Reconciled: `claude --help` 2.1.288 lists `acceptEdits, auto, bypassPermissions, manual, dontAsk,
+plan`; KalCode Auto passes `auto`, while Approve and Custom pass `manual`. The certified 2.1.282
+floor already accepts explicit Auto; v2.1.283 made it the built-in interactive default on every
+plan and provider. Claude Code falls back to Manual when its classifier is unavailable.
+`interactive_modes_are_verified_and_never_broader`
 fails if a mode outside the list is emitted.
 
-Never used, in any mode: Claude Code `bypassPermissions`, `auto` (the provider's classifier is not
-KalCode policy) and the dangerous-skip flags; Codex
+Never used, in any mode: Claude Code `bypassPermissions`, `dontAsk` and the dangerous-skip flags; Codex
 `--dangerously-bypass-approvals-and-sandbox`, `--dangerously-bypass-hook-trust` and
 `--approve-for-me` (automatic review by the provider). Codex `danger-full-access` is used only as
 the explicit native sandbox for Bypass; it is not the combined dangerous-bypass switch.
 
-**Why hooks are sufficient for Claude Code.** Per [2], `PreToolUse` runs before the permission
-prompt for every tool (except ending the conversation). A hook can deny, force a prompt, or allow;
-exit code 2 blocks before any allow rule is evaluated. Hook decisions never override the
-provider's own deny/ask rules. So KalCode's decision is at least as strict as KalCode policy, and
-the user's own provider deny rules only add strictness.
+**What Claude Code hooks do.** Per [2], `PreToolUse` runs before the permission prompt for every
+tool except ending the conversation. Production panes use `ProviderPrompt` routing: KalCode
+observes hook events and returns no decision, so Claude Code's native prompt or Auto classifier
+remains authoritative. KalCode's launch-time deny floor still wins before a provider allow rule.
+`Engine` routing remains only for explicit adapter tests and is not the app-control default.
 
-**How approvals surface.** For Claude Code, KalCode is the approver. When TK says *ask*, the
-helper holds the `PreToolUse` / `PermissionRequest` hook. KalCode shows its `PermissionPrompt` as
-an overlay on the pane and in the approval queue and Dashboard, with Deny / Approve once / Allow
-for thread. The helper then returns the decision. If nobody answers before the hook timeout
-(documented default 10 minutes; KalCode sets it explicitly [1]), the helper returns *no decision*.
-The provider's own prompt then takes over in the pane, and the KalCode request expires as
-`answered_in_provider`. For providers without trusted hooks, approvals are answered in the
-provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer button.
+**How approvals surface.** In Manual and Accept Edits modes, Claude Code shows its native prompt
+inside the pane. KalCode reflects that the session needs the user but does not synthesize or answer
+the prompt. In Auto, Claude Code's background classifier decides and falls back to Manual when
+Auto is unavailable. Codex and Gemini likewise keep approvals in their provider-native prompts;
+KalCode shows limited status without an answer button when it has no trusted status channel.
 
 **What KalCode cannot intercept** (stated in the pane's info panel):
 
@@ -242,7 +244,7 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 
 1. Claude Code hooks reference — https://code.claude.com/docs/en/hooks
 2. Claude Code hooks guide (limits, timeouts, PermissionRequest behaviour) — https://code.claude.com/docs/en/hooks-guide · permissions and hooks — https://code.claude.com/docs/en/permissions
-3. Claude Code CLI reference — https://code.claude.com/docs/en/cli-reference · settings — https://code.claude.com/docs/en/settings · installed `claude --help` (2.1.282)
+3. Claude Code CLI reference — https://code.claude.com/docs/en/cli-reference · settings — https://code.claude.com/docs/en/settings · installed `claude --help` (2.1.288)
 4. Codex hooks — https://learn.chatgpt.com/docs/hooks
 5. Codex advanced configuration (`notify`, `tui.notifications`) — https://learn.chatgpt.com/docs/config-file/config-advanced · installed `codex --help` (0.157.0; minimum 0.155.1)
 6. Codex approvals and security — https://learn.chatgpt.com/codex/agent-approvals-security
@@ -271,14 +273,11 @@ missing or temporarily unreadable account keeps the thread's durable snapshot an
 explicitly. The account id remains the routing authority. Pane titles include the same owner-visible
 identity so KalVoice's focused-pane announcement distinguishes Personal, Work and other accounts.
 
-**Decision routing.** `DecisionRouting::Engine` (default since the classifier hardening merged to
-main, 65fe095): every call becomes `ApprovalRequired` for the Z3 runtime and Z4 engine. Calls whose
-shape the classifier still can't judge (SEC-LATENT §5: recursive searches, pipelines, multi-level
-wildcards) are sent as opaque, so they always need an explicit one-time approval
-(`session::known_gap`). `DecisionRouting::ProviderPrompt` (the switch back): every `PreToolUse`
-still needs an authenticated round trip (so an unreachable KalCode blocks) and is recorded for
-status, but KalCode returns no decision and Claude Code's own permission flow decides under the
-deny floor. Debug and `e2e` builds can choose with `KALCODE_E2E_HOOK_DECISIONS=engine|provider_prompt`.
+**Decision routing.** `DecisionRouting::ProviderPrompt` is the production default. Every
+`PreToolUse` is recorded for status, but KalCode returns no decision and Claude Code's own prompt
+or Auto classifier decides under the deny floor. `DecisionRouting::Engine` remains available for
+explicit adapter tests. Debug and `e2e` builds can choose with
+`KALCODE_E2E_HOOK_DECISIONS=engine|provider_prompt`.
 
 **Runtime kind until v12.** `threads.runtime_kind` doesn't exist yet (lead, L-2), so the Claude
 Code provider registered with the Z3 runtime is a router: threads created through
@@ -294,9 +293,9 @@ own prompts (needs a Z3 runtime change).
 
 ## Security hardening release gate (2026-09-25)
 
-Provider changes are not approved for installation or publication. Panes now use the same exact
-provider-native Codex mapping as headless turns (Plan `read-only/never`, Approve and Custom
-`workspace-write/on-request`, Auto `workspace-write/never`, Bypass
+Provider changes are not approved for installation or publication. Panes use provider-native
+Codex modes (Plan `read-only/never`, Approve, Auto and Custom
+`workspace-write/on-request`, Bypass
 `danger-full-access/never`) while connected tools and web search remain disabled. These scalar
 flags alone do not isolate inherited MCP maps or managed configuration. The dedicated KalCode
 profile candidate uses separate supported sign-in and preserves the existing CLI setup;

@@ -23,6 +23,14 @@ function codeOf(fn: () => unknown): string {
 }
 
 describe("in-memory permission commands", () => {
+  it("starts fresh installs in Auto without weakening explicit later choices", () => {
+    const { call } = memory(false);
+    expect(call<PermissionSettings>("permission_settings_get").defaultMode).toBe("auto");
+    expect(call<PermissionSettings>("permission_settings_update", { defaultMode: "approve" }).defaultMode).toBe(
+      "approve",
+    );
+  });
+
   it("seeds pending approvals and announces them", () => {
     const { events, call } = memory();
     const pending = call<ApprovalView[]>("approval_list", { status: "pending" });
@@ -72,7 +80,7 @@ describe("in-memory permission commands", () => {
     expect(settings.defaultMode).toBe("bypass");
     expect(events.at(-1)).toMatchObject({
       type: "permission.mode_changed",
-      payload: { from: "approve", to: "bypass" },
+      payload: { from: "auto", to: "bypass" },
     });
   });
 

@@ -177,12 +177,10 @@ fn install_panic_hook(log_dir: PathBuf) {
     }));
 }
 
-fn reconcile_core_startup(core: &Arc<Core>) -> kalcode_core::Result<(usize, u64)> {
+fn reconcile_core_startup(core: &Arc<Core>) -> kalcode_core::Result<usize> {
     let recovered = context_commands::recover_deliveries(core)?;
     core.require_terminal_guardian()?;
-    let invalidated = kalcode_providers::accounts::AccountStore::new(core.clone())
-        .invalidate_cached_auth_on_start()?;
-    Ok((recovered, invalidated))
+    Ok(recovered)
 }
 
 /// Opens Core only after the update recovery guard for a forward-only migration is durable.
@@ -290,17 +288,11 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         Ok(core) => {
             let core = Arc::new(core);
             match reconcile_core_startup(&core) {
-                Ok((recovered, changed)) => {
+                Ok(recovered) => {
                     if recovered > 0 {
                         tracing::info!(
                             event = "context.interrupted_deliveries_recovered",
                             count = recovered
-                        );
-                    }
-                    if changed > 0 {
-                        tracing::info!(
-                            event = "provider_accounts.cached_auth_invalidated",
-                            count = changed
                         );
                     }
                     state.core = Some(core);

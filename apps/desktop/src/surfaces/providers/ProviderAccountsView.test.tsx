@@ -134,6 +134,28 @@ describe("Gemini account row", () => {
 });
 
 describe("account rows", () => {
+  it("never offers a standalone Claude status probe", async () => {
+    useTransport({
+      accounts: [account("claude-a", "claude-code", "Claude A", { authenticationState: "authenticated" })],
+    });
+    const user = userEvent.setup();
+    mount();
+    const row = await screen.findByRole("region", { name: "Claude Code · Claude A" });
+    expect(within(row).queryByRole("button", { name: "Refresh Claude A sign-in status" })).toBeNull();
+
+    const menu = await openMenu(user, row, "Claude A");
+    expect(within(menu).queryByRole("menuitem", { name: "Refresh Claude A status" })).toBeNull();
+    expect(calls).not.toContain("provider_claude_account_refresh");
+  });
+
+  it("shows a transient validation error without offering sign-in for an unknown session", async () => {
+    useTransport({ accounts: [account("a", "codex", "Personal", { lastErrorCode: "provider_unavailable" })] });
+    mount();
+    const row = await screen.findByRole("region", { name: "Codex · Personal" });
+    expect(within(row).getByText("Error", { exact: true })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Sign in Personal" })).toBeNull();
+  });
+
   it("marks the default quietly and states identity, plan and usage truthfully", async () => {
     useTransport({
       accounts: [

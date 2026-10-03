@@ -128,7 +128,12 @@ export function shipLockState(lockFile, { alive = pidAlive, now = Date.now } = {
 }
 
 function run(command, args, options = {}) {
-  const r = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+  const r = spawnSync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    ...options,
+    windowsHide: true,
+  });
   if (r.error) throw new ReleaseError(`${command} failed: ${r.error.message}`);
   return { code: r.status ?? 1, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -157,12 +162,13 @@ function postStatus(sha, state, description) {
 /** Runs ship.mjs with live output, returning its exit code and full output. */
 function runShip(args) {
   return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let output = "";
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+      if (process.platform === "win32")
+        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
       else child.kill("SIGKILL");
     }, RELEASE_TIMEOUT_MS);
     for (const stream of [child.stdout, child.stderr]) {

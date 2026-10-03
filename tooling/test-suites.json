@@ -373,10 +373,6 @@
     },
     {
       "path": "crates/providers/tests/claude_sign_in_real.rs",
-      "reason": "needs a real Claude Code (KALCODE_REAL_CLAUDE); no sign-in, prompt or quota"
-    },
-    {
-      "path": "crates/providers/tests/claude_sign_in_real.rs",
       "reason": "needs KALCODE_REAL_CLAUDE and KALCODE_REAL_CLAUDE_LOGIN_PROBE=1; opens the browser once"
     },
     {

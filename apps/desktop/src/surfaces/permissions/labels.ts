@@ -56,8 +56,8 @@ export const MODE_LABELS: Record<PermissionMode, string> = {
 
 export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   plan: "Read and plan only. Anything that changes files, runs commands or reaches out is refused.",
-  approve: "Reads in the workspace run on their own; changes and commands wait for your approval.",
-  auto: "Work the policy covers runs automatically. Installs, deletions, secrets, anything outside the workspace and anything that leaves this computer still ask.",
+  approve: "Ask before edits and commands. Use this when you want to review each coding action.",
+  auto: "Recommended for everyday coding. Workspace edits, development commands, tests, builds, local Git, worktrees and dev servers run without repeated prompts. Real security boundaries and external effects still ask.",
   bypass:
     "Broad local authority: local work runs without asking. Pushes, deploys, cloud changes, messages and spending still ask, as do secrets and files outside the workspace.",
   custom: "A named rule set, such as Code Reviewer or Local Builder.",
@@ -65,15 +65,20 @@ export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
 
 /**
  * The modes a new thread or provider pane can start in (`creation_mode` in crates/threads, the
- * `thread_options` list). Bypass and Custom are never starting modes: a saved Bypass or Custom
- * default starts new threads in Approve.
+ * `thread_options` list). Bypass and Custom are never starting modes. Both fall back to Approve:
+ * Bypass confirmation cannot be replayed implicitly, and a custom profile may intentionally
+ * restrict local work.
  */
 export const START_MODES: readonly PermissionMode[] = ["plan", "approve", "auto"];
 
-/** The mode a new thread starts in for a saved default: the default when it can start one, else Approve. */
+/** Resolve a saved default without widening an explicitly restrictive choice. */
 export function startModeFor(defaultMode: PermissionMode | null | undefined, offered = START_MODES): PermissionMode {
-  if (defaultMode && offered.includes(defaultMode)) return defaultMode;
-  return "approve";
+  if (defaultMode && defaultMode !== "custom" && defaultMode !== "bypass" && offered.includes(defaultMode))
+    return defaultMode;
+  if ((defaultMode === "custom" || defaultMode === "bypass") && offered.includes("approve")) return "approve";
+  if (!defaultMode && offered.includes("auto")) return "auto";
+  if (offered.includes("approve")) return "approve";
+  return offered[0] ?? "approve";
 }
 
 export const EFFECT_LABELS: Record<RuleEffect, string> = {

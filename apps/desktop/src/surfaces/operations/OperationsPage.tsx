@@ -1247,7 +1247,8 @@ function TaskEditor({
       {isAgent ? (
         <>
           <div className={styles.permissionNotice}>
-            Agent tasks start in <strong>Approve</strong> permission mode.
+            Agent tasks start in <strong>Auto</strong>: routine workspace coding runs without repeated prompts, while
+            security boundaries and external effects still ask.
           </div>
           <div className={styles.formGrid}>
             <Field htmlFor={`${formId}-provider`} label="Provider">

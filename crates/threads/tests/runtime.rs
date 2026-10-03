@@ -122,6 +122,17 @@ fn create_starts_a_session_and_records_the_lifecycle() {
 }
 
 #[test]
+fn new_coding_options_default_to_bounded_auto() {
+    let h = Harness::new();
+    let options = h.runtime.options().expect("options");
+    assert_eq!(options.default_permission_mode, PermissionMode::Auto);
+    assert!(options.permission_modes.contains(&PermissionMode::Plan));
+    assert!(options.permission_modes.contains(&PermissionMode::Approve));
+    assert!(options.permission_modes.contains(&PermissionMode::Auto));
+    assert!(!options.permission_modes.contains(&PermissionMode::Bypass));
+}
+
+#[test]
 fn claude_full_model_id_is_preserved_with_a_nonempty_alias_catalog() {
     let h = Harness::new();
     let model = |id: &str, display_name: &str, is_default| ModelInfo {

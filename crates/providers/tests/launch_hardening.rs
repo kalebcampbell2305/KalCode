@@ -197,6 +197,15 @@ fn arg0(run: &Value) -> String {
     run["args"][0].as_str().unwrap_or_default().to_owned()
 }
 
+fn is_claude_auth_status(run: &Value) -> bool {
+    run["args"]
+        .as_array()
+        .is_some_and(|args| {
+            args.windows(2)
+                .any(|pair| pair[0] == "auth" && pair[1] == "status")
+        })
+}
+
 #[test]
 fn an_npm_node_shim_runs_the_real_node_never_the_workspace_one() {
     let setup = Setup::new(NPM_NODE_SHIM);
@@ -208,7 +217,7 @@ fn an_npm_node_shim_runs_the_real_node_never_the_workspace_one() {
         "planted programs ran: {:?}",
         setup.planted_runs()
     );
-    // Detection probes and the session all went to the real node.exe with the shim's script.
+    // The version probe and session both went to the real node.exe with the shim's script.
     let runs = setup.runs(&setup.nodejs);
     let script = std::fs::canonicalize(
         setup
@@ -218,7 +227,8 @@ fn an_npm_node_shim_runs_the_real_node_never_the_workspace_one() {
     .unwrap();
     let script = script.to_string_lossy();
     let script = script.trim_start_matches(r"\\?\");
-    assert!(runs.len() >= 3, "{runs:?}"); // --version, auth status, session
+    assert!(runs.len() >= 2, "{runs:?}"); // --version, session
+    assert!(!runs.iter().any(is_claude_auth_status), "{runs:?}");
     for run in &runs {
         assert!(arg0(run).eq_ignore_ascii_case(script), "{run}");
     }
@@ -251,7 +261,8 @@ fn an_npm_shim_for_the_native_binary_starts_it_directly() {
         .npm
         .join(r"node_modules\@anthropic-ai\claude-code\bin");
     let runs = setup.runs(&bin);
-    assert!(runs.len() >= 3, "{runs:?}");
+    assert!(runs.len() >= 2, "{runs:?}");
+    assert!(!runs.iter().any(is_claude_auth_status), "{runs:?}");
     // Started directly: no script argument in front of the CLI's own arguments.
     assert_eq!(arg0(&runs[0]), "--version");
     assert!(runs.iter().any(|r| arg0(r) == "-p"));

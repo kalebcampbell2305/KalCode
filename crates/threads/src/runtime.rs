@@ -31,7 +31,8 @@ use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent
 use kalcode_contracts::ids::{is_valid_id, new_id};
 use kalcode_contracts::kalvoice::ThreadScope;
 use kalcode_contracts::permissions::{
-    ApprovalDecision, NormalizedAction, PermissionGate, PermissionMode, PolicyEffect,
+    ApprovalDecision, DEFAULT_CODING_PERMISSION_MODE, NormalizedAction, PermissionGate,
+    PermissionMode, PolicyEffect,
 };
 use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
 use kalcode_contracts::threads::{
@@ -1058,7 +1059,7 @@ impl ThreadRuntime {
                 PermissionMode::Approve,
                 PermissionMode::Auto,
             ],
-            default_permission_mode: PermissionMode::Approve,
+            default_permission_mode: DEFAULT_CODING_PERMISSION_MODE,
         })
     }
 

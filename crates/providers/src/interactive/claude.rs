@@ -2,7 +2,7 @@
 //! file (hooks that run `kalcode-hook`), the Z2 deny floor, and a permission mode never broader
 //! than the thread's KalCode mode (docs/PROVIDER_PANES.md §3–4).
 //!
-//! Verified on 2026-09-24 against the installed `claude --help` (2.1.282) and
+//! Verified on 2026-10-03 against the installed `claude --help` (2.1.288) and
 //! https://code.claude.com/docs/en/cli-reference, /hooks, /permissions and /settings:
 //! - `--permission-mode` choices: `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`
 //!   (headless Z2 passes `default`, which the hooks reference reports as the input value of
@@ -40,8 +40,10 @@ pub const VERIFIED_PERMISSION_MODES: &[&str] = &[
     "plan",
 ];
 
-/// Claude Code modes KalCode never launches with, in any KalCode mode.
-pub const FORBIDDEN_PERMISSION_MODES: &[&str] = &["bypassPermissions", "auto", "dontAsk"];
+/// Claude Code modes KalCode never launches with, in any KalCode mode. Auto is intentionally
+/// allowed: supported Claude Code sessions use its native classifier and unsupported sessions
+/// fall back to Manual rather than broadening authority.
+pub const FORBIDDEN_PERMISSION_MODES: &[&str] = &["bypassPermissions", "dontAsk"];
 
 /// Flags KalCode never passes to an interactive session.
 pub const FORBIDDEN_FLAGS: &[&str] = &[
@@ -80,8 +82,11 @@ pub fn interactive_deny_rules(mode: PermissionMode) -> Vec<String> {
 pub fn permission_args(mode: PermissionMode) -> Vec<&'static str> {
     match mode {
         PermissionMode::Plan => vec!["--restricted", "--permission-mode", "plan"],
-        PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
+        PermissionMode::Approve | PermissionMode::Custom => {
             vec!["--setting-sources", "user", "--permission-mode", "manual"]
+        }
+        PermissionMode::Auto => {
+            vec!["--setting-sources", "user", "--permission-mode", "auto"]
         }
         PermissionMode::Bypass => vec![
             "--setting-sources",
@@ -227,7 +232,7 @@ pub fn interactive_mappings(routing: DecisionRouting) -> Vec<PermissionMapping> 
         ),
         (
             PermissionMode::Auto,
-            "Runs like Approve; Claude Code's auto mode is never used.",
+            "Claude Code's background classifier handles routine workspace actions. If Auto is unavailable for the selected account, model, or organization, Claude Code falls back to Manual.",
         ),
         (
             PermissionMode::Bypass,
@@ -308,6 +313,7 @@ mod tests {
             "dontAsk" => 1,
             "manual" | "default" => 2,
             "acceptEdits" => 3,
+            "auto" => 4,
             _ => u8::MAX,
         }
     }
@@ -316,7 +322,8 @@ mod tests {
     fn interactive_modes_are_verified_and_never_broader() {
         let cap = |mode| match mode {
             PermissionMode::Plan => 0,
-            PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => 2,
+            PermissionMode::Approve | PermissionMode::Custom => 2,
+            PermissionMode::Auto => 4,
             PermissionMode::Bypass => 3,
         };
         for mode in ALL {
@@ -331,6 +338,12 @@ mod tests {
                 "{mode:?}"
             );
             assert!(rank(&claude_mode) <= cap(mode), "{mode:?} -> {claude_mode}");
+            if mode == PermissionMode::Auto {
+                assert_eq!(
+                    claude_mode, "auto",
+                    "Auto must use Claude Code's background classifier"
+                );
+            }
         }
     }
 

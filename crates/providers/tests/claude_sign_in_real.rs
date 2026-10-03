@@ -1,15 +1,11 @@
 //! Real Claude Code checks of KalCode's managed account path. Every test is `#[ignore]`d and needs
 //! `KALCODE_REAL_CLAUDE` set to an installed `claude` executable.
 //!
-//! The status probe never signs in, sends a prompt or uses quota. It runs the production
-//! `ClaudeAccountAuthManager` path (exclusive sign-in lease, native guardian job, certified-version
-//! gate, `claude auth status --json`) against a throwaway managed profile, so it proves what the
-//! fixtures can't: that the installed release passes KalCode's certified-version gate and that
-//! Claude reports the isolated profile as signed out.
-//!
-//! The login probe additionally needs `KALCODE_REAL_CLAUDE_LOGIN_PROBE=1`. It starts the official
+//! The login probe needs `KALCODE_REAL_CLAUDE_LOGIN_PROBE=1`. It starts the official
 //! `claude auth login --claudeai`, which OPENS THE DEFAULT BROWSER ONCE on Claude's sign-in page,
-//! then cancels before any sign-in can complete and proves the process tree was cleaned up.
+//! then cancels before any sign-in can complete and proves the process tree was cleaned up. This
+//! suite intentionally never invokes the short-lived `claude auth status` command: Claude can
+//! start an OAuth refresh during that command and exit before persisting the rotated credentials.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -101,36 +97,6 @@ fn rig(claude: PathBuf) -> Rig {
         manager,
         _temp: temp,
     }
-}
-
-#[test]
-#[ignore = "needs a real Claude Code (KALCODE_REAL_CLAUDE); no sign-in, prompt or quota"]
-fn real_managed_status_passes_the_certified_version_gate_and_reports_signed_out() {
-    let Some(claude) = real_claude() else { return };
-    let rig = rig(claude);
-    let account_id = kalcode_contracts::ids::new_id();
-    let lease = rig
-        .profiles
-        .acquire_sign_in_lease("claude-code", &account_id)
-        .expect("exclusive lease");
-    let state = rig
-        .manager
-        .read_account_with_lease_observed(&account_id, lease, |_| Ok(()))
-        .unwrap_or_else(|error| {
-            panic!(
-                "production Claude account path failed with reason {}: {error}",
-                error.reason_code()
-            )
-        });
-    assert!(
-        !state.logged_in,
-        "a fresh managed profile must be signed out"
-    );
-    assert_eq!(state.auth_method.as_deref(), Some("none"));
-    let _session = rig
-        .profiles
-        .acquire_session_lease("claude-code", &account_id)
-        .expect("status releases the exclusive lease");
 }
 
 #[test]

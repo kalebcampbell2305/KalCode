@@ -31,7 +31,7 @@ fn startup_reconciles_interrupted_context_before_runtime_publication() {
     }
     for expected_recovery_count in [1, 0] {
         let core = Arc::new(Core::open(config(directory.path())).expect("reopen"));
-        let (recovered, _) = reconcile_core_startup(&core).expect("startup reconciliation");
+        let recovered = reconcile_core_startup(&core).expect("startup reconciliation");
         assert_eq!(recovered, expected_recovery_count);
         // This assertion precedes the same AppState publication performed by start().
         core.read(|connection| {
@@ -68,5 +68,34 @@ fn startup_refuses_missing_delivery_authority() {
         .expect("older store"),
     );
     assert!(reconcile_core_startup(&core).is_err());
+    core.shutdown();
+}
+
+#[test]
+fn startup_keeps_persisted_provider_account_state_available_for_first_paint() {
+    let directory = tempfile::tempdir().expect("temporary app data");
+    let core = Arc::new(Core::open(config(directory.path())).expect("open core"));
+    let store = kalcode_providers::accounts::AccountStore::new(core.clone());
+    let account = store.create("codex", "Codex A").expect("account");
+    let connected = store
+        .mark_authentication(
+            &account.id,
+            kalcode_contracts::agent::AuthState::Authenticated,
+            Some("fixture-identity"),
+            None,
+        )
+        .expect("connected");
+
+    reconcile_core_startup(&core).expect("startup reconciliation");
+
+    let restored = store.get(&account.id).expect("restored account");
+    assert_eq!(
+        restored.authentication_state,
+        kalcode_contracts::agent::AuthState::Authenticated
+    );
+    assert_eq!(
+        restored.provider_reported_identity,
+        connected.provider_reported_identity
+    );
     core.shutdown();
 }

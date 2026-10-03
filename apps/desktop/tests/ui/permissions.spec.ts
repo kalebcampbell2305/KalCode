@@ -155,8 +155,8 @@ test.describe("permission settings", () => {
     await open(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = page.getByRole("region", { name: "Permissions" });
-    const modes = section.getByRole("radiogroup", { name: "Default mode for new threads" });
-    await expect(modes.getByRole("radio", { name: "Approve" })).toBeChecked();
+    const modes = section.getByRole("radiogroup", { name: "Default mode for new coding agents" });
+    await expect(modes.getByRole("radio", { name: "Auto" })).toBeChecked();
     await modes.getByRole("radio", { name: "Plan" }).click();
     await expect(modes.getByRole("radio", { name: "Plan" })).toBeChecked();
     await expect(section.getByText("Read and plan only.")).toBeVisible();
@@ -175,14 +175,18 @@ test.describe("permission settings", () => {
     await open(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = page.getByRole("region", { name: "Permissions" });
-    const modes = section.getByRole("radiogroup", { name: "Default mode for new threads" });
+    const modes = section.getByRole("radiogroup", { name: "Default mode for new coding agents" });
     await modes.getByRole("radio", { name: "Bypass" }).click();
     const dialog = page.getByRole("alertdialog", { name: "Save Bypass as your default?" });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/Codex uses its unrestricted local sandbox/)).toBeVisible();
+    await expect(
+      dialog.getByText(/Gemini CLI accepts file edits; shell commands and other tools still prompt/),
+    ).toBeVisible();
     const confirm = dialog.getByRole("button", { name: "Turn on Bypass" });
     await expect(confirm).toBeDisabled();
     await dialog.getByRole("button", { name: "Keep current mode" }).click();
-    await expect(modes.getByRole("radio", { name: "Approve" })).toBeChecked();
+    await expect(modes.getByRole("radio", { name: "Auto" })).toBeChecked();
 
     await modes.getByRole("radio", { name: "Bypass" }).click();
     await dialog.getByRole("checkbox").check();
@@ -191,12 +195,12 @@ test.describe("permission settings", () => {
     await expect(modes.getByRole("radio", { name: "Bypass" })).toBeChecked();
     // Threads can't start in Bypass, so the saved default says so and the sidebar raises no alarm.
     await expect(section.getByText("Bypass is your saved default")).toBeVisible();
-    await expect(section.getByText(/New threads start in Approve/).first()).toBeVisible();
+    await expect(section.getByText(/New coding agents start in Approve/).first()).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /Bypass/ })).toHaveCount(
       0,
     );
 
-    await section.getByRole("button", { name: "Switch to Approve" }).click();
+    await section.getByRole("button", { name: "Use Approve" }).click();
     await expect(modes.getByRole("radio", { name: "Approve" })).toBeChecked();
     await expect(section.getByText("Bypass is your saved default")).toHaveCount(0);
   });
@@ -225,7 +229,7 @@ test.describe("permission accessibility", () => {
       await expectNoSeriousA11yViolations(page);
 
       await section
-        .getByRole("radiogroup", { name: "Default mode for new threads" })
+        .getByRole("radiogroup", { name: "Default mode for new coding agents" })
         .getByRole("radio", { name: "Bypass" })
         .click();
       await expect(page.getByRole("alertdialog")).toBeVisible();

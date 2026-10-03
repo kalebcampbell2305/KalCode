@@ -855,7 +855,7 @@ export function createThreadsMemory(
         providers: offered(),
         workspaces: workspaces(),
         permissionModes: CREATE_MODES,
-        defaultPermissionMode: "approve",
+        defaultPermissionMode: "auto",
       };
     },
     thread_list: (args) => {

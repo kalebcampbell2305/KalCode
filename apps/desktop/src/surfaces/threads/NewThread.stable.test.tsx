@@ -284,6 +284,17 @@ describe("New thread account defaults (Stable)", () => {
 describe("New thread permission mode (Stable)", () => {
   const modes = (form: ReturnType<typeof within>) => within(form.getByRole("radiogroup", { name: "Permissions" }));
 
+  it("starts fresh installs in Auto for normal workspace coding", async () => {
+    const h = await mountStable();
+    const form = await openNewThread(h.user);
+    await waitFor(() => expect(modes(form).getByRole("radio", { name: "Auto" })).toBeChecked());
+
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "run the focused tests");
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    await waitFor(() => expect(h.calls.some((c) => c.command === "thread_create")).toBe(true));
+    expect(h.calls.find((c) => c.command === "thread_create")?.args?.permissionMode).toBe("auto");
+  });
+
   it("starts in the saved default mode when a thread can start in it", async () => {
     const h = await mountStable(async ({ client }) => {
       await client.updatePermissionSettings("auto");

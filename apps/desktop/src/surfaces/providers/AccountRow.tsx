@@ -14,9 +14,9 @@ import {
 import { ChevronDown, Info, LogIn, LogOut, MoreHorizontal, PenLine, RefreshCw, Star, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
-import { accountFullLabel, accountHealth, accountName, accountSignIn } from "./accountIdentity.ts";
+import { accountFullLabel, accountName, accountSessionState, accountSignIn } from "./accountIdentity.ts";
 import styles from "./ProviderAccountsView.module.css";
-import { type AccountUsage, isBrowserAuthProvider } from "./useProviderAccounts.ts";
+import { type AccountUsage, canRefreshProviderAuth, isBrowserAuthProvider } from "./useProviderAccounts.ts";
 
 export interface AccountRowActions {
   rename: (accountId: string, displayName: string) => Promise<ProviderAccount | null>;
@@ -41,6 +41,10 @@ export function AccountRow({
   busyKey,
   activeLogin,
   loginInProgress,
+  checking = false,
+  validationError = null,
+  usageStale = false,
+  usageRefreshing = false,
   actions,
 }: {
   account: ProviderAccount;
@@ -52,6 +56,13 @@ export function AccountRow({
   activeLogin: boolean;
   /** Any account's browser sign-in is in progress (one at a time). */
   loginInProgress: boolean;
+  /** Provider-native validation is running; the last-known session stays usable meanwhile. */
+  checking?: boolean;
+  /** A transient validation failure; last-known authentication remains visible below it. */
+  validationError?: string | null;
+  /** The last derived local activity snapshot is still shown after a refresh failure. */
+  usageStale?: boolean;
+  usageRefreshing?: boolean;
   actions: AccountRowActions;
 }) {
   const id = useId();
@@ -65,8 +76,9 @@ export function AccountRow({
   const label = accountName(account);
   const busy = busyKey?.endsWith(account.id) ?? false;
   const browserAuth = isBrowserAuthProvider(account.providerId);
+  const canRefreshAuth = canRefreshProviderAuth(account.providerId);
   const signedIn = account.authenticationState === "authenticated";
-  const health = accountHealth(account);
+  const session = accountSessionState(account, checking, validationError);
   const signIn = accountSignIn(account);
   const detailsId = `${id}-details`;
 
@@ -108,21 +120,31 @@ export function AccountRow({
         </div>
 
         <div className={styles.cellStatus}>
-          <StatusIndicator tone={health.tone} pulse={activeLogin}>
-            {health.label}
+          <StatusIndicator tone={session.tone} pulse={activeLogin || checking}>
+            {session.label}
           </StatusIndicator>
           {activeLogin ? (
             <span className={styles.sub} role="status">
               Waiting for browser sign-in…
             </span>
-          ) : signIn.label !== health.label ? (
+          ) : checking && signedIn ? (
+            <span className={styles.sub}>Connected while checking</span>
+          ) : validationError && signedIn ? (
+            <span className={styles.sub}>Connected · check failed</span>
+          ) : signIn.label !== session.label ? (
             <span className={styles.sub}>{signIn.label}</span>
           ) : null}
         </div>
 
         <div className={styles.cellUsage}>
           <span className={styles.muted}>{account.lastCheckedAt ? "Usage unavailable" : "Usage not checked"}</span>
-          <span className={styles.sub}>{usage ? activity(usage) : "Activity unavailable"}</span>
+          <span className={styles.sub}>
+            {usage
+              ? `${activity(usage)}${usageStale ? " · stale" : usageRefreshing ? " · refreshing" : ""}`
+              : usageRefreshing
+                ? "Restoring activity…"
+                : "Activity unavailable"}
+          </span>
         </div>
 
         <div className={styles.cellActions}>
@@ -136,7 +158,7 @@ export function AccountRow({
             >
               Cancel sign-in
             </Button>
-          ) : browserAuth && !signedIn ? (
+          ) : browserAuth && (session.state === "expired" || session.state === "not_checked") ? (
             <Button
               size="sm"
               icon={<LogIn />}
@@ -149,13 +171,13 @@ export function AccountRow({
             </Button>
           ) : null}
           {/* Hidden while signing in: the wider Cancel sign-in takes its place in the column. */}
-          {browserAuth && !activeLogin ? (
+          {canRefreshAuth && !activeLogin ? (
             <IconButton
               size="sm"
               label={`Refresh ${label} sign-in status`}
               icon={<RefreshCw />}
               onClick={() => void actions.refreshAuth(account)}
-              busy={busyKey === `refresh:${account.id}`}
+              busy={busyKey === `refresh:${account.id}` || checking}
               disabled={busy}
             />
           ) : null}
@@ -185,7 +207,7 @@ export function AccountRow({
                 event.preventDefault();
               }}
             >
-              {browserAuth ? (
+              {canRefreshAuth ? (
                 <DropdownMenuItem
                   icon={<RefreshCw />}
                   disabled={busy || activeLogin}

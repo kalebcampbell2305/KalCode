@@ -3,6 +3,8 @@
 //! Claude Code owns credentials and opens its own browser login. KalCode invokes only the
 //! documented `claude auth` commands inside an exclusively leased managed profile, never reads
 //! credential files, and publishes account state only after the whole child process tree exits.
+//! Claude's short-lived `auth status` command is deliberately not used because it can start an
+//! OAuth refresh and exit before the refreshed credentials are durably written.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -12,8 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use serde_json::Value;
 
 use crate::claude::managed_version_supported;
 use crate::detect::DetectEnv;
@@ -29,9 +29,8 @@ const TERMINATE_GRACE: Duration = Duration::from_millis(500);
 /// Longest a failed login waits for its stdout reader to finish before classifying the exit. A
 /// descendant that inherited the pipe can keep it open, so this stays short and bounded.
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(500);
-const MAX_STATUS_BYTES: usize = 64 * 1024;
 
-/// Account truth returned by Claude Code's documented `auth status --json` command.
+/// Bounded account state derived only from a completed official authentication operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeAccountState {
     pub logged_in: bool,
@@ -226,25 +225,6 @@ impl ClaudeAccountAuthManager {
         }
     }
 
-    pub fn read_account_with_lease_observed<F>(
-        &self,
-        account_id: &str,
-        lease: ProfileLease,
-        observe: F,
-    ) -> Result<ClaudeAccountState, ClaudeAccountAuthError>
-    where
-        F: Fn(
-            &Result<ClaudeAccountState, ClaudeAccountAuthError>,
-        ) -> Result<(), ClaudeAccountAuthError>,
-    {
-        let prepared = self.prepare(account_id, lease)?;
-        let mut result = self.read_prepared(&prepared);
-        if observe(&result).is_err() {
-            result = Err(ClaudeAccountAuthError::StateUpdateFailed);
-        }
-        result
-    }
-
     pub fn start_login_with_lease_observed<F>(
         &self,
         account_id: &str,
@@ -261,17 +241,6 @@ impl ClaudeAccountAuthManager {
         let prepared = self
             .prepare(account_id, lease)
             .inspect_err(|error| trace_failure("login", error))?;
-        let before = self
-            .read_prepared(&prepared)
-            .inspect_err(|error| trace_failure("login", error))?;
-        if before.logged_in {
-            let result = Ok(before);
-            if observe(&result).is_err() {
-                return Err(ClaudeAccountAuthError::StateUpdateFailed);
-            }
-            return Err(ClaudeAccountAuthError::AlreadyConnected);
-        }
-
         let spec = self.spec(&prepared, "login", &["auth", "login", "--claudeai"]);
         let spawned = match &self.launch_mode {
             LaunchMode::Production => {
@@ -378,8 +347,6 @@ impl ClaudeAccountAuthManager {
         let worker_outcome = Arc::clone(&outcome);
         let canceled = Arc::new(AtomicBool::new(false));
         let worker_canceled = Arc::clone(&canceled);
-        let executable = self.executable.clone();
-        let launch_mode = self.launch_mode.clone();
         let timeouts = self.timeouts;
         let prepared = Arc::new(Mutex::new(Some(prepared)));
         let worker_prepared = Arc::clone(&prepared);
@@ -466,16 +433,11 @@ impl ClaudeAccountAuthManager {
                         }
                     };
                     let mut final_result = match result {
-                        Ok(()) => {
-                            read_status(&executable, &launch_mode, &prepared, timeouts.status)
-                                .map_err(|_| ClaudeAccountAuthError::StatusRefreshFailed)
-                                .and_then(|state| {
-                                    state
-                                        .logged_in
-                                        .then_some(state)
-                                        .ok_or(ClaudeAccountAuthError::AccountNotConfirmed)
-                                })
-                        }
+                        // The official command's successful exit is Claude's authentication
+                        // verdict. Do not run the short-lived status command afterwards: it can
+                        // race its own OAuth refresh. Identity and plan remain unknown until a
+                        // long-lived coding session reports them through a safe provider path.
+                        Ok(()) => Ok(authenticated_state()),
                         Err(error) => Err(error),
                     };
                     if observe(&final_result).is_err() {
@@ -510,7 +472,7 @@ impl ClaudeAccountAuthManager {
             outcome,
             canceled,
             handoff_started,
-            wait_timeout: self.timeouts.login + self.timeouts.status.saturating_mul(2),
+            wait_timeout: self.timeouts.login + self.timeouts.terminate_grace + OUTPUT_DRAIN_GRACE,
             terminate_grace: self.timeouts.terminate_grace,
         })
     }
@@ -527,9 +489,8 @@ impl ClaudeAccountAuthManager {
         ) -> Result<(), ClaudeAccountAuthError>,
     {
         let prepared = self.prepare(account_id, lease)?;
-        let _ = self.read_prepared(&prepared)?;
         let spec = self.spec(&prepared, "logout", &["auth", "logout"]);
-        let output = match &self.launch_mode {
+        let output = match match &self.launch_mode {
             LaunchMode::Production => {
                 let job = prepared
                     ._lease
@@ -539,14 +500,24 @@ impl ClaudeAccountAuthManager {
             }
             #[cfg(test)]
             LaunchMode::Test { .. } => run_probe(&spec, self.timeouts.status, false, 0),
-        }
-        .map_err(map_process_error)?;
+        } {
+            Ok(output) => output,
+            Err(error) => {
+                let mut result = Err(map_process_error(error));
+                if observe(&result).is_err() {
+                    result = Err(ClaudeAccountAuthError::StateUpdateFailed);
+                }
+                // A failed supervised operation may still own a descendant or guardian job. The
+                // short probe API cannot return a positive quiescence proof on its error channel,
+                // so retain the exclusive lease until restart rather than race profile reuse.
+                prepared.retain_lease_fail_closed();
+                return result;
+            }
+        };
         let mut result = if output.status.success() {
-            self.read_prepared(&prepared).and_then(|state| {
-                (!state.logged_in)
-                    .then_some(state)
-                    .ok_or(ClaudeAccountAuthError::LogoutNotConfirmed)
-            })
+            // A successful official logout command is the provider verdict. A follow-up status
+            // process would re-enter Claude's OAuth startup path and is therefore unsafe.
+            Ok(signed_out_state())
         } else {
             Err(ClaudeAccountAuthError::ConnectionEnded)
         };
@@ -583,18 +554,6 @@ impl ClaudeAccountAuthManager {
             cwd,
             _lease: lease,
         })
-    }
-
-    fn read_prepared(
-        &self,
-        prepared: &PreparedAuth,
-    ) -> Result<ClaudeAccountState, ClaudeAccountAuthError> {
-        read_status(
-            &self.executable,
-            &self.launch_mode,
-            prepared,
-            self.timeouts.status,
-        )
     }
 
     fn spec(&self, prepared: &PreparedAuth, operation: &str, args: &[&str]) -> ProcessSpec {
@@ -732,47 +691,6 @@ impl LoginOutcome {
     }
 }
 
-fn read_status(
-    executable: &Path,
-    launch_mode: &LaunchMode,
-    prepared: &PreparedAuth,
-    timeout: Duration,
-) -> Result<ClaudeAccountState, ClaudeAccountAuthError> {
-    let spec = make_spec(
-        executable,
-        launch_mode,
-        prepared,
-        "status",
-        &["auth", "status", "--json"],
-    );
-    let output = match launch_mode {
-        LaunchMode::Production => {
-            let job = prepared
-                ._lease
-                .prepare_guarded_job("claude-auth-status")
-                .map_err(|_| ClaudeAccountAuthError::StartFailed)?;
-            run_probe_guarded(&spec, job, timeout, true, MAX_STATUS_BYTES)
-        }
-        #[cfg(test)]
-        LaunchMode::Test { .. } => run_probe(&spec, timeout, true, MAX_STATUS_BYTES),
-    }
-    .map_err(map_process_error)?;
-    if !output.status.success() && output.status.code() != Some(1) {
-        return Err(ClaudeAccountAuthError::ConnectionEnded);
-    }
-    let status = match launch_mode {
-        LaunchMode::Production => output.stdout.trim(),
-        #[cfg(test)]
-        LaunchMode::Test { .. } => output
-            .stdout
-            .lines()
-            .rev()
-            .find(|line| serde_json::from_str::<Value>(line).is_ok())
-            .ok_or(ClaudeAccountAuthError::InvalidResponse)?,
-    };
-    decode_status(status)
-}
-
 fn make_spec(
     executable: &Path,
     launch_mode: &LaunchMode,
@@ -840,42 +758,28 @@ fn verify_certified_version(
     Ok(())
 }
 
-fn decode_status(output: &str) -> Result<ClaudeAccountState, ClaudeAccountAuthError> {
-    let value: Value =
-        serde_json::from_str(output.trim()).map_err(|_| ClaudeAccountAuthError::InvalidResponse)?;
-    let object = value
-        .as_object()
-        .ok_or(ClaudeAccountAuthError::InvalidResponse)?;
-    let logged_in = object
-        .get("loggedIn")
-        .and_then(Value::as_bool)
-        .ok_or(ClaudeAccountAuthError::InvalidResponse)?;
-    let bounded = |key: &str| -> Result<Option<String>, ClaudeAccountAuthError> {
-        match object.get(key) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(value)) if !value.is_empty() && value.chars().count() <= 1024 => {
-                Ok(Some(value.clone()))
-            }
-            _ => Err(ClaudeAccountAuthError::InvalidResponse),
-        }
-    };
-    let auth_method = bounded("authMethod")?;
-    let identity = bounded("email")?;
-    let subscription_type = bounded("subscriptionType")?;
-    if logged_in && auth_method.as_deref() == Some("none") {
-        return Err(ClaudeAccountAuthError::InvalidResponse);
+fn authenticated_state() -> ClaudeAccountState {
+    ClaudeAccountState {
+        logged_in: true,
+        auth_method: Some("claude.ai".to_owned()),
+        identity: None,
+        subscription_type: None,
     }
-    Ok(ClaudeAccountState {
-        logged_in,
-        auth_method,
-        identity,
-        subscription_type,
-    })
+}
+
+fn signed_out_state() -> ClaudeAccountState {
+    ClaudeAccountState {
+        logged_in: false,
+        auth_method: None,
+        identity: None,
+        subscription_type: None,
+    }
 }
 
 fn map_process_error(error: crate::process::ProcessError) -> ClaudeAccountAuthError {
     match error {
         crate::process::ProcessError::TimedOut(_) => ClaudeAccountAuthError::TimedOut,
+        crate::process::ProcessError::Canceled => ClaudeAccountAuthError::Canceled,
         crate::process::ProcessError::Spawn(_) => ClaudeAccountAuthError::StartFailed,
         _ => ClaudeAccountAuthError::ConnectionEnded,
     }
@@ -893,9 +797,9 @@ mod tests {
     struct Fixture {
         _temp: tempfile::TempDir,
         profiles: Arc<ManagedProfiles>,
-        managed_root: PathBuf,
         manager: ClaudeAccountAuthManager,
         state_marker: PathBuf,
+        operation_log: PathBuf,
         // Fields drop in declaration order. Keep the shared slot last so it covers the child,
         // bounded process cleanup, profile authority, marker path, and temporary-root teardown.
         _recursive_test_process_slot: std::sync::MutexGuard<'static, ()>,
@@ -912,11 +816,16 @@ mod tests {
         let managed_root = temp_root.join("managed-profiles");
         let profiles = Arc::new(ManagedProfiles::new(managed_root.clone()).expect("profiles"));
         let state_marker = temp_root.join("connected");
+        let operation_log = temp_root.join("operations.log");
         let mut extra_env: BTreeMap<OsString, OsString> = [
             ("CLAUDE_AUTH_TEST_SCENARIO".into(), scenario.into()),
             (
                 "CLAUDE_AUTH_TEST_STATE".into(),
                 state_marker.clone().into_os_string(),
+            ),
+            (
+                "CLAUDE_AUTH_TEST_OPERATION_LOG".into(),
+                operation_log.clone().into_os_string(),
             ),
         ]
         .into_iter()
@@ -968,39 +877,23 @@ mod tests {
         Fixture {
             _temp: temp,
             profiles,
-            managed_root,
             manager,
             state_marker,
+            operation_log,
             _recursive_test_process_slot: recursive_test_process_slot,
         }
     }
 
-    #[test]
-    fn status_uses_both_exact_managed_profile_selectors_under_lease() {
-        let fixture = fixture("status_connected");
-        let lease = fixture
-            .profiles
-            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
-            .expect("lease");
-        let state = fixture
-            .manager
-            .read_account_with_lease_observed(ACCOUNT_ID, lease, |result| {
-                assert!(result.is_ok());
-                assert!(
-                    fixture
-                        .profiles
-                        .acquire_session_lease("claude-code", ACCOUNT_ID)
-                        .is_err()
-                );
-                Ok(())
-            })
-            .expect("state");
-        assert!(state.logged_in);
-        assert_eq!(state.identity.as_deref(), Some("person@example.test"));
+    fn operations(fixture: &Fixture) -> Vec<String> {
+        std::fs::read_to_string(&fixture.operation_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     #[test]
-    fn login_confirms_status_before_releasing_profile() {
+    fn successful_login_exit_is_the_verdict_and_never_invokes_status() {
         let fixture = fixture("login_success");
         let lease = fixture
             .profiles
@@ -1015,9 +908,13 @@ mod tests {
             fixture.state_marker.exists(),
             "login child did not run: {result:?}"
         );
-        let state = result.expect("confirmed state");
+        let state = result.expect("authenticated state");
         assert!(state.logged_in);
+        assert_eq!(state.auth_method.as_deref(), Some("claude.ai"));
+        assert_eq!(state.identity, None);
+        assert_eq!(state.subscription_type, None);
         assert!(fixture.state_marker.exists());
+        assert_eq!(operations(&fixture), ["login"]);
         let _lease = fixture
             .profiles
             .acquire_session_lease("claude-code", ACCOUNT_ID)
@@ -1027,13 +924,20 @@ mod tests {
     #[test]
     fn cancel_waits_for_process_tree_cleanup_before_releasing_profile() {
         let fixture = fixture("login_hang");
+        std::fs::write(&fixture.state_marker, b"preexisting-safe-session")
+            .expect("prior safe state");
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
         let lease = fixture
             .profiles
             .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
             .expect("lease");
         let pending = fixture
             .manager
-            .start_login_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
+            .start_login_with_lease_observed(ACCOUNT_ID, lease, move |result| {
+                lock(&recorder).push(result.clone());
+                Ok(())
+            })
             .expect("login");
         pending.cancel().expect("cancel");
         let _lease = fixture
@@ -1044,6 +948,79 @@ mod tests {
             pending.wait(),
             Err(ClaudeAccountAuthError::Canceled)
         ));
+        assert!(
+            fixture.state_marker.exists(),
+            "cancel preserves prior provider state"
+        );
+        assert_eq!(
+            lock(&observed).as_slice(),
+            &[Err(ClaudeAccountAuthError::Canceled)]
+        );
+        assert_eq!(operations(&fixture), ["login"]);
+    }
+
+    #[test]
+    fn successful_logout_exit_is_the_verdict_and_never_invokes_status() {
+        let fixture = fixture("logout_success");
+        std::fs::write(&fixture.state_marker, b"connected").expect("connected marker");
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease");
+        let state = fixture
+            .manager
+            .logout_with_lease_observed(ACCOUNT_ID, lease, move |result| {
+                lock(&recorder).push(result.clone());
+                Ok(())
+            })
+            .expect("signed out");
+
+        assert!(!state.logged_in);
+        assert_eq!(state.auth_method, None);
+        assert_eq!(state.identity, None);
+        assert_eq!(state.subscription_type, None);
+        assert!(!fixture.state_marker.exists());
+        assert_eq!(lock(&observed).as_slice(), &[Ok(state)]);
+        assert_eq!(operations(&fixture), ["logout"]);
+        let _lease = fixture
+            .profiles
+            .acquire_session_lease("claude-code", ACCOUNT_ID)
+            .expect("logout releases the exclusive lease after cleanup");
+    }
+
+    #[test]
+    fn failed_logout_preserves_prior_provider_state_and_reports_once() {
+        let fixture = fixture("logout_failure");
+        std::fs::write(&fixture.state_marker, b"connected").expect("connected marker");
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease");
+        let result = fixture
+            .manager
+            .logout_with_lease_observed(ACCOUNT_ID, lease, move |result| {
+                lock(&recorder).push(result.clone());
+                Ok(())
+            });
+
+        assert_eq!(result, Err(ClaudeAccountAuthError::ConnectionEnded));
+        assert!(
+            fixture.state_marker.exists(),
+            "failed logout preserves provider state"
+        );
+        assert_eq!(
+            lock(&observed).as_slice(),
+            &[Err(ClaudeAccountAuthError::ConnectionEnded)]
+        );
+        assert_eq!(operations(&fixture), ["logout"]);
+        let _lease = fixture
+            .profiles
+            .acquire_session_lease("claude-code", ACCOUNT_ID)
+            .expect("cleanly exited logout releases the exclusive lease");
     }
 
     #[test]
@@ -1277,16 +1254,22 @@ mod tests {
     }
 
     #[test]
-    fn login_whose_status_refresh_fails_reports_refresh_failure() {
-        let (_fixture, error) = login_error("login_success_status_broken");
-        assert_eq!(error, ClaudeAccountAuthError::StatusRefreshFailed);
-        assert_eq!(error.reason_code(), "auth_status_refresh_failed");
-    }
-
-    #[test]
-    fn login_that_never_signs_in_is_not_reported_as_connected() {
-        let (_fixture, error) = login_error("login_success_not_signed_in");
-        assert_eq!(error, ClaudeAccountAuthError::AccountNotConfirmed);
+    fn successful_official_login_does_not_require_a_follow_up_status_process() {
+        let fixture = fixture("login_success_not_signed_in");
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease");
+        let pending = fixture
+            .manager
+            .start_login_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
+            .expect("login starts");
+        let state = pending
+            .wait()
+            .expect("official login exit is authoritative");
+        assert!(state.logged_in);
+        assert_eq!(state.identity, None);
+        assert_eq!(operations(&fixture), ["login"]);
     }
 
     #[test]
@@ -1314,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_login_is_refreshed_observed_and_survives_a_restart() {
+    fn successful_login_is_observed_exactly_once_without_a_status_process() {
         let fixture = fixture("login_success");
         let observed = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&observed);
@@ -1331,40 +1314,13 @@ mod tests {
             .expect("login");
         let state = pending.wait().expect("signed in");
         assert!(state.logged_in);
-        assert_eq!(state.identity.as_deref(), Some("person@example.test"));
+        assert_eq!(state.identity, None);
         assert_eq!(
             lock(&observed).as_slice(),
             &[Ok(state.clone())],
-            "the refreshed signed-in state is published exactly once"
+            "the provider command's signed-in result is published exactly once"
         );
-        drop(pending);
-
-        // A full quit/reopen builds a new manager over the same managed profile root. Signed-in
-        // state is re-read from Claude's own profile store, never cached by KalCode.
-        let reopened = ClaudeAccountAuthManager::new_for_test(
-            fixture.manager.executable.clone(),
-            fixture.manager.source_env.clone(),
-            Arc::new(
-                ManagedProfiles::new(fixture.managed_root.clone()).expect("reopened profiles"),
-            ),
-            match &fixture.manager.launch_mode {
-                LaunchMode::Test { args, .. } => args.clone(),
-                LaunchMode::Production => unreachable!("test fixture"),
-            },
-            match &fixture.manager.launch_mode {
-                LaunchMode::Test { extra_env, .. } => extra_env.clone(),
-                LaunchMode::Production => unreachable!("test fixture"),
-            },
-            fixture.manager.timeouts,
-        );
-        let lease = reopened
-            .profiles
-            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
-            .expect("lease after restart");
-        let after_restart = reopened
-            .read_account_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
-            .expect("status after restart");
-        assert_eq!(after_restart, state);
+        assert_eq!(operations(&fixture), ["login"]);
     }
 
     #[test]
@@ -1427,18 +1383,6 @@ mod tests {
     }
 
     #[test]
-    fn decoder_fails_closed_on_ambiguous_or_unbounded_status() {
-        for value in [
-            "{}".to_owned(),
-            r#"{"loggedIn":"yes"}"#.to_owned(),
-            format!(r#"{{"loggedIn":true,"email":"{}"}}"#, "x".repeat(1025)),
-            r#"{"loggedIn":true,"authMethod":"none"}"#.to_owned(),
-        ] {
-            assert!(decode_status(&value).is_err(), "{value}");
-        }
-    }
-
-    #[test]
     fn fake_claude_cli() {
         let Ok(operation) = std::env::var("CLAUDE_AUTH_TEST_OPERATION") else {
             return;
@@ -1452,6 +1396,19 @@ mod tests {
         );
         let marker = PathBuf::from(std::env::var_os("CLAUDE_AUTH_TEST_STATE").expect("marker"));
         let scenario = std::env::var("CLAUDE_AUTH_TEST_SCENARIO").expect("scenario");
+        let operation_log = PathBuf::from(
+            std::env::var_os("CLAUDE_AUTH_TEST_OPERATION_LOG").expect("operation log"),
+        );
+        use std::io::Write as _;
+        writeln!(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(operation_log)
+                .expect("open operation log"),
+            "{operation}"
+        )
+        .expect("record operation");
         match operation.as_str() {
             "login"
                 if scenario == "login_hang"
@@ -1476,26 +1433,11 @@ mod tests {
             }
             "login" if scenario == "login_success_not_signed_in" => {}
             "login" => std::fs::write(&marker, b"connected").expect("login marker"),
+            "logout" if scenario == "logout_failure" => std::process::exit(7),
             "logout" => {
                 if marker.exists() {
                     std::fs::remove_file(&marker).expect("logout marker");
                 }
-            }
-            "status" if scenario == "login_success_status_broken" && marker.exists() => {
-                println!("not json");
-            }
-            "status" => {
-                let connected = scenario == "status_connected" || marker.exists();
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "loggedIn": connected,
-                        "authMethod": if connected { "claude.ai" } else { "none" },
-                        "apiProvider": "firstParty",
-                        "email": if connected { Some("person@example.test") } else { None },
-                        "subscriptionType": if connected { Some("max") } else { None },
-                    })
-                );
             }
             _ => panic!("unexpected operation"),
         }

@@ -77,6 +77,14 @@ impl FakeInstall {
         serde_json::from_str(&text).expect("json")
     }
 
+    fn runs(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.dir.path().join("runs.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("run"))
+            .collect()
+    }
+
     fn config(&self, mode: PermissionMode, resume: Option<&str>) -> SessionConfig {
         SessionConfig {
             thread_id: kalcode_contracts::ids::new_id(),
@@ -355,7 +363,7 @@ fn wait_for(condition: impl Fn() -> bool) -> bool {
 // ---------------------------------------------------------------- detection
 
 #[test]
-fn detects_an_installed_signed_in_claude_on_a_temp_path() {
+fn claude_detection_is_version_only_and_never_runs_auth_status() {
     let fake = FakeInstall::new(
         "claude",
         json!({"version": "2.1.300 (Claude Code)", "authExit": 0}),
@@ -365,7 +373,7 @@ fn detects_an_installed_signed_in_claude_on_a_temp_path() {
     assert_eq!(d.state, DetectionState::Installed);
     assert_eq!(d.version.as_deref(), Some("2.1.300"));
     assert_eq!(d.minimum_version.as_deref(), Some("2.1.259"));
-    assert_eq!(d.auth, AuthState::Authenticated);
+    assert_eq!(d.auth, AuthState::Unknown);
     assert!(
         d.display_path
             .as_deref()
@@ -375,18 +383,13 @@ fn detects_an_installed_signed_in_claude_on_a_temp_path() {
         result.executable.as_deref().and_then(Path::parent),
         Some(fake.dir.path())
     );
+    let runs = fake.runs();
+    assert_eq!(runs.len(), 1, "detection ran unexpected commands: {runs:?}");
+    assert_eq!(runs[0]["args"], json!(["--version"]));
 }
 
 #[test]
-fn reports_signed_out_outdated_and_broken_installs() {
-    let signed_out = FakeInstall::new("claude", json!({"authExit": 1}));
-    assert_eq!(
-        detect(&catalog::claude_spec(), &signed_out.env())
-            .detection
-            .auth,
-        AuthState::NotAuthenticated
-    );
-
+fn reports_outdated_and_broken_installs() {
     let old = FakeInstall::new("claude", json!({"version": "2.1.100 (Claude Code)"}));
     let d = detect(&catalog::claude_spec(), &old.env()).detection;
     assert_eq!(d.state, DetectionState::Outdated);
@@ -541,6 +544,10 @@ fn text_turn_flows_from_process_to_normalized_events() {
     assert_eq!(after("--permission-mode").as_deref(), Some("default"));
     assert_eq!(after("--permission-prompts").as_deref(), Some("none"));
     assert_eq!(after("--model").as_deref(), Some("sonnet"));
+    assert!(
+        fake.runs().iter().all(|run| run["args"] != json!(["auth", "status"])),
+        "headless launch must never run Claude's unsafe short-lived status command"
+    );
     let env: Vec<String> = serde_json::from_value(fake.read_json("last-env.json")).expect("env");
     assert!(env.iter().any(|n| n == "ANTHROPIC_API_KEY"), "{env:?}");
     for leaked in ["OPENAI_API_KEY", "KALCODE_DATA_DIR", "GITHUB_TOKEN"] {
@@ -836,13 +843,6 @@ fn sessions_refuse_to_start_when_the_provider_is_unusable() {
             .err(),
         Some(ProviderError::NotInstalled)
     );
-    let signed_out = FakeInstall::new("claude", json!({"authExit": 1}));
-    assert_eq!(
-        provider(&signed_out)
-            .start_session(signed_out.config(PermissionMode::Approve, None), sink())
-            .err(),
-        Some(ProviderError::NotAuthenticated)
-    );
     let fake = FakeInstall::new("claude", json!({}));
     let mut config = fake.config(PermissionMode::Approve, None);
     config.working_directory = "relative/dir".into();
@@ -864,8 +864,8 @@ fn sessions_refuse_to_start_when_the_provider_is_unusable() {
 
 // ---------------------------------------------------------------- real provider (opt-in)
 
-/// Detects the real `claude` on this machine. Runs only `claude --version` and
-/// `claude auth status` (no prompt, no quota). Opt in with `cargo test -- --ignored real_`.
+/// Detects the real `claude` on this machine. Runs only `claude --version` (no prompt or quota).
+/// Opt in with `cargo test -- --ignored real_`.
 #[test]
 #[ignore = "uses the real Claude Code install on this machine"]
 fn real_claude_detection() {

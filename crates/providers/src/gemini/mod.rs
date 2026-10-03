@@ -67,7 +67,11 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
             "Tool calls that need confirmation can't be answered in headless mode, so they \
              don't run.",
         ),
-        map(PermissionMode::Auto, "Runs like Approve."),
+        map(
+            PermissionMode::Auto,
+            "File edits are approved automatically; shell commands and other tools still require \
+             confirmation. yolo mode is never used.",
+        ),
         map(
             PermissionMode::Bypass,
             "File edits are approved automatically; other tools that need confirmation don't \
@@ -471,7 +475,7 @@ mod tests {
                     .expect("mode");
                 let cap = match mode {
                     PermissionMode::Plan => 0,
-                    PermissionMode::Bypass => 2,
+                    PermissionMode::Auto | PermissionMode::Bypass => 2,
                     _ => 1,
                 };
                 assert!(rank(&args[at + 1]) <= cap, "{mode:?}");
@@ -481,6 +485,10 @@ mod tests {
             strings(headless_args(PermissionMode::Plan, None, None).expect("args")),
             ["--output-format", "stream-json", "--approval-mode", "plan"]
         );
+        assert_eq!(approval_mode(PermissionMode::Approve), "default");
+        assert_eq!(approval_mode(PermissionMode::Auto), "auto_edit");
+        assert_eq!(approval_mode(PermissionMode::Bypass), "auto_edit");
+        assert!(FORBIDDEN.contains(&"--approval-mode=yolo"));
     }
 
     #[test]

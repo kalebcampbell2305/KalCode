@@ -84,6 +84,13 @@ describe("provider health labels", () => {
       detail: "Checked with codex login status.",
     });
     expect(signInText(health({ auth: "not_authenticated" }), codex).label).toBe("Signed out");
+    expect(
+      signInText(health({ providerId: "claude-code", displayName: "Claude Code", auth: "unknown" }), claude),
+    ).toEqual({
+      tone: "idle",
+      label: "Sign-in status unknown",
+      detail: "Sign-in is checked when a Claude Code session starts.",
+    });
     expect(signInText(health({ displayName: "Gemini CLI", auth: "unknown" }), gemini).label).toBe(
       "Gemini CLI has no documented way to check sign-in",
     );
