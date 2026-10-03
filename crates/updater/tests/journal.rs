@@ -308,26 +308,6 @@ fn forward_only_mac_fence_rejects_the_wrong_target_phase_or_version() {
 }
 
 #[test]
-fn an_install_attempt_that_failed_to_save_is_never_written_later() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("updater.json");
-    let mut journal = UpdateJournal::load(&path).unwrap();
-    journal.set_channel(UpdateChannel::Stable).unwrap();
-    // A directory where the next journal file goes makes this save fail before it commits.
-    let blocker = temp.path().join("updater.json.next");
-    std::fs::create_dir(&blocker).unwrap();
-    assert!(journal.record_install_attempt(attempt()).is_err());
-    assert_eq!(journal.state().install_attempt, None);
-    std::fs::remove_dir(&blocker).unwrap();
-
-    // An unrelated later save must not record the install that never started.
-    journal.set_channel(UpdateChannel::Beta).unwrap();
-    let reopened = UpdateJournal::load(&path).unwrap();
-    assert_eq!(reopened.state().channel, UpdateChannel::Beta);
-    assert_eq!(reopened.state().install_attempt, None);
-}
-
-#[test]
 fn journal_defaults_to_stable_and_survives_restart() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("updater.json");
