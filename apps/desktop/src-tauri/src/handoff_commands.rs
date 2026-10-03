@@ -476,20 +476,24 @@ impl HandoffState {
             },
         );
         if let Err(original) = created {
-            if let Ok(Some(existing)) = self.store.get_if_preview(id, preview_hash) {
+            let Ok(Some(existing)) = self.store.get_if_preview(id, preview_hash) else {
+                return Err(original);
+            };
+            if existing.status != HandoffStatus::Queued {
                 return Ok(existing);
             }
-            return Err(original);
+            // A concurrent caller created this record and is delivering it. Join that attempt
+            // under the dispatch gate, so every caller returns the same authoritative record;
+            // `dispatch_one` writes to the terminal at most once and reports a settled record as is.
+            self.mark_queued(id)?;
+            let _gate = self.dispatch_gate.lock().map_err(|_| poisoned())?;
+            // The winner already settled it (delivery consumes the draft): report that record.
+            if !self.drafts.lock().map_err(|_| poisoned())?.contains_key(id) {
+                return self.store.get(id);
+            }
+            return self.dispatch_one(id);
         }
-        let queued = {
-            let mut drafts = self.drafts.lock().map_err(|_| poisoned())?;
-            drafts.get_mut(id).map(|draft| {
-                let now = Instant::now();
-                draft.queued_at = Some(now);
-                draft.next_attempt = now;
-                draft.retry_delay = Duration::from_secs(1);
-            })
-        };
+        let queued = self.mark_queued(id)?;
         if queued.is_none() {
             return self.store.interrupt_pending(
                 id,
@@ -502,6 +506,19 @@ impl HandoffState {
         };
         self.wake();
         result
+    }
+
+    /// Queues a sent preview for delivery (once: a later call keeps the first queue time).
+    fn mark_queued(&self, id: &str) -> Result<Option<()>> {
+        let mut drafts = self.drafts.lock().map_err(|_| poisoned())?;
+        Ok(drafts.get_mut(id).map(|draft| {
+            if draft.queued_at.is_none() {
+                let now = Instant::now();
+                draft.queued_at = Some(now);
+                draft.next_attempt = now;
+                draft.retry_delay = Duration::from_secs(1);
+            }
+        }))
     }
 
     fn cancel(&self, id: &str) -> Result<HandoffRecord> {
