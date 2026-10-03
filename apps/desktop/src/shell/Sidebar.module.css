@@ -73,7 +73,7 @@
   height: var(--control-h-md);
   padding: 0 var(--space-2);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-secondary);
   font-size: var(--type-ui);
@@ -92,6 +92,12 @@
 .button:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
+}
+
+/* Pressed: acknowledged on the same frame as the click. */
+.button:active {
+  background: var(--color-surface-active);
+  transition-duration: 0ms;
 }
 
 .button[aria-current="page"] {
