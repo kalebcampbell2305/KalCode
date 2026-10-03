@@ -14,6 +14,23 @@ test("Windows installer wires the source-controlled path hook through Tauri", ()
   assert.ok(existsSync(resolve(desktop, hooks)));
 });
 
+test("Windows installer never skips a locked file (AllowSkipFiles off outside any hook macro)", () => {
+  const text = readFileSync(resolve(desktop, config.bundle.windows.nsis.installerHooks), "utf8");
+  let depth = 0;
+  let found = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/;.*$/, "").trim();
+    if (/^!macro\s/i.test(line)) depth += 1;
+    else if (/^!macroend\b/i.test(line)) depth -= 1;
+    else if (/^AllowSkipFiles\s+off$/i.test(line)) {
+      assert.equal(depth, 0, "AllowSkipFiles off must be a top-level installer attribute");
+      found = true;
+    }
+    assert.ok(!/^AllowSkipFiles\s+on$/i.test(line), "the hooks must not turn AllowSkipFiles back on");
+  }
+  assert.ok(found, "installer-hooks.nsh must set AllowSkipFiles off");
+});
+
 if (process.platform === "win32") {
   test("native NSIS removes only owned shortcuts after short-path payload removal", () => {
     const compiler =

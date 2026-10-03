@@ -1,5 +1,12 @@
 !include LogicLib.nsh
 
+; Tauri !includes this file at the top level of its installer script, so this installer attribute applies to every
+; File command. A locked kalcode.exe (e.g. an exiting process that has not released its image yet) must fail the install
+; instead of being skipped: with the NSIS default, a silent /S install answers the write error with Ignore, exits 0 and
+; leaves the old binary in place (update-over-087 investigation). The in-app updater then sees the old build start and
+; falls back to its restart prompt instead of reporting a successful update.
+AllowSkipFiles off
+
 ; Shell links store long paths even when /D= or the uninstaller was invoked through an 8.3
 ; alias. Tauri compares shortcut targets after deleting the payload, when normalization is
 ; too late. Resolve the existing directory first, retaining its exact filesystem identity.

@@ -34,7 +34,9 @@ use installer::PreparedInstaller;
 use silent_fallback::SilentInstallRecord;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
+// KalCode's public version, from tauri.conf.json via build.rs (the workspace crates carry a fixed
+// internal version so a public version change recompiles only this crate).
+const USER_AGENT: &str = concat!("KalCode/", env!("KALCODE_PUBLIC_VERSION"));
 const MAX_FEED_BYTES: u64 = 64 * 1024;
 /// The build that most recently raised this data folder's database schema. Every migration is
 /// forward-only, so recovery may only restore a build at or after this floor.

@@ -392,6 +392,7 @@ impl ProviderRuntimeAuthority {
                     executable,
                     source_env.clone(),
                     Arc::clone(&profiles),
+                    env!("KALCODE_PUBLIC_VERSION"),
                 ))
             });
         let gemini_auth = source_env
@@ -2612,6 +2613,7 @@ mod tests {
             missing.clone(),
             inner.source_env.clone(),
             Arc::clone(&inner.profiles),
+            env!("KALCODE_PUBLIC_VERSION"),
         )));
         inner.claude_auth = Some(Arc::new(ClaudeAccountAuthManager::new(
             missing,

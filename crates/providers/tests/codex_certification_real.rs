@@ -105,7 +105,12 @@ fn real_codex_app_server_account_protocol_matches_kalcode() {
     #[cfg(not(any(windows, target_os = "macos")))]
     let profiles = Arc::new(ManagedProfiles::new(root.join("managed")).expect("profiles"));
     let account_id = kalcode_contracts::ids::new_id();
-    let manager = CodexAccountAuthManager::new(codex, source(&root), Arc::clone(&profiles));
+    let manager = CodexAccountAuthManager::new(
+        codex,
+        source(&root),
+        Arc::clone(&profiles),
+        "0.0.0-certification",
+    );
 
     // Version gate + initialize(codexHome == managed home) + account/read on a fresh profile.
     let state = manager.read_account(&account_id).expect("account/read");

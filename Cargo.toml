@@ -3,7 +3,10 @@ resolver = "3"
 members = ["crates/*", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.1.9"
+# Fixed internal crate version. KalCode's public version lives in apps/desktop/src-tauri/tauri.conf.json
+# (with apps/desktop/package.json) and is compiled only into the app crate, so changing it never
+# recompiles the workspace crates. Do not bump this for a release.
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.89"
 license = "LicenseRef-KalCode-Proprietary"
