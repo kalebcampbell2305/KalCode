@@ -6,6 +6,10 @@ import {
   chipCounts,
   compareThreads,
   filterThreads,
+  fleetCounts,
+  fleetFilterOf,
+  fleetGroupOf,
+  fleetSummaryLine,
   GROUP_MODES,
   groupThreads,
   matchesQuery,
@@ -68,13 +72,62 @@ describe("chip counts and the summary line", () => {
   });
 });
 
+describe("Agent Fleet groups", () => {
+  it("partition every agent into exactly one of five groups; FAILED is its own", () => {
+    const all = (Object.keys(DISPLAY_STATUS_OF) as ThreadStatus[]).map((s) => thread(s));
+    const counts = fleetCounts(all);
+    expect(counts.all).toBe(18);
+    expect(counts.needs_you + counts.working + counts.done + counts.idle + counts.failed).toBe(18);
+    expect(counts.needs_you).toBe(2);
+    expect(counts.failed).toBe(1);
+    expect(fleetGroupOf("failed")).toBe("failed");
+    expect(fleetGroupOf("waiting_for_user")).toBe("needs_you");
+    expect(fleetGroupOf("interrupted")).toBe("idle");
+    expect(fleetGroupOf("completed")).toBe("done");
+  });
+
+  it("summarises like the owner's example, with zeros left out", () => {
+    const threads = [
+      thread("running_command"),
+      thread("waiting_for_permission"),
+      thread("waiting_for_user"),
+      ...Array.from({ length: 9 }, () => thread("completed")),
+      ...Array.from({ length: 15 }, () => thread("idle")),
+    ];
+    expect(fleetSummaryLine(fleetCounts(threads))).toBe("27 agents · 1 working · 2 need you · 9 done · 15 idle");
+    expect(fleetSummaryLine(fleetCounts([thread("waiting_for_user"), thread("failed")]))).toBe(
+      "2 agents · 1 needs you · 1 failed",
+    );
+    expect(fleetSummaryLine(fleetCounts([]))).toBe("0 agents");
+  });
+
+  it("maps a KalVoice chip request onto the Fleet filter", () => {
+    expect(fleetFilterOf("waiting_for_you")).toBe("needs_you");
+    expect(fleetFilterOf("working")).toBe("working");
+    expect(fleetFilterOf("all")).toBe("all");
+  });
+});
+
 describe("filtering and search", () => {
-  it("filters by chip and by every word of the query", () => {
+  it("filters by group and by every word of the query", () => {
     const a = thread("editing", { name: "Fix login flow", branch: "fix/login" });
     const b = thread("waiting_for_permission", { name: "Bump deps", workspaceName: "atlas-api" });
     const c = thread("completed", { name: "Write docs", providerName: "Codex", providerId: "codex" });
-    expect(filterThreads([a, b, c], "working", "")).toEqual([a]);
-    expect(filterThreads([a, b, c], "waiting_for_you", "")).toEqual([b]);
+    const d = thread("failed", { name: "Ship it", accountLabel: "Zeta", effort: "high" });
+    expect(filterThreads([a, b, c, d], "working", "")).toEqual([a]);
+    expect(filterThreads([a, b, c, d], "needs_you", "")).toEqual([b]);
+    expect(filterThreads([a, b, c, d], "failed", "")).toEqual([d]);
+    // Account, status, effort and caller-supplied fields (the call sign) are searchable too.
+    expect(filterThreads([a, b, c, d], "all", "zeta")).toEqual([d]);
+    expect(filterThreads([a, b, c, d], "all", "failed")).toEqual([d]);
+    expect(filterThreads([a, b, c, d], "all", "high")).toEqual([d]);
+    expect(filterThreads([a, b, c, d], "all", "waiting")).toEqual([b]);
+    expect(filterThreads([a, b, c, d], "all", "codex b", (t) => (t === a ? ["Codex B"] : []))).toEqual([a]);
+    // A phrase that names something exactly wins over loose words ("Claude B", not any "b").
+    const e = thread("idle", { name: "Bump billing", accountLabel: "Claude A" });
+    const f = thread("idle", { name: "Docs", accountLabel: "Claude B" });
+    expect(filterThreads([e, f], "all", "claude  b")).toEqual([f]);
+    expect(filterThreads([e, f], "all", "claude bump")).toEqual([e]);
     expect(filterThreads([a, b, c], "all", "atlas")).toEqual([b]);
     expect(filterThreads([a, b, c], "all", "codex docs")).toEqual([c]);
     expect(matchesQuery(a, "FIX/LOGIN")).toBe(true);
@@ -94,8 +147,9 @@ describe("grouping", () => {
     const idle = thread("idle");
     const done = thread("completed");
     const groups = groupThreads([idle, done, working, failed, permission], "status");
-    expect(groups.map((g) => g.label)).toEqual(["Needs you", "Working", "Done", "Idle"]);
-    expect(groups[0]?.threads).toEqual([permission, failed]);
+    expect(groups.map((g) => g.label)).toEqual(["Needs you", "Working", "Done", "Idle", "Failed"]);
+    expect(groups[0]?.threads).toEqual([permission]);
+    expect(groups[4]?.threads).toEqual([failed]);
   });
 
   it("puts the projects and providers that need the person first", () => {
@@ -130,9 +184,9 @@ describe("activity trend", () => {
 });
 
 describe("performance", () => {
-  it("recomputes counts, filters and groups for 50 threads well within a frame", () => {
+  it("recomputes counts, filters and groups for 200 agents well within a frame", () => {
     const statuses = Object.keys(DISPLAY_STATUS_OF) as ThreadStatus[];
-    const threads = Array.from({ length: 50 }, (_, i) =>
+    const threads = Array.from({ length: 200 }, (_, i) =>
       thread(statuses[i % statuses.length] ?? "idle", {
         workspaceId: `ws-${i % 5}`,
         workspaceName: `ws-${i % 5}`,
@@ -143,7 +197,7 @@ describe("performance", () => {
     groupThreads(filterThreads(threads, "all", ""), "status");
     const start = performance.now();
     for (const mode of GROUP_MODES) {
-      chipCounts(threads);
+      fleetCounts(threads);
       groupThreads(filterThreads(threads, "all", "ws"), mode);
     }
     expect(performance.now() - start).toBeLessThan(16);

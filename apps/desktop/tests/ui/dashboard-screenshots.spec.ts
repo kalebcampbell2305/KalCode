@@ -39,7 +39,7 @@ const SCENES: Scene[] = [
     prepare: (page) =>
       page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "Provider" }).click(),
   },
-  { name: "waiting", scenario: "busy", prepare: (page) => chip(page, "Waiting for you").click() },
+  { name: "waiting", scenario: "busy", prepare: (page) => chip(page, "Needs you").click() },
   { name: "done", scenario: "busy", prepare: (page) => chip(page, "Done").click() },
   { name: "error", scenario: "errors" },
   { name: "empty", scenario: "empty" },

@@ -1,16 +1,24 @@
 import type { ApprovalDecision, ApprovalView } from "@kalcode/protocol";
-import { Button } from "@kalcode/ui/components";
-import { ShieldAlert } from "lucide-react";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@kalcode/ui/components";
+import { ChevronDown, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { actionDetail, DECISION_LABELS, SCOPE_LABELS, scopeTone } from "../permissions/labels.ts";
 import styles from "./AgentCard.module.css";
 
 /**
- * The approval answers, in the app's order: Deny · Allow for workspace · Allow for thread ·
- * Approve once (Z4 `PROMPT_DECISIONS`). Only the answers the engine allows for this request
- * render (remote-consequential requests offer Deny and Approve once).
+ * The approval answers, in the app's order (Z4 `PROMPT_DECISIONS`). On a card the two common
+ * answers sit inline (Deny · Approve once) and the broader grants (Allow for workspace · Allow for
+ * thread) wait in a More menu, so the row never wraps. Only the answers the engine allows for this
+ * request render (remote-consequential requests offer Deny and Approve once).
  */
-const ORDER: readonly ApprovalDecision[] = ["deny", "approve_for_workspace", "approve_for_thread", "approve_once"];
+const INLINE: readonly ApprovalDecision[] = ["deny", "approve_once"];
+const MORE: readonly ApprovalDecision[] = ["approve_for_workspace", "approve_for_thread"];
 
 export interface InlineApprovalProps {
   request: ApprovalView;
@@ -24,11 +32,12 @@ export interface InlineApprovalProps {
  * ACTION NEEDED on a Dashboard card: the exact action the agent asks for and the answers, answered
  * through Z4 `approval_decide`. The full prompt (reason, grant coverage) is in the approvals panel.
  */
-export function InlineApproval({ request, more, onDecide, onReviewAll }: InlineApprovalProps) {
+export function InlineApproval({ request, more: moreRequests, onDecide, onReviewAll }: InlineApprovalProps) {
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
   const detail = actionDetail(request.action.action);
   const title = request.action.summary || detail || "An agent wants to act";
-  const decisions = ORDER.filter((decision) => request.allowedDecisions.includes(decision));
+  const inline = INLINE.filter((decision) => request.allowedDecisions.includes(decision));
+  const more = MORE.filter((decision) => request.allowedDecisions.includes(decision));
   const labelId = `approval-${request.id}-title`;
 
   const decide = async (decision: ApprovalDecision) => {
@@ -58,11 +67,11 @@ export function InlineApproval({ request, more, onDecide, onReviewAll }: InlineA
         </ul>
       ) : null}
       <div className={styles.decisions}>
-        {decisions.map((decision) => (
+        {inline.map((decision) => (
           <Button
             key={decision}
             size="sm"
-            variant={decision === "deny" ? "danger" : decision === "approve_once" ? "primary" : "secondary"}
+            variant={decision === "deny" ? "danger" : "primary"}
             busy={busy === decision}
             disabled={busy !== null && busy !== decision}
             onClick={() => void decide(decision)}
@@ -70,10 +79,33 @@ export function InlineApproval({ request, more, onDecide, onReviewAll }: InlineA
             {DECISION_LABELS[decision]}
           </Button>
         ))}
+        {more.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className={styles.decisionMore}
+                busy={busy !== null && more.includes(busy)}
+                disabled={busy !== null && !more.includes(busy)}
+              >
+                More
+                <ChevronDown aria-hidden="true" className={styles.decisionMoreGlyph} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {more.map((decision) => (
+                <DropdownMenuItem key={decision} onSelect={() => void decide(decision)}>
+                  {DECISION_LABELS[decision]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </div>
-      {more > 0 ? (
+      {moreRequests > 0 ? (
         <button type="button" className={styles.linkButton} onClick={onReviewAll}>
-          {more} more {more === 1 ? "request" : "requests"} from this agent · Review all
+          {moreRequests} more {moreRequests === 1 ? "request" : "requests"} from this agent · Review all
         </button>
       ) : null}
     </div>

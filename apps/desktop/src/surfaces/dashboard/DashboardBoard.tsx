@@ -1,6 +1,11 @@
-import type { ApprovalView, DashboardChip, ThreadSummary } from "@kalcode/protocol";
+import type { ApprovalView, ThreadSummary } from "@kalcode/protocol";
 import {
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   EmptyState,
   ErrorState,
   IconButton,
@@ -9,30 +14,36 @@ import {
   Skeleton,
   TextInput,
 } from "@kalcode/ui/components";
-import { ChevronDown, Search, X } from "lucide-react";
+import { Archive, BroomSparkles, ChevronDown, CircleX, ListX, Power, Search, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
+import { useKalTidy } from "../code/kaltidy/kalTidyContext.ts";
 import { useProviderPanesEnabled } from "../code/panes/useProviderPanes.ts";
 import { useLaunchAgent } from "../code/useLaunchAgent.ts";
 import { usePermissions } from "../permissions/PermissionsProvider.tsx";
 import { AgentCard } from "./AgentCard.tsx";
 import styles from "./DashboardBoard.module.css";
 import {
-  CHIP_LABELS,
-  CHIPS,
-  type ChipCounts,
-  chipCounts,
+  FLEET_FILTER_LABELS,
+  FLEET_FILTERS,
+  FLEET_GROUPS,
+  type FleetCounts,
+  type FleetFilter,
   filterThreads,
+  fleetCounts,
+  fleetFilterOf,
+  fleetSummaryLine,
   GROUP_MODE_LABELS,
   GROUP_MODES,
   type GroupMode,
   groupThreads,
-  summaryLine,
   type ThreadGroup,
 } from "./data/board.ts";
 import { useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
+import { canDismiss, useAgentCleanup } from "./fleet/agentCleanup.ts";
+import { isFolded, useFleetLayout } from "./fleet/fleetLayout.ts";
 import { fleetHandles, mergeReadiness } from "./fleet/fleetModel.ts";
 import { morphIntoAgent } from "./fleet/morph.ts";
 import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
@@ -40,24 +51,28 @@ import { useNow } from "./useNow.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
 
 /** Card sizing: a card never gets narrower than this; wider boards get more columns. */
-const CARD_MIN_PX = 300;
-const CARD_GAP_PX = 12;
+const CARD_MIN_PX = 284;
+const CARD_GAP_PX = 10;
 const GROUP_KEY = "kalcode.dashboard.groupBy";
+/** The archived view lists the newest this many at a time (hundreds stay usable). */
+const ARCHIVED_PAGE = 48;
 
-const EMPTY_FILTER_TEXT: Record<DashboardChip, string> = {
+const EMPTY_FILTER_TEXT: Record<FleetFilter, string> = {
   all: "No agents match.",
-  waiting_for_you: "Nothing is waiting for you.",
+  needs_you: "Nothing needs you right now.",
   working: "No agents are working right now.",
   done: "Nothing has finished yet.",
   idle: "No idle agents.",
+  failed: "No failed agents.",
 };
 
-const CHIP_ANNOUNCE: Record<DashboardChip, (n: number) => string> = {
+const FILTER_ANNOUNCE: Record<FleetFilter, (n: number) => string> = {
   all: (n) => `Showing all ${n} ${n === 1 ? "agent" : "agents"}.`,
-  waiting_for_you: (n) => (n === 0 ? "Nothing is waiting for you." : `Showing ${n} waiting for you.`),
+  needs_you: (n) => (n === 0 ? "Nothing needs you." : `Showing ${n} that need you.`),
   working: (n) => (n === 0 ? "No agents are working." : `Showing ${n} working.`),
   done: (n) => (n === 0 ? "Nothing has finished." : `Showing ${n} done.`),
   idle: (n) => (n === 0 ? "No idle agents." : `Showing ${n} idle.`),
+  failed: (n) => (n === 0 ? "No failed agents." : `Showing ${n} failed.`),
 };
 
 function readGroupMode(): GroupMode {
@@ -98,10 +113,11 @@ export interface DashboardBoardProps {
 }
 
 /**
- * Agent Fleet: the live board of coding agents (Claude Code, Codex or Gemini CLI in Code terminal
- * panes; chat threads stay in Threads): filter chips with real counts, search, grouping, and a
- * virtualized grid of cards that gains columns on wide windows instead of stretching. A card opens
- * its agent's terminal in Code. The same board renders in the Dashboard surface and in a pane.
+ * Agent Fleet: the live command surface for coding agents (Claude Code, Codex or Gemini CLI in
+ * Code terminal panes; chat threads stay in Threads). A summary with a status bar, six filters
+ * with real counts (All, Needs you, Working, Done, Idle, Failed), instant search, grouping, cleanup
+ * and a virtualized grid of compact cards that gains columns on wide windows. A card opens its
+ * agent's terminal in Code; nothing here duplicates a terminal.
  */
 export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const { state, reload, pendingActions, runAction } = useCodingAgents();
@@ -109,39 +125,49 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const permissions = usePermissions();
   const intents = useOptionalUiIntents();
   const launchAgent = useLaunchAgent();
+  const kalTidy = useKalTidy();
+  const cleanup = useAgentCleanup();
   const { navigate } = useNavigation();
   // Provider panes are how a coding agent runs: a real CLI in a Code terminal pane.
   const providerPanes = useProviderPanesEnabled();
   const now = useNow(30_000);
   const [showArchived, setShowArchived] = useState(false);
+  const [archivedShown, setArchivedShown] = useState(ARCHIVED_PAGE);
+  const [confirmCloseAll, setConfirmCloseAll] = useState(false);
   const archivedId = useId();
+  const { layout, setFolded, toggleCard } = useFleetLayout();
+  const expanded = useMemo(() => new Set(layout.expanded), [layout.expanded]);
 
-  const [chip, setChip] = useState<DashboardChip>("all");
+  const [filter, setFilter] = useState<FleetFilter>("all");
   const [query, setQuery] = useState("");
   const [groupMode, setGroupModeState] = useState<GroupMode>(readGroupMode);
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [announcement, setAnnouncement] = useState<{ id: number; text: string } | null>(null);
   const announceSeq = useRef(0);
   const chipsRef = useRef<HTMLDivElement>(null);
+  const closeAllRef = useRef<HTMLButtonElement>(null);
+  const cleanupRef = useRef<HTMLButtonElement>(null);
 
   const threads = state.status === "ready" ? state.data : null;
-  const counts: ChipCounts = useMemo(() => chipCounts(threads ?? []), [threads]);
+  const counts: FleetCounts = useMemo(() => fleetCounts(threads ?? []), [threads]);
   const archived = archivedThreads.state.status === "ready" ? archivedThreads.state.data : NO_THREADS;
   // Nothing left to show once the last archived session is restored: close the archived view.
   useEffect(() => {
     if (archived.length === 0) setShowArchived(false);
   }, [archived.length]);
+  useEffect(() => {
+    if (confirmCloseAll) closeAllRef.current?.focus();
+  }, [confirmCloseAll]);
 
   const announce = useCallback((text: string) => {
     announceSeq.current += 1;
     setAnnouncement({ id: announceSeq.current, text });
   }, []);
 
-  const selectChip = useCallback(
-    (next: DashboardChip, fromIntent = false) => {
-      setChip(next);
+  const selectFilter = useCallback(
+    (next: FleetFilter, fromIntent = false) => {
+      setFilter(next);
       if (fromIntent) setQuery("");
-      announce(CHIP_ANNOUNCE[next](next === "all" ? counts.all : counts[next]));
+      announce(FILTER_ANNOUNCE[next](counts[next]));
     },
     [announce, counts],
   );
@@ -152,9 +178,10 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   useEffect(() => {
     if (!request || request.nonce === handledRequest.current || !threads) return;
     handledRequest.current = request.nonce;
-    selectChip(request.chip, true);
-    chipsRef.current?.querySelector<HTMLElement>(`[data-chip="${request.chip}"]`)?.focus({ preventScroll: true });
-  }, [request, threads, selectChip]);
+    const next = fleetFilterOf(request.chip);
+    selectFilter(next, true);
+    chipsRef.current?.querySelector<HTMLElement>(`[data-chip="${next}"]`)?.focus({ preventScroll: true });
+  }, [request, threads, selectFilter]);
 
   const setGroupMode = (mode: GroupMode) => {
     setGroupModeState(mode);
@@ -165,9 +192,18 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     }
   };
 
+  // Agent Fleet: call signs, worktree facts and merge readiness for every card.
+  // Archived agents keep their letters, so a call sign never moves to another agent.
+  const handles = useMemo(() => fleetHandles([...(threads ?? []), ...archived]), [threads, archived]);
   const groups = useMemo(
-    () => (threads ? groupThreads(filterThreads(threads, chip, query), groupMode) : []),
-    [threads, chip, query, groupMode],
+    () =>
+      threads
+        ? groupThreads(
+            filterThreads(threads, filter, query, (t) => [handles.get(t.id)]),
+            groupMode,
+          )
+        : [],
+    [threads, filter, query, groupMode, handles],
   );
 
   const approvalsByThread = useMemo(() => {
@@ -182,6 +218,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     return map;
   }, [permissions.pending]);
 
+  // An agent always opens in Code (its terminal pane), never Threads: the explicit agent intent
+  // can't fall back to a chat view even when a metadata read fails.
   const onFocus = useCallback(
     (thread: ThreadSummary) => {
       const card = document.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(thread.id)}"]`);
@@ -195,18 +233,18 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     [intents, navigate],
   );
 
-  // Agent Fleet: call signs, worktree facts and merge readiness for every card.
-  // Archived agents keep their letters, so a call sign never moves to another agent.
-  const handles = useMemo(() => fleetHandles([...(threads ?? []), ...archived]), [threads, archived]);
   const { states: worktrees, apply: applyWorktree } = useWorktreeStates(threads);
   const onReviewApprovals = useCallback(() => permissions.setPanelOpen(true), [permissions.setPanelOpen]);
+  const onDismiss = useCallback((thread: ThreadSummary) => void cleanup.dismissAgent(thread.id), [cleanup]);
 
   const [measureRef, columns] = useColumns();
 
   const rows = useMemo(() => {
     const list: BoardRow[] = [];
     for (const group of groups) {
-      const isCollapsed = collapsed.has(`${group.mode}:${group.key}`);
+      // A filter or search shows what it found: only the board's own view folds groups.
+      const isCollapsed =
+        filter === "all" && !query.trim() && isFolded(layout, `${group.mode}:${group.key}`, group.threads.length);
       list.push({ kind: "header", key: `h:${group.mode}:${group.key}`, group, collapsed: isCollapsed });
       if (isCollapsed) continue;
       for (let i = 0; i < group.threads.length; i += columns) {
@@ -219,43 +257,49 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
       }
     }
     return list;
-  }, [groups, columns, collapsed]);
+  }, [groups, columns, layout, filter, query]);
 
   const getKey = useCallback((index: number) => rows[index]?.key ?? String(index), [rows]);
   const estimate = useCallback(
     (index: number) => {
       const row = rows[index];
-      if (!row || row.kind === "header") return 48;
+      if (!row || row.kind === "header") return 44;
       const tallest = row.threads.reduce((max, t) => {
         const extra =
-          t.status === "waiting_for_permission" && approvalsByThread.has(t.id)
+          (t.status === "waiting_for_permission" && approvalsByThread.has(t.id)
             ? 150
-            : t.status === "completed"
-              ? 60
-              : t.status === "failed" || t.status === "waiting_for_user"
-                ? 44
-                : 0;
+            : t.status === "failed" || t.status === "waiting_for_user"
+              ? 18
+              : 0) + (expanded.has(t.id) ? 150 : 0);
         return Math.max(max, extra);
       }, 0);
-      return 196 + tallest + CARD_GAP_PX;
+      return 158 + tallest + CARD_GAP_PX;
     },
-    [rows, approvalsByThread],
+    [rows, approvalsByThread, expanded],
   );
   const virtual = useVirtualRows({ count: rows.length, getKey, estimate });
 
-  const toggleGroup = (group: ThreadGroup) => {
-    const key = `${group.mode}:${group.key}`;
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const toggleGroup = (group: ThreadGroup, collapsed: boolean) => setFolded(`${group.mode}:${group.key}`, !collapsed);
+
+  const groupAction = (group: ThreadGroup) => {
+    if (group.mode !== "status") return null;
+    if (group.status === "failed" && cleanup.counts.failed > 0)
+      return { label: "Clear failed", run: cleanup.clearFailed, icon: <CircleX /> };
+    if (group.status === "done" && cleanup.counts.finished > 0)
+      return { label: "Clear finished", run: cleanup.clearFinished, icon: <ListX /> };
+    if (group.status === "idle" && cleanup.counts.idle > 0)
+      return { label: "Close idle", run: cleanup.closeIdle, icon: <Power /> };
+    return null;
   };
 
   const renderRow = (row: BoardRow) =>
     row.kind === "header" ? (
-      <GroupHeader group={row.group} collapsed={row.collapsed} onToggle={() => toggleGroup(row.group)} />
+      <GroupHeader
+        group={row.group}
+        collapsed={row.collapsed}
+        onToggle={() => toggleGroup(row.group, row.collapsed)}
+        action={groupAction(row.group)}
+      />
     ) : (
       <div className={styles.cardRow} style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
         {row.threads.map((thread) => (
@@ -273,6 +317,9 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
             worktree={worktrees.get(thread.id)}
             readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
             onCommitted={applyWorktree}
+            expanded={expanded.has(thread.id)}
+            onToggleExpanded={toggleCard}
+            onDismiss={canDismiss(thread.status) ? onDismiss : undefined}
           />
         ))}
       </div>
@@ -355,12 +402,12 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   } else if (groups.length === 0) {
     body = (
       <div className={styles.noMatch} role="status">
-        <p>{query ? `No agents match “${query.trim()}”.` : EMPTY_FILTER_TEXT[chip]}</p>
+        <p>{query ? `No agents match “${query.trim()}”.` : EMPTY_FILTER_TEXT[filter]}</p>
         <Button
           size="sm"
           onClick={() => {
             setQuery("");
-            selectChip("all");
+            selectFilter("all");
           }}
         >
           Show all agents
@@ -398,69 +445,181 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   }
 
   const ready = state.status === "ready" && counts.all > 0;
+  const archivedList = useMemo(
+    () => [...archived].sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? "")),
+    [archived],
+  );
 
   return (
     <section className={styles.board} aria-label="Agents" data-in-pane={inPane || undefined}>
-      {inPane && ready ? <p className={styles.paneSummary}>{summaryLine(counts)}</p> : null}
       {ready ? (
-        <div className={styles.toolbar}>
-          {/* biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields. */}
-          <div className={styles.chips} role="group" aria-label="Filter agents" ref={chipsRef}>
-            {CHIPS.map((value) => (
-              <button
-                key={value}
-                type="button"
-                className={styles.chip}
-                data-chip={value}
-                aria-pressed={chip === value}
-                aria-label={`${CHIP_LABELS[value]}, ${value === "all" ? counts.all : counts[value]}`}
-                onClick={() => selectChip(value)}
-              >
-                <span className={styles.chipDot} data-chip={value} aria-hidden="true" />
-                <span className={styles.chipLabel}>{CHIP_LABELS[value]}</span>
-                <span className={styles.chipCount}>{value === "all" ? counts.all : counts[value]}</span>
-              </button>
-            ))}
+        <div className={styles.head}>
+          <div className={styles.overview}>
+            <p className={styles.total}>
+              <span className={styles.totalCount}>{counts.all}</span>
+              <span className={styles.totalLabel}>{counts.all === 1 ? "agent" : "agents"}</span>
+            </p>
+            {inPane ? <p className={styles.paneSummary}>{fleetSummaryLine(counts)}</p> : null}
+            <StatusBar counts={counts} />
           </div>
-          <div className={styles.controls}>
-            <div className={styles.search}>
-              <Search className={styles.searchGlyph} aria-hidden="true" />
-              <TextInput
-                type="search"
-                aria-label="Search agents"
-                placeholder="Search agents"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape" && query) {
-                    event.preventDefault();
-                    setQuery("");
-                  }
-                }}
-                className={styles.searchInput}
-              />
-              {query ? (
-                <IconButton
-                  size="sm"
-                  label="Clear search"
-                  icon={<X />}
-                  className={styles.searchClear}
-                  onClick={() => setQuery("")}
+          <div className={styles.toolbar}>
+            {/* biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields. */}
+            <div className={styles.chips} role="group" aria-label="Filter agents" ref={chipsRef}>
+              {FLEET_FILTERS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={styles.chip}
+                  data-chip={value}
+                  data-empty={(value !== "all" && counts[value] === 0) || undefined}
+                  aria-pressed={filter === value}
+                  aria-label={`${FLEET_FILTER_LABELS[value]}, ${counts[value]}`}
+                  onClick={() => selectFilter(value)}
+                >
+                  <span className={styles.chipDot} data-chip={value} aria-hidden="true" />
+                  <span className={styles.chipLabel}>{FLEET_FILTER_LABELS[value]}</span>
+                  <span className={styles.chipCount}>{counts[value]}</span>
+                </button>
+              ))}
+            </div>
+            <div className={styles.controls}>
+              <div className={styles.search}>
+                <Search className={styles.searchGlyph} aria-hidden="true" />
+                <TextInput
+                  type="search"
+                  aria-label="Search agents"
+                  placeholder="Search agents, accounts, projects…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" && query) {
+                      event.preventDefault();
+                      setQuery("");
+                    }
+                  }}
+                  className={styles.searchInput}
                 />
-              ) : null}
-            </div>
-            <div className={styles.groupBy}>
-              <span className={styles.groupLabel} id="dashboard-group-label">
-                Group by
-              </span>
-              <SegmentedControl<GroupMode>
-                aria-labelledby="dashboard-group-label"
-                value={groupMode}
-                options={GROUP_MODES.map((mode) => ({ value: mode, label: GROUP_MODE_LABELS[mode] }))}
-                onValueChange={setGroupMode}
-              />
+                {query ? (
+                  <IconButton
+                    size="sm"
+                    label="Clear search"
+                    icon={<X />}
+                    className={styles.searchClear}
+                    onClick={() => setQuery("")}
+                  />
+                ) : null}
+              </div>
+              <div className={styles.groupBy}>
+                <span className={styles.groupLabel} id="dashboard-group-label">
+                  Group by
+                </span>
+                <SegmentedControl<GroupMode>
+                  aria-labelledby="dashboard-group-label"
+                  value={groupMode}
+                  options={GROUP_MODES.map((mode) => ({ value: mode, label: GROUP_MODE_LABELS[mode] }))}
+                  onValueChange={setGroupMode}
+                />
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button ref={cleanupRef} size="sm" variant="secondary" icon={<Sparkles />} className={styles.cleanup}>
+                    Clean up
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className={styles.cleanupMenu}>
+                  <DropdownMenuItem
+                    icon={<CircleX />}
+                    disabled={cleanup.counts.failed === 0}
+                    description="Removes failed agents; restore them from Archived"
+                    onSelect={() => void cleanup.clearFailed()}
+                  >
+                    Clear failed ({cleanup.counts.failed})
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    icon={<ListX />}
+                    disabled={cleanup.counts.finished === 0}
+                    description="Removes finished, stopped and offline agents"
+                    onSelect={() => void cleanup.clearFinished()}
+                  >
+                    Clear finished ({cleanup.counts.finished})
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    icon={<Power />}
+                    disabled={cleanup.counts.idle === 0}
+                    description="Closes agents idle at their prompt; paused ones keep their turn"
+                    onSelect={() => void cleanup.closeIdle()}
+                  >
+                    Close idle ({cleanup.counts.idle})
+                  </DropdownMenuItem>
+                  {kalTidy ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        icon={<BroomSparkles />}
+                        description="Stops terminals that are idle; never ones in use"
+                        onSelect={() => void kalTidy.stopIdle()}
+                      >
+                        KalTidy: stop idle terminals
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
+                  {archived.length > 0 ? (
+                    <DropdownMenuItem icon={<Archive />} onSelect={() => setShowArchived((shown) => !shown)}>
+                      {showArchived ? "Hide archived" : `Show archived (${archived.length})`}
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    icon={<Power />}
+                    tone="danger"
+                    disabled={cleanup.counts.all === 0}
+                    onSelect={() => (cleanup.canonical ? void cleanup.closeAll() : setConfirmCloseAll(true))}
+                  >
+                    {cleanup.canonical ? "Close all terminals and agents…" : "Close all agents…"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
+          {confirmCloseAll ? (
+            // biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields.
+            <div className={styles.confirm} role="group" aria-label="Close all agents?">
+              {/* The one confirmation cleanup asks (AGENTS.md agent cleanup rule). */}
+              <p className={styles.confirmText}>
+                <strong>Close all {cleanup.counts.all} agents?</strong> Active agents, builds, tests, and running
+                processes will be stopped.
+              </p>
+              <div className={styles.confirmActions}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setConfirmCloseAll(false);
+                    cleanupRef.current?.focus();
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  ref={closeAllRef}
+                  size="sm"
+                  variant="danger"
+                  onClick={() => {
+                    setConfirmCloseAll(false);
+                    void cleanup.closeAll();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setConfirmCloseAll(false);
+                      cleanupRef.current?.focus();
+                    }
+                  }}
+                >
+                  Close all
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {body}
@@ -475,7 +634,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
             </Button>
           </div>
           <div className={styles.archivedGrid}>
-            {archived.map((thread) => (
+            {archivedList.slice(0, archivedShown).map((thread) => (
               <AgentCard
                 key={thread.id}
                 thread={thread}
@@ -490,6 +649,12 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
               />
             ))}
           </div>
+          {archivedList.length > archivedShown ? (
+            <Button size="sm" variant="ghost" onClick={() => setArchivedShown((n) => n + ARCHIVED_PAGE)}>
+              Show {Math.min(ARCHIVED_PAGE, archivedList.length - archivedShown)} more of{" "}
+              {archivedList.length - archivedShown}
+            </Button>
+          ) : null}
         </section>
       ) : null}
       <div className="visually-hidden" aria-live="polite" aria-atomic="true">
@@ -502,26 +667,67 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
 const NO_APPROVALS: readonly ApprovalView[] = [];
 const NO_THREADS: readonly ThreadSummary[] = [];
 
-function GroupHeader({ group, collapsed, onToggle }: { group: ThreadGroup; collapsed: boolean; onToggle: () => void }) {
+/** The fleet at a glance: one segment per state, sized by its share (decorative; chips say it). */
+function StatusBar({ counts }: { counts: FleetCounts }) {
+  return (
+    <div className={styles.statusBar} aria-hidden="true" title={fleetSummaryLine(counts)}>
+      {FLEET_GROUPS.filter((group) => counts[group] > 0).map((group) => (
+        <span
+          key={group}
+          className={styles.segment}
+          data-chip={group}
+          style={{ flexGrow: counts[group], flexBasis: 0 }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function GroupHeader({
+  group,
+  collapsed,
+  onToggle,
+  action,
+}: {
+  group: ThreadGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+  action: { label: string; run: () => Promise<void>; icon: React.ReactNode } | null;
+}) {
   const count = group.threads.length;
   return (
-    <h2 className={styles.groupHeading} data-chip={group.chip}>
-      <button type="button" className={styles.groupToggle} aria-expanded={!collapsed} onClick={onToggle}>
-        <ChevronDown className={styles.groupChevron} aria-hidden="true" data-collapsed={collapsed || undefined} />
-        {group.providerId ? (
-          <ProviderMark provider={group.providerId} name={group.label} size="sm" className={styles.groupMark} />
-        ) : (
-          <span className={styles.groupName}>{group.label}</span>
-        )}
-        <span className={styles.groupCount}>
-          <span className="visually-hidden">, </span>
-          {count}
-          <span className="visually-hidden">{count === 1 ? " agent" : " agents"}</span>
-        </span>
-        {group.mode !== "status" && group.needsYou > 0 ? (
-          <span className={styles.groupNeeds}>{group.needsYou} need you</span>
-        ) : null}
-      </button>
-    </h2>
+    <div className={styles.groupRow} data-chip={group.status}>
+      <h2 className={styles.groupHeading} data-chip={group.status}>
+        <button type="button" className={styles.groupToggle} aria-expanded={!collapsed} onClick={onToggle}>
+          <ChevronDown className={styles.groupChevron} aria-hidden="true" data-collapsed={collapsed || undefined} />
+          {group.status ? <span className={styles.groupDot} data-chip={group.status} aria-hidden="true" /> : null}
+          {group.providerId ? (
+            <ProviderMark provider={group.providerId} name={group.label} size="sm" className={styles.groupMark} />
+          ) : (
+            <span className={styles.groupName}>{group.label}</span>
+          )}
+          <span className={styles.groupCount}>
+            <span className="visually-hidden">, </span>
+            {count}
+            <span className="visually-hidden">{count === 1 ? " agent" : " agents"}</span>
+          </span>
+          {group.mode !== "status" && group.needsYou > 0 ? (
+            <span className={styles.groupNeeds}>{group.needsYou} need you</span>
+          ) : null}
+        </button>
+      </h2>
+      <span className={styles.groupRule} aria-hidden="true" />
+      {action ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={action.icon}
+          className={styles.groupAction}
+          onClick={() => void action.run()}
+        >
+          {action.label}
+        </Button>
+      ) : null}
+    </div>
   );
 }
