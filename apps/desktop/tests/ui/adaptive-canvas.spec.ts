@@ -66,6 +66,35 @@ test("many panes stay readable and keyboard focus reveals offscreen panes", asyn
   await expect(page.locator("[data-pane-id][data-focused]")).toBeInViewport();
 });
 
+test("mixed-axis panes that fit do not create canvas scrollbars", async ({ page }) => {
+  await openCode(page);
+  await page.keyboard.press("Control+Alt+d");
+  await page.keyboard.press("Control+Alt+Shift+d");
+  await expect(panes(page)).toHaveCount(3);
+
+  const samples = await page.locator("[data-pane-canvas]").evaluate(async (canvas) => {
+    const frames: Array<{ clientWidth: number; clientHeight: number; scrollWidth: number; scrollHeight: number }> = [];
+    for (let frame = 0; frame < 12; frame += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      frames.push({
+        clientWidth: canvas.clientWidth,
+        clientHeight: canvas.clientHeight,
+        scrollWidth: canvas.scrollWidth,
+        scrollHeight: canvas.scrollHeight,
+      });
+    }
+    return frames;
+  });
+
+  expect(samples.every(({ clientWidth, clientHeight }) => clientWidth >= 646 && clientHeight >= 446)).toBe(true);
+  expect(
+    samples.filter(
+      ({ clientWidth, clientHeight, scrollWidth, scrollHeight }) =>
+        scrollWidth > clientWidth + 1 || scrollHeight > clientHeight + 1,
+    ),
+  ).toEqual([]);
+});
+
 test("workspace switching restores selected tabs, sizes and the focused pane", async ({ page }) => {
   await openCode(page);
   await page.keyboard.press("Control+Alt+d");
