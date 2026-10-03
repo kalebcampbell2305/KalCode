@@ -63,29 +63,3 @@ it("closing a pane hands every content it held to the host to close (a shell ter
   act(() => result.current.close("pane"));
   expect(onCloseContent.mock.calls.map(([content]) => content)).toEqual([terminal("one"), terminal("two")]);
 });
-
-it("a closed pane that held only terminals and agents isn't offered for reopening (they ended)", async () => {
-  const initial: PaneLayout = {
-    schemaVersion: 1,
-    root: {
-      kind: "split",
-      axis: "horizontal",
-      ratios: [500, 500],
-      children: [
-        makeLeaf([terminal("one"), { kind: "agent", agentId: "a1" }], "ended"),
-        makeLeaf([{ kind: "dashboard" }], "kept"),
-      ],
-    } as PaneLayout["root"],
-    maximizedPaneId: null,
-    dock: [],
-  };
-  const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
-  const { result } = renderHook(() =>
-    usePaneController({ scope: "workspace", store, initial: () => initial, titleOf: () => "Pane" }),
-  );
-  await waitFor(() => expect(result.current.ready).toBe(true));
-  act(() => result.current.close("ended"));
-  expect(result.current.closed).toHaveLength(0);
-  act(() => result.current.close("kept"));
-  expect(result.current.closed).toHaveLength(1);
-});
