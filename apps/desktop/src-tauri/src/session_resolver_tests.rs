@@ -33,7 +33,11 @@ fn agent_targets_never_resolve_to_a_chat_with_the_same_name() {
         SessionResolution::Resolved { target, .. } if target.thread_id == agent.id)
     );
     assert!(matches!(
-        resolve(&[chat.clone()], "Release agent", &ResolveContext::default()),
+        resolve(
+            std::slice::from_ref(&chat),
+            "Release agent",
+            &ResolveContext::default()
+        ),
         SessionResolution::NotFound { .. }
     ));
     assert!(matches!(
