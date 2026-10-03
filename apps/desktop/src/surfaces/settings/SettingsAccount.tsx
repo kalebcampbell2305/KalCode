@@ -59,6 +59,9 @@ export function SettingsAccount() {
 export function SettingsAccountView({ account, usage, busy, error, onManage, onLogout }: SettingsAccountViewProps) {
   const paid = account.tier === "pro" || account.tier === "max" || account.tier === "max2x";
   const usageLabel = usage?.allowance === null ? "Unlimited requests" : usage ? usageLine(usage) : "Usage unavailable";
+  // Share of this period's allowance used, for the meter beside the numbers (null when unlimited/unknown).
+  const usedShare =
+    usage && usage.allowance !== null && usage.allowance > 0 ? Math.min(1, usage.used / usage.allowance) : null;
   return (
     <Panel
       id="kalcode-account"
@@ -86,11 +89,26 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
         </div>
         <div>
           <dt>Plan</dt>
-          <dd>{account.tier ? tierName(account.tier) : "Not activated"}</dd>
+          <dd>
+            <span className={styles.plan} data-tier={account.tier ?? undefined}>
+              {account.tier ? tierName(account.tier) : "Not activated"}
+            </span>
+          </dd>
         </div>
         <div>
           <dt>KalVoice</dt>
-          <dd>{usageLabel}</dd>
+          <dd className={styles.usage}>
+            <span>{usageLabel}</span>
+            {usedShare !== null ? (
+              <span
+                className={styles.meter}
+                data-level={usedShare >= 1 ? "full" : usedShare >= 0.8 ? "high" : undefined}
+                aria-hidden="true"
+              >
+                <span style={{ transform: `scaleX(${usedShare})` }} />
+              </span>
+            ) : null}
+          </dd>
         </div>
         <div>
           <dt>Dictation</dt>
