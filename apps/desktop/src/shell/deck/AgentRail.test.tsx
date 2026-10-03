@@ -14,7 +14,9 @@ vi.mock("../../surfaces/dashboard/data/DashboardData.tsx", () => ({
   useArchivedCodingAgents: () => ({ state: { status: "ready", data: [] } }),
 }));
 vi.mock("../../surfaces/dashboard/useNow.ts", () => ({ useNow: () => NOW }));
-vi.mock("./DeckUi.tsx", () => ({ useDeckUi: () => ({ agentsOpen: true, setAgentsOpen: vi.fn() }) }));
+vi.mock("./DeckUi.tsx", () => ({
+  useDeckUi: () => ({ agentsOpen: true, setAgentsOpen: vi.fn(), setAgentsActive: vi.fn() }),
+}));
 vi.mock("../navigation.tsx", () => ({ useNavigation: () => ({ navigate: vi.fn() }) }));
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useOptionalUiIntents: () => null }));
 vi.mock("../../surfaces/code/useLaunchAgent.ts", () => ({ useLaunchAgent: () => vi.fn() }));

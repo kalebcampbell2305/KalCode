@@ -1,4 +1,22 @@
 /* The Command Deck's agents rail (right) and its collapsed strip. */
+/* The rail's frame: eases between the strip and the full rail (no re-flow of what's beside it). */
+.dock {
+  position: relative;
+  width: var(--sidebar-w-collapsed);
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid var(--color-border);
+  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
+  outline: none;
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+/* Open, its left edge carries the mirrored lit hairline: the deck's right edge glows like the sidebar's. */
+.dock[data-open] {
+  width: var(--deck-agents-w, 18rem);
+  border-image: linear-gradient(180deg, var(--color-border-lit), var(--color-border) 14rem) 1;
+}
+
 .rail {
   position: relative;
   display: flex;
@@ -6,23 +24,10 @@
   width: var(--deck-agents-w, 18rem);
   min-width: 0;
   height: 100%;
-  border-left: 1px solid var(--color-border);
   background:
     radial-gradient(18rem 14rem at 100% 0%, var(--color-accent-soft), transparent 70%),
     linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
   outline: none;
-}
-
-/* The mirrored lit hairline: the deck's right edge glows like the sidebar's. */
-.rail::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 14rem;
-  background: linear-gradient(180deg, var(--color-border-lit), transparent);
-  pointer-events: none;
 }
 
 .header {
@@ -370,6 +375,7 @@
     animation: none;
   }
 
+  .dock,
   .rowDismiss {
     transition: none;
   }
@@ -498,8 +504,6 @@
   width: var(--sidebar-w-collapsed);
   height: 100%;
   padding: var(--space-2) 0;
-  border-left: 1px solid var(--color-border);
-  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
 }
 
 .stripCounts {

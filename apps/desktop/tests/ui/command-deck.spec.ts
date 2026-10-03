@@ -50,6 +50,10 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
   // The threads scenario has chat threads only: none of them is an agent.
   await open(page, "threads");
   await toOperations(page);
+  // With no agent running, the rail stays a strip until one works or the person opens it.
+  const strip = page.getByRole("complementary", { name: "Agents (collapsed)" });
+  await expect(strip).toBeVisible();
+  await strip.getByRole("button", { name: "Show agents", exact: true }).click();
   await expect(agents(page).getByText("No agents running")).toBeVisible();
   await expect(agents(page).getByRole("button", { name: /^Fix OAuth Callback Race, / })).toHaveCount(0);
 

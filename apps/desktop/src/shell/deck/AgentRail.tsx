@@ -3,12 +3,13 @@
  * terminal pane), grouped by what it needs — agents waiting on the person first, then working,
  * then blocked; idle agents fold away and the last few that finished stay briefly. Each row opens
  * the agent's terminal in Code. Chat threads live in Threads, not here. Collapses to a narrow
- * strip of live counts.
+ * strip of live counts: on its own while no agent runs and nothing needs the person, or when the
+ * person collapses it.
  */
 import type { ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
 import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw, X } from "lucide-react";
-import { useCallback, useId, useMemo, useState } from "react";
+import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
@@ -18,12 +19,13 @@ import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
+import { beginLiveResize } from "../panes/liveResize.ts";
 import styles from "./AgentRail.module.css";
 import { useDeckUi } from "./DeckUi.tsx";
 import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
 
 export function AgentRail() {
-  const { agentsOpen, setAgentsOpen } = useDeckUi();
+  const { agentsOpen, setAgentsOpen, setAgentsActive } = useDeckUi();
   const { state, reload } = useCodingAgents();
   const now = useNow(30_000);
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
@@ -37,58 +39,102 @@ export function AgentRail() {
       ]),
     [state, archived],
   );
-
-  if (!agentsOpen) {
-    return (
-      <aside className={styles.strip} aria-label="Agents (collapsed)" data-deck-agents>
-        <Tooltip content="Show agents" side="left">
-          <IconButton size="sm" label="Show agents" icon={<PanelRightOpen />} onClick={() => setAgentsOpen(true)} />
-        </Tooltip>
-        {sections ? <StripCounts sections={sections} onOpen={() => setAgentsOpen(true)} /> : null}
-      </aside>
-    );
-  }
+  // Until the person pins or collapses it, the rail opens while an agent runs or needs them.
+  const active = sections ? runningAgentCount(sections) > 0 || sections.needsYou.length > 0 : null;
+  useEffect(() => {
+    if (active !== null) setAgentsActive(active);
+  }, [active, setAgentsActive]);
+  const dock = useRef<HTMLElement>(null);
+  useWidthTransition(dock, agentsOpen);
 
   const running = sections ? runningAgentCount(sections) : 0;
   return (
     <aside
-      id="deck-agents"
-      className={styles.rail}
-      aria-labelledby="deck-agents-heading"
-      tabIndex={-1}
+      ref={dock}
+      className={styles.dock}
+      data-open={agentsOpen || undefined}
       data-deck-agents
+      {...(agentsOpen
+        ? { id: "deck-agents", "aria-labelledby": "deck-agents-heading", tabIndex: -1 }
+        : { "aria-label": "Agents (collapsed)" })}
     >
-      <div className={styles.header}>
-        <h2 className={styles.heading} id="deck-agents-heading">
-          Agents
-          {running > 0 ? <span className={styles.headingCount}>{running}</span> : null}
-        </h2>
-        <Tooltip content="Hide agents" side="left">
-          <IconButton size="sm" label="Hide agents" icon={<PanelRightClose />} onClick={() => setAgentsOpen(false)} />
-        </Tooltip>
-      </div>
-      <div className={styles.body}>
-        {state.status === "loading" ? (
-          <div className={styles.loading} aria-busy="true">
-            <Skeleton width="80%" />
-            <Skeleton width="62%" />
-            <Skeleton width="70%" />
+      {agentsOpen ? (
+        <div className={styles.rail}>
+          <div className={styles.header}>
+            <h2 className={styles.heading} id="deck-agents-heading">
+              Agents
+              {running > 0 ? <span className={styles.headingCount}>{running}</span> : null}
+            </h2>
+            <Tooltip content="Hide agents" side="left">
+              <IconButton
+                size="sm"
+                label="Hide agents"
+                icon={<PanelRightClose />}
+                onClick={() => setAgentsOpen(false)}
+              />
+            </Tooltip>
           </div>
-        ) : state.status === "error" ? (
-          <div className={styles.problem} role="alert">
-            <p>Agents couldn't load. {state.error.message}</p>
-            <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
-              Try again
-            </Button>
+          <div className={styles.body}>
+            {state.status === "loading" ? (
+              <div className={styles.loading} aria-busy="true">
+                <Skeleton width="80%" />
+                <Skeleton width="62%" />
+                <Skeleton width="70%" />
+              </div>
+            ) : state.status === "error" ? (
+              <div className={styles.problem} role="alert">
+                <p>Agents couldn't load. {state.error.message}</p>
+                <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
+                  Try again
+                </Button>
+              </div>
+            ) : sections ? (
+              <AgentList sections={sections} now={now} handles={handles} />
+            ) : (
+              <p className={styles.quiet}>Agents aren't part of this build.</p>
+            )}
           </div>
-        ) : sections ? (
-          <AgentList sections={sections} now={now} handles={handles} />
-        ) : (
-          <p className={styles.quiet}>Agents aren't part of this build.</p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className={styles.strip}>
+          <Tooltip content="Show agents" side="left">
+            <IconButton size="sm" label="Show agents" icon={<PanelRightOpen />} onClick={() => setAgentsOpen(true)} />
+          </Tooltip>
+          {sections ? <StripCounts sections={sections} onOpen={() => setAgentsOpen(true)} /> : null}
+        </div>
+      )}
     </aside>
   );
+}
+
+/**
+ * The rail's width eases between its strip and its full width. Terminals beside it fit once when
+ * the change settles (the pane divider's live-resize path) instead of re-flowing every frame.
+ */
+function useWidthTransition(dock: RefObject<HTMLElement | null>, open: boolean) {
+  const first = useRef(true);
+  useEffect(() => {
+    void open;
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    const element = dock.current;
+    if (!element) return;
+    const end = beginLiveResize();
+    const finish = (event?: TransitionEvent) => {
+      if (event && (event.target !== element || event.propertyName !== "width")) return;
+      end();
+    };
+    element.addEventListener("transitionend", finish);
+    // Reduced motion (no transition) or an interrupted one still ends the live resize.
+    const timer = window.setTimeout(() => finish(), 400);
+    return () => {
+      element.removeEventListener("transitionend", finish);
+      window.clearTimeout(timer);
+      end();
+    };
+  }, [dock, open]);
 }
 
 function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: () => void }) {
