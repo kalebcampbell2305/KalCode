@@ -111,6 +111,11 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
     await shot(page, "z7w4-pane-auto-build");
 
+    // A push runs without a prompt too (owner directive 2026-10-03: no approvals for routine work).
+    await typeInPane(page, "run git push origin main");
+    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Approve once" })).toHaveCount(0);
+
     // Credential access is the one protected scope in Bypass: it still asks and can be denied.
     await typeInPane(page, "run printenv");
     const deny = page.getByRole("button", { name: "Deny" }).first();
