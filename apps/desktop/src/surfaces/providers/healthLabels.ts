@@ -37,7 +37,7 @@ export function processText(health: Pick<ProviderHealth, "processRunning" | "act
 
 /** Sign-in as the provider reports it. KalCode never signs in for the user. */
 export function signInText(
-  health: Pick<ProviderHealth, "auth" | "displayName" | "detection">,
+  health: Pick<ProviderHealth, "providerId" | "auth" | "displayName" | "detection">,
   status?: Pick<ProviderStatus, "authCheck"> | null,
 ): Label {
   if (health.detection !== "installed" && health.detection !== "outdated") {
@@ -52,7 +52,13 @@ export function signInText(
     case "unknown":
       return status?.authCheck
         ? { tone: "idle", label: "Unknown", detail: `${status.authCheck} didn't give a clear answer.` }
-        : { tone: "idle", label: `${health.displayName} has no documented way to check sign-in`, detail: null };
+        : health.providerId === "claude-code"
+          ? {
+              tone: "idle",
+              label: "Sign-in status unknown",
+              detail: "Sign-in is checked when a Claude Code session starts.",
+            }
+          : { tone: "idle", label: `${health.displayName} has no documented way to check sign-in`, detail: null };
   }
 }
 

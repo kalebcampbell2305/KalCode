@@ -5,7 +5,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { useProviderPanes } from "./useProviderPanes.ts";
 
 const state = vi.hoisted(() => {
-  const client = { listThreads: vi.fn(), threadOptions: vi.fn(), transport: { invoke: vi.fn() } };
+  const client = {
+    getPermissionSettings: vi.fn(),
+    listThreads: vi.fn(),
+    threadOptions: vi.fn(),
+    transport: { invoke: vi.fn() },
+  };
   return {
     client,
     feed: { getSnapshot: () => ({ events: [] }), subscribe: () => () => undefined },
@@ -27,6 +32,7 @@ const info = { threadId: agent.id, running: true, hookChannel: "active" };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  state.client.getPermissionSettings.mockResolvedValue({ defaultMode: "auto" });
   state.client.listThreads.mockResolvedValue([]);
   state.client.threadOptions.mockResolvedValue({ providers: [] });
   state.client.transport.invoke.mockImplementation(async (command: string) =>

@@ -374,7 +374,7 @@ export function createPermissionMemory(options: {
     thread("Refactor settings", "gemini-cli", "Gemini CLI", "auto"),
     thread("Ship the landing page", "claude-code", "Claude Code", "bypass", { id: websiteId, name: "kalcode-website" }),
   ];
-  let settings: PermissionSettings = { defaultMode: "approve", defaultProfileId: null };
+  let settings: PermissionSettings = { defaultMode: "auto", defaultProfileId: null };
   const approvals: ApprovalView[] = [];
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 

@@ -45,8 +45,8 @@ export function detectionLabel(detection: ProviderDetection | null, errorCode: s
 }
 
 /**
- * Sign-in state exactly as the provider's own documented status command reported it. KalCode
- * never signs in for the user, so there is no "connected" state here.
+ * Sign-in state exactly as provider detection reported it. Installation/version detection may
+ * intentionally leave auth unknown when a safe standalone status probe does not exist.
  */
 export function authLabel(status: ProviderStatus): Label | null {
   const detection = status.detection;
@@ -64,7 +64,9 @@ export function authLabel(status: ProviderStatus): Label | null {
         label: "Sign-in status unknown",
         detail: status.authCheck
           ? `${status.authCheck} didn't give a clear answer.`
-          : `${status.displayName} has no documented way to check sign-in without starting a session.`,
+          : status.id === "claude-code"
+            ? "Sign-in is checked when a Claude Code session starts."
+            : `${status.displayName} has no documented way to check sign-in without starting a session.`,
       };
   }
 }

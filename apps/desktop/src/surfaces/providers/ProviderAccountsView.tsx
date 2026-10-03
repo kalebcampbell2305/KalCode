@@ -241,6 +241,10 @@ export function ProviderAccountsView({
                     busyKey={state.busyKey}
                     activeLogin={state.activeLogin?.accountId === account.id}
                     loginInProgress={state.activeLogin !== null}
+                    checking={state.checking.has(account.id)}
+                    validationError={state.validationErrors.get(account.id) ?? null}
+                    usageStale={state.usageStale}
+                    usageRefreshing={state.usageRefreshing}
                     actions={state}
                   />
                 ))}

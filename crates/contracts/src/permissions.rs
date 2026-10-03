@@ -19,6 +19,19 @@ pub enum PermissionMode {
     Custom,
 }
 
+/// Default for an implicit local coding session. This keeps ordinary workspace work in the
+/// bounded Auto policy; callers must still honor an explicit saved or per-session choice.
+/// Bypass is never an implicit default.
+pub const DEFAULT_CODING_PERMISSION_MODE: PermissionMode = PermissionMode::Auto;
+
+impl PermissionMode {
+    /// Modes that may be selected implicitly when creating a coding session. Bypass needs an
+    /// explicit confirmation, while Custom needs an attached profile.
+    pub const fn is_confirm_free_start(self) -> bool {
+        matches!(self, Self::Plan | Self::Approve | Self::Auto)
+    }
+}
+
 /// Built-in authority scopes. Plugin capability scopes are added with the plugin system (Z11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]

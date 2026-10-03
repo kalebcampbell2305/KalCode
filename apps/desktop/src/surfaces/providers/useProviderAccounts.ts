@@ -5,6 +5,7 @@ import type { KalCodeClient } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { presentStatus } from "../threads/model.ts";
+import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import { signInFailureTitle } from "./providerLabels.ts";
 
 /** Providers whose own official sign-in KalCode runs natively for one managed account. */
@@ -12,6 +13,11 @@ export type BrowserAuthProvider = "claude-code" | "codex" | "gemini-cli";
 
 export function isBrowserAuthProvider(providerId: string): providerId is BrowserAuthProvider {
   return providerId === "claude-code" || providerId === "codex" || providerId === "gemini-cli";
+}
+
+/** Providers whose read-only status command is safe to run outside a real provider launch. */
+export function canRefreshProviderAuth(providerId: string): providerId is "codex" | "gemini-cli" {
+  return providerId === "codex" || providerId === "gemini-cli";
 }
 
 const AUTH_PROVIDER_NAMES: Record<BrowserAuthProvider, string> = {
@@ -25,7 +31,6 @@ function authCommands(client: KalCodeClient, providerId: BrowserAuthProvider) {
   switch (providerId) {
     case "codex":
       return {
-        refresh: (id: string) => client.refreshCodexAccount(id),
         start: (id: string) => client.startCodexLogin(id),
         wait: (handle: string) => client.waitForCodexLogin(handle),
         cancel: (handle: string) => client.cancelCodexLogin(handle),
@@ -33,7 +38,6 @@ function authCommands(client: KalCodeClient, providerId: BrowserAuthProvider) {
       };
     case "claude-code":
       return {
-        refresh: (id: string) => client.refreshClaudeAccount(id),
         start: (id: string) => client.startClaudeLogin(id),
         wait: (handle: string) => client.waitForClaudeLogin(handle),
         cancel: (handle: string) => client.cancelClaudeLogin(handle),
@@ -41,13 +45,16 @@ function authCommands(client: KalCodeClient, providerId: BrowserAuthProvider) {
       };
     case "gemini-cli":
       return {
-        refresh: (id: string) => client.refreshGeminiAccount(id),
         start: (id: string) => client.startGeminiLogin(id),
         wait: (handle: string) => client.waitForGeminiLogin(handle),
         cancel: (handle: string) => client.cancelGeminiLogin(handle),
         logout: (id: string) => client.logoutGeminiAccount(id),
       };
   }
+}
+
+function refreshProviderAuth(client: KalCodeClient, providerId: "codex" | "gemini-cli", accountId: string) {
+  return providerId === "codex" ? client.refreshCodexAccount(accountId) : client.refreshGeminiAccount(accountId);
 }
 
 interface ActiveLogin {
@@ -106,10 +113,14 @@ export function accountUsage(
 export function useProviderAccounts(enabled: boolean) {
   const { client } = useRuntime();
   const toast = useToast();
-  const [accounts, setAccounts] = useState<ProviderAccount[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const sessions = useOptionalProviderAccountSessions();
+  const sessionReload = sessions?.reload;
+  const retrySessionLoad = sessions?.accounts === null && sessions.loadError !== null;
+  const [localAccounts, setLocalAccounts] = useState<ProviderAccount[] | null>(null);
+  const [localLoadError, setLocalLoadError] = useState<string | null>(null);
   const [usage, setUsage] = useState<Map<string, AccountUsage> | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageRefreshing, setUsageRefreshing] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [activeLogin, setActiveLogin] = useState<ActiveLogin | null>(null);
   const cancelledLogins = useRef(new Set<string>());
@@ -135,6 +146,7 @@ export function useProviderAccounts(enabled: boolean) {
   // Thread use and workspace defaults are read separately: if they can't load, the accounts (and
   // their sign-in) still can, and the card says the usage is unavailable instead of showing zero.
   const loadUsage = useCallback(async () => {
+    setUsageRefreshing(true);
     try {
       const [threads, bindings, workspaces] = await Promise.all([
         client.listThreads(),
@@ -144,49 +156,63 @@ export function useProviderAccounts(enabled: boolean) {
       setUsage(accountUsage(threads, bindings, workspaces));
       setUsageError(null);
     } catch (error) {
-      setUsage(null);
       setUsageError(toKalCodeError(error).message);
+    } finally {
+      setUsageRefreshing(false);
     }
   }, [client]);
 
   const load = useCallback(async () => {
     if (!enabled) return;
-    setLoadError(null);
+    setLocalLoadError(null);
     void loadUsage();
-    try {
-      setAccounts(await client.listProviderAccounts());
-    } catch (error) {
-      setLoadError(toKalCodeError(error).message);
+    if (sessionReload) {
+      if (retrySessionLoad) await sessionReload();
+      return;
     }
-  }, [client, enabled, loadUsage]);
+    try {
+      setLocalAccounts(await client.listProviderAccounts());
+    } catch (error) {
+      setLocalLoadError(toKalCodeError(error).message);
+    }
+  }, [client, enabled, loadUsage, retrySessionLoad, sessionReload]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const replace = useCallback((account: ProviderAccount) => {
-    setAccounts((current) => {
-      if (!current) return [account];
-      const next = current.map((candidate) => {
-        if (candidate.id === account.id) return account;
-        if (account.isDefault && candidate.providerId === account.providerId) return { ...candidate, isDefault: false };
-        return candidate;
+  const replace = useCallback(
+    (account: ProviderAccount) => {
+      if (sessions) return sessions.replace(account);
+      setLocalAccounts((current) => {
+        if (!current) return [account];
+        const next = current.map((candidate) => {
+          if (candidate.id === account.id) return account;
+          if (account.isDefault && candidate.providerId === account.providerId)
+            return { ...candidate, isDefault: false };
+          return candidate;
+        });
+        if (!next.some((candidate) => candidate.id === account.id)) next.push(account);
+        return next.filter((candidate) => candidate.archivedAt === null);
       });
-      if (!next.some((candidate) => candidate.id === account.id)) next.push(account);
-      return next.filter((candidate) => candidate.archivedAt === null);
-    });
-    return account;
-  }, []);
+      return account;
+    },
+    [sessions],
+  );
 
   const run = useCallback(
     async (
       key: string,
       failureTitle: string,
       operation: () => Promise<ProviderAccount>,
+      accountId?: string,
+      commitResult = true,
     ): Promise<ProviderAccount | null> => {
       setBusyKey(key);
+      if (accountId) sessions?.supersede(accountId);
       try {
-        return replace(await operation());
+        const account = await operation();
+        return commitResult ? replace(account) : account;
       } catch (error) {
         toast.show({ tone: "danger", title: failureTitle, description: toKalCodeError(error).message });
         return null;
@@ -194,7 +220,7 @@ export function useProviderAccounts(enabled: boolean) {
         setBusyKey((current) => (current === key ? null : current));
       }
     },
-    [replace, toast],
+    [replace, sessions, toast],
   );
 
   const create = useCallback(
@@ -204,37 +230,52 @@ export function useProviderAccounts(enabled: boolean) {
   );
   const rename = useCallback(
     (accountId: string, displayName: string) =>
-      run(`rename:${accountId}`, "Account name wasn't saved", () =>
-        client.renameProviderAccount(accountId, displayName),
+      run(
+        `rename:${accountId}`,
+        "Account name wasn't saved",
+        () => client.renameProviderAccount(accountId, displayName),
+        accountId,
       ),
     [client, run],
   );
   const setDefault = useCallback(
     (accountId: string) =>
-      run(`default:${accountId}`, "Default account wasn't changed", () => client.setDefaultProviderAccount(accountId)),
+      run(
+        `default:${accountId}`,
+        "Default account wasn't changed",
+        () => client.setDefaultProviderAccount(accountId),
+        accountId,
+      ),
     [client, run],
   );
   const archive = useCallback(
     (accountId: string) =>
-      run(`archive:${accountId}`, "Account wasn't removed", () => client.archiveProviderAccount(accountId)),
+      run(`archive:${accountId}`, "Account wasn't removed", () => client.archiveProviderAccount(accountId), accountId),
     [client, run],
   );
   const refreshAuth = useCallback(
     async (account: ProviderAccount) => {
-      if (!isBrowserAuthProvider(account.providerId)) return null;
+      if (!canRefreshProviderAuth(account.providerId)) return account;
       const providerId = account.providerId;
-      return run(`refresh:${account.id}`, `${AUTH_PROVIDER_NAMES[providerId]} status couldn't be refreshed`, () =>
-        authCommands(client, providerId).refresh(account.id),
+      return run(
+        `refresh:${account.id}`,
+        `${AUTH_PROVIDER_NAMES[providerId]} status couldn't be refreshed`,
+        () => (sessions ? sessions.validate(account) : refreshProviderAuth(client, providerId, account.id)),
+        undefined,
+        sessions === null,
       );
     },
-    [client, run],
+    [client, run, sessions],
   );
   const logoutAuth = useCallback(
     async (account: ProviderAccount) => {
       if (!isBrowserAuthProvider(account.providerId)) return null;
       const providerId = account.providerId;
-      return run(`logout:${account.id}`, `${AUTH_PROVIDER_NAMES[providerId]} couldn't sign out`, () =>
-        authCommands(client, providerId).logout(account.id),
+      return run(
+        `logout:${account.id}`,
+        `${AUTH_PROVIDER_NAMES[providerId]} couldn't sign out`,
+        () => authCommands(client, providerId).logout(account.id),
+        account.id,
       );
     },
     [client, run],
@@ -246,6 +287,7 @@ export function useProviderAccounts(enabled: boolean) {
       const providerId = account.providerId;
       const commands = authCommands(client, providerId);
       const key = `login:${account.id}`;
+      sessions?.supersede(account.id);
       setBusyKey(key);
       let handle: string | null = null;
       try {
@@ -268,7 +310,7 @@ export function useProviderAccounts(enabled: boolean) {
         setActiveLogin((current) => (current?.handle === handle ? null : current));
       }
     },
-    [client, replace, toast],
+    [client, replace, sessions, toast],
   );
 
   const cancelLogin = useCallback(async () => {
@@ -287,10 +329,14 @@ export function useProviderAccounts(enabled: boolean) {
   }, [activeLogin, client, toast]);
 
   return {
-    accounts,
-    loadError,
+    accounts: sessions?.accounts ?? localAccounts,
+    loadError: sessions?.loadError ?? localLoadError,
+    checking: sessions?.checking ?? new Set<string>(),
+    validationErrors: sessions?.validationErrors ?? new Map<string, string>(),
     usage,
     usageError,
+    usageRefreshing,
+    usageStale: usage !== null && usageError !== null,
     busyKey,
     activeLogin,
     load,

@@ -46,7 +46,7 @@ interface NewThreadProps {
   prefill?: NewThreadPrefill;
 }
 
-/** New thread flow: provider, model, workspace, permission mode (the saved default, else Approve), task. */
+/** New thread flow: provider, model, workspace, permission mode (the saved default, else Auto), task. */
 export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const { client } = useRuntime();
   const { navigate } = useNavigation();
@@ -224,8 +224,8 @@ function NewThreadForm({
   // Each thread gets its own worktree and branch unless the person opts out.
   const [isolate, setIsolate] = useState(true);
   const repository = useIsRepository(workspaceId);
-  // The saved default (Settings → Permissions) when a thread can start in it, else Approve; until
-  // the settings load, the runtime's answer (`thread_options` applies the same rule natively).
+  // The saved default when a thread can start in it, otherwise a safe startable fallback. Until
+  // settings load, the runtime's answer applies the same rule natively.
   const { settings: permissionSettings } = usePermissions();
   const savedDefault = permissionSettings?.defaultMode ?? null;
   const defaultMode = savedDefault
@@ -233,7 +233,7 @@ function NewThreadForm({
     : options.defaultPermissionMode;
   const [chosenMode, setMode] = useState<PermissionMode | null>(null);
   const mode = chosenMode ?? defaultMode;
-  // A saved Bypass or Custom default can't start a thread; the form says so instead of hiding it.
+  // A saved Bypass or Custom default can't start a thread; the form names its safe fallback.
   const unstartableDefault =
     savedDefault !== null && chosenMode === null && !options.permissionModes.includes(savedDefault);
   const [task, setTask] = useState("");
@@ -565,8 +565,8 @@ function NewThreadForm({
           />
           {unstartableDefault && savedDefault ? (
             <p className={styles.hint} role="note">
-              Your default mode is {MODE_LABELS[savedDefault]}, which threads can't start in, so this thread starts in
-              Approve.
+              Your default mode is {MODE_LABELS[savedDefault]}, which threads can't start in, so this thread starts in{" "}
+              {MODE_LABELS[defaultMode]}.
             </p>
           ) : null}
           <p className={styles.hint} aria-live="polite">

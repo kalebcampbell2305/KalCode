@@ -27,6 +27,11 @@ const PROVIDER: &str = "codex";
 const CONFIG_NAME: &str = "config.toml";
 const SAFE_CONFIG: &str = "# KalCode account profile. Launch policy is supplied on argv.\n";
 const UNSAFE_CONFIG: &str = "the managed Codex config path is not a regular file";
+const UNMANAGED_CONFIG: &str = "the managed Codex config changed outside KalCode";
+
+pub(crate) fn is_unmanaged_config(error: &ProviderError) -> bool {
+    matches!(error, ProviderError::Start(message) if message == UNMANAGED_CONFIG)
+}
 
 /// Whether the official Codex account result permits a session without an enterprise cloud
 /// config layer. Business, Education, and Enterprise accounts are eligible; missing/unknown
@@ -63,7 +68,7 @@ pub struct ManagedAuthLaunch {
     pub args: Vec<OsString>,
     /// Exact dedicated profile selected by `CODEX_HOME`.
     pub profile_home: PathBuf,
-    /// Exclusive profile lease retained for the app-server process lifetime.
+    /// Exact observer or exclusive authentication lease retained for the app-server lifetime.
     pub lease: ProfileLease,
 }
 
@@ -146,6 +151,63 @@ pub fn prepare_auth_with_lease(
         profile_home,
         lease,
     })
+}
+
+/// Prepares the official app-server for the read-only `account/read {refreshToken:false}` RPC.
+/// Unlike authentication preparation, this accepts only a shared observer lease and deliberately
+/// does not rewrite `config.toml`; explicit login/logout continue through the exclusive path.
+pub fn prepare_observer_with_lease(
+    profiles: &ManagedProfiles,
+    source: &DetectEnv,
+    account_id: &str,
+    lease: ProfileLease,
+) -> Result<ManagedAuthLaunch, ProviderError> {
+    if !lease.is_observer_for(profiles, PROVIDER, account_id) {
+        return Err(ProviderError::Start(
+            "the managed Codex observer lease does not match the selected account".into(),
+        ));
+    }
+    let profile_home = profiles.profile_home(PROVIDER, account_id)?;
+    // The observer deliberately preserves provider-native configuration, but it must not follow a
+    // config symlink/reparse point or multiply-linked file outside this isolated profile.
+    verify_safe_config_or_missing(&profile_home.join(CONFIG_NAME))?;
+    // Reuse the account id as a canonical stable directory key. This directory is outside the
+    // profile home and every repository; no thread is created by the observer.
+    let cwd = profiles.session_dir(PROVIDER, account_id, account_id)?;
+    reject_repository_marker(&cwd)?;
+    let env = profiles.launch_env(PROVIDER, account_id, source)?;
+    let mut args = config_args(
+        crate::codex::argv::POLICY_CONFIG
+            .iter()
+            .copied()
+            .chain(["approval_policy='never'", "sandbox_mode='read-only'"])
+            .map(str::to_owned)
+            .chain([repository_override(&cwd)?]),
+    );
+    args.push("app-server".into());
+    Ok(ManagedAuthLaunch {
+        env,
+        cwd,
+        args,
+        profile_home,
+        lease,
+    })
+}
+
+/// Restores only KalCode's inert Codex configuration under the exact account's exclusive lease.
+/// Provider-native credentials and every other profile file remain untouched.
+pub fn repair_observer_config_with_lease(
+    profiles: &ManagedProfiles,
+    account_id: &str,
+    lease: ProfileLease,
+) -> Result<(), ProviderError> {
+    if !lease.is_exclusive_for(profiles, PROVIDER, account_id) {
+        return Err(ProviderError::Start(
+            "the managed Codex configuration lease does not match the selected account".into(),
+        ));
+    }
+    let profile_home = profiles.profile_home(PROVIDER, account_id)?;
+    reset_managed_config(&profile_home)
 }
 
 fn reject_repository_marker(cwd: &Path) -> Result<(), ProviderError> {
@@ -251,6 +313,28 @@ fn verify_regular_or_missing(path: &Path) -> Result<(), ProviderError> {
         Ok(_) => Err(ProviderError::Start(UNSAFE_CONFIG.into())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error("couldn't inspect the managed Codex config", error)),
+    }
+}
+
+/// A shared observer cannot repair configuration while sessions may be using the profile. It
+/// therefore accepts only the exact KalCode-owned inert file (or no file) and fails closed on
+/// drift without reading, copying, or exposing provider credentials.
+fn verify_safe_config_or_missing(path: &Path) -> Result<(), ProviderError> {
+    verify_regular_or_missing(path)?;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error("couldn't inspect the managed Codex config", error)),
+    };
+    if metadata.len() != SAFE_CONFIG.len() as u64 {
+        return Err(ProviderError::Start(UNMANAGED_CONFIG.into()));
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|error| io_error("couldn't verify the managed Codex config", error))?;
+    if bytes == SAFE_CONFIG.as_bytes() {
+        Ok(())
+    } else {
+        Err(ProviderError::Start(UNMANAGED_CONFIG.into()))
     }
 }
 
@@ -437,6 +521,66 @@ mod tests {
         assert!(
             prepare_auth_with_lease(&profiles, &source, &account_id, wrong_root_lease).is_err(),
             "a same-provider, same-account lease from another root must not authorize this root"
+        );
+    }
+
+    #[test]
+    fn observer_is_read_only_and_refuses_config_drift() {
+        let (_temp, profiles, source, account_id, _workspace) = fixture();
+        let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
+        let config = home.join(CONFIG_NAME);
+        std::fs::write(&config, SAFE_CONFIG).expect("safe config");
+        let before = std::fs::read(&config).expect("config before");
+        let lease = profiles
+            .acquire_observer_lease(PROVIDER, &account_id)
+            .expect("observer lease");
+        let launch = prepare_observer_with_lease(&profiles, &source, &account_id, lease)
+            .expect("observer launch");
+        let args = strings(&launch.args);
+        assert_eq!(args.last().map(String::as_str), Some("app-server"));
+        assert!(args.iter().any(|arg| arg == "approval_policy='never'"));
+        assert!(args.iter().any(|arg| arg == "sandbox_mode='read-only'"));
+        assert_eq!(std::fs::read(&config).expect("config after"), before);
+        drop(launch);
+
+        let hostile = b"[mcp_servers.hostile]\ncommand='hostile'\n";
+        std::fs::write(&config, hostile).expect("hostile config");
+        let auth = home.join("auth.json");
+        std::fs::write(&auth, b"opaque-provider-native-credential").expect("auth fixture");
+        let lease = profiles
+            .acquire_observer_lease(PROVIDER, &account_id)
+            .expect("observer lease");
+        assert!(
+            prepare_observer_with_lease(&profiles, &source, &account_id, lease).is_err(),
+            "a shared observer must never start under an unowned config"
+        );
+        assert_eq!(std::fs::read(&config).expect("hostile unchanged"), hostile);
+
+        let lease = profiles
+            .acquire_sign_in_lease(PROVIDER, &account_id)
+            .expect("exclusive config repair");
+        repair_observer_config_with_lease(&profiles, &account_id, lease).expect("config repair");
+        assert_eq!(
+            std::fs::read_to_string(&config).expect("normalized config"),
+            SAFE_CONFIG
+        );
+        assert_eq!(
+            std::fs::read(&auth).expect("auth unchanged"),
+            b"opaque-provider-native-credential"
+        );
+        let lease = profiles
+            .acquire_observer_lease(PROVIDER, &account_id)
+            .expect("observer after repair");
+        let launch = prepare_observer_with_lease(&profiles, &source, &account_id, lease)
+            .expect("observer after repair");
+        drop(launch);
+        std::fs::write(&config, hostile).expect("repeated drift");
+        let lease = profiles
+            .acquire_observer_lease(PROVIDER, &account_id)
+            .expect("observer lease after repeated drift");
+        assert!(
+            prepare_observer_with_lease(&profiles, &source, &account_id, lease).is_err(),
+            "a writer that reintroduces drift after the one repair remains fail-closed"
         );
     }
 

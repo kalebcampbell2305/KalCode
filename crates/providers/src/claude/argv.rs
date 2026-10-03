@@ -144,9 +144,10 @@ const CREDENTIAL_PATHS: &[&str] = &[
 /// matches case-insensitively (https://code.claude.com/docs/en/permissions#powershell).
 const SHELL_TOOLS: &[&str] = &["Bash", "PowerShell"];
 
-/// Tools that change files or reach the network. In Approve, Auto and Custom KalCode would ask
-/// before these (`filesystem.write`, `network.*`); nobody can answer yet, so they are removed.
-/// Plan removes them too (Plan never edits; `--restricted` already drops `WebFetch`).
+/// Tools that change files or reach the network. In Approve and Custom KalCode would ask before
+/// these (`filesystem.write`, `network.*`); nobody can answer a headless prompt, so they are
+/// removed. Auto leaves them available to Claude Code's background classifier. Plan removes them
+/// too (Plan never edits; `--restricted` already drops `WebFetch`).
 const ASK_FIRST_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
 
 /// KalCode-owned deny rules for a mode, passed with `--disallowedTools`
@@ -164,7 +165,7 @@ const ASK_FIRST_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit", "WebFetch", 
 /// Claude Code allow rules cover it (https://code.claude.com/docs/en/permissions#bash-rule-limits).
 pub fn deny_rules(mode: PermissionMode) -> Vec<String> {
     let mut rules = Vec::new();
-    if !matches!(mode, PermissionMode::Bypass) {
+    if !matches!(mode, PermissionMode::Auto | PermissionMode::Bypass) {
         rules.extend(ASK_FIRST_TOOLS.iter().map(|t| (*t).to_owned()));
     }
     rules.extend(CREDENTIAL_PATHS.iter().map(|p| format!("Read({p})")));
@@ -191,11 +192,18 @@ pub fn permission_args(mode: PermissionMode) -> Vec<&'static str> {
         // blocks edits. Reads only.
         PermissionMode::Plan => vec!["--restricted", "--permission-mode", "plan"],
         // Manual mode: reads and Claude Code's built-in read-only commands run; everything that
-        // would ask is denied (no host approvals yet). Claude Code's own `auto` classifier is
-        // never used: its decisions are not KalCode policy.
-        PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
+        // would ask is denied (no host approvals yet).
+        PermissionMode::Approve | PermissionMode::Custom => {
             let mut args = USER_SETTINGS_ONLY.to_vec();
             args.extend(["--permission-mode", "default"]);
+            args
+        }
+        // Claude Code's native Auto mode uses a background classifier for routine workspace work.
+        // The certified 2.1.282 floor accepts the explicit mode; if the selected model, account,
+        // organization or server flag cannot use it, Claude Code falls back to Manual.
+        PermissionMode::Auto => {
+            let mut args = USER_SETTINGS_ONLY.to_vec();
+            args.extend(["--permission-mode", "auto"]);
             args
         }
         // File edits and common filesystem commands inside the working directory. Other
@@ -275,9 +283,10 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
             fidelity: MappingFidelity::ApproximateStricter,
             provider_setting: setting(PermissionMode::Auto),
             notes: format!(
-                "Runs like Approve. Claude Code's own auto mode is not used, because its \
-                 classifier's decisions are not your KalCode policy. {ENFORCED_BY_KALCODE} \
-                 {NOT_YET_ENFORCED}"
+                "Claude Code's background classifier checks edits, shell commands and network \
+                 requests. If Auto is unavailable for the selected account, model or \
+                 organization, Claude Code falls back to Manual; prompts are refused in this \
+                 headless session. {ENFORCED_BY_KALCODE} {NOT_YET_ENFORCED}"
             ),
         },
         PermissionMapping {
@@ -444,7 +453,8 @@ mod tests {
         // The broadest Claude Code mode each KalCode mode may use.
         let cap = |mode| match mode {
             PermissionMode::Plan => 0,
-            PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => 2,
+            PermissionMode::Approve | PermissionMode::Custom => 2,
+            PermissionMode::Auto => 4,
             PermissionMode::Bypass => 3,
         };
         for mode in ALL {
@@ -473,6 +483,12 @@ mod tests {
                 Some("none")
             );
             assert!(args.iter().any(|a| a == "--strict-mcp-config"), "{mode:?}");
+            if mode == PermissionMode::Auto {
+                assert_eq!(
+                    claude_mode, "auto",
+                    "Auto must use Claude Code's background classifier"
+                );
+            }
         }
     }
 
@@ -730,17 +746,23 @@ mod tests {
     }
 
     #[test]
-    fn modes_that_would_ask_remove_edit_and_web_tools() {
+    fn manual_modes_remove_edit_and_web_tools_while_auto_keeps_them_classified() {
         for mode in [
             PermissionMode::Plan,
             PermissionMode::Approve,
-            PermissionMode::Auto,
             PermissionMode::Custom,
         ] {
             let rules = deny_rules(mode);
             for tool in ["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"] {
                 assert!(rules.iter().any(|r| r == tool), "{mode:?} keeps {tool}");
             }
+        }
+        let auto = deny_rules(PermissionMode::Auto);
+        for tool in ["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"] {
+            assert!(
+                !auto.iter().any(|rule| rule == tool),
+                "Auto must leave {tool} to Claude Code's classifier"
+            );
         }
         for mode in ALL {
             let rules = deny_rules(mode);
@@ -751,7 +773,8 @@ mod tests {
                 );
             }
         }
-        // Bypass keeps local edits (acceptEdits); remote actions stay denied.
+        // Auto and Bypass keep local edits; remote actions stay denied.
+        assert!(auto.iter().any(|r| r == "Bash(git push *)"));
         let bypass = deny_rules(PermissionMode::Bypass);
         assert!(!bypass.iter().any(|r| r == "Edit" || r == "Write"));
         assert!(bypass.iter().any(|r| r == "Bash(git push *)"));

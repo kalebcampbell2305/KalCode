@@ -15,11 +15,13 @@ use kalcode_contracts::agent::{
 };
 use kalcode_contracts::context::PromptReview;
 use kalcode_contracts::operations::{OperationKind, OperationSpec};
-use kalcode_contracts::permissions::{PermissionGate, PermissionMode};
+use kalcode_contracts::permissions::{
+    DEFAULT_CODING_PERMISSION_MODE, PermissionGate, PermissionMode,
+};
 use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountScopes};
 use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
 use kalcode_core::{Core, ErrorCategory, IpcError, KalError};
-use kalcode_permissions::{PermissionService, ThreadModeStore};
+use kalcode_permissions::{PermissionService, PermissionSettings, ThreadModeStore};
 use kalcode_providers::accounts::AccountStore;
 use kalcode_providers::codex::managed_policy::CloudConfigEligibility;
 use kalcode_providers::health::observe::ObservedProvider;
@@ -27,8 +29,8 @@ use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::model::{AdapterState, ProviderStatus};
 use kalcode_providers::{ClaudeCodeProvider, CodexProvider, DetectEnv, GeminiProvider};
 use kalcode_threads::{
-    CoreWorkspaces, CreateThread, ProviderRegistry, StreamId, ThreadOptions, ThreadRuntime,
-    ToolCallRecord,
+    CoreWorkspaces, CreateThread, ProviderErrorObserver, ProviderRegistry, StreamId, ThreadOptions,
+    ThreadRuntime, ToolCallRecord,
 };
 use tauri::ipc::Channel;
 use tauri::{State, Webview};
@@ -119,6 +121,37 @@ struct AccountBoundProvider {
     /// Debug and E2E fixtures may intentionally exercise the pre-account runtime contract. This
     /// is always false in shipped builds because its caller uses `TEST_HOOKS_ENABLED`.
     allow_unbound_test_fixture: bool,
+}
+
+struct AccountProviderErrorObserver {
+    accounts: AccountStore,
+}
+
+impl ProviderErrorObserver for AccountProviderErrorObserver {
+    fn observe(
+        &self,
+        provider_id: &ProviderId,
+        account_id: &str,
+        code: &str,
+    ) -> kalcode_core::Result<()> {
+        if provider_id.as_str() != ProviderId::CLAUDE_CODE
+            || !kalcode_providers::health::is_auth_code(code)
+        {
+            return Ok(());
+        }
+        // Revalidate the immutable provider/account association at the persistence boundary.
+        // The thread worker still holds its generation lock and the live session's shared profile
+        // lease here, so archive/sign-in/sign-out cannot overtake this update.
+        self.accounts
+            .get_active_for_provider(account_id, provider_id)?;
+        self.accounts.mark_authentication(
+            account_id,
+            AuthState::NotAuthenticated,
+            None,
+            Some(code),
+        )?;
+        Ok(())
+    }
 }
 
 impl AccountBoundProvider {
@@ -347,6 +380,17 @@ impl ThreadsState {
             (None, _) => None,
         };
         if let Some(runtime) = &runtime {
+            if let Some(provider_runtime) = &provider_runtime
+                && let Err(error) =
+                    runtime.set_provider_error_observer(Arc::new(AccountProviderErrorObserver {
+                        accounts: provider_runtime.account_store(),
+                    }))
+            {
+                tracing::error!(
+                    event = "threads.provider_error_observer_start_failed",
+                    error_code = error.code
+                );
+            }
             modes.bind(runtime);
         }
         let state = Self {
@@ -428,8 +472,8 @@ impl ThreadsState {
     }
 
     /// Starts a confirmed Operations agent task through the canonical thread admission path.
-    /// Operations intentionally fixes the permission mode to Approve and cannot silently map
-    /// unsupported scheduler fields onto provider defaults.
+    /// Operations uses the saved startable permission preference. Fresh settings use bounded Auto;
+    /// modes that need an attached confirmation or profile conservatively use Approve.
     pub(crate) fn start_operation(
         &self,
         core: &Arc<Core>,
@@ -448,7 +492,14 @@ impl ThreadsState {
     ) -> kalcode_core::Result<CreateThread> {
         self.ensure_providers(Some(core));
         let runtime = self.operation_runtime()?;
-        let request = operation_request(core, runtime, spec)?;
+        let permission_mode = match self.permissions.as_ref() {
+            Some(service) => service
+                .settings()
+                .map(|settings| settings.startable_default_mode())
+                .unwrap_or(PermissionMode::Approve),
+            None => DEFAULT_CODING_PERMISSION_MODE,
+        };
+        let request = operation_request(core, runtime, spec, permission_mode)?;
         review_operation_prompt(runtime, &request)?;
         Ok(request)
     }
@@ -581,6 +632,7 @@ fn operation_request(
     core: &Arc<Core>,
     runtime: &ThreadRuntime,
     spec: &OperationSpec,
+    permission_mode: PermissionMode,
 ) -> kalcode_core::Result<CreateThread> {
     let (provider_id, prompt) = validate_agent_operation(spec)?;
     let provider_id = kalcode_threads::validate::provider_id(provider_id)?;
@@ -629,7 +681,7 @@ fn operation_request(
         spec.provider_account_id.clone(),
         spec.workspace_id.clone(),
         model,
-        PermissionMode::Approve,
+        permission_mode,
         prompt.to_owned(),
         Some(spec.name.clone()),
     )
@@ -932,18 +984,24 @@ pub fn thread_options(
         .runtime()?
         .options()
         .map_err(|e| e.log_and_convert("thread_options"))?;
-    // New threads start in the user's default mode (Settings → Permissions) when it can be
-    // chosen at creation; Bypass and Custom are set on the thread afterwards, with confirmation.
-    if let Some(default) = state
-        .permissions
-        .as_ref()
-        .and_then(|service| service.settings().ok())
-        .map(|settings| settings.default_mode)
-        .filter(|mode| options.permission_modes.contains(mode))
-    {
-        options.default_permission_mode = default;
+    // New threads start in the user's saved startable mode. Bypass needs a fresh confirmation and
+    // Custom needs its attached profile, so neither may silently broaden to Auto during startup.
+    if let Some(service) = state.permissions.as_ref() {
+        let settings = service.settings().unwrap_or(PermissionSettings {
+            default_mode: PermissionMode::Approve,
+            default_profile_id: None,
+        });
+        apply_saved_permission_settings(&mut options, &settings);
     }
     Ok(options)
+}
+
+fn apply_saved_permission_settings(options: &mut ThreadOptions, settings: &PermissionSettings) {
+    let default = settings.startable_default_mode();
+    if !options.permission_modes.contains(&default) {
+        options.permission_modes.push(default);
+    }
+    options.default_permission_mode = default;
 }
 
 #[tauri::command(async)]
@@ -1798,6 +1856,8 @@ mod tests {
                 })
                 .expect("core"),
             );
+            std::fs::create_dir_all(temp_root.join("workspace"))
+                .expect("workspace fixture directory");
             let workspace_id = kalcode_contracts::ids::new_id();
             core.transact(|tx| {
                 let root_path = temp_root.join("workspace").display().to_string();
@@ -1836,6 +1896,95 @@ mod tests {
                 account_label_query,
                 false,
             )
+        }
+    }
+
+    #[test]
+    fn account_error_observer_expires_only_the_selected_claude_account() {
+        let fixture = AccountFixture::new();
+        let selected = fixture
+            .store
+            .create(ProviderId::CLAUDE_CODE, "Claude A")
+            .expect("selected account");
+        let other = fixture
+            .store
+            .create(ProviderId::CLAUDE_CODE, "Claude B")
+            .expect("other account");
+        let observer = AccountProviderErrorObserver {
+            accounts: fixture.store.clone(),
+        };
+        for account in [&selected, &other] {
+            fixture
+                .store
+                .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+                .expect("authenticate fixture account");
+        }
+
+        for code in [
+            "api_authentication_failed",
+            "api_oauth_org_not_allowed",
+            "provider_authentication_failed",
+            "provider_oauth_org_not_allowed",
+        ] {
+            fixture
+                .store
+                .mark_authentication(&selected.id, AuthState::Authenticated, None, None)
+                .expect("reset selected account");
+            observer
+                .observe(
+                    &ProviderId::new(ProviderId::CLAUDE_CODE),
+                    &selected.id,
+                    code,
+                )
+                .expect("structured auth failure");
+            let expired = fixture.store.get(&selected.id).expect("selected account");
+            assert_eq!(expired.authentication_state, AuthState::NotAuthenticated);
+            assert_eq!(expired.last_error_code.as_deref(), Some(code));
+            assert_eq!(
+                fixture
+                    .store
+                    .get(&other.id)
+                    .expect("other account")
+                    .authentication_state,
+                AuthState::Authenticated
+            );
+        }
+    }
+
+    #[test]
+    fn account_error_observer_ignores_transient_and_cross_provider_errors() {
+        let fixture = AccountFixture::new();
+        let account = fixture
+            .store
+            .create(ProviderId::CLAUDE_CODE, "Claude A")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+            .expect("authenticated account");
+        let observer = AccountProviderErrorObserver {
+            accounts: fixture.store.clone(),
+        };
+
+        for (provider, code) in [
+            (ProviderId::CLAUDE_CODE, "api_rate_limit"),
+            (ProviderId::CLAUDE_CODE, "provider_billing_error"),
+            (ProviderId::CLAUDE_CODE, "api_cloud_credential_error"),
+            (ProviderId::CLAUDE_CODE, "process_exited"),
+            (ProviderId::CODEX, "api_authentication_failed"),
+        ] {
+            observer
+                .observe(&ProviderId::new(provider), &account.id, code)
+                .expect("ignored error");
+            assert_eq!(
+                fixture
+                    .store
+                    .get(&account.id)
+                    .expect("unchanged account")
+                    .authentication_state,
+                AuthState::Authenticated,
+                "{provider}/{code} must not infer expiry"
+            );
         }
     }
 
@@ -2489,6 +2638,78 @@ mod tests {
                 .code,
             "provider_account_unknown"
         );
+    }
+
+    #[test]
+    fn operation_agents_preserve_the_selected_startable_permission_mode() {
+        let fixture = AccountFixture::new();
+        let account = fixture.store.create("codex", "Work").expect("account");
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+            .expect("authenticated account");
+        let providers = Arc::new(ProviderRegistry::new());
+        providers.register(Arc::new(StartSpy::default()));
+        let runtime = ThreadRuntime::new(
+            fixture.core.clone(),
+            providers,
+            Arc::new(CoreWorkspaces::new(fixture.core.clone())),
+            Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+        )
+        .expect("runtime");
+        let mut spec = agent_operation_spec();
+        spec.workspace_id = fixture.workspace_id.clone();
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            DEFAULT_CODING_PERMISSION_MODE,
+        ] {
+            let request =
+                operation_request(&fixture.core, &runtime, &spec, mode).expect("operation request");
+            assert_eq!(request.permission_mode, mode);
+            assert_ne!(request.permission_mode, PermissionMode::Bypass);
+        }
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn thread_options_preserve_restrictive_defaults_and_never_infer_bypass_or_custom() {
+        let mut options = ThreadOptions {
+            providers: Vec::new(),
+            workspaces: Vec::new(),
+            permission_modes: vec![
+                PermissionMode::Plan,
+                PermissionMode::Approve,
+                PermissionMode::Auto,
+            ],
+            default_permission_mode: PermissionMode::Auto,
+        };
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+        ] {
+            apply_saved_permission_settings(
+                &mut options,
+                &PermissionSettings {
+                    default_mode: mode,
+                    default_profile_id: None,
+                },
+            );
+            assert_eq!(options.default_permission_mode, mode);
+        }
+        for mode in [PermissionMode::Bypass, PermissionMode::Custom] {
+            apply_saved_permission_settings(
+                &mut options,
+                &PermissionSettings {
+                    default_mode: mode,
+                    default_profile_id: None,
+                },
+            );
+            assert_eq!(options.default_permission_mode, PermissionMode::Approve);
+            assert!(!options.permission_modes.contains(&PermissionMode::Bypass));
+            assert!(!options.permission_modes.contains(&PermissionMode::Custom));
+        }
     }
 
     // ---------------------------------------------------------------- Agent Fleet worktrees

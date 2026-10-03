@@ -24,12 +24,11 @@ pub fn claude_spec() -> DetectionSpec {
         appdata_dirs: &["npm"],
         local_appdata_dirs: &["Microsoft/WinGet/Links"],
         minimum_version: Some(claude_argv::MINIMUM_VERSION),
-        // CLI reference: "Show authentication status as JSON ... Exits with code 0 if logged
-        // in, 1 if not." Only the exit code is used; the output (account details) is discarded.
-        auth: Some(AuthProbe {
-            args: &["auth", "status"],
-            signal: AuthSignal::ExitCode,
-        }),
+        // `claude auth status` is not a passive probe: Claude Code 2.1.x can begin an OAuth
+        // refresh during startup and let this short-lived command exit before the rotated
+        // credentials are durably written. Detect only installation/version here. Managed
+        // accounts restore their persisted safe state; a real coding session is authoritative.
+        auth: None,
         env_policy: EnvPolicy {
             provider_prefixes: &["ANTHROPIC_", "CLAUDE_"],
             provider_names: &[],
@@ -296,13 +295,6 @@ mod tests {
     #[test]
     fn auth_checks_are_documented_commands() {
         let checks: Vec<_> = statuses().into_iter().map(|s| s.auth_check).collect();
-        assert_eq!(
-            checks,
-            [
-                Some("claude auth status".to_owned()),
-                Some("codex login status".to_owned()),
-                None
-            ]
-        );
+        assert_eq!(checks, [None, Some("codex login status".to_owned()), None]);
     }
 }

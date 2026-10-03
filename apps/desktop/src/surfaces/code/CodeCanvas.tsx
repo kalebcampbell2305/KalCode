@@ -69,6 +69,7 @@ import {
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
 import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "../../shell/rail/paneIds.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
+import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
@@ -165,6 +166,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const [browserBridge] = useState(createBrowserBridge);
   const initialBrowserUrls = useRef(new Map<string, string>());
   const { client, info } = useRuntime();
+  const accountSessions = useOptionalProviderAccountSessions();
+  const hasSharedAccountSessions = accountSessions !== null;
   const { current, navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
   const theme = useResolvedTheme();
@@ -184,6 +187,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const terminalById = useMemo(() => new Map(terminals.map((t) => [t.id, t])), [terminals]);
   const paneById = useMemo(() => new Map(providerPanes.panes.map((p) => [p.thread.id, p])), [providerPanes.panes]);
   useEffect(() => {
+    if (hasSharedAccountSessions) return;
     let cancelled = false;
     setProviderAccounts(null);
     setProviderAccountsUnavailable(false);
@@ -198,10 +202,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, hasSharedAccountSessions]);
+  const restoredProviderAccounts = accountSessions?.accounts ?? providerAccounts;
+  const restoredProviderAccountsUnavailable = accountSessions
+    ? accountSessions.loadError !== null
+    : providerAccountsUnavailable;
   const accountFor = useCallback(
-    (thread: ThreadSummary) => resolvePaneAccount(thread, providerAccounts, providerAccountsUnavailable),
-    [providerAccounts, providerAccountsUnavailable],
+    (thread: ThreadSummary) =>
+      resolvePaneAccount(thread, restoredProviderAccounts, restoredProviderAccountsUnavailable),
+    [restoredProviderAccounts, restoredProviderAccountsUnavailable],
   );
 
   const titleOf = useCallback(

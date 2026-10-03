@@ -1,5 +1,34 @@
 # KalCode agent policy
 
+## Permanent background process and focus rule (owner directive 2026-10-03)
+
+**KALCODE AGENTS MUST NEVER SPAM THE WINDOWS DESKTOP WITH EXTERNAL TERMINAL WINDOWS.** User-visible shell work runs inside KalCode's integrated terminals. Infrastructure and background commands run headless/hidden and must never steal focus. Do not launch Windows Terminal, cmd, PowerShell or another external console window unless the user explicitly requests an external terminal.
+
+- Trace the actual process parent and launch owner before repairing a popup. Prevent window creation at that boundary (`windowsHide`, `CREATE_NO_WINDOW`, or the canonical process host/PTY as appropriate); never minimize, move, hide or close a window after creating it as the fix.
+- Apply this to agent execution, tests, Git/worktrees, Cargo/builds, package managers, release/verification scripts and shell wrappers. Avoid unnecessary shells, `wt.exe`, `start` and visible `Start-Process` for background work.
+- Deduplicate active logical jobs, bound retries/concurrency, and ensure cancellation and completion clean up owned children. Never terminate unrelated user processes.
+- Verify sustained concurrent coding/build/test/Git/worktree work with desktop window/focus observation: zero external console popups or focus theft, working integrated terminals, and a responsive app. Preserve equivalent background behavior on macOS.
+
+## Permanent provider session persistence rule (owner directive 2026-10-02)
+
+**KALCODE PROVIDER ACCOUNTS MUST PERSIST ACROSS APP RESTARTS.** Once a user connects a valid Claude Code, Codex, or other supported provider account, closing and reopening KalCode must not require manual Refresh or re-authentication unless the provider session has actually expired or been revoked.
+
+- Restore persisted account identities, nicknames, defaults, ordering and last known safe status immediately. Keep the Code-tab account picker ready to launch real coding agents with valid accounts.
+- Validate sessions and refresh health/usage asynchronously. Startup and account selection must not wait on provider/network checks. Distinguish connected, checking, expired and validation error; an unfinished or failed background check is not proof of sign-out. Label cached usage as stale until refreshed.
+- Background validation must use a provider-supported check that cannot refresh or mutate credentials. Never run a short-lived command known to risk token loss (including affected Claude `auth status` versions). If no safe passive check exists, preserve last-known state and let the next real provider coding session enforce authentication; do not fake a fresh validation timestamp.
+- Keep credentials in provider-native persistence or existing OS/secure credential storage on Windows and macOS. Never copy secrets into plaintext account metadata, localStorage, logs, telemetry or repository files. Preserve genuine provider expiration, revocation and authentication boundaries.
+- Owner clarification (2026-10-03): preserve provider-native sessions, including credential files managed by the provider itself. The plaintext prohibition applies to new KalCode credential storage: do not create a second token cache, copy provider secrets, or switch existing native storage in a way that forces valid accounts to sign in again. Do not claim provider-owned files are encrypted when they are not.
+- Verify multiple accounts, complete application restart, immediate launch, transient validation failure and genuine expiration on both platforms. Tests must not mutate the owner's provider credentials.
+
+## Permanent permission UX rule (owner directive 2026-10-02)
+
+**NORMAL CODING WORK = DO IT. REAL SECURITY / DESTRUCTIVE RISK = ASK.** Normal trusted development inside the user's own workspace must not repeatedly require Allow, Approve or Continue prompts for reading/editing/creating project files, ordinary development commands, tests, builds, Git, worktrees, dev servers and terminals.
+
+- Reuse canonical app/provider permission paths and simplify redundant prompts and confusing modes. Honor explicitly selected restrictive preferences.
+- Preserve OS/admin/UAC authorization, provider sign-in, credential/secret protection, billing/payment authorization, meaningful user-data deletion safeguards, irreversible production authorization and signing/certificate security. Ambiguous consequential actions still require clarification.
+- Do not implement the trusted coding experience by blindly accepting provider prompts or applying unrestricted approval bypass to every action. Test routine development and genuine risk boundaries together on Windows and macOS.
+
+
 ## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
 
 An agent is always a real provider coding terminal/session in Code. Agent commands never create chat Threads. Opening four Claude Code agents creates four fresh Claude Code terminals in the current workspace; opening six Codex agents creates six fresh Codex terminals. Each binds its provider account, exact model, effort and working directory. Agent Fleet focuses that same terminal. Threads remain a separate product concept. Preserve terminal identity through resource waits, retry, restoration and runtime errors; never fall back to chat execution or Threads navigation.
@@ -7,6 +36,7 @@ An agent is always a real provider coding terminal/session in Code. Agent comman
 KalCode agents must never spam the Windows desktop with external terminal windows. User-visible shell work runs inside KalCode's integrated PTY; background work runs headless/hidden and must never steal focus. Do not spawn Windows Terminal, cmd, PowerShell or another external console unless the user explicitly requests one. Prevent window creation at the owning spawn boundary; minimizing or hiding a window after creation is not a fix. Deduplicate active logical jobs, bound retries, and terminate owned child processes on cancellation/completion without disturbing unrelated user work.
 
 For Codex tool execution on Windows, use the existing PTY execution mode (`exec_command` with `tty: true`) so commands stay contained. Any explicitly launched background helper must use the platform's no-window creation mechanism (`windowsHide`, `CREATE_NO_WINDOW`, or `Start-Process -WindowStyle Hidden` as applicable). Test the actual owning spawn path and observe window/focus events; reduced popup frequency is not completion.
+
 
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 

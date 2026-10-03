@@ -19,6 +19,7 @@ import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
 import { HomeSurface } from "../surfaces/home/HomeSurface.tsx";
 import { OperationsPage } from "../surfaces/operations/OperationsPage.tsx";
 import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
+import { ProviderAccountSessionsProvider } from "../surfaces/providers/ProviderAccountSessions.tsx";
 import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
 import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
@@ -52,36 +53,38 @@ export function Shell() {
   const kalvoiceFlag = info.flags.surfaces.find((s) => s.id === "kalvoice");
   const kalvoiceEnabled = Boolean(kalvoiceFlag?.visible && kalvoiceFlag.state !== "gated");
   return (
-    <NavigationProvider flags={info.flags.surfaces} features={info.flags.features}>
-      <WorkspaceProvider>
-        <PermissionsProvider>
-          <ThreadsIntentProvider>
-            {/* Z7-W3: cross-surface focus/filter intents and the notification center. */}
-            <UiIntentsProvider>
-              <NotificationsProvider>
-                <ShellSlotsProvider>
-                  {/* Z7-W2: shared search (palette + locator) and the workspace rail. */}
-                  <SearchProvider>
-                    <RailProvider>
-                      {/* KalTidy wraps KalVoice, which stops idle terminals through it. */}
-                      <KalTidyProvider>
-                        {kalvoiceEnabled ? (
-                          <KalVoiceProvider>
-                            <ShellLayout kalvoice />
-                          </KalVoiceProvider>
-                        ) : (
-                          <ShellLayout kalvoice={false} />
-                        )}
-                      </KalTidyProvider>
-                    </RailProvider>
-                  </SearchProvider>
-                </ShellSlotsProvider>
-              </NotificationsProvider>
-            </UiIntentsProvider>
-          </ThreadsIntentProvider>
-        </PermissionsProvider>
-      </WorkspaceProvider>
-    </NavigationProvider>
+    <ProviderAccountSessionsProvider>
+      <NavigationProvider flags={info.flags.surfaces} features={info.flags.features}>
+        <WorkspaceProvider>
+          <PermissionsProvider>
+            <ThreadsIntentProvider>
+              {/* Z7-W3: cross-surface focus/filter intents and the notification center. */}
+              <UiIntentsProvider>
+                <NotificationsProvider>
+                  <ShellSlotsProvider>
+                    {/* Z7-W2: shared search (palette + locator) and the workspace rail. */}
+                    <SearchProvider>
+                      <RailProvider>
+                        {/* KalTidy wraps KalVoice, which stops idle terminals through it. */}
+                        <KalTidyProvider>
+                          {kalvoiceEnabled ? (
+                            <KalVoiceProvider>
+                              <ShellLayout kalvoice />
+                            </KalVoiceProvider>
+                          ) : (
+                            <ShellLayout kalvoice={false} />
+                          )}
+                        </KalTidyProvider>
+                      </RailProvider>
+                    </SearchProvider>
+                  </ShellSlotsProvider>
+                </NotificationsProvider>
+              </UiIntentsProvider>
+            </ThreadsIntentProvider>
+          </PermissionsProvider>
+        </WorkspaceProvider>
+      </NavigationProvider>
+    </ProviderAccountSessionsProvider>
   );
 }
 

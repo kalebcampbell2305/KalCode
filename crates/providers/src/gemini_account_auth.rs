@@ -317,6 +317,40 @@ where
     result
 }
 
+/// Observes credential presence under a read-only shared lease. The provider credential file is
+/// never opened; only ordinary-file metadata and the bounded display identity are read. A pending
+/// explicit sign-in, sign-out, or archive cancels the observer before it can publish stale state.
+pub fn observe_account_with_lease_observed<F>(
+    profiles: &ManagedProfiles,
+    account_id: &str,
+    lease: ProfileLease,
+    observe: F,
+) -> Result<GeminiAccountState, GeminiAccountAuthError>
+where
+    F: Fn(
+        &Result<GeminiAccountState, GeminiAccountAuthError>,
+    ) -> Result<(), GeminiAccountAuthError>,
+{
+    if !lease.is_observer_for(profiles, ProviderId::GEMINI_CLI, account_id) {
+        return Err(GeminiAccountAuthError::ProfileUnavailable);
+    }
+    let cancellation = lease
+        .observer_cancellation()
+        .ok_or(GeminiAccountAuthError::ProfileUnavailable)?;
+    if cancellation.load(Ordering::Acquire) {
+        return Err(GeminiAccountAuthError::Canceled);
+    }
+    let mut result =
+        account_state(profiles, account_id).map_err(|_| GeminiAccountAuthError::ProfileUnavailable);
+    if cancellation.load(Ordering::Acquire) {
+        return Err(GeminiAccountAuthError::Canceled);
+    }
+    if observe(&result).is_err() {
+        result = Err(GeminiAccountAuthError::StateUpdateFailed);
+    }
+    result
+}
+
 /// Signs one account out by removing Gemini's own credential files for it (see
 /// [`remove_credentials`]), then confirms the profile reads as signed out. Needs no provider
 /// process, so a person can always sign out, even after uninstalling Gemini CLI.

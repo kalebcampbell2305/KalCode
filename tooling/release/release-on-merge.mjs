@@ -129,6 +129,7 @@ export function shipLockState(lockFile, { alive = pidAlive, now = Date.now } = {
 
 function run(command, args, options = {}) {
   const r = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options, windowsHide: true });
+
   if (r.error) throw new ReleaseError(`${command} failed: ${r.error.message}`);
   return { code: r.status ?? 1, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }

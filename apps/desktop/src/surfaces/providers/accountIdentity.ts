@@ -54,6 +54,42 @@ export function accountHealth(
   return { label: account.lastCheckedAt ? "Unknown" : "Not checked", tone: "idle" };
 }
 
+export type AccountSessionState = "connected" | "checking" | "expired" | "error" | "not_checked";
+
+/**
+ * The restart-safe session state shown in Account Hub. A background check never turns a
+ * last-known connected account into a signed-out account unless the provider actually reports it.
+ */
+export function accountSessionState(
+  account: Pick<ProviderAccount, "authenticationState" | "lastErrorCode" | "lastCheckedAt">,
+  checking = false,
+  validationError: string | null = null,
+): { state: AccountSessionState; label: string; tone: LegacyStatusTone; usable: boolean } {
+  if (checking) {
+    return {
+      state: "checking",
+      label: "Checking",
+      tone: "waiting",
+      usable: account.authenticationState !== "not_authenticated",
+    };
+  }
+  if (account.authenticationState === "not_authenticated") {
+    return { state: "expired", label: "Expired", tone: "waiting", usable: false };
+  }
+  if (validationError || account.lastErrorCode) {
+    return {
+      state: "error",
+      label: "Error",
+      tone: "danger",
+      usable: true,
+    };
+  }
+  if (account.authenticationState === "authenticated") {
+    return { state: "connected", label: "Connected", tone: "success", usable: true };
+  }
+  return { state: "not_checked", label: "Not checked", tone: "idle", usable: true };
+}
+
 /** Accounts in one stable order everywhere: default first, then by name (numbers in natural order). */
 export function sortAccounts<T extends Pick<ProviderAccount, "isDefault" | "displayName">>(
   accounts: readonly T[],

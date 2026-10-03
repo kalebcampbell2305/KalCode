@@ -41,7 +41,12 @@ function option(args, name) {
 }
 
 function sh(step) {
-  const result = spawnSync(step.cmd, step.args, { cwd: step.cwd, stdio: "inherit", shell: step.cmd === "pnpm" });
+  const result = spawnSync(step.cmd, step.args, {
+    cwd: step.cwd,
+    stdio: "inherit",
+    shell: step.cmd === "pnpm",
+    windowsHide: true,
+  });
   if (result.status !== 0) throw new Error(`${step.cmd} ${step.args.join(" ")} exited ${result.status}`);
 }
 
@@ -62,6 +67,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=normal"], {
           cwd: step.cwd,
           encoding: "utf8",
+          windowsHide: true,
         });
         if (status.status !== 0 || status.stdout.trim())
           throw new Error(`refused: ${step.cwd} is not clean (a release build may own it)`);

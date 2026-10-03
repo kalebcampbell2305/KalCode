@@ -17,7 +17,7 @@ use kalcode_contracts::permissions::{
     UtilityHttpMethod, UtilitySqliteOperation,
 };
 use kalcode_core::db;
-use kalcode_permissions::{Actor, PermissionService, profiles, store};
+use kalcode_permissions::{Actor, PermissionService, PermissionSettings, profiles, store};
 
 fn open(h: &Harness, kind: ActionKind) -> kalcode_permissions::ApprovalView {
     let action = h.action(kind);
@@ -819,8 +819,30 @@ fn default_mode_settings() {
     let h = Harness::new();
     assert_eq!(
         h.service.settings().expect("settings").default_mode,
-        M::Approve
+        M::Auto
     );
+    for mode in [M::Plan, M::Approve, M::Auto] {
+        assert_eq!(
+            PermissionSettings {
+                default_mode: mode,
+                default_profile_id: None,
+            }
+            .startable_default_mode(),
+            mode,
+            "an explicit restrictive or bounded default must be preserved"
+        );
+    }
+    for mode in [M::Bypass, M::Custom] {
+        assert_eq!(
+            PermissionSettings {
+                default_mode: mode,
+                default_profile_id: None,
+            }
+            .startable_default_mode(),
+            M::Approve,
+            "an implicit launch cannot infer confirmation or a custom profile"
+        );
+    }
     assert_eq!(
         h.service
             .update_settings(M::Bypass, None, false, Actor::User)
@@ -858,6 +880,68 @@ fn default_mode_settings() {
         .collect();
     assert!(kinds.contains(&"permission.default_mode_changed".to_owned()));
     assert!(kinds.contains(&"permission.bypass_enabled".to_owned()));
+}
+
+#[test]
+fn bounded_auto_allows_normal_workspace_coding_and_keeps_real_risks_interactive() {
+    let h = Harness::new();
+    let auto_thread = h.add_thread(M::Auto);
+    for action in [
+        ActionKind::FileWrite {
+            path: "src/lib.rs".into(),
+        },
+        command("npm test"),
+        command("cargo build"),
+        ActionKind::Git {
+            operation: GitOperation::Commit,
+            remote: None,
+        },
+    ] {
+        let decision = h.service.evaluate(
+            &h.action_for(&auto_thread, &h.workspace_id, action),
+            M::Auto,
+        );
+        assert_eq!(decision.effect, PolicyEffect::Allow, "{}", decision.reason);
+    }
+
+    for action in [
+        ActionKind::FileRead {
+            path: ".env".into(),
+        },
+        ActionKind::FileDelete { path: ".".into() },
+        ActionKind::Git {
+            operation: GitOperation::Push,
+            remote: Some("origin".into()),
+        },
+        ActionKind::Deploy {
+            target: "production".into(),
+        },
+    ] {
+        let decision = h.service.evaluate(
+            &h.action_for(&auto_thread, &h.workspace_id, action),
+            M::Auto,
+        );
+        assert_eq!(decision.effect, PolicyEffect::Ask, "{}", decision.reason);
+        assert!(decision.approvable, "{}", decision.reason);
+    }
+}
+
+#[test]
+fn invalid_saved_settings_recover_to_approve_instead_of_broadening_authority() {
+    let h = Harness::new();
+    h.core
+        .transact(|tx| {
+            tx.execute(
+                "INSERT INTO permission_settings (key, value, updated_at) VALUES ('defaults', '[]', 'now')",
+                [],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("store invalid setting fixture");
+
+    let recovered = h.service.settings().expect("conservative recovery");
+    assert_eq!(recovered.default_mode, M::Approve);
+    assert_eq!(recovered.default_profile_id, None);
 }
 
 #[test]

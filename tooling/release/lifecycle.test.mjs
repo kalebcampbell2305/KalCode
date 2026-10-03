@@ -190,7 +190,11 @@ describe("policy", () => {
   });
 
   test("every tracked file of this repository matches an explicit rule (no silent fallback)", () => {
-    const files = spawnSync("git", ["-C", ROOT, "ls-files", "-z"], { encoding: "utf8", maxBuffer: 1e8 })
+    const files = spawnSync("git", ["-C", ROOT, "ls-files", "-z"], {
+      encoding: "utf8",
+      maxBuffer: 1e8,
+      windowsHide: true,
+    })
       .stdout.split("\0")
       .filter(Boolean);
     assert.ok(files.length > 100);
@@ -405,7 +409,8 @@ describe("classify", () => {
     const a = classifyRange(policy, f.git, { base: f.base, head });
     const b = classifyRange(policy, makeGit(f.repo), { base: f.base, head });
     assert.deepEqual(a, b);
-    const run = (...args) => spawnSync(process.execPath, [SHIP, ...args, "--repo", f.repo], { encoding: "utf8" });
+    const run = (...args) =>
+      spawnSync(process.execPath, [SHIP, ...args, "--repo", f.repo], { encoding: "utf8", windowsHide: true });
     const json = run("classify", "--base", f.base, "--head", head, "--json");
     assert.equal(json.status, 0, json.stderr);
     const parsed = JSON.parse(json.stdout);
@@ -625,7 +630,10 @@ describe("lifecycle status", () => {
     const f = makeFixture({ version: "1.2.0" });
     const dir = stateDir(f.git.commonDir());
     const run = (...args) =>
-      spawnSync(process.execPath, [SHIP, "lifecycle", "status", ...args, "--repo", f.repo], { encoding: "utf8" });
+      spawnSync(process.execPath, [SHIP, "lifecycle", "status", ...args, "--repo", f.repo], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
     assert.match(run("--offline").stderr, /no cached production observations/);
     writeJsonAtomic(join(dir, "observations.json"), obsWith({ feed: { version: "1.1.0", commit: null } }));
     const r = run("--offline", "--json");
@@ -751,6 +759,7 @@ describe("Stop hook", () => {
       input: input(f, { session_id: "cli" }),
       encoding: "utf8",
       env,
+      windowsHide: true,
     });
     const ms = Date.now() - t0;
     assert.equal(r.status, 0, r.stderr);
@@ -760,6 +769,7 @@ describe("Stop hook", () => {
       input: input(f, { stop_hook_active: true }),
       encoding: "utf8",
       env,
+      windowsHide: true,
     });
     assert.equal(active.status, 0);
     assert.equal(active.stdout, "");
@@ -775,7 +785,7 @@ describe("Stop hook", () => {
     const ignore = readFileSync(join(ROOT, ".gitignore"), "utf8").split(/\r?\n/);
     assert.ok(ignore.includes(".claude/*") && ignore.includes("!.claude/settings.json"));
     assert.ok(!ignore.includes(".claude/"), "a directory ignore would make the exception impossible");
-    const check = (p) => spawnSync("git", ["-C", ROOT, "check-ignore", "-q", p]).status === 0;
+    const check = (p) => spawnSync("git", ["-C", ROOT, "check-ignore", "-q", p], { windowsHide: true }).status === 0;
     assert.equal(check(".claude/settings.json"), false);
     assert.equal(check(".claude/worktrees/agent-x/file"), true);
     assert.equal(check(".claude/settings.local.json"), true);
@@ -921,7 +931,7 @@ describe("gate", () => {
       [
         'import { spawn } from "node:child_process";',
         'import { writeFileSync } from "node:fs";',
-        'const c = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+        'const c = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });',
         "writeFileSync(process.argv[2], String(c.pid));",
         "setInterval(() => {}, 1000);",
       ].join("\n"),
@@ -977,12 +987,16 @@ describe("gate", () => {
     assert.equal(recordGate(f.git, subset, { status: "PASS", results: [] }), null, "no receipt for an --only subset");
     const receipt = recordGate(f.git, clean, { status: "PASS", results: [] });
     assert.equal(JSON.parse(readFileSync(receipt, "utf8")).head, head);
-    const list = spawnSync(process.execPath, [SHIP, "gate", "--list", "--repo", f.repo], { encoding: "utf8" });
+    const list = spawnSync(process.execPath, [SHIP, "gate", "--list", "--repo", f.repo], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
     assert.equal(list.status, 0, list.stderr);
     assert.match(list.stdout, /gate: lanes website, internal \(targets api\)/);
     assert.match(list.stdout, /run api/);
     const unknown = spawnSync(process.execPath, [SHIP, "gate", "--only", "nope", "--repo", f.repo], {
       encoding: "utf8",
+      windowsHide: true,
     });
     assert.match(unknown.stderr, /unknown gate nope/);
   });

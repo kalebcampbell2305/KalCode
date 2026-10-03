@@ -926,8 +926,10 @@ impl GuardedJob {
             *marker = retired;
             Ok(())
         })();
-        #[cfg(target_os = "macos")]
         if result.is_err() {
+            // A failed cleanup proof must quarantine the runtime on every platform. Releasing the
+            // outer profile lease without this marker would let a lifecycle writer overlap a
+            // child tree whose termination was never proven.
             marker.block();
             let _ = self.inner.marker_store.persist(marker);
             state.blocked_unclean = true;
@@ -1206,6 +1208,35 @@ mod tests {
             store.states.lock().expect("states lock").last(),
             Some(&MarkerState::Clean),
             "CLEAN must be durably persisted before the proof is returned"
+        );
+    }
+
+    #[test]
+    fn failed_job_quiescence_quarantines_all_future_profile_admission() {
+        let store = Arc::new(RecordingStore::default());
+        let jobs = Arc::new(FakeJobs::default());
+        let guardian = authority(Arc::clone(&store), Arc::clone(&jobs));
+        let lease = guardian
+            .acquire(profile(), ProfileCapability::SharedSession)
+            .expect("lease");
+        let registered = lease.prepare_job("failing-cleanup".into()).expect("job");
+        let job = registered.job_id();
+        jobs.set_active(job, Err("injected active-process failure"));
+        let guarded = GuardedJob {
+            inner: Arc::clone(&guardian.inner),
+            profile: profile(),
+            job,
+        };
+
+        assert!(guarded.cancel_and_prove_quiescence().is_err());
+        drop((registered, lease));
+        assert!(matches!(
+            guardian.acquire(profile(), ProfileCapability::SharedSession),
+            Err(GuardianError::BlockedUnclean)
+        ));
+        assert_eq!(
+            store.states.lock().expect("states lock").last(),
+            Some(&MarkerState::Blocked)
         );
     }
 

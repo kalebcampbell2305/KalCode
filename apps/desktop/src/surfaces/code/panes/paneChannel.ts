@@ -1,4 +1,4 @@
-import type { PaneInfo, PermissionMode, ThreadSummary } from "@kalcode/protocol";
+import type { PaneInfo, PermissionMode, PermissionSettings, ThreadSummary } from "@kalcode/protocol";
 import type { KalCodeClient, TerminalSize } from "../../../ipc/client.ts";
 import { clampTerminalSize } from "../../../ipc/client.ts";
 import { toKalCodeError } from "../../../ipc/errors.ts";
@@ -50,9 +50,19 @@ export function splitInput(data: string, chunk = WRITE_CHUNK): string[] {
   return parts;
 }
 
-/** A start mode the native command accepts: the default when it can be chosen, else Approve. */
-export function paneStartMode(defaultMode: PermissionMode | null | undefined): PermissionMode {
-  return defaultMode && PANE_CREATE_MODES.includes(defaultMode) ? defaultMode : "approve";
+/** A start mode the native command accepts without replaying Bypass or widening Custom. */
+export function paneStartMode(defaultMode: PermissionMode): PermissionMode {
+  if (PANE_CREATE_MODES.includes(defaultMode)) return defaultMode;
+  return defaultMode === "custom" || defaultMode === "bypass" ? "approve" : "auto";
+}
+
+/** Read the canonical local setting before launch when the provider has not loaded it yet. */
+export async function resolvePaneStartMode(
+  settings: Pick<PermissionSettings, "defaultMode"> | null,
+  loadSettings: () => Promise<Pick<PermissionSettings, "defaultMode">>,
+): Promise<PermissionMode> {
+  const canonical = settings ?? (await loadSettings());
+  return paneStartMode(canonical.defaultMode);
 }
 
 /**

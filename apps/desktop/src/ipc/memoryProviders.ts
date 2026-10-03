@@ -4,9 +4,9 @@
  * `crates/providers/src/claude/argv.rs`, `codex/argv.rs` and `gemini/mod.rs` (Windows build) so the
  * UI is tested against real copy.
  *
- * Fake machines: by default Claude Code and Codex are installed and signed in, and Gemini CLI is
- * installed (its sign-in can't be checked). `providers-none`: nothing installed.
- * `providers-outdated`: Claude Code too old and signed out. `providers-signed-out`: Codex signed
+ * Fake machines: by default Claude Code, Codex and Gemini CLI are installed. Codex reports its
+ * sign-in state; Claude and Gemini defer it to a real session. `providers-none`: nothing installed.
+ * `providers-outdated`: Claude Code is too old. `providers-signed-out`: Codex is signed
  * out, Gemini CLI not installed. `providers-backoff`: the default machine (Provider Health shows a
  * reported rate limit, see ./memory/health.ts).
  */
@@ -37,16 +37,43 @@ const claudeNotYet =
 /** Mirrors `crates/providers/src/codex/argv.rs` `permission_setting` (generated from the argv). */
 function codexSetting(mode: PermissionMapping["mode"]): string {
   const sandbox =
-    mode === "bypass"
-      ? "--sandbox workspace-write -c sandbox_workspace_write.network_access=false"
-      : "--sandbox read-only --skip-git-repo-check";
-  return `${sandbox} -c approval_policy='never' -c web_search='disabled' -c shell_environment_policy.inherit='core' --ignore-rules`;
+    mode === "plan"
+      ? "--sandbox read-only --skip-git-repo-check -c approval_policy='never'"
+      : mode === "bypass"
+        ? "--sandbox danger-full-access -c approval_policy='never'"
+        : `--sandbox workspace-write -c approval_policy='${mode === "auto" ? "never" : "on-request"}'`;
+  const policy = [
+    "--ignore-rules",
+    "--ignore-user-config",
+    "mcp_servers={}",
+    "web_search='disabled'",
+    "shell_environment_policy.inherit='core'",
+    "sandbox_workspace_write.network_access=false",
+    "sandbox_workspace_write.writable_roots=[]",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.remote_plugin=false",
+    "features.hooks=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+    "features.skill_mcp_dependency_install=false",
+    "features.browser_use=false",
+    "features.browser_use_external=false",
+    "features.computer_use=false",
+    "features.in_app_browser=false",
+    "features.image_generation=false",
+    "features.code_mode=false",
+    "features.code_mode_host=false",
+    "features.auth_elicitation=false",
+    "features.tool_call_mcp_elicitation=false",
+  ];
+  return `${sandbox} ${policy.map((value) => (value.startsWith("--") ? value : `-c ${value}`)).join(" ")}`;
 }
 
 const codexNotEnforced =
-  "Codex has no deny-rule flag: KalCode can't stop reads of credential files inside the workspace, and remote actions are stopped by the sandbox's network block, not by KalCode rules.";
+  "Codex has no deny-rule flag: KalCode can't stop reads of credential files that its native sandbox permits.";
 const geminiNotEnforced =
-  "Gemini CLI has no deny-rule flag KalCode can pass per session: reads of credential files aren't blocked by KalCode, and settings of a folder you trusted in Gemini CLI still apply.";
+  "Gemini Plan retains core project read tools, so it is not a secret-file privacy boundary. Managed profiles accept only the certified Gemini CLI 0.61.0 configuration behavior.";
 
 export function providerCatalog(): ProviderStatus[] {
   return [
@@ -55,7 +82,7 @@ export function providerCatalog(): ProviderStatus[] {
       displayName: "Claude Code",
       detection: null,
       detectionErrorCode: null,
-      authCheck: "claude auth status",
+      authCheck: null,
       capabilities: {
         streaming: true,
         interrupt: true,
@@ -82,8 +109,8 @@ export function providerCatalog(): ProviderStatus[] {
           ),
           stricter(
             "auto",
-            `--setting-sources user --permission-mode default --permission-prompts none --disallowedTools ${askFirstDenied}`,
-            `Runs like Approve. Claude Code's own auto mode is not used, because its classifier's decisions are not your KalCode policy. ${claudeEnforced} ${claudeNotYet}`,
+            `--setting-sources user --permission-mode auto --permission-prompts none --disallowedTools ${remoteDenied}`,
+            `Claude Code's background classifier checks edits, shell commands and network requests. If Auto is unavailable for the selected account, model or organization, Claude Code falls back to Manual; prompts are refused in this headless session. ${claudeEnforced} ${claudeNotYet}`,
           ),
           stricter(
             "bypass",
@@ -121,13 +148,17 @@ export function providerCatalog(): ProviderStatus[] {
           stricter(
             "approve",
             codexSetting("approve"),
-            `Runs like Plan: edits would need an approval KalCode can't give Codex yet, so they're refused instead of asking. ${codexNotEnforced}`,
+            `Workspace writes use Codex's native on-request approval prompt; connected tools and web search remain disabled. ${codexNotEnforced}`,
           ),
-          stricter("auto", codexSetting("auto"), `Runs like Approve. ${codexNotEnforced}`),
+          stricter(
+            "auto",
+            codexSetting("auto"),
+            `Workspace writes run without approval prompts inside Codex's native sandbox; connected tools and web search remain disabled. ${codexNotEnforced}`,
+          ),
           stricter(
             "bypass",
             codexSetting("bypass"),
-            `Edits and commands inside the workspace, with network access off. danger-full-access is never used. ${codexNotEnforced}`,
+            `Uses Codex's explicit danger-full-access sandbox with approval prompts disabled; connected tools and web search remain disabled. ${codexNotEnforced}`,
           ),
         ],
       },
@@ -164,7 +195,11 @@ export function providerCatalog(): ProviderStatus[] {
             "--approval-mode default",
             `Tool calls that need confirmation can't be answered in headless mode, so they don't run. ${geminiNotEnforced}`,
           ),
-          stricter("auto", "--approval-mode default", `Runs like Approve. ${geminiNotEnforced}`),
+          stricter(
+            "auto",
+            "--approval-mode auto_edit",
+            `File edits are approved automatically; shell commands and other tools still require confirmation. yolo mode is never used. ${geminiNotEnforced}`,
+          ),
           stricter(
             "bypass",
             "--approval-mode auto_edit",
@@ -203,14 +238,14 @@ function fakeMachine(scenario: ProviderScenario): Record<string, Fake> {
           state: "outdated",
           displayPath: "~\\.local\\bin\\claude.exe",
           version: "2.1.100",
-          auth: "not_authenticated",
+          auth: "unknown",
           message: "KalCode needs version 2.1.259 or later to run Claude Code threads.",
         }
       : {
           state: "installed",
           displayPath: "~\\.local\\bin\\claude.exe",
           version: "2.1.282",
-          auth: "authenticated",
+          auth: "unknown",
           message: null,
         };
   const signedOut = scenario === "providers-signed-out";

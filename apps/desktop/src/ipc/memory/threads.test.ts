@@ -272,7 +272,7 @@ describe("memory thread runtime", () => {
     const { client } = await setup("no-providers");
     const options = await client.threadOptions();
     expect(options.providers).toEqual([]);
-    expect(options.defaultPermissionMode).toBe("approve");
+    expect(options.defaultPermissionMode).toBe("auto");
     expect(options.permissionModes).toEqual(["plan", "approve", "auto"]);
   });
 });

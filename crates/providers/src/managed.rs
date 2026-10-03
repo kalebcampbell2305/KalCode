@@ -13,7 +13,9 @@ use std::fs::File;
 #[cfg(not(windows))]
 use std::fs::OpenOptions;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AgentInput, AgentSession, ProviderError};
 use kalcode_contracts::permissions::ApprovalDecision;
@@ -33,6 +35,203 @@ const SUPPORTED_PROVIDERS: &str =
     "managed profiles support only claude-code, codex, and gemini-cli";
 const UNSAFE_PATH: &str = "managed profile storage must not contain filesystem links";
 const MANAGED_PROFILE_DIRECTORY: &str = "provider-profiles";
+const OBSERVER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+type ProfilePriorityKey = (&'static str, String);
+
+#[derive(Default)]
+struct ProfilePriorityEntry {
+    reader_admissions: usize,
+    observers: usize,
+    observer_cancellations: Vec<Weak<AtomicBool>>,
+    writers: usize,
+}
+
+#[derive(Default)]
+struct ProfilePriorityCoordinator {
+    entries: Mutex<BTreeMap<ProfilePriorityKey, ProfilePriorityEntry>>,
+    changed: Condvar,
+}
+
+struct ObserverAdmission {
+    coordinator: Arc<ProfilePriorityCoordinator>,
+    key: ProfilePriorityKey,
+    canceled: Arc<AtomicBool>,
+}
+
+struct ReaderAdmission {
+    coordinator: Arc<ProfilePriorityCoordinator>,
+    key: ProfilePriorityKey,
+}
+
+struct WriterAdmission {
+    coordinator: Arc<ProfilePriorityCoordinator>,
+    key: ProfilePriorityKey,
+}
+
+static PROFILE_PRIORITY_COORDINATORS: OnceLock<
+    Mutex<BTreeMap<PathBuf, Weak<ProfilePriorityCoordinator>>>,
+> = OnceLock::new();
+
+fn priority_coordinator(root: &Path) -> Arc<ProfilePriorityCoordinator> {
+    let coordinators = PROFILE_PRIORITY_COORDINATORS.get_or_init(Mutex::default);
+    let mut coordinators = coordinators.lock().unwrap_or_else(PoisonError::into_inner);
+    coordinators.retain(|_, coordinator| coordinator.strong_count() > 0);
+    if let Some(coordinator) = coordinators.get(root).and_then(Weak::upgrade) {
+        return coordinator;
+    }
+    let coordinator = Arc::new(ProfilePriorityCoordinator::default());
+    coordinators.insert(root.to_path_buf(), Arc::downgrade(&coordinator));
+    coordinator
+}
+
+impl ProfilePriorityCoordinator {
+    fn admit_reader(
+        self: &Arc<Self>,
+        key: ProfilePriorityKey,
+    ) -> Result<ReaderAdmission, ProfileLeaseError> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = entries.entry(key.clone()).or_default();
+        if entry.writers > 0 {
+            return Err(ProfileLeaseError::InUse);
+        }
+        entry.reader_admissions = entry.reader_admissions.saturating_add(1);
+        Ok(ReaderAdmission {
+            coordinator: Arc::clone(self),
+            key,
+        })
+    }
+
+    fn begin_observer(
+        self: &Arc<Self>,
+        key: ProfilePriorityKey,
+    ) -> Result<ObserverAdmission, ProfileLeaseError> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = entries.entry(key.clone()).or_default();
+        if entry.writers > 0 {
+            return Err(ProfileLeaseError::InUse);
+        }
+        let canceled = Arc::new(AtomicBool::new(false));
+        entry.observers = entry.observers.saturating_add(1);
+        entry.observer_cancellations.push(Arc::downgrade(&canceled));
+        Ok(ObserverAdmission {
+            coordinator: Arc::clone(self),
+            key,
+            canceled,
+        })
+    }
+
+    fn begin_writer(
+        self: &Arc<Self>,
+        key: ProfilePriorityKey,
+        timeout: Duration,
+    ) -> Result<WriterAdmission, ProfileLeaseError> {
+        let deadline = Instant::now() + timeout;
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        {
+            let entry = entries.entry(key.clone()).or_default();
+            entry.writers = entry.writers.saturating_add(1);
+            entry.observer_cancellations.retain(|cancellation| {
+                cancellation.upgrade().is_some_and(|cancellation| {
+                    cancellation.store(true, Ordering::Release);
+                    true
+                })
+            });
+        }
+        loop {
+            if entries
+                .get(&key)
+                .is_none_or(|entry| entry.observers == 0 && entry.reader_admissions == 0)
+            {
+                return Ok(WriterAdmission {
+                    coordinator: Arc::clone(self),
+                    key,
+                });
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                finish_writer(&mut entries, &key);
+                self.changed.notify_all();
+                return Err(ProfileLeaseError::InUse);
+            }
+            let waited = self
+                .changed
+                .wait_timeout(entries, deadline.saturating_duration_since(now))
+                .unwrap_or_else(PoisonError::into_inner);
+            entries = waited.0;
+            if waited.1.timed_out()
+                && entries
+                    .get(&key)
+                    .is_some_and(|entry| entry.observers > 0 || entry.reader_admissions > 0)
+            {
+                finish_writer(&mut entries, &key);
+                self.changed.notify_all();
+                return Err(ProfileLeaseError::InUse);
+            }
+        }
+    }
+}
+
+fn finish_writer(
+    entries: &mut BTreeMap<ProfilePriorityKey, ProfilePriorityEntry>,
+    key: &ProfilePriorityKey,
+) {
+    if let Some(entry) = entries.get_mut(key) {
+        entry.writers = entry.writers.saturating_sub(1);
+        if entry.writers == 0 && entry.observers == 0 && entry.reader_admissions == 0 {
+            entries.remove(key);
+        }
+    }
+}
+
+impl Drop for ObserverAdmission {
+    fn drop(&mut self) {
+        let mut entries = self
+            .coordinator
+            .entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = entries.get_mut(&self.key) {
+            entry.observers = entry.observers.saturating_sub(1);
+            entry
+                .observer_cancellations
+                .retain(|cancellation| cancellation.strong_count() > 0);
+            if entry.writers == 0 && entry.observers == 0 && entry.reader_admissions == 0 {
+                entries.remove(&self.key);
+            }
+        }
+        self.coordinator.changed.notify_all();
+    }
+}
+
+impl Drop for ReaderAdmission {
+    fn drop(&mut self) {
+        let mut entries = self
+            .coordinator
+            .entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = entries.get_mut(&self.key) {
+            entry.reader_admissions = entry.reader_admissions.saturating_sub(1);
+            if entry.writers == 0 && entry.observers == 0 && entry.reader_admissions == 0 {
+                entries.remove(&self.key);
+            }
+        }
+        self.coordinator.changed.notify_all();
+    }
+}
+
+impl Drop for WriterAdmission {
+    fn drop(&mut self) {
+        let mut entries = self
+            .coordinator
+            .entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        finish_writer(&mut entries, &self.key);
+        self.coordinator.changed.notify_all();
+    }
+}
 
 /// Why an account-lifecycle operation could not exclusively lock a managed profile.
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +302,7 @@ impl ManagedProvider {
 pub struct ManagedProfiles {
     root: PathBuf,
     guardian: Option<GuardianBinding>,
+    priority: Arc<ProfilePriorityCoordinator>,
 }
 
 #[derive(Clone)]
@@ -162,6 +362,7 @@ impl ManagedProfiles {
             return Err(ProviderError::Start(UNSAFE_PATH.into()));
         }
         Ok(Self {
+            priority: priority_coordinator(&canonical_root),
             root: canonical_root,
             guardian: None,
         })
@@ -314,6 +515,18 @@ impl ManagedProfiles {
             .map_err(ProfileLeaseError::into_provider_error)
     }
 
+    /// Acquires a shared, read-only observer lease. Explicit authentication or lifecycle writers
+    /// cancel and drain observers before taking the exclusive OS profile lock; ordinary sessions
+    /// may run concurrently because observers never refresh or write provider credentials.
+    pub fn acquire_observer_lease(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> Result<ProfileLease, ProviderError> {
+        self.acquire_lease(provider, account_id, LeaseMode::SharedObserver)
+            .map_err(ProfileLeaseError::into_provider_error)
+    }
+
     /// Acquires the exclusive lease required while running the provider's supported sign-in
     /// flow. It fails immediately when a session or another sign-in currently uses the profile.
     pub fn acquire_sign_in_lease(
@@ -352,6 +565,26 @@ impl ManagedProfiles {
         // containment/link checks as environment preparation.
         self.profile_home(provider.id(), account_id)
             .map_err(ProfileLeaseError::Unavailable)?;
+        let key = (provider.id(), account_id.to_owned());
+        let observer = match mode {
+            LeaseMode::SharedObserver => Some(self.priority.begin_observer(key.clone())?),
+            LeaseMode::SharedSession => None,
+            LeaseMode::ExclusiveAuth | LeaseMode::ExclusiveLifecycle => None,
+        };
+        // Retain this short admission until the OS shared lock attempt completes so a lifecycle
+        // writer that has declared priority cannot be overtaken between the check and the lock.
+        let _reader = match mode {
+            LeaseMode::SharedSession => Some(self.priority.admit_reader(key.clone())?),
+            LeaseMode::SharedObserver
+            | LeaseMode::ExclusiveAuth
+            | LeaseMode::ExclusiveLifecycle => None,
+        };
+        let _writer = match mode {
+            LeaseMode::ExclusiveAuth | LeaseMode::ExclusiveLifecycle => {
+                Some(self.priority.begin_writer(key, OBSERVER_DRAIN_TIMEOUT)?)
+            }
+            LeaseMode::SharedObserver | LeaseMode::SharedSession => None,
+        };
         let locks = self
             .ensure_directory(&["providers", provider.id(), "accounts", account_id, "locks"])
             .map_err(ProfileLeaseError::Unavailable)?;
@@ -360,7 +593,9 @@ impl ManagedProfiles {
         let file = open_private_lock_file(&path).map_err(ProfileLeaseError::Unavailable)?;
         verify_regular_file_or_missing(&path).map_err(ProfileLeaseError::Unavailable)?;
         let result = match mode {
-            LeaseMode::SharedSession => lease_file(&file).try_lock_shared(),
+            LeaseMode::SharedObserver | LeaseMode::SharedSession => {
+                lease_file(&file).try_lock_shared()
+            }
             LeaseMode::ExclusiveAuth | LeaseMode::ExclusiveLifecycle => {
                 lease_file(&file).try_lock()
             }
@@ -394,8 +629,12 @@ impl ManagedProfiles {
                     root: self.root.clone(),
                     provider: provider.id(),
                     account_id: account_id.to_owned(),
-                    exclusive: !matches!(mode, LeaseMode::SharedSession),
+                    exclusive: matches!(
+                        mode,
+                        LeaseMode::ExclusiveAuth | LeaseMode::ExclusiveLifecycle
+                    ),
                     guardian,
+                    observer,
                 })
             }
             Err(std::fs::TryLockError::WouldBlock) => Err(ProfileLeaseError::InUse),
@@ -464,6 +703,7 @@ pub struct ProfileLease {
     account_id: String,
     exclusive: bool,
     guardian: Option<GuardianLease>,
+    observer: Option<ObserverAdmission>,
 }
 
 impl ProfileLease {
@@ -490,6 +730,26 @@ impl ProfileLease {
             && self.root == profiles.root
             && self.provider == provider
             && self.account_id == account_id
+    }
+
+    /// Confirms that a caller-supplied lease is the read-only observer guard for this profile.
+    pub(crate) fn is_observer_for(
+        &self,
+        profiles: &ManagedProfiles,
+        provider: &str,
+        account_id: &str,
+    ) -> bool {
+        self.observer.is_some()
+            && self.root == profiles.root
+            && self.provider == provider
+            && self.account_id == account_id
+    }
+
+    /// Cancellation signal asserted when an explicit sign-in, sign-out, or archive takes priority.
+    pub(crate) fn observer_cancellation(&self) -> Option<Arc<AtomicBool>> {
+        self.observer
+            .as_ref()
+            .map(|observer| Arc::clone(&observer.canceled))
     }
 }
 
@@ -564,6 +824,7 @@ impl AgentSession for LeasedSession {
 
 #[derive(Clone, Copy)]
 enum LeaseMode {
+    SharedObserver,
     SharedSession,
     ExclusiveAuth,
     ExclusiveLifecycle,
@@ -572,7 +833,7 @@ enum LeaseMode {
 impl LeaseMode {
     const fn capability(self) -> ProfileCapability {
         match self {
-            Self::SharedSession => ProfileCapability::SharedSession,
+            Self::SharedObserver | Self::SharedSession => ProfileCapability::SharedSession,
             Self::ExclusiveAuth => ProfileCapability::ExclusiveAuth,
             Self::ExclusiveLifecycle => ProfileCapability::ExclusiveLifecycle,
         }
@@ -1060,6 +1321,69 @@ mod tests {
         let _released = profiles
             .acquire_session_lease("codex", &account_a)
             .expect("released lease");
+    }
+
+    #[test]
+    fn lifecycle_writer_cancels_exact_observer_and_blocks_later_same_account_readers() {
+        let temp = tempfile::tempdir().expect("temp");
+        let temp_root = fixture_root(&temp);
+        let profiles = Arc::new(ManagedProfiles::new(temp_root.join("managed")).expect("profiles"));
+        let same_root = Arc::new(
+            ManagedProfiles::new(temp_root.join("managed")).expect("same canonical profiles"),
+        );
+        let account = kalcode_contracts::ids::new_id();
+        let other = kalcode_contracts::ids::new_id();
+        let observer = profiles
+            .acquire_observer_lease("codex", &account)
+            .expect("observer");
+        let canceled = observer
+            .observer_cancellation()
+            .expect("observer cancellation");
+
+        let writer_profiles = Arc::clone(&same_root);
+        let writer_account = account.clone();
+        let writer = std::thread::spawn(move || {
+            writer_profiles.acquire_account_lifecycle_lease("codex", &writer_account)
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !canceled.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            canceled.load(Ordering::Acquire),
+            "writer must cancel observer"
+        );
+        assert!(profiles.acquire_observer_lease("codex", &account).is_err());
+        assert!(profiles.acquire_session_lease("codex", &account).is_err());
+        let independent = profiles
+            .acquire_session_lease("codex", &other)
+            .expect("other account remains independent");
+        drop(independent);
+
+        drop(observer);
+        let exclusive = writer.join().expect("writer thread").expect("writer lease");
+        assert!(profiles.acquire_session_lease("codex", &account).is_err());
+        drop(exclusive);
+        let _released = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("reader after lifecycle writer");
+    }
+
+    #[test]
+    fn timed_out_writer_admission_clears_priority_gate() {
+        let coordinator = Arc::new(ProfilePriorityCoordinator::default());
+        let key = ("codex", kalcode_contracts::ids::new_id());
+        let observer = coordinator
+            .begin_observer(key.clone())
+            .expect("observer admission");
+        assert!(matches!(
+            coordinator.begin_writer(key.clone(), Duration::from_millis(10)),
+            Err(ProfileLeaseError::InUse)
+        ));
+        drop(observer);
+        let _reader = coordinator
+            .begin_observer(key)
+            .expect("timed-out writer must clear pending admission");
     }
 
     #[test]
