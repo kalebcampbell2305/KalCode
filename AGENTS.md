@@ -1,5 +1,13 @@
 # KalCode agent policy
 
+## Permanent workspace execution rule (owner directive 2026-10-03)
+
+**KALCODE CODE MODE / WORKSPACE EXECUTION MUST BE AVAILABLE BY DEFAULT. THE USER SHOULD NEVER BE BLOCKED BY "CODE-MODE HOST IS DISABLED" DURING NORMAL USE.** This policy applies to Claude Code, Codex, Windows and macOS, Stable and Dev.
+
+The execution host must initialize automatically, recover safely when possible, and support real terminals, coding agents, file operations, tests, builds, Git, merging and shipping. Do not require a manual enable switch, configuration edit, Refresh or an extra KalCode approval for routine workspace execution.
+
+Do not hide host failures: fix the underlying initialization/configuration problem. Preserve the actual error and an actionable retry when recovery fails. Reinitialize only owned failed execution processes; never replay potentially completed commands or interrupt active coding terminals. Keep provider authentication, selected permission modes, OS security, credential protection, signing and updater integrity authoritative. Verify the real execution path and restart behavior with isolated test profiles; never close the owner's active app.
+
 ## Permanent active application protection (owner directive 2026-10-03)
 
 **NEVER CLOSE, RESTART, OR TERMINATE THE KALCODE APPLICATION THE OWNER IS WORKING IN.** It may contain many running coding terminals. This applies to development, testing, updates, release verification and cleanup. Never use process-wide termination or an updater/installer that would interrupt that instance or its terminals.

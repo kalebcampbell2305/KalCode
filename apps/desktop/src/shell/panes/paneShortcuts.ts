@@ -11,6 +11,9 @@ import { DESKTOP_PLATFORM, type DesktopPlatform, formatShortcut } from "../../pl
 import type { BuiltinPreset } from "./model.ts";
 
 export type PaneShortcut =
+  | { kind: "move"; direction: PaneDirection }
+  | { kind: "tidy" }
+  | { kind: "undo-layout" }
   | { kind: "focus"; direction: PaneDirection }
   | { kind: "resize"; direction: PaneDirection }
   | { kind: "split-right" }
@@ -50,9 +53,15 @@ export function paneShortcut(
   const key = codeKey ?? (event.key.length === 1 ? event.key.toLowerCase() : event.key);
   if (event.shiftKey) {
     if (key === "d") return { kind: "split-down" };
+    const movement: Record<string, PaneDirection> = { h: "left", j: "down", k: "up", l: "right" };
+    if (movement[key]) return { kind: "move", direction: movement[key] };
     return null;
   }
   switch (key) {
+    case "t":
+      return { kind: "tidy" };
+    case "z":
+      return { kind: "undo-layout" };
     case "d":
       return { kind: "split-right" };
     case "Enter":
@@ -82,6 +91,9 @@ export function isPaneShortcut(event: KeyboardEvent): boolean {
 export function paneShortcutLabels(platform: DesktopPlatform = DESKTOP_PLATFORM) {
   const chord = (tokens: readonly string[]) => formatShortcut(["Control", "Alt", ...tokens], platform);
   return {
+    move: chord(["Shift", "H / J / K / L"]),
+    tidy: chord(["T"]),
+    undoLayout: chord(["Z"]),
     focus: chord(["←↑→↓"]),
     resize: chord(["Shift", "←↑→↓"]),
     splitRight: chord(["D"]),

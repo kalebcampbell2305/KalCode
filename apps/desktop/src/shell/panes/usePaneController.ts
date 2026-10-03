@@ -5,16 +5,17 @@
  */
 import type { PaneContent, PaneDirection, PaneLayout, PaneNode, SplitAxis } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { arrangeTask, TASK_LABELS, type TaskLayout, tidyLayout, withCompanions } from "./adaptiveCanvas.ts";
 import {
   activateTab,
   addTab,
   applyPreset,
   applyShape,
   type BuiltinPreset,
+  CANVAS_GEOMETRY,
   type ClosedPane,
   closePane,
   contentKey,
-  DEFAULT_GEOMETRY,
   type DropZone,
   dockPane,
   evenDivider,
@@ -103,6 +104,10 @@ export interface PaneController {
   cycleTab(delta: 1 | -1): void;
   preset(preset: BuiltinPreset): void;
   applyShape(shape: PaneNode, name: string): void;
+  tidy(): void;
+  taskLayout(task: TaskLayout, companions?: PaneContent[]): void;
+  undoLayoutLabel: string | null;
+  undoLayout(): void;
   even(): void;
   evenDivider(path: number[], index: number): void;
   dock(paneId: string): void;
@@ -113,6 +118,15 @@ export interface PaneController {
 
 const DIRECTION_WORD: Record<PaneDirection, string> = { left: "left", right: "right", up: "up", down: "down" };
 const PRESET_WORD: Record<BuiltinPreset, string> = { two: "2", three: "3", four: "4", six: "6" };
+
+const focusKey = (scope: string) => `kalcode:canvas-focus:${scope}`;
+function savedFocus(scope: string): string | null {
+  try {
+    return localStorage.getItem(focusKey(scope));
+  } catch {
+    return null;
+  }
+}
 
 export function usePaneController({
   scope,
@@ -128,6 +142,7 @@ export function usePaneController({
   const [focusRequest, setFocusRequest] = useState({ paneId: "", n: 0 });
   const [closed, setClosed] = useState<ClosedPane[]>([]);
   const [message, setMessage] = useState({ text: "", n: 0 });
+  const [undo, setUndo] = useState<{ layout: PaneLayout; focus: string | null; label: string } | null>(null);
   const size = useRef({ width: 1200, height: 800 });
   const latest = useRef(layout);
   latest.current = layout;
@@ -142,8 +157,12 @@ export function usePaneController({
   const lastSaved = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedScope = useRef<string | null>(null);
+  const pendingSave = useRef<{ scope: string; layout: PaneLayout; store: PaneStore } | null>(null);
+  const saveChain = useRef(Promise.resolve());
+  const writesInFlight = useRef(0);
 
   // Load this workspace's layout (or build the default).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: flush is stable; reload only for a different workspace.
   useEffect(() => {
     let cancelled = false;
     loadedScope.current = null;
@@ -156,13 +175,20 @@ export function usePaneController({
         const next = stored && validateLayout(stored) === null ? stored : initialRef.current();
         lastSaved.current = stored ? JSON.stringify(stored) : null;
         setLayout(next);
-        setFocusedPaneId(leaves(next.root)[0]?.paneId ?? null);
+        const remembered = savedFocus(scope);
+        setFocusedPaneId(
+          remembered && findLeaf(next, remembered)
+            ? remembered
+            : (next.maximizedPaneId ?? leaves(next.root)[0]?.paneId ?? null),
+        );
+        setUndo(null);
         setClosed([]);
         loadedScope.current = scope;
         setReady(true);
       });
     return () => {
       cancelled = true;
+      void flush();
     };
   }, [scope]);
 
@@ -171,24 +197,39 @@ export function usePaneController({
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
-    const current = latest.current;
+    const pending = pendingSave.current;
+    if (!pending) return;
+    pendingSave.current = null;
+    const current = pending.layout;
     const serialized = JSON.stringify(current);
-    if (serialized === lastSaved.current || validateLayout(current) !== null) return;
+    if (validateLayout(current) !== null) return;
+    writesInFlight.current++;
     setSaveState("saving");
     try {
-      await storeRef.current.save(current);
-      lastSaved.current = serialized;
-      setSaveState("saved");
+      const write = saveChain.current.then(() => pending.store.save(current));
+      saveChain.current = write.catch(() => undefined);
+      await write;
+      if (loadedScope.current === pending.scope) {
+        lastSaved.current = serialized;
+        setSaveState("saved");
+      }
     } catch {
-      setSaveState("error");
+      if (loadedScope.current === pending.scope) setSaveState("error");
+    } finally {
+      writesInFlight.current--;
     }
   }, []);
 
   // Save debounced after every change once loaded.
   useEffect(() => {
     if (!ready || loadedScope.current !== scope) return;
-    if (JSON.stringify(layout) === lastSaved.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    if (JSON.stringify(layout) === lastSaved.current && writesInFlight.current === 0) {
+      pendingSave.current = null;
+      return;
+    }
+    pendingSave.current = { scope, layout, store: storeRef.current };
     saveTimer.current = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
   }, [layout, ready, scope, flush]);
 
@@ -205,6 +246,15 @@ export function usePaneController({
   const focusValid = focusedPaneId !== null && panes.some((p) => p.paneId === focusedPaneId);
   const effectiveFocus = focusValid ? focusedPaneId : (panes[0]?.paneId ?? null);
 
+  useEffect(() => {
+    if (!ready || loadedScope.current !== scope || !effectiveFocus) return;
+    try {
+      localStorage.setItem(focusKey(scope), effectiveFocus);
+    } catch {
+      /* Layout persistence remains native when browser storage is unavailable. */
+    }
+  }, [ready, scope, effectiveFocus]);
+
   const announce = useCallback((text: string) => setMessage((m) => ({ text, n: m.n + 1 })), []);
 
   const paneTitle = useCallback((paneId: string) => {
@@ -219,6 +269,7 @@ export function usePaneController({
       if (validateLayout(next) !== null) return false;
       latest.current = next;
       setLayout(next);
+      setUndo(null);
       if (announcement) announce(announcement);
       return true;
     },
@@ -409,7 +460,7 @@ export function usePaneController({
       },
       swapWith: (paneId, direction) => {
         const { width, height } = size.current;
-        const other = neighbourPane(latest.current, paneId, direction, width, height);
+        const other = neighbourPane(latest.current, paneId, direction, width, height, CANVAS_GEOMETRY);
         if (!other) {
           announce(`There's no pane to the ${DIRECTION_WORD[direction]}.`);
           return;
@@ -420,7 +471,7 @@ export function usePaneController({
       resize: (paneId, direction, steps = 1) => {
         const { width, height } = size.current;
         const step = RESIZE_STEP_PX * Math.max(1, Math.min(10, steps));
-        let next = resizePane(latest.current, paneId, direction, step, width, height, DEFAULT_GEOMETRY);
+        let next = resizePane(latest.current, paneId, direction, step, width, height, CANVAS_GEOMETRY);
         if (next === latest.current) {
           // Nothing that way: grow toward the other side instead ("make this pane bigger").
           const opposite: Record<PaneDirection, PaneDirection> = {
@@ -429,7 +480,7 @@ export function usePaneController({
             up: "down",
             down: "up",
           };
-          next = resizePane(latest.current, paneId, opposite[direction], step, width, height, DEFAULT_GEOMETRY);
+          next = resizePane(latest.current, paneId, opposite[direction], step, width, height, CANVAS_GEOMETRY);
         }
         if (next === latest.current) {
           announce("This pane can't grow that way.");
@@ -441,7 +492,7 @@ export function usePaneController({
         const from = focused();
         if (!from) return;
         const { width, height } = size.current;
-        const next = neighbourPane(latest.current, from, direction, width, height);
+        const next = neighbourPane(latest.current, from, direction, width, height, CANVAS_GEOMETRY);
         if (!next) {
           announce(`No pane to the ${DIRECTION_WORD[direction]}.`);
           return;
@@ -462,6 +513,28 @@ export function usePaneController({
       },
       applyShape: (shape, name) => {
         apply(applyShape(latest.current, shape), `Applied the ${name} layout. Nothing was closed.`);
+      },
+      undoLayoutLabel: undo?.label ?? null,
+      tidy: () => {
+        const previous = { layout: latest.current, focus: focused() ?? null, label: "Tidy" };
+        if (
+          apply(
+            tidyLayout(latest.current, size.current.width),
+            "Tidied the canvas. All work is preserved. Undo Tidy restores your arrangement.",
+          )
+        )
+          setUndo(previous);
+      },
+      taskLayout: (task, companions = []) => {
+        const previous = { layout: latest.current, focus: focused() ?? null, label: TASK_LABELS[task] };
+        const next = arrangeTask(withCompanions(latest.current, companions), task, previous.focus);
+        if (apply(next, `Applied ${TASK_LABELS[task]}. All work is preserved; you can undo this layout.`))
+          setUndo(previous);
+      },
+      undoLayout: () => {
+        if (!undo) return;
+        apply(undo.layout, `Restored the arrangement before ${undo.label}.`);
+        if (undo.focus) focusPane(undo.focus);
       },
       even: () => {
         apply(evenOut(latest.current), "Evened out pane sizes.");
@@ -506,6 +579,7 @@ export function usePaneController({
       focusPane,
       paneTitle,
       focused,
+      undo,
     ],
   );
 }

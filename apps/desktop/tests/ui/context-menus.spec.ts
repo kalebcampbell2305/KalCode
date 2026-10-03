@@ -3,6 +3,40 @@ import { expect, test } from "@playwright/test";
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
+test("Fleet right-click renames its coding agent and opens Browser beside the same pane", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    (
+      window as unknown as { __kalcodeMemory: { queueFolders: (...names: string[]) => void } }
+    ).__kalcodeMemory.queueFolders("fleet-menu");
+  });
+  const nav = page.getByRole("navigation", { name: "Primary" });
+  await nav.getByRole("button", { name: "Code", exact: true }).click();
+  await page.getByRole("button", { name: "Open folder…" }).first().click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "New agent" })
+    .getByRole("button", { name: "Launch Claude Code agent" })
+    .click();
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
+  await nav.getByRole("button", { name: "Dashboard", exact: true }).click();
+  const card = page
+    .getByRole("article")
+    .filter({ has: page.locator("[data-kind=state]") })
+    .first();
+  await card.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  await page.getByRole("dialog", { name: "Rename agent" }).getByRole("textbox").fill("Context reviewer");
+  await page.getByRole("dialog").getByRole("button", { name: "Save name" }).click();
+  const renamed = page.getByRole("article", { name: "Context reviewer" });
+  await expect(renamed).toBeVisible();
+  await renamed.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Open Browser beside", exact: true }).click();
+  await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
+  await expect(page.getByRole("tab", { name: /Browser/ })).toBeVisible();
+});
+
 test("Thread right-click renames the clicked row without navigating to it", async ({ page }) => {
   await page.goto("/?scenario=threads");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads", exact: true }).click();

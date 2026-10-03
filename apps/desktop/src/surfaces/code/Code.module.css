@@ -16,6 +16,48 @@
   container: code / inline-size;
 }
 
+.layoutPreview {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 2px;
+  width: 18px;
+  height: 16px;
+  color: var(--color-accent);
+}
+
+.layoutPreview i {
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.55;
+}
+
+.layoutPreview i:first-child {
+  grid-row: span 2;
+  background: var(--color-accent-subtle);
+  opacity: 1;
+}
+
+.layoutPreview[data-layout="review"] {
+  grid-template-columns: 1fr 1fr;
+}
+.layoutPreview[data-layout="review"] i:nth-child(2) {
+  grid-row: span 2;
+}
+.layoutPreview[data-layout="review"] i:nth-child(3),
+.layoutPreview[data-layout="focus"] i:not(:first-child) {
+  display: none;
+}
+.layoutPreview[data-layout="focus"] {
+  grid-template-columns: 1fr;
+}
+.layoutPreview[data-layout="debug"] {
+  transform: scaleX(-1);
+}
+.layoutPreview[data-layout="ship"] {
+  grid-template-rows: 2fr 1fr;
+}
+
 .loading {
   display: flex;
   flex-direction: column;
