@@ -74,6 +74,8 @@ test.describe("provider panes", () => {
   for (const [provider, count] of [
     ["Claude Code", 1],
     ["Claude Code", 4],
+    ["Claude Code", 6],
+    ["Codex", 4],
     ["Codex", 6],
   ] as const) {
     test(`launching ${count} ${provider} agents creates distinct terminal panes in the current workspace`, async ({
@@ -93,6 +95,9 @@ test.describe("provider panes", () => {
       const terminals = page.locator("[data-provider-pane]");
       await expect(terminals).toHaveCount(count);
       for (const terminal of await terminals.all()) {
+        await expect(terminal.locator("[data-pane-status]")).toHaveText("IDLE");
+        await expect(terminal).toHaveAttribute("aria-label", /account Personal/);
+        await expect(terminal).not.toContainText("earlier run");
         await expect(terminal.locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
       }
       const ids = await terminals.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-provider-pane")));

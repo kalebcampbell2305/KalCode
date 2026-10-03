@@ -13,7 +13,7 @@
 //! helper, working directory and settings are all native-resolved.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -172,6 +172,13 @@ fn hook_program() -> Option<PathBuf> {
     Some(exe.parent()?.join(HOOK_HELPER))
 }
 
+/// A provider pane is unavailable unless its native hook helper is already installed. Checking
+/// this at the pane-create boundary prevents writing a thread and interactive marker that can
+/// never reach a PTY, while keeping the interactive provider route available to other callers.
+fn hook_program_ready(path: &Path) -> bool {
+    path.is_absolute() && path.is_file()
+}
+
 /// The decision routing for this build: the default (the engine decides), or, in debug and
 /// `e2e` builds only, `KALCODE_E2E_HOOK_DECISIONS=engine|provider_prompt` (tests of both paths).
 fn routing() -> DecisionRouting {
@@ -249,6 +256,10 @@ impl ProviderPanesState {
         let Some(runtime) = runtime else {
             return disabled("Managed provider accounts aren't available. Restart KalCode.");
         };
+        // Keep interactive routes registered even when the installed helper is temporarily
+        // absent: KalVoice reaches the same provider router without this IPC command, and must
+        // fail in the interactive adapter instead of silently falling back to headless. Pane
+        // creation checks the file before writing any thread state; adapters recheck at start.
         let Some(hook_program) = hook_program() else {
             return disabled("KalCode's hook helper is missing. Reinstall KalCode.");
         };
@@ -440,6 +451,29 @@ fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
     KalError::validation("provider_pane_failed", message).to_ipc()
 }
 
+/// Thread creation retains a failed row so the person can repair the provider and resume it.
+/// Creating a new pane still reports that recorded, user-safe startup failure to its caller;
+/// only resource-held starts remain successful queued creations.
+fn pane_create_failure(status: ThreadStatus, error: Option<&ThreadError>) -> Option<IpcError> {
+    if status != ThreadStatus::Failed {
+        return None;
+    }
+    Some(match error {
+        Some(error) => IpcError {
+            category: ErrorCategory::Provider,
+            code: error.code.clone(),
+            message: error.message.clone(),
+            retryable: false,
+        },
+        None => KalError::new(
+            ErrorCategory::Provider,
+            "provider_pane_failed",
+            "The provider could not start. Resume the agent to try again.",
+        )
+        .to_ipc(),
+    })
+}
+
 /// Creates a thread whose provider runs interactively in a pane. Plan, Approve and Auto only at
 /// creation, as for `thread_create` (Bypass and Custom are set afterwards, with confirmation).
 #[tauri::command(async)]
@@ -459,6 +493,13 @@ pub fn provider_pane_create(
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     panes.require()?;
+    if !hook_program().is_some_and(|path| hook_program_ready(&path)) {
+        return Err(KalError::validation(
+            "provider_panes_unavailable",
+            "KalCode's hook helper is missing. Reinstall KalCode.",
+        )
+        .to_ipc());
+    }
     if ![
         ProviderId::CLAUDE_CODE,
         ProviderId::CODEX,
@@ -510,19 +551,8 @@ fn pane_creation_error(
     runtime_kind: Option<ThreadRuntimeKind>,
     error: Option<&ThreadError>,
 ) -> Option<IpcError> {
-    if status == ThreadStatus::Failed {
-        return Some(IpcError {
-            category: ErrorCategory::Provider,
-            code: error
-                .map_or("provider_pane_failed", |error| error.code.as_str())
-                .into(),
-            message: error
-                .map_or("The coding terminal couldn't start. Try again.", |error| {
-                    error.message.as_str()
-                })
-                .into(),
-            retryable: true,
-        });
+    if let Some(error) = pane_create_failure(status, error) {
+        return Some(error);
     }
     (runtime_kind != Some(ThreadRuntimeKind::InteractivePty)).then(|| {
         KalError::validation(
@@ -747,25 +777,27 @@ pub fn provider_pane_info(
     if let Some(info) = panes.panes.info(&thread_id) {
         return Ok(Some(info));
     }
-    // A pane thread from an earlier run (its process ended with that run): it resumes in a pane.
     if !panes
         .is_interactive_thread(&thread_id)
         .map_err(|error| error.log_and_convert("provider_pane_info_runtime"))?
     {
         return Ok(None);
     }
+    // A marker without an in-memory pane usually belongs to an earlier app run, but can also
+    // remain after a provider failed before spawning its first PTY. The canonical thread keeps
+    // the truthful provider and failure state; the UI uses both it and this non-running info.
     let thread = threads
         .runtime()?
         .get(&thread_id)
-        .map_err(|error| error.log_and_convert("provider_pane_info_thread"))?;
-    Ok(Some(ended_pane_info(
+        .map_err(|e| e.log_and_convert("provider_pane_info_thread"))?;
+    Ok(Some(ended_marker_info(
         thread_id,
-        thread.provider_id.to_string(),
+        thread.provider_id.as_str().to_owned(),
         panes.routing,
     )))
 }
 
-fn ended_pane_info(thread_id: String, provider_id: String, routing: DecisionRouting) -> PaneInfo {
+fn ended_marker_info(thread_id: String, provider_id: String, routing: DecisionRouting) -> PaneInfo {
     PaneInfo {
         thread_id,
         provider_id,
@@ -828,7 +860,7 @@ mod tests {
             ProviderId::GEMINI_CLI,
         ] {
             let id = kalcode_contracts::ids::new_id();
-            let info = ended_pane_info(id.clone(), provider.into(), DEFAULT_DECISION_ROUTING);
+            let info = ended_marker_info(id.clone(), provider.into(), DEFAULT_DECISION_ROUTING);
             assert_eq!(info.thread_id, id);
             assert_eq!(info.provider_id.as_str(), provider);
             assert_eq!(info.hook_channel, HookChannelState::Ended);
@@ -881,6 +913,54 @@ mod tests {
             "{}",
             path.display()
         );
+    }
+
+    #[test]
+    fn pane_runtime_requires_a_real_hook_helper_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join(HOOK_HELPER);
+        assert!(!hook_program_ready(&missing));
+
+        std::fs::create_dir(&missing).expect("directory at helper path");
+        assert!(!hook_program_ready(&missing));
+        std::fs::remove_dir(&missing).expect("remove directory");
+
+        std::fs::write(&missing, b"test helper").expect("helper file");
+        assert!(hook_program_ready(&missing));
+        assert!(!hook_program_ready(std::path::Path::new(HOOK_HELPER)));
+    }
+
+    #[test]
+    fn failed_new_pane_returns_its_recorded_safe_error_but_a_queued_start_does_not() {
+        let recorded = kalcode_contracts::threads::ThreadError {
+            code: "provider_start_failed".into(),
+            message: "Claude Code couldn't start. Resume this thread after reinstalling KalCode."
+                .into(),
+        };
+        let failed = pane_create_failure(ThreadStatus::Failed, Some(&recorded))
+            .expect("failed start must cross IPC as failure");
+        assert_eq!(failed.category, ErrorCategory::Provider);
+        assert_eq!(failed.code, recorded.code);
+        assert_eq!(failed.message, recorded.message);
+
+        assert!(
+            pane_create_failure(ThreadStatus::WaitingForDependency, Some(&recorded)).is_none(),
+            "a resource-held launch remains a successfully created, queued agent"
+        );
+    }
+
+    #[test]
+    fn marker_only_pane_info_preserves_the_canonical_provider() {
+        let thread_id = kalcode_contracts::ids::new_id();
+        let info = ended_marker_info(
+            thread_id.clone(),
+            ProviderId::CODEX.into(),
+            DecisionRouting::ProviderPrompt,
+        );
+        assert_eq!(info.thread_id, thread_id);
+        assert_eq!(info.provider_id, ProviderId::CODEX);
+        assert_eq!(info.hook_channel, HookChannelState::Ended);
+        assert!(!info.running);
     }
 
     #[test]

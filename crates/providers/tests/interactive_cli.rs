@@ -6,6 +6,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::Condvar;
@@ -221,6 +222,19 @@ impl Rig {
         };
         pane.wait_for_text("KalCode fake provider (interactive");
         Ok(pane)
+    }
+
+    /// Mirrors simultaneous IPC launches: every pane gets its own thread/session config and PTY.
+    fn start_many(&self, count: usize, mode: PermissionMode) -> Vec<Pane> {
+        std::thread::scope(|scope| {
+            let starts: Vec<_> = (0..count)
+                .map(|_| scope.spawn(move || self.start(mode)))
+                .collect();
+            starts
+                .into_iter()
+                .map(|start| start.join().expect("pane start thread"))
+                .collect()
+        })
     }
 
     fn args(&self) -> Vec<String> {
@@ -962,4 +976,152 @@ fn a_codex_pane_starts_without_a_view_attached() {
         std::thread::sleep(Duration::from_millis(50));
     }
     session.terminate().expect("stop");
+}
+
+#[test]
+fn new_codex_agents_fan_out_to_fresh_live_ptys_for_one_four_and_six() {
+    for count in [1, 4, 6] {
+        let rig = Rig::new(PaneCli::Codex);
+        let panes = rig.start_many(count, PermissionMode::Plan);
+
+        assert_eq!(panes.len(), count);
+        assert_eq!(
+            panes
+                .iter()
+                .map(|pane| pane.thread_id.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
+            count
+        );
+        let instances: HashSet<_> = panes
+            .iter()
+            .map(|pane| {
+                let info = rig.panes.info(&pane.thread_id).expect("pane info");
+                assert!(info.running, "fresh Codex process is not live: {info:?}");
+                info.instance_id.expect("process instance id")
+            })
+            .collect();
+        assert_eq!(
+            instances.len(),
+            count,
+            "two Codex panes shared one provider process identity"
+        );
+
+        let mut provider_sessions = HashSet::new();
+        for (index, pane) in panes.iter().enumerate() {
+            pane.type_line(&format!("hello from agent {index}"));
+            let events =
+                pane.events_until(|event| matches!(event, AgentEvent::TurnCompleted { .. }));
+            let provider_session_id = events
+                .iter()
+                .find_map(|event| match event {
+                    AgentEvent::SessionStarted {
+                        provider_session_id,
+                        ..
+                    } => Some(provider_session_id.clone()),
+                    _ => None,
+                })
+                .or_else(|| pane._session.provider_session_id())
+                .expect("Codex provider session id");
+            assert!(
+                provider_sessions.insert(provider_session_id),
+                "two Codex panes shared one provider session identity"
+            );
+        }
+        assert_eq!(provider_sessions.len(), count);
+
+        for pane in panes {
+            pane._session.terminate().expect("terminate");
+            pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+        }
+    }
+}
+
+#[test]
+fn ending_one_codex_process_leaves_its_sibling_sessions_live() {
+    let rig = Rig::new(PaneCli::Codex);
+    let panes = rig.start_many(4, PermissionMode::Plan);
+    for (index, pane) in panes.iter().enumerate() {
+        pane.type_line(&format!("initial turn {index}"));
+        pane.events_until(|event| matches!(event, AgentEvent::TurnCompleted { .. }));
+    }
+
+    panes[0]._session.terminate().expect("terminate one pane");
+    panes[0].events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    assert!(
+        !rig.panes
+            .info(&panes[0].thread_id)
+            .expect("ended pane info")
+            .running
+    );
+
+    for (index, sibling) in panes[1..].iter().enumerate() {
+        assert!(
+            rig.panes
+                .info(&sibling.thread_id)
+                .expect("sibling pane info")
+                .running,
+            "sibling {index} ended with another process"
+        );
+        sibling.type_line(&format!("still live {index}"));
+        sibling.events_until(|event| matches!(event, AgentEvent::TurnCompleted { .. }));
+    }
+
+    for sibling in &panes[1..] {
+        sibling._session.terminate().expect("terminate sibling");
+        sibling.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn managed_codex_fanout_keeps_every_pane_on_its_requested_account() {
+    let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Ineligible));
+    let account_a = new_id();
+    let account_b = new_id();
+    let requested = [
+        account_a.clone(),
+        account_a.clone(),
+        account_b.clone(),
+        account_b.clone(),
+    ];
+    let panes: Vec<_> = requested
+        .iter()
+        .map(|account_id| {
+            rig.start_with_account(PermissionMode::Plan, Some(account_id.clone()))
+                .expect("managed Codex pane")
+        })
+        .collect();
+
+    assert_eq!(&*rig.resolved_accounts.lock().unwrap(), &requested);
+    assert_eq!(
+        panes
+            .iter()
+            .map(|pane| {
+                let info = rig.panes.info(&pane.thread_id).expect("pane info");
+                assert!(info.running);
+                info.instance_id.expect("process instance id")
+            })
+            .collect::<HashSet<_>>()
+            .len(),
+        panes.len()
+    );
+
+    // Both panes on one account coexist under a shared session lease, while the other account
+    // remains separately bound. Sign-in stays exclusive until every session on that account ends.
+    let profiles = rig.profiles.as_ref().expect("managed profiles");
+    assert!(profiles.acquire_sign_in_lease("codex", &account_a).is_err());
+    assert!(profiles.acquire_sign_in_lease("codex", &account_b).is_err());
+    for pane in panes {
+        pane._session.terminate().expect("terminate");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+        drop(pane);
+    }
+    let lease_a = profiles
+        .acquire_sign_in_lease("codex", &account_a)
+        .expect("account A lease released");
+    let lease_b = profiles
+        .acquire_sign_in_lease("codex", &account_b)
+        .expect("account B lease released");
+    drop((lease_a, lease_b));
 }

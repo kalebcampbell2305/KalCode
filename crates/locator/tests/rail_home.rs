@@ -120,6 +120,96 @@ fn rail_state_persists_across_restart() {
 }
 
 #[test]
+fn pinned_order_and_unavailable_project_survive_recency_changes_and_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let sources = FakeSources::new();
+    let (alpha_id, beta_id, gamma_id);
+    {
+        let core = core_with_v11(dir.path());
+        let alpha = workspace(&core, dir.path(), "alpha");
+        let beta = workspace(&core, dir.path(), "beta");
+        let gamma = workspace(&core, dir.path(), "gamma");
+        let locator = Locator::start(core.clone(), sources.clone()).expect("start");
+
+        for workspace_id in [&alpha.id, &beta.id, &gamma.id] {
+            locator
+                .rail_update(&RailUpdate {
+                    workspace_id: workspace_id.clone(),
+                    pinned: Some(true),
+                    ..RailUpdate::default()
+                })
+                .unwrap();
+        }
+        // Arrange the pins independently from workspace activation and thread recency.
+        locator
+            .rail_update(&RailUpdate {
+                workspace_id: gamma.id.clone(),
+                position: Some(0),
+                ..RailUpdate::default()
+            })
+            .unwrap();
+        locator
+            .rail_update(&RailUpdate {
+                workspace_id: beta.id.clone(),
+                position: Some(1),
+                ..RailUpdate::default()
+            })
+            .unwrap();
+
+        core.activate_workspace(&alpha.id).unwrap();
+        sources.add(thread(
+            "Newest work",
+            "claude-code",
+            &alpha.id,
+            &alpha.name,
+            ThreadStatus::Active,
+            "9999-12-31T23:59:59Z",
+        ));
+        std::fs::rename(dir.path().join("beta"), dir.path().join("beta-moved"))
+            .expect("move pinned project folder");
+
+        let state = locator.rail_state().unwrap();
+        let pinned: Vec<&str> = state
+            .pinned
+            .iter()
+            .map(|entry| entry.workspace_id.as_str())
+            .collect();
+        assert_eq!(
+            pinned,
+            vec![gamma.id.as_str(), beta.id.as_str(), alpha.id.as_str()],
+            "activation and newer work must not reorder manually arranged pins"
+        );
+        assert!(state.pinned[2].active);
+        assert_eq!(state.pinned[2].last_activity_at, "9999-12-31T23:59:59Z");
+        assert!(!state.pinned[1].available);
+
+        (alpha_id, beta_id, gamma_id) = (alpha.id, beta.id, gamma.id);
+        locator.shutdown();
+        core.shutdown();
+    }
+
+    let core = core_with_v11(dir.path());
+    let locator = Locator::start(core.clone(), sources).expect("restart");
+    let state = locator.rail_state().unwrap();
+    let pinned: Vec<&str> = state
+        .pinned
+        .iter()
+        .map(|entry| entry.workspace_id.as_str())
+        .collect();
+    assert_eq!(
+        pinned,
+        vec![gamma_id.as_str(), beta_id.as_str(), alpha_id.as_str()]
+    );
+    let unavailable = state
+        .pinned
+        .iter()
+        .find(|entry| entry.workspace_id == beta_id)
+        .expect("unavailable project remains pinned after restart");
+    assert!(!unavailable.available);
+    locator.shutdown();
+}
+
+#[test]
 fn rail_counts_threads_per_provider_and_badges() {
     let dir = tempfile::tempdir().unwrap();
     let core = core_with_v11(dir.path());

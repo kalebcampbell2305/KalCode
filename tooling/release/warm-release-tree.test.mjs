@@ -29,7 +29,7 @@ test("refuses a relative repo or a non-commit", () => {
   assert.throws(() => warmPlan({ repo, commit: "main", worktreeExists: false }));
 });
 
-test("the warm compile mirrors the signed build's invocation and leaves no guardian behind", () => {
+test("the warm compile mirrors the signed build's invocation and leaves no release helpers behind", () => {
   const warm = readFileSync(new URL("./warm-windows.mjs", import.meta.url), "utf8");
   assert.match(
     warm,
@@ -37,4 +37,7 @@ test("the warm compile mirrors the signed build's invocation and leaves no guard
   );
   assert.match(warm, /releaseVersionOverlay\(releaseVersion\(\)\)/);
   assert.equal((warm.match(/clearStaleGuardian\(TARGET_DIR\)/g) ?? []).length, 2);
+  assert.equal((warm.match(/clearStaleHook\(TARGET_DIR\)/g) ?? []).length, 2);
+  assert.match(warm, /run\("cargo", hookBuildArgs\(\)/);
+  assert.match(warm, /hookBundleOverlay/);
 });

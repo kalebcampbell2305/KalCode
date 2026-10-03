@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 
 import { guardianPublicSigningProblems, guardianPublicVerificationProblems } from "./guardian-packaging.mjs";
+import { hookPublicSigningProblems, hookPublicVerificationProblems } from "./hook-packaging.mjs";
 import { releaseFileVersion } from "./lib.mjs";
 
 export const ARTIFACT_SIGNING = Object.freeze({
@@ -375,6 +376,7 @@ export function publicSigningProblems(build) {
     problems.push("public Windows releases require the exact production binary probe with test hooks disabled");
   }
   problems.push(...guardianPublicSigningProblems(build.guardian));
+  problems.push(...hookPublicSigningProblems(build.hook));
   return problems;
 }
 
@@ -404,6 +406,7 @@ export function publicVerificationProblems(build, verify) {
     problems.push("verification must re-prove the updater signature for the exact installer bytes and version");
   }
   problems.push(...guardianPublicVerificationProblems(build.guardian, verify.guardian, verify.passes));
+  problems.push(...hookPublicVerificationProblems(build.hook, verify.hook, verify.passes));
   if (verify.launchedApp !== false) {
     problems.push("installer verification must never launch the application");
   }
