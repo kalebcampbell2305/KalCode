@@ -127,6 +127,13 @@
 .oc-live[data-state="stale"] i {
   background: #f2b544;
 }
+.oc-live[data-state="offline"] {
+  color: #f3a6a6;
+  border-color: rgb(239 108 108 / 0.32);
+}
+.oc-live[data-state="offline"] i {
+  background: #ef6c6c;
+}
 
 .oc-controls {
   display: flex;
