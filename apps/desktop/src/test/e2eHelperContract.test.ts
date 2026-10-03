@@ -45,8 +45,9 @@ describe("native E2E helper inventory", () => {
   it("binds every real-app launch spec to the per-test owned-process fixture", () => {
     const specs = readdirSync(e2eDirectory).filter((name) => name.endsWith(".spec.ts"));
     const launchSpecs = specs.filter((name) => readFileSync(resolve(e2eDirectory, name), "utf8").includes("launch"));
-    expect(launchSpecs).toHaveLength(17);
+    expect(launchSpecs).toHaveLength(18);
     expect(launchSpecs).toContain("operations.spec.ts");
+    expect(launchSpecs).toContain("live-browser.spec.ts");
     expect(launchSpecs).toContain("provider-session-restart.spec.ts");
     for (const name of launchSpecs) {
       const source = readFileSync(resolve(e2eDirectory, name), "utf8");
