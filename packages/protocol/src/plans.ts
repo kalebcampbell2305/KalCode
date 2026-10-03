@@ -305,6 +305,8 @@ const LIVE = "0.1.8+923";
  * placeholder with the production-verified build number before merge (the roadmap test rejects it).
  */
 const V019 = "0.1.9+1106";
+/** The Stable 0.1.9 build that shipped the New agent launcher, provider agent panes and Account Hub. */
+const V019_STABLE = "0.1.9+1340";
 
 export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
   {
@@ -331,14 +333,22 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         id: "provider-terminals",
         label: "Real Claude Code and Codex terminals in Code",
         from: "free",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: V019_STABLE,
       },
-      { id: "account-hub", label: "Account Hub and Account + Usage Center", from: "free", status: "coming_soon" },
+      {
+        id: "account-hub",
+        label: "Account Hub and Account + Usage Center",
+        from: "free",
+        status: "available",
+        verifiedIn: V019_STABLE,
+      },
       {
         id: "identity",
         label: "Exact provider, account, model and effort identity",
         from: "free",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: V019_STABLE,
       },
       {
         id: "terminal-status",

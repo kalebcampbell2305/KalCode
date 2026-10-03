@@ -1,0 +1,42 @@
+---
+/**
+ * The live KalCode demo: the website's centerpiece. The first paint is rendered here at build time
+ * from the same renderer the browser uses (lib/live/render.ts), so the workspace is on screen before
+ * any script runs; scripts/live/loader.ts fetches the interactive code only when the demo nears the
+ * viewport or someone presses a "Try it" control anywhere on the page.
+ */
+import liveCss from "../../styles/live.css?url";
+import { LIVE_ICON_PATHS } from "../../lib/live/icons";
+import { initialState } from "../../lib/live/model";
+import { iconSprite, renderApp } from "../../lib/live/render";
+import { downloadCta } from "../../lib/releases";
+import { ACCOUNT_PAGE } from "../../lib/site";
+
+const cta = downloadCta();
+const cfg = { downloadHref: cta.href, downloadLabel: "Download KalCode", accountHref: ACCOUNT_PAGE.path };
+const html = renderApp(initialState(), cfg);
+---
+<link rel="stylesheet" href={liveCss} />
+<div
+  class="live"
+  data-live
+  tabindex="-1"
+  data-download-href={cfg.downloadHref}
+  data-download-label={cfg.downloadLabel}
+  data-account-href={cfg.accountHref}
+  role="region"
+  aria-label="KalCode, live demo"
+  aria-roledescription="interactive demo"
+>
+  <Fragment set:html={iconSprite(LIVE_ICON_PATHS)} />
+  <div class="live__app" data-live-app set:html={html} />
+  <div class="live__tip" data-live-tip role="tooltip" aria-hidden="true"></div>
+  <div class="live__bar">
+    <span class="live__mode"><span class="live__pulse" aria-hidden="true"></span>Demo mode · a sample workspace, nothing you do here is saved</span>
+    <button type="button" class="live__reset" data-live-do="reset">Reset demo</button>
+  </div>
+</div>
+
+<script>
+  import "../../scripts/live/loader";
+</script>
