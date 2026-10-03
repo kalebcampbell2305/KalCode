@@ -1,5 +1,11 @@
 # KalCode agent policy
 
+## Permanent active application protection (owner directive 2026-10-03)
+
+**NEVER CLOSE, RESTART, OR TERMINATE THE KALCODE APPLICATION THE OWNER IS WORKING IN.** It may contain many running coding terminals. This applies to development, testing, updates, release verification and cleanup. Never use process-wide termination or an updater/installer that would interrupt that instance or its terminals.
+
+Agents may open a separate KalCode instance for testing, using isolated application data and explicitly tracked process ownership. Stop only test instances and children that the task itself created. Verify update delivery with isolated installations/profiles; leave any proof requiring interruption of the owner's active instance pending until the owner closes it themselves. This rule overrides earlier release instructions that would close or restart the owner's active application.
+
 ## Permanent background process and focus rule (owner directive 2026-10-03)
 
 **KALCODE AGENTS MUST NEVER SPAM THE WINDOWS DESKTOP WITH EXTERNAL TERMINAL WINDOWS.** User-visible shell work runs inside KalCode's integrated terminals. Infrastructure and background commands run headless/hidden and must never steal focus. Do not launch Windows Terminal, cmd, PowerShell or another external console window unless the user explicitly requests an external terminal.
