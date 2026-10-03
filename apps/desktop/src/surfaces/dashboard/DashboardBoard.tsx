@@ -34,7 +34,7 @@ import {
 } from "./data/board.ts";
 import { useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
 import { fleetHandles, mergeReadiness } from "./fleet/fleetModel.ts";
-import { morphIntoThread } from "./fleet/morph.ts";
+import { morphIntoAgent } from "./fleet/morph.ts";
 import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
 import { useNow } from "./useNow.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
@@ -185,8 +185,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const onFocus = useCallback(
     (thread: ThreadSummary) => {
       const card = document.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(thread.id)}"]`);
-      morphIntoThread(card, thread.id, () => {
-        if (intents) return intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+      morphIntoAgent(card, thread.id, () => {
+        if (intents) return intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
         flushSync(() => {
           navigate("code");
         });

@@ -50,6 +50,48 @@ function deferred<T>() {
 const pane = { workspaceId: "workspace-a", runtimeKind: "interactive_pty", terminalId: null };
 const mount = () => renderHook(useUiIntents, { wrapper: UiIntentsProvider });
 
+describe("coding agent focus never falls back to Threads", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.clientIndex = 0;
+    mocks.activate.mockResolvedValue(true);
+    mocks.getThread.mockRejectedValue(new Error("runtime temporarily unavailable"));
+    mocks.invoke.mockResolvedValue(null);
+  });
+
+  it("opens the agent's Code workspace even while runtime metadata is unavailable", async () => {
+    const view = mount();
+    await act(async () =>
+      view.result.current.focus({ kind: "agent", agentId: "queued-agent", workspaceId: "workspace-a" }),
+    );
+    expect(mocks.navigate).toHaveBeenLastCalledWith("code");
+    expect(view.result.current.paneFocus?.threadId).toBe("queued-agent");
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("does not open Threads when the agent workspace cannot be activated", async () => {
+    mocks.activate.mockResolvedValue(false);
+    const view = mount();
+    await act(async () => view.result.current.focus({ kind: "agent", agentId: "agent", workspaceId: "missing" }));
+    expect(mocks.activate).toHaveBeenCalledWith("missing");
+    expect(mocks.navigate).not.toHaveBeenCalledWith("threads");
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("returns to the previous coding agent without consulting chat metadata", async () => {
+    resetFocusHistoryForTests();
+    const view = mount();
+    await act(async () => view.result.current.focus({ kind: "agent", agentId: "first", workspaceId: "workspace-a" }));
+    await act(async () => view.result.current.focus({ kind: "agent", agentId: "second", workspaceId: "workspace-a" }));
+    await act(async () => {
+      await view.result.current.focusPrevious();
+    });
+    expect(view.result.current.paneFocus?.threadId).toBe("first");
+    expect(mocks.getThread).not.toHaveBeenCalled();
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+});
+
 describe("UI focus intent lifecycle", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -412,7 +454,9 @@ describe("go back to what I was just using", () => {
     const view = mount();
     await act(async () => view.result.current.focus({ kind: "thread", threadId: "a" }));
     await act(async () => view.result.current.focus({ kind: "thread", threadId: "b" }));
-    expect(focusHistory().map((e) => (e.kind === "thread" ? e.threadId : e.terminalId))).toEqual(["b", "a"]);
+    expect(
+      focusHistory().map((e) => (e.kind === "agent" ? e.agentId : e.kind === "thread" ? e.threadId : e.terminalId)),
+    ).toEqual(["b", "a"]);
     let went = false;
     await act(async () => {
       went = await view.result.current.focusPrevious();

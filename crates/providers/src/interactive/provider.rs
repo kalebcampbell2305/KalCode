@@ -571,7 +571,7 @@ impl Drop for Disarm {
 /// interactive (a pane) or headless (stream-JSON).
 pub struct RuntimeRouter {
     headless: Arc<dyn AgentProvider>,
-    interactive: Arc<dyn AgentProvider>,
+    interactive: Option<Arc<dyn AgentProvider>>,
     sessions_dir: PathBuf,
 }
 
@@ -583,7 +583,7 @@ impl RuntimeRouter {
         let sessions_dir = interactive.config.sessions_dir.clone();
         Self {
             headless,
-            interactive,
+            interactive: Some(interactive),
             sessions_dir,
         }
     }
@@ -596,9 +596,31 @@ impl RuntimeRouter {
     ) -> Self {
         Self {
             headless,
-            interactive,
+            interactive: Some(interactive),
             sessions_dir,
         }
+    }
+
+    /// Keeps terminal intent authoritative even when this runtime cannot offer panes.
+    /// Ordinary chat sessions may still use the headless provider.
+    pub fn without_interactive(headless: Arc<dyn AgentProvider>, sessions_dir: PathBuf) -> Self {
+        Self {
+            headless,
+            interactive: None,
+            sessions_dir,
+        }
+    }
+
+    /// Apply the same account, resource and observation guards to both execution modes.
+    /// The router must remain outside them: a guard may defer starting until another OS
+    /// thread retries, after the creation thread's transient intent has gone away.
+    pub fn with_session_guards(
+        mut self,
+        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+    ) -> Self {
+        self.headless = guard(self.headless);
+        self.interactive = self.interactive.map(guard);
+        self
     }
 
     /// Runs `create` (a thread-runtime create call on this OS thread) so that the session it
@@ -647,7 +669,10 @@ impl AgentProvider for RuntimeRouter {
 
     fn capabilities(&self) -> ProviderCapabilities {
         let mut capabilities = self.headless.capabilities();
-        capabilities.interactive = self.interactive.capabilities().interactive;
+        capabilities.interactive = self
+            .interactive
+            .as_ref()
+            .and_then(|provider| provider.capabilities().interactive);
         capabilities
     }
 
@@ -660,8 +685,20 @@ impl AgentProvider for RuntimeRouter {
         if armed {
             self.mark(&config.thread_id)?;
         }
-        if armed || self.is_interactive(&config.thread_id) {
-            self.interactive.start_session(config, sink)
+        let interactive = armed
+            || marked_interactive_checked(&self.sessions_dir, &config.thread_id).map_err(|_| {
+                ProviderError::Start("KalCode couldn't verify the session runtime.".into())
+            })?;
+        if interactive {
+            let provider = self
+                .interactive
+                .as_ref()
+                .ok_or_else(|| ProviderError::Refused {
+                    code: "provider_panes_unavailable".into(),
+                    message: "Coding terminals aren't available. Restart KalCode and try again."
+                        .into(),
+                })?;
+            provider.start_session(config, sink)
         } else {
             self.headless.start_session(config, sink)
         }

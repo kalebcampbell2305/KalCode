@@ -107,6 +107,7 @@ pub fn is_browser_url(url: &str) -> bool {
 
 fn check_content(content: &PaneContent, browser_ids: &mut HashSet<String>) -> Result<(), KalError> {
     let ok = match content {
+        PaneContent::Agent { agent_id } => is_valid_id(agent_id),
         PaneContent::Thread { thread_id } => is_valid_id(thread_id),
         PaneContent::Terminal { terminal_id } => is_valid_id(terminal_id),
         PaneContent::Git { workspace_id } => is_valid_id(workspace_id),

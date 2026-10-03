@@ -40,7 +40,7 @@ export function ActiveAgentsWidget() {
   if (list.length === 0) return <p className={styles.none}>No agents are working right now.</p>;
 
   const open = (thread: ThreadSummary) => {
-    if (intents) void intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+    if (intents) void intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
     else navigate("code");
   };
 

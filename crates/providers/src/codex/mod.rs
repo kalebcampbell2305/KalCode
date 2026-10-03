@@ -44,10 +44,15 @@ pub const MANAGED_VERSIONS: VersionWindow = VersionWindow {
     profile_name: "Codex",
     npm_package: "@openai/codex",
     floors: &[
+        #[cfg(not(windows))]
         Version::new(0, 155, 1),
+        #[cfg(not(windows))]
         Version::new(0, 156, 0),
+        #[cfg(not(windows))]
         Version::new(0, 157, 0),
+        #[cfg(not(windows))]
         Version::new(0, 158, 0),
+        #[cfg(not(windows))]
         Version::new(0, 159, 0),
         Version::new(0, 160, 0),
     ],
@@ -546,6 +551,12 @@ mod tests {
             "0.155.1", "0.155.2", "0.156.0", "0.156.1", "0.156.7", "0.157.0", "0.157.1", "0.158.0",
             "0.158.4", "0.159.0", "0.159.3", "0.160.0", "0.160.2",
         ] {
+            if cfg!(windows) && version(supported) < argv::MINIMUM_VERSION {
+                assert!(!managed_version_supported(&version(supported)));
+                require_managed_version(&version(supported))
+                    .expect_err("Windows requires the console-free runtime");
+                continue;
+            }
             assert!(
                 managed_version_supported(&version(supported)),
                 "{supported} is in a certified line at or above its floor"
@@ -586,9 +597,11 @@ mod tests {
         assert_eq!(code, "provider_version_unsupported");
         assert!(message.contains("Codex CLI 0.161.0"), "{message}");
         assert!(
-            message.contains(
+            message.contains(if cfg!(windows) {
+                "0.160.x"
+            } else {
                 "0.155.x (0.155.1 or later), 0.156.x, 0.157.x, 0.158.x, 0.159.x or 0.160.x"
-            ),
+            }),
             "{message}"
         );
         assert!(
@@ -655,10 +668,10 @@ printf 'codex-cli {version}\n'
             temp.path().join("cwd-marker").into_os_string(),
         );
         for (index, (reported, accepted)) in [
-            ("0.156.1", true),
-            ("0.157.1", true),
-            ("0.158.0", true),
-            ("0.159.0", true),
+            ("0.156.1", !cfg!(windows)),
+            ("0.157.1", !cfg!(windows)),
+            ("0.158.0", !cfg!(windows)),
+            ("0.159.0", !cfg!(windows)),
             ("0.160.0", true),
             ("0.161.0", false),
             ("0.158.0-alpha.15", false),
@@ -688,7 +701,7 @@ printf 'codex-cli {version}\n'
             let script = temp.path().join("codex-version.cmd");
             std::fs::write(
                 &script,
-                "@echo off\r\ncd > \"%CWD_MARKER%\"\r\necho codex-cli 0.157.0\r\n",
+                "@echo off\r\ncd > \"%CWD_MARKER%\"\r\necho codex-cli 0.160.0\r\n",
             )
             .expect("version script");
             script

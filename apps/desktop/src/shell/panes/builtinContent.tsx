@@ -23,6 +23,8 @@ export function describeBuiltin(content: PaneContent): TabInfo {
       return { title: "Widget", glyph: <Puzzle />, stateLabel: "Unavailable", statusText: "Not in this build" };
     case "thread":
       return { title: "Thread", glyph: <CircleSlash />, stateLabel: "Unavailable", statusText: "Not found" };
+    case "agent":
+      return { title: "Coding agent", glyph: <CircleSlash />, stateLabel: "Unavailable", statusText: "Not found" };
     case "terminal":
       return { title: "Terminal", glyph: <CircleSlash />, stateLabel: "Unavailable", statusText: "Not found" };
     default:

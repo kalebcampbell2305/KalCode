@@ -283,7 +283,8 @@ export function resolveSession(
   const trimmed = query.trim();
   if (!trimmed) return notFound("Say which session, for example “Authentication”.");
   if ([...trimmed].length > MAX_SESSION_QUERY_CHARS) return missing();
-  const open = threads.filter((t) => !t.archivedAt).map(entry);
+  const coding = /\b(?:agents?|terminals?)\b/.test(normalizeSessionText(trimmed));
+  const open = threads.filter((t) => !t.archivedAt && (!coding || t.runtimeKind === "interactive_pty")).map(entry);
   const inWorkspace = (e: Entry) => (ctx.workspaceId ? e.t.workspaceId === ctx.workspaceId : false);
   const preferWorkspace = (matches: Entry[]) => {
     const here = matches.filter(inWorkspace);

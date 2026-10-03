@@ -1,5 +1,13 @@
 # KalCode agent policy
 
+## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
+
+An agent is always a real provider coding terminal/session in Code. Agent commands never create chat Threads. Opening four Claude Code agents creates four fresh Claude Code terminals in the current workspace; opening six Codex agents creates six fresh Codex terminals. Each binds its provider account, exact model, effort and working directory. Agent Fleet focuses that same terminal. Threads remain a separate product concept. Preserve terminal identity through resource waits, retry, restoration and runtime errors; never fall back to chat execution or Threads navigation.
+
+KalCode agents must never spam the Windows desktop with external terminal windows. User-visible shell work runs inside KalCode's integrated PTY; background work runs headless/hidden and must never steal focus. Do not spawn Windows Terminal, cmd, PowerShell or another external console unless the user explicitly requests one. Prevent window creation at the owning spawn boundary; minimizing or hiding a window after creation is not a fix. Deduplicate active logical jobs, bound retries, and terminate owned child processes on cancellation/completion without disturbing unrelated user work.
+
+For Codex tool execution on Windows, use the existing PTY execution mode (`exec_command` with `tty: true`) so commands stay contained. Any explicitly launched background helper must use the platform's no-window creation mechanism (`windowsHide`, `CREATE_NO_WINDOW`, or `Start-Process -WindowStyle Hidden` as applicable). Test the actual owning spawn path and observe window/focus events; reduced popup frequency is not completion.
+
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 
 **KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.**

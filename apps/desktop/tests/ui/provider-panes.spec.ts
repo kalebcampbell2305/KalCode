@@ -71,6 +71,46 @@ async function expectNoSeriousA11yViolations(page: Page) {
 }
 
 test.describe("provider panes", () => {
+  for (const [provider, count] of [
+    ["Claude Code", 1],
+    ["Claude Code", 4],
+    ["Codex", 6],
+  ] as const) {
+    test(`launching ${count} ${provider} agents creates distinct terminal panes in the current workspace`, async ({
+      page,
+    }) => {
+      await open(page);
+      await openWorkspace(page, "KalCode");
+      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await launcher(page).getByRole("radio", { name: provider, exact: true }).click();
+      await launcher(page).getByLabel("Agents", { exact: true }).fill(String(count));
+      await launcher(page)
+        .getByRole("button", {
+          name: count === 1 ? `Launch ${provider} agent` : `Launch ${count} ${provider} agents`,
+          exact: true,
+        })
+        .click();
+      const terminals = page.locator("[data-provider-pane]");
+      await expect(terminals).toHaveCount(count);
+      for (const terminal of await terminals.all()) {
+        await expect(terminal.locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
+      }
+      const ids = await terminals.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-provider-pane")));
+      expect(new Set(ids).size).toBe(count);
+      await expect(page.getByText("This thread isn't a pane here")).toHaveCount(0);
+      await expect(page.getByText("Open in Threads", { exact: true })).toHaveCount(0);
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Dashboard", exact: true })
+        .click();
+      await expect(page.getByRole("article")).toHaveCount(count);
+      await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
+      await expect(page.getByRole("heading", { level: 1, name: "KalCode", exact: true })).toBeVisible();
+      await expect(terminals).toHaveCount(count);
+      if (count === 4) await page.screenshot({ path: "qa/screenshots/agent-terminals-four.png" });
+    });
+  }
+
   test("a pane shows the provider identity, title, model, mode and status from the runtime", async ({ page }) => {
     await open(page);
     await openWorkspace(page);

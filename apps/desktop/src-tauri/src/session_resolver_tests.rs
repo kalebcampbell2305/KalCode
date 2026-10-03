@@ -14,6 +14,34 @@ fn thread_id(key: &str) -> String {
     format!("0192f3c4-0000-7000-8000-0000000000{key}")
 }
 
+#[test]
+fn agent_targets_never_resolve_to_a_chat_with_the_same_name() {
+    let chat = summary(
+        "01",
+        "Release",
+        (ProviderId::CODEX, "Codex"),
+        None,
+        ws1(),
+        ThreadStatus::Completed,
+        false,
+    );
+    let mut agent = chat.clone();
+    agent.id = thread_id("02");
+    agent.runtime_kind = Some(kalcode_contracts::threads::ThreadRuntimeKind::InteractivePty);
+    assert!(
+        matches!(resolve(&[chat.clone(), agent.clone()], "Release agent", &ResolveContext::default()),
+        SessionResolution::Resolved { target, .. } if target.thread_id == agent.id)
+    );
+    assert!(matches!(
+        resolve(&[chat.clone()], "Release agent", &ResolveContext::default()),
+        SessionResolution::NotFound { .. }
+    ));
+    assert!(matches!(
+        resolve(&[chat], "Release thread", &ResolveContext::default()),
+        SessionResolution::Resolved { .. }
+    ));
+}
+
 fn summary(
     key: &str,
     name: &str,
@@ -282,6 +310,7 @@ fn live_task_context_resolves_natural_scene_phrases_without_reading_messages() {
         false,
     );
     website.model = Some("claude-opus-4-1".into());
+    website.runtime_kind = Some(kalcode_contracts::threads::ThreadRuntimeKind::InteractivePty);
     website.effort = Some("high".into());
     website.current_activity = Some("Running frontend tests for the website".into());
     website.branch = Some("feature/navigation".into());
@@ -335,6 +364,7 @@ fn live_task_context_keeps_equal_matches_ambiguous_and_other_excludes_focus() {
         false,
     );
     first.current_activity = Some("Implementing Browser controls".into());
+    first.runtime_kind = Some(kalcode_contracts::threads::ThreadRuntimeKind::InteractivePty);
     let mut second = summary(
         "02",
         "Browser two",
@@ -345,6 +375,7 @@ fn live_task_context_keeps_equal_matches_ambiguous_and_other_excludes_focus() {
         false,
     );
     second.current_activity = Some("Reviewing Browser controls".into());
+    second.runtime_kind = Some(kalcode_contracts::threads::ThreadRuntimeKind::InteractivePty);
 
     assert!(matches!(
         resolve(

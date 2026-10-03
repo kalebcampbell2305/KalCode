@@ -6,5 +6,5 @@ import type { ThreadSummary } from "@kalcode/protocol";
  * never counts as an agent, even though both live in the native thread store (AGENTS.md).
  */
 export function isCodingAgent(thread: ThreadSummary): boolean {
-  return thread.runtimeKind === "interactive_pty" || thread.terminalId !== null;
+  return thread.runtimeKind === "interactive_pty" || thread.terminalId != null;
 }

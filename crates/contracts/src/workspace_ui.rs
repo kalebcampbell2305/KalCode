@@ -156,6 +156,10 @@ pub enum SplitAxis {
 )]
 #[ts(export)]
 pub enum PaneContent {
+    /// A provider coding session in Code, never a chat Thread renderer.
+    Agent {
+        agent_id: String,
+    },
     Thread {
         thread_id: String,
     },
@@ -332,6 +336,27 @@ mod tests {
             maximized_pane_id: None,
             dock: vec![],
         }
+    }
+
+    #[test]
+    fn agent_content_has_a_distinct_wire_identity() {
+        let agent = PaneContent::Agent {
+            agent_id: "provider-session".into(),
+        };
+        let json = serde_json::to_value(&agent).expect("serialize agent");
+        assert_eq!(
+            json,
+            serde_json::json!({"kind": "agent", "agentId": "provider-session"})
+        );
+        assert_eq!(
+            serde_json::from_value::<PaneContent>(json).expect("restore agent"),
+            agent
+        );
+        let thread: PaneContent = serde_json::from_value(
+            serde_json::json!({"kind": "thread", "threadId": "conversation"}),
+        )
+        .expect("legacy Thread still supported");
+        assert!(matches!(thread, PaneContent::Thread { .. }));
     }
 
     #[test]
