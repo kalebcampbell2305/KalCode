@@ -13,7 +13,7 @@
 //! | `item.completed` `agent_message {text}` | `MessageCompleted` |
 //! | `item.completed` `command_execution` / `mcp_tool_call` / `web_search` | `ToolCompleted { ok }` (`status == "completed"`, and exit code 0 for commands) |
 //! | `item.completed` `file_change {changes, status}` | `ToolRequested`, `Status(editing)`, `ToolCompleted`, `FileChanged` per change when it succeeded |
-//! | `item.completed` `error {message}` | `Error(codex_item_error, recoverable)`; the code-mode-host notice KalCode's policy causes is dropped |
+//! | `item.completed` `error {message}` | `Error(codex_item_error, recoverable)` including execution-host failures |
 //! | `turn.completed {usage}` | `Usage`, `TurnCompleted { ok: true }`, `Status(idle)` |
 //! | `turn.failed {error}` | `Error(turn_failed, recoverable)`, `TurnCompleted { ok: false }`, `Status(idle)` |
 //! | `error {message}` | `Error(stream_error, recoverable)` |
@@ -31,10 +31,6 @@ use serde_json::Value;
 
 use crate::claude::actions::classify;
 use crate::turns::{TurnNormalizer, provider_message};
-
-/// The notice Codex reports as an item error because KalCode's policy floor disables its
-/// code-mode host (`features.code_mode_host=false`). Expected on every turn; never shown.
-const CODE_MODE_HOST_DISABLED: &str = "Code Mode is unavailable because code-mode host is disabled";
 
 fn status(status: ThreadStatus, detail: Option<String>) -> AgentEvent {
     AgentEvent::Status { status, detail }
@@ -195,13 +191,6 @@ impl CodexNormalizer {
             }
             "error" => {
                 let message = required(item, "message")?;
-                if message.starts_with(CODE_MODE_HOST_DISABLED) {
-                    // KalCode disables Codex's code-mode host by policy (`argv::POLICY_CONFIG`,
-                    // `features.code_mode_host=false`). Codex then reports this notice as an
-                    // item error on successful turns; it is expected, not a problem to show.
-                    tracing::debug!(event = "provider.codex_code_mode_notice_dropped");
-                    return Ok(Vec::new());
-                }
                 vec![AgentEvent::Error {
                     code: "codex_item_error".into(),
                     message: provider_message(message),
@@ -430,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn the_policy_disabled_code_mode_notice_is_not_a_thread_error() {
+    fn code_host_failures_are_visible_alongside_other_provider_errors() {
         let events = run(&[
             r#"{"type":"thread.started","thread_id":"t-1"}"#,
             r#"{"type":"turn.started"}"#,
@@ -446,8 +435,13 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Only the real item error remains; the expected policy notice is dropped.
-        assert_eq!(errors, ["Model provider overloaded"]);
+        assert_eq!(
+            errors,
+            [
+                "Code Mode is unavailable because code-mode host is disabled.",
+                "Model provider overloaded"
+            ]
+        );
         assert!(events.contains(&AgentEvent::TurnCompleted { ok: true }));
     }
 

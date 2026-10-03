@@ -57,8 +57,10 @@ pub(crate) const POLICY_CONFIG: &[&str] = &[
     "features.computer_use=false",
     "features.in_app_browser=false",
     "features.image_generation=false",
-    "features.code_mode=false",
-    "features.code_mode_host=false",
+    // The local execution host is stable and starts automatically. Disabling it prevents
+    // model-selected Code Mode tools from running; it is not a permission boundary. Leave
+    // experimental code_mode selection to Codex while preserving the sandbox below.
+    "features.code_mode_host=true",
     "features.auth_elicitation=false",
     "features.tool_call_mcp_elicitation=false",
 ];
@@ -264,6 +266,22 @@ mod tests {
             .filter(|(_, a)| *a == flag)
             .filter_map(|(i, _)| args.get(i + 1).map(String::as_str))
             .collect()
+    }
+
+    #[test]
+    fn code_host_is_available_for_new_and_resumed_turns_in_every_mode() {
+        for mode in ALL {
+            for resume in [None, Some("0192f3c4-0000-7000-8000-000000000000")] {
+                let argv = args(mode, resume);
+                let configs = after(&argv, "-c");
+                assert!(
+                    configs.contains(&"features.code_mode_host=true"),
+                    "{mode:?}"
+                );
+                assert!(!configs.contains(&"features.code_mode_host=false"));
+                assert!(!configs.contains(&"features.code_mode=false"));
+            }
+        }
     }
 
     #[test]

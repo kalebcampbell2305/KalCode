@@ -42,6 +42,7 @@ import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
 import { useNavigation, viewVisible } from "../../shell/navigation.tsx";
+import { suggestTask, type TaskLayout } from "../../shell/panes/adaptiveCanvas.ts";
 import { PaneNotice } from "../../shell/panes/builtinContent.tsx";
 import type { PaneRenderContext, TabInfo } from "../../shell/panes/contentRegistry.ts";
 import { registeredWidgets } from "../../shell/panes/contentRegistry.ts";
@@ -155,6 +156,8 @@ export interface CodeCanvasApi {
   /** Opens the coding-agent launcher with the last selection unless a provider is named. */
   openAgentLauncher: (providerId?: PaneProviderId) => void;
   titleOf: (content: PaneContent) => string;
+  applyTaskLayout: (task: TaskLayout) => void;
+  layoutSuggestion: ReturnType<typeof suggestTask>;
 }
 
 interface CodeCanvasProps {
@@ -791,7 +794,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             workspaceId={workspace.id}
             context={context}
             controllerRef={controllerRef}
-            visible={current === "code"}
+            visible={current === "code" && context.visible !== false}
             initialUrl={initialBrowserUrls.current.get(content.browserId)}
           />
         );
@@ -805,6 +808,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             focused={context.focused}
             focusRequest={context.focusRequest}
             codeShown={codeShown}
+            visible={context.visible !== false}
             theme={theme}
             workspace={workspace}
             onRestart={restartById}
@@ -825,6 +829,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             account={accountFor(entry.thread)}
             theme={theme}
             focusRequest={context.focusRequest}
+            visible={context.visible !== false && codeShown}
             throttled={!context.focused || !codeShown}
             onChanged={providerPanes.updated}
             onHandOff={handOffFor(entry.thread.id)}
@@ -1189,9 +1194,48 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     <CanvasSkeleton label="Loading the layout" />
   );
 
+  const applyTaskLayout = useCallback((task: TaskLayout) => {
+    const current = controllerRef.current;
+    const contents = allContents(current.layout);
+    const companions: PaneContent[] = [];
+    if (task === "build" || task === "debug")
+      companions.push(contents.find((content) => content.kind === "browser") ?? browserContent());
+    if (task === "debug" || task === "ship") companions.push({ kind: "widget", widgetId: "activity" });
+    current.taskLayout(task, companions);
+  }, []);
+  const layoutSuggestion = useMemo(
+    () =>
+      suggestTask(
+        controller.layout,
+        terminals.some(
+          (terminal) => terminal.status === "exited" && terminal.exitCode !== null && terminal.exitCode !== 0,
+        ),
+      ),
+    [controller.layout, terminals],
+  );
   const api = useMemo<CodeCanvasApi>(
-    () => ({ controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf }),
-    [controller, background, providerPanes, shells, newTerminal, openAgentLauncher, titleOf],
+    () => ({
+      controller,
+      background,
+      providerPanes,
+      shells,
+      newTerminal,
+      openAgentLauncher,
+      titleOf,
+      applyTaskLayout,
+      layoutSuggestion,
+    }),
+    [
+      controller,
+      background,
+      providerPanes,
+      shells,
+      newTerminal,
+      openAgentLauncher,
+      titleOf,
+      applyTaskLayout,
+      layoutSuggestion,
+    ],
   );
 
   return (
@@ -1258,6 +1302,7 @@ const TerminalPanel = memo(function TerminalPanel({
   focused,
   focusRequest,
   codeShown,
+  visible,
   theme,
   workspace,
   onRestart,
@@ -1268,6 +1313,7 @@ const TerminalPanel = memo(function TerminalPanel({
   focused: boolean;
   focusRequest: number;
   codeShown: boolean;
+  visible: boolean;
   theme: "light" | "dark";
   workspace: Workspace;
   onRestart: (terminalId: string) => void;
@@ -1309,7 +1355,7 @@ const TerminalPanel = memo(function TerminalPanel({
         key={`${terminal.id}:${terminal.startedAt ?? ""}`}
         terminal={terminal}
         label={label}
-        visible
+        visible={visible && codeShown}
         focusRequest={focusRequest}
         theme={theme}
         throttled={!focused || !codeShown}

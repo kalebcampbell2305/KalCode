@@ -1,4 +1,4 @@
-import type { PaneContent, PaneDirection } from "@kalcode/protocol";
+import type { PaneDirection } from "@kalcode/protocol";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,14 +27,15 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { Fragment, type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef } from "react";
-import type { PaneRenderContext, TabInfo } from "./contentRegistry.ts";
+import { type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef } from "react";
+import type { TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, type Rect } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
 import { PANE_SHORTCUT_LABELS } from "./paneShortcuts.ts";
 
 export const paneDomId = (paneId: string) => `pane-${paneId}`;
 export const tabDomId = (paneId: string, index: number) => `pane-${paneId}-tab-${index}`;
+export const bodyDomId = (paneId: string) => `pane-${paneId}-body`;
 export const panelDomId = (paneId: string) => `pane-${paneId}-panel`;
 
 export interface PaneFrameProps {
@@ -55,7 +56,6 @@ export interface PaneFrameProps {
   multiple: boolean;
   dropTarget: boolean;
   tabs: TabInfo[];
-  renderContent: (content: PaneContent, context: PaneRenderContext) => ReactNode;
   renderEmpty: (paneId: string) => ReactNode;
   addMenu: (paneId: string) => ReactNode;
   onFocus: (paneId: string) => void;
@@ -81,11 +81,8 @@ const SWAP: { direction: PaneDirection; label: string; icon: ReactNode }[] = [
 ];
 
 /**
- * One pane: a header with its tabs (WAI-ARIA tabs, automatic activation) and controls, and the
- * active tab's content. Terminal tabs (shells, provider TUIs) stay mounted once shown, hidden and
- * throttled while another tab is in front or the pane is collapsed or behind a maximized one, so
- * switching back never rebuilds xterm or replays scrollback. Other contents render only while in
- * front; whatever they run keeps running.
+ * Pane chrome and its content slot. Persistent content hosts belong to the canvas, so
+ * moving, tabbing, minimizing and docking preserve the mounted view and session identity.
  */
 export function PaneFrame(props: PaneFrameProps) {
   const {
@@ -104,7 +101,6 @@ export function PaneFrame(props: PaneFrameProps) {
     multiple,
     dropTarget,
     tabs,
-    renderContent,
     renderEmpty,
     addMenu,
     onFocus,
@@ -127,45 +123,9 @@ export function PaneFrame(props: PaneFrameProps) {
   const title = activeInfo?.title ?? "Empty pane";
   const label = `Pane ${index + 1} of ${count}: ${title}`;
   const collapsed = leaf.collapsed;
-  // A focus request belongs to the content that was in front when it was made: switching tabs
-  // with the arrow keys must not pull focus into the newly shown terminal.
-  const activeKey = active ? contentKey(active) : "";
-  const seenRequest = useRef({ n: focusRequest, key: activeKey });
-  if (focusRequest !== seenRequest.current.n) seenRequest.current = { n: focusRequest, key: activeKey };
-  const contentFocusRequest = seenRequest.current.key === activeKey ? seenRequest.current.n : 0;
-
-  // Terminal tabs that have been in front stay mounted (see above); closed tabs are let go.
-  const shownBody = !hidden && !collapsed;
-  const keptTerminals = useRef(new Set<string>());
-  const tabKeys = new Set(leaf.tabs.map(contentKey));
-  for (const key of keptTerminals.current) if (!tabKeys.has(key)) keptTerminals.current.delete(key);
-  if (shownBody && active && activeInfo?.terminal) keptTerminals.current.add(activeKey);
-  const panel = (content: PaneContent, i: number, front: boolean) => (
-    <div
-      id={front ? panelDomId(leaf.paneId) : undefined}
-      role="tabpanel"
-      aria-labelledby={tabDomId(leaf.paneId, i)}
-      className={styles.panel}
-      hidden={!front}
-    >
-      {renderContent(content, {
-        paneId: leaf.paneId,
-        tabId: tabDomId(leaf.paneId, i),
-        focused: front && focused,
-        focusRequest: front ? contentFocusRequest : 0,
-      })}
-    </div>
-  );
-  // Keyed so the same element survives collapsing and expanding the pane.
   const body = (
-    <div key="body" className={styles.body} data-pane-body hidden={!shownBody}>
-      {leaf.tabs.map((content, i) => {
-        const key = contentKey(content);
-        if (!keptTerminals.current.has(key)) return null;
-        return <Fragment key={key}>{panel(content, i, shownBody && i === leaf.activeTab)}</Fragment>;
-      })}
-      {shownBody && active && !keptTerminals.current.has(activeKey) ? panel(active, leaf.activeTab, true) : null}
-      {shownBody && !active ? renderEmpty(leaf.paneId) : null}
+    <div key="body" id={bodyDomId(leaf.paneId)} className={styles.body} data-pane-body hidden={hidden || collapsed}>
+      {!active && !hidden && !collapsed ? renderEmpty(leaf.paneId) : null}
     </div>
   );
 
@@ -174,6 +134,7 @@ export function PaneFrame(props: PaneFrameProps) {
   useEffect(() => {
     if (focusRequest === 0 || hidden) return;
     const frame = requestAnimationFrame(() => {
+      frameRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
       if (collapsed) {
         frameRef.current?.querySelector<HTMLElement>("[data-expand]")?.focus();
         return;

@@ -62,8 +62,7 @@ function codexSetting(mode: PermissionMapping["mode"]): string {
     "features.computer_use=false",
     "features.in_app_browser=false",
     "features.image_generation=false",
-    "features.code_mode=false",
-    "features.code_mode_host=false",
+    "features.code_mode_host=true",
     "features.auth_elicitation=false",
     "features.tool_call_mcp_elicitation=false",
   ];

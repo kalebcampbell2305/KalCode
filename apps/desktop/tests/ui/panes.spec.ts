@@ -100,9 +100,9 @@ test.describe("splitting and resizing", () => {
     expect((await box(pane(page, 0))).width).toBeCloseTo(before + 24 + 24 + 96, -1);
     expect(Number(await divider.getAttribute("aria-valuenow"))).toBeGreaterThan(55);
     await page.keyboard.press("End");
-    expect((await box(pane(page, 1))).width).toBeLessThan(160);
+    expect((await box(pane(page, 1))).width).toBeCloseTo(320, 0);
     await page.keyboard.press("Home");
-    expect((await box(pane(page, 0))).width).toBeLessThan(160);
+    expect((await box(pane(page, 0))).width).toBeCloseTo(320, 0);
     await page.keyboard.press("Enter");
     await expect(divider).toHaveAttribute("aria-valuenow", "50");
   });
@@ -360,7 +360,7 @@ test.describe("content from other surfaces", () => {
     await page.keyboard.press("Control+Alt+w");
     await expect(provider).toHaveCount(0);
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard" }).click();
-    const card = page.locator(`article[data-thread-id="${threadId}"]`);
+    const card = page.locator(`article[data-thread-id="${threadId}"]:visible`);
     await expect(card).toBeVisible();
     await card.click({ position: { x: 6, y: 6 } });
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
