@@ -1856,6 +1856,8 @@ mod tests {
                 })
                 .expect("core"),
             );
+            std::fs::create_dir_all(temp_root.join("workspace"))
+                .expect("workspace fixture directory");
             let workspace_id = kalcode_contracts::ids::new_id();
             core.transact(|tx| {
                 let root_path = temp_root.join("workspace").display().to_string();

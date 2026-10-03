@@ -885,6 +885,7 @@ fn default_mode_settings() {
 #[test]
 fn bounded_auto_allows_normal_workspace_coding_and_keeps_real_risks_interactive() {
     let h = Harness::new();
+    let auto_thread = h.add_thread(M::Auto);
     for action in [
         ActionKind::FileWrite {
             path: "src/lib.rs".into(),
@@ -896,7 +897,10 @@ fn bounded_auto_allows_normal_workspace_coding_and_keeps_real_risks_interactive(
             remote: None,
         },
     ] {
-        let decision = h.service.evaluate(&h.action(action), M::Auto);
+        let decision = h.service.evaluate(
+            &h.action_for(&auto_thread, &h.workspace_id, action),
+            M::Auto,
+        );
         assert_eq!(decision.effect, PolicyEffect::Allow, "{}", decision.reason);
     }
 
@@ -913,24 +917,27 @@ fn bounded_auto_allows_normal_workspace_coding_and_keeps_real_risks_interactive(
             target: "production".into(),
         },
     ] {
-        let decision = h.service.evaluate(&h.action(action), M::Auto);
+        let decision = h.service.evaluate(
+            &h.action_for(&auto_thread, &h.workspace_id, action),
+            M::Auto,
+        );
         assert_eq!(decision.effect, PolicyEffect::Ask, "{}", decision.reason);
         assert!(decision.approvable, "{}", decision.reason);
     }
 }
 
 #[test]
-fn malformed_saved_settings_recover_to_approve_instead_of_broadening_authority() {
+fn invalid_saved_settings_recover_to_approve_instead_of_broadening_authority() {
     let h = Harness::new();
     h.core
         .transact(|tx| {
             tx.execute(
-                "INSERT INTO permission_settings (key, value, updated_at) VALUES ('defaults', '{', 'now')",
+                "INSERT INTO permission_settings (key, value, updated_at) VALUES ('defaults', '[]', 'now')",
                 [],
             )?;
             Ok(((), Vec::new()))
         })
-        .expect("store malformed setting fixture");
+        .expect("store invalid setting fixture");
 
     let recovered = h.service.settings().expect("conservative recovery");
     assert_eq!(recovered.default_mode, M::Approve);
