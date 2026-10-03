@@ -83,6 +83,7 @@ import {
   updateBrowserUrl,
 } from "../browser/index.ts";
 import { resolveBrowserTarget } from "./browserTarget.ts";
+import { stopsOnClose } from "./panes/agentLaunch.ts";
 import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
@@ -222,10 +223,11 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [terminalById, labels, paneById, accountFor],
   );
 
-  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running.
+  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running,
+  // and a launch still held for resources is cancelled rather than starting later without a pane.
   const stopAgent = useCallback(
     async (threadId: string) => {
-      if (!paneById.get(threadId)?.info.running) return;
+      if (!stopsOnClose(paneById.get(threadId))) return;
       try {
         providerPanes.updated(await client.stopThread(threadId));
       } catch (error) {
@@ -521,9 +523,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const [launcher, setLauncher] = useState<{ providerId: PaneProviderId; paneId: string | null } | null>(null);
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
+  // A fresh launcher never shows the previous launch's refusal.
+  const { clearLaunchError } = providerPanes;
   const openAgentLauncher = useCallback(
-    (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => setLauncher({ providerId, paneId }),
-    [],
+    (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => {
+      clearLaunchError();
+      setLauncher({ providerId, paneId });
+    },
+    [clearLaunchError],
   );
   const launchAgents = useCallback(
     async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null) => {
@@ -951,10 +958,17 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           return { handled: false, message: "None of those providers has a pane in this workspace yet." };
         }
         const [first, ...rest] = found;
-        if (first) current.show(first, { focus: true });
+        // `current` is a snapshot: its focus doesn't follow show() or split(). Start from where
+        // `first` lands (its existing pane, else the focused one) and put each next provider
+        // beside the previous one, so they come out in order.
+        let target: string | null = null;
+        if (first) {
+          target = findContent(current.layout, contentKey(first))?.paneId ?? current.focusedPaneId;
+          current.show(first, { focus: true });
+        }
         for (const content of rest) {
-          const target = current.focusedPaneId;
-          if (target) current.split(target, command.axis, content);
+          if (!target) break;
+          target = current.split(target, command.axis, content) ?? target;
         }
         return selected.missing.length > 0
           ? { handled: true, message: `Arranged the available panes. No pane yet for ${selected.missing.join(", ")}.` }
