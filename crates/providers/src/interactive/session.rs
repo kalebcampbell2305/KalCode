@@ -404,18 +404,10 @@ impl Shared {
             return;
         };
         let trailing_input = last_submit + 1 < data.len();
-        match self.provider_id.as_str() {
-            "claude-code" => {
-                // The authenticated UserPromptSubmit that follows consumes this exact boundary.
-                // A later write has a higher generation and therefore survives that hook.
-                self.record_claude_submit_boundary_locked(
-                    lifecycle,
-                    generation,
-                    trailing_input,
-                    true,
-                );
-            }
-            _ => {}
+        if self.provider_id.as_str() == "claude-code" {
+            // The authenticated UserPromptSubmit that follows consumes this exact boundary.
+            // A later write has a higher generation and therefore survives that hook.
+            self.record_claude_submit_boundary_locked(lifecycle, generation, trailing_input, true);
         }
     }
 
