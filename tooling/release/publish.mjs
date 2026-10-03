@@ -40,6 +40,7 @@ import {
   pointerAdvanceProblems,
   publicationRowProblems,
   resolvePlatformPublicationState,
+  supersedingVersion,
   writeFrozenPublicationJson,
 } from "./publication-safety.mjs";
 import {
@@ -565,11 +566,23 @@ async function probeImmutableObject(key, path, expectedSha256, label) {
   return false;
 }
 
+// A newer build already owns the channel: this job is superseded, not failed. Exit 3 so release
+// jobs can retire it without treating it as a pipeline error.
+const SUPERSEDED_EXIT = 3;
+function exitIfSuperseded(row, candidate) {
+  const newer = supersedingVersion(row, candidate);
+  if (newer === null) return;
+  console.error(`
+release: SUPERSEDED: ${channel} already serves ${newer}, newer than ${candidate.version}. Nothing was published.`);
+  process.exit(SUPERSEDED_EXIT);
+}
+
 if (publishesRemote) {
   try {
     const rows = executeD1(buildPointerReadStatement(channel));
     if (!initializesAuthority && rows.length > 1) throw new Error("authoritative D1 pointer returned multiple rows");
     authoritativePreviousRow = rows[0] ?? null;
+    if (!initializesAuthority) exitIfSuperseded(rows[0] ?? null, pointerCandidate);
     if (initializesAuthority) {
       bootstrapPointerAction = decideBootstrapPointerAction(rows, pointerCandidate);
     } else problems.push(...publicationRowProblems(rows[0] ?? null, pointerCandidate));
@@ -795,6 +808,8 @@ let versionRows = claimed;
 if (versionRows.length === 0) {
   versionRows = executeD1(buildVersionReadStatement(pointerCandidate.channel, pointerCandidate.version));
 }
+if (versionRows.length === 0)
+  exitIfSuperseded(executeD1(buildPointerReadStatement(pointerCandidate.channel))[0], pointerCandidate);
 if (versionRows.length !== 1) fail("authoritative D1 release version could not be claimed");
 const versionProblems = publicationRowProblems(versionRows[0], pointerCandidate);
 if (versionProblems.length > 0) fail(versionProblems.join("; "));
@@ -831,11 +846,19 @@ if (initializesAuthority) {
   process.exit(0);
 }
 
-const advanced = executeD1(buildPointerAdvanceStatement(pointerCandidate, authoritativePreviousRow));
-if (advanced.length !== 1 || advanced[0]?.channel !== pointerCandidate.channel || advanced[0]?.version !== version) {
+// Compare-and-set. Parallel release jobs may move the pointer between our read and this write: a
+// newer build there supersedes this job; an older one is advanced past, from a fresh read.
+let expectedPointer = authoritativePreviousRow;
+for (let attempt = 1; ; attempt++) {
+  const advanced = executeD1(buildPointerAdvanceStatement(pointerCandidate, expectedPointer));
+  if (advanced.length === 1 && advanced[0]?.channel === pointerCandidate.channel && advanced[0]?.version === version)
+    break;
   const current = executeD1(buildPointerReadStatement(pointerCandidate.channel));
+  exitIfSuperseded(current[0], pointerCandidate);
   const reason = publicationRowProblems(current[0] ?? null, pointerCandidate);
-  fail(reason[0] ?? "authoritative D1 release pointer compare-and-set was rejected");
+  if (reason.length > 0 || attempt >= 3)
+    fail(reason[0] ?? "authoritative D1 release pointer compare-and-set was rejected");
+  expectedPointer = current[0] ?? null;
 }
 const authoritative = executeD1(buildPointerReadStatement(pointerCandidate.channel));
 if (authoritative.length !== 1 || publicationRowProblems(authoritative[0], pointerCandidate).length > 0) {

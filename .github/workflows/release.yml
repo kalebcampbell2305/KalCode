@@ -10,8 +10,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Release jobs run in parallel, one per commit (AGENTS.md multi-shipper rule). Only the final D1
+# stable-pointer write is serialized, by its forward-only compare-and-set in publish.mjs.
 concurrency:
-  group: release
+  group: release-${{ github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -26,6 +28,10 @@ jobs:
     # KALCODE_RELEASE_REPO names the owner's checkout on the release machine. It signs and publishes nothing.
     if: github.ref == 'refs/heads/main' && vars.KALCODE_RELEASE_WARM == 'true' && vars.KALCODE_RELEASE_REPO != ''
     runs-on: [self-hosted, Windows, kalcode-release]
+    # One shared warm worktree, so warm runs (not releases) stay serialized.
+    concurrency:
+      group: release-warm
+      cancel-in-progress: false
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
