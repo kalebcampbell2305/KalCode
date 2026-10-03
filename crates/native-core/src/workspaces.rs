@@ -194,12 +194,33 @@ impl TerminalRegistry {
     }
 
     fn status_of_open_tab(&self, id: &str) -> TerminalStatus {
-        match self.session(id) {
-            Some(session) if session.exit_info().is_none() => TerminalStatus::Running,
-            // Exited, and the exit is being recorded right now.
-            Some(_) => TerminalStatus::Exited,
-            None => TerminalStatus::EndedByApp,
-        }
+        self.open_tab_state(id).0
+    }
+
+    /// Status and exit code of a tab whose row has no recorded end yet.
+    ///
+    /// A session that has exited while `on_terminal_exit` is still waiting to record it reports
+    /// the status and exit code that record will hold, so no reader ever sees an exited terminal
+    /// without its code.
+    fn open_tab_state(&self, id: &str) -> (TerminalStatus, Option<i64>) {
+        let Some((generation, session)) = lock(&self.sessions)
+            .get(id)
+            .map(|(generation, session)| (*generation, session.clone()))
+        else {
+            return (TerminalStatus::EndedByApp, None);
+        };
+        let Some(exit) = session.exit_info() else {
+            return (TerminalStatus::Running, None);
+        };
+        // Mirrors `on_terminal_exit`: a deliberately stopped operation is recorded as ended by
+        // the app, any other exit as exited.
+        let stopped = lock(&self.operation_stopping).get(id) == Some(&generation);
+        let status = if stopped {
+            TerminalStatus::EndedByApp
+        } else {
+            TerminalStatus::Exited
+        };
+        (status, Some(i64::from(exit.code)))
     }
 
     /// Forgets a terminal's session and every view attached to it.
@@ -441,10 +462,11 @@ fn row_to_terminal(
     let id: String = row.get(0)?;
     let ended_at: Option<String> = row.get(6)?;
     let end_reason: Option<String> = row.get(8)?;
-    let status = match (&ended_at, end_reason.as_deref()) {
-        (None, _) => registry.status_of_open_tab(&id),
-        (Some(_), Some("exited")) => TerminalStatus::Exited,
-        (Some(_), _) => TerminalStatus::EndedByApp,
+    let recorded_code: Option<i64> = row.get(7)?;
+    let (status, exit_code) = match (&ended_at, end_reason.as_deref()) {
+        (None, _) => registry.open_tab_state(&id),
+        (Some(_), Some("exited")) => (TerminalStatus::Exited, recorded_code),
+        (Some(_), _) => (TerminalStatus::EndedByApp, recorded_code),
     };
     Ok(TerminalInfo {
         id,
@@ -455,7 +477,7 @@ fn row_to_terminal(
         status,
         started_at: row.get(5)?,
         ended_at,
-        exit_code: row.get(7)?,
+        exit_code,
     })
 }
 
