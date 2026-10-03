@@ -1382,6 +1382,17 @@ fn provider_error_observer_gets_the_current_account_before_the_error_is_publishe
         .set_provider_error_observer(observed.clone())
         .expect("observer");
     let account_id = new_id();
+    h.core
+        .transact(|conn| {
+            conn.execute(
+                "INSERT INTO provider_accounts (
+                    id, provider_id, display_name, authentication_state, is_default, created_at
+                 ) VALUES (?1, 'claude-code', 'Fixture account', 'authenticated', 1, ?2)",
+                rusqlite::params![&account_id, "2026-09-25T00:00:00Z"],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("account");
     let mut request = h.request("x");
     request.provider_account_id = Some(account_id.clone());
     let thread = h.runtime.create(request).expect("create");

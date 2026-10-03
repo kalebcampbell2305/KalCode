@@ -3171,7 +3171,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
             let script = dir.join("codex.cmd");
             std::fs::write(
                 &script,
-                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift\r\ngoto scan\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift /1\r\ngoto scan\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
             )
             .expect("fake codex");
             script
@@ -3351,8 +3351,13 @@ done
         );
         assert_eq!(claude_after.last_error_code, None);
 
-        // A refused sign-in never touched the profile, so the live sessions' verdict still stands.
-        assert_eq!(codex_launch_refusal(&fixture), None);
+        // Beginning a lifecycle operation invalidates the prior plan generation even when the
+        // live session then refuses the writer. A new read-only check is allowed beside the
+        // session; this intentionally unrunnable fake therefore fails as a real check error.
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
+        );
         drop((codex_session, claude_session));
     }
 

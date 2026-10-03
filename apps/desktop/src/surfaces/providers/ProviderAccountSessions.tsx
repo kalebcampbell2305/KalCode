@@ -318,16 +318,14 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     if (!feed) return;
     let active = true;
     let seenSeq = feed.getSnapshot().events[0]?.seq ?? 0;
-    const reconcileState = { dirty: false, running: false };
+    const reconcileState = { eventGeneration: 0, running: false };
 
-    const reconcile = () => {
-      reconcileState.dirty = true;
-      if (reconcileState.running) return;
+    const runReconcileBatch = (): void => {
       reconcileState.running = true;
+      const expectedEventGeneration = reconcileState.eventGeneration;
       void (async () => {
         let attempts = 0;
-        while (active && reconcileState.dirty && attempts < AUTH_EVENT_READ_ATTEMPTS) {
-          reconcileState.dirty = false;
+        while (active && attempts < AUTH_EVENT_READ_ATTEMPTS) {
           attempts += 1;
           const expectedClientEpoch = clientEpoch.current;
           const expectedRegistryVersion = registryVersion.current;
@@ -335,14 +333,12 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
           try {
             restored = await client.listProviderAccounts();
           } catch {
-            reconcileState.dirty = true;
             continue;
           }
           if (!active || !live.current || clientEpoch.current !== expectedClientEpoch) return;
           // A user mutation landed during this local read. Read again so the latest persisted
           // session facts win without losing nickname/default/order metadata.
           if (registryVersion.current !== expectedRegistryVersion) {
-            reconcileState.dirty = true;
             continue;
           }
           const current = accountsRef.current;
@@ -351,7 +347,7 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
             // the registry generation so the older startup read cannot overwrite it afterward.
             registryVersion.current += 1;
             setAccounts(restored);
-            continue;
+            break;
           }
           const restoredById = new Map(restored.map((account) => [account.id, account]));
           const changedIds = new Set(
@@ -362,7 +358,7 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
               })
               .map((account) => account.id),
           );
-          if (changedIds.size === 0) continue;
+          if (changedIds.size === 0) break;
           // Canonical session metadata wins over any older observer already in flight. Metadata
           // such as nickname/default/order and other providers remain exactly as rendered.
           registryVersion.current += 1;
@@ -392,9 +388,18 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
                   : account;
               }) ?? null,
           );
+          break;
         }
         reconcileState.running = false;
+        // A real auth event that arrived during the final attempt gets its own fresh bounded
+        // batch. A persistent local read failure cannot reschedule itself indefinitely.
+        if (active && reconcileState.eventGeneration !== expectedEventGeneration) runReconcileBatch();
       })();
+    };
+
+    const reconcile = () => {
+      reconcileState.eventGeneration += 1;
+      if (!reconcileState.running) runReconcileBatch();
     };
 
     const unsubscribe = feed.subscribe(() => {

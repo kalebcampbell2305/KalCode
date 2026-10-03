@@ -370,6 +370,40 @@ describe("provider account session restoration", () => {
     );
   });
 
+  it("starts a fresh bounded batch when an auth event arrives during the final read attempt", async () => {
+    const claude = account("claude-a", "claude-code", "Claude A");
+    const expired = {
+      ...claude,
+      authenticationState: "not_authenticated" as const,
+      lastErrorCode: "provider_authentication_failed",
+    };
+    const finalRead = deferred<ProviderAccount[]>();
+    const list = vi
+      .fn<() => Promise<ProviderAccount[]>>()
+      .mockResolvedValueOnce([claude])
+      .mockRejectedValueOnce(new Error("local read failed"))
+      .mockRejectedValueOnce(new Error("local read failed"))
+      .mockReturnValueOnce(finalRead.promise)
+      .mockResolvedValueOnce([expired]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshClaudeAccount: vi.fn(),
+      refreshCodexAccount: vi.fn(),
+      refreshGeminiAccount: vi.fn(),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([claude]));
+
+    act(() => runtime.feed?.merge([providerError(1, "claude-code", "provider_authentication_failed")]));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(4));
+    act(() => runtime.feed?.merge([providerError(2, "claude-code", "provider_authentication_failed")]));
+    act(() => finalRead.resolve([claude]));
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(5));
+    await waitFor(() => expect(view.result.current?.accounts?.[0]?.authenticationState).toBe("not_authenticated"));
+    expect(runtime.client.refreshClaudeAccount).not.toHaveBeenCalled();
+  });
+
   it("does not let an older validation resurrect an account after logout or archive wins", async () => {
     const codex = account("codex-a", "codex", "Codex A");
     const check = deferred<ProviderAccount>();
