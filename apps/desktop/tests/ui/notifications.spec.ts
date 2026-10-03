@@ -59,12 +59,16 @@ test("lists what finished, failed and needs permission, with an unread count", a
   await expect(center(page).getByRole("heading", { name: "Today" })).toBeVisible();
 });
 
-test("opening a notification marks it read and focuses its thread", async ({ page }) => {
+test("opening a notification marks it read and focuses its agent in Code", async ({ page }) => {
   await open(page);
   await bell(page).click();
   await opener(page, "Deploy preview build failed").click();
   await expect(center(page)).toHaveCount(0);
-  await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+  // The fixture's threads are coding agents: they open in Code, never Threads.
+  await expect(
+    page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
   await expect(bell(page)).toHaveAccessibleName("Notifications, 3 unread");
   // Unread state is kept by the native store: reopening shows it read.
   await bell(page).click();

@@ -53,6 +53,32 @@ describe("ToastProvider", () => {
     expect(screen.queryByText("Saved")).not.toBeInTheDocument();
   });
 
+  it("keeps a toast under the pointer alive, so its action can still be reached", () => {
+    const onSelect = vi.fn();
+    const { result } = renderHook(useToast, { wrapper });
+    act(() =>
+      result.current.show({ title: "Stopped 2 idle terminals.", action: { label: "Review terminals", onSelect } }),
+    );
+    advance(4000);
+    const toast = screen.getByText("Stopped 2 idle terminals.").closest("li") as HTMLElement;
+    fireEvent.pointerEnter(toast);
+    advance(10_000);
+    expect(screen.getByText("Stopped 2 idle terminals.")).toBeInTheDocument();
+
+    // Focus moving in and out while the pointer stays does not restart the timer.
+    const dismiss = screen.getByRole("button", { name: "Dismiss notification" });
+    act(() => dismiss.focus());
+    act(() => screen.getByRole("button", { name: "Outside the toast" }).focus());
+    advance(10_000);
+    expect(screen.getByText("Stopped 2 idle terminals.")).toBeInTheDocument();
+
+    fireEvent.pointerLeave(toast);
+    advance(499);
+    expect(screen.getByText("Stopped 2 idle terminals.")).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByText("Stopped 2 idle terminals.")).not.toBeInTheDocument();
+  });
+
   it.each(["info", "success"] as const)("expires an unfocused %s toast normally", (tone) => {
     const { result } = renderHook(useToast, { wrapper });
     act(() => result.current.show({ title: "Finished", tone }));

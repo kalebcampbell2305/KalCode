@@ -26,9 +26,11 @@ use crate::version::Version;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const TERMINATE_GRACE: Duration = Duration::from_millis(500);
-/// Longest a failed login waits for its stdout reader to finish before classifying the exit. A
-/// descendant that inherited the pipe can keep it open, so this stays short and bounded.
-const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(500);
+/// Longest a failed login waits for its stdout reader to finish before classifying the exit. The
+/// wait ends as soon as the reader drains; this cap only bounds a descendant that inherited the
+/// pipe and keeps it open. It must outlast a reader lagging on a busy machine, or an exit after
+/// the browser hand-off is misreported as a hand-off failure (seen at 500 ms on a loaded Mac).
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Bounded account state derived only from a completed official authentication operation.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -111,15 +111,26 @@
 
 .itemLabel {
   flex: 1;
+  /* One line in the fixed-height row: long thread names and project paths end in an ellipsis. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .current {
+  flex: none;
   color: var(--color-accent-text);
   font-family: var(--font-label);
   font-size: var(--type-label);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+}
+
+.item kbd {
+  flex: none;
+  white-space: nowrap;
 }
 
 @keyframes fade {

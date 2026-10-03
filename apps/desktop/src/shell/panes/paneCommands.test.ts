@@ -10,6 +10,7 @@ import {
   paneCanvasListening,
   paneQueryCandidates,
   providerPaneAliases,
+  providerPaneAliasesOf,
   resolvePaneQuery,
   resolvePaneTabQuery,
   selectDistinctProviderThreads,
@@ -278,6 +279,26 @@ describe("pane query resolution", () => {
       ["thread:codex-new", ["Codex 2"]],
       ["thread:claude-new", ["Claude Code 2", "Claude 2"]],
     ]);
+  });
+
+  it('names an agent pane by its provider ordinal ("Claude 2") for KalVoice and pane control', () => {
+    const aliases = providerPaneAliases(
+      [
+        { threadId: "claude-old", providerId: "claude-code" },
+        { threadId: "claude-new", providerId: "claude-code" },
+      ],
+      () => ({ full: "Claude Code", short: "Claude" }),
+    );
+
+    expect(providerPaneAliasesOf(aliases, { kind: "agent", agentId: "claude-new" })).toEqual([
+      "Claude Code 2",
+      "Claude 2",
+    ]);
+    expect(providerPaneAliasesOf(aliases, { kind: "thread", threadId: "claude-old" })).toEqual([
+      "Claude Code 1",
+      "Claude 1",
+    ]);
+    expect(providerPaneAliasesOf(aliases, { kind: "terminal", terminalId: "claude-old" })).toEqual([]);
   });
 
   it("prefers an exact match and rejects an ambiguous partial match without selecting a pane", () => {

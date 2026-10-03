@@ -37,6 +37,9 @@ const AUTH_FAILURE_CODES = new Set([
   "api_oauth_org_not_allowed",
   "provider_authentication_failed",
   "provider_oauth_org_not_allowed",
+  // A launch that finds the native session expired persists `not_authenticated` for that exact
+  // account (`launch_with_active_account`) and fails the agent with this code.
+  "provider_not_authenticated",
 ]);
 
 type SessionFacts = Pick<

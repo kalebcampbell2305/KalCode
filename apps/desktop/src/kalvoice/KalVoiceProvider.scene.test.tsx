@@ -10,6 +10,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { INITIAL_STATE, reduce } from "./assistantState.ts";
+import { registerDictationSink } from "./dictation.ts";
 import { KalVoiceProvider, useKalVoice } from "./KalVoiceProvider.tsx";
 import { SessionChoicePanel } from "./SessionChoicePanel.tsx";
 
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => {
   };
   const invoke = vi.fn();
   const request = vi.fn<() => Promise<KalVoiceResponse>>();
+  const talk = vi.fn();
   const client = {
     subscribeKalVoice: vi.fn().mockResolvedValue(() => undefined),
     renewKalVoiceSubscription: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +42,8 @@ const mocks = vi.hoisted(() => {
     getThread: vi.fn(),
     locatorSearch: vi.fn(),
     kalvoiceRequest: request,
+    kalvoiceTalk: talk,
+    kalvoiceListenCancel: vi.fn().mockResolvedValue(undefined),
     transport: { invoke },
   };
   const runtime = { client, feed: makeFeed() };
@@ -51,6 +55,7 @@ const mocks = vi.hoisted(() => {
     selectTerminal: vi.fn(),
     invoke,
     request,
+    talk,
     client,
     runtime,
     makeFeed,
@@ -321,7 +326,57 @@ beforeEach(() => {
   mocks.client.getThread.mockRejectedValue(new Error("Unknown thread"));
   mocks.client.locatorSearch.mockResolvedValue({ results: { items: [], nextCursor: null } });
   mocks.client.kalvoiceStatus.mockResolvedValue(null);
+  mocks.talk.mockResolvedValue({ route: "dictation", response: null, recognizedMs: 1 });
 });
+
+/** A focused Claude Code pane that receives dictation, as a provider terminal registers it. */
+function providerPane() {
+  const element = document.createElement("textarea");
+  document.body.append(element);
+  const deliver = vi.fn().mockResolvedValue(undefined);
+  const unregister = registerDictationSink(element, {
+    destination: {
+      kind: "provider_pane",
+      providerId: "claude-code",
+      providerAccountId: "claude-a",
+      threadId: "thread-pane",
+      instanceId: "thread-pane-instance",
+    },
+    label: "Claude Code",
+    deliver,
+    submit: vi.fn().mockResolvedValue(undefined),
+  });
+  return {
+    element,
+    deliver,
+    dispose: () => {
+      unregister();
+      element.remove();
+    },
+  };
+}
+
+let pttSession = 0;
+
+/** One push-to-talk utterance with whatever has focus now. */
+async function speak(text: string) {
+  const sessionId = `ptt-${++pttSession}`;
+  act(() => mocks.signal?.({ kind: "listening_started", sessionId, mode: "talk" }));
+  await act(async () =>
+    mocks.signal?.({
+      kind: "result",
+      timings: {
+        keyDownToMic: null,
+        speechToPartial: null,
+        keyUpToFinal: null,
+        finalToRecognized: null,
+        recognizedToAction: null,
+        finalSource: null,
+      },
+      result: { kind: "transcript", sessionId, mode: "talk", text, durationMs: 500 },
+    }),
+  );
+}
 
 describe("KalVoice scene integration", () => {
   it("keeps a native agent directive bound to Code when session metadata cannot be read", async () => {
@@ -753,6 +808,46 @@ describe("KalVoice scene integration", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
+  it("opens the coding agent whose turn just finished, though its pane is idle again", async () => {
+    // An agent in a Code pane goes back to idle when its turn completes; the completion event,
+    // not a "completed" status, is what makes it "the agent that just finished".
+    const earlier = { ...thread("agent-earlier", "Earlier agent", "Ready"), status: "idle" as const };
+    const finished = { ...thread("agent-finished", "Finished agent", "Ready"), status: "idle" as const };
+    const chat = { ...thread("chat-later", "Chat later", "Done"), runtimeKind: "headless" as const };
+    mocks.client.listThreads.mockResolvedValue([earlier, finished, chat]);
+    mocks.client.getThread.mockImplementation(async (id: string) => {
+      const found = [earlier, finished, chat].find((t) => t.id === id);
+      if (!found) throw new Error("Unknown thread");
+      return found;
+    });
+    await mount();
+    const complete = (seq: number, type: string, threadId: string) =>
+      act(() => {
+        mocks.runtime.feed.push({
+          id: `event-${seq}`,
+          seq,
+          version: 1,
+          occurredAt: new Date(Date.now() + seq).toISOString(),
+          source: { kind: "provider" },
+          correlation: { correlationId: `turn-${seq}`, causationId: null },
+          type,
+          payload: type === "agent.turn_completed" ? { threadId, ok: true, interrupted: false } : { threadId },
+        });
+      });
+    complete(1, "agent.turn_completed", earlier.id);
+    complete(2, "agent.turn_completed", finished.id);
+    complete(3, "thread.completed", chat.id);
+
+    await say("open the agent that just finished");
+
+    expect(mocks.focusIntent).toHaveBeenCalledExactlyOnceWith({
+      kind: "agent",
+      agentId: finished.id,
+      workspaceId: "workspace-kalcode",
+    });
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
   it("never answers an agent completion question with a chat callback", async () => {
     const chat = { ...thread("chat-finished", "Chat result", "Finished chatting"), runtimeKind: "headless" as const };
     mocks.client.getThread.mockResolvedValue(chat);
@@ -1046,5 +1141,75 @@ describe("KalVoice scene integration", () => {
 
     expect(replacement.getThread).not.toHaveBeenCalled();
     expect(mocks.request).toHaveBeenCalledTimes(1);
+  });
+
+  describe("while a dictation target has focus", () => {
+    it.each([
+      "restart the dev server",
+      "restart the API",
+      "what's running",
+      "what happened",
+      "open runs",
+      "show activity",
+      "find the login bug",
+    ])("lets native routing dictate %j to the focused pane instead of running a scene command", async (text) => {
+      // A live agent and its fresh completion callback, so every phrase has a scene to act on.
+      const login = thread("thread-login", "Login bug", "Fixed the login redirect");
+      mocks.client.listThreads.mockResolvedValue([login]);
+      mocks.client.getThread.mockResolvedValue(login);
+      const pane = providerPane();
+      try {
+        await mount();
+        await waitFor(() => expect(mocks.client.listThreads).toHaveBeenCalled());
+        lifecycle("completed", "thread", login.id);
+        act(() => pane.element.focus());
+
+        await speak(text);
+
+        await waitFor(() => expect(pane.deliver).toHaveBeenCalledWith(text, expect.any(Object)));
+        expect(mocks.talk).toHaveBeenCalledOnce();
+        expect(mocks.talk).toHaveBeenCalledWith(expect.objectContaining({ text, target: "provider_pane" }));
+        expect(mocks.invoke).not.toHaveBeenCalled();
+        expect(mocks.navigate).not.toHaveBeenCalled();
+        expect(mocks.focusOperations).not.toHaveBeenCalled();
+        expect(mocks.focusIntent).not.toHaveBeenCalled();
+        expect(mocks.client.getThread).not.toHaveBeenCalled();
+      } finally {
+        pane.dispose();
+      }
+    });
+
+    it("still answers a pending scene chooser by voice", async () => {
+      const pane = providerPane();
+      try {
+        await mount();
+        await say("restart API service");
+        expect(screen.getByText("Which API service?")).toBeInTheDocument();
+        act(() => pane.element.focus());
+
+        await speak("two");
+
+        await waitFor(() =>
+          expect(mocks.invoke).toHaveBeenCalledWith("operations_service_action", {
+            id: "service-api-b",
+            action: "restart",
+          }),
+        );
+        expect(mocks.talk).not.toHaveBeenCalled();
+        expect(pane.deliver).not.toHaveBeenCalled();
+      } finally {
+        pane.dispose();
+      }
+    });
+
+    it("keeps spoken scene routing when nothing dictatable has focus", async () => {
+      await mount();
+
+      await speak("open runs");
+
+      expect(mocks.navigate).toHaveBeenLastCalledWith("operations");
+      expect(mocks.focusOperations).toHaveBeenLastCalledWith({ kind: "tab", tab: "runs" }, expect.any(Object));
+      expect(mocks.talk).not.toHaveBeenCalled();
+    });
   });
 });

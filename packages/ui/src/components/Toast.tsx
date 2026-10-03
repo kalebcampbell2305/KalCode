@@ -58,8 +58,10 @@ function Toast({
     timer.current = null;
     remaining.current = Math.max(0, remaining.current - (performance.now() - started.current));
   }, []);
+  // The timer runs only while the toast is neither focused nor under the pointer.
+  const held = useRef({ focus: false, pointer: false });
   const resume = useCallback(() => {
-    if (!(toast.duration > 0) || timer.current !== null) return;
+    if (!(toast.duration > 0) || timer.current !== null || held.current.focus || held.current.pointer) return;
     started.current = performance.now();
     timer.current = setTimeout(() => dismiss(toast.id), remaining.current);
   }, [dismiss, toast.duration, toast.id]);
@@ -78,13 +80,24 @@ function Toast({
       className={cx(styles.toast, styles[toast.tone])}
       onFocus={() => {
         setFocused(toast.id, true);
+        held.current.focus = true;
         pause();
       }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
           setFocused(toast.id, false);
+          held.current.focus = false;
           resume();
         }
+      }}
+      onPointerEnter={(event) => {
+        if (event.pointerType === "touch") return;
+        held.current.pointer = true;
+        pause();
+      }}
+      onPointerLeave={() => {
+        held.current.pointer = false;
+        resume();
       }}
     >
       <span className={styles.icon} aria-hidden="true">

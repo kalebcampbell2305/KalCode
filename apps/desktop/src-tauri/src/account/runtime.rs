@@ -117,8 +117,13 @@ pub(crate) struct KalVoiceAuthority {
 }
 
 pub(crate) enum KalVoiceRecord {
-    Confirmed { allowed: bool },
+    Confirmed {
+        allowed: bool,
+    },
     Unavailable,
+    /// The service never counted the request: KalCode refused before sending it (lost account
+    /// authority, no session), or the service rejected it outright (HTTP 4xx other than 429).
+    Refused(AccountRuntimeError),
 }
 
 impl AuthorityLease {
@@ -1128,6 +1133,8 @@ impl AccountRuntime {
 
     /// A single bounded idempotent metering call. Unknown transport outcomes remain caller-owned
     /// durable pending claims; invalid receipts and lost account authority never grant execution.
+    /// A request that was never counted (refused before sending, or a definitive 4xx) is
+    /// [`KalVoiceRecord::Refused`]; an outcome KalCode can't know stays an error.
     pub(crate) fn record_kalvoice(
         &self,
         lease: &AuthorityLease,
@@ -1135,17 +1142,22 @@ impl AccountRuntime {
         offline: bool,
     ) -> Result<KalVoiceRecord, AccountRuntimeError> {
         if !kalcode_contracts::ids::is_valid_id(request_id) || !self.validate_active_lease(lease) {
-            return Err(authentication_required());
+            return Ok(KalVoiceRecord::Refused(authentication_required()));
         }
         let _lane = match self.request_lane.try_lock() {
             Ok(lane) => lane,
             Err(std::sync::TryLockError::WouldBlock) => return Ok(KalVoiceRecord::Unavailable),
-            Err(std::sync::TryLockError::Poisoned(_)) => return Err(authentication_required()),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Ok(KalVoiceRecord::Refused(authentication_required()));
+            }
         };
         if !self.validate_active_lease(lease) {
-            return Err(authentication_required());
+            return Ok(KalVoiceRecord::Refused(authentication_required()));
         }
-        let token = self.session_token()?;
+        let token = match self.session_token() {
+            Ok(token) => token,
+            Err(error) => return Ok(KalVoiceRecord::Refused(error)),
+        };
         let result = self.api.record_kalvoice(&token, request_id, offline);
         let _effect = self.lock_generation_effect();
         if !self.validate_active_lease(lease) {
@@ -1163,6 +1175,11 @@ impl AccountRuntime {
                 status: 429 | 500..=599,
                 ..
             }) => Ok(KalVoiceRecord::Unavailable),
+            Err(
+                error @ ApiError::Http {
+                    status: 400..=499, ..
+                },
+            ) => Ok(KalVoiceRecord::Refused(api_error(error))),
             Err(error) => Err(api_error(error)),
         }
     }
