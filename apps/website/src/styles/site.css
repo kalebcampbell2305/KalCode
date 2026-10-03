@@ -573,6 +573,12 @@ html[data-os="linux"] .platform[data-os="linux"] {
     grid-row: 1 / span 3;
     align-self: center;
   }
+
+  /* Notes and the terms line stack under the details instead of auto-filling the action column,
+     where notes of different heights sat side by side, centred against each other. */
+  .platform[data-state="available"] > :not(.platform__action) {
+    grid-column: 1;
+  }
 }
 
 .expect {

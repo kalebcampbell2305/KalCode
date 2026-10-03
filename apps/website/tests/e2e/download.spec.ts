@@ -102,4 +102,16 @@ test.describe("download page", () => {
     await page.goto(notes.pathname);
     await expect(page.locator(notes.hash)).toBeVisible();
   });
+
+  test("on desktop, every note stacks under the build details, clear of the download button", async ({ page }) => {
+    test.skip(RELEASES.latest === null, "no published release, so there are no build notes");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/download");
+    for (const platform of await page.locator('.platform[data-state="available"]').all()) {
+      const details = await platform.locator(".platform__meta").boundingBox();
+      for (const note of await platform.locator(".platform__note").all()) {
+        expect((await note.boundingBox())?.x, "note starts in the details column").toBe(details?.x);
+      }
+    }
+  });
 });
