@@ -791,10 +791,67 @@
 
 /* ---------- Empty state and recents ---------- */
 
+.codeLanding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.codeWelcome {
+  padding: var(--space-7);
+  background: linear-gradient(120deg, var(--color-accent-soft), transparent 42%), var(--color-bg-sunken);
+}
+
 .emptyArt {
-  width: 1.75rem;
-  height: 1.75rem;
-  stroke-width: 1.5;
+  width: 1.5rem;
+  height: 1.5rem;
+  stroke-width: 1.6;
+}
+
+.entryFeatures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: min(100%, 32rem);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid var(--color-border-subtle);
+  list-style: none;
+}
+
+.entryFeatures li {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.entryFeatures svg {
+  width: 1rem;
+  height: 1rem;
+  margin: 0.125rem 0 0 0.125rem;
+  color: var(--color-accent-icy);
+  stroke-width: 1.6;
+}
+
+.entryFeatures span {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.entryFeatures strong {
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+}
+
+.entryFeatures small {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  line-height: var(--leading-relaxed);
 }
 
 .recentList {
@@ -809,7 +866,7 @@
 
 .recentRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: 2rem minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--space-4);
   min-height: var(--row-h);
@@ -825,6 +882,26 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.recentGlyph {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+}
+
+.recentGlyph svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 1.6;
+}
+
+.recentRow[data-available="true"] .recentGlyph {
+  color: var(--color-accent-text);
 }
 
 .recentName {
@@ -859,4 +936,19 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+/* The landing sits outside the pane canvas, so it adapts to the window. */
+@media (max-width: 44rem) {
+  .codeWelcome {
+    padding: var(--space-5);
+  }
+
+  .recentRow {
+    gap: var(--space-2);
+  }
+
+  .recentTime {
+    display: none;
+  }
 }

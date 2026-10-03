@@ -384,6 +384,11 @@
 }
 
 @container pane (max-width: 13rem) {
+  /* The actions menu retains Close; keep input controls usable in dense layouts. */
+  .closePane {
+    display: none;
+  }
+
   .tab:not([aria-selected="true"]) {
     display: none;
   }

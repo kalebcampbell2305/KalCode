@@ -137,6 +137,8 @@ export type CommandName =
   | "terminal_restart"
   | "terminal_close"
   | "terminal_write"
+  | "terminal_image_import"
+  | "terminal_image_discard"
   | "terminal_resize"
   | "terminal_attach"
   | "terminal_detach"

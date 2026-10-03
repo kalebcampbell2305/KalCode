@@ -2783,6 +2783,7 @@ dependencies = [
  "libc",
  "objc2",
  "objc2-app-kit",
+ "png 0.18.1",
  "reqwest 0.12.28",
  "semver",
  "serde",

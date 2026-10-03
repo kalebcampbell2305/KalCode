@@ -305,6 +305,67 @@ describe("dictation insertion", () => {
     expect(writes).toEqual(["typed first"]);
   });
 
+  it("keeps an exact-target writer ordered without batching it into neighboring guarded input", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const writes: string[] = [];
+    const queue = createOrderedInputQueue(
+      async (text) => {
+        writes.push(`keyboard:${text}`);
+        if (writes.length === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+      },
+      undefined,
+      async (text) => {
+        writes.push(`guarded:${text}`);
+      },
+    );
+    queue.send("typed first");
+    await Promise.resolve();
+    const dictated = queue.deliver("dictated");
+    const exact = queue.deliver("image-path", undefined, undefined, async (text) => {
+      writes.push(`exact:${text}`);
+    });
+    releaseFirst?.();
+
+    await Promise.all([dictated, exact]);
+    expect(writes).toEqual(["keyboard:typed first", "guarded:dictated", "exact:image-path"]);
+  });
+
+  it("does not write a later local-batch group after the destination closes", async () => {
+    let releaseInitial: (() => void) | undefined;
+    let releaseGuarded: (() => void) | undefined;
+    let guardedStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      guardedStarted = resolve;
+    });
+    const writes: string[] = [];
+    const queue = createOrderedInputQueue(
+      async (text) => {
+        writes.push(`keyboard:${text}`);
+        await new Promise<void>((resolve) => (releaseInitial = resolve));
+      },
+      undefined,
+      async (text) => {
+        writes.push(`guarded:${text}`);
+        guardedStarted?.();
+        await new Promise<void>((resolve) => (releaseGuarded = resolve));
+      },
+    );
+    queue.send("initial");
+    await Promise.resolve();
+    const first = queue.deliver("first");
+    const stale = queue.deliver("stale", undefined, undefined, async (text) => {
+      writes.push(`exact:${text}`);
+    });
+    releaseInitial?.();
+    await started;
+    queue.dispose();
+    releaseGuarded?.();
+
+    await expect(first).resolves.toBeUndefined();
+    await expect(stale).rejects.toMatchObject({ code: "target_closed" });
+    expect(writes).toEqual(["keyboard:initial", "guarded:first"]);
+  });
+
   it("strips every terminal control and bracketed-paste wrapper from dictated shell text", () => {
     expect(sanitizeTerminalDictation("echo safe\r\nwhoami\u001b[200~\u001b]9;notify\u0007\u001b[201~\t now")).toBe(
       "echo safe whoami now",

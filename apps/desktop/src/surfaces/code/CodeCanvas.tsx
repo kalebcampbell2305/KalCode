@@ -96,7 +96,9 @@ import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
 import { CODE_SHORTCUT_LABELS } from "./shortcuts.ts";
+import { TerminalImageButton } from "./TerminalImageButton.tsx";
 import { TerminalView } from "./TerminalView.tsx";
+import { terminalImageTargetKey } from "./terminalImages.ts";
 
 /** How long an agent pane waits for its terminal before offering Retry. */
 const RETRY_AFTER_MS = 4000;
@@ -735,6 +737,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           statusText: describeTerminalStatus(terminal),
           terminal: true,
           running,
+          actions: running ? (
+            <TerminalImageButton targetKey={terminalImageTargetKey("terminal", terminal.id)} />
+          ) : undefined,
           stop: running ? { label: "End terminal", run: () => closeTerminalTab(terminal.id) } : undefined,
           onClose: () => closeTerminalTab(terminal.id),
         };
@@ -751,6 +756,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           statusText: `${entry.thread.providerName}${account ? ` · ${paneAccountLabel(account)}` : ""} · ${status.label}`,
           terminal: true,
           running: entry.info?.running ?? false,
+          actions:
+            entry.info?.running && entry.info.instanceId ? (
+              <TerminalImageButton targetKey={terminalImageTargetKey("agent", entry.thread.id)} />
+            ) : undefined,
           // Closing the tab stops the agent and takes the pane thread out of the layout.
           onClose: () => {
             void stopAgent(entry.thread.id);

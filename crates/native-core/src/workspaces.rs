@@ -1428,6 +1428,17 @@ impl Core {
 
     /// Sends input to a running shell.
     pub fn write_terminal(&self, id: &str, data: &[u8]) -> Result<()> {
+        self.write_terminal_for_generation(id, data, None)
+    }
+
+    /// A delayed paste is bound to the session that accepted its attachment. Looking up and
+    /// cloning the exact session under the registry lock prevents a restart from redirecting it.
+    pub fn write_terminal_for_generation(
+        &self,
+        id: &str,
+        data: &[u8],
+        expected_generation: Option<u64>,
+    ) -> Result<()> {
         validate_id(id)?;
         if data.len() > MAX_WRITE_BYTES {
             return Err(KalError::validation(
@@ -1435,10 +1446,17 @@ impl Core {
                 "That input is too large to send to the terminal.",
             ));
         }
-        let session = self
-            .terminal_registry()
-            .session(id)
-            .ok_or_else(not_running)?;
+        let session = {
+            let sessions = lock(&self.terminal_registry().sessions);
+            let (generation, session) = sessions.get(id).ok_or_else(not_running)?;
+            if expected_generation.is_some_and(|expected| expected != *generation) {
+                return Err(KalError::validation(
+                    "terminal_image_target_changed",
+                    "This terminal restarted. Choose the image again.",
+                ));
+            }
+            session.clone()
+        };
         session.write(data).map_err(|e| match e {
             kalcode_pty::PtyError::Exited => not_running(),
             kalcode_pty::PtyError::Busy => KalError::new(
