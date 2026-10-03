@@ -64,7 +64,10 @@ beforeEach(() => {
     },
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 function mount(health: ProviderHealth[] | null = null) {
   return render(
@@ -239,6 +242,9 @@ describe("account rows", () => {
     useTransport({
       accounts: [account("a", "codex", "Personal", { isDefault: true }), account("b", "codex", "Work")],
     });
+    // Local midday, so "now + 15 min" never crosses midnight into the dated format.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 3, 12, 0, 0));
     const backoffUntil = new Date(Date.now() + 15 * 60_000).toISOString();
     const codexHealth = {
       providerId: "codex",
