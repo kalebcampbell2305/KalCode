@@ -129,9 +129,10 @@ test.describe("provider panes", () => {
     );
     await expect(region.locator("[data-pane-account]")).toContainText("Personal");
     await expect(region.locator("[data-pane-model]"), "an unknown model shows nothing").toHaveCount(0);
-    // Fresh panes start in Auto (the canonical start mode); the header always names the mode.
+    // The header always names the mode the pane runs in. Which start mode is canonical (Auto or
+    // Bypass) is owned and asserted by the permissions specs, not by the header.
     await expect(region.locator("[data-pane-mode]")).toBeVisible();
-    await expect(region.locator("[data-pane-mode]")).toHaveText("Permission mode Auto");
+    await expect(region.locator("[data-pane-mode]")).toHaveText(/^Permission mode (Auto|Bypass)$/);
 
     await typeInPane(page, "run npm test");
     await expect(paneText(page)).toContainText("RAN Bash");
