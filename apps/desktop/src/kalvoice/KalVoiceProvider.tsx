@@ -815,7 +815,12 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [sceneChoice, dismissSceneChoice]);
 
   const routeScene = useCallback(
-    async (text: string, requestScope: RequestScope): Promise<boolean> => {
+    /**
+     * Handles a scene command in the UI. With `dictating` (a live text box or terminal holds the
+     * dictation target) only an answer to a pending scene chooser counts: native routing decides
+     * whether everything else is dictated, as it does for its own low-confidence commands.
+     */
+    async (text: string, requestScope: RequestScope, dictating = false): Promise<boolean> => {
       if (requestScope.signal.aborted) return true;
       const signal = combineAbortSignals([requestScope.signal, sceneLifetime.current.signal]);
       const scope: RequestScope = {
@@ -830,7 +835,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const callback = lastLifecycle.current;
       const callbackFollowup =
         /^(?:(?:open|show|focus) (?:it|that)|what did (?:it|that|the agent) do|what happened)$/.test(spoken);
-      const liveCallback = callback && callback.expiresAt > Date.now() && callbackFollowup ? callback : null;
+      const liveCallback =
+        !dictating && callback && callback.expiresAt > Date.now() && callbackFollowup ? callback : null;
       if (liveCallback?.targetKind === "operation") {
         const detail = await operationsClient.detail(liveCallback.targetId).catch(() => null);
         if (signal.aborted) return true;
@@ -874,8 +880,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         statusRef.current.status?.preferences.voiceReplies;
       const recentCompletion = completed && Date.now() - completed.at < 120_000 ? completed.threadId : null;
       const summaryQuery = /^(?:what did (?:it|that|the agent) do|what happened)$/.test(spoken);
-      const threadToDescribe =
-        liveCallback?.targetKind === "thread"
+      const threadToDescribe = dictating
+        ? null
+        : liveCallback?.targetKind === "thread"
           ? liveCallback.targetId
           : completionQuery || completionFollowup
             ? recentCompletion
@@ -948,6 +955,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         }
         dismissSceneChoice();
       }
+      if (dictating) return false;
       const deps = {
         client: operationsClient,
         navigate: () => navigate("operations"),
@@ -1201,7 +1209,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           recordAction();
           return;
         }
-        if (await routeScene(text, scope)) {
+        if (await routeScene(text, scope, target !== null && targetIsAlive(target))) {
           recordAction();
           return;
         }
