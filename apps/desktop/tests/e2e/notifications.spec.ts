@@ -97,8 +97,9 @@ test("a pane's permission request and completion reach the notification center, 
     await expectPaneText(page, FAKE_BANNER, 30_000); // safety gate: the fake, not a real provider
     await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
 
-    // Approve mode asks before a build command: a native notification is raised.
-    await typeInPane(page, "run cargo build");
+    // Bypass runs routine coding without prompts, but credential access still asks.
+    await expect(pane(page).locator("[data-pane-mode]")).toHaveAttribute("data-pane-mode", "bypass");
+    await typeInPane(page, "run printenv");
     await expect(pane(page).locator("[data-pane-status]")).toContainText("PERMISSION REQUIRED", { timeout: 30_000 });
     await expect(bell(page)).toHaveAccessibleName("Notifications, 1 unread", { timeout: 15_000 });
 
@@ -131,7 +132,7 @@ test("a pane's permission request and completion reach the notification center, 
     await expect(bell(page)).toHaveAccessibleName("Notifications, 1 unread", { timeout: 15_000 });
 
     await nav(page, "Dashboard").click();
-    await expect(board.getByRole("article").first().getByText("Completed", { exact: true })).toBeVisible({
+    await expect(board.getByRole("article").first().getByText("Done", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     await shot(page, "e2e-dashboard-done");

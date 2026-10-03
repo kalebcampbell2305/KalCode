@@ -203,7 +203,7 @@ export function writeManagedFakeProviderConfig(binDir: string): void {
     `${JSON.stringify({
       versions: {
         claude: "2.1.282 (Claude Code)",
-        codex: "codex-cli 0.155.1",
+        codex: "codex-cli 0.160.0",
         gemini: "0.61.0",
       },
     })}\n`,
