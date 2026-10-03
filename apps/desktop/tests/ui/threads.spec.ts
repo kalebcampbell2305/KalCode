@@ -78,16 +78,13 @@ test.describe("threads", () => {
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByRole("heading", { name: "New thread" })).toBeVisible();
 
-    // Defaults: first provider, provider's default model, first workspace, Auto (the trusted coding
-    // default since #125: workspace work runs, real security boundaries and external effects ask).
+    // Defaults: first provider, its sole account and default model, first workspace, Auto.
     await expect(form.getByLabel("Provider")).toHaveValue("claude-code");
-    await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000101");
+    await expect(form.getByRole("combobox", { name: "Account" })).toHaveCount(0);
+    await expect(form.getByText(/^Personal(?: · Default)?$/)).toBeVisible();
     await expect(form.getByLabel("Model")).toHaveValue("");
     await expect(form.getByRole("radio", { name: "Auto" })).toBeChecked();
-    await expect(form.getByRole("radio", { name: "Approve" })).not.toBeChecked();
-    await expect(
-      form.getByText(/^Recommended for everyday coding\..*real security boundaries and external effects still ask\.$/),
-    ).toBeVisible();
+    await expect(form.getByText(/Recommended for everyday coding/)).toBeVisible();
     await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
 
     await form.getByLabel("Model").selectOption("opus");
@@ -132,10 +129,7 @@ test.describe("threads", () => {
     ]);
     await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
     await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
-    // The note names what Codex enforces in the default mode, Auto.
-    await expect(
-      form.getByText(/With Codex: Workspace writes run without approval prompts inside Codex's native sandbox/),
-    ).toBeVisible();
+    await expect(form.getByText(/With Codex: Workspace writes run without approval prompts/)).toBeVisible();
 
     await form.getByLabel("Provider").selectOption("gemini-cli");
     await expect(form.getByLabel("Model").locator("option")).toHaveText([
@@ -145,12 +139,7 @@ test.describe("threads", () => {
       "Flash",
       "Flash-Lite",
     ]);
-    await expect(
-      form.getByText(/With Gemini CLI: File edits are approved automatically; shell commands and other tools still/),
-    ).toBeVisible();
-    // Switching the mode switches the provider's note with it.
-    await form.getByRole("radio", { name: "Approve" }).click();
-    await expect(form.getByText(/With Gemini CLI: Tool calls that need confirmation/)).toBeVisible();
+    await expect(form.getByText(/With Gemini CLI: File edits are approved automatically/)).toBeVisible();
 
     // A Codex thread runs like any other.
     await form.getByLabel("Provider").selectOption("codex");
@@ -234,20 +223,29 @@ test.describe("threads", () => {
     await expect(page.getByRole("heading", { name: "Open a project folder" })).toBeVisible();
   });
 
-  test("without a managed account, thread creation fails closed and links to Accounts", async ({ page }) => {
+  test("without a managed account, one is added and signed in inside the thread form", async ({ page }) => {
     await page.goto("/?scenario=provider-accounts-empty");
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await openFolders(page, "kalcode");
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
-    await expect(form.getByLabel("Account", { exact: true })).toBeDisabled();
-    await expect(form.getByText("Add a managed account before starting this provider.")).toBeVisible();
+    await expect(form.getByRole("combobox", { name: "Account" })).toHaveCount(0);
+    await expect(form.getByText("No Claude Code account added yet")).toBeVisible();
     await form.getByLabel("Task").fill("Do not launch without an isolated account");
     await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
-    await form.getByRole("button", { name: "Manage accounts" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
+    await form.getByLabel("Account name").fill("Personal");
+    await form.getByRole("button", { name: "Add Claude Code account" }).click();
+    await expect(form.getByLabel("Task")).toHaveValue("Do not launch without an isolated account");
+    await expect(form.getByText(/^Personal(?: · Default)?$/)).toBeVisible();
+    await expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled();
+    await form.getByRole("button", { name: "Start thread" }).click();
+    await expect(
+      detail(page)
+        .getByText(/Claude Code.*Personal/)
+        .first(),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toHaveCount(0);
   });
 
   test("interrupt stops a slow turn and keeps what was written", async ({ page }) => {

@@ -32,9 +32,13 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
+import { preselectLaunchAccount } from "../code/panes/agentLaunch.ts";
+import { PANE_PROVIDERS } from "../code/panes/paneChannel.ts";
+import { providerIdentity } from "../code/panes/paneLabels.ts";
 import { MODE_LABELS, startModeFor, usePermissions } from "../permissions/index.ts";
-import { accountName, accountSignIn, sortAccounts } from "../providers/accountIdentity.ts";
-import { openProviderAccounts } from "../providers/providersTab.ts";
+import { accountName, sortAccounts } from "../providers/accountIdentity.ts";
+import { LaunchAccountPicker } from "../providers/LaunchAccountPicker.tsx";
+import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import type { NewThreadPrefill } from "./intent.tsx";
 import { PERMISSION_MODES, providerModeNote, type UnavailableProvider, unavailableProviders } from "./model.ts";
 import styles from "./NewThread.module.css";
@@ -51,32 +55,91 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const { client } = useRuntime();
   const { navigate } = useNavigation();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
-  const [accounts, setAccounts] = useState<ProviderAccount[] | null>(null);
+  const sessions = useOptionalProviderAccountSessions();
+  const sharedSessions = sessions !== null;
+  const [localAccounts, setAccounts] = useState<ProviderAccount[] | null>(null);
+  const accounts = sessions ? sessions.accounts : localAccounts;
+  const activeWorkspaceId = useWorkspaces().active?.id ?? "";
+  const [earlyProvider, setEarlyProvider] = useState(prefill?.providerId ?? "claude-code");
+  const [earlyAccount, setEarlyAccount] = useState(prefill?.providerAccountId ?? "");
+  const [earlySigningIn, setEarlySigningIn] = useState(false);
+  const [bindingsReady, setBindingsReady] = useState(false);
   const [bindings, setBindings] = useState<ProviderAccountBinding[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableProvider[]>([]);
   const [loadError, setLoadError] = useState<KalCodeError | null>(null);
 
   const load = useCallback(() => {
     setLoadError(null);
-    // Workspace defaults are read with the accounts: if they can't load, the form doesn't guess a
-    // different account; it shows the error instead.
-    Promise.all([
-      client.threadOptions(),
-      client.listProviderAccounts(),
-      client.listProviderAccountBindings({ kind: "workspace" }),
-    ])
-      .then(async ([next, providerAccounts, workspaceBindings]) => {
-        // `thread_options` runs provider detection first when it hasn't run yet, so the cached
-        // statuses explain every provider that isn't offered.
-        const statuses: ProviderStatus[] = await client.listProviders().catch(() => []);
-        setUnavailable(unavailableProviders(statuses, new Set(next.providers.map((p) => p.id))));
-        setAccounts(providerAccounts);
-        setBindings(workspaceBindings);
-        setOptions(next);
+    if (!sharedSessions)
+      client
+        .listProviderAccounts()
+        .then(setAccounts)
+        .catch((error) => setLoadError(toKalCodeError(error)));
+    // Local accounts are selectable while provider/model detection is still running.
+    client
+      .listProviderAccountBindings({ kind: "workspace" })
+      .then((next) => {
+        setBindings(next);
+        setBindingsReady(true);
       })
       .catch((error) => setLoadError(toKalCodeError(error)));
-  }, [client]);
+    client
+      .threadOptions()
+      .then((next) => {
+        setOptions(next);
+        void client
+          .listProviders()
+          .then((statuses: ProviderStatus[]) => {
+            setUnavailable(unavailableProviders(statuses, new Set(next.providers.map((p) => p.id))));
+          })
+          .catch(() => undefined);
+      })
+      .catch((error) => setLoadError(toKalCodeError(error)));
+  }, [client, sharedSessions]);
   useEffect(load, [load]);
+  const reloadAccounts = async () => {
+    if (sessions) await sessions.reload();
+    else setAccounts(await client.listProviderAccounts());
+    // A ready form keeps its draft and choices. Account recovery doesn't need another
+    // provider/model probe; only an unavailable provider needs options rediscovery.
+    if (!options || options.providers.length === 0) load();
+  };
+  const earlySelected = accounts?.some(
+    (a) => a.id === earlyAccount && a.providerId === earlyProvider && a.archivedAt === null,
+  )
+    ? earlyAccount
+    : preselectLaunchAccount(accounts ?? [], bindings, earlyProvider, prefill?.workspaceId ?? activeWorkspaceId);
+  const earlyPicker = (
+    <div className={styles.loading}>
+      <Field htmlFor="new-thread-provider" label="Provider">
+        <Select
+          id="new-thread-provider"
+          value={earlyProvider}
+          disabled={earlySigningIn}
+          onChange={(event) => {
+            setEarlyProvider(event.target.value);
+            setEarlyAccount("");
+          }}
+        >
+          {PANE_PROVIDERS.map((providerId) => (
+            <option key={providerId} value={providerId}>
+              {providerIdentity(providerId).name}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <LaunchAccountPicker
+        providerId={earlyProvider}
+        providerName={providerIdentity(earlyProvider).name}
+        accounts={accounts}
+        value={earlySelected}
+        onChange={setEarlyAccount}
+        onReload={reloadAccounts}
+        error={sessions?.loadError}
+        onBusyChange={setEarlySigningIn}
+      />
+    </div>
+  );
 
   return (
     <div className={styles.pane}>
@@ -86,6 +149,9 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
           <h2 className={styles.title}>New thread</h2>
           <p className={styles.description}>Give a provider a task in one of your workspaces.</p>
         </header>
+        {!options || !accounts || !bindingsReady || earlySigningIn || options.providers.length === 0
+          ? earlyPicker
+          : null}
         {loadError ? (
           <ErrorState
             title="Thread options couldn't load"
@@ -101,9 +167,11 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
           >
             <p>{loadError.message}</p>
           </ErrorState>
-        ) : !options || !accounts ? (
-          <div className={styles.loading} role="status" aria-busy="true">
-            <span className="visually-hidden">Loading providers and workspaces</span>
+        ) : !options || !accounts || !bindingsReady || earlySigningIn ? (
+          <div className={styles.loading}>
+            <span role="status">
+              {earlySigningIn ? "Finish signing in to continue." : "Loading models and workspaces…"}
+            </span>
             <Skeleton width="50%" />
             <Skeleton width="65%" />
             <Skeleton width="40%" />
@@ -114,7 +182,10 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
             title="No provider is ready for threads"
             actions={
               <>
-                <Button onClick={() => navigate("providers")}>Go to Providers</Button>
+                <Button onClick={load}>Check again</Button>
+                <Button variant="ghost" onClick={() => navigate("providers")}>
+                  Go to Providers
+                </Button>
                 <Button variant="ghost" onClick={onCancel}>
                   Back to threads
                 </Button>
@@ -126,7 +197,7 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
               {unavailable.length > 0
                 ? "Install one of the providers below or sign in to it"
                 : "Install one or sign in"}
-              , then check again on the Providers page.
+              , then check again here.
             </p>
             <ProviderAvailability providers={unavailable} />
           </EmptyState>
@@ -153,7 +224,13 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
             unavailable={unavailable}
             onCreated={onCreated}
             onCancel={onCancel}
-            {...(prefill ? { prefill } : {})}
+            onReloadAccounts={reloadAccounts}
+            prefill={{
+              ...prefill,
+              providerId: earlyProvider,
+              providerAccountId: earlyAccount || null,
+              workspaceId: prefill?.workspaceId ?? null,
+            }}
           />
         )}
       </div>
@@ -185,7 +262,9 @@ function NewThreadForm({
   onCreated,
   onCancel,
   prefill,
+  onReloadAccounts,
 }: {
+  onReloadAccounts: () => Promise<unknown>;
   options: ThreadOptions;
   accounts: readonly ProviderAccount[];
   bindings: readonly ProviderAccountBinding[];
@@ -193,7 +272,6 @@ function NewThreadForm({
 } & NewThreadProps) {
   const { client } = useRuntime();
   const account = useAccount();
-  const { navigate } = useNavigation();
   const toast = useToast();
   const id = useId();
   // New threads start in the active workspace (the one the rail and Code show), when it can run one.
@@ -213,7 +291,7 @@ function NewThreadForm({
       ? activeWorkspaceId
       : (options.workspaces[0]?.id ?? "");
   const [providerId, setProviderId] = useState(initialProvider);
-  const [providerAccountId, setProviderAccountId] = useState(() => {
+  const [chosenAccountId, setProviderAccountId] = useState(() => {
     const asked = prefill?.providerAccountId;
     if (asked && accounts.some((a) => a.id === asked && a.providerId === initialProvider)) return asked;
     return preselectAccount(accounts, bindings, initialProvider, initialWorkspace);
@@ -242,7 +320,12 @@ function NewThreadForm({
   const taskRef = useRef<HTMLTextAreaElement>(null);
 
   const provider = options.providers.find((p) => p.id === providerId);
-  const providerAccounts = sortAccounts(accounts.filter((account) => account.providerId === providerId));
+  const providerAccounts = sortAccounts(
+    accounts.filter((account) => account.providerId === providerId && account.archivedAt === null),
+  );
+  const providerAccountId = providerAccounts.some((account) => account.id === chosenAccountId)
+    ? chosenAccountId
+    : preselectLaunchAccount(accounts, bindings, providerId, workspaceId);
   const providerAccount = providerAccounts.find((account) => account.id === providerAccountId);
   const workspaceBinding = bindingFor(bindings, providerId, workspaceId);
   const accountReady = providerAccount != null && providerAccount.authenticationState !== "not_authenticated";
@@ -406,45 +489,19 @@ function NewThreadForm({
                 ))}
               </Select>
             </Field>
-            <Field
-              htmlFor={`${id}-account`}
-              label="Account"
-              hint={
-                providerAccounts.length === 0 ? (
-                  "Add a managed account before starting this provider."
-                ) : (
-                  <>
-                    {providerAccount ? (
-                      <span className={styles.accountSource}>
-                        {sourceText(providerAccount, workspaceBinding, workspace?.name)}
-                      </span>
-                    ) : null}{" "}
-                    {providerAccount?.authenticationState === "not_authenticated"
-                      ? "Sign in to this account under Providers before starting."
-                      : "This exact isolated provider profile will run the thread."}
-                  </>
-                )
-              }
-            >
-              <Select
-                id={`${id}-account`}
-                value={providerAccountId}
-                onChange={(event) => {
-                  confirmation.cancel();
-                  setProviderAccountId(event.target.value);
-                }}
-                aria-describedby={`${id}-account-hint`}
-                disabled={providerAccounts.length === 0}
-                required
-              >
-                {providerAccounts.length === 0 ? <option value="">No account added</option> : null}
-                {providerAccounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {accountOption(account)}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            <LaunchAccountPicker
+              providerId={providerId}
+              providerName={provider?.displayName ?? providerId}
+              accounts={accounts}
+              value={providerAccountId}
+              onChange={(next) => {
+                confirmation.cancel();
+                setProviderAccountId(next);
+              }}
+              onReload={onReloadAccounts}
+              disabled={confirmation.busy}
+              hint={providerAccount ? sourceText(providerAccount, workspaceBinding, workspace?.name) : undefined}
+            />
             <Field htmlFor={`${id}-model`} label="Model">
               <Select
                 id={`${id}-model`}
@@ -463,26 +520,6 @@ function NewThreadForm({
               </Select>
             </Field>
           </div>
-          {!accountReady ? (
-            <div className={styles.accountNotice} role="status">
-              <span>
-                {providerAccounts.length === 0
-                  ? `Add a ${provider?.displayName ?? "provider"} account before starting this thread.`
-                  : `${providerAccount ? accountName(providerAccount) : "This account"} is signed out.`}
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  // Opens this provider's section; with no account yet, its connect form too.
-                  openProviderAccounts({ providerId, connect: providerAccounts.length === 0 });
-                  navigate("providers");
-                }}
-              >
-                Manage accounts
-              </Button>
-            </div>
-          ) : null}
           <ProviderAvailability providers={unavailable} />
         </div>
 
@@ -651,10 +688,7 @@ function preselectAccount(
   providerId: string,
   workspaceId: string,
 ): string {
-  const candidates = accounts.filter((account) => account.providerId === providerId);
-  const bound = bindingFor(bindings, providerId, workspaceId);
-  if (bound && candidates.some((account) => account.id === bound.accountId)) return bound.accountId;
-  return candidates.find((account) => account.isDefault)?.id ?? candidates[0]?.id ?? "";
+  return preselectLaunchAccount(accounts, bindings, providerId, workspaceId);
 }
 
 /** Why this account is selected, in words: the workspace's default, the provider default, or a pick. */
@@ -666,14 +700,6 @@ function sourceText(
   if (binding?.accountId === account.id) return `Workspace default for ${workspaceName ?? "this workspace"}.`;
   if (account.isDefault) return "Default account.";
   return "Chosen for this thread.";
-}
-
-/** "Work", "Work · Default", "Work · Signed out": the name, the default marker, then any sign-in caveat. */
-function accountOption(account: ProviderAccount): string {
-  const parts = [accountName(account)];
-  if (account.isDefault) parts.push("Default");
-  if (account.authenticationState !== "authenticated") parts.push(accountSignIn(account).label);
-  return parts.join(" · ");
 }
 
 /** Whether a workspace folder is in a Git repository (null while checking or when unknown). */

@@ -111,6 +111,121 @@ const remember = (form: ReturnType<typeof within>) =>
   form.getByRole("checkbox", { name: "Remember these accounts for this workspace" });
 
 describe("New thread account defaults (Stable)", () => {
+  it("keeps an in-progress inline sign-in alive when thread options finish loading", async () => {
+    const h = await mountStable(async ({ client, claudeWork }) => {
+      await client.logoutClaudeAccount(claudeWork);
+    });
+    let finishOptions!: (value: unknown) => void;
+    let finishLogin!: () => void;
+    const pendingOptions = new Promise((resolve) => {
+      finishOptions = resolve;
+    });
+    intercept = (command, args) => {
+      if (command === "thread_options") return pendingOptions;
+      if (command === "provider_claude_login_wait")
+        return new Promise((resolve) => {
+          finishLogin = () => {
+            void h.raw(command, args).then(resolve);
+          };
+        });
+      return null;
+    };
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    await h.user.click(form.getByRole("button", { name: "Sign in to Work" }));
+    await form.findByRole("button", { name: "Cancel sign-in" });
+    await act(async () => {
+      finishOptions(await h.raw("thread_options"));
+    });
+    expect(h.calls.some((call) => call.command === "provider_claude_login_cancel")).toBe(false);
+    await act(async () => {
+      finishLogin();
+    });
+    await form.findByRole("textbox", { name: "Task" });
+    expect(account(form)).toHaveValue(h.claudeWork);
+  });
+
+  it("preserves the draft when signing in without reloading unrelated thread options", async () => {
+    const h = await mountStable(async ({ client, claudeWork }) => {
+      await client.logoutClaudeAccount(claudeWork);
+    });
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep this draft through recovery");
+    intercept = (command) =>
+      command === "thread_options"
+        ? Promise.reject({ category: "internal", code: "options_unavailable", message: "Options unavailable" })
+        : null;
+    await h.user.click(form.getByRole("button", { name: "Sign in to Work" }));
+    await waitFor(() => expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled());
+    expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep this draft through recovery");
+    expect(account(form)).toHaveValue(h.claudeWork);
+  });
+
+  it("signs in the selected account in place and keeps the draft", async () => {
+    const h = await mountStable(async ({ client, claudeWork }) => {
+      await client.logoutClaudeAccount(claudeWork);
+    });
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Keep this draft");
+    expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
+    await h.user.click(form.getByRole("button", { name: "Sign in to Work" }));
+    await waitFor(() => expect(form.getByRole("button", { name: "Start thread" })).toBeEnabled());
+    expect(form.getByRole("textbox", { name: "Task" })).toHaveValue("Keep this draft");
+    expect(account(form)).toHaveValue(h.claudeWork);
+    expect(h.calls.some((call) => call.command === "provider_claude_login_start")).toBe(true);
+  });
+
+  it("adds and signs in an account without leaving a new thread", async () => {
+    const h = await mountStable(async ({ client, claudeWork }) => {
+      await client.archiveProviderAccount(claudeWork);
+      await client.archiveProviderAccount(CLAUDE_PERSONAL);
+    });
+    await h.user.click(
+      within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Threads" }),
+    );
+    await h.user.click(screen.getAllByRole("button", { name: "New thread" })[0] as HTMLElement);
+    const form = within(await screen.findByRole("region", { name: "New thread" }));
+    await h.user.type(await form.findByRole("textbox", { name: /Account name/ }), "New Work");
+    await h.user.click(form.getByRole("button", { name: "Add Claude Code account" }));
+    await waitFor(() => expect(form.queryByRole("button", { name: "Sign in to New Work" })).not.toBeInTheDocument());
+    await waitFor(async () =>
+      expect(
+        (await h.client.listProviderAccounts()).find((a) => a.displayName === "New Work")?.authenticationState,
+      ).toBe("authenticated"),
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
+  });
+
+  it("shows the account picker while thread options are still loading", async () => {
+    const h = await mountStable();
+    intercept = (command) => (command === "thread_options" ? new Promise(() => {}) : null);
+    const form = await openNewThread(h.user);
+    await h.user.selectOptions(account(form), h.claudeWork);
+    expect(account(form)).toHaveValue(h.claudeWork);
+  });
+
+  it("uses the only account without making the user choose it", async () => {
+    const h = await mountStable(async ({ client, claudeWork }) => {
+      await client.archiveProviderAccount(claudeWork);
+    });
+    await h.user.click(
+      within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Threads" }),
+    );
+    await h.user.click(screen.getAllByRole("button", { name: "New thread" })[0] as HTMLElement);
+    const form = within(await screen.findByRole("region", { name: "New thread" }));
+    await form.findByRole("textbox", { name: "Task" });
+    expect(form.queryByRole("combobox", { name: "Account" })).not.toBeInTheDocument();
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "Inspect this project");
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    await waitFor(() =>
+      expect(
+        h.calls.some((call) => call.command === "thread_create" && JSON.stringify(call.args).includes(CLAUDE_PERSONAL)),
+      ).toBe(true),
+    );
+  });
+
   it("preselects the workspace's remembered account before the provider default", async () => {
     const h = await mountStable(async ({ client, alpha, claudeWork }) => {
       await client.bindProviderAccount("claude-code", "workspace", alpha.id, claudeWork);
