@@ -79,6 +79,8 @@ export function BrowserPane({
   const [attachAttempt, setAttachAttempt] = useState(0);
   const [preset, setPreset] = useState<ViewportPreset>("fluid");
   const [customWidth, setCustomWidth] = useState(900);
+  // The width field's text while it is edited; bounding every keystroke would turn "1" into 320.
+  const [customDraft, setCustomDraft] = useState<string | null>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
   const attached = useRef(false);
   const addressEditing = useRef(false);
@@ -385,8 +387,23 @@ export function BrowserPane({
             min={320}
             max={3840}
             aria-label="Custom viewport width"
-            value={customWidth}
-            onChange={(event) => setCustomWidth(clampCustomViewport(event.currentTarget.valueAsNumber))}
+            value={customDraft ?? customWidth}
+            onChange={(event) => {
+              const typed = event.currentTarget.valueAsNumber;
+              setCustomDraft(event.currentTarget.value);
+              // Preview a width as soon as it is in range; out-of-range text is bounded on commit.
+              if (clampCustomViewport(typed) === typed) setCustomWidth(typed);
+            }}
+            onBlur={() => {
+              if (customDraft === null) return;
+              // An emptied field keeps the last width.
+              const typed = Number.parseFloat(customDraft);
+              if (Number.isFinite(typed)) setCustomWidth(clampCustomViewport(typed));
+              setCustomDraft(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
           />
         ) : null}
         {button("Copy URL", <Copy size={14} />, () => void navigator.clipboard.writeText(state?.url ?? address))}
