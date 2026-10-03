@@ -48,6 +48,9 @@ struct BrowserRecord {
     page_lease: u64,
     account_generation: u64,
     visibility_version: u64,
+    /// The latest pop-up the page asked for (denied); offered as "open here / in your browser".
+    blocked_popup: Option<String>,
+    blocked_popup_seq: u64,
     #[cfg(feature = "e2e")]
     debug_port: Option<u16>,
 }
@@ -283,6 +286,8 @@ pub struct BrowserState {
     loading: bool,
     visible: bool,
     bounds: BrowserBounds,
+    blocked_popup: Option<String>,
+    blocked_popup_seq: u64,
     #[cfg(feature = "e2e")]
     #[serde(skip_serializing_if = "Option::is_none")]
     debug_port: Option<u16>,
@@ -307,6 +312,8 @@ impl BrowserState {
             loading: record.loading,
             visible: record.visible,
             bounds: record.bounds,
+            blocked_popup: record.blocked_popup.clone(),
+            blocked_popup_seq: record.blocked_popup_seq,
             #[cfg(feature = "e2e")]
             debug_port: record.debug_port,
             #[cfg(feature = "e2e")]
@@ -946,6 +953,8 @@ pub async fn browser_attach(
             page_lease: request.page_lease,
             account_generation: _runtime_access.generation(),
             visibility_version: request.visibility_version,
+            blocked_popup: None,
+            blocked_popup_seq: 0,
             #[cfg(feature = "e2e")]
             debug_port: None,
         },
@@ -965,6 +974,9 @@ pub async fn browser_attach(
     let title_views = views.inner().clone();
     let title_id = request.browser_id.clone();
     let title_lease = request.page_lease;
+    let popup_views = views.inner().clone();
+    let popup_id = request.browser_id.clone();
+    let popup_lease = request.page_lease;
     #[cfg(windows)]
     let initial_url = WebviewUrl::External(url::Url::parse("about:blank").map_err(|_| {
         unavailable(
@@ -996,7 +1008,21 @@ pub async fn browser_attach(
         }
         allowed
     })
-    .on_new_window(|_, _| NewWindowResponse::Deny)
+    // The page helper only records errors and a picked element; it has no KalCode capability.
+    .initialization_script(crate::browser_live::LIVE_SCRIPT)
+    // Pop-ups stay denied (they would be unmanaged windows). A safe HTTP(S) target is remembered
+    // so the pane can offer it here or in the system browser, e.g. a "Sign in with Google" window.
+    .on_new_window(move |candidate, _| {
+        if safe_runtime_url(&candidate)
+            && let Some(record) = popup_views.lock().get_mut(&popup_id).filter(|record| {
+                record.page_lease == popup_lease && popup_lease == popup_views.current_page_lease()
+            })
+        {
+            record.blocked_popup = Some(candidate.to_string());
+            record.blocked_popup_seq = record.blocked_popup_seq.saturating_add(1);
+        }
+        NewWindowResponse::Deny
+    })
     .on_download(|_, event| {
         if matches!(event, DownloadEvent::Requested { .. }) {
             #[cfg(feature = "e2e")]
@@ -1581,6 +1607,211 @@ pub fn browser_open_external(
         })
 }
 
+/// The live native child of a ready, current-page Browser record, with its URL and visibility.
+fn ready_child(
+    runtime_access: &crate::runtime_coordinator::RuntimeAccess,
+    webview: &Webview,
+    views: &BrowserViews,
+    browser_id: &str,
+    page_lease: u64,
+) -> Result<(Webview, String, bool), IpcError> {
+    runtime_access.revalidate()?;
+    trusted(webview)?;
+    validate_browser_id(browser_id).map_err(policy_error)?;
+    require_current_page_lease(views, page_lease)?;
+    let (url, visible) = {
+        let records = views.lock();
+        let record = records
+            .get(browser_id)
+            .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
+        require_ready_record(record, page_lease)?;
+        (record.url.clone(), record.visible)
+    };
+    let child = webview
+        .app_handle()
+        .get_webview(&label(browser_id, page_lease, runtime_access.generation()))
+        .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
+    Ok((child, url, visible))
+}
+
+/// Evaluates one fixed helper script in the page and waits briefly for its JSON answer.
+async fn evaluate_helper(child: &Webview, script: &'static str) -> Option<String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(1);
+    child
+        .eval_with_callback(script, move |answer| {
+            let _ = sender.try_send(answer);
+        })
+        .ok()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        receiver.recv_timeout(std::time::Duration::from_millis(1500))
+    })
+    .await
+    .ok()?
+    .ok()
+}
+
+/// Console/load errors and the element the person picked. A page without the helper (an error
+/// page, a load still committing, or a slow page) reports `available: false`, never an error.
+#[tauri::command(async)]
+pub async fn browser_inspect(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    webview: Webview,
+    views: State<'_, BrowserViews>,
+    browser_id: String,
+    page_lease: u64,
+) -> Result<crate::browser_live::BrowserInspection, IpcError> {
+    let (child, _, _) = ready_child(&_runtime_access, &webview, &views, &browser_id, page_lease)?;
+    Ok(evaluate_helper(&child, crate::browser_live::INSPECT_SCRIPT)
+        .await
+        .map(|answer| crate::browser_live::parse_inspection(&answer))
+        .unwrap_or_default())
+}
+
+/// Starts or stops element picking in the page. Resolves whether picking is now active.
+#[tauri::command(async)]
+pub async fn browser_pick(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    webview: Webview,
+    views: State<'_, BrowserViews>,
+    browser_id: String,
+    active: bool,
+    page_lease: u64,
+) -> Result<bool, IpcError> {
+    let (child, _, _) = ready_child(&_runtime_access, &webview, &views, &browser_id, page_lease)?;
+    let script = if active {
+        crate::browser_live::START_PICK_SCRIPT
+    } else {
+        crate::browser_live::STOP_PICK_SCRIPT
+    };
+    match evaluate_helper(&child, script).await.as_deref() {
+        Some("true") => Ok(true),
+        Some(_) => Ok(false),
+        None if !active => Ok(false),
+        None => Err(unavailable(
+            "browser_pick_unavailable",
+            "This page isn't ready for picking yet. Try again once it has loaded.",
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserScreenshot {
+    path: String,
+    file_name: String,
+}
+
+fn screenshot_dir(app: &tauri::AppHandle, data_dir: &Path) -> PathBuf {
+    app.path()
+        .picture_dir()
+        .map(|pictures| pictures.join("KalCode"))
+        .unwrap_or_else(|_| data_dir.join("browser-screenshots"))
+}
+
+fn screenshot_save_failed() -> IpcError {
+    unavailable(
+        "browser_screenshot_save_failed",
+        "KalCode couldn't save the screenshot.",
+    )
+}
+
+/// Saves a PNG of the visible Browser page in Pictures/KalCode and returns where it went.
+#[tauri::command(async)]
+pub async fn browser_screenshot(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    webview: Webview,
+    state: State<'_, AppState>,
+    views: State<'_, BrowserViews>,
+    browser_id: String,
+    page_lease: u64,
+) -> Result<BrowserScreenshot, IpcError> {
+    let (child, url, visible) =
+        ready_child(&_runtime_access, &webview, &views, &browser_id, page_lease)?;
+    if !visible {
+        return Err(KalError::validation(
+            "browser_screenshot_hidden",
+            "Show the browser pane before taking a screenshot.",
+        )
+        .to_ipc());
+    }
+    let bytes = crate::browser_live::capture_png(&child)
+        .await
+        .map_err(|code| unavailable(code, "KalCode couldn't capture this page."))?;
+    if !crate::browser_live::is_png(&bytes) {
+        return Err(unavailable(
+            "browser_screenshot_failed",
+            "KalCode couldn't capture this page.",
+        ));
+    }
+    let host = url::Url::parse(&url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let directory = screenshot_dir(webview.app_handle(), &state.paths.data_dir);
+    let saved = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<PathBuf> {
+        std::fs::create_dir_all(&directory)?;
+        let name = crate::browser_live::screenshot_file_name(
+            &host,
+            &crate::browser_live::screenshot_stamp(),
+        );
+        let path = crate::browser_live::unique_path(&directory, &name);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        std::io::Write::write_all(&mut file, &bytes)?;
+        Ok(path)
+    })
+    .await
+    .map_err(|_| screenshot_save_failed())?
+    .map_err(|_| screenshot_save_failed())?;
+    Ok(BrowserScreenshot {
+        file_name: saved
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: saved.to_string_lossy().into_owned(),
+    })
+}
+
+/// Shows a Live Browser screenshot in the file manager. Only files in the screenshot folder.
+#[tauri::command(async)]
+pub fn browser_reveal_screenshot(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    webview: Webview,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
+    trusted(&webview)?;
+    let refused = || {
+        KalError::validation(
+            "browser_screenshot_unknown",
+            "That screenshot isn't in KalCode's screenshot folder.",
+        )
+        .to_ipc()
+    };
+    let directory = screenshot_dir(webview.app_handle(), &state.paths.data_dir)
+        .canonicalize()
+        .map_err(|_| refused())?;
+    let file = Path::new(&path).canonicalize().map_err(|_| refused())?;
+    if file.parent() != Some(directory.as_path())
+        || file.extension().and_then(|extension| extension.to_str()) != Some("png")
+    {
+        return Err(refused());
+    }
+    webview
+        .app_handle()
+        .opener()
+        .reveal_item_in_dir(&file)
+        .map_err(|_| {
+            unavailable(
+                "browser_reveal_failed",
+                "KalCode couldn't show the screenshot.",
+            )
+        })
+}
+
 pub fn close_all(app: &tauri::AppHandle, views: &BrowserViews) -> Result<usize, IpcError> {
     // Account/runtime cleanup uses the same atomic authority transition as a page reload. New
     // account work can observe the lease but cannot reserve until every old record is detached.
@@ -1610,6 +1841,8 @@ mod tests {
             page_lease: 1,
             account_generation: 41,
             visibility_version: 0,
+            blocked_popup: None,
+            blocked_popup_seq: 0,
             #[cfg(feature = "e2e")]
             debug_port: None,
         }

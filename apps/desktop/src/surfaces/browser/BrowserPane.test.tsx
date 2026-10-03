@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserPane } from "./BrowserPane.tsx";
 import type { BrowserBridge, BrowserState } from "./browserBridge.ts";
+import type { LiveBrowserServices } from "./useLiveBrowserServices.ts";
 
 const browserId = "550e8400-e29b-41d4-a716-446655440000";
 const workspaceId = "550e8400-e29b-41d4-a716-446655440001";
@@ -43,6 +44,10 @@ function testBridge(overrides: Partial<BrowserBridge> = {}): BrowserBridge {
     hideAll: vi.fn(async () => 0),
     openExternal: vi.fn(async () => undefined),
     subscribeFocus: vi.fn(async () => () => undefined),
+    inspect: vi.fn(async () => ({ available: true, errorCount: 0, errors: [], picking: false, picked: null })),
+    pick: vi.fn(async (_id: string, active: boolean) => active),
+    screenshot: vi.fn(async () => ({ path: "C:\\Pictures\\KalCode\\shot.png", fileName: "shot.png" })),
+    revealScreenshot: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -384,5 +389,175 @@ describe("BrowserPane address editing", () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
     await user.click(screen.getByRole("button", { name: "Copy URL" }));
     expect(await screen.findByText("KalCode couldn't copy the address.")).toBeInTheDocument();
+  });
+});
+
+describe("Live Browser", () => {
+  const agent = {
+    threadId: "agent-1",
+    name: "Claude Code 2",
+    providerId: "claude-code",
+    providerName: "Claude Code",
+    accountLabel: null,
+    lastActivityAt: "2026-10-03T10:00:00Z",
+    terminalId: "pty-1",
+  };
+
+  function services(overrides: Partial<LiveBrowserServices> = {}): LiveBrowserServices {
+    return {
+      snapshot: {
+        services: [],
+        environments: [
+          {
+            workspaceId,
+            kind: "production",
+            branch: "main",
+            version: null,
+            urls: ["https://atlas.dev"],
+            deploymentStatus: "deployed_unverified",
+            health: "not_probed",
+            platform: "Cloudflare Pages",
+            lastDeploy: null,
+            runId: null,
+            variables: [],
+            observedAt: "2026-10-03T10:00:00Z",
+            notes: [],
+          },
+        ],
+      },
+      listAgents: vi.fn(async () => [agent]),
+      ask: vi.fn(async () => undefined),
+      ...overrides,
+    };
+  }
+
+  function livePane(bridge: BrowserBridge, live: LiveBrowserServices) {
+    return (
+      <BrowserPane
+        content={{ kind: "browser", browserId, url: null }}
+        workspaceId={workspaceId}
+        context={{ paneId: "pane-1", tabId: "tab-1", focused: true, focusRequest: 0 }}
+        bridge={bridge}
+        visible
+        onRequestFocus={() => undefined}
+        onUrlChange={() => undefined}
+        services={live}
+      />
+    );
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    // jsdom lays nothing out; give the stage a real size so the pane counts as visible.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 60, 800, 500));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("attaches a picked element, errors and a screenshot, then asks the agent in one prompt", async () => {
+    const user = userEvent.setup();
+    const picked = {
+      selector: "main > button.pay",
+      tag: "button",
+      text: "Pay now",
+      html: '<button class="pay">Pay now</button>',
+    };
+    let picking = false;
+    const bridge = testBridge({
+      pick: vi.fn(async (_id: string, active: boolean) => {
+        picking = active;
+        return active;
+      }),
+      inspect: vi.fn(async () => {
+        const result = {
+          available: true,
+          errorCount: 2,
+          errors: ["TypeError: cart is undefined", "Failed to load img /logo.png"],
+          picking: false,
+          picked: picking ? picked : null,
+        };
+        picking = false;
+        return result;
+      }),
+    });
+    const live = services();
+    render(livePane(bridge, live));
+    await waitFor(() => expect(bridge.attach).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: "2 console errors" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Take screenshot" }));
+    expect(await screen.findByText("Screenshot saved.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Pick an element" }));
+    const element = await screen.findByText("button.pay", {}, { timeout: 3_000 });
+    expect(element.tagName).toBe("CODE");
+    expect(screen.getByRole("region", { name: "Ask an agent about this page" })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveValue("agent-1"));
+    await user.type(screen.getByLabelText("Question"), "Why is pay disabled?{Enter}");
+    await waitFor(() => expect(live.ask).toHaveBeenCalledTimes(1));
+    const [askedAgent, prompt] = (live.ask as ReturnType<typeof vi.fn>).mock.calls[0] as [typeof agent, string];
+    expect(askedAgent.threadId).toBe("agent-1");
+    expect(prompt).toContain("Why is pay disabled?");
+    expect(prompt).toContain("Selected element: main > button.pay");
+    expect(prompt).toContain("Console errors (2)");
+    expect(prompt).toContain("Screenshot of the page: C:\\Pictures\\KalCode\\shot.png");
+    expect(await screen.findByText("Sent to Claude Code 2.")).toBeInTheDocument();
+  });
+
+  it("offers to launch an agent when none is running", async () => {
+    const user = userEvent.setup();
+    render(livePane(testBridge(), services({ listAgents: vi.fn(async () => []) })));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask Agent" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Ask Agent" }));
+    expect(await screen.findByText("No coding agent is running in this workspace.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Launch an agent" })).toBeInTheDocument();
+  });
+
+  it("switches targets in one click and asks once for an unknown URL, then remembers it", async () => {
+    const user = userEvent.setup();
+    const bridge = testBridge();
+    render(livePane(bridge, services()));
+    await waitFor(() => expect(bridge.attach).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Local" })).toHaveAttribute("aria-pressed", "true"));
+
+    await user.click(screen.getByRole("button", { name: "Production" }));
+    expect(bridge.navigate).toHaveBeenCalledWith(browserId, "https://atlas.dev/");
+
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    const address = screen.getByLabelText("Web address");
+    expect(address).toHaveAttribute("placeholder", "Enter your Preview URL");
+    await user.type(address, "pr-7.atlas.dev{Enter}");
+    expect(bridge.navigate).toHaveBeenCalledWith(browserId, "https://pr-7.atlas.dev/");
+    expect(JSON.parse(localStorage.getItem(`kalcode.liveBrowser.targets.${workspaceId}`) ?? "{}")).toMatchObject({
+      preview: "https://pr-7.atlas.dev/",
+    });
+  });
+
+  it("guides Google sign-in to the system browser without touching credentials", async () => {
+    const user = userEvent.setup();
+    const bridge = testBridge({
+      attach: vi.fn(async () => nativeState("http://localhost:3000/login")),
+      info: vi.fn(async () => nativeState("https://accounts.google.com/v3/signin/rejected?rrk=46")),
+    });
+    render(livePane(bridge, services()));
+    expect(
+      await screen.findByText("Google blocked sign-in in this embedded browser.", {}, { timeout: 3_000 }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+    // The site's own page goes to the system browser, never Google's rejection page.
+    expect(bridge.openExternal).toHaveBeenCalledWith("http://localhost:3000/login");
+  });
+
+  it("explains a denied sign-in pop-up and can open it in the pane instead", async () => {
+    const user = userEvent.setup();
+    const popup = "https://accounts.google.com/o/oauth2/v2/auth?client_id=demo";
+    const bridge = testBridge({
+      attach: vi.fn(async () => ({ ...nativeState(), blockedPopup: popup, blockedPopupSeq: 1 })),
+      info: vi.fn(async () => ({ ...nativeState(), blockedPopup: popup, blockedPopupSeq: 1 })),
+    });
+    render(livePane(bridge, services()));
+    expect(await screen.findByText("accounts.google.com wants to open a sign-in window.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open here" }));
+    expect(bridge.navigate).toHaveBeenCalledWith(browserId, popup);
   });
 });

@@ -155,3 +155,8 @@ export function useDeckData(): DeckDataValue {
   if (!value) throw new Error("useDeckData must be used inside <DeckDataProvider>");
   return value;
 }
+
+/** Deck data when a DeckDataProvider is mounted (panes rendered in isolation have none). */
+export function useOptionalDeckData(): DeckDataValue | null {
+  return useContext(DeckDataContext);
+}
