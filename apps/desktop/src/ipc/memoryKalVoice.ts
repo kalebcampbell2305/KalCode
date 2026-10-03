@@ -43,6 +43,7 @@ import type {
   TalkRequest,
   TalkResponse,
   TalkRoute,
+  UiCommandRequest,
   UiDirective,
 } from "@kalcode/protocol";
 import { getPlan } from "@kalcode/protocol";
@@ -776,6 +777,24 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     directive: UiDirective | null = null,
   ): KalVoiceResponse => ({ requestId, intent: kind, outcome, usage: usage(), counted: wasCounted, directive });
 
+  // Like native: a command the UI runs itself takes one Request, and a retried id never two.
+  const meterUiCommand = (request: UiCommandRequest): KalVoiceResponse => {
+    const { requestId } = request;
+    const kind = `ui_${request.command}`;
+    if (counted.has(requestId)) return respond(requestId, kind, { kind: "completed", summary: "" }, false);
+    if (used >= FREE_KALVOICE_ALLOWANCE) {
+      emit({
+        type: "kalvoice.limit_reached",
+        payload: { allowance: FREE_KALVOICE_ALLOWANCE, resetsAt: usage().resetsAt },
+      });
+      return respond(requestId, kind, { kind: "limit_reached", resetsAt: usage().resetsAt }, false);
+    }
+    counted.set(requestId, kind);
+    used += 1;
+    emit({ type: "kalvoice.command_executed", payload: { requestId, intent: kind } }, { correlation: { requestId } });
+    return respond(requestId, kind, { kind: "completed", summary: "" }, true);
+  };
+
   const handleRequest = async (
     request: CommandRequest,
     target: TalkRequest["target"] = "none",
@@ -1031,6 +1050,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     kalvoice_subscribe: () => fail("use_subscribe", "Use subscribeKalVoice().", "internal"),
     kalvoice_status: () => status(),
     kalvoice_request: (args) => handleRequest(args.request as CommandRequest),
+    kalvoice_meter_ui_command: (args) => meterUiCommand(args.request as UiCommandRequest),
     kalvoice_talk: (args) => talk(args.request as TalkRequest),
     kalvoice_type_instead: (args) => {
       const id = String(args.requestId);

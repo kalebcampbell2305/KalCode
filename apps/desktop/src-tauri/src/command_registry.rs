@@ -79,6 +79,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "kalvoice_subscribe",
     "kalvoice_status",
     "kalvoice_request",
+    "kalvoice_meter_ui_command",
     "kalvoice_preferences_update",
     "kalvoice_listen_start",
     "kalvoice_listen_stop",

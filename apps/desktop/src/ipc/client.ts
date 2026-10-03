@@ -63,6 +63,7 @@ import type {
   ThreadSummary,
   ThreadWorktreeState,
   ToolCallRecord,
+  UiCommandRequest,
   Workspace,
   WorkspaceGroup,
   WorkspaceLayout,
@@ -318,6 +319,11 @@ export class KalCodeClient {
 
   kalvoiceRequest(request: CommandRequest): Promise<KalVoiceResponse> {
     return this.call("kalvoice_request", { request });
+  }
+
+  /** Claims one KalVoice Request for a command the UI runs itself; run it only on `completed`. */
+  kalvoiceMeterUiCommand(request: UiCommandRequest): Promise<KalVoiceResponse> {
+    return this.call("kalvoice_meter_ui_command", { request });
   }
 
   /** One push-to-talk utterance: routed natively to a command, dictation or a request. */
