@@ -64,6 +64,20 @@ impl AccountStore {
         self.core.read(|conn| get_account(conn, id))
     }
 
+    /// Gets active metadata only when the stable id belongs to the requested provider.
+    ///
+    /// Passive startup restoration uses this instead of [`Self::get`] so archived tombstones and
+    /// cross-provider ids can never re-enter an active account surface.
+    pub fn get_active_for_provider(
+        &self,
+        id: &str,
+        provider: &ProviderId,
+    ) -> Result<ProviderAccount> {
+        check_id(id)?;
+        self.core
+            .read(|conn| get_active_account_for_provider(conn, id, provider))
+    }
+
     pub fn create(&self, provider: &str, label: &str) -> Result<ProviderAccount> {
         self.create_limited(provider, label, None)
     }

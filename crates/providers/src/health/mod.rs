@@ -69,6 +69,7 @@ pub fn is_auth_code(code: &str) -> bool {
     matches!(
         code,
         "api_authentication_failed"
+            | "api_oauth_org_not_allowed"
             | "provider_authentication_failed"
             | "provider_oauth_org_not_allowed"
     )
@@ -1108,5 +1109,10 @@ mod tests {
         assert!(is_failure_code("turn_error_max_turns"));
         assert!(!is_failure_code("provider_warning"));
         assert!(is_auth_code("api_authentication_failed"));
+        assert!(is_auth_code("api_oauth_org_not_allowed"));
+        assert!(is_auth_code("provider_authentication_failed"));
+        assert!(is_auth_code("provider_oauth_org_not_allowed"));
+        assert!(!is_auth_code("api_cloud_credential_error"));
+        assert!(!is_auth_code("provider_billing_error"));
     }
 }

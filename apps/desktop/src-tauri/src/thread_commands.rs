@@ -29,8 +29,8 @@ use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::model::{AdapterState, ProviderStatus};
 use kalcode_providers::{ClaudeCodeProvider, CodexProvider, DetectEnv, GeminiProvider};
 use kalcode_threads::{
-    CoreWorkspaces, CreateThread, ProviderRegistry, StreamId, ThreadOptions, ThreadRuntime,
-    ToolCallRecord,
+    CoreWorkspaces, CreateThread, ProviderErrorObserver, ProviderRegistry, StreamId, ThreadOptions,
+    ThreadRuntime, ToolCallRecord,
 };
 use tauri::ipc::Channel;
 use tauri::{State, Webview};
@@ -121,6 +121,37 @@ struct AccountBoundProvider {
     /// Debug and E2E fixtures may intentionally exercise the pre-account runtime contract. This
     /// is always false in shipped builds because its caller uses `TEST_HOOKS_ENABLED`.
     allow_unbound_test_fixture: bool,
+}
+
+struct AccountProviderErrorObserver {
+    accounts: AccountStore,
+}
+
+impl ProviderErrorObserver for AccountProviderErrorObserver {
+    fn observe(
+        &self,
+        provider_id: &ProviderId,
+        account_id: &str,
+        code: &str,
+    ) -> kalcode_core::Result<()> {
+        if provider_id.as_str() != ProviderId::CLAUDE_CODE
+            || !kalcode_providers::health::is_auth_code(code)
+        {
+            return Ok(());
+        }
+        // Revalidate the immutable provider/account association at the persistence boundary.
+        // The thread worker still holds its generation lock and the live session's shared profile
+        // lease here, so archive/sign-in/sign-out cannot overtake this update.
+        self.accounts
+            .get_active_for_provider(account_id, provider_id)?;
+        self.accounts.mark_authentication(
+            account_id,
+            AuthState::NotAuthenticated,
+            None,
+            Some(code),
+        )?;
+        Ok(())
+    }
 }
 
 impl AccountBoundProvider {
@@ -349,6 +380,17 @@ impl ThreadsState {
             (None, _) => None,
         };
         if let Some(runtime) = &runtime {
+            if let Some(provider_runtime) = &provider_runtime
+                && let Err(error) =
+                    runtime.set_provider_error_observer(Arc::new(AccountProviderErrorObserver {
+                        accounts: provider_runtime.account_store(),
+                    }))
+            {
+                tracing::error!(
+                    event = "threads.provider_error_observer_start_failed",
+                    error_code = error.code
+                );
+            }
             modes.bind(runtime);
         }
         let state = Self {
@@ -1852,6 +1894,95 @@ mod tests {
                 account_label_query,
                 false,
             )
+        }
+    }
+
+    #[test]
+    fn account_error_observer_expires_only_the_selected_claude_account() {
+        let fixture = AccountFixture::new();
+        let selected = fixture
+            .store
+            .create(ProviderId::CLAUDE_CODE, "Claude A")
+            .expect("selected account");
+        let other = fixture
+            .store
+            .create(ProviderId::CLAUDE_CODE, "Claude B")
+            .expect("other account");
+        let observer = AccountProviderErrorObserver {
+            accounts: fixture.store.clone(),
+        };
+        for account in [&selected, &other] {
+            fixture
+                .store
+                .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+                .expect("authenticate fixture account");
+        }
+
+        for code in [
+            "api_authentication_failed",
+            "api_oauth_org_not_allowed",
+            "provider_authentication_failed",
+            "provider_oauth_org_not_allowed",
+        ] {
+            fixture
+                .store
+                .mark_authentication(&selected.id, AuthState::Authenticated, None, None)
+                .expect("reset selected account");
+            observer
+                .observe(
+                    &ProviderId::new(ProviderId::CLAUDE_CODE),
+                    &selected.id,
+                    code,
+                )
+                .expect("structured auth failure");
+            let expired = fixture.store.get(&selected.id).expect("selected account");
+            assert_eq!(expired.authentication_state, AuthState::NotAuthenticated);
+            assert_eq!(expired.last_error_code.as_deref(), Some(code));
+            assert_eq!(
+                fixture
+                    .store
+                    .get(&other.id)
+                    .expect("other account")
+                    .authentication_state,
+                AuthState::Authenticated
+            );
+        }
+    }
+
+    #[test]
+    fn account_error_observer_ignores_transient_and_cross_provider_errors() {
+        let fixture = AccountFixture::new();
+        let account = fixture
+            .store
+            .create(ProviderId::CLAUDE_CODE, "Claude A")
+            .expect("account");
+        fixture
+            .store
+            .mark_authentication(&account.id, AuthState::Authenticated, None, None)
+            .expect("authenticated account");
+        let observer = AccountProviderErrorObserver {
+            accounts: fixture.store.clone(),
+        };
+
+        for (provider, code) in [
+            (ProviderId::CLAUDE_CODE, "api_rate_limit"),
+            (ProviderId::CLAUDE_CODE, "provider_billing_error"),
+            (ProviderId::CLAUDE_CODE, "api_cloud_credential_error"),
+            (ProviderId::CLAUDE_CODE, "process_exited"),
+            (ProviderId::CODEX, "api_authentication_failed"),
+        ] {
+            observer
+                .observe(&ProviderId::new(provider), &account.id, code)
+                .expect("ignored error");
+            assert_eq!(
+                fixture
+                    .store
+                    .get(&account.id)
+                    .expect("unchanged account")
+                    .authentication_state,
+                AuthState::Authenticated,
+                "{provider}/{code} must not infer expiry"
+            );
         }
     }
 

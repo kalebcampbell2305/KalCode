@@ -31,6 +31,27 @@ const ProviderAccountSessionsContext = createContext<ProviderAccountSessionsValu
 // Native account metadata is local and normally available immediately. A short bounded retry
 // covers startup/runtime handoff races without delaying the shell or creating a refresh prompt.
 const RESTORE_RETRY_DELAYS_MS = [160, 640] as const;
+const AUTH_EVENT_READ_ATTEMPTS = 3;
+const AUTH_FAILURE_CODES = new Set([
+  "api_authentication_failed",
+  "api_oauth_org_not_allowed",
+  "provider_authentication_failed",
+  "provider_oauth_org_not_allowed",
+]);
+
+type SessionFacts = Pick<
+  ProviderAccount,
+  "providerReportedIdentity" | "authenticationState" | "lastCheckedAt" | "lastErrorCode"
+>;
+
+function sameSessionFacts(left: SessionFacts, right: SessionFacts): boolean {
+  return (
+    left.providerReportedIdentity === right.providerReportedIdentity &&
+    left.authenticationState === right.authenticationState &&
+    left.lastCheckedAt === right.lastCheckedAt &&
+    left.lastErrorCode === right.lastErrorCode
+  );
+}
 
 function validation(client: KalCodeClient, account: ProviderAccount): Promise<ProviderAccount> {
   switch (account.providerId) {
@@ -48,11 +69,13 @@ function validation(client: KalCodeClient, account: ProviderAccount): Promise<Pr
  * afterward and never blank the account picker or overwrite a newer logout/archive operation.
  */
 export function ProviderAccountSessionsProvider({ children }: { children: ReactNode }) {
-  const { client } = useRuntime();
+  const { client, feed } = useRuntime();
   const [accounts, setAccounts] = useState<ProviderAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checking, setChecking] = useState<ReadonlySet<string>>(() => new Set());
   const [validationErrors, setValidationErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
   const versions = useRef(new Map<string, number>());
   const startedFor = useRef<KalCodeClient | null>(null);
   const live = useRef(true);
@@ -208,7 +231,8 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
         if (!live.current || clientEpoch.current !== expectedClientEpoch) return null;
         // A list read that began before logout/archive/default changed must not restore its older
         // snapshot over the mutation result.
-        if (registryVersion.current === expectedRegistryVersion) setAccounts(restored);
+        if (registryVersion.current !== expectedRegistryVersion) return null;
+        setAccounts(restored);
         setLoadError(null);
         return restored;
       } catch (error) {
@@ -285,6 +309,114 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     void restore();
     return cleanup;
   }, [client, readAccounts, validateRestored]);
+
+  useEffect(() => {
+    // Provider sessions can discover real expiration while they run. Native persists that exact
+    // account before emitting its auth-failure event. The shared runtime feed already owns the native
+    // subscription; this listener rereads only the local registry and never runs an observer or
+    // login command.
+    if (!feed) return;
+    let active = true;
+    let seenSeq = feed.getSnapshot().events[0]?.seq ?? 0;
+    const reconcileState = { dirty: false, running: false };
+
+    const reconcile = () => {
+      reconcileState.dirty = true;
+      if (reconcileState.running) return;
+      reconcileState.running = true;
+      void (async () => {
+        let attempts = 0;
+        while (active && reconcileState.dirty && attempts < AUTH_EVENT_READ_ATTEMPTS) {
+          reconcileState.dirty = false;
+          attempts += 1;
+          const expectedClientEpoch = clientEpoch.current;
+          const expectedRegistryVersion = registryVersion.current;
+          let restored: ProviderAccount[];
+          try {
+            restored = await client.listProviderAccounts();
+          } catch {
+            reconcileState.dirty = true;
+            continue;
+          }
+          if (!active || !live.current || clientEpoch.current !== expectedClientEpoch) return;
+          // A user mutation landed during this local read. Read again so the latest persisted
+          // session facts win without losing nickname/default/order metadata.
+          if (registryVersion.current !== expectedRegistryVersion) {
+            reconcileState.dirty = true;
+            continue;
+          }
+          const current = accountsRef.current;
+          if (!current) {
+            // This event can beat the initial restore. Its local snapshot is canonical and bumps
+            // the registry generation so the older startup read cannot overwrite it afterward.
+            registryVersion.current += 1;
+            setAccounts(restored);
+            continue;
+          }
+          const restoredById = new Map(restored.map((account) => [account.id, account]));
+          const changedIds = new Set(
+            current
+              .filter((account) => {
+                const next = restoredById.get(account.id);
+                return next !== undefined && !sameSessionFacts(account, next);
+              })
+              .map((account) => account.id),
+          );
+          if (changedIds.size === 0) continue;
+          // Canonical session metadata wins over any older observer already in flight. Metadata
+          // such as nickname/default/order and other providers remain exactly as rendered.
+          registryVersion.current += 1;
+          for (const accountId of changedIds) {
+            versions.current.set(accountId, version(accountId) + 1);
+            validations.current.delete(accountId);
+          }
+          setChecking((currentChecking) => {
+            if (![...changedIds].some((accountId) => currentChecking.has(accountId))) return currentChecking;
+            const next = new Set(currentChecking);
+            for (const accountId of changedIds) next.delete(accountId);
+            return next;
+          });
+          setAccounts(
+            (currentAccounts) =>
+              currentAccounts?.map((account) => {
+                if (!changedIds.has(account.id)) return account;
+                const next = restoredById.get(account.id);
+                return next
+                  ? {
+                      ...account,
+                      providerReportedIdentity: next.providerReportedIdentity,
+                      authenticationState: next.authenticationState,
+                      lastCheckedAt: next.lastCheckedAt,
+                      lastErrorCode: next.lastErrorCode,
+                    }
+                  : account;
+              }) ?? null,
+          );
+        }
+        reconcileState.running = false;
+      })();
+    };
+
+    const unsubscribe = feed.subscribe(() => {
+      if (!active) return;
+      const events = feed.getSnapshot().events.filter((event) => event.seq > seenSeq);
+      if (events.length === 0) return;
+      seenSeq = Math.max(seenSeq, ...events.map((event) => event.seq));
+      if (
+        events.some(
+          (event) =>
+            (event.type === "provider.error" || event.type === "thread.failed") &&
+            AUTH_FAILURE_CODES.has(event.payload.code),
+        )
+      ) {
+        reconcile();
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [client, feed, version]);
 
   const value = useMemo<ProviderAccountSessionsValue>(
     () => ({ accounts, loadError, checking, validationErrors, reload, validate, replace, supersede }),

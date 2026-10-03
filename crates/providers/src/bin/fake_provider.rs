@@ -815,6 +815,13 @@ mod interactive {
                 );
             } else if let Some(text) = line.strip_prefix("say ") {
                 say(text);
+            } else if line == "auth-fail" {
+                hooks.fire(
+                    "StopFailure",
+                    json!({"error": "authentication_failed", "error_details": "synthetic expired session"}),
+                );
+                prompt();
+                continue;
             } else if line == "fail" {
                 hooks.fire(
                     "StopFailure",

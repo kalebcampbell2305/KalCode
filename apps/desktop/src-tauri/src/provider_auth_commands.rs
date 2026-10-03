@@ -588,7 +588,7 @@ impl ProviderRuntimeAuthority {
         let restored = self
             .inner
             .accounts
-            .get(account_id)
+            .get_active_for_provider(account_id, &ProviderId::new(ProviderId::CLAUDE_CODE))
             .map_err(RuntimeAuthError::Account)?;
         if restored.last_error_code.as_deref() == Some("claude_auth_failed") {
             // This code was produced by the retired short-lived status probe and is no longer an
@@ -2849,6 +2849,53 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
+    fn launch_preempts_a_delayed_background_observer_without_false_sign_out() {
+        let mut fixture = Fixture::new();
+        let marker = install_read_only_codex_app_server(&mut fixture, "pro", true);
+        let store = fixture.runtime.account_store();
+        store
+            .mark_authentication(
+                &fixture.account.id,
+                AuthState::Authenticated,
+                Some("cached@example.test"),
+                None,
+            )
+            .expect("cached account");
+        let runtime = fixture.runtime.clone();
+        let account_id = fixture.account.id.clone();
+        let background = std::thread::spawn(move || runtime.refresh_codex_account(&account_id));
+        let entered_deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < entered_deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(marker.exists(), "background observer entered account/read");
+
+        let started = Instant::now();
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("foreground launch refreshes after preemption");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "launch must not wait for the observer's five-second delay"
+        );
+        let canceled = background
+            .join()
+            .expect("background observer joins")
+            .expect("preemption resolves current safe account");
+        assert_eq!(canceled.authentication_state, AuthState::Authenticated);
+
+        let refreshed = store.get(&fixture.account.id).expect("refreshed account");
+        assert_eq!(refreshed.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            refreshed.provider_reported_identity.as_deref(),
+            Some("restored@example.test")
+        );
+        assert_eq!(refreshed.last_error_code, None);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
     fn validation_errors_preserve_last_safe_state_and_explicit_expiry_clears_it() {
         let fixture = Fixture::new();
         let store = fixture.runtime.account_store();
@@ -2969,9 +3016,9 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn codex_launch_reuses_this_runs_plan_verdict_while_live_sessions_hold_the_profile() {
+    fn codex_launch_refreshes_plan_truth_while_live_sessions_hold_the_profile() {
         let mut fixture = Fixture::new();
-        install_unrunnable_auth_managers(&mut fixture);
+        install_read_only_codex_app_server(&mut fixture, "pro", false);
         let store = fixture.runtime.account_store();
         observe_codex_plan(&fixture, &connected("pro"));
         let session = codex_session(&fixture);
@@ -2980,7 +3027,7 @@ mod tests {
         assert_eq!(
             codex_launch_refusal(&fixture),
             None,
-            "an idle session's lease must not block another launch on the same account"
+            "a read-only account observer must refresh safely beside a live session"
         );
         assert_eq!(
             fixture
@@ -2996,43 +3043,52 @@ mod tests {
             "a busy check is not a failure"
         );
 
-        // Reuse preserves the decision; it never upgrades it.
+        // Fresh provider truth replaces stale in-memory plan state.
         observe_codex_plan(&fixture, &connected("business"));
         expire_codex_plan(&fixture);
+        assert_eq!(codex_launch_refusal(&fixture), None);
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some("provider_account_plan_unsupported")
-        );
-        observe_codex_plan(&fixture, &connected("mystery"));
-        expire_codex_plan(&fixture);
-        assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some("provider_account_plan_unverified")
+            store
+                .get(&fixture.account.id)
+                .expect("fresh account truth")
+                .provider_reported_identity
+                .as_deref(),
+            Some("restored@example.test")
         );
         drop(session);
     }
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn busy_codex_plan_check_without_a_verdict_fails_busy_and_marks_nothing() {
+    fn live_session_does_not_hide_a_failed_codex_check_or_clear_safe_auth() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
         let store = fixture.runtime.account_store();
-        let before = store.get(&fixture.account.id).expect("account");
+        store
+            .mark_authentication(
+                &fixture.account.id,
+                AuthState::Authenticated,
+                Some("preserved@example.test"),
+                None,
+            )
+            .expect("known safe account");
         let session = codex_session(&fixture);
 
-        assert!(matches!(
+        assert!(!matches!(
             fixture.runtime.refresh_codex_account(&fixture.account.id),
             Err(RuntimeAuthError::Busy)
         ));
         assert_eq!(
             codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY)
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
         );
         let after = store.get(&fixture.account.id).expect("account");
-        assert_eq!(after.authentication_state, before.authentication_state);
-        assert_eq!(after.last_error_code, None);
-        assert_eq!(after.last_checked_at, before.last_checked_at);
+        assert_eq!(after.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            after.provider_reported_identity.as_deref(),
+            Some("preserved@example.test")
+        );
+        assert_eq!(after.last_error_code.as_deref(), Some("codex_auth_failed"));
         drop(session);
     }
 
@@ -3071,6 +3127,96 @@ mod tests {
             Arc::clone(&inner.profiles),
             env!("KALCODE_PUBLIC_VERSION"),
         )));
+    }
+
+    /// Installs only the certified read-only Codex app-server account surface. This fake never
+    /// reads provider credentials or contacts a provider.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn install_read_only_codex_app_server(
+        fixture: &mut Fixture,
+        plan: &str,
+        delay_first_read: bool,
+    ) -> std::path::PathBuf {
+        let dir = fixture._temp.path().join("codex-read-only");
+        std::fs::create_dir_all(&dir).expect("fake codex directory");
+        let first_read_marker = dir.join("first-read-entered");
+        #[cfg(windows)]
+        let executable = {
+            let server = dir.join("codex-app-server.ps1");
+            std::fs::write(
+                &server,
+                format!(
+                    r#"$ErrorActionPreference = 'Stop'
+while (($line = [Console]::In.ReadLine()) -ne $null) {{
+  $request = $line | ConvertFrom-Json
+  if ($request.method -eq 'initialize') {{
+    $result = @{{ userAgent = 'codex_cli_rs/0.160.0'; codexHome = $env:CODEX_HOME; platformFamily = 'windows'; platformOs = 'windows' }}
+  }} elseif ($request.method -eq 'account/read') {{
+    if ($request.params.refreshToken -ne $false) {{ exit 9 }}
+    if ({delay_first_read} -and -not (Test-Path -LiteralPath '{marker}')) {{
+      [IO.File]::WriteAllText('{marker}', 'entered')
+      Start-Sleep -Seconds 5
+    }}
+    $result = @{{ account = @{{ type = 'chatgpt'; email = 'restored@example.test'; planType = '{plan}' }}; requiresOpenaiAuth = $true }}
+  }} else {{ continue }}
+  [Console]::Out.WriteLine((@{{ id = $request.id; result = $result }} | ConvertTo-Json -Compress -Depth 8))
+  [Console]::Out.Flush()
+}}
+"#,
+                    delay_first_read = if delay_first_read { "$true" } else { "$false" },
+                    marker = first_read_marker.to_string_lossy().replace('`', "``").replace('\'', "''"),
+                ),
+            )
+            .expect("fake app-server");
+            let script = dir.join("codex.cmd");
+            std::fs::write(
+                &script,
+                "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.160.0& exit /b 0)\r\n:scan\r\nif \"%~1\"==\"\" exit /b 2\r\nif \"%~1\"==\"app-server\" goto server\r\nshift\r\ngoto scan\r\n:server\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0codex-app-server.ps1\"\r\nexit /b %ERRORLEVEL%\r\n",
+            )
+            .expect("fake codex");
+            script
+        };
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script = dir.join("codex");
+            std::fs::write(
+                &script,
+                format!(
+                    r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.0'; exit 0; fi
+found=false
+for arg in "$@"; do if [ "$arg" = "app-server" ]; then found=true; fi; done
+$found || exit 2
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{{"id":%s,"result":{{"userAgent":"codex_cli_rs/0.160.0","codexHome":"%s","platformFamily":"unix","platformOs":"macos"}}}}\n' "$id" "$CODEX_HOME" ;;
+    *'"method":"account/read"'*'"refreshToken":false'*)
+      if {delay_first_read} && [ ! -e '{marker}' ]; then : > '{marker}'; sleep 5; fi
+      printf '{{"id":%s,"result":{{"account":{{"type":"chatgpt","email":"restored@example.test","planType":"{plan}"}},"requiresOpenaiAuth":true}}}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+                    delay_first_read = if delay_first_read { "true" } else { "false" },
+                    marker = first_read_marker.to_string_lossy().replace('\'', "'\\''"),
+                ),
+            )
+            .expect("fake codex");
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+                .expect("executable fake codex");
+            script
+        };
+        let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
+        inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
+            executable,
+            inner.source_env.clone(),
+            Arc::clone(&inner.profiles),
+            env!("KALCODE_PUBLIC_VERSION"),
+        )));
+        first_read_marker
     }
 
     /// Codex CLI 0.160.0 shipped while 0.1.9 certified only 0.155-0.158: the launch's plan check
@@ -3117,7 +3263,8 @@ mod tests {
     fn codex_sign_in_or_sign_out_forgets_the_reusable_plan_verdict() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
-        let busy = Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY);
+        let check_failed =
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED);
 
         // A completed sign-out observes a signed-out profile, so no earlier verdict survives it.
         observe_codex_plan(&fixture, &connected("pro"));
@@ -3129,7 +3276,7 @@ mod tests {
             }),
         );
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
         drop(session);
 
         // A sign-out or sign-in that took the exclusive lease may have changed the profile, so the
@@ -3137,7 +3284,7 @@ mod tests {
         observe_codex_plan(&fixture, &connected("pro"));
         assert!(fixture.runtime.logout_codex(&fixture.account.id).is_err());
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
         drop(session);
 
         observe_codex_plan(&fixture, &connected("pro"));
@@ -3148,7 +3295,7 @@ mod tests {
                 .is_err()
         );
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
         drop(session);
     }
 
@@ -3205,7 +3352,6 @@ mod tests {
         assert_eq!(claude_after.last_error_code, None);
 
         // A refused sign-in never touched the profile, so the live sessions' verdict still stands.
-        expire_codex_plan(&fixture);
         assert_eq!(codex_launch_refusal(&fixture), None);
         drop((codex_session, claude_session));
     }
@@ -3223,8 +3369,15 @@ mod tests {
             .archive(&fixture.runtime.inner.profiles, &claude.id)
             .expect("archive");
         let missing = kalcode_contracts::ids::new_id();
+        let wrong_provider = store
+            .create(ProviderId::GEMINI_CLI, "Gemini")
+            .expect("other provider account");
 
-        for account_id in [claude.id.as_str(), missing.as_str()] {
+        for account_id in [
+            claude.id.as_str(),
+            missing.as_str(),
+            wrong_provider.id.as_str(),
+        ] {
             assert!(matches!(
                 fixture.runtime.refresh_claude_account(account_id),
                 Err(RuntimeAuthError::Account(_))
@@ -3268,7 +3421,7 @@ mod tests {
         let session = codex_session(&fixture);
         assert_eq!(
             codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
             "a new account has no verdict of its own this run"
         );
         drop(session);

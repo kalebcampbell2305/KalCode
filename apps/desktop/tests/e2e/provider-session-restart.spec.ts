@@ -34,7 +34,7 @@ function invoke<T>(page: Page, command: string, args: Record<string, unknown> = 
   ) as Promise<T>;
 }
 
-test("a second connected account survives a complete restart and launches without Refresh", async () => {
+test("connected accounts survive restart, launch without Refresh and isolate genuine expiry", async () => {
   test.setTimeout(180_000);
   const dataDir = createAccountFixtureDataDir();
   const root = mkdtempSync(join(tmpdir(), "kalcode-provider-restart-"));
@@ -71,6 +71,7 @@ test("a second connected account survives a complete restart and launches withou
     const before = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
     const primary = before.find((account) => account.providerId === "claude-code");
     expect(primary).toBeTruthy();
+    if (!primary) throw new Error("The primary Claude account is missing");
     await invoke(app.page, "provider_account_rename", { accountId: primary?.id, displayName: "Claude A" });
     const second = await invoke<ProviderAccount>(app.page, "provider_account_create", {
       providerId: "claude-code",
@@ -88,10 +89,11 @@ test("a second connected account survives a complete restart and launches withou
       "python",
       [
         "-c",
-        "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); r=c.execute(\"UPDATE provider_accounts SET authentication_state='authenticated', provider_reported_identity=?, last_checked_at='2026-10-03T00:00:00Z', last_error_code=NULL WHERE id=? AND archived_at IS NULL\", (sys.argv[3],sys.argv[2])); assert r.rowcount == 1; c.commit(); c.close()",
+        "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); r=c.executemany(\"UPDATE provider_accounts SET authentication_state='authenticated', provider_reported_identity=?, last_checked_at='2026-10-03T00:00:00Z', last_error_code=NULL WHERE id=? AND archived_at IS NULL\", [(sys.argv[3],sys.argv[2]), ('primary@example.test',sys.argv[4])]); assert r.rowcount == 2; c.commit(); c.close()",
         join(dataDir, "kalcode.db"),
         second.id,
         identity,
+        primary.id,
       ],
       { windowsHide: true, stdio: "pipe" },
     );
@@ -146,6 +148,27 @@ test("a second connected account survives a complete restart and launches withou
         },
       )
       .toBe("idle");
+    // The fake is positively identified above before any terminal input. Exercise the real
+    // authenticated hook bridge and runtime event worker, without a provider or credentials.
+    await pane.locator("[data-pane-terminal] .xterm-screen").click();
+    await app.page.keyboard.type("auth-fail");
+    await app.page.keyboard.press("Enter");
+    await expect
+      .poll(async () => {
+        const current = await invoke<ProviderAccount[]>(restartedPage, "provider_accounts_list");
+        return current.find((account) => account.id === second.id)?.authenticationState;
+      })
+      .toBe("not_authenticated");
+    const afterExpiry = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
+    expect(afterExpiry.find((account) => account.id === primary.id)?.authenticationState).toBe("authenticated");
+    await app.page.getByRole("button", { name: "Providers", exact: true }).click();
+    await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
+    await expect(
+      app.page.getByRole("region", { name: /Claude B/ }).getByText("Expired", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      app.page.getByRole("region", { name: /Claude A/ }).getByText("Connected", { exact: true }),
+    ).toBeVisible();
     await invoke(app.page, "thread_stop", { threadId: thread.id });
     const starts = readFileSync(join(bin, "runs.log"), "utf8")
       .trim()

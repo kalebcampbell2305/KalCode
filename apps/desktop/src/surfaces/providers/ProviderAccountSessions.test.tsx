@@ -1,12 +1,17 @@
-import type { ProviderAccount } from "@kalcode/protocol";
+import type { EventEnvelope, ProviderAccount } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KalCodeClient } from "../../ipc/client.ts";
+import { EventFeed } from "../../runtime/eventFeed.ts";
 import { ProviderAccountSessionsProvider, useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 
-const runtime = vi.hoisted(() => ({ client: null as unknown as KalCodeClient }));
+const runtime = vi.hoisted(() => ({ client: null as unknown as KalCodeClient, feed: null as EventFeed | null }));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => runtime }));
+
+beforeEach(() => {
+  runtime.feed = new EventFeed();
+});
 
 function account(id: string, providerId: ProviderAccount["providerId"], name: string): ProviderAccount {
   return {
@@ -32,6 +37,14 @@ function deferred<T>() {
     reject = no;
   });
   return { promise, resolve, reject };
+}
+
+function providerError(seq: number, providerId: string, code: string): EventEnvelope {
+  return { seq, type: "provider.error", payload: { providerId, code, message: code } } as EventEnvelope;
+}
+
+function threadFailed(seq: number, code: string): EventEnvelope {
+  return { seq, type: "thread.failed", payload: { threadId: "thread-1", code, message: code } } as EventEnvelope;
 }
 
 const wrapper = ({ children }: { children: ReactNode }) => (
@@ -187,6 +200,174 @@ describe("provider account session restoration", () => {
       authenticationState: "authenticated",
       providerReportedIdentity: codex.providerReportedIdentity,
     });
+  });
+
+  it("applies provider-confirmed expiration without probing or changing another account", async () => {
+    const codexA = account("codex-a", "codex", "Codex A");
+    const codexB = { ...account("codex-b", "codex", "Codex B"), isDefault: false };
+    const expiredA = {
+      ...codexA,
+      displayName: "Stale native label",
+      authenticationState: "not_authenticated" as const,
+      isDefault: false,
+      lastCheckedAt: "2026-10-03T04:00:00.000Z",
+      lastErrorCode: "provider_authentication_failed",
+    };
+    const checkA = deferred<ProviderAccount>();
+    const checkB = deferred<ProviderAccount>();
+    const list = vi
+      .fn<(providerId?: string) => Promise<ProviderAccount[]>>()
+      .mockResolvedValueOnce([codexA, codexB])
+      .mockResolvedValueOnce([expiredA, codexB]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshClaudeAccount: vi.fn(),
+      refreshCodexAccount: vi.fn((id: string) => (id === codexA.id ? checkA.promise : checkB.promise)),
+      refreshGeminiAccount: vi.fn(),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.checking.size).toBe(2));
+
+    act(() =>
+      checkB.reject({
+        category: "provider",
+        code: "network",
+        message: "Temporary provider failure",
+        retryable: true,
+      }),
+    );
+    await waitFor(() => expect(view.result.current?.validationErrors.has(codexB.id)).toBe(true));
+    const unchangedB = view.result.current?.accounts?.find((item) => item.id === codexB.id);
+    act(() => {
+      runtime.feed?.merge([providerError(1, "codex", "rate_limited")]);
+    });
+    await Promise.resolve();
+    expect(list).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      runtime.feed?.merge([providerError(2, "codex", "provider_authentication_failed")]);
+    });
+    await waitFor(() =>
+      expect(view.result.current?.accounts?.find((item) => item.id === codexA.id)?.authenticationState).toBe(
+        "not_authenticated",
+      ),
+    );
+    expect(list).toHaveBeenLastCalledWith();
+    expect(view.result.current?.checking.has(codexA.id)).toBe(false);
+    expect(view.result.current?.accounts?.find((item) => item.id === codexA.id)).toMatchObject({
+      displayName: codexA.displayName,
+      isDefault: codexA.isDefault,
+      authenticationState: "not_authenticated",
+      lastErrorCode: "provider_authentication_failed",
+    });
+    expect(view.result.current?.accounts?.find((item) => item.id === codexB.id)).toBe(unchangedB);
+    expect(view.result.current?.validationErrors.has(codexB.id)).toBe(true);
+
+    act(() => checkA.resolve(codexA));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.result.current?.accounts?.find((item) => item.id === codexA.id)?.authenticationState).toBe(
+      "not_authenticated",
+    );
+    expect(runtime.client.refreshCodexAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles a nonrecoverable headless authentication failure from thread.failed", async () => {
+    const claude = account("claude-a", "claude-code", "Claude A");
+    const expired = {
+      ...claude,
+      authenticationState: "not_authenticated" as const,
+      lastErrorCode: "api_authentication_failed",
+    };
+    const list = vi
+      .fn<() => Promise<ProviderAccount[]>>()
+      .mockResolvedValueOnce([claude])
+      .mockResolvedValueOnce([expired]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshClaudeAccount: vi.fn(),
+      refreshCodexAccount: vi.fn(),
+      refreshGeminiAccount: vi.fn(),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([claude]));
+
+    act(() => runtime.feed?.merge([threadFailed(1, "api_authentication_failed")]));
+    await waitFor(() => expect(view.result.current?.accounts?.[0]?.authenticationState).toBe("not_authenticated"));
+    expect(list).toHaveBeenCalledTimes(2);
+
+    act(() => runtime.feed?.merge([threadFailed(2, "turn_failed")]));
+    await Promise.resolve();
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(runtime.client.refreshClaudeAccount).not.toHaveBeenCalled();
+  });
+
+  it("coalesces simultaneous provider expirations and retries across metadata mutations", async () => {
+    const claude = account("claude-a", "claude-code", "Claude A");
+    const codexA = account("codex-a", "codex", "Codex A");
+    const codexB = { ...account("codex-b", "codex", "Codex B"), isDefault: false };
+    const expiredClaude = {
+      ...claude,
+      authenticationState: "not_authenticated" as const,
+      lastErrorCode: "provider_oauth_org_not_allowed",
+    };
+    const expiredCodex = {
+      ...codexA,
+      authenticationState: "not_authenticated" as const,
+      lastErrorCode: "api_authentication_failed",
+    };
+    const eventRead = deferred<ProviderAccount[]>();
+    const checkA = deferred<ProviderAccount>();
+    const list = vi
+      .fn<() => Promise<ProviderAccount[]>>()
+      .mockResolvedValueOnce([claude, codexA, codexB])
+      .mockReturnValueOnce(eventRead.promise)
+      .mockResolvedValueOnce([expiredClaude, expiredCodex, codexB]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshClaudeAccount: vi.fn(),
+      refreshCodexAccount: vi.fn((id: string) => (id === codexA.id ? checkA.promise : Promise.resolve(codexB))),
+      refreshGeminiAccount: vi.fn(),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.checking.has(codexA.id)).toBe(true));
+
+    act(() => {
+      runtime.feed?.merge([
+        providerError(10, "claude-code", "provider_oauth_org_not_allowed"),
+        threadFailed(11, "api_authentication_failed"),
+      ]);
+    });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    const sessions = view.result.current;
+    if (!sessions) throw new Error("Provider account sessions were not mounted");
+    act(() => {
+      sessions.supersede(claude.id);
+      sessions.replace({ ...claude, displayName: "Renamed Claude" });
+      sessions.supersede(codexB.id);
+      sessions.replace({ ...codexB, isDefault: true });
+    });
+    act(() => eventRead.resolve([expiredClaude, expiredCodex, codexB]));
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+    await waitFor(() => {
+      expect(view.result.current?.accounts?.find((item) => item.id === claude.id)).toMatchObject({
+        displayName: "Renamed Claude",
+        authenticationState: "not_authenticated",
+      });
+      expect(view.result.current?.accounts?.find((item) => item.id === codexA.id)).toMatchObject({
+        isDefault: false,
+        authenticationState: "not_authenticated",
+      });
+      expect(view.result.current?.accounts?.find((item) => item.id === codexB.id)?.isDefault).toBe(true);
+    });
+
+    act(() => checkA.resolve(codexA));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.result.current?.accounts?.find((item) => item.id === codexA.id)?.authenticationState).toBe(
+      "not_authenticated",
+    );
   });
 
   it("does not let an older validation resurrect an account after logout or archive wins", async () => {
