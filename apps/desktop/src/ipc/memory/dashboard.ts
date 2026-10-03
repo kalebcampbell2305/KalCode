@@ -963,6 +963,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
       }
       return structuredClone(request);
     },
+    // Opening an agent from a card reads it first (uiIntents decides Code pane vs Threads).
+    thread_get: read((args) => snapshot(requireThread(args))),
     thread_interrupt: (args) => {
       const thread = requireThread(args);
       const s = thread.status;

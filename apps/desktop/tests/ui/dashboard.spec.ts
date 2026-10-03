@@ -208,6 +208,17 @@ test.describe("cards", () => {
     await expect(migration.getByRole("group", { name: "Run pnpm prisma migrate dev" })).toBeVisible();
   });
 
+  test("clicking a card opens its agent's terminal in Code, never Threads", async ({ page }) => {
+    await open(page, "busy");
+    await card(page, "Fix flaky checkout test")
+      .getByRole("button", { name: "Fix flaky checkout test", exact: true })
+      .click();
+    await expect(
+      page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
+  });
+
   test("pause, resume, retry and archive go through the thread commands", async ({ page }) => {
     await open(page, "busy");
     const menu = async (name: string, item: string) => {

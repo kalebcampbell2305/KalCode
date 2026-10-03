@@ -190,6 +190,15 @@ describe("UI focus intent lifecycle", () => {
     expect(result.current.paneFocus?.threadId).toBe("current-pane");
   });
 
+  it("keeps a coding agent in Code, never Threads, when its workspace can't be opened", async () => {
+    mocks.activate.mockResolvedValueOnce(false);
+    const { result } = mount();
+    await act(async () => result.current.focus({ kind: "thread", threadId: "current-pane" }));
+    expect(mocks.navigate.mock.calls).toEqual([["code"]]);
+    expect(mocks.request).not.toHaveBeenCalled();
+    expect(result.current.paneFocus).toBeNull();
+  });
+
   it("does not navigate to an old thread after a newer focus request", async () => {
     const read = deferred<typeof pane>();
     mocks.getThread.mockReturnValueOnce(read.promise);

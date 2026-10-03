@@ -191,11 +191,11 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
             // Even the displayed workspace must supersede an older activation still in flight.
             const ok = await workspaces.activate(workspaceId);
             if (!isCurrent()) return;
-            if (ok) {
-              navigate("code");
-              setPaneState({ owner: session, request: { threadId: target.threadId, nonce: generation } });
-              return;
-            }
+            // A coding agent lives in Code, never Threads: when its workspace can't be opened
+            // (activation already reported why), stay in Code without a pane to focus.
+            navigate("code");
+            if (ok) setPaneState({ owner: session, request: { threadId: target.threadId, nonce: generation } });
+            return;
           }
           navigate("threads");
           threadsIntent.request("open", target.threadId);
