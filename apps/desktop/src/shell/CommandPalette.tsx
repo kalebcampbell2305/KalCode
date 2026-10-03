@@ -247,6 +247,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       navigate("threads");
       threadsIntent.request("open", thread.id);
     });
+  const switchTargets = workspaces.workspaces.filter((w) => w.id !== workspaces.active?.id && w.available);
+  // Two clones may share a folder name; cmdk selects by label, so those labels carry the path.
+  const sharedNames = new Set(
+    switchTargets.map((w) => w.name).filter((name, index, names) => names.indexOf(name) !== index),
+  );
   const destinations = [...PRIMARY_ORDER, "settings" as const].filter((id): id is SurfaceId => visible.has(id));
   const views = (["home", "folder"] as const).filter((view) => viewVisible(view, info.flags.features));
 
@@ -398,20 +403,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             Open folder…
           </Item>
-          {workspaces.workspaces
-            .filter((w) => w.id !== workspaces.active?.id && w.available)
-            .map((workspace) => (
-              <Item
-                key={workspace.id}
-                icon={<ArrowRightLeft />}
-                onSelect={run(async () => {
-                  if (await workspaces.activate(workspace.id)) navigate("code");
-                })}
-                keywords={["switch workspace", workspace.displayPath]}
-              >
-                {`Switch to ${workspace.name}`}
-              </Item>
-            ))}
+          {switchTargets.map((workspace) => (
+            <Item
+              key={workspace.id}
+              icon={<ArrowRightLeft />}
+              onSelect={run(async () => {
+                if (await workspaces.activate(workspace.id)) navigate("code");
+              })}
+              keywords={["switch workspace", workspace.displayPath]}
+            >
+              {sharedNames.has(workspace.name)
+                ? `Switch to ${workspace.name} · ${workspace.displayPath}`
+                : `Switch to ${workspace.name}`}
+            </Item>
+          ))}
         </Command.Group>
 
         {accountMatches.length > 0 && (selectedThread || activeWorkspace) ? (
