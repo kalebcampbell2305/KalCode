@@ -146,3 +146,22 @@ describe("thread runtime lifecycle", () => {
     expect(activeClient.getThread).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("thread list contents", () => {
+  beforeEach(() => {
+    runtime.events = [];
+    runtime.client = client();
+  });
+
+  it("never lists coding agents (provider panes) as threads", async () => {
+    const summaries = [
+      { id: "chat", runtimeKind: null, terminalId: null },
+      { id: "pane", runtimeKind: "interactive_pty", terminalId: null },
+      { id: "attached", runtimeKind: null, terminalId: "term-1" },
+    ];
+    (runtime.client as ReturnType<typeof client>).listThreads.mockResolvedValue(summaries);
+    const { result } = renderHook(() => useThreadList(true));
+    await flush();
+    expect(result.current.entries.map((entry) => entry.thread.id)).toEqual(["chat"]);
+  });
+});

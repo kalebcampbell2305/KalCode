@@ -381,7 +381,7 @@ function ThreadTitle({
   if (!editing) {
     return (
       <div className={styles.title}>
-        <h2 id="thread-title" className={styles.name}>
+        <h2 id="thread-title" className={styles.name} title={thread.name}>
           {thread.name}
         </h2>
         <Tooltip content="Rename thread">
