@@ -114,8 +114,8 @@ export function providerCatalog(): ProviderStatus[] {
           ),
           stricter(
             "bypass",
-            `--setting-sources user --permission-mode acceptEdits --permission-prompts none --disallowedTools ${remoteDenied}`,
-            `File edits and common file commands in the workspace run without asking; anything else that would ask is refused. Claude Code's bypassPermissions mode is never used. ${claudeEnforced} ${claudeNotYet}`,
+            "--setting-sources user --permission-mode bypassPermissions --permission-prompts none --disallowedTools 18-credential-file-rules",
+            "Everything runs without asking (Claude Code's bypassPermissions mode), with your Claude Code user settings; only credential files stay unreadable.",
           ),
         ],
       },
@@ -202,8 +202,8 @@ export function providerCatalog(): ProviderStatus[] {
           ),
           stricter(
             "bypass",
-            "--approval-mode auto_edit",
-            `File edits are approved automatically; other tools that need confirmation don't run. yolo mode is never used. ${geminiNotEnforced}`,
+            "--approval-mode yolo",
+            `Everything runs without approval prompts (Gemini CLI's yolo mode). ${geminiNotEnforced}`,
           ),
         ],
       },

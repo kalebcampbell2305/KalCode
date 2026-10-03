@@ -91,10 +91,10 @@ test.describe("providers", () => {
     ]);
     const bypass = table.getByRole("row", { name: /Bypass/ });
     await expect(bypass.getByRole("rowheader")).toHaveText("Bypass");
-    await expect(bypass.getByRole("cell").first()).toHaveText(/--permission-mode\s*acceptEdits/);
+    await expect(bypass.getByRole("cell").first()).toHaveText(/--permission-mode\s*bypassPermissions/);
     await expect(bypass.getByText("Stricter than requested")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(3);
-    await expect(page.getByText("bypassPermissions mode is never used", { exact: false })).toBeVisible();
+    await expect(page.getByText("only credential files stay unreadable", { exact: false })).toBeVisible();
 
     // Codex and Gemini CLI: the flags KalCode passes, never a broader mode.
     const codex = page.getByRole("table", { name: /Permission modes in Codex/ });
@@ -116,7 +116,7 @@ test.describe("providers", () => {
         .getByRole("row", { name: /Bypass/ })
         .getByRole("cell")
         .first(),
-    ).toHaveText("--approval-mode auto_edit");
+    ).toHaveText("--approval-mode yolo");
   });
 
   test("managed accounts support local metadata and official browser sign-in flows", async ({ page }) => {

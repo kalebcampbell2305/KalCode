@@ -132,7 +132,7 @@ test.describe("provider panes", () => {
     // The header always names the mode the pane runs in. Which start mode is canonical (Auto or
     // Bypass) is owned and asserted by the permissions specs, not by the header.
     await expect(region.locator("[data-pane-mode]")).toBeVisible();
-    await expect(region.locator("[data-pane-mode]")).toHaveText(/^Permission mode (Auto|Bypass)$/);
+    await expect(region.locator("[data-pane-mode]")).toHaveText("Permission mode Bypass");
 
     await typeInPane(page, "run npm test");
     await expect(paneText(page)).toContainText("RAN Bash");
