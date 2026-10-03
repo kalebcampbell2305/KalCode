@@ -35,13 +35,33 @@ export function processText(health: Pick<ProviderHealth, "processRunning" | "act
   return `Running · ${plural(health.activeSessions, "active session")}`;
 }
 
-/** Sign-in as the provider reports it. KalCode never signs in for the user. */
+/** The provider's connected KalCode accounts, as the canonical account state knows them. */
+export interface AccountSignIns {
+  total: number;
+  signedIn: number;
+}
+
+/**
+ * Sign-in as the provider reports it. KalCode never signs in for the user. When the provider
+ * itself can't be asked safely (Claude defers to a real session), the connected accounts are
+ * the one authoritative answer (AGENTS.md account-usage rule).
+ */
 export function signInText(
   health: Pick<ProviderHealth, "providerId" | "auth" | "displayName" | "detection">,
   status?: Pick<ProviderStatus, "authCheck"> | null,
+  accounts?: AccountSignIns | null,
 ): Label {
   if (health.detection !== "installed" && health.detection !== "outdated") {
     return { tone: "idle", label: "Not checked", detail: null };
+  }
+  if (health.auth === "unknown" && accounts && accounts.total > 0) {
+    return accounts.signedIn > 0
+      ? {
+          tone: "success",
+          label: "Signed in",
+          detail: `${plural(accounts.signedIn, "account")} signed in on this computer.`,
+        }
+      : { tone: "waiting", label: "Signed out", detail: "Sign in from Accounts." };
   }
   const checkedWith = status?.authCheck ? `Checked with ${status.authCheck}.` : null;
   switch (health.auth) {

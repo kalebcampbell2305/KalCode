@@ -310,7 +310,8 @@ test.describe("providers", () => {
 
     const gemini = view.locator("#health-gemini-cli");
     await expect(gemini).toHaveAttribute("data-health-state", "healthy");
-    await expect(gemini.getByText("Gemini CLI has no documented way to check sign-in", { exact: true })).toBeVisible();
+    // Gemini can't be asked passively; its connected account is the authoritative answer.
+    await expect(gemini.getByText("Signed out", { exact: true })).toBeVisible();
     await expect(gemini.getByText("Version 0.12.0 · no minimum declared")).toBeVisible();
     await expect(gemini.getByText("Not enough data yet")).toBeVisible();
 
