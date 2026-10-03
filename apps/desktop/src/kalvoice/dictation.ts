@@ -384,6 +384,34 @@ export function deliverToProviderThread(
   return deliverToProviderTarget(dictationTargetForProviderThread(threadId), text, options);
 }
 
+/**
+ * Waits for a provider pane that was just asked to open (a focus intent) to mount its terminal.
+ * Resolves the live target, or null when it doesn't appear in time or the request is cancelled.
+ */
+export function waitForProviderThreadTarget(
+  threadId: string,
+  signal?: AbortSignal,
+  timeoutMs = 8_000,
+  intervalMs = 50,
+): Promise<DictationSinkTarget | null> {
+  const found = dictationTargetForProviderThread(threadId);
+  if (found || signal?.aborted) return Promise.resolve(signal?.aborted ? null : found);
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const finish = (target: DictationSinkTarget | null) => {
+      clearInterval(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(target);
+    };
+    const onAbort = () => finish(null);
+    const timer = setInterval(() => {
+      const target = dictationTargetForProviderThread(threadId);
+      if (target || Date.now() - started >= timeoutMs) finish(target);
+    }, intervalMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** Writes a prompt using the provider runtime's authoritative PTY id, never a raw shell id. */
 export function deliverToProviderTerminal(
   terminalId: string,

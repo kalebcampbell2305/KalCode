@@ -64,6 +64,7 @@ import {
   type PaneCommandResult,
   paneQueryCandidates,
   providerPaneAliases,
+  providerPaneAliasesOf,
   selectDistinctProviderThreads,
 } from "../../shell/panes/paneCommands.ts";
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
@@ -391,7 +392,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
                   entityId: thread.id,
                   title: account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name,
                   aliases: [
-                    ...(aliases.get(contentKey(content)) ?? []),
+                    ...providerPaneAliasesOf(aliases, content),
                     thread.providerName,
                     ...(thread.accountLabel ? [thread.accountLabel] : []),
                     thread.workspaceName,
@@ -1031,7 +1032,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           return content
             ? {
                 title: titleOf(content),
-                aliases: aliases.get(content.kind === "agent" ? `thread:${content.agentId}` : key) ?? [],
+                aliases: providerPaneAliasesOf(aliases, content),
               }
             : null;
         });
