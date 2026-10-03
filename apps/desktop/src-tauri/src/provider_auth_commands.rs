@@ -2864,7 +2864,9 @@ mod tests {
         let runtime = fixture.runtime.clone();
         let account_id = fixture.account.id.clone();
         let background = std::thread::spawn(move || runtime.refresh_codex_account(&account_id));
-        let entered_deadline = Instant::now() + Duration::from_secs(2);
+        // Only waits for the observer to reach its delayed read (a cold cmd -> PowerShell start
+        // on Windows can take seconds on a loaded machine); the delay starts at the marker.
+        let entered_deadline = Instant::now() + Duration::from_secs(20);
         while !marker.exists() && Instant::now() < entered_deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -2875,9 +2877,13 @@ mod tests {
             .runtime
             .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
             .expect("foreground launch refreshes after preemption");
+        // A preempting launch pays the observer's terminate grace (500 ms) plus one fresh
+        // app-server start (~0.7 s idle, longer under load). Waiting for the observer instead
+        // would take the whole delayed read, so the bound sits far from both.
         assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "launch must not wait for the observer's five-second delay"
+            started.elapsed() < DELAYED_OBSERVER_READ / 3,
+            "launch must not wait for the observer's delayed account read: {:?}",
+            started.elapsed()
         );
         let canceled = background
             .join()
@@ -3129,6 +3135,11 @@ mod tests {
         )));
     }
 
+    /// How long the delayed fake holds its first `account/read`. Long enough that a launch which
+    /// waited for it is unmistakable from one that preempted it, even on a loaded machine.
+    #[cfg(any(windows, target_os = "macos"))]
+    const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(15);
+
     /// Installs only the certified read-only Codex app-server account surface. This fake never
     /// reads provider credentials or contacts a provider.
     #[cfg(any(windows, target_os = "macos"))]
@@ -3155,7 +3166,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
     if ($request.params.refreshToken -ne $false) {{ exit 9 }}
     if ({delay_first_read} -and -not (Test-Path -LiteralPath '{marker}')) {{
       [IO.File]::WriteAllText('{marker}', 'entered')
-      Start-Sleep -Seconds 5
+      Start-Sleep -Seconds {delay}
     }}
     $result = @{{ account = @{{ type = 'chatgpt'; email = 'restored@example.test'; planType = '{plan}' }}; requiresOpenaiAuth = $true }}
   }} else {{ continue }}
@@ -3164,6 +3175,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {{
 }}
 "#,
                     delay_first_read = if delay_first_read { "$true" } else { "$false" },
+                    delay = DELAYED_OBSERVER_READ.as_secs(),
                     marker = first_read_marker.to_string_lossy().replace('`', "``").replace('\'', "''"),
                 ),
             )
@@ -3194,13 +3206,14 @@ while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*) printf '{{"id":%s,"result":{{"userAgent":"codex_cli_rs/0.160.0","codexHome":"%s","platformFamily":"unix","platformOs":"macos"}}}}\n' "$id" "$CODEX_HOME" ;;
     *'"method":"account/read"'*'"refreshToken":false'*)
-      if {delay_first_read} && [ ! -e '{marker}' ]; then : > '{marker}'; sleep 5; fi
+      if {delay_first_read} && [ ! -e '{marker}' ]; then : > '{marker}'; sleep {delay}; fi
       printf '{{"id":%s,"result":{{"account":{{"type":"chatgpt","email":"restored@example.test","planType":"{plan}"}},"requiresOpenaiAuth":true}}}}\n' "$id"
       ;;
   esac
 done
 "#,
                     delay_first_read = if delay_first_read { "true" } else { "false" },
+                    delay = DELAYED_OBSERVER_READ.as_secs(),
                     marker = first_read_marker.to_string_lossy().replace('\'', "'\\''"),
                 ),
             )

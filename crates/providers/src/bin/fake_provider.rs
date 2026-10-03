@@ -95,18 +95,24 @@ fn exit(code: i64) -> ! {
 
 /// Appends one line per start to `runs.log` beside the executable: its file name and
 /// arguments. Tests use it to prove which copy ran (and that planted copies never did).
+///
+/// Concurrent starts (fan-out tests launch several panes at once) append to the same file, so
+/// each record and its newline go out in ONE append. `writeln!` issues the text and the newline
+/// as separate writes, and two processes interleaving between them merge records onto one
+/// unparseable line, which tests then miscount as missing launches.
 fn record_run(args: &[String]) {
     let name = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    let line = serde_json::json!({ "exe": name, "args": args }).to_string();
+    let mut line = serde_json::json!({ "exe": name, "args": args }).to_string();
+    line.push('\n');
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(exe_dir().join("runs.log"))
     {
-        let _ = writeln!(file, "{line}");
+        let _ = file.write_all(line.as_bytes());
     }
 }
 
