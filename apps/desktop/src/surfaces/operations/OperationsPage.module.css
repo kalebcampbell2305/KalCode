@@ -104,31 +104,92 @@
   font: inherit;
 }
 
+/* Summary: four KPI tiles, each with a status-toned hairline and a large tabular count. */
 .pulseBar {
   display: flex;
-  align-items: center;
-  gap: var(--space-5);
-  min-height: 2.75rem;
+  align-items: stretch;
+  gap: var(--space-2-5);
   margin-top: var(--space-5);
-  padding: 0 var(--space-4);
-  border-block: 1px solid var(--color-border);
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
 }
 
-.pulseBar strong {
-  margin-right: var(--space-1);
+.metric {
+  --metric-tone: var(--status-muted);
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-0-5);
+  min-width: 6.5rem;
+  max-width: 11rem;
+  padding: var(--space-2-5) var(--space-3-5);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-muted);
+  font-size: var(--type-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+}
+
+.metric::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, var(--metric-tone), transparent 85%);
+  opacity: 0.5;
+  content: "";
+}
+
+.metric[data-tone="working"] {
+  --metric-tone: var(--status-working);
+}
+.metric[data-tone="queued"] {
+  --metric-tone: var(--status-waiting);
+}
+.metric[data-tone="service"] {
+  --metric-tone: var(--color-accent);
+}
+.metric[data-tone="failed"] {
+  --metric-tone: var(--status-failed);
+}
+
+.metric[data-live]::before,
+.failedMetric::before {
+  opacity: 1;
+}
+
+.metric strong {
+  order: -1;
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+  line-height: 1.15;
+  text-transform: none;
+}
+
+.failedMetric {
+  border-color: var(--status-failed-line);
+  background: linear-gradient(180deg, var(--status-failed-soft), transparent 4rem), var(--color-surface-1);
 }
 
 .failedMetric strong {
   color: var(--status-failed-text);
 }
 .observed {
+  align-self: flex-end;
   margin-left: auto;
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
+  font-size: var(--type-label);
+  white-space: nowrap;
 }
 
 .staleNotice,
@@ -160,7 +221,7 @@
 }
 
 .tabs {
-  margin-top: var(--space-4);
+  margin-top: var(--space-5);
 }
 .tabList {
   position: sticky;
@@ -204,7 +265,11 @@
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-panel);
-  background: var(--color-surface-1);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+}
+.runList[hidden] {
+  display: none;
 }
 .runRow {
   display: grid;
@@ -219,6 +284,9 @@
   text-align: left;
   background: transparent;
   cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
 }
 .runRow:last-child {
   border-bottom: 0;
@@ -232,12 +300,14 @@
 }
 .runRow[data-selected] {
   background: var(--color-surface-selected);
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 .kindIcon {
   display: grid;
   place-items: center;
   width: 2rem;
   height: 2rem;
+  border: 1px solid var(--color-border-lit-soft);
   border-radius: var(--radius-md);
   color: var(--color-accent-text);
   background: var(--color-accent-soft);
@@ -282,6 +352,8 @@
   gap: var(--space-3);
   align-self: start;
   padding: var(--space-4);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-panel);
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   line-height: var(--leading-relaxed);
@@ -302,11 +374,23 @@
   gap: var(--space-3);
 }
 .queueColumn {
+  --lane-tone: var(--status-muted);
   min-height: 9rem;
-  padding: var(--space-3);
-  border-top: 2px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-1);
+  padding: var(--space-3) var(--space-3-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lane-tone) 9%, transparent), transparent 3.5rem),
+    var(--color-surface-1);
+  box-shadow:
+    inset 0 2px 0 color-mix(in srgb, var(--lane-tone) 70%, transparent),
+    var(--shadow-panel);
+}
+.queueColumn:nth-child(1) {
+  --lane-tone: var(--status-working);
+}
+.queueColumn:nth-child(2) {
+  --lane-tone: var(--color-accent);
 }
 .queueColumn header {
   display: flex;
@@ -316,7 +400,10 @@
 }
 .queueColumn h3 {
   margin: 0;
-  font-size: var(--text-md);
+  font-size: var(--type-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 .queueColumn header span,
 .columnEmpty {
@@ -357,8 +444,16 @@
   align-items: center;
   padding: var(--space-3);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--color-surface-1);
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard);
+}
+.queueItem:hover,
+.queueItem:focus-within {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-2);
 }
 .queueItem[data-dragged] {
   opacity: 0.58;
@@ -452,10 +547,11 @@
   overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
 }
 .serviceTable {
   width: 100%;
-  min-width: 68rem;
+  min-width: 46rem;
   border-collapse: collapse;
   background: var(--color-surface-1);
 }
@@ -471,15 +567,24 @@
   position: sticky;
   top: 0;
   color: var(--color-text-muted);
+  font-size: var(--type-label);
   font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
   background: var(--color-surface-2);
+}
+.serviceTable tbody tr {
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+.serviceTable tbody tr:hover {
+  background: var(--color-surface-hover);
 }
 .serviceTable tr:last-child td {
   border-bottom: 0;
 }
 .serviceActions {
+  flex-wrap: wrap;
   justify-content: flex-end;
-  min-width: 22rem;
 }
 .endpoints {
   display: grid;
@@ -512,25 +617,31 @@
   margin: 0 0 var(--space-3);
   font-size: var(--text-md);
 }
+/* Wraps to two columns in narrow windows instead of clipping the Production card. */
 .environmentGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(15rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
   gap: var(--space-3);
-  overflow-x: auto;
-  padding-bottom: var(--space-2);
 }
 .environment {
   display: flex;
   flex-direction: column;
-  min-height: 30rem;
+  min-width: 0;
+  min-height: 22rem;
   padding: var(--space-4);
-  border-top: 2px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow:
+    inset 0 2px 0 var(--color-border-strong),
+    var(--shadow-panel);
 }
 .environment[data-production] {
-  border-top-color: var(--status-paused);
+  border-color: var(--status-paused-line);
   background: linear-gradient(180deg, var(--status-paused-soft), transparent 7rem), var(--color-surface-1);
+  box-shadow:
+    inset 0 2px 0 var(--status-paused),
+    var(--shadow-panel);
 }
 .environment > header {
   display: flex;
@@ -549,7 +660,14 @@
 }
 .notObserved {
   margin: auto 0;
+  padding: var(--space-5) var(--space-3);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
   text-align: center;
+}
+.notObserved strong {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
 }
 .notObserved p {
   color: var(--color-text-muted);
@@ -643,8 +761,9 @@
 .activityHero {
   padding: var(--space-5);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-panel);
-  background: var(--color-surface-1);
+  border-radius: var(--radius-lg);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
 }
 .activityHeading {
   align-items: center;
@@ -732,6 +851,7 @@
   border: 0;
   border-radius: var(--radius-xs);
   background: var(--color-bg-sunken);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
   cursor: pointer;
   transition: transform var(--dur-fast) var(--ease-out);
 }
@@ -752,6 +872,7 @@
 }
 .heatCell[data-level="4"] {
   background: var(--color-accent);
+  box-shadow: 0 0 14px -4px var(--color-glow);
 }
 .activityFeed {
   border-top: 1px solid var(--color-border);
@@ -782,7 +903,12 @@
   gap: var(--space-3);
   align-items: center;
   min-height: 3.5rem;
+  padding: 0 var(--space-2);
   border-top: 1px solid var(--color-border-subtle);
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+.activityFeed li:hover {
+  background: var(--color-surface-hover);
 }
 .activityFeed li small,
 .testList small,
@@ -795,7 +921,11 @@
 .activityGlyph {
   display: grid;
   place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-md);
   color: var(--color-accent-text);
+  background: var(--color-accent-soft);
 }
 .activityGlyph svg {
   width: 1rem;
@@ -812,12 +942,23 @@
   width: min(42rem, calc(100vw - var(--sidebar-w-collapsed)));
   border-left: 1px solid var(--color-border-strong);
   background: var(--color-surface-1);
-  box-shadow: -8px 0 8px -8px rgb(0 0 0 / 0.5);
+  box-shadow:
+    -32px 0 64px -24px rgb(0 0 0 / 0.7),
+    -1px 0 0 var(--color-border-lit-soft);
+  animation: detail-in var(--dur-base) var(--ease-emphasized);
+}
+/* Slides in from the edge; content is interactive from the first frame. */
+@keyframes detail-in {
+  from {
+    opacity: 0.4;
+    transform: translateX(1.5rem);
+  }
 }
 .detailHeader {
   flex-shrink: 0;
   padding: var(--space-5);
   border-bottom: 1px solid var(--color-border);
+  background: radial-gradient(32rem 10rem at 0% 0%, var(--color-accent-soft), transparent 70%), var(--color-surface-2);
 }
 .detailHeader h2 {
   margin: var(--space-1) 0 var(--space-2);
@@ -846,9 +987,19 @@
   background: transparent;
   cursor: pointer;
 }
+.detailTabs button {
+  transition:
+    color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard);
+}
+.detailTabs button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
 .detailTabs button[aria-selected="true"] {
   color: var(--color-text);
   background: var(--color-surface-active);
+  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
 }
 .detailContent {
   display: flex;
@@ -891,11 +1042,15 @@
 }
 .overview section {
   padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border-subtle);
 }
 .overview h3 {
   margin: 0 0 var(--space-2);
-  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  font-size: var(--type-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 .overview p,
 .overview li {
@@ -1011,8 +1166,11 @@
     flex-direction: column;
   }
   .pulseBar {
-    gap: var(--space-3);
-    overflow-x: auto;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .metric {
+    max-width: none;
   }
   .observed {
     margin-left: 0;
@@ -1037,4 +1195,10 @@
   .heatCell {
     transition: none;
   }
+  .detail {
+    animation: none;
+  }
+}
+:global([data-motion="reduced"]) .detail {
+  animation: none;
 }

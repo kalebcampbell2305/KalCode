@@ -50,7 +50,7 @@
   height: var(--control-h-md);
   padding: 0 var(--space-2);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-secondary);
   font-size: var(--type-ui);
@@ -64,6 +64,13 @@
 .tile:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
+}
+
+.row:active,
+.tile:active,
+.emptyRow:active {
+  background: var(--color-surface-active);
+  transition-duration: 0ms;
 }
 
 .row:focus-visible,
@@ -209,14 +216,19 @@
   height: var(--control-h-md);
   padding: 0 var(--space-2);
   border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-muted);
   font-size: var(--type-ui);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .emptyRow:hover {
   border-color: var(--color-border-lit-soft);
+  background: var(--color-accent-soft);
   color: var(--color-text);
 }
 
