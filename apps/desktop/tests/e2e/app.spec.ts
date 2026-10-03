@@ -180,7 +180,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
 
     const claude = app.page.getByRole("region", { name: "Claude Code", exact: true });
     await expect(claude.getByText(/^Installed, version \d+\.\d+\.\d+/)).toBeVisible({ timeout: 30_000 });
-    await expect(claude.getByText(/^(Signed in|Signed out|Sign-in status unknown)$/)).toBeVisible();
+    await expect(claude.getByText("Signed in (1 account)", { exact: true })).toBeVisible();
     // Every provider ends with a definite result, never a spinner.
     for (const name of ["Codex", "Gemini CLI"]) {
       const region = app.page.getByRole("region", { name, exact: true });
