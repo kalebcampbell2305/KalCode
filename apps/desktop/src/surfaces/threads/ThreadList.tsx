@@ -141,7 +141,9 @@ export function ThreadList({
                           </span>
                         </span>
                       ) : null}
-                      <span className={styles.nameText}>{thread.name}</span>
+                      <span className={styles.nameText} title={thread.name}>
+                        {thread.name}
+                      </span>
                     </span>
                     <time
                       className={styles.time}

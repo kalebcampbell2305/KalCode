@@ -1167,6 +1167,13 @@ fn read_checked_file(firewall: &Firewall, raw_path: &str, check: &PathCheck) -> 
             reason: "the path is outside the workspace".to_owned(),
         });
     };
+    // Refuse special files before opening: opening a FIFO for reading blocks until a writer
+    // appears (macOS and Linux). The handle check below still covers a swap after this.
+    if !std::fs::metadata(real).map_err(io_error)?.is_file() {
+        return Err(ContextError::PathRejected {
+            reason: "the path is not a regular file".to_owned(),
+        });
+    }
     let file = std::fs::File::open(real).map_err(io_error)?;
     let metadata = file.metadata().map_err(io_error)?;
     if !metadata.is_file() {

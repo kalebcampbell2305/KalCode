@@ -41,9 +41,13 @@ pub fn read_text(mut file: std::fs::File, file_ref: FileRef) -> Result<TextFile>
     let truncated = buffer.len() > MAX_TEXT_BYTES;
     if truncated {
         buffer.truncate(MAX_TEXT_BYTES);
-        // Don't cut a character in half.
-        while !buffer.is_empty() && std::str::from_utf8(&buffer).is_err() {
-            buffer.pop();
+        // Don't cut a character in half: drop only an incomplete character at the cut. Any
+        // other invalid byte means the file isn't UTF-8 text.
+        if let Err(error) = std::str::from_utf8(&buffer) {
+            if error.error_len().is_some() {
+                return Err(binary());
+            }
+            buffer.truncate(error.valid_up_to());
         }
     }
     if buffer.iter().take(8192).any(|b| *b == 0) {
@@ -99,6 +103,32 @@ mod tests {
         let read = read_text(std::fs::File::open(&big).expect("open"), file_ref()).expect("read");
         assert!(read.truncated);
         assert!(read.text.len() <= MAX_TEXT_BYTES);
+    }
+
+    #[test]
+    fn a_large_file_cut_mid_character_keeps_its_whole_characters() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cut.txt");
+        // "é" is two bytes: the 2 MiB cut lands inside one.
+        std::fs::write(&path, format!("a{}", "é".repeat(MAX_TEXT_BYTES))).expect("write");
+        let read = read_text(std::fs::File::open(&path).expect("open"), file_ref()).expect("read");
+        assert!(read.truncated);
+        assert_eq!(read.text.len(), MAX_TEXT_BYTES - 1);
+    }
+
+    #[test]
+    fn a_large_file_with_invalid_utf8_inside_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("latin1.csv");
+        // A Windows-1252 "é" (0xE9) early in a file larger than the read limit.
+        let mut bytes = b"name,city\n".to_vec();
+        bytes.push(0xE9);
+        bytes.resize(MAX_TEXT_BYTES + 1024, b'x');
+        std::fs::write(&path, bytes).expect("write");
+        assert_eq!(
+            read_text(std::fs::File::open(&path).expect("open"), file_ref()).map_err(|e| e.code),
+            Err("file_not_text")
+        );
     }
 
     #[test]

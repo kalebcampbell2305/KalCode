@@ -919,9 +919,18 @@ fn run_worker(inner: &Arc<Inner>, rx: &Receiver<Work>) {
     }
 }
 
-fn apply(inner: &Arc<Inner>, dirty: Dirty) -> Result<()> {
+fn apply(inner: &Arc<Inner>, mut dirty: Dirty) -> Result<()> {
     if let Some(clear) = dirty.rebuild {
-        return rebuild(inner, clear);
+        rebuild(inner, clear)?;
+        // A rebuild re-reads every source but backfills activity only into an empty index, so
+        // activity events batched with it are still applied.
+        if dirty.activity.is_empty() {
+            return Ok(());
+        }
+        dirty = Dirty {
+            activity: dirty.activity,
+            ..Dirty::default()
+        };
     }
     let core = &inner.core;
     let rows = inner.store.read(rail::load_rows)?;

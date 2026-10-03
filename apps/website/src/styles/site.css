@@ -83,7 +83,21 @@
   gap: var(--space-2) var(--space-6);
 }
 
+/* Narrow phones: the X handles need the full width rather than half a column. */
+@media (max-width: 24rem) {
+  .site-footer__follow {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Tablet: the brand keeps its own row so the four link columns (and the X handles) fit. */
 @media (min-width: 48rem) {
+  .site-footer__grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 64rem) {
   .site-footer__grid {
     grid-template-columns: 2fr repeat(4, minmax(0, 1fr));
   }
@@ -559,6 +573,12 @@ html[data-os="linux"] .platform[data-os="linux"] {
     grid-row: 1 / span 3;
     align-self: center;
   }
+
+  /* Notes and the terms line stack under the details instead of auto-filling the action column,
+     where notes of different heights sat side by side, centred against each other. */
+  .platform[data-state="available"] > :not(.platform__action) {
+    grid-column: 1;
+  }
 }
 
 .expect {
@@ -1016,8 +1036,16 @@ kbd.ptt__key {
 
 .page-head__inner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-6);
   justify-items: start;
+}
+
+/* A long status chip wraps instead of widening the head past a narrow phone screen. */
+.page-head .chip {
+  max-width: 100%;
+  padding-block: 0.3rem;
+  white-space: normal;
 }
 
 .page-head .lead {

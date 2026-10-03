@@ -309,6 +309,13 @@
   height: 0.6875rem;
 }
 
+/* The flex row above can't ellipsize its own text; the name does. */
+.branchName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .branchGlyph {
   width: 0.8125rem;
   height: 0.8125rem;

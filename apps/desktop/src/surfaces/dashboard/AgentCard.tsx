@@ -257,14 +257,17 @@ export const AgentCard = memo(function AgentCard({
           </span>
         ) : null}
         {thread.branch ? (
-          <span className={styles.branch} title={thread.worktreeId ? "Its own worktree and branch" : undefined}>
+          <span
+            className={styles.branch}
+            title={thread.worktreeId ? `${thread.branch} · its own worktree and branch` : thread.branch}
+          >
             {thread.worktreeId ? (
               <FolderGit2 aria-hidden="true" className={styles.branchGlyph} />
             ) : (
               <GitBranch aria-hidden="true" className={styles.branchGlyph} />
             )}
             <span className="visually-hidden">{thread.worktreeId ? "worktree branch " : "branch "}</span>
-            {thread.branch}
+            <span className={styles.branchName}>{thread.branch}</span>
           </span>
         ) : null}
         {worktree?.ahead ? (

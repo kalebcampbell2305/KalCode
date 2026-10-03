@@ -944,6 +944,12 @@ impl HttpSession {
             if body.len() > MAX_RESPONSE_BYTES {
                 body.truncate(MAX_RESPONSE_BYTES);
                 truncated = true;
+                // A cap inside a multi-byte character must not make a text body look binary.
+                if let Err(error) = std::str::from_utf8(&body)
+                    && error.error_len().is_none()
+                {
+                    body.truncate(error.valid_up_to());
+                }
             }
         }
         Ok(Hop {

@@ -180,6 +180,38 @@ fn budgets_trim_output_and_refuse_oversize_files() {
     assert_eq!(package.budget_bytes, 1024);
 }
 
+/// Opening a FIFO for reading blocks until a writer appears; building a package must never wait
+/// on one.
+#[cfg(unix)]
+#[test]
+fn a_named_pipe_never_blocks_package_building() {
+    let ws = Ws::new();
+    let fifo = ws.path().join("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    let root = ws.path().to_path_buf();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let firewall = Firewall::for_root(&root);
+        let package = ContextPackage::build(
+            &firewall,
+            &FakeProviderCapabilities::everything(),
+            options(),
+            vec![ContextItem::file("pipe")],
+        );
+        let _ = done.send(package.items.len());
+    });
+    let items = finished
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("package building returned instead of waiting on the pipe");
+    assert_eq!(items, 1);
+    // Unblock the reader thread if the build is still stuck on the pipe.
+    drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+}
+
 #[test]
 fn hash_is_pinned_until_send() {
     let ws = Ws::new();

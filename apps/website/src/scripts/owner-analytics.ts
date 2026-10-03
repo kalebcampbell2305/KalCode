@@ -868,7 +868,9 @@ function renderRevenue(r: Revenue) {
 // ---------------------------------------------------------------- loading and live state
 
 type Gate = "loading" | "signed-out" | "forbidden" | "error" | "open";
+let gateState: Gate = "loading";
 function gate(state: Gate, message?: string) {
+  gateState = state;
   const section = $("[data-gate]");
   const content = $("[data-content]");
   const controls = $("[data-controls]");
@@ -904,18 +906,31 @@ function liveState() {
   const label = $("[data-live-label]");
   if (!badge || !label) return;
   const fresh = lastLoaded !== null && Date.now() - lastLoaded.getTime() < REFRESH_MS * 2 && !lastError;
-  const state =
-    document.visibilityState !== "visible" ? "paused" : lastLoaded === null ? "connecting" : fresh ? "live" : "stale";
+  // Never "Connecting" once the gate has answered (signed out, forbidden or unreachable).
+  const idle = lastLoaded === null ? (gateState === "loading" ? "connecting" : "offline") : null;
+  const state = document.visibilityState !== "visible" ? "paused" : (idle ?? (fresh ? "live" : "stale"));
   badge.dataset.state = state;
-  label.textContent = { live: "Live", stale: "Reconnecting", paused: "Paused", connecting: "Connecting" }[state];
+  label.textContent = {
+    live: "Live",
+    stale: "Reconnecting",
+    paused: "Paused",
+    connecting: "Connecting",
+    offline: "Not connected",
+  }[state];
   const updated = $("[data-updated]");
   if (updated && lastLoaded) {
     updated.textContent = `Updated ${lastLoaded.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
   }
 }
 
+/** Resolves with status 0 when the request never reached the API, so no call can reject unawaited. */
 async function call(path: string): Promise<{ status: number; body: unknown }> {
-  const response = await fetch(`${API}${path}`, { credentials: "include", headers: { accept: "application/json" } });
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, { credentials: "include", headers: { accept: "application/json" } });
+  } catch {
+    return { status: 0, body: null };
+  }
   let body: unknown = null;
   try {
     body = await response.json();

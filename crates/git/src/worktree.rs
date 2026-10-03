@@ -359,7 +359,7 @@ pub fn commit_all(
         .timeout(std::time::Duration::from_secs(300))
         .run_ok("worktree")?;
     let out = in_worktree()
-        .args(["commit", "--quiet", "--file=-", "--cleanup=strip"])
+        .args(["commit", "--quiet", "--file=-", "--cleanup=whitespace"])
         .stdin(message.into_bytes())
         .timeout(std::time::Duration::from_secs(300))
         .run()?;

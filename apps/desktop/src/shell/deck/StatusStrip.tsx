@@ -171,11 +171,13 @@ interface SegmentProps {
 
 function Segment({ icon, label, spoken, tone, value, detail, pulse = false, title, onClick }: SegmentProps) {
   return (
-    <Tooltip content={title} side="top">
+    // Narrow windows hide the detail text, so the tooltip carries it too.
+    <Tooltip content={detail ? `${title} · ${detail}` : title} side="top">
       <button
         type="button"
         className={styles.segment}
         data-tone={tone}
+        data-detail={detail ? "" : undefined}
         onClick={onClick}
         aria-label={`${spoken}: ${value}${detail ? `, ${detail}` : ""}`}
       >
