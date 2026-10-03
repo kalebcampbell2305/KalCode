@@ -16,6 +16,7 @@ import { limitsFor } from "@kalcode/protocol";
 import {
   Badge,
   Button,
+  cx,
   EmptyState,
   ErrorState,
   Field,
@@ -447,16 +448,16 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
       </header>
 
       <section className={styles.pulseBar} aria-label="Operations summary">
-        <span>
+        <span className={styles.metric} data-tone="working" data-live={active > 0 || undefined}>
           <strong>{active}</strong> running
         </span>
-        <span>
+        <span className={styles.metric} data-tone="queued" data-live={queued > 0 || undefined}>
           <strong>{queued}</strong> queued
         </span>
-        <span>
+        <span className={styles.metric} data-tone="service">
           <strong>{snapshot.services.filter((service) => service.status === "running").length}</strong> services
         </span>
-        <span className={failed > 0 ? styles.failedMetric : undefined}>
+        <span className={cx(styles.metric, failed > 0 && styles.failedMetric)} data-tone="failed">
           <strong>{failed}</strong> failed
         </span>
         <span className={styles.observed}>Observed {timeLabel(state.observedAt ?? snapshot.observedAt)}</span>
@@ -688,13 +689,13 @@ function RunsView({
 
   return (
     <section className={styles.runLayout} aria-label="Execution history">
-      {shownRuns.length === 0 ? (
-        <EmptyState art={<ListChecks />} title="No runs recorded">
-          <p>Queued work appears here when the native scheduler starts it. Load older to check earlier history.</p>
-        </EmptyState>
-      ) : null}
       <div className={styles.runColumn}>
-        <div className={styles.runList}>
+        {shownRuns.length === 0 ? (
+          <EmptyState art={<ListChecks />} title="No runs recorded">
+            <p>Queued work appears here when the native scheduler starts it. Load older to check earlier history.</p>
+          </EmptyState>
+        ) : null}
+        <div className={styles.runList} hidden={shownRuns.length === 0}>
           {shownRuns.map((run) => (
             <button
               key={run.id}
@@ -740,7 +741,11 @@ function RunsView({
         ) : null}
       </div>
       <div className={styles.runHint}>
-        <span>Select a run to inspect its timeline, logs, changed files, artifacts, and tests.</span>
+        {shownRuns.length > 0 ? (
+          <span>Select a run to inspect its timeline, logs, changed files, artifacts, and tests.</span>
+        ) : (
+          <span>Earlier runs may be in your history.</span>
+        )}
         {historyError ? <span role="alert">{historyError}</span> : null}
         {hiddenRuns > 0 ? null : !historyStarted || cursor !== null ? (
           <Button size="sm" variant="secondary" busy={loadingHistory} onClick={() => void loadOlder()}>
