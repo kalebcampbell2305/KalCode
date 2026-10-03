@@ -41,6 +41,15 @@ const guardianEvidence = {
   publisherIdentityBound: true,
   bundledBesideApplication: true,
 };
+const hookEvidence = {
+  file: "kalcode-hook.exe",
+  sha256: "d".repeat(64),
+  signed: true,
+  signatureStatus: "Valid",
+  timestamped: true,
+  publisherIdentityBound: true,
+  bundledBesideApplication: true,
+};
 
 test("release subprocesses are hidden and bounded", () => {
   assert.deepEqual(releaseProcessOptions({ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), {
@@ -265,8 +274,17 @@ test("a public release requires valid timestamped installer and application sign
     },
     file: "KalCode_1.2.3_x64-setup.exe",
     guardian: guardianEvidence,
+    hook: hookEvidence,
   };
   assert.deepEqual(publicSigningProblems(build), []);
+  assert.match(publicSigningProblems({ ...build, hook: undefined }).join("\n"), /hook helper/);
+  assert.match(
+    publicSigningProblems({
+      ...build,
+      hook: { ...hookEvidence, signatureStatus: "NotSigned", signed: false },
+    }).join("\n"),
+    /signed hook helper/,
+  );
   assert.match(publicSigningProblems({ ...build, guardian: undefined }).join("\n"), /guardian/);
   assert.match(
     publicSigningProblems({
@@ -448,6 +466,7 @@ test("public verification requires the exact build plus clean, shortcut, and upd
     commit: "a".repeat(40),
     sha256: "b".repeat(64),
     guardian: guardianEvidence,
+    hook: hookEvidence,
   };
   const verify = {
     status: "passed",
@@ -467,6 +486,14 @@ test("public verification requires the exact build plus clean, shortcut, and upd
       publisherIdentityBound: true,
       allInstallPassesVerified: true,
     },
+    hook: {
+      file: hookEvidence.file,
+      sha256: hookEvidence.sha256,
+      signatureStatus: "Valid",
+      timestamped: true,
+      publisherIdentityBound: true,
+      allInstallPassesVerified: true,
+    },
     launchedApp: false,
     preflight: { existingInstall: [], runningKalcode: [] },
     checks: [{ name: "all release checks completed", ok: true }],
@@ -478,6 +505,13 @@ test("public verification requires the exact build plus clean, shortcut, and upd
         installedGuardian: {
           file: guardianEvidence.file,
           sha256: guardianEvidence.sha256,
+          signatureStatus: "Valid",
+          timestamped: true,
+          signerMatchesInstaller: true,
+        },
+        installedHook: {
+          file: hookEvidence.file,
+          sha256: hookEvidence.sha256,
           signatureStatus: "Valid",
           timestamped: true,
           signerMatchesInstaller: true,
@@ -500,6 +534,13 @@ test("public verification requires the exact build plus clean, shortcut, and upd
           timestamped: true,
           signerMatchesInstaller: true,
         },
+        installedHook: {
+          file: hookEvidence.file,
+          sha256: hookEvidence.sha256,
+          signatureStatus: "Valid",
+          timestamped: true,
+          signerMatchesInstaller: true,
+        },
         afterUninstall: {
           uninstallEntry: false,
           installFolder: false,
@@ -518,6 +559,13 @@ test("public verification requires the exact build plus clean, shortcut, and upd
           timestamped: true,
           signerMatchesInstaller: true,
         },
+        installedHook: {
+          file: hookEvidence.file,
+          sha256: hookEvidence.sha256,
+          signatureStatus: "Valid",
+          timestamped: true,
+          signerMatchesInstaller: true,
+        },
         updateModeRehearsal: true,
         afterUninstall: {
           uninstallEntry: false,
@@ -529,6 +577,14 @@ test("public verification requires the exact build plus clean, shortcut, and upd
     ],
   };
   assert.deepEqual(publicVerificationProblems(build, verify), []);
+  assert.match(publicVerificationProblems(build, { ...verify, hook: undefined }).join("\n"), /hook helper/);
+  assert.match(
+    publicVerificationProblems(build, {
+      ...verify,
+      passes: verify.passes.map((pass, index) => (index === 2 ? { ...pass, installedHook: undefined } : pass)),
+    }).join("\n"),
+    /hook helper/,
+  );
   assert.match(publicVerificationProblems(build, { ...verify, guardian: undefined }).join("\n"), /guardian/);
   assert.match(
     publicVerificationProblems(build, {

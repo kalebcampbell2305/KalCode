@@ -17,6 +17,7 @@ const commit = "a".repeat(40);
 const artifactBytes = Buffer.from("updater artifact");
 const artifactSha256 = createHash("sha256").update(artifactBytes).digest("hex");
 const guardianSha256 = "c".repeat(64);
+const hookSha256 = "e".repeat(64);
 const baselineCommit = "b".repeat(40);
 const baselineSha256 = "d".repeat(64);
 
@@ -149,6 +150,15 @@ function evidence(channel = "stable") {
       publisherIdentityBound: true,
       bundledBesideApplication: true,
     },
+    hook: {
+      file: "kalcode-hook.exe",
+      sha256: hookSha256,
+      signed: true,
+      signatureStatus: "Valid",
+      timestamped: true,
+      publisherIdentityBound: true,
+      bundledBesideApplication: true,
+    },
     compiledChannelVerification: {
       status: "verified",
       method: "build_info_probe_v1",
@@ -172,6 +182,13 @@ function evidence(channel = "stable") {
     timestamped: true,
     signerMatchesInstaller: true,
   };
+  const installedHook = {
+    file: build.hook.file,
+    sha256: hookSha256,
+    signatureStatus: "Valid",
+    timestamped: true,
+    signerMatchesInstaller: true,
+  };
   const verify = {
     status: "passed",
     version: build.version,
@@ -190,6 +207,14 @@ function evidence(channel = "stable") {
       publisherIdentityBound: true,
       allInstallPassesVerified: true,
     },
+    hook: {
+      file: build.hook.file,
+      sha256: hookSha256,
+      signatureStatus: "Valid",
+      timestamped: true,
+      publisherIdentityBound: true,
+      allInstallPassesVerified: true,
+    },
     launchedApp: false,
     preflight: { existingInstall: [], runningKalcode: [] },
     checks: [{ name: "all checks", ok: true }],
@@ -199,6 +224,7 @@ function evidence(channel = "stable") {
         installedAppSignature,
         installedAppSignerMatchesInstaller: true,
         installedGuardian,
+        installedHook,
         afterUninstall,
       },
       {
@@ -206,6 +232,7 @@ function evidence(channel = "stable") {
         installedAppSignature,
         installedAppSignerMatchesInstaller: true,
         installedGuardian,
+        installedHook,
         afterUninstall,
       },
       {
@@ -213,6 +240,7 @@ function evidence(channel = "stable") {
         installedAppSignature,
         installedAppSignerMatchesInstaller: true,
         installedGuardian,
+        installedHook,
         updateModeRehearsal: true,
         afterUninstall,
       },
@@ -371,6 +399,34 @@ test("rejects ineligible, unsigned, mismatched-channel, and identity-bearing bui
         notes: "Update.",
       }),
       /not eligible|signature|channel|redacted/,
+    );
+  }
+});
+
+test("public updater publication requires the exact installed hook helper in every Windows pass", async () => {
+  for (const mutate of [
+    (input) => ({ ...input, build: { ...input.build, hook: undefined } }),
+    (input) => ({ ...input, verify: { ...input.verify, hook: undefined } }),
+    (input) => ({
+      ...input,
+      verify: {
+        ...input.verify,
+        passes: input.verify.passes.map((pass) =>
+          pass.name === "upgrade"
+            ? { ...pass, installedHook: { ...pass.installedHook, sha256: "f".repeat(64) } }
+            : pass,
+        ),
+      },
+    }),
+  ]) {
+    const input = mutate(fixture());
+    await assert.rejects(
+      createUpdaterManifest({
+        ...input,
+        publishedAt: "2026-09-25T12:00:00.000Z",
+        notes: "Update.",
+      }),
+      /hook helper/,
     );
   }
 });

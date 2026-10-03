@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { verifyComponentNotices } from "./component-notices.mjs";
 import { guardianInstalledProblems } from "./guardian-packaging.mjs";
+import { hookInstalledProblems } from "./hook-packaging.mjs";
 import {
   fail,
   powershell,
@@ -294,6 +295,7 @@ async function uninstall(installDir) {
       !existsSync(uninstaller) &&
       !existsSync(join(installDir, "kalcode.exe")) &&
       !existsSync(join(installDir, build.guardian.file)) &&
+      !existsSync(join(installDir, build.hook.file)) &&
       registry(UNINSTALL_KEY) === null,
     120_000,
     "the silent uninstall to finish",
@@ -420,6 +422,33 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
       `${name}: installed provider guardian matches the signed build hash and publisher`,
       guardianProblems.length === 0,
       guardianProblems.join("; "),
+    );
+    const hook = join(installDir, build.hook.file);
+    const hookExists = existsSync(hook);
+    check(`${name}: provider hook helper installed beside kalcode.exe`, hookExists);
+    const hookSha256 = hookExists ? await sha256File(hook) : null;
+    const hookSignature = hookExists
+      ? authenticodeStatus(hook, powershellJson)
+      : { status: "Missing", timestamped: false };
+    const hookSignerMatchesInstaller = hookExists && sameAuthenticodeSigner(installer, hook, powershellJson);
+    result.installedHook = {
+      file: build.hook.file,
+      sha256: hookSha256,
+      signatureStatus: hookSignature.status,
+      timestamped: hookSignature.timestamped,
+      signerMatchesInstaller: hookSignerMatchesInstaller,
+    };
+    const hookProblems = hookInstalledProblems({
+      buildHook: build.hook,
+      exists: hookExists,
+      sha256: hookSha256,
+      signature: hookSignature,
+      sameSignerAsInstaller: hookSignerMatchesInstaller,
+    });
+    check(
+      `${name}: installed provider hook helper matches the signed build hash and publisher`,
+      hookProblems.length === 0,
+      hookProblems.join("; "),
     );
     result.exeVersionInfo = powershellJson(
       `(Get-Item -LiteralPath ${psQuote(exe)}).VersionInfo | Select-Object ProductName, ProductVersion, FileVersion, CompanyName, FileDescription | ConvertTo-Json -Compress`,
@@ -586,6 +615,25 @@ try {
       ),
   };
   check("provider guardian verified in every install and upgrade pass", report.guardian.allInstallPassesVerified);
+  const hookPasses = report.passes.map((entry) => entry.installedHook);
+  report.hook = {
+    file: build.hook.file,
+    sha256: build.hook.sha256,
+    signatureStatus: "Valid",
+    timestamped: true,
+    publisherIdentityBound: true,
+    allInstallPassesVerified:
+      hookPasses.length === 3 &&
+      hookPasses.every(
+        (hook) =>
+          hook?.file === build.hook.file &&
+          hook?.sha256 === build.hook.sha256 &&
+          hook?.signatureStatus === "Valid" &&
+          hook?.timestamped === true &&
+          hook?.signerMatchesInstaller === true,
+      ),
+  };
+  check("provider hook helper verified in every install and upgrade pass", report.hook.allInstallPassesVerified);
   const noticePasses = report.passes.map((entry) => entry.installedNotices);
   report.notices.allInstallPassesVerified =
     noticePasses.length === 3 &&

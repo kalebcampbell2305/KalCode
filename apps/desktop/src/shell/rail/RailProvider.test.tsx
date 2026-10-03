@@ -96,6 +96,7 @@ afterEach(() => {
 
 const mutations = [
   "update",
+  "pinProject",
   "setSection",
   "createGroup",
   "renameGroup",
@@ -112,6 +113,8 @@ function invoke(rail: RailValue, action: Mutation, f: Awaited<ReturnType<typeof 
   switch (action) {
     case "update":
       return rail.update({ workspaceId: entry.workspaceId, pinned: false });
+    case "pinProject":
+      return rail.pinProject(entry.workspaceId, false);
     case "setSection":
       return rail.setSection("rail", true);
     case "createGroup":
@@ -277,27 +280,189 @@ describe("RailProvider runtime isolation", () => {
     expect(view.result.current.rail.rail).toEqual(next.rail);
   });
 
-  it("blocks disabled callbacks and recovers with fresh handlers", async () => {
+  it("keeps shared project pins available while full rail mutations remain gated", async () => {
     const f = await fixture();
     const spies = stubMutations(f);
     const view = await mount(f);
     const retained = view.result.current.rail;
     contexts.enabled = false;
     view.rerender();
+    await waitFor(() => expect(view.result.current.rail.state).toBe("ready"));
     f.read.mockClear();
     await act(async () => {
       await retained.refresh();
       await retained.createGroup("Old");
-      await view.result.current.rail.createGroup("Disabled");
+      expect(await view.result.current.rail.createGroup("Disabled")).toBeNull();
     });
     expect(f.read).not.toHaveBeenCalled();
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    expect(view.result.current.rail.rail).toBeNull();
+    expect(view.result.current.rail).toMatchObject({ enabled: false, rail: f.rail });
+
+    const candidate = f.rail.recent[0];
+    if (!candidate) throw new Error("Expected an unpinned project");
+    await act(async () => view.result.current.rail.pinProject(candidate.workspaceId, true));
+    expect(spies[0]).toHaveBeenCalledExactlyOnceWith({ workspaceId: candidate.workspaceId, pinned: true });
+    for (const spy of spies.slice(1)) expect(spy).not.toHaveBeenCalled();
+    expect(f.read).toHaveBeenCalledTimes(1);
+
     contexts.enabled = true;
     view.rerender();
     await waitFor(() => expect(view.result.current.rail.state).toBe("ready"));
     await act(async () => {
       expect(await view.result.current.rail.createGroup("Current")).not.toBeNull();
+    });
+  });
+
+  it("applies pin writes immediately, serializes them and fences an older refresh", async () => {
+    const f = await fixture();
+    const view = await mount(f);
+    const candidate = f.rail.recent[0];
+    if (!candidate) throw new Error("Expected an unpinned project");
+    const stale = deferred<RailState>();
+    const firstWrite = deferred<typeof candidate>();
+    const secondWrite = deferred<typeof candidate>();
+    const committed: RailState = {
+      ...f.rail,
+      pinned: [{ ...candidate, pinned: true }, ...f.rail.pinned],
+      recent: f.rail.recent.filter((entry) => entry.workspaceId !== candidate.workspaceId),
+    };
+    f.read.mockReturnValueOnce(stale.promise).mockResolvedValue(committed);
+    const write = vi
+      .spyOn(f.client, "railUpdate")
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockReturnValueOnce(secondWrite.promise);
+
+    let reading!: Promise<void>;
+    let pinning!: Promise<void>;
+    let reordering!: Promise<void>;
+    act(() => {
+      reading = view.result.current.rail.refresh();
+    });
+    act(() => {
+      pinning = view.result.current.rail.pinProject(candidate.workspaceId, true);
+      reordering = view.result.current.rail.pinProject(candidate.workspaceId, 0);
+    });
+
+    expect(view.result.current.rail.rail?.pinned[0]).toMatchObject({
+      workspaceId: candidate.workspaceId,
+      pinned: true,
+    });
+    expect(view.result.current.rail.rail?.recent.some((entry) => entry.workspaceId === candidate.workspaceId)).toBe(
+      false,
+    );
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    expect(write).toHaveBeenNthCalledWith(1, { workspaceId: candidate.workspaceId, pinned: true });
+
+    await act(async () => {
+      stale.resolve(f.rail);
+      await reading;
+    });
+    expect(view.result.current.rail.rail?.pinned[0]?.workspaceId).toBe(candidate.workspaceId);
+
+    await act(async () => {
+      firstWrite.resolve({ ...candidate, pinned: true });
+    });
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    expect(write).toHaveBeenNthCalledWith(2, { workspaceId: candidate.workspaceId, position: 0 });
+    await act(async () => {
+      secondWrite.resolve({ ...candidate, pinned: true });
+      await Promise.all([pinning, reordering]);
+    });
+    expect(view.result.current.rail.rail).toEqual(committed);
+  });
+
+  it("finishes accepted pin writes in order after Activity reconnects", async () => {
+    const f = await fixture();
+    const view = await mount(f);
+    const candidate = f.rail.recent[0];
+    if (!candidate) throw new Error("Expected an unpinned project");
+    const pinWrite = deferred<typeof candidate>();
+    const reorderWrite = deferred<typeof candidate>();
+    const committed: RailState = {
+      ...f.rail,
+      pinned: [{ ...candidate, pinned: true }, ...f.rail.pinned],
+      recent: f.rail.recent.filter((entry) => entry.workspaceId !== candidate.workspaceId),
+    };
+    const update = vi
+      .spyOn(f.client, "railUpdate")
+      .mockReturnValueOnce(pinWrite.promise)
+      .mockReturnValueOnce(reorderWrite.promise);
+    f.read.mockClear().mockResolvedValue(committed);
+
+    let pinning!: Promise<void>;
+    let reordering!: Promise<void>;
+    act(() => {
+      pinning = view.result.current.rail.pinProject(candidate.workspaceId, true);
+      reordering = view.result.current.rail.pinProject(candidate.workspaceId, 0);
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update).toHaveBeenNthCalledWith(1, { workspaceId: candidate.workspaceId, pinned: true });
+    view.visibility(false);
+    view.visibility(true);
+    expect(view.result.current.rail).toMatchObject({ state: "loading", rail: null });
+
+    await act(async () => {
+      pinWrite.resolve({ ...candidate, pinned: true });
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenNthCalledWith(2, { workspaceId: candidate.workspaceId, position: 0 });
+    expect(f.read).not.toHaveBeenCalled();
+
+    await act(async () => {
+      reorderWrite.resolve({ ...candidate, pinned: true });
+      await Promise.all([pinning, reordering]);
+    });
+    await waitFor(() => expect(view.result.current.rail.state).toBe("ready"));
+    expect(view.result.current.rail.rail).toEqual(committed);
+    expect(f.read).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles a failed optimistic pin and explains the failure", async () => {
+    const f = await fixture();
+    const view = await mount(f);
+    const candidate = f.rail.recent[0];
+    if (!candidate) throw new Error("Expected an unpinned project");
+    const write = deferred<typeof candidate>();
+    vi.spyOn(f.client, "railUpdate").mockReturnValue(write.promise);
+    f.read.mockClear();
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = view.result.current.rail.pinProject(candidate.workspaceId, true);
+    });
+    expect(view.result.current.rail.rail?.pinned.at(-1)?.workspaceId).toBe(candidate.workspaceId);
+
+    await act(async () => {
+      write.reject({
+        category: "database",
+        code: "pin_write_failed",
+        message: "The project pin couldn't be saved.",
+        retryable: true,
+      });
+      await pending;
+    });
+    expect(view.result.current.rail.rail).toEqual(f.rail);
+    expect(f.read).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Couldn't save project pins")).toBeInTheDocument();
+    expect(screen.getByText("The project pin couldn't be saved.")).toBeInTheDocument();
+  });
+
+  it("restores persisted native pin order after the provider remounts", async () => {
+    const f = await fixture();
+    f.read.mockRestore();
+    const view = await mount(f);
+    const candidate = view.result.current.rail.rail?.recent[0];
+    if (!candidate) throw new Error("Expected an unpinned project");
+
+    await act(async () => view.result.current.rail.pinProject(candidate.workspaceId, true));
+    await act(async () => view.result.current.rail.pinProject(candidate.workspaceId, 0));
+    expect(view.result.current.rail.rail?.pinned[0]?.workspaceId).toBe(candidate.workspaceId);
+    view.unmount();
+
+    const remounted = await mount(f);
+    expect(remounted.result.current.rail.rail?.pinned[0]).toMatchObject({
+      workspaceId: candidate.workspaceId,
+      pinned: true,
     });
   });
 
@@ -421,12 +586,13 @@ describe("RailProvider runtime isolation", () => {
     const old = await fixture();
     const next = await fixture();
     const gate = deferred<void>();
-    stubMutations(old, gate.promise);
+    const writes = stubMutations(old, gate.promise);
     const view = await mount(old);
     let pending!: ReturnType<typeof invoke>;
     act(() => {
       pending = invoke(view.result.current.rail, action, old);
     });
+    if (action === "pinProject") await waitFor(() => expect(writes[0]).toHaveBeenCalledTimes(1));
     view.replace(next);
     await waitFor(() => expect(view.result.current.rail.rail).toEqual(next.rail));
     old.read.mockClear();
