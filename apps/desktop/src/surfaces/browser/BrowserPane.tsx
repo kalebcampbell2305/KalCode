@@ -1,4 +1,14 @@
-import { ArrowLeft, ArrowRight, Copy, ExternalLink, LoaderCircle, Maximize2, RefreshCw, Square } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Copy,
+  ExternalLink,
+  LoaderCircle,
+  Maximize2,
+  RefreshCw,
+  Square,
+} from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import type { PaneRenderContext } from "../../shell/panes/contentRegistry.ts";
@@ -82,6 +92,15 @@ export function BrowserPane({
   // The width field's text while it is edited; bounding every keystroke would turn "1" into 320.
   const [customDraft, setCustomDraft] = useState<string | null>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
+  // "Copy URL" confirms itself briefly, so the click is visibly acknowledged.
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
   const attached = useRef(false);
   const addressEditing = useRef(false);
   const alive = useRef(true);
@@ -301,6 +320,23 @@ export function BrowserPane({
       });
   };
 
+  const copyUrl = () => {
+    void navigator.clipboard.writeText(state?.url ?? address).then(
+      () => {
+        if (!alive.current) return;
+        setCopied(true);
+        if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+        copiedTimer.current = window.setTimeout(() => {
+          copiedTimer.current = null;
+          setCopied(false);
+        }, 1500);
+      },
+      () => {
+        if (alive.current) setError("KalCode couldn't copy the address.");
+      },
+    );
+  };
+
   const openExternally = () => {
     let url: string;
     try {
@@ -406,7 +442,7 @@ export function BrowserPane({
             }}
           />
         ) : null}
-        {button("Copy URL", <Copy size={14} />, () => void navigator.clipboard.writeText(state?.url ?? address))}
+        {copied ? button("URL copied", <Check size={14} />, copyUrl) : button("Copy URL", <Copy size={14} />, copyUrl)}
         {button("Open externally", <ExternalLink size={14} />, openExternally)}
       </div>
       <div className={styles.stage}>
