@@ -690,7 +690,9 @@ export function applyShape(layout: PaneLayout, shape: PaneNode): PaneLayout {
     shape,
     slots.map((slot) => assigned.get(slot.paneId) ?? slot),
   );
-  const dock = [...layout.dock, ...dockExtra].slice(0, MAX_TABS_PER_PANE);
+  // A smaller shape must never silently discard overflow (or detach those live sessions).
+  if (layout.dock.length + dockExtra.length > MAX_TABS_PER_PANE) return layout;
+  const dock = [...layout.dock, ...dockExtra];
   return withRoot({ ...layout, maximizedPaneId: null, dock }, root);
 }
 
@@ -820,6 +822,8 @@ export interface GeometryOptions {
 }
 
 export const DEFAULT_GEOMETRY: GeometryOptions = { gutter: 6, minWidth: 140, minHeight: 84, collapsedSize: 34 };
+/** Readable working area; overflowing canvases scroll instead of crushing terminal content. */
+export const CANVAS_GEOMETRY: GeometryOptions = { ...DEFAULT_GEOMETRY, minWidth: 320, minHeight: 220 };
 
 /** A divider between child `index` and `index + 1` of the split at `path`. */
 export interface Divider {
@@ -1075,8 +1079,9 @@ export function neighbourPane(
   direction: PaneDirection,
   width = 1600,
   height = 1000,
+  options: GeometryOptions = DEFAULT_GEOMETRY,
 ): string | null {
-  const { panes } = computeGeometry(layout, width, height);
+  const { panes } = computeGeometry(layout, width, height, options);
   const from = panes.get(paneId);
   if (!from) return null;
   const cx = from.x + from.width / 2;

@@ -58,6 +58,7 @@ export interface ProviderPaneProps {
   account: PaneAccountIdentity | null;
   theme: "light" | "dark";
   focusRequest: number;
+  visible?: boolean;
   /** The thread changed (rename, stop, resume); the host refreshes its list. */
   onChanged?: (thread: ThreadSummary) => void;
   /** The pane isn't focused (Z7-W1): terminal output renders in batches. */
@@ -83,6 +84,7 @@ export const ProviderPane = memo(function ProviderPane({
   account,
   theme,
   focusRequest,
+  visible = true,
   onChanged,
   onClose,
   onMaximize,
@@ -252,6 +254,7 @@ export const ProviderPane = memo(function ProviderPane({
           label={`${thread.name} ${identity.name}${accountLabel ? ` ${accountLabel}` : ""} input`}
           running={running}
           focusRequest={focusRequest + localFocus}
+          visible={visible}
           theme={theme}
           throttled={throttled}
         />
