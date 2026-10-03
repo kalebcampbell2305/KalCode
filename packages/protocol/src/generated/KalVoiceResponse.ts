@@ -3,11 +3,11 @@ import type { KalVoiceOutcome } from "./KalVoiceOutcome.ts";
 import type { KalVoiceUsage } from "./KalVoiceUsage.ts";
 import type { UiDirective } from "./UiDirective.ts";
 
-export type KalVoiceResponse = { requestId: string, 
+export type KalVoiceResponse = { requestId: string,
 /**
  * Stable intent name (`navigate`, `create_threads`, `reasoning`, …) once understood.
  */
-intent: string | null, outcome: KalVoiceOutcome, usage: KalVoiceUsage, 
+intent: string | null, outcome: KalVoiceOutcome, usage: KalVoiceUsage,
 /**
  * Whether this request counted against the allowance.
  */

@@ -5,15 +5,15 @@ import type { PolicyDecision } from "./PolicyDecision.ts";
 /**
  * The kernel's final result for one action.
  */
-export type KernelDecision = { 
+export type KernelDecision = {
 /**
  * Final result (policy result after ceilings and invariants).
  */
-decision: PolicyDecision, invariants: Array<KernelInvariant>, ceilingApplied: string | null, 
+decision: PolicyDecision, invariants: Array<KernelInvariant>, ceilingApplied: string | null,
 /**
  * The action may proceed only after a Rust-side (native) confirmation dialog (D8 set).
  */
-requiresNativeConfirmation: boolean, 
+requiresNativeConfirmation: boolean,
 /**
  * Recorded in `permission_action_log`; used by `explain` and Time Machine replay.
  */

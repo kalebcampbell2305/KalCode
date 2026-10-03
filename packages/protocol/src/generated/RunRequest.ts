@@ -4,16 +4,16 @@ import type { DoctorArea } from "./DoctorArea.ts";
 /**
  * `doctor_run` input.
  */
-export type RunRequest = { 
+export type RunRequest = {
 /**
  * Areas to check; empty = all.
  */
-areas: Array<DoctorArea>, 
+areas: Array<DoctorArea>,
 /**
  * Only these check ids (KalVoice "why is Node not found?" runs `tools.node`); empty = all
  * checks of the areas.
  */
-checks: Array<string>, 
+checks: Array<string>,
 /**
  * The active workspace id. Native code resolves it through the canonical workspace store;
  * the WebView never supplies a path.

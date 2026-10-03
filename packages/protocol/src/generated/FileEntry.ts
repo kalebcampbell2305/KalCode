@@ -4,7 +4,7 @@ import type { FileRef } from "./FileRef.ts";
 /**
  * One entry of a directory listing (`files_list`).
  */
-export type FileEntry = { file: FileRef, isDir: boolean, bytes: number | null, 
+export type FileEntry = { file: FileRef, isDir: boolean, bytes: number | null,
 /**
  * Matched by `.gitignore`, `.git/info/exclude` or the global excludes file.
  */

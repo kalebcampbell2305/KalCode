@@ -5,32 +5,32 @@ import type { FindingSeverity } from "./FindingSeverity.ts";
 import type { FixOption } from "./FixOption.ts";
 import type { IgnoreScope } from "./IgnoreScope.ts";
 
-export type DoctorFinding = { 
+export type DoctorFinding = {
 /**
  * Stable, ignorable code, e.g. `project.env.not_ignored`, `tools.node.missing`.
  */
-code: string, 
+code: string,
 /**
  * Opaque version of this exact observation. A fix must echo it so a later run or changed
  * finding cannot be substituted under an old approval.
  */
-version: string, checkId: string, area: DoctorArea, severity: FindingSeverity, title: string, 
+version: string, checkId: string, area: DoctorArea, severity: FindingSeverity, title: string,
 /**
  * Plain-language explanation: what it means and why it matters.
  */
-explanation: string, 
+explanation: string,
 /**
  * Details: facts behind the finding (paths, versions, counts). Redacted.
  */
-details: Array<DetailFact>, 
+details: Array<DetailFact>,
 /**
  * Items the finding is about (workspace-relative paths, PATH entries), at most 50.
  */
-subjects: Array<string>, fixes: Array<FixOption>, 
+subjects: Array<string>, fixes: Array<FixOption>,
 /**
  * Set when the person ignored this finding (and where).
  */
-ignored: IgnoreScope | null, 
+ignored: IgnoreScope | null,
 /**
  * The workspace a project finding belongs to.
  */

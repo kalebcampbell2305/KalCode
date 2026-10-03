@@ -3,7 +3,7 @@
 /**
  * Exact preconditions for previewing or applying a catalog fix.
  */
-export type FixRequest = { runId: string, findingCode: string, findingVersion: string, fixCode: string, 
+export type FixRequest = { runId: string, findingCode: string, findingVersion: string, fixCode: string,
 /**
  * Present only when resuming the exact request after the owner approved it.
  */

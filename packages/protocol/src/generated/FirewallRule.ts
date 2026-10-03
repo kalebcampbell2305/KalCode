@@ -5,7 +5,7 @@ import type { Sensitivity } from "./Sensitivity.ts";
 /**
  * A rule that fired for an item.
  */
-export type FirewallRule = { "kind": "workspace_permission_denied" } | { "kind": "secret_detected", detector: string, count: number, } | { "kind": "ignored_path", source: IgnoreSource, 
+export type FirewallRule = { "kind": "workspace_permission_denied" } | { "kind": "secret_detected", detector: string, count: number, } | { "kind": "ignored_path", source: IgnoreSource,
 /**
  * The built-in rule id, or the user pattern, or the ignore file that matched.
  */

@@ -3,11 +3,11 @@
 /**
  * Branch facts from `git status`.
  */
-export type BranchState = { 
+export type BranchState = {
 /**
  * `None` before the first commit.
  */
-headOid: string | null, 
+headOid: string | null,
 /**
  * `None` when HEAD is detached.
  */

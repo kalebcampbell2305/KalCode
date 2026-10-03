@@ -14,15 +14,15 @@ import type { VolumeReading } from "./VolumeReading.ts";
 /**
  * One sample, with slow tiers carried forward and pressure evaluated under the current mode.
  */
-export type ResourceSnapshot = { 
+export type ResourceSnapshot = {
 /**
  * Monotonic sample number (starts at 1).
  */
-seq: number, 
+seq: number,
 /**
  * Wall-clock time of the sample, Unix milliseconds (UTC).
  */
-sampledAtUnixMs: number, mode: GovernorMode, cpu: Reading<CpuReading>, memory: Reading<MemoryReading>, 
+sampledAtUnixMs: number, mode: GovernorMode, cpu: Reading<CpuReading>, memory: Reading<MemoryReading>,
 /**
  * Volumes holding registered workspace roots. `Value([])` when no root is registered.
  */

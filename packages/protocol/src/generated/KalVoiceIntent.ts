@@ -16,26 +16,26 @@ import type { ThreadScope } from "./ThreadScope.ts";
  * A structured command. Everything except `Reasoning` executes deterministically without any
  * model; `Reasoning` requires the bounded on-device interpreter.
  */
-export type KalVoiceIntent = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", query: string, } | { "kind": "create_terminal", workspaceId: string | null, } | { "kind": "create_threads", providerId: ProviderId, count: number, workspaceId: string | null, 
+export type KalVoiceIntent = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", query: string, } | { "kind": "create_terminal", workspaceId: string | null, } | { "kind": "create_threads", providerId: ProviderId, count: number, workspaceId: string | null,
 /**
  * Owner-visible account label or suffix ("work", "Gemini B"), resolved to one of the
  * provider's accounts by label. `None` keeps the workspace default / provider default.
  * Missing on the wire decodes as `None` (pre-0.1.5 payloads).
  */
-accountQuery: string | null, 
+accountQuery: string | null,
 /**
  * Exact provider model id or documented alias. Missing keeps the account/provider
  * default and preserves compatibility with older KalVoice payloads.
  */
-model: string | null, 
+model: string | null,
 /**
  * Exact provider effort level. Missing keeps the provider/account default.
  */
-effort: string | null, 
+effort: string | null,
 /**
  * Optional counted tasks. Missing on older payloads keeps the idle-session behavior.
  */
-assignments: Array<AgentLaunchAssignment>, } | { "kind": "create_provider_panes", groups: Array<ProviderPaneRequest>, workspaceId: string | null, } | { "kind": "configure_recent_launch", providerId: ProviderId, model: string, effort: string, } | { "kind": "control_pane", command: PaneControl, workspaceId: string | null, } | { "kind": "control_browser", command: BrowserControl, workspaceId: string | null, } | { "kind": "open_thread", query: string, } | { "kind": "pause_threads", scope: ThreadScope, } | { "kind": "resume_threads", scope: ThreadScope, } | { "kind": "stop_threads", scope: ThreadScope, 
+assignments: Array<AgentLaunchAssignment>, } | { "kind": "create_provider_panes", groups: Array<ProviderPaneRequest>, workspaceId: string | null, } | { "kind": "configure_recent_launch", providerId: ProviderId, model: string, effort: string, } | { "kind": "control_pane", command: PaneControl, workspaceId: string | null, } | { "kind": "control_browser", command: BrowserControl, workspaceId: string | null, } | { "kind": "open_thread", query: string, } | { "kind": "pause_threads", scope: ThreadScope, } | { "kind": "resume_threads", scope: ThreadScope, } | { "kind": "stop_threads", scope: ThreadScope,
 /**
  * When spoken (for example, "stop six active terminals"), execution proceeds only if
  * exactly this many provider sessions are live in the resolved scope. Older payloads

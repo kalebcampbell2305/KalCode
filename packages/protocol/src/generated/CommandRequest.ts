@@ -4,15 +4,15 @@ import type { KalVoiceInput } from "./KalVoiceInput.ts";
 /**
  * A top-level command request from the command bar.
  */
-export type CommandRequest = { 
+export type CommandRequest = {
 /**
  * Client-generated UUID; the idempotency key for usage.
  */
-requestId: string, text: string, input: KalVoiceInput, 
+requestId: string, text: string, input: KalVoiceInput,
 /**
  * The workspace the user is looking at, if any.
  */
-workspaceId: string | null, 
+workspaceId: string | null,
 /**
  * The thread the user is looking at, if any ("switch this thread to …"). Missing on the
  * wire decodes as `None`.

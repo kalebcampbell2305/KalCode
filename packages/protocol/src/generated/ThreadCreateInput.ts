@@ -7,11 +7,11 @@ import type { PermissionMode } from "./PermissionMode.ts";
  * still refuses Bypass and Custom at creation (they are set afterwards through
  * `thread_set_permission_mode`) until it supports them.
  */
-export type ThreadCreateInput = { providerId: string, 
+export type ThreadCreateInput = { providerId: string,
 /**
  * Explicit account selection. The desktop resolves and validates this id before creation.
  */
-providerAccountId: string | null, workspaceId: string, model: string | null, permissionMode: PermissionMode, prompt: string, name: string | null, confirmBypass: boolean | null, profileId: string | null, 
+providerAccountId: string | null, workspaceId: string, model: string | null, permissionMode: PermissionMode, prompt: string, name: string | null, confirmBypass: boolean | null, profileId: string | null,
 /**
  * `true`: the thread gets its own Git worktree and branch (`kal/<name>-<id>`) so parallel
  * agents never share a folder; refused with `worktree_unavailable` when the workspace isn't
