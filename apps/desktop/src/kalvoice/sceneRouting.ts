@@ -1,8 +1,10 @@
 import type { VoiceSceneKind, VoiceSceneReference } from "./sceneTargets.ts";
 
 function kindHint(query: string): readonly VoiceSceneKind[] | undefined {
-  if (/\bterminal\b/i.test(query)) return ["terminal", "thread"];
-  if (/\b(?:agent|session|thread)\b/i.test(query)) return ["thread", "agent"];
+  if (/\bterminal\b/i.test(query)) return ["terminal", "agent"];
+  if (/\bagent\b/i.test(query)) return ["agent"];
+  if (/\bthread\b/i.test(query)) return ["thread"];
+  if (/\bsession\b/i.test(query)) return ["thread", "agent"];
   if (/\b(?:workspace|project)\b/i.test(query)) return ["workspace", "remote_workspace"];
   return undefined;
 }
@@ -17,7 +19,9 @@ export function sceneReference(text: string): VoiceSceneReference | null {
   if (!match?.[1]) return null;
   const query = match[1].replace(/^(?:the|my)\s+/i, "");
   if (/\b(?:and|then|don't|not|never)\b/i.test(query)) return null;
-  if (/^(?:it|that|that one|same (?:terminal|agent|thread))$/i.test(query)) return { kind: "last_target" };
+  if (/^same agent$/i.test(query)) return { kind: "last_target", agents: true };
+  if (/^(?:it|that|that one|same (?:terminal|thread))$/i.test(query)) return { kind: "last_target" };
+  if (/^(?:this|current) agent$/i.test(query)) return { kind: "current", agents: true };
   if (/^(?:this|this (?:terminal|agent|thread|pane)|current (?:terminal|agent|thread|pane))$/i.test(query))
     return { kind: "current" };
   if (/^(?:(?:terminal|pane|one) )?(?:beside|next to) (?:this|this one|this terminal|me)$/i.test(query))

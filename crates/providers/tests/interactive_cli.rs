@@ -191,6 +191,15 @@ impl Rig {
                 let _ = tx.send(e);
             }),
         )?;
+        self.attach_started(thread_id, session, rx)
+    }
+
+    fn attach_started(
+        &self,
+        thread_id: String,
+        session: Box<dyn AgentSession>,
+        rx: Receiver<AgentEvent>,
+    ) -> Result<Pane, ProviderError> {
         let output = Arc::new(Mutex::new(Vec::new()));
         let sink = output.clone();
         let panes = self.panes.clone();
@@ -435,6 +444,89 @@ fn managed_codex_panes_use_the_exact_account_policy_and_hold_the_lease_until_dro
         .acquire_sign_in_lease("codex", &account_id)
         .expect("lease released after full session drop");
     drop(lease);
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn six_codex_agents_start_distinct_live_terminals_with_the_selected_accounts() {
+    let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Ineligible));
+    let accounts = [new_id(), new_id()];
+    let workspace = new_id();
+    let router = RuntimeRouter::for_provider(
+        Arc::new(kalcode_providers::CodexProvider::new(
+            DetectEnv::from_process(),
+        )),
+        rig.provider.clone(),
+        rig.provider.sessions_dir(),
+    );
+    let mut sessions = Vec::new();
+    let mut instances = std::collections::HashSet::new();
+    let mut expected_accounts = Vec::new();
+    for index in 0..6 {
+        let account = accounts[index % accounts.len()].clone();
+        let mut config = rig.config(PermissionMode::Approve, Some(account.clone()));
+        config.workspace_id = workspace.clone();
+        config.model = Some("gpt-5.4".into());
+        config.effort = Some("high".into());
+        let id = config.thread_id.clone();
+        assert!(config.resume_session_id.is_none());
+        let (tx, rx) = mpsc::channel();
+        let session = RuntimeRouter::create_interactive(|| {
+            router.start_session(
+                config,
+                Box::new(move |event: AgentEvent| {
+                    let _ = tx.send(event);
+                }),
+            )
+        })
+        .expect("fresh managed Codex terminal");
+        let pane = rig
+            .attach_started(id.clone(), session, rx)
+            .expect("live Codex CLI");
+        let info = rig.panes.info(&id).expect("real PTY");
+        assert!(info.running);
+        assert_eq!(info.provider_id.as_str(), "codex");
+        assert!(instances.insert(info.instance_id.expect("live instance")));
+        assert!(router.is_interactive(&id));
+        let args = rig.args();
+        #[cfg(windows)]
+        assert!(
+            args.iter().any(|arg| arg == "--no-daemon"),
+            "Windows terminals must not attach an older external daemon: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-m" && pair[1] == "gpt-5.4"),
+            "exact model: {args:?}"
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "model_reasoning_effort='high'"),
+            "exact effort: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "resume"),
+            "a new agent cannot resume a historical session"
+        );
+        assert_eq!(
+            rig.launch_cwd().canonicalize().expect("provider cwd"),
+            rig.work.path().canonicalize().expect("workspace cwd")
+        );
+        expected_accounts.push(account);
+        sessions.push(pane);
+    }
+    assert_eq!(instances.len(), 6);
+    assert_eq!(*rig.resolved_accounts.lock().unwrap(), expected_accounts);
+    let profiles = rig.profiles.as_ref().expect("managed profiles");
+    for account in &accounts {
+        assert!(
+            profiles.acquire_sign_in_lease("codex", account).is_err(),
+            "every selected account retains its running sessions"
+        );
+    }
+    for session in sessions {
+        session._session.terminate().expect("stop test terminal");
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]

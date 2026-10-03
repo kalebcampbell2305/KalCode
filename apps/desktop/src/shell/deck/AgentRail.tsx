@@ -132,7 +132,7 @@ function AgentList({
   const running = runningAgentCount(sections);
   // An agent opens its own terminal pane in Code (the focus intent finds and focuses it).
   const open = (thread: ThreadSummary) => {
-    if (intents) void intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+    if (intents) void intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
     else navigate("code");
   };
 

@@ -1,59 +1,102 @@
 // @vitest-environment jsdom
-import type { Workspace } from "@kalcode/protocol";
+import type { ThreadSummary, Workspace } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { useProviderPanes } from "./useProviderPanes.ts";
 
-const mocks = vi.hoisted(() => ({
-  listThreads: vi.fn(),
-  invoke: vi.fn(),
-}));
-
-vi.mock("../../../runtime/RuntimeProvider.tsx", () => {
-  const client = {
-    listThreads: mocks.listThreads,
-    threadOptions: () => Promise.resolve({ providers: [] }),
-    transport: { invoke: mocks.invoke },
+const state = vi.hoisted(() => {
+  const client = { listThreads: vi.fn(), threadOptions: vi.fn(), transport: { invoke: vi.fn() } };
+  return {
+    client,
+    feed: { getSnapshot: () => ({ events: [] }), subscribe: () => () => undefined },
   };
-  const feed = { getSnapshot: () => ({ events: [] }), subscribe: () => () => {} };
-  const info = { flags: { features: [{ id: "provider_panes", visible: true }] } };
-  return { useRuntime: () => ({ client, feed, info }) };
 });
+vi.mock("../../../runtime/RuntimeProvider.tsx", () => ({
+  useRuntime: () => ({ ...state, info: { flags: { features: [{ id: "provider_panes", visible: true }] } } }),
+}));
 vi.mock("../../permissions/PermissionsProvider.tsx", () => ({ usePermissions: () => ({ settings: null }) }));
 
-const workspace = { id: "ws-1", available: true } as Workspace;
+const workspace = { id: "workspace", available: true } as Workspace;
+const agent = {
+  id: "fresh-agent",
+  providerId: "claude-code",
+  runtimeKind: "interactive_pty",
+  createdAt: "2026-10-03",
+} as ThreadSummary;
+const info = { threadId: agent.id, running: true, hookChannel: "active" };
 
-describe("provider pane errors", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-  });
+beforeEach(() => {
+  vi.resetAllMocks();
+  state.client.listThreads.mockResolvedValue([]);
+  state.client.threadOptions.mockResolvedValue({ providers: [] });
+  state.client.transport.invoke.mockImplementation(async (command: string) =>
+    command === "provider_pane_create" ? agent : info,
+  );
+});
 
-  it("clears a failed list read once a later read succeeds", async () => {
-    mocks.listThreads.mockRejectedValueOnce(new Error("list failed")).mockResolvedValue([]);
-    const { result } = renderHook(() => useProviderPanes(workspace));
-    await waitFor(() => expect(result.current.error).not.toBeNull());
-    await act(() => result.current.refresh());
-    expect(result.current.error).toBeNull();
+it("registers the created terminal directly even when the list snapshot lags behind creation", async () => {
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  await act(async () => {
+    await view.result.current.create("claude-code");
   });
+  expect(view.result.current.panes.map((pane) => pane.thread.id)).toEqual([agent.id]);
+});
 
-  it("forgets a refused launch when the launcher is opened again", async () => {
-    mocks.listThreads.mockResolvedValue([]);
-    mocks.invoke.mockRejectedValue({
-      category: "validation",
-      code: "provider_launch_refused",
-      message: "That account is in use.",
-      retryable: false,
-    });
-    const { result } = renderHook(() => useProviderPanes(workspace));
-    await waitFor(() => expect(result.current.loaded).toBe(true));
-    await act(async () => {
-      await result.current.create("claude-code");
-    });
-    expect(result.current.error).toBe("That account is in use.");
-    // A background refresh doesn't hide the refusal while the person is reading it.
-    await act(() => result.current.refresh());
-    expect(result.current.error).toBe("That account is in use.");
-    act(() => result.current.clearLaunchError());
-    expect(result.current.error).toBeNull();
+it("keeps a known terminal during a transient pane-info read failure", async () => {
+  state.client.listThreads.mockResolvedValue([agent]);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.panes).toHaveLength(1));
+  state.client.transport.invoke.mockRejectedValue(new Error("IPC temporarily unavailable"));
+  await act(async () => {
+    await view.result.current.refresh();
   });
+  expect(view.result.current.panes.map((pane) => pane.thread.id)).toEqual([agent.id]);
+});
+
+it("keeps a successfully created session when its first info read fails, without launching another", async () => {
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  state.client.transport.invoke.mockImplementation(async (command: string) => {
+    if (command === "provider_pane_create") return agent;
+    throw { category: "internal", code: "unavailable", message: "Temporarily unavailable", retryable: true };
+  });
+  let created: ThreadSummary | null = null;
+  await act(async () => {
+    created = await view.result.current.create();
+  });
+  expect(created).toBe(agent);
+  expect(view.result.current.panes).toEqual([{ thread: agent, info: null }]);
+  expect(
+    state.client.transport.invoke.mock.calls.filter(([command]) => command === "provider_pane_create"),
+  ).toHaveLength(1);
+});
+
+it("retains restored terminal identity when pane metadata is initially unavailable", async () => {
+  state.client.listThreads.mockResolvedValue([agent]);
+  state.client.transport.invoke.mockResolvedValue(null);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  expect(view.result.current.panes).toEqual([{ thread: agent, info: null }]);
+  expect(view.result.current.chatIds).toEqual([]);
+});
+
+it("identifies legacy chat references without treating a failed metadata read as a chat", async () => {
+  const chat = { ...agent, id: "chat", runtimeKind: "headless" };
+  state.client.listThreads.mockResolvedValue([chat]);
+  state.client.transport.invoke.mockResolvedValue(null);
+  const view = renderHook(() => useProviderPanes(workspace));
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  expect(view.result.current.chatIds).toEqual(["chat"]);
+  expect(view.result.current.panes).toEqual([]);
+  state.client.transport.invoke.mockRejectedValue({
+    category: "internal",
+    code: "unavailable",
+    message: "Temporarily unavailable",
+    retryable: true,
+  });
+  await act(async () => {
+    await view.result.current.refresh();
+  });
+  expect(view.result.current.chatIds).toEqual([]);
 });

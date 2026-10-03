@@ -3,4 +3,4 @@
 /**
  * What a pane tab shows. Unknown kinds in stored layouts render as "unavailable".
  */
-export type PaneContent = { "kind": "thread", threadId: string, } | { "kind": "terminal", terminalId: string, } | { "kind": "dashboard" } | { "kind": "widget", widgetId: string, } | { "kind": "browser", browserId: string, url: string | null, } | { "kind": "git", workspaceId: string, };
+export type PaneContent = { "kind": "agent", agentId: string, } | { "kind": "thread", threadId: string, } | { "kind": "terminal", terminalId: string, } | { "kind": "dashboard" } | { "kind": "widget", widgetId: string, } | { "kind": "browser", browserId: string, url: string | null, } | { "kind": "git", workspaceId: string, };

@@ -81,6 +81,20 @@ function summary(t: CasesFile["threads"][number]): ThreadSummary {
 
 const threads = table.threads.map(summary);
 
+it("agent targets exclude chats even when a chat has the same name", () => {
+  const chat = { ...threads[0], id: "chat", runtimeKind: "headless" } as ThreadSummary;
+  const agent = { ...chat, id: "agent", runtimeKind: "interactive_pty" } as ThreadSummary;
+  expect(resolveSession([chat, agent], `${chat.name} agent`)).toMatchObject({
+    kind: "resolved",
+    target: { threadId: "agent" },
+  });
+  expect(resolveSession([chat], `${chat.name} agent`)).toMatchObject({ kind: "not_found" });
+  expect(resolveSession([chat], `${chat.name} thread`)).toMatchObject({
+    kind: "resolved",
+    target: { threadId: "chat" },
+  });
+});
+
 function expected(expect: CasesFile["cases"][number]["expect"]): unknown {
   switch (expect.kind) {
     case "resolved":

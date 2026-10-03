@@ -683,3 +683,68 @@ fn headless_and_interactive_threads_coexist_behind_one_provider() {
         .map(|s| s.terminate());
     assert!(!router.is_interactive(&third));
 }
+
+#[test]
+fn unavailable_terminals_never_fall_back_to_headless_on_create_or_resume() {
+    let rig = Rig::new(
+        DecisionRouting::ProviderPrompt,
+        json!({}),
+        SessionLimits::default(),
+    );
+    let router = RuntimeRouter::without_interactive(
+        Arc::new(ClaudeCodeProvider::new(Rig::env(&rig.dir))),
+        rig.sessions.path().to_path_buf(),
+    );
+    let config = rig.config(PermissionMode::Approve);
+    let thread_id = config.thread_id.clone();
+    let created = RuntimeRouter::create_interactive(|| {
+        router.start_session(config.clone(), Box::new(|_: AgentEvent| {}))
+    });
+    assert!(
+        matches!(created, Err(ProviderError::Refused { code, .. }) if code == "provider_panes_unavailable")
+    );
+    assert!(router.is_interactive(&thread_id));
+    let resumed = router.start_session(config, Box::new(|_: AgentEvent| {}));
+    assert!(
+        matches!(resumed, Err(ProviderError::Refused { code, .. }) if code == "provider_panes_unavailable")
+    );
+    assert!(
+        !rig.dir.path().join("last-args.json").exists(),
+        "no provider process starts for a refused terminal"
+    );
+
+    let chat = router
+        .start_session(
+            rig.config(PermissionMode::Approve),
+            Box::new(|_: AgentEvent| {}),
+        )
+        .expect("ordinary chat remains available");
+    chat.terminate().expect("stop chat");
+}
+
+#[test]
+fn unreadable_terminal_identity_refuses_instead_of_starting_headless() {
+    let rig = Rig::new(
+        DecisionRouting::ProviderPrompt,
+        json!({}),
+        SessionLimits::default(),
+    );
+    let router = RuntimeRouter::new(
+        Arc::new(ClaudeCodeProvider::new(Rig::env(&rig.dir))),
+        rig.provider.clone(),
+    );
+    let config = rig.config(PermissionMode::Approve);
+    std::fs::create_dir_all(
+        rig.sessions
+            .path()
+            .join(&config.thread_id)
+            .join("interactive"),
+    )
+    .expect("invalid marker object");
+    let result = router.start_session(config, Box::new(|_: AgentEvent| {}));
+    assert!(matches!(result, Err(ProviderError::Start(_))));
+    assert!(
+        !rig.dir.path().join("last-args.json").exists(),
+        "uncertain identity cannot start either provider runtime"
+    );
+}

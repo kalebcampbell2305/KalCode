@@ -227,6 +227,10 @@ pub enum UiDirective {
     OpenThread {
         thread_id: String,
     },
+    OpenAgent {
+        agent_id: String,
+        workspace_id: String,
+    },
     OpenTerminal {
         workspace_id: String,
         terminal_id: String,
@@ -326,6 +330,7 @@ impl UiDirective {
     /// The thread this directive acts on, if it names exactly one.
     pub fn thread_id(&self) -> Option<&str> {
         match self {
+            Self::OpenAgent { agent_id, .. } => Some(agent_id),
             Self::OpenThread { thread_id }
             | Self::ConfirmThreadRebind { thread_id, .. }
             | Self::SubmitComposer { thread_id }

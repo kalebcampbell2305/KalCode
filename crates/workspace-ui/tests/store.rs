@@ -127,6 +127,38 @@ fn refused(conn: &Connection, bad: &PaneLayout) -> &'static str {
 }
 
 #[test]
+fn coding_agent_tabs_and_dock_restore_without_becoming_threads() {
+    let conn = db();
+    let workspace_id = new_id();
+    let agent_id = new_id();
+    let mut original = layout(leaf(
+        "code",
+        vec![
+            PaneContent::Agent {
+                agent_id: agent_id.clone(),
+            },
+            PaneContent::Thread {
+                thread_id: new_id(),
+            },
+        ],
+    ));
+    original.dock = vec![PaneContent::Agent { agent_id: new_id() }];
+    save_layout(&conn, &workspace_id, &original).expect("persist agents");
+    let restored = get_layout(&conn, &workspace_id)
+        .expect("read layout")
+        .expect("stored");
+    assert_eq!(restored.layout, original);
+    let encoded: String = conn
+        .query_row(
+            "SELECT layout FROM workspace_layouts WHERE workspace_id = ?1",
+            [&workspace_id],
+            |row| row.get(0),
+        )
+        .expect("stored JSON");
+    assert!(encoded.contains(&format!("\"agentId\":\"{agent_id}\"")));
+}
+
+#[test]
 fn invalid_layouts_are_refused_before_anything_is_written() {
     let conn = db();
     let mut cases: Vec<PaneLayout> = Vec::new();
@@ -170,6 +202,9 @@ fn invalid_layouts_are_refused_before_anything_is_written() {
     cases.push(unknown_max);
     // Content checks, in tabs and in the dock.
     for content in [
+        PaneContent::Agent {
+            agent_id: "../etc".into(),
+        },
         PaneContent::Thread {
             thread_id: "../etc".into(),
         },
