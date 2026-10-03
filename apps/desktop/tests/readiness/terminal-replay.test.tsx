@@ -46,6 +46,10 @@ vi.mock("@xterm/addon-fit", () => ({
     fit() {}
   },
 }));
+// The terminal's context menu reads shell data providers this replay harness doesn't mount.
+vi.mock("../../src/shell/context/ContentContextMenu.tsx", () => ({
+  ContentContextMenu: ({ children }: { children: React.ReactNode }) => children,
+}));
 vi.mock("../../src/runtime/WorkspaceProvider.tsx", () => ({ useWorkspaces: () => ({ lastSize: mocks.lastSize }) }));
 vi.mock("../../src/runtime/RuntimeProvider.tsx", () => ({
   useRuntime: () => ({

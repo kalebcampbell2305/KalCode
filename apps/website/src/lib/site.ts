@@ -119,9 +119,9 @@ export const OWNER_PAGE = {
 export const PAGES = [
   {
     path: "/",
-    title: "KalCode — One intelligence that operates your entire AI workspace",
+    title: "KalCode — AI engineering. One workspace.",
     description:
-      "KalCode is a desktop workspace for the coding agents you already use. Connect Claude Code and Codex, run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
+      "KalCode is the desktop workspace for AI coding. Run Claude Code and Codex agents in real terminals, see every agent in Agent Fleet, preview your app in Live Browser and control it all with KalVoice. Try it live in your browser.",
   },
   {
     path: "/product",

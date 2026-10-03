@@ -64,6 +64,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "shell.started": { type: "shell.started", payload: { terminalId, shellId: "pwsh", shellName: "PowerShell" } },
     "shell.completed": { type: "shell.completed", payload: { terminalId, exitCode: 0, closedByUser: true } },
     "shell.failed": { type: "shell.failed", payload: { terminalId, exitCode: 1 } },
+    "shell.renamed": { type: "shell.renamed", payload: { terminalId, title: "Dev server" } },
     "provider.detected": {
       type: "provider.detected",
       payload: { providerId: "claude-code", installed: true, version: "2.1.0" },
@@ -98,6 +99,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
       payload: { threadId, from: "thinking", to: "running_command", detail: "Running npm test" },
     },
     "thread.renamed": { type: "thread.renamed", payload: { threadId, name: "Fix the login test" } },
+    "thread.moved": { type: "thread.moved", payload: { threadId, fromWorkspaceId: workspaceId, workspaceId } },
     "thread.completed": { type: "thread.completed", payload: { threadId } },
     "thread.failed": {
       type: "thread.failed",
