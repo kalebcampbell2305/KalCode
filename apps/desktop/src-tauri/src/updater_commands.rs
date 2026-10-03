@@ -51,8 +51,9 @@ fn require_stable_installer() -> Result<(), UpdateError> {
     Ok(())
 }
 /// While KalCode runs, the signed feed is re-checked about this often (the launch check covers
-/// startup), jittered by `PERIODIC_CHECK_JITTER_PERCENT` either way.
-const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// startup), jittered by `PERIODIC_CHECK_JITTER_PERCENT` either way. Short, so a shipped build is
+/// downloaded and staged while KalCode stays open, on Windows and macOS alike.
+const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const PERIODIC_CHECK_JITTER_PERCENT: u64 = 10;
 /// The periodic timer re-reads the wall clock at least this often, so a machine that slept
 /// through the due time re-checks soon after it wakes.
@@ -487,7 +488,7 @@ impl DesktopUpdaterState {
         });
     }
 
-    /// Re-checks the signed feed about every six hours (plus or minus 10%) while KalCode runs,
+    /// Re-checks the signed feed about every ten minutes (plus or minus 10%) while KalCode runs,
     /// through the same check as launch. Idempotent; `stop_periodic_checks` ends it on shutdown.
     pub fn start_periodic_checks(&self) {
         let (stop, stopped) = mpsc::channel();
@@ -757,7 +758,10 @@ impl DesktopUpdaterState {
     /// update downloads again on the next launch.
     pub fn install_staged_on_exit(&self) {
         if session_ending() {
-            // Logoff or shutdown would stop the installer part-way. Install on a later quit.
+            // Logoff or shutdown would stop the installer part-way. Install on a later quit, and
+            // don't count this as a skipped exit: shutting Windows down with KalCode open is
+            // normal and must not move the build onto the restart prompt.
+            self.update_silent_record(silent_fallback::after_session_end);
             return;
         }
         let result = run_owned_operation(
@@ -2880,18 +2884,19 @@ mod tests {
     }
 
     #[test]
-    fn periodic_interval_is_six_hours_jittered_by_ten_percent() {
+    fn periodic_interval_is_ten_minutes_jittered_by_ten_percent() {
         let base = PERIODIC_CHECK_INTERVAL;
-        assert_eq!(base, Duration::from_secs(6 * 60 * 60));
-        let low = Duration::from_secs(6 * 60 * 60 * 9 / 10);
-        let high = Duration::from_secs(6 * 60 * 60 * 11 / 10);
+        assert_eq!(base, Duration::from_secs(10 * 60));
+        let low = Duration::from_secs(10 * 60 * 9 / 10);
+        let high = Duration::from_secs(10 * 60 * 11 / 10);
+        let span = 60_000;
         assert_eq!(jittered_interval(base, 0), low);
-        assert_eq!(jittered_interval(base, 2 * 2_160_000), high);
-        for sample in [1, 12_345, u64::MAX, u64::MAX / 3, 2_160_000] {
+        assert_eq!(jittered_interval(base, 2 * span), high);
+        for sample in [1, 12_345, u64::MAX, u64::MAX / 3, span] {
             let interval = jittered_interval(base, sample);
             assert!(interval >= low && interval <= high, "{interval:?}");
         }
-        assert_eq!(jittered_interval(base, 2_160_000), base);
+        assert_eq!(jittered_interval(base, span), base);
         for _ in 0..32 {
             let interval = jittered_interval(base, jitter_sample());
             assert!(interval >= low && interval <= high, "{interval:?}");

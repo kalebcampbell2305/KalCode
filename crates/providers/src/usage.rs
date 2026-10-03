@@ -1,9 +1,12 @@
-//! Passive, credential-free provider quota usage per account.
+//! Provider quota usage per account: passive file reads, plus a live read when they age.
 //!
-//! Every number here is copied from a file the provider CLI itself wrote into the account's
-//! dedicated profile home. KalCode never runs a provider command, never reads a credential file
-//! or the OS keychain, never calls the network, and never writes anything to read usage, so this
-//! is safe on Windows and macOS, can't refresh or invalidate a sign-in, and can't show a prompt.
+//! Every passive number is copied from a file the provider CLI itself wrote into the account's
+//! dedicated profile home. That path never runs a provider command, never reads a credential
+//! file or the OS keychain, never calls the network, and never writes anything. Because those
+//! files only change while an agent runs, the caller may also make a live read (see
+//! `live_usage_request`): the provider's own usage endpoint, with the access token the provider
+//! keeps in a file in that profile, read-only and never refreshed, copied or stored. Neither
+//! path can refresh or invalidate a sign-in or show a prompt (the macOS Keychain is never read).
 //!
 //! - **Claude Code** caches the account's plan utilization (`cachedUsageUtilization`: 5-hour and
 //!   weekly windows with reset times, plus `fetchedAtMs`) in `.claude.json` inside the account's
@@ -229,7 +232,19 @@ fn parse_claude_state(state: &Value) -> Option<Reading> {
     let fetched_ms = cache.get("fetchedAtMs").and_then(Value::as_i64)?;
     let checked_at =
         OffsetDateTime::from_unix_timestamp_nanos(i128::from(fetched_ms) * 1_000_000).ok()?;
-    let utilization = cache.get("utilization")?;
+    let tier = account
+        .get("organizationRateLimitTier")
+        .and_then(Value::as_str)
+        .or_else(|| account.get("userRateLimitTier").and_then(Value::as_str));
+    claude_utilization(cache.get("utilization")?, checked_at, tier)
+}
+
+/// Claude's plan utilization (the `/api/oauth/usage` response, which Claude Code also caches).
+fn claude_utilization(
+    utilization: &Value,
+    checked_at: OffsetDateTime,
+    tier: Option<&str>,
+) -> Option<Reading> {
     let mut windows = Vec::new();
     for (key, id, label, minutes) in [
         ("five_hour", "five_hour", "5-hour", Some(300)),
@@ -297,10 +312,6 @@ fn parse_claude_state(state: &Value) -> Option<Reading> {
     if windows.is_empty() {
         return None;
     }
-    let tier = account
-        .get("organizationRateLimitTier")
-        .and_then(Value::as_str)
-        .or_else(|| account.get("userRateLimitTier").and_then(Value::as_str));
     Some(Reading {
         plan: tier.and_then(claude_plan),
         checked_at,
@@ -531,6 +542,181 @@ fn codex_plan(plan: &str) -> Option<String> {
         _ => return None,
     };
     Some(label.to_owned())
+}
+
+// --- Live provider reads ----------------------------------------------------------------------
+//
+// The files above only change while an agent runs, so an idle account's numbers age. A live
+// read asks the provider's own usage endpoint (the one its CLI's usage screen calls) with the
+// access token the provider CLI already keeps in the account's profile. It is read-only: the
+// token is never refreshed, copied, logged or persisted, and nothing is written. An expired or
+// rejected token simply leaves the file reading in place; it is not proof of sign-out. Tokens
+// kept in the macOS Keychain are never read (that could prompt), so those accounts stay passive.
+// The network call itself lives with the caller; this module only builds and interprets it.
+
+/// One live usage request: the provider endpoint and its headers (including the bearer token).
+pub struct LiveUsageRequest {
+    pub url: &'static str,
+    pub headers: Vec<(&'static str, String)>,
+}
+
+impl std::fmt::Debug for LiveUsageRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Headers carry the access token.
+        formatter
+            .debug_struct("LiveUsageRequest")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+/// Provider credential files are small; anything larger is not one.
+const MAX_CREDENTIAL_BYTES: u64 = 64 * 1024;
+/// A token this close to expiry is left for the provider CLI to refresh.
+const TOKEN_EXPIRY_MARGIN: Duration = Duration::seconds(60);
+
+/// The live request for an account, or `None` when it can't be read live (another provider,
+/// signed out, no profile, no file-kept token, or an expired one).
+pub fn live_usage_request(
+    profiles: &ManagedProfiles,
+    account: &ProviderAccount,
+    now: OffsetDateTime,
+) -> Option<LiveUsageRequest> {
+    if account.authentication_state == AuthState::NotAuthenticated {
+        return None;
+    }
+    let provider = account.provider_id.as_str();
+    if provider != ProviderId::CLAUDE_CODE && provider != ProviderId::CODEX {
+        return None;
+    }
+    let home = profiles
+        .existing_profile_home(provider, &account.id)
+        .ok()??;
+    if provider == ProviderId::CLAUDE_CODE {
+        let credentials = read_small_json(&home.join(".credentials.json"))?;
+        let oauth = credentials.get("claudeAiOauth")?;
+        let token = oauth.get("accessToken")?.as_str()?.trim();
+        let expires_ms = oauth.get("expiresAt").and_then(Value::as_i64)?;
+        let expires =
+            OffsetDateTime::from_unix_timestamp_nanos(i128::from(expires_ms) * 1_000_000).ok()?;
+        if token.is_empty() || expires <= now + TOKEN_EXPIRY_MARGIN {
+            return None;
+        }
+        Some(LiveUsageRequest {
+            url: CLAUDE_USAGE_URL,
+            headers: vec![
+                ("Authorization", format!("Bearer {token}")),
+                ("anthropic-beta", "oauth-2025-04-20".to_owned()),
+            ],
+        })
+    } else {
+        let auth = read_small_json(&home.join("auth.json"))?;
+        let tokens = auth.get("tokens")?;
+        let token = tokens.get("access_token")?.as_str()?.trim();
+        if token.is_empty() {
+            return None;
+        }
+        let mut headers = vec![("Authorization", format!("Bearer {token}"))];
+        if let Some(id) = tokens
+            .get("account_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            headers.push(("ChatGPT-Account-Id", id.to_owned()));
+        }
+        Some(LiveUsageRequest {
+            url: CODEX_USAGE_URL,
+            headers,
+        })
+    }
+}
+
+/// Usage from a live response body, or `None` when it doesn't describe the account's limits.
+pub fn usage_from_live_response(
+    profiles: &ManagedProfiles,
+    account: &ProviderAccount,
+    body: &Value,
+    now: OffsetDateTime,
+) -> Option<ProviderAccountUsage> {
+    let reading = if account.provider_id.as_str() == ProviderId::CLAUDE_CODE {
+        let home = profiles
+            .existing_profile_home(ProviderId::CLAUDE_CODE, &account.id)
+            .ok()??;
+        let tier = read_small_json(&home.join(".credentials.json")).and_then(|credentials| {
+            credentials
+                .pointer("/claudeAiOauth/rateLimitTier")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+        claude_utilization(body, now, tier.as_deref())?
+    } else if account.provider_id.as_str() == ProviderId::CODEX {
+        codex_live_reading(body, now)?
+    } else {
+        return None;
+    };
+    Some(usage_from_reading(account, Ok(Some(reading)), now))
+}
+
+fn codex_live_reading(body: &Value, now: OffsetDateTime) -> Option<Reading> {
+    let limits = body.get("rate_limit")?.as_object()?;
+    let mut windows = Vec::new();
+    for (key, slot) in [
+        ("primary_window", "primary"),
+        ("secondary_window", "secondary"),
+    ] {
+        let Some(window) = limits.get(key).filter(|window| window.is_object()) else {
+            continue;
+        };
+        let Some(used) = window.get("used_percent").and_then(Value::as_f64) else {
+            continue;
+        };
+        let minutes = window
+            .get("limit_window_seconds")
+            .and_then(Value::as_i64)
+            .map(|seconds| seconds / 60);
+        let resets_at = window
+            .get("reset_at")
+            .and_then(Value::as_i64)
+            .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok())
+            .or_else(|| {
+                window
+                    .get("reset_after_seconds")
+                    .and_then(Value::as_i64)
+                    .map(|seconds| now + Duration::seconds(seconds))
+            });
+        let (mut id, label) = codex_window_name(slot, minutes);
+        if windows.iter().any(|existing: &RawWindow| existing.id == id) {
+            id = slot.to_owned();
+        }
+        windows.push(RawWindow {
+            id,
+            label,
+            used_percent: used,
+            resets_at,
+            window_minutes: minutes,
+        });
+    }
+    if windows.is_empty() {
+        return None;
+    }
+    Some(Reading {
+        plan: body
+            .get("plan_type")
+            .and_then(Value::as_str)
+            .and_then(codex_plan),
+        checked_at: now,
+        windows,
+    })
+}
+
+fn read_small_json(path: &Path) -> Option<Value> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_CREDENTIAL_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 #[cfg(test)]
@@ -866,6 +1052,100 @@ mod tests {
         assert_eq!(usage.status, ProviderUsageStatus::NotChecked);
         assert_eq!(usage.reason.as_deref(), Some(SIGNED_OUT));
         assert!(usage.windows.is_empty());
+    }
+
+    #[test]
+    fn live_claude_request_uses_the_profile_token_until_it_expires() {
+        let (_temp, profiles) = profiles();
+        let claude = account(CLAUDE_ID, ProviderId::CLAUDE_CODE, AuthState::Authenticated);
+        assert!(
+            live_usage_request(&profiles, &claude, NOW).is_none(),
+            "no profile yet"
+        );
+        let dir = home(&profiles, ProviderId::CLAUDE_CODE, CLAUDE_ID);
+        let expires = (NOW + Duration::hours(1)).unix_timestamp() * 1000;
+        write(
+            &dir.join(".credentials.json"),
+            &format!(
+                r#"{{"claudeAiOauth":{{"accessToken":"tok-1","expiresAt":{expires},"rateLimitTier":"default_claude_max_20x"}}}}"#
+            ),
+        );
+        let request = live_usage_request(&profiles, &claude, NOW).expect("request");
+        assert_eq!(request.url, CLAUDE_USAGE_URL);
+        assert!(
+            request
+                .headers
+                .contains(&("Authorization", "Bearer tok-1".to_owned()))
+        );
+        assert!(
+            !format!("{request:?}").contains("tok-1"),
+            "Debug never shows the token"
+        );
+        assert!(live_usage_request(&profiles, &claude, NOW + Duration::hours(2)).is_none());
+        let signed_out = account(
+            CLAUDE_ID,
+            ProviderId::CLAUDE_CODE,
+            AuthState::NotAuthenticated,
+        );
+        assert!(live_usage_request(&profiles, &signed_out, NOW).is_none());
+
+        let body: Value = serde_json::from_str(
+            r#"{"five_hour":{"utilization":9,"resets_at":"2026-10-03T20:00:00+00:00"},
+                "seven_day":{"utilization":16,"resets_at":"2026-10-10T08:00:00+00:00"},
+                "limits":[{"kind":"weekly_scoped","percent":2,"resets_at":"2026-10-10T08:00:00+00:00",
+                           "scope":{"model":{"display_name":"Fable"}}}]}"#,
+        )
+        .unwrap_or_else(|error| panic!("json: {error}"));
+        let usage = usage_from_live_response(&profiles, &claude, &body, NOW).expect("usage");
+        assert_eq!(usage.status, ProviderUsageStatus::Available);
+        assert_eq!(
+            usage.checked_at.as_deref(),
+            Some("2026-10-03T17:45:00.000Z")
+        );
+        assert_eq!(usage.plan.as_deref(), Some("Max 20x"));
+        let ids: Vec<_> = usage
+            .windows
+            .iter()
+            .map(|w| (w.id.as_str(), w.remaining_percent))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("weekly", 84.0),
+                ("five_hour", 91.0),
+                ("weekly_fable", 98.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn live_codex_request_and_response() {
+        let (_temp, profiles) = profiles();
+        let codex = account(CODEX_ID, ProviderId::CODEX, AuthState::Authenticated);
+        let dir = home(&profiles, ProviderId::CODEX, CODEX_ID);
+        write(
+            &dir.join("auth.json"),
+            r#"{"auth_mode":"chatgpt","tokens":{"access_token":"tok-2","account_id":"acct-9"}}"#,
+        );
+        let request = live_usage_request(&profiles, &codex, NOW).expect("request");
+        assert_eq!(request.url, CODEX_USAGE_URL);
+        assert!(
+            request
+                .headers
+                .contains(&("ChatGPT-Account-Id", "acct-9".to_owned()))
+        );
+
+        let resets = (NOW + Duration::days(6)).unix_timestamp();
+        let body: Value = serde_json::from_str(&format!(
+            r#"{{"plan_type":"pro","rate_limit":{{"primary_window":{{"used_percent":21,"limit_window_seconds":604800,"reset_at":{resets}}},"secondary_window":null}}}}"#
+        ))
+        .unwrap_or_else(|error| panic!("json: {error}"));
+        let usage = usage_from_live_response(&profiles, &codex, &body, NOW).expect("usage");
+        assert_eq!(usage.plan.as_deref(), Some("Pro"));
+        assert_eq!(usage.windows.len(), 1);
+        assert_eq!(usage.windows[0].id, "weekly");
+        assert!((usage.windows[0].remaining_percent - 79.0).abs() < f64::EPSILON);
+        assert!(usage_from_live_response(&profiles, &codex, &Value::Null, NOW).is_none());
     }
 
     #[test]
