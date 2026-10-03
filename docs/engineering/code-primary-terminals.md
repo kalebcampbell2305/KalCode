@@ -15,6 +15,7 @@ The Context menu opens Browser, registered widgets, and current-workspace Runs/S
 - `code-context.spec.ts`: canonical service actions, Logs/Tests evidence, narrow viewport layout, expanded-rail bounds, and accessibility.
 - `adaptive-canvas.spec.ts`: fitting mixed-axis panes do not introduce scrollbars. Divider hit targets expand across their axis only, preventing a native scrollbar/resize feedback loop while retaining wide drag targets.
 - Existing provider restart tests retain native account persistence coverage. This change adds no credential storage, schema migration, or authentication refresh behavior.
+- The website's sample workspace mirrors Code-first navigation and the compact context pane. Its unit and browser tests cover pane reuse, truthful run state, desktop/phone navigation, and accessibility; the demo remains explicitly labeled sample data.
 
 Browser UI tests use deterministic adapters. Native tests use isolated profiles and fake provider executables; they do not demonstrate a paid provider response. Signed Windows/macOS release and updater receipts are separate release evidence and must be verified before claiming delivery.
 
