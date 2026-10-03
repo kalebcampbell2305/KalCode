@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-desktop"
-version = "0.0.0"
+version = "0.1.9"
 dependencies = [
  "base64 0.22.1",
  "block2",
