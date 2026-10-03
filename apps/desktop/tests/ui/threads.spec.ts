@@ -78,12 +78,16 @@ test.describe("threads", () => {
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByRole("heading", { name: "New thread" })).toBeVisible();
 
-    // Defaults: first provider, provider's default model, first workspace, Approve.
+    // Defaults: first provider, provider's default model, first workspace, Auto (the trusted coding
+    // default since #125: workspace work runs, real security boundaries and external effects ask).
     await expect(form.getByLabel("Provider")).toHaveValue("claude-code");
     await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000101");
     await expect(form.getByLabel("Model")).toHaveValue("");
-    await expect(form.getByRole("radio", { name: "Approve" })).toBeChecked();
-    await expect(form.getByText("Edits, commands and network access wait for your approval.")).toBeVisible();
+    await expect(form.getByRole("radio", { name: "Auto" })).toBeChecked();
+    await expect(form.getByRole("radio", { name: "Approve" })).not.toBeChecked();
+    await expect(
+      form.getByText(/^Recommended for everyday coding\..*real security boundaries and external effects still ask\.$/),
+    ).toBeVisible();
     await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
 
     await form.getByLabel("Model").selectOption("opus");
@@ -128,7 +132,10 @@ test.describe("threads", () => {
     ]);
     await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
     await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
-    await expect(form.getByText(/With Codex: Runs like Plan/)).toBeVisible();
+    // The note names what Codex enforces in the default mode, Auto.
+    await expect(
+      form.getByText(/With Codex: Workspace writes run without approval prompts inside Codex's native sandbox/),
+    ).toBeVisible();
 
     await form.getByLabel("Provider").selectOption("gemini-cli");
     await expect(form.getByLabel("Model").locator("option")).toHaveText([
@@ -138,6 +145,11 @@ test.describe("threads", () => {
       "Flash",
       "Flash-Lite",
     ]);
+    await expect(
+      form.getByText(/With Gemini CLI: File edits are approved automatically; shell commands and other tools still/),
+    ).toBeVisible();
+    // Switching the mode switches the provider's note with it.
+    await form.getByRole("radio", { name: "Approve" }).click();
     await expect(form.getByText(/With Gemini CLI: Tool calls that need confirmation/)).toBeVisible();
 
     // A Codex thread runs like any other.
