@@ -110,6 +110,86 @@ fn record_run(args: &[String]) {
     }
 }
 
+/// Minimal deterministic Codex app-server used by managed-account persistence tests.
+/// It implements only the read-only handshake KalCode uses; it never reads credentials or
+/// contacts a provider. The first account read can be delayed so a launcher can prove it
+/// preempts background validation instead of waiting for it.
+fn codex_app_server(config: &Value) -> ! {
+    let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) else {
+        exit(8);
+    };
+    let marker = codex_home.join(".kalcode-fake-first-account-read");
+    let delay_ms = get_i64(config, "codexFirstAccountReadDelayMs", 0);
+    let plan = get_str(config, "codexPlan", "pro").to_owned();
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout().lock();
+
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else {
+            exit(8);
+        };
+        let Ok(request) = serde_json::from_str::<Value>(&line) else {
+            exit(8);
+        };
+        let Some(method) = request.get("method").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(id) = request.get("id").cloned() else {
+            continue;
+        };
+
+        let result = match method {
+            "initialize" => serde_json::json!({
+                "userAgent": "codex_cli_rs/0.160.0",
+                "codexHome": codex_home,
+                "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
+                "platformOs": std::env::consts::OS,
+            }),
+            "account/read" => {
+                if request
+                    .get("params")
+                    .and_then(|params| params.get("refreshToken"))
+                    .and_then(Value::as_bool)
+                    != Some(false)
+                {
+                    exit(8);
+                }
+                match std::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&marker)
+                {
+                    Ok(mut file) => {
+                        if writeln!(file, "entered").is_err() || file.flush().is_err() {
+                            exit(8);
+                        }
+                        sleep_ms(delay_ms);
+                        if writeln!(file, "complete").is_err() || file.flush().is_err() {
+                            exit(8);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(_) => exit(8),
+                }
+                serde_json::json!({
+                    "account": {
+                        "type": "chatgpt",
+                        "email": "codex-e2e@example.test",
+                        "planType": plan,
+                    },
+                    "requiresOpenaiAuth": true,
+                })
+            }
+            _ => continue,
+        };
+        let response = serde_json::json!({ "id": id, "result": result });
+        if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+            exit(8);
+        }
+    }
+    exit(0)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("hook") {
@@ -164,6 +244,9 @@ fn main() {
         };
         println!("{}", provider_version(&config, kind, default));
         exit(get_i64(&config, "versionExit", 0));
+    }
+    if kind == "codex" && args.iter().any(|arg| arg == "app-server") {
+        codex_app_server(&config);
     }
     if kind == "codex" && args.first().map(String::as_str) == Some("exec") {
         record_invocation(&args);

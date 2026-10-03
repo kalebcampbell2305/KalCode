@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ProviderAccount } from "@kalcode/protocol";
@@ -35,7 +35,7 @@ function invoke<T>(page: Page, command: string, args: Record<string, unknown> = 
 }
 
 test("connected accounts survive restart, launch without Refresh and isolate genuine expiry", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   const dataDir = createAccountFixtureDataDir();
   const root = mkdtempSync(join(tmpdir(), "kalcode-provider-restart-"));
   const project = join(root, "project");
@@ -44,10 +44,15 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
   mkdirSync(bin);
   writeFileSync(join(project, "README.md"), "# Isolated restart proof\n");
   copyFileSync(FAKE, join(bin, "claude.exe"));
-  const configure = (versionDelayMs: number) =>
+  copyFileSync(FAKE, join(bin, "codex.exe"));
+  const configure = (codexFirstAccountReadDelayMs: number) =>
     writeFileSync(
       join(bin, "fake-provider.json"),
-      JSON.stringify({ versions: { claude: "2.1.282 (Claude Code)" }, versionDelayMs }),
+      JSON.stringify({
+        versions: { claude: "2.1.282 (Claude Code)", codex: "codex-cli 0.160.0" },
+        codexFirstAccountReadDelayMs,
+        codexPlan: "pro",
+      }),
     );
   configure(0);
   const env = {
@@ -60,7 +65,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
   try {
     app = await launch(dataDir, env);
     await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await invoke(app.page, "workspace_open_dialog");
+    await invoke<{ id: string }>(app.page, "workspace_open_dialog");
     const providers = await invoke<{ id: string; detection: { displayPath: string | null } | null }[]>(
       app.page,
       "providers_detect",
@@ -68,19 +73,43 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     expect(providers.find((provider) => provider.id === "claude-code")?.detection?.displayPath).toContain(
       basename(root),
     );
+    expect(providers.find((provider) => provider.id === "codex")?.detection?.displayPath).toContain(basename(root));
     const before = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
-    const primary = before.find((account) => account.providerId === "claude-code");
-    expect(primary).toBeTruthy();
-    if (!primary) throw new Error("The primary Claude account is missing");
-    await invoke(app.page, "provider_account_rename", { accountId: primary?.id, displayName: "Claude A" });
-    const second = await invoke<ProviderAccount>(app.page, "provider_account_create", {
+    const claudeA = before.find((account) => account.providerId === "claude-code");
+    const codexA = before.find((account) => account.providerId === "codex");
+    expect(claudeA).toBeTruthy();
+    expect(codexA).toBeTruthy();
+    if (!claudeA || !codexA) throw new Error("The primary Claude and Codex accounts are required");
+    await invoke(app.page, "provider_account_rename", { accountId: claudeA.id, displayName: "Claude A" });
+    await invoke(app.page, "provider_account_rename", { accountId: codexA.id, displayName: "Codex A" });
+    const claudeB = await invoke<ProviderAccount>(app.page, "provider_account_create", {
       providerId: "claude-code",
       displayName: "Claude B",
     });
-    expect(second.isDefault).toBe(false);
+    const codexB = await invoke<ProviderAccount>(app.page, "provider_account_create", {
+      providerId: "codex",
+      displayName: "Codex B",
+    });
+    expect(claudeB.isDefault).toBe(false);
+    expect(codexB.isDefault).toBe(false);
+    await invoke(app.page, "provider_account_set_default", { accountId: codexB.id });
     const saved = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
+    expect(saved.find((account) => account.id === codexB.id)?.isDefault).toBe(true);
+    const codexAReadMarker = join(
+      dataDir,
+      "provider-profiles",
+      "providers",
+      "codex",
+      "accounts",
+      codexA.id,
+      "home",
+      ".kalcode-fake-first-account-read",
+    );
     await closeGracefully(app);
     app = null;
+    // The initial app can validate the fixture's original default. Reset only this synthetic
+    // account's test marker while the app is closed so the next launch owns the delay proof.
+    rmSync(codexAReadMarker, { force: true });
     // Seed only synthetic, non-secret account metadata after the isolated app is fully closed.
     // Claude auth status is intentionally never invoked: affected native versions can lose a
     // refreshed token on exit. Native login outcome tests cover sign-in; this proves restart.
@@ -89,28 +118,46 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       "python",
       [
         "-c",
-        "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); r=c.executemany(\"UPDATE provider_accounts SET authentication_state='authenticated', provider_reported_identity=?, last_checked_at='2026-10-03T00:00:00Z', last_error_code=NULL WHERE id=? AND archived_at IS NULL\", [(sys.argv[3],sys.argv[2]), ('primary@example.test',sys.argv[4])]); assert r.rowcount == 2; c.commit(); c.close()",
+        "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); pairs=[(sys.argv[i+1],sys.argv[i]) for i in range(2,10,2)]; r=c.executemany(\"UPDATE provider_accounts SET authentication_state='authenticated', provider_reported_identity=?, last_checked_at='2026-10-03T00:00:00Z', last_error_code=NULL WHERE id=? AND archived_at IS NULL\", pairs); assert r.rowcount == 4; c.commit(); c.close()",
         join(dataDir, "kalcode.db"),
-        second.id,
+        claudeB.id,
         identity,
-        primary.id,
+        claudeA.id,
+        "primary@example.test",
+        codexA.id,
+        "codex-a@example.test",
+        codexB.id,
+        "codex-b@example.test",
       ],
       { windowsHide: true, stdio: "pipe" },
     );
-    configure(1500);
+    configure(10_000);
     app = await launch(dataDir, env);
     await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     const restored = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
     expect(
       restored.map(({ id, displayName, providerId, isDefault }) => ({ id, displayName, providerId, isDefault })),
     ).toEqual(saved.map(({ id, displayName, providerId, isDefault }) => ({ id, displayName, providerId, isDefault })));
-    expect(restored.find((account) => account.id === second.id)).toMatchObject({
+    expect(restored.find((account) => account.id === claudeB.id)).toMatchObject({
       authenticationState: "authenticated",
       displayName: "Claude B",
       isDefault: false,
       providerReportedIdentity: identity,
       lastCheckedAt: "2026-10-03T00:00:00Z",
     });
+    expect(restored.find((account) => account.id === codexA.id)).toMatchObject({
+      authenticationState: "authenticated",
+      displayName: "Codex A",
+      isDefault: false,
+      providerReportedIdentity: "codex-a@example.test",
+      lastCheckedAt: "2026-10-03T00:00:00Z",
+    });
+    expect(restored.find((account) => account.id === codexB.id)).toMatchObject({
+      authenticationState: "authenticated",
+      displayName: "Codex B",
+      isDefault: true,
+    });
+    await expect.poll(() => existsSync(codexAReadMarker), { timeout: 30_000 }).toBe(true);
     await waitForProviderAdmission(app.page);
     await app.page
       .getByRole("navigation", { name: "Primary" })
@@ -118,27 +165,74 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       .click();
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
+    await launcher.getByRole("radio", { name: "Codex", exact: true }).click();
     const accountPicker = launcher.getByLabel("Account", { exact: true });
     await expect(accountPicker.locator("option")).toHaveCount(2);
-    await expect(accountPicker.locator(`option[value="${second.id}"]`)).toContainText("Claude B");
-    await accountPicker.selectOption(second.id);
-    await app.page.screenshot({ path: test.info().outputPath("restored-account-picker.png") });
+    await expect(accountPicker).toHaveValue(codexB.id);
+    await expect(accountPicker.locator(`option[value="${codexA.id}"]`)).toContainText("Codex A");
+    await expect(accountPicker.locator(`option[value="${codexB.id}"]`)).toContainText("Codex B");
+    await accountPicker.selectOption(codexA.id);
+    await app.page.screenshot({ path: test.info().outputPath("restored-codex-account-picker.png") });
+    expect(readFileSync(codexAReadMarker, "utf8")).toBe("entered\n");
+    const launchStartedAt = Date.now();
+    await launcher.getByRole("button", { name: "Launch Codex agent", exact: true }).click();
+    await expect(launcher).not.toBeVisible({ timeout: 8_000 });
+    expect(Date.now() - launchStartedAt).toBeLessThan(8_000);
+    const codexThreads = await invoke<{ id: string; providerAccountId: string; runtimeKind: string }[]>(
+      app.page,
+      "thread_list",
+    );
+    const codexThread = codexThreads.find((candidate) => candidate.providerAccountId === codexA.id);
+    expect(codexThread).toBeTruthy();
+    expect(codexThread?.runtimeKind).toBe("interactive_pty");
+    if (!codexThread) throw new Error("The restored Codex account did not launch a coding agent");
+    const codexPane = app.page.locator(`[data-provider-pane="${codexThread.id}"]`);
+    await expect(codexPane).toBeVisible();
+    await expect(codexPane.locator("[data-pane-terminal] .xterm-rows")).toContainText(
+      "KalCode fake provider (interactive Codex)",
+      { timeout: 30_000 },
+    );
+
+    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await launcher.getByRole("radio", { name: "Codex", exact: true }).click();
+    await expect(accountPicker).toHaveValue(codexB.id);
+    await launcher.getByRole("button", { name: "Launch Codex agent", exact: true }).click();
+    await expect(launcher).not.toBeVisible({ timeout: 30_000 });
+    const codexBThreads = await invoke<{ id: string; providerAccountId: string; runtimeKind: string }[]>(
+      app.page,
+      "thread_list",
+    );
+    const codexBThread = codexBThreads.find((candidate) => candidate.providerAccountId === codexB.id);
+    expect(codexBThread).toBeTruthy();
+    expect(codexBThread?.runtimeKind).toBe("interactive_pty");
+    if (!codexBThread) throw new Error("The restored default Codex account did not launch a coding agent");
+    const codexBPane = app.page.locator(`[data-provider-pane="${codexBThread.id}"]`);
+    await expect(codexBPane.locator("[data-pane-terminal] .xterm-rows")).toContainText(
+      "KalCode fake provider (interactive Codex)",
+      { timeout: 30_000 },
+    );
+
+    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await launcher.getByRole("radio", { name: "Claude Code", exact: true }).click();
+    await expect(accountPicker.locator("option")).toHaveCount(2);
+    await expect(accountPicker.locator(`option[value="${claudeB.id}"]`)).toContainText("Claude B");
+    await accountPicker.selectOption(claudeB.id);
     await launcher.getByRole("button", { name: "Launch Claude Code agent", exact: true }).click();
     await expect(launcher).not.toBeVisible({ timeout: 30_000 });
-    const pane = app.page.locator("[data-provider-pane]").first();
+    const threads = await invoke<{ id: string; providerAccountId: string; runtimeKind: string }[]>(
+      app.page,
+      "thread_list",
+    );
+    const thread = threads.find((candidate) => candidate.providerAccountId === claudeB.id);
+    expect(thread).toBeTruthy();
+    expect(thread?.runtimeKind).toBe("interactive_pty");
+    if (!thread) throw new Error("The selected restored account did not launch a coding agent");
+    const pane = app.page.locator(`[data-provider-pane="${thread.id}"]`);
     await expect(pane).toBeVisible();
     await expect(pane.locator("[data-pane-terminal] .xterm-rows")).toContainText(
       "KalCode fake provider (interactive)",
       { timeout: 30_000 },
     );
-    const threads = await invoke<{ id: string; providerAccountId: string; runtimeKind: string }[]>(
-      app.page,
-      "thread_list",
-    );
-    const thread = threads.find((candidate) => candidate.providerAccountId === second.id);
-    expect(thread).toBeTruthy();
-    expect(thread?.runtimeKind).toBe("interactive_pty");
-    if (!thread) throw new Error("The selected restored account did not launch a coding agent");
     const restartedPage = app.page;
     await expect
       .poll(
@@ -156,11 +250,11 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     await expect
       .poll(async () => {
         const current = await invoke<ProviderAccount[]>(restartedPage, "provider_accounts_list");
-        return current.find((account) => account.id === second.id)?.authenticationState;
+        return current.find((account) => account.id === claudeB.id)?.authenticationState;
       })
       .toBe("not_authenticated");
     const afterExpiry = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
-    expect(afterExpiry.find((account) => account.id === primary.id)?.authenticationState).toBe("authenticated");
+    expect(afterExpiry.find((account) => account.id === claudeA.id)?.authenticationState).toBe("authenticated");
     await app.page.getByRole("button", { name: "Providers", exact: true }).click();
     await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
     await expect(
@@ -170,11 +264,27 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       app.page.getByRole("region", { name: /Claude A/ }).getByText("Connected", { exact: true }),
     ).toBeVisible();
     await invoke(app.page, "thread_stop", { threadId: thread.id });
+    await invoke(app.page, "thread_stop", { threadId: codexThread.id });
+    await invoke(app.page, "thread_stop", { threadId: codexBThread.id });
     const starts = readFileSync(join(bin, "runs.log"), "utf8")
       .trim()
       .split(/\r?\n/)
       .map((line) => JSON.parse(line) as { args: string[] });
     expect(starts.some(({ args }) => args[0] === "auth" && args[1] === "status")).toBe(false);
+
+    await closeGracefully(app);
+    app = null;
+    configure(0);
+    app = await launch(dataDir, env);
+    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await app.page.getByRole("button", { name: "Providers", exact: true }).click();
+    await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
+    const codexARegion = app.page.getByRole("region", { name: /Codex A/ });
+    await expect(codexARegion.getByText("1 thread", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(codexARegion.getByText("Usage unavailable", { exact: true })).toBeVisible();
+    const codexBRegion = app.page.getByRole("region", { name: /Codex B/ });
+    await expect(codexBRegion.getByText("1 thread", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(codexBRegion.getByText("Usage unavailable", { exact: true })).toBeVisible();
   } finally {
     if (app) await closeGracefully(app);
     removeDir(dataDir);
