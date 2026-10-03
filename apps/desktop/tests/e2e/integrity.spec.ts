@@ -308,7 +308,8 @@ test("a v4 database from the installed app is upgraded to the latest schema with
       archivedAt: null,
       resumable: false,
       permissionProfileId: null,
-      runtimeKind: null,
+      // A thread without a provider-pane marker is stamped headless (0fd162e3), never an agent.
+      runtimeKind: "headless",
       terminalId: null,
     });
     // The v4 permission preference survives.
