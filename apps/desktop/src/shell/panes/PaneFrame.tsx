@@ -365,6 +365,7 @@ export function PaneFrame(props: PaneFrameProps) {
           </DropdownMenu>
         </div>
         <div className={styles.headerActions} data-no-drag>
+          {activeInfo?.actions}
           {maximized ? (
             <span className={styles.maxBadge}>
               Maximized · {count - 1} more {count - 1 === 1 ? "pane" : "panes"}
@@ -467,7 +468,13 @@ export function PaneFrame(props: PaneFrameProps) {
             </DropdownMenuContent>
           </DropdownMenu>
           <Tooltip content={`Close pane (${PANE_SHORTCUT_LABELS.close})`}>
-            <IconButton size="sm" label={`Close pane ${index + 1}`} icon={<X />} onClick={onClose} />
+            <IconButton
+              size="sm"
+              className={styles.closePane}
+              label={`Close pane ${index + 1}`}
+              icon={<X />}
+              onClick={onClose}
+            />
           </Tooltip>
         </div>
       </header>

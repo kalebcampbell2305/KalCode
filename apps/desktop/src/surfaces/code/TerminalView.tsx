@@ -19,6 +19,7 @@ import styles from "./Code.module.css";
 import { noteTerminalInput, noteTerminalOutput } from "./kaltidy/activity.ts";
 import { suppressReplayQueries } from "./replayQueries.ts";
 import { isTerminalShortcut } from "./shortcuts.ts";
+import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "./terminalImages.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "./terminalTheme.ts";
 
 const FONT_SIZE = 13;
@@ -60,6 +61,8 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
   runningRef.current = running;
   const initialTheme = useRef(theme);
   const terminalId = terminal.id;
+  const terminalStartedAtRef = useRef(terminal.startedAt);
+  terminalStartedAtRef.current = terminal.startedAt;
   const labelRef = useRef(label);
   labelRef.current = label;
   const throttledRef = useRef(throttled);
@@ -101,10 +104,11 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       if (event.defaultPrevented) return false;
       if (isTerminalShortcut(event)) return false;
       const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
+      const paste = (event.ctrlKey || event.metaKey) && !event.altKey;
       const key = event.key.toLowerCase();
       if (ctrl && key === "c" && term.hasSelection()) return false; // browser copy → xterm copy handler
       if (ctrl && key === "c" && event.shiftKey) return false;
-      if (ctrl && key === "v") return false; // browser paste → xterm paste handler
+      if (paste && key === "v") return false; // browser paste → xterm paste handler
       return true;
     });
 
@@ -124,13 +128,74 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       },
     );
     inputRef.current = input;
+    let imagePasteCapture: ((data: string) => void) | null = null;
     term.onData((data) => {
+      const capture = imagePasteCapture;
+      if (capture) {
+        capture(data);
+        return;
+      }
       if (!disposed && runningRef.current) input.send(data);
     });
     term.onBinary((data) => {
       // Legacy mouse reports; only 7-bit data survives the UTF-8 input path unchanged.
       const sevenBit = [...data].every((ch) => ch.charCodeAt(0) < 0x80);
       if (!disposed && runningRef.current && sevenBit) input.send(data);
+    });
+
+    const imageTarget = { kind: "terminal", terminalId } as const;
+    const unregisterImageTarget = registerTerminalImageTarget(host, {
+      key: terminalImageTargetKey("terminal", terminalId),
+      importImage: (pngBase64) => client.importTerminalImage(imageTarget, pngBase64),
+      beginAttachment: () => {
+        const startedAt = terminalStartedAtRef.current;
+        return () => {
+          if (disposed || !runningRef.current) {
+            throw new DictationDeliveryError("terminal_not_running", "That terminal is no longer running.");
+          }
+          if (terminalStartedAtRef.current !== startedAt) {
+            throw new TerminalImageError(
+              "terminal_generation_changed",
+              "That terminal restarted before the image was ready. Try again in the active terminal.",
+            );
+          }
+        };
+      },
+      discardImage: (imported) => client.discardTerminalImage(imageTarget, imported.imageId),
+      focus: () => term.focus(),
+      async pasteInsertion(insertion, beforeWrite, terminalGeneration) {
+        if (!Number.isSafeInteger(terminalGeneration) || (terminalGeneration ?? 0) <= 0) {
+          throw new TerminalImageError(
+            "terminal_generation_invalid",
+            "That terminal restarted before the image was ready. Try again in the active terminal.",
+          );
+        }
+        if (imagePasteCapture) {
+          throw new TerminalImageError("image_paste_busy", "Wait for the current image to finish attaching.");
+        }
+        const writes: Promise<void>[] = [];
+        imagePasteCapture = (data) => {
+          writes.push(
+            input.deliver(
+              data,
+              undefined,
+              () => {
+                beforeWrite();
+              },
+              (guardedData) => client.writeTerminal(terminalId, guardedData, terminalGeneration),
+            ),
+          );
+        };
+        try {
+          term.paste(insertion);
+        } finally {
+          imagePasteCapture = null;
+        }
+        if (writes.length === 0) {
+          throw new TerminalImageError("image_paste_failed", "KalCode couldn't paste the image into that terminal.");
+        }
+        await Promise.all(writes);
+      },
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -259,6 +324,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
 
     return () => {
       disposed = true;
+      unregisterImageTarget();
       observer.disconnect();
       cancelAnimationFrame(frame);
       waitingForResize?.();

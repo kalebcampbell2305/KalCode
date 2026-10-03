@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +46,68 @@ async function newTerminal(page: Page, shell: string) {
   await page.getByRole("menuitem", { name: new RegExp(shell) }).click();
   await expect(page.getByRole("tab", { name: new RegExp(shell) }).last()).toHaveAttribute("aria-selected", "true");
 }
+
+test("image attachment stores real pixels and pastes into its isolated native terminal", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-images-"));
+  const project = mkdtempSync(join(tmpdir(), "kalcode-e2e-image-project-"));
+  const app = await launch(dataDir, { KALCODE_E2E_PICK_FOLDER: project });
+  try {
+    const page = app.page;
+    await codeNav(page).click();
+    await page.getByRole("button", { name: "Open folder…", exact: true }).click();
+    await page.getByRole("button", { name: /^New .+ terminal$/ }).click();
+    await expect(visibleTerminal(page)).toContainText(basename(project));
+    const before = await visibleTerminal(page).innerText();
+    const png = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 4;
+      canvas.height = 4;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("No canvas");
+      context.fillStyle = "#408cff";
+      context.fillRect(0, 0, 4, 4);
+      return canvas.toDataURL("image/png").split(",")[1] ?? "";
+    });
+    await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
+      name: "private-picture.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(png, "base64"),
+    });
+    await expect(visibleTerminal(page)).toContainText("terminal-images", { timeout: 20_000 });
+    const directories = readdirSync(join(dataDir, "terminal-images", "terminals"));
+    expect(directories).toHaveLength(1);
+    const storedDir = join(dataDir, "terminal-images", "terminals", directories[0] ?? "");
+    const images = readdirSync(storedDir);
+    expect(images).toHaveLength(1);
+    const stored = readFileSync(join(storedDir, images[0] ?? ""));
+    expect([...stored.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(stored.readUInt32BE(16)).toBe(4);
+    expect(stored.readUInt32BE(20)).toBe(4);
+    expect((await visibleTerminal(page).innerText()).split("PS ").length).toBe(before.split("PS ").length);
+    await page.keyboard.press("Control+c");
+    // Compute the marker in PowerShell so command echo and line wrapping cannot satisfy the proof.
+    await typeInTerminal(page, "Write-Output ('image-' + 'terminal-alive')");
+    await expect(visibleTerminal(page)).toContainText("image-terminal-alive");
+    await typeInTerminal(page, "exit");
+    await page.locator('[role="tabpanel"]:not([hidden])').getByRole("button", { name: "Restart", exact: true }).click();
+    await expect(visibleTerminal(page)).toContainText(basename(project));
+    await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
+      name: "after-restart.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(png, "base64"),
+    });
+    await expect.poll(() => readdirSync(storedDir).length).toBe(2);
+    await expect(visibleTerminal(page)).toContainText("terminal-images");
+    await page.screenshot({ path: test.info().outputPath("native-code-image.png") });
+    await page.getByRole("button", { name: "Actions for pane 1" }).click();
+    await page.getByRole("menuitem", { name: "End terminal", exact: true }).click();
+    await expect.poll(() => existsSync(storedDir)).toBe(false);
+  } finally {
+    await closeGracefully(app);
+    removeDir(dataDir);
+    removeDir(project);
+  }
+});
 
 test("open a folder, run commands in real shells, restart KalCode, restore and restart the tabs", async () => {
   test.setTimeout(240_000);

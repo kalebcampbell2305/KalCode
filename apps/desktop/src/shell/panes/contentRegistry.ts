@@ -25,6 +25,8 @@ export interface TabInfo {
   statusText?: string;
   /** The content draws on the terminal background (terminals, provider TUIs). */
   terminal?: boolean;
+  /** Contextual controls beside the active tab (for example terminal image input). */
+  actions?: ReactNode;
   /** An explicit stop for the content's process, offered in the pane menu (never on close). */
   stop?: { label: string; run: () => void };
   /**
