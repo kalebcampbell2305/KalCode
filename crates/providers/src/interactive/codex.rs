@@ -351,6 +351,27 @@ mod tests {
     }
 
     #[test]
+    fn code_host_is_available_for_new_and_resumed_panes_in_every_mode() {
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+            PermissionMode::Custom,
+        ] {
+            for resume in [None, Some("0192f3c4-0000-7000-8000-000000000000")] {
+                let argv = args(mode, resume);
+                assert!(
+                    argv.windows(2)
+                        .any(|p| p == ["-c", "features.code_mode_host=true"])
+                );
+                assert!(!argv.iter().any(|a| a == "features.code_mode_host=false"));
+                assert!(!argv.iter().any(|a| a == "features.code_mode=false"));
+            }
+        }
+    }
+
+    #[test]
     fn osc9_is_found_across_chunks_and_other_sequences_are_ignored() {
         let mut scanner = Osc9Scanner::default();
         assert_eq!(
