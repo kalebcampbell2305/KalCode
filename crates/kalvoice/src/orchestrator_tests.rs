@@ -2862,12 +2862,9 @@ fn ui_commands_take_one_request_each_and_never_twice_for_a_retry() {
     // The renderer runs the command; native executes nothing for it.
     assert!(h.executor.executed.lock().expect("effects").is_empty());
     let events = kalvoice_events(&h.core);
-    assert!(
-        events
-            .iter()
-            .any(|e| e["type"] == "kalvoice.command_executed"
-                && e["payload"]["intent"] == "ui_kaltidy")
-    );
+    assert!(events.iter().any(
+        |e| e["type"] == "kalvoice.command_executed" && e["payload"]["intent"] == "ui_kaltidy"
+    ));
 }
 
 #[test]
@@ -2913,7 +2910,12 @@ fn account_ui_commands_are_metered_by_the_account_once() {
     let orchestrator =
         Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
     let req = ui_command(UiCommand::Scene);
-    assert!(orchestrator.meter_ui_command(req.clone()).expect("meter").counted);
+    assert!(
+        orchestrator
+            .meter_ui_command(req.clone())
+            .expect("meter")
+            .counted
+    );
     assert!(!orchestrator.meter_ui_command(req).expect("retry").counted);
     assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
 
