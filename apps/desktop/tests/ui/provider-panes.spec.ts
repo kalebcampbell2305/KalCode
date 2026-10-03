@@ -366,6 +366,9 @@ test.describe("provider panes", () => {
       .getByRole("option")
       .first()
       .click();
+    // The default machine's Gemini account checks out as signed out (Providers asserts that);
+    // signing in right in the launcher is the one step this pane needs.
+    await page.getByRole("dialog", { name: "New agent" }).getByRole("button", { name: "Sign in to Personal" }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Gemini CLI agent" })

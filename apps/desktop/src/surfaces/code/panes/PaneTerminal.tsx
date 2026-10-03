@@ -458,19 +458,27 @@ export const PaneTerminal = memo(function PaneTerminal({
 
   // Focus on request, and again when a resumed agent's new instance recreates the terminal while
   // this pane had focus (the old xterm took the keyboard focus with it).
+  // A request stays pending until it lands: a new agent's instance id often arrives right after
+  // its focus request, and re-running this effect must not drop that request.
   const focusSeen = useRef(0);
+  const focusPending = useRef(false);
   useEffect(() => {
     void instanceId;
-    const requested = focusSeen.current !== focusRequest;
-    focusSeen.current = focusRequest;
+    if (focusSeen.current !== focusRequest) {
+      focusSeen.current = focusRequest;
+      if (focusRequest !== 0) focusPending.current = true;
+    }
     if (focusRequest === 0) return;
-    if (!requested) {
+    if (!focusPending.current) {
       const active = document.activeElement;
       const lostWithOldTerminal =
         active === null || active === document.body || (hostRef.current?.contains(active) ?? false);
       if (throttledRef.current || !lostWithOldTerminal) return;
     }
-    const frame = requestAnimationFrame(() => termRef.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      focusPending.current = false;
+      termRef.current?.focus();
+    });
     return () => cancelAnimationFrame(frame);
   }, [focusRequest, instanceId]);
 
