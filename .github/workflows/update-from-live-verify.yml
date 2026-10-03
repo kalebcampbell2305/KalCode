@@ -88,6 +88,8 @@ jobs:
           if ($liveInst) { $a += @('-LiveInstaller', $liveInst) }
           $processTimeoutMs = 40 * 60 * 1000
           $p = Start-Process -FilePath powershell.exe -ArgumentList $a -NoNewWindow -PassThru
+          # Retain the native handle before exit; Windows PowerShell 5.1 otherwise loses ExitCode with -NoNewWindow.
+          $null = $p.Handle
           if (-not $p.WaitForExit($processTimeoutMs)) { throw 'update-from-live wrapper timed out after 40 minutes; owned QA descendants were left running for evidence preservation' }
           $p.Refresh()
           $exitCode = $p.ExitCode
