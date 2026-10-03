@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terminal-image-discard"
+description = "Enables the terminal_image_discard command without any pre-configured scope."
+commands.allow = ["terminal_image_discard"]
+
+[[permission]]
+identifier = "deny-terminal-image-discard"
+description = "Denies the terminal_image_discard command without any pre-configured scope."
+commands.deny = ["terminal_image_discard"]

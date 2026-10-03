@@ -1,0 +1,33 @@
+.root {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.spin {
+  animation: terminal-image-spin 700ms linear infinite;
+}
+
+:global([data-terminal-image-drop="active"]) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 72%, transparent);
+  background-color: var(--color-accent-soft);
+}
+
+@keyframes terminal-image-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}

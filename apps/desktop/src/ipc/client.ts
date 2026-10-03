@@ -73,6 +73,7 @@ import type {
 import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
 import { HandoffsClient } from "./handoffs.ts";
+import type { ImportedTerminalImage, TerminalImageTarget } from "./terminalImages.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 import type { UpdateChannel, UpdateStatus } from "./updater.ts";
 
@@ -787,15 +788,29 @@ export class KalCodeClient {
     return this.call("terminal_close", { terminalId });
   }
 
+  /** Stages the selected pixels locally; the terminal performs a separate, non-submitting paste. */
+  importTerminalImage(target: TerminalImageTarget, pngBase64: string): Promise<ImportedTerminalImage> {
+    return this.call("terminal_image_import", { target, pngBase64 });
+  }
+
+  /** Releases a staged image when its target closed or rejected the paste. */
+  async discardTerminalImage(target: TerminalImageTarget, imageId: string): Promise<void> {
+    await this.call("terminal_image_discard", { target, imageId });
+  }
+
   /** Sends input in order, split so no single write exceeds the native limit. */
-  async writeTerminal(terminalId: string, data: string): Promise<void> {
+  async writeTerminal(terminalId: string, data: string, expectedGeneration?: number): Promise<void> {
     let start = 0;
     while (start < data.length) {
       let end = Math.min(data.length, start + TERMINAL_WRITE_CHUNK);
       // Never split a surrogate pair across two writes.
       const last = data.charCodeAt(end - 1);
       if (end < data.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
-      await this.call("terminal_write", { terminalId, data: data.slice(start, end) });
+      await this.call("terminal_write", {
+        terminalId,
+        data: data.slice(start, end),
+        ...(expectedGeneration === undefined ? {} : { expectedGeneration }),
+      });
       start = end;
     }
   }

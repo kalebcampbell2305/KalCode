@@ -292,7 +292,16 @@ pub fn terminal_close(
     state
         .core()?
         .close_terminal(&terminal_id)
-        .map_err(|e| e.log_and_convert("terminal_close"))
+        .map_err(|e| e.log_and_convert("terminal_close"))?;
+    let data_dir = state.paths.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) =
+            crate::terminal_image_commands::remove_terminal_images(&data_dir, &terminal_id)
+        {
+            error.log_and_convert("terminal_image_cleanup");
+        }
+    });
+    Ok(())
 }
 
 /// Queues keyboard/paste input (UTF-8 text from xterm.js). At most 64 KB per call.
@@ -302,11 +311,12 @@ pub fn terminal_write(
     state: State<'_, AppState>,
     terminal_id: String,
     data: String,
+    expected_generation: Option<u64>,
 ) -> Result<(), IpcError> {
     _runtime_access.revalidate()?;
     state
         .core()?
-        .write_terminal(&terminal_id, data.as_bytes())
+        .write_terminal_for_generation(&terminal_id, data.as_bytes(), expected_generation)
         .map_err(|e| e.to_ipc())
 }
 
