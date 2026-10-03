@@ -1,4 +1,4 @@
-import type { KalVoiceSignal } from "@kalcode/protocol";
+import type { KalVoiceResponse, KalVoiceSignal } from "@kalcode/protocol";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -16,14 +16,21 @@ const mocks = vi.hoisted(() => {
     kalvoiceListenCancel: vi.fn().mockResolvedValue(undefined),
     kalvoiceTalk: talk,
     kalvoiceRequest: request,
-    kalvoiceMeterUiCommand: vi.fn(async (r: { requestId: string; command: string }) => ({
-      requestId: r.requestId,
-      intent: `ui_${r.command}`,
-      outcome: { kind: "completed", summary: "" },
-      usage: { used: 1, allowance: 25, periodStart: "2026-10-01T00:00:00.000Z", resetsAt: "2026-11-01T00:00:00.000Z" },
-      counted: true,
-      directive: null,
-    })),
+    kalvoiceMeterUiCommand: vi.fn(
+      async (r: { requestId: string; command: string }): Promise<KalVoiceResponse> => ({
+        requestId: r.requestId,
+        intent: `ui_${r.command}`,
+        outcome: { kind: "completed", summary: "" },
+        usage: {
+          used: 1,
+          allowance: 25,
+          periodStart: "2026-10-01T00:00:00.000Z",
+          resetsAt: "2026-11-01T00:00:00.000Z",
+        },
+        counted: true,
+        directive: null,
+      }),
+    ),
   };
   return {
     signal: null as ((signal: KalVoiceSignal) => void) | null,
