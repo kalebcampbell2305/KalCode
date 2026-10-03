@@ -107,6 +107,10 @@ This file is the canonical engineering and release policy for every agent workin
 
 ## Permanent definition: AGENT means a coding agent (owner directive 2026-10-02)
 
+**Creating a new KalCode coding agent always creates a fresh live provider coding session. Multi-agent launch creates N independent provider processes and terminal sessions, subject to the existing account, plan and resource limits. New agents must never inherit ended or failed state from historical sessions. Agent UI state reflects the real provider process: starting or waiting during initialization, live only after successful creation, and failed only for an actual failure.**
+
+New-agent creation and historical restoration are separate lifecycle paths. Use fresh agent, provider-session and PTY identities for new launches; sharing a provider account never means sharing a runtime identity. Resume preserves the historical agent's conversation while creating a new process instance. Ship and verify every required runtime helper beside the application on Windows and macOS, including `kalcode-hook`; a missing helper or failed spawn must report its real cause, never an "earlier run" explanation.
+
 "IN KALCODE, AN AGENT IS A REAL CODING AGENT RUNNING IN A CODING TERMINAL/PANE.
 
 AGENT IS NOT A THREAD.
