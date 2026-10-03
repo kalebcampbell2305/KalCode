@@ -62,27 +62,27 @@ const dashboardNav = () =>
   within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Dashboard" });
 
 describe("Stable Dashboard", () => {
-  it("empty: says no sessions yet and offers both tracked session paths", async () => {
+  it("empty: says no agents yet and launches a coding agent from Code, never a Thread", async () => {
     const { user } = await mount("empty");
     const agents = board();
-    await agents.findByRole("heading", { name: "No sessions yet" });
+    await agents.findByRole("heading", { name: "No agents yet" });
     const actions = agents.getAllByRole("button").map((button) => button.textContent);
-    expect(actions).toEqual(["New Session", "Open Code"]);
+    expect(actions).toEqual(["Launch an agent"]);
     expect(agents.queryByRole("button", { name: "Show archived" })).toBeNull();
-    const copy = screen.getByText(/in a provider pane from Code/);
+    const copy = screen.getByText(/agent from Code/);
     expect(copy.textContent).toMatch(/A CLI you type into a plain terminal isn't tracked here/);
     expect(screen.queryByText(/No active sessions/)).toBeNull();
 
-    await user.click(agents.getByRole("button", { name: "New Session" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Threads" })).toBeInTheDocument();
+    await user.click(agents.getByRole("button", { name: "Launch an agent" }));
+    expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).toBeNull();
   });
 
   it("archived only: says so, lists them read-only on request and restores one", async () => {
     const { user } = await mount("archived");
     const agents = board();
-    await agents.findByRole("heading", { name: "All 3 sessions are archived" });
-    expect(agents.queryByRole("heading", { name: "No sessions yet" })).toBeNull();
-    expect(agents.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    await agents.findByRole("heading", { name: "All 3 agents are archived" });
+    expect(agents.queryByRole("heading", { name: "No agents yet" })).toBeNull();
+    expect(agents.getByRole("button", { name: "Launch an agent" })).toBeInTheDocument();
     const toggle = agents.getByRole("button", { name: "Show archived" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(agents.queryAllByRole("article")).toHaveLength(0);
@@ -109,7 +109,7 @@ describe("Stable Dashboard", () => {
     await user.click(archived.getByRole("button", { name: "Unarchive Deploy preview build" }));
     // Restored: it is back on the board (Failed waits for you), the rest stay archived.
     await waitFor(() => expect(agents.getAllByRole("article", { name: "Deploy preview build" })).toHaveLength(1));
-    expect(agents.queryByRole("heading", { name: /sessions are archived/ })).toBeNull();
+    expect(agents.queryByRole("heading", { name: /agents are archived/ })).toBeNull();
     const stillArchived = within(agents.getByRole("region", { name: /^Archived/ }));
     expect(stillArchived.getAllByRole("article")).toHaveLength(2);
     expect(agents.getByRole("button", { name: "Waiting for you, 1" })).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("Stable Dashboard", () => {
     await mount("busy");
     const agents = board();
     await waitFor(() => expect(agents.getAllByRole("article").length).toBeGreaterThan(0));
-    expect(agents.queryByRole("heading", { name: "No sessions yet" })).toBeNull();
+    expect(agents.queryByRole("heading", { name: "No agents yet" })).toBeNull();
     expect(agents.queryByRole("heading", { name: /archived/ })).toBeNull();
     const waiting = agents.getByRole("button", { name: /^Waiting for you, \d+$/ });
     const count = Number(waiting.getAttribute("aria-label")?.split(", ")[1]);
@@ -138,7 +138,7 @@ describe("Stable Dashboard", () => {
 
   it("the Sidebar shows no count when nothing needs you", async () => {
     await mount("archived");
-    await board().findByRole("heading", { name: "All 3 sessions are archived" });
+    await board().findByRole("heading", { name: "All 3 agents are archived" });
     const nav = dashboardNav();
     expect(nav.textContent).toBe("Dashboard");
     expect(nav).not.toHaveAttribute("aria-describedby");
@@ -146,12 +146,12 @@ describe("Stable Dashboard", () => {
 });
 
 describe("Development Dashboard", () => {
-  it("empty: keeps the provider-pane path to Code as a secondary action", async () => {
+  it("empty: launching an agent is the one action", async () => {
     await mount("empty", "development");
     const agents = board();
-    await agents.findByRole("heading", { name: "No sessions yet" });
-    expect(agents.getAllByRole("button").map((button) => button.textContent)).toEqual(["New Session", "Open Code"]);
-    expect(screen.getByText(/in a provider pane from Code/).textContent).toMatch(
+    await agents.findByRole("heading", { name: "No agents yet" });
+    expect(agents.getAllByRole("button").map((button) => button.textContent)).toEqual(["Launch an agent"]);
+    expect(screen.getByText(/agent from Code/).textContent).toMatch(
       /A CLI you type into a plain terminal isn't tracked here/,
     );
   });

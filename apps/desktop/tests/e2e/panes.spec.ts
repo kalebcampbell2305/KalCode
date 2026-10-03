@@ -102,7 +102,11 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await page.keyboard.press("Control+Alt+d");
     await expect(panes(page)).toHaveCount(2);
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New Claude Code pane" }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("button", { name: "Launch Claude Code agent" })
+      .click();
     const provider = page.locator("[data-provider-pane]").first();
     await expect(provider.locator("[data-pane-terminal] .xterm-rows")).toContainText(
       "KalCode fake provider (interactive)",

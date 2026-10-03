@@ -1854,7 +1854,7 @@ fn idle_threads_start_without_a_task() {
     for thread in created {
         let thread = thread.expect("created");
         assert_eq!(thread.status, ThreadStatus::Idle, "waiting for input");
-        assert_eq!(thread.name, "New thread");
+        assert_eq!(thread.name, "New agent");
         assert!(h.runtime.messages(&thread.id, 10, None).unwrap().is_empty());
     }
     assert!(

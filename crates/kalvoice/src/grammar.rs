@@ -1745,7 +1745,9 @@ fn surface_name(name: &str) -> Option<SurfaceId> {
         "kalvoice" | "kal voice" | "voice" => SurfaceId::KalVoice,
         "code" | "code mode" | "editor" => SurfaceId::Code,
         "threads" => SurfaceId::Threads,
-        "agents" | "agent fleet" => SurfaceId::Agents,
+        // Agents are coding agents (AGENTS.md); their Fleet is on the Dashboard. The gated
+        // Agents page is not where they live.
+        "agents" | "agent fleet" | "coding agents" => SurfaceId::Dashboard,
         "missions" => SurfaceId::Missions,
         "automations" => SurfaceId::Automations,
         "skills" => SurfaceId::Skills,

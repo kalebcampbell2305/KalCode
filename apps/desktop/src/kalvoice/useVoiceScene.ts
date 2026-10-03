@@ -5,6 +5,7 @@ import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { useOpenLocated } from "../shell/rail/search/useOpenLocated.ts";
+import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { getSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import {
   resolveVoiceSceneTarget,
@@ -230,6 +231,7 @@ export function createBaseVoiceSceneTargets({ workspaces, terminals, threads }: 
       model: thread.model,
       effort,
       branch: thread.branch,
+      codingAgent: isCodingAgent(thread),
       updatedAt: thread.lastActivityAt,
     });
   }

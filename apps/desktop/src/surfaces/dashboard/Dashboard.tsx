@@ -7,7 +7,7 @@ import { Announcer } from "./Announcer.tsx";
 import styles from "./Dashboard.module.css";
 import { DashboardBoard } from "./DashboardBoard.tsx";
 import { activityBuckets, chipCounts, summaryLine } from "./data/board.ts";
-import { DashboardDataBoundary, useThreadSummaries } from "./data/DashboardData.tsx";
+import { DashboardDataBoundary, useCodingAgents } from "./data/DashboardData.tsx";
 import { useNow } from "./useNow.ts";
 
 /**
@@ -24,7 +24,7 @@ export function Dashboard() {
 }
 
 function DashboardPage() {
-  const { state } = useThreadSummaries();
+  const { state } = useCodingAgents();
   const summary = useMemo(
     () => (state.status === "ready" && state.data.length > 0 ? summaryLine(chipCounts(state.data)) : null),
     [state],

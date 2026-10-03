@@ -251,7 +251,7 @@ export function PaneTerminal({
           fitNow();
           if (id === null && !resync) {
             term.write(
-              "\x1b[2mThis pane's provider ended in an earlier run. Resume the thread to start it again.\x1b[0m",
+              "\x1b[2mThis pane's provider ended in an earlier run. Resume the agent to start it again.\x1b[0m",
             );
           }
         })

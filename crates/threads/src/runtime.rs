@@ -1197,11 +1197,12 @@ impl ThreadRuntime {
         )
     }
 
-    /// Creates a thread whose session starts without a task; it waits (`idle`) for input.
+    /// Creates a thread whose session starts without a task; it waits (`idle`) for input. Coding
+    /// agents (provider panes) start this way, so an untitled one is a "New agent".
     pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
-            None => naming::FALLBACK_NAME.to_owned(),
+            None => naming::AGENT_FALLBACK_NAME.to_owned(),
         };
         self.inner.create(
             NewThread {

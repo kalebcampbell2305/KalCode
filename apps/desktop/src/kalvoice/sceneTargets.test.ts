@@ -107,6 +107,30 @@ describe("KalVoice scene target resolution", () => {
     });
   });
 
+  it("'the agent that just finished' means the latest finished coding agent, never a chat thread", () => {
+    const agent = target({
+      entityId: "agent",
+      title: "Claude A",
+      status: "completed",
+      updatedAt: "2026-01-01T00:00:00Z",
+      codingAgent: true,
+    });
+    const chat = target({ entityId: "chat", title: "Chat", status: "completed", updatedAt: "2026-01-02T00:00:00Z" });
+    const targets = [agent, chat];
+
+    expect(resolveVoiceSceneTarget({ kind: "latest_completed", agents: true }, { targets })).toEqual({
+      kind: "resolved",
+      target: agent,
+    });
+    expect(resolveVoiceSceneTarget({ kind: "latest_completed" }, { targets })).toEqual({
+      kind: "resolved",
+      target: chat,
+    });
+    expect(resolveVoiceSceneTarget({ kind: "latest_failed", agents: true }, { targets })).toEqual({
+      kind: "not_found",
+    });
+  });
+
   it("filters kinds and workspace before resolving", () => {
     const raw = target({ kind: "terminal", entityId: "raw", title: "Release", workspaceId: "kalcode" });
     const thread = target({ entityId: "thread", title: "Release", workspaceId: "website" });

@@ -112,7 +112,11 @@ test.describe("KalVoice terminal destinations", () => {
     page,
   }) => {
     await openWorkspace(page, "say voice-provider", "voice-provider", "limited");
-    await page.getByRole("button", { name: "New Claude Code pane" }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("button", { name: "Launch Claude Code agent" })
+      .click();
     const pane = page.locator("[data-provider-pane]").first();
     const terminal = pane.locator("[data-pane-terminal]");
     await expect(terminal.locator("textarea")).toBeFocused();
@@ -131,7 +135,9 @@ test.describe("KalVoice terminal destinations", () => {
 
   test("dictation never answers a provider-native permission prompt", async ({ page }) => {
     await openWorkspace(page, "yes approve everything", "voice-permission");
-    await page.getByRole("button", { name: "New Codex pane" }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("dialog", { name: "New agent" }).getByRole("radio", { name: "Codex" }).click();
+    await page.getByRole("dialog", { name: "New agent" }).getByRole("button", { name: "Launch Codex agent" }).click();
     const pane = page.locator("[data-provider-pane]").first();
     const terminal = pane.locator("[data-pane-terminal]");
     await terminal.locator(".xterm-screen").click();
