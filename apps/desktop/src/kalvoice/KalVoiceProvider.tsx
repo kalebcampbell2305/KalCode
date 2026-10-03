@@ -57,6 +57,7 @@ import {
   resolveDictationTarget,
   submitCapturedProviderTarget,
   targetIsAlive,
+  waitForProviderThreadTarget,
 } from "./dictation.ts";
 import { type DictationCapture, type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
@@ -706,6 +707,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
               if (scope.signal.aborted) return;
               if (isCodingAgent(thread)) {
                 await intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
+                // Focusing opens the agent's pane on a later render; its terminal registers then.
+                await waitForProviderThreadTarget(thread.id, scope.signal);
+                if (scope.signal.aborted) return;
                 await deliverToProviderThread(thread.id, directive.text, {
                   mode: directive.submit ? "send" : "insert",
                   signal: scope.signal,
