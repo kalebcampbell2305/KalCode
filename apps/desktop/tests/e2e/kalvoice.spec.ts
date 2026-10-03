@@ -191,7 +191,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     const expectedDisplayPath = displayedPath(realpathSync.native(fakePath));
     expect(expectedDisplayPath.startsWith("~")).toBe(true);
     expect(codex?.detection?.displayPath?.toLowerCase()).toBe(expectedDisplayPath.toLowerCase());
-    expect(codex?.detection?.version).toBe("0.155.1");
+    expect(codex?.detection?.version).toBe("0.160.0");
     expect(await invoke<unknown[]>(page, "approval_list")).toEqual([]);
     const create = await talk(page, "open two codex threads", "none");
     expect(create.route).toBe("command");
