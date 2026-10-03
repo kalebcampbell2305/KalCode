@@ -19,6 +19,19 @@ export interface AccountProfile {
   id: string;
   email: string;
   activatedAt: string | null;
+  /** Cosmetic account display name; null = none set (clients show the email's local part). */
+  displayName: string | null;
+}
+
+interface AccountProfileRow {
+  id: string;
+  email: string;
+  activated_at: string | null;
+  display_name: string | null;
+}
+
+function profileFromRow(row: AccountProfileRow): AccountProfile {
+  return { id: row.id, email: row.email, activatedAt: row.activated_at, displayName: row.display_name };
 }
 
 export interface EmailAttempt {
@@ -412,10 +425,25 @@ export function d1AccountStore(db: D1Database) {
 
     async accountProfile(accountId: string): Promise<AccountProfile | null> {
       const row = await db
-        .prepare("SELECT id, email, activated_at FROM accounts WHERE id = ?1 AND deleted_at IS NULL")
+        .prepare("SELECT id, email, activated_at, display_name FROM accounts WHERE id = ?1 AND deleted_at IS NULL")
         .bind(accountId)
-        .first<{ id: string; email: string; activated_at: string | null }>();
-      return row ? { id: row.id, email: row.email, activatedAt: row.activated_at } : null;
+        .first<AccountProfileRow>();
+      return row ? profileFromRow(row) : null;
+    },
+
+    /**
+     * Sets (or, with null, clears) the account's cosmetic display name. Touches nothing else:
+     * id, email, sessions, identities and billing stay exactly as they are.
+     */
+    async setDisplayName(accountId: string, displayName: string | null): Promise<AccountProfile | null> {
+      const row = await db
+        .prepare(
+          `UPDATE accounts SET display_name = ?2 WHERE id = ?1 AND deleted_at IS NULL
+           RETURNING id, email, activated_at, display_name`,
+        )
+        .bind(accountId, displayName)
+        .first<AccountProfileRow>();
+      return row ? profileFromRow(row) : null;
     },
 
     async createEmailAttempt(input: {
@@ -676,7 +704,7 @@ export function d1AccountStore(db: D1Database) {
           .bind(input.verifyHash, input.accountId, input.now, input.consumeNonce),
         db
           .prepare(
-            `UPDATE accounts SET email = ?3, deleted_at = ?2, activated_at = NULL
+            `UPDATE accounts SET email = ?3, deleted_at = ?2, activated_at = NULL, display_name = NULL
              WHERE id = ?1 AND deleted_at IS NULL
                AND EXISTS (
                  SELECT 1 FROM email_signin_attempts

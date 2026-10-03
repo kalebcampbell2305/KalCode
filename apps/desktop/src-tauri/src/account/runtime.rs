@@ -1087,6 +1087,81 @@ impl AccountRuntime {
         }
     }
 
+    /// Sets (`Some`) or clears (`None`) the KalCode account's cosmetic display name.
+    ///
+    /// Only the name changes: account id, email, session, entitlement and authority revision
+    /// stay exactly as they are, so no lease or running work is disturbed. The server validates
+    /// and normalizes; the returned name is published and cached for offline restarts.
+    pub fn set_display_name(
+        &self,
+        display_name: Option<String>,
+    ) -> Result<AccountSnapshot, AccountRuntimeError> {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let _lane = self.lock_lane()?;
+        if !self.is_current(generation) {
+            return Err(cancelled());
+        }
+        if display_name
+            .as_ref()
+            .is_some_and(|name| name.len() > MAX_DISPLAY_NAME_REQUEST_BYTES)
+        {
+            return Err(invalid_display_name());
+        }
+        let account_id = self
+            .snapshot()
+            .account
+            .map(|account| account.id)
+            .ok_or_else(authentication_required)?;
+        let token = self.session_token()?;
+        let response = self.api.set_display_name(&token, display_name.as_deref());
+        if !self.is_current(generation) {
+            return Err(cancelled());
+        }
+        let updated = match response {
+            Ok(account) => public_account(account)?,
+            Err(error) if error.status() == Some(401) => {
+                self.clear_unauthorized()?;
+                return Err(authentication_required());
+            }
+            Err(error) => return Err(display_name_error(error)),
+        };
+        if updated.id != account_id {
+            return Err(account_identity_mismatch());
+        }
+        let mut state = self.lock_state();
+        if !self.is_current(generation) {
+            return Err(cancelled());
+        }
+        let Some(account) = state
+            .snapshot
+            .account
+            .as_mut()
+            .filter(|account| account.id == updated.id)
+        else {
+            return Err(cancelled());
+        };
+        account.display_name = updated.display_name.clone();
+        if let Some(cached) = state
+            .cached
+            .as_ref()
+            .filter(|cached| cached.account().id == updated.id)
+        {
+            let mut cached_account = cached.account().clone();
+            cached_account.display_name = updated.display_name;
+            if let Ok(next) =
+                CachedAccountSecret::new(cached.entitlement_token().to_owned(), cached_account)
+            {
+                state.cached = Some(next);
+            }
+        }
+        // The server already holds the name; a local cache write failure only costs the name on
+        // an offline restart, so it never turns a saved name into an error.
+        if self.persist_locked(&state).is_err() {
+            tracing::warn!(event = "account.display_name_cache_write_failed");
+        }
+        Ok(state.snapshot.clone())
+    }
+
     /// Revalidates the current account's signed entitlement on every metering decision. The
     /// expected identity was captured by the native account-owned runtime, never by the WebView.
     pub(crate) fn kalvoice_authority(
@@ -1652,6 +1727,17 @@ impl AccountRuntime {
     }
 }
 
+/// The longest name the server accepts is 64 characters (at most 4 UTF-8 bytes each); anything
+/// longer than this bound can never be valid and is refused without a request.
+const MAX_DISPLAY_NAME_REQUEST_BYTES: usize = 1024;
+
+/// A display name the WebView may show: what the server accepts (1–64 characters, already
+/// trimmed, no control characters).
+fn valid_display_name(value: &str) -> bool {
+    let count = value.chars().count();
+    (1..=64).contains(&count) && value == value.trim() && !value.chars().any(char::is_control)
+}
+
 fn public_account(value: ApiAccount) -> Result<PublicAccount, AccountRuntimeError> {
     let id_valid =
         !value.id.is_empty() && value.id.len() <= 128 && !value.id.chars().any(char::is_control);
@@ -1664,13 +1750,15 @@ fn public_account(value: ApiAccount) -> Result<PublicAccount, AccountRuntimeErro
         .activated_at
         .as_ref()
         .is_none_or(|time| parse_iso_epoch(time).is_ok());
-    if !id_valid || !email_valid || !activation_valid {
+    let display_name_valid = value.display_name.as_deref().is_none_or(valid_display_name);
+    if !id_valid || !email_valid || !activation_valid || !display_name_valid {
         return Err(invalid_response());
     }
     Ok(PublicAccount {
         id: value.id,
         email: value.email,
         activated_at: value.activated_at,
+        display_name: value.display_name,
     })
 }
 
@@ -1809,6 +1897,29 @@ fn unavailable_social_sign_in_reports_the_build_limitation() {
     assert_eq!(error.code, "social_sign_in_unavailable");
     assert!(error.message.contains("Sign in with email"));
     assert!(!error.retryable);
+}
+
+fn invalid_display_name() -> AccountRuntimeError {
+    AccountRuntimeError {
+        code: "invalid_display_name",
+        message: "Use 1–64 characters, without control or invisible formatting characters.",
+        retryable: false,
+    }
+}
+
+/// Saving a display name only ever fails as: invalid, rate limited, or not reachable now.
+fn display_name_error(error: ApiError) -> AccountRuntimeError {
+    match (error.status(), error.code()) {
+        (Some(400), Some("invalid_display_name")) => invalid_display_name(),
+        (Some(429), _) => api_error(error),
+        // 404 is a service that predates display names: like an outage, it passes.
+        (Some(status), _) if status != 404 && (400..=499).contains(&status) => invalid_response(),
+        _ => AccountRuntimeError {
+            code: "account_service_unavailable",
+            message: "KalCode could not reach the account service.",
+            retryable: true,
+        },
+    }
 }
 
 fn store_error(_: SessionStoreError) -> AccountRuntimeError {

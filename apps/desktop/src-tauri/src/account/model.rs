@@ -50,6 +50,9 @@ pub struct PublicAccount {
     pub id: String,
     pub email: String,
     pub activated_at: Option<String>,
+    /// The cosmetic KalCode account display name; `None` = not set (the UI shows the email's
+    /// local part). Never part of identity, authority or any signed document.
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -220,3 +220,24 @@ describe("Account Hub", () => {
     expect(within(screen.getByRole("navigation", { name: "Primary" })).getByText(/^Version \d/)).toBeInTheDocument();
   });
 });
+
+describe("KalCode account display name", () => {
+  it("is edited in Account & plan and the hub shows it at once, ahead of a local name", async () => {
+    const { user, hub } = await mount({ displayName: "Local Name" });
+    expect(hub).toHaveAccessibleName("Account: Local Name, Free plan");
+    await user.click(hub);
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Account & plan" }));
+    const panel = await screen.findByRole("region", { name: "KalCode account" });
+    const field = within(panel).getByRole("textbox", { name: "Display name" });
+    expect(field).toHaveValue("");
+    expect(field).toHaveAttribute("placeholder", "owner");
+    await user.type(field, "Kaleb Campbell");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(hub).toHaveAccessibleName("Account: Kaleb Campbell, Free plan"));
+    expect(hub).toHaveTextContent("KC");
+    await user.clear(field);
+    await user.type(field, "Kaleb{Enter}");
+    await waitFor(() => expect(hub).toHaveAccessibleName("Account: Kaleb, Free plan"));
+    expect(await within(panel).findByRole("status")).toHaveTextContent("Saved");
+  });
+});

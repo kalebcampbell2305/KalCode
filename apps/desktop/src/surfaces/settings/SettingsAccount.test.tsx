@@ -8,7 +8,7 @@ import { SettingsAccount, SettingsAccountView } from "./SettingsAccount.tsx";
 
 const account: AccountSnapshot = {
   phase: "ready",
-  account: { id: "acct_01", email: "owner@example.com", activatedAt: "2026-09-25T12:00:00Z" },
+  account: { id: "acct_01", email: "owner@example.com", activatedAt: "2026-09-25T12:00:00Z", displayName: null },
   tier: "pro",
   sessionExpiresAt: "2026-10-25T12:00:00Z",
   entitlementExpiresAt: 1_800_000_000,

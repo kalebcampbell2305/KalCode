@@ -26,6 +26,7 @@ export type CommandName =
   | "account_refresh"
   | "account_logout"
   | "account_usage"
+  | "account_set_display_name"
   | "updater_status"
   | "updater_set_channel"
   | "updater_check"

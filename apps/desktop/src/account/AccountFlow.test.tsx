@@ -11,7 +11,9 @@ function snapshot(phase: "bootstrapping" | "ready"): AccountSnapshot {
   return {
     phase,
     account:
-      phase === "ready" ? { id: "acct_01", email: "owner@example.com", activatedAt: "2026-09-25T12:00:00Z" } : null,
+      phase === "ready"
+        ? { id: "acct_01", email: "owner@example.com", activatedAt: "2026-09-25T12:00:00Z", displayName: null }
+        : null,
     tier: phase === "ready" ? "pro" : null,
     sessionExpiresAt: phase === "ready" ? "2026-10-25T12:00:00Z" : null,
     entitlementExpiresAt: phase === "ready" ? 1_800_000_000 : null,
@@ -296,6 +298,7 @@ describe("account onboarding integration", () => {
       refresh: vi.fn(async () => signedOut),
       logout: vi.fn(async () => signedOut),
       usage: vi.fn(async () => null),
+      setDisplayName: vi.fn(async () => signedOut),
     };
     const user = userEvent.setup();
     render(

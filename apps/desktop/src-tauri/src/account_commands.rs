@@ -189,6 +189,19 @@ pub async fn account_usage(
     blocking(runtime.inner().clone(), AccountRuntime::usage).await
 }
 
+/// Sets the KalCode account display name; `null` or blank clears it. Cosmetic only: the
+/// account id, email, session and plan never change.
+#[tauri::command]
+pub async fn account_set_display_name(
+    runtime: State<'_, Arc<AccountRuntime>>,
+    display_name: Option<String>,
+) -> Result<AccountSnapshot, AccountRuntimeError> {
+    blocking(runtime.inner().clone(), move |runtime| {
+        runtime.set_display_name(display_name)
+    })
+    .await
+}
+
 /// Absent means monthly, matching the API contract and older frontends.
 fn billing_interval(value: Option<&str>) -> Result<BillingInterval, AccountRuntimeError> {
     match value {

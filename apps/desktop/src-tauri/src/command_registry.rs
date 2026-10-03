@@ -12,6 +12,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "account_refresh",
     "account_logout",
     "account_usage",
+    "account_set_display_name",
     "runtime_status",
     "operations_snapshot",
     "operations_detail",

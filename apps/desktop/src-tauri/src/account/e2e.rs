@@ -347,6 +347,7 @@ struct E2eAccountApi {
 #[derive(Default)]
 struct E2eServerState {
     email: Option<String>,
+    display_name: Option<String>,
     code_challenge: Option<String>,
 }
 
@@ -364,14 +365,18 @@ impl E2eAccountApi {
     }
 
     fn account_snapshot(&self) -> ApiAccount {
-        let email = self
+        let state = self
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let email = state
             .email
             .clone()
             .unwrap_or_else(|| "owner@example.com".into());
+        let display_name = state.display_name.clone();
+        drop(state);
         ApiAccount {
+            display_name,
             id: ACCOUNT_ID.into(),
             email,
             activated_at: self
@@ -449,6 +454,33 @@ impl AccountApi for E2eAccountApi {
 
     fn account(&self, bearer: &str) -> Result<ApiAccount, ApiError> {
         Self::authorize(bearer)?;
+        Ok(self.account_snapshot())
+    }
+
+    fn set_display_name(
+        &self,
+        bearer: &str,
+        display_name: Option<&str>,
+    ) -> Result<ApiAccount, ApiError> {
+        Self::authorize(bearer)?;
+        let name = display_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned);
+        if name
+            .as_ref()
+            .is_some_and(|name| name.chars().count() > 64 || name.chars().any(char::is_control))
+        {
+            return Err(ApiError::Http {
+                status: 400,
+                code: "invalid_display_name".into(),
+                retry_after_seconds: None,
+            });
+        }
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .display_name = name;
         Ok(self.account_snapshot())
     }
 

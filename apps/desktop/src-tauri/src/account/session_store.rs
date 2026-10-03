@@ -17,6 +17,9 @@ pub const ACCOUNT_USAGE_RECEIPT_KEY: &str = "kalcode-account-usage-receipt";
 /// after an updater rollback. Older builds never read this item; it is bound to the checkout's
 /// request id, so a stale or orphaned value can never apply to another checkout.
 pub const ACCOUNT_CHECKOUT_INTERVAL_KEY: &str = "kalcode-account-checkout-interval";
+/// The cached account's display name, beside the envelope for the same rollback reason: an
+/// extra envelope field would sign people out on an older build. Bound to the account id.
+pub const ACCOUNT_DISPLAY_NAME_KEY: &str = "kalcode-account-display-name";
 const ENVELOPE_VERSION: u32 = 2;
 const LEGACY_ENVELOPE_VERSION: u32 = 1;
 
@@ -25,6 +28,7 @@ pub struct AccountSessionStore<'a> {
     key: SecretKey,
     usage_key: SecretKey,
     interval_key: SecretKey,
+    display_name_key: SecretKey,
 }
 
 impl<'a> AccountSessionStore<'a> {
@@ -34,11 +38,14 @@ impl<'a> AccountSessionStore<'a> {
             SecretKey::new(ACCOUNT_USAGE_RECEIPT_KEY).map_err(|_| SessionStoreError::Backend)?;
         let interval_key = SecretKey::new(ACCOUNT_CHECKOUT_INTERVAL_KEY)
             .map_err(|_| SessionStoreError::Backend)?;
+        let display_name_key =
+            SecretKey::new(ACCOUNT_DISPLAY_NAME_KEY).map_err(|_| SessionStoreError::Backend)?;
         Ok(Self {
             backend,
             key,
             usage_key,
             interval_key,
+            display_name_key,
         })
     }
 
@@ -72,12 +79,14 @@ impl<'a> AccountSessionStore<'a> {
         let cached = raw
             .cached
             .map(|value| {
+                let display_name = self.display_name(&value.account_id);
                 CachedAccountSecret::new(
                     value.entitlement_token,
                     PublicAccount {
                         id: value.account_id,
                         email: value.email,
                         activated_at: value.activated_at,
+                        display_name,
                     },
                 )
             })
@@ -207,6 +216,31 @@ impl<'a> AccountSessionStore<'a> {
                 .delete(&self.usage_key)
                 .map_err(|_| SessionStoreError::Backend)?;
         }
+        // Best effort: a display name is cosmetic and never blocks saving the session. The item
+        // is bound to the account id, so a stale one can never name another account.
+        match cached.and_then(|value| {
+            let account = value.account();
+            account
+                .display_name
+                .as_deref()
+                .map(|name| (account.id.as_str(), name))
+        }) {
+            Some((account_id, display_name)) => {
+                let stored = StoredDisplayName {
+                    version: 1,
+                    account_id: account_id.to_owned(),
+                    display_name: display_name.to_owned(),
+                };
+                if let Ok(json) = serde_json::to_string(&stored) {
+                    let _ = self
+                        .backend
+                        .set(&self.display_name_key, &SecretString::new(json));
+                }
+            }
+            None => {
+                let _ = self.backend.delete(&self.display_name_key);
+            }
+        }
         // Written before the envelope: an interrupted save leaves only an orphan bound to a
         // request id the envelope does not hold. Monthly checkouts write nothing here.
         if let Some(checkout) = checkout.filter(|value| value.interval() == BillingInterval::Year) {
@@ -231,8 +265,25 @@ impl<'a> AccountSessionStore<'a> {
         let receipt = self.backend.delete(&self.usage_key);
         // Best effort: the marker is request-bound, so a leftover can never apply elsewhere.
         let _ = self.backend.delete(&self.interval_key);
+        // Best effort: the name is account-bound, so a leftover can never name another account.
+        let _ = self.backend.delete(&self.display_name_key);
         Ok(session.map_err(|_| SessionStoreError::Backend)?
             | receipt.map_err(|_| SessionStoreError::Backend)?)
+    }
+
+    /// The cached display name of `account_id`. Absent, unreadable, invalid or another
+    /// account's name means none: the UI then shows the email's local part until the next
+    /// verified account read.
+    fn display_name(&self, account_id: &str) -> Option<String> {
+        let secret = self.backend.get(&self.display_name_key).ok()??;
+        let stored: StoredDisplayName = serde_json::from_str(secret.expose_secret()).ok()?;
+        let count = stored.display_name.chars().count();
+        (stored.version == 1
+            && stored.account_id == account_id
+            && (1..=64).contains(&count)
+            && stored.display_name == stored.display_name.trim()
+            && !stored.display_name.chars().any(char::is_control))
+        .then_some(stored.display_name)
     }
 
     /// The interval of the stored pending checkout. Absent, unreadable, or stale markers mean
@@ -255,6 +306,14 @@ struct StoredCheckoutInterval {
     version: u32,
     request_id: String,
     interval: BillingInterval,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredDisplayName {
+    version: u32,
+    account_id: String,
+    display_name: String,
 }
 
 #[derive(Serialize, Deserialize)]

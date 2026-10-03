@@ -3,6 +3,7 @@
  * It has no credentials, browser launches, email, payment, or network effects.
  */
 import { limitsFor } from "@kalcode/protocol";
+import { accountDisplayNameProblem } from "../account/displayName.ts";
 import {
   type AccountCommandName,
   type AccountOpenResult,
@@ -44,11 +45,11 @@ function pending(email: string): AccountSnapshot {
   return { ...signedOut(), phase: "email_pending", pendingEmail: email, pendingExpiresAt: PENDING_EXPIRY };
 }
 
-function unactivated(email = ACCOUNT_EMAIL): AccountSnapshot {
+function unactivated(email = ACCOUNT_EMAIL, displayName: string | null = null): AccountSnapshot {
   return {
     ...signedOut(),
     phase: "authenticated_unactivated",
-    account: { id: ACCOUNT_ID, email, activatedAt: null },
+    account: { id: ACCOUNT_ID, email, activatedAt: null, displayName },
     sessionExpiresAt: SESSION_EXPIRY,
   };
 }
@@ -57,11 +58,11 @@ function confirming(email = ACCOUNT_EMAIL): AccountSnapshot {
   return { ...unactivated(email), phase: "confirming_plan" };
 }
 
-function ready(tier: AccountTier = "free", email = ACCOUNT_EMAIL): AccountSnapshot {
+function ready(tier: AccountTier = "free", email = ACCOUNT_EMAIL, displayName: string | null = null): AccountSnapshot {
   return {
     ...signedOut(),
     phase: "ready",
-    account: { id: ACCOUNT_ID, email, activatedAt: ACTIVATED_AT },
+    account: { id: ACCOUNT_ID, email, activatedAt: ACTIVATED_AT, displayName },
     tier,
     sessionExpiresAt: SESSION_EXPIRY,
     entitlementExpiresAt: ENTITLEMENT_EXPIRY,
@@ -101,6 +102,23 @@ function requiredEmail(args: Record<string, unknown> | undefined): string {
     throw new Error("Enter a valid email address.");
   }
   return email;
+}
+
+/** Mirrors the API's rule: trimmed; empty clears; 1–64 characters, no control/invisible ones. */
+function requestedDisplayName(args: Record<string, unknown> | undefined): string | null {
+  const value = args?.displayName;
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") throw new Error("Invalid display name.");
+  const trimmed = value.normalize("NFC").trim();
+  if (trimmed.length === 0) return null;
+  if (accountDisplayNameProblem(trimmed)) {
+    throw {
+      code: "invalid_display_name",
+      message: "Use 1–64 characters, without control or invisible formatting characters.",
+      retryable: false,
+    };
+  }
+  return trimmed;
 }
 
 function requiredTier(args: Record<string, unknown> | undefined): PurchasableTier {
@@ -178,6 +196,14 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
       pendingEmail = null;
       confirmingTier = null;
       snapshot = signedOut();
+      return snapshot;
+    },
+    async account_set_display_name(args) {
+      const account = snapshot.account;
+      if (!account || (snapshot.phase !== "ready" && snapshot.phase !== "offline_grace")) {
+        throw { code: "authentication_required", message: "Sign in to continue.", retryable: false };
+      }
+      snapshot = { ...snapshot, account: { ...account, displayName: requestedDisplayName(args) } };
       return snapshot;
     },
     async account_usage() {
