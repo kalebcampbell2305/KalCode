@@ -218,12 +218,9 @@ test.describe("tabs and drag and drop", () => {
     await page.keyboard.press("Control+Alt+d");
     await expect(panes(page)).toHaveCount(2);
     const gitBash = pane(page, 0).getByRole("tab", { name: /Git Bash/ });
-    // Provider detection finishes asynchronously, one provider at a time, and the panes move ~40 px down
-    // once all are in, so an early press could land on a toolbar button. Measure only after they appear
-    // and the tab holds still as the element under its own centre.
-    for (const provider of ["Claude Code", "Codex", "Gemini CLI"]) {
-      await expect(page.getByRole("button", { name: `New ${provider} pane` })).toBeVisible();
-    }
+    // The header settles once the agent launcher is offered; measure only after it appears and the
+    // tab holds still as the element under its own centre.
+    await expect(page.getByRole("button", { name: "New agent", exact: true })).toBeVisible();
     await expect
       .poll(async () => {
         const before = await box(gitBash);
@@ -352,7 +349,11 @@ test.describe("content from other surfaces", () => {
     await expectNoSeriousA11yViolations(page);
 
     // A provider pane, hidden in the background, is brought back and focused by its focus request.
-    await page.getByRole("button", { name: "New Claude Code pane" }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("button", { name: "Launch Claude Code agent" })
+      .click();
     const provider = page.locator("[data-provider-pane]");
     await expect(provider).toBeVisible();
     const threadId = await provider.getAttribute("data-provider-pane");
@@ -548,7 +549,11 @@ test.describe("accessibility", () => {
         .getByRole("button", { name: "Code", exact: true })
         .click();
       await expect(canvas(page)).toBeVisible();
-      await page.getByRole("button", { name: "New Claude Code pane" }).click();
+      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "New agent" })
+        .getByRole("button", { name: "Launch Claude Code agent" })
+        .click();
       await expect(page.locator("[data-provider-pane]")).toBeVisible();
       await page.keyboard.press("Control+Alt+Shift+D");
       await expect(panes(page)).toHaveCount(3);

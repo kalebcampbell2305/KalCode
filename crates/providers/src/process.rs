@@ -503,6 +503,7 @@ mod platform {
     use std::fmt;
     use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
     use crate::guardian::{GuardedJob, RegisteredJob};
@@ -620,18 +621,36 @@ mod platform {
         child.stderr().take()
     }
 
+    /// How long `kill_tree` waits for a terminated root to be reaped.
+    const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    // Never call process-wrap's `JobObjectChild::kill`/`wait` here: its wait blocks on the job's
+    // completion port with an INFINITE timeout, every `try_wait` consumes one packet, and Windows
+    // does not guarantee job notifications, so it can hang a session thread forever.
+    // `start_kill` (TerminateJobObject) ends every process in the job without waiting; guarded
+    // children additionally prove zero active guardian-job processes within a bound.
     pub fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
         let status = child.try_wait()?;
         if status.is_some() {
-            // JobObjectChild::kill terminates any surviving descendants and its wait verifies the
-            // completion-port signal for the whole job before a profile lease may be released.
-            child.kill()?;
+            // The root has exited; terminate any descendants that survived it.
+            child.start_kill()?;
         }
         Ok(status)
     }
 
     pub fn kill_tree(child: &mut Child) -> std::io::Result<()> {
-        child.kill()
+        child.start_kill()?;
+        let deadline = Instant::now() + REAP_TIMEOUT;
+        while child.try_wait()?.is_none() {
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the terminated process tree's root did not exit within 5 seconds",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        Ok(())
     }
 }
 
@@ -1171,6 +1190,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_child_status_returns_without_a_job_completion_packet() {
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let (child, _lines) = SupervisedChild::spawn(&ProcessSpec {
+            program: std::path::Path::new(&system_root)
+                .join("System32")
+                .join("cmd.exe"),
+            args: ["/d", "/c", "exit 0"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+            cwd: None,
+            env: crate::detect::DetectEnv::from_process()
+                .provider_env(&crate::env::EnvPolicy::BASE),
+        })
+        .expect("spawn cmd.exe");
+
+        // Observe the exit through the raw Job Object child, then drain every queued job
+        // notification. Windows does not guarantee job completion packets, and this exited root
+        // with an empty completion port is the state in which process-wrap's blocking `kill()`
+        // waited forever.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while lock(&child.child)
+            .try_wait()
+            .expect("raw try_wait")
+            .is_none()
+        {
+            assert!(Instant::now() < deadline, "cmd.exe did not exit");
+            thread::sleep(Duration::from_millis(15));
+        }
+        thread::sleep(Duration::from_millis(200));
+        for _ in 0..64 {
+            let _ = lock(&child.child).try_wait();
+        }
+
+        let (status_tx, status_rx) = mpsc::channel();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let status = child
+                .wait_timeout(Duration::from_secs(1))
+                .map(|status| status.map(|status| status.success()))
+                .map_err(|error| error.to_string());
+            let _ = status_tx.send(status);
+            drop(child);
+            let _ = dropped_tx.send(());
+        });
+        let status = status_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the exited child's status check hung without a job completion packet");
+        assert_eq!(status, Ok(Some(true)));
+        dropped_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("dropping the exited child hung without a job completion packet");
     }
 
     #[test]

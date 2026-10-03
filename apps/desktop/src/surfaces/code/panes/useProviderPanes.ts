@@ -5,6 +5,13 @@ import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import { isPaneProvider, PaneChannel, type PaneProviderId, paneStartMode } from "./paneChannel.ts";
 
+/** How a new coding agent starts: account, exact model and effort (each optional). */
+export interface AgentLaunch {
+  providerAccountId?: string | null;
+  model?: string | null;
+  effort?: string | null;
+}
+
 export interface ProviderPaneEntry {
   thread: ThreadSummary;
   info: PaneInfo;
@@ -37,8 +44,8 @@ export interface ProviderPanes {
   /** Codex / Gemini CLI when `thread_options` offers them (Claude Code is always offered). */
   offered: readonly PaneProviderId[];
   error: string | null;
-  /** Starts a provider (Claude Code by default) in a new pane thread (the real CLI in a PTY). */
-  create: (providerId?: PaneProviderId, providerAccountId?: string | null) => Promise<ThreadSummary | null>;
+  /** Starts a coding agent (Claude Code by default): the real CLI in a PTY pane. */
+  create: (providerId?: PaneProviderId, launch?: AgentLaunch) => Promise<ThreadSummary | null>;
   /** A thread changed (rename, stop). */
   updated: (thread: ThreadSummary) => void;
   refresh: () => Promise<void>;
@@ -154,13 +161,15 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   }, [waiting, codexWaiting, refresh]);
 
   const create = useCallback(
-    async (providerId: PaneProviderId = "claude-code", providerAccountId?: string | null) => {
+    async (providerId: PaneProviderId = "claude-code", launch: AgentLaunch = {}) => {
       setCreating(providerId);
       setError(null);
       try {
         const thread = await channel.create({
           providerId,
-          providerAccountId: providerAccountId ?? null,
+          providerAccountId: launch.providerAccountId ?? null,
+          model: launch.model ?? null,
+          effort: launch.effort ?? null,
           workspaceId: workspace.id,
           permissionMode: paneStartMode(settings?.defaultMode),
         });

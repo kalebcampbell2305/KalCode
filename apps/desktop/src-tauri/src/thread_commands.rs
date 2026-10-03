@@ -36,6 +36,7 @@ use tauri::{State, Webview};
 use crate::AppState;
 use crate::provider_auth_commands::ProviderRuntimeAuthority;
 use crate::provider_commands::detect_and_record;
+use crate::provider_pane_commands::ProviderPanesState;
 use crate::resource_commands::ResourceAdmissionProvider;
 
 /// Detection results (Z2) that decide which providers threads may use.
@@ -853,27 +854,36 @@ fn validate_creation_account(
 pub fn thread_list(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     workspace_id: Option<String>,
     include_archived: Option<bool>,
 ) -> Result<Vec<ThreadSummary>, IpcError> {
     _runtime_access.revalidate()?;
-    state
+    let mut threads = state
         .runtime()?
         .list(workspace_id.as_deref(), include_archived.unwrap_or(false))
-        .map_err(|e| e.log_and_convert("thread_list"))
+        .map_err(|e| e.log_and_convert("thread_list"))?;
+    // Coding agents (provider panes) and chat threads share this list; say which is which.
+    for thread in &mut threads {
+        panes.stamp_runtime_kind(thread);
+    }
+    Ok(threads)
 }
 
 #[tauri::command(async)]
 pub fn thread_get(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
-    state
+    let mut thread = state
         .runtime()?
         .get(&thread_id)
-        .map_err(|e| e.log_and_convert("thread_get"))
+        .map_err(|e| e.log_and_convert("thread_get"))?;
+    panes.stamp_runtime_kind(&mut thread);
+    Ok(thread)
 }
 
 #[tauri::command(async)]
@@ -1028,7 +1038,7 @@ fn worktree_unavailable() -> KalError {
     KalError::new(
         ErrorCategory::Git,
         "worktree_unavailable",
-        "This workspace isn't a Git repository, so the agent can't get its own worktree.",
+        "This workspace isn't a Git repository, so the thread can't get its own worktree.",
     )
 }
 
@@ -2889,7 +2899,7 @@ mod tests {
         assert_eq!(error.code, "worktree_unavailable");
         assert_eq!(
             error.message,
-            "This workspace isn't a Git repository, so the agent can't get its own worktree."
+            "This workspace isn't a Git repository, so the thread can't get its own worktree."
         );
         assert!(fixture.spy.starts().is_empty());
         assert!(fixture.worktrees().is_empty());

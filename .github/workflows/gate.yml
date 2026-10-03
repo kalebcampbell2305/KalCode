@@ -8,6 +8,14 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Docs-only PRs skip the self-hosted gate (AGENTS.md parallel merge protocol): the two gate
+    # runners are the merge bottleneck. Later patterns win; release notes still gate.
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "!docs/**"
+      - "!marketing/**"
+      - "docs/releases/**"
   workflow_dispatch:
 
 concurrency:

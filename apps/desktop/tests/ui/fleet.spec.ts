@@ -1,8 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
 
 /**
- * Agent Fleet: the Dashboard's agent cards with call signs, each agent's own worktree and branch,
- * READY TO MERGE from Git facts, and a card opening its thread.
+ * Agent Fleet: the Dashboard's coding-agent cards with call signs, each agent's own worktree and
+ * branch, READY TO MERGE from Git facts, and a card opening the agent's terminal in Code. Chat
+ * threads are not agents and stay in Threads.
  */
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -38,7 +39,7 @@ test("a finished agent is ready to merge only when its worktree facts all agree"
   await expect(conflicted).not.toContainText("Ready to merge ");
 });
 
-test("a new agent runs in its own worktree and branch by default", async ({ page }) => {
+test("a new thread runs in its own worktree by default and is not an agent in the Fleet", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await openFolders(page, "kalcode");
@@ -52,10 +53,11 @@ test("a new agent runs in its own worktree and branch by default", async ({ page
   await expect(page.getByRole("region", { name: "Thread", exact: true })).toBeVisible();
 
   await nav(page, "Dashboard");
-  await expect(page.getByRole("article").first()).toContainText(/kal\/tidy-release-checklist-[0-9a-f]{8}/);
+  await expect(page.getByRole("heading", { name: "No agents yet" })).toBeVisible();
+  await expect(page.getByRole("article")).toHaveCount(0);
 });
 
-test("a folder outside Git can't give an agent its own worktree", async ({ page }) => {
+test("a folder outside Git can't give a thread its own worktree", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await openFolders(page, "design-notes");
@@ -63,17 +65,26 @@ test("a folder outside Git can't give an agent its own worktree", async ({ page 
   await page.getByRole("main").getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
   await expect(form.getByRole("checkbox", { name: "Run in its own worktree" })).toBeDisabled();
-  await expect(form).toContainText("isn't a Git repository, so the agent works in the folder itself");
+  await expect(form).toContainText("isn't a Git repository, so the thread works in the folder itself");
 });
 
-test("clicking a fleet card opens its thread", async ({ page }) => {
-  await page.goto("/?scenario=threads");
+test("launching two agents from Code fills the Fleet, and a card opens its terminal", async ({ page }) => {
+  await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  await card(page, "Fix OAuth Callback Race")
-    .getByRole("heading", { name: "Fix OAuth Callback Race" })
-    .getByRole("button")
-    .click();
-  await expect(page.getByRole("region", { name: "Thread", exact: true })).toContainText("Fix OAuth Callback Race");
+  await openFolders(page, "kalcode");
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  const launcher = page.getByRole("dialog", { name: "New agent" });
+  await launcher.getByRole("button", { name: "One more agent" }).click();
+  await launcher.getByRole("button", { name: "Launch 2 Claude Code agents" }).click();
+  await expect(launcher).toHaveCount(0);
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(2);
+
+  await nav(page, "Dashboard");
+  await expect(page.getByRole("article")).toHaveCount(2);
+  await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
+  await expect(page.getByRole("heading", { level: 1, name: "kalcode" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(2);
 });
 
 test("KalCode commits an isolated agent's leftover changes on its branch when asked", async ({ page }) => {

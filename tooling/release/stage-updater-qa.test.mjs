@@ -156,6 +156,35 @@ test("baseline source validator permits only canonical version authorities and t
   }
 });
 
+function fixedCrateSnapshot() {
+  // After the version split the workspace crates carry a fixed internal version: a baseline leaves Cargo untouched.
+  const snapshot = sourceSnapshot();
+  for (const files of [snapshot.candidateFiles, snapshot.baselineFiles]) {
+    files["Cargo.toml"] = `[workspace.package]\nversion = "0.0.0"\n`;
+    files["Cargo.lock"] = `[[package]]\nname = "kalcode-desktop"\nversion = "0.0.0"\n`;
+  }
+  snapshot.changedFiles = [
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "crates/updater/src/lib.rs",
+  ];
+  return snapshot;
+}
+
+test("baseline source validator accepts the fixed-version Cargo workspace unchanged", () => {
+  assert.deepEqual(validateBaselineSourceSnapshot(fixedCrateSnapshot()), []);
+  for (const mutate of [
+    (snapshot) => (snapshot.baselineFiles["Cargo.lock"] += "\n# broadened change"),
+    (snapshot) => (snapshot.baselineFiles["Cargo.toml"] += "\n[profile.release]\n"),
+    (snapshot) => snapshot.changedFiles.push("Cargo.lock"),
+    (snapshot) => snapshot.changedFiles.push("crates/updater/src/tests.rs"),
+  ]) {
+    const snapshot = fixedCrateSnapshot();
+    mutate(snapshot);
+    assert.notDeepEqual(validateBaselineSourceSnapshot(snapshot), []);
+  }
+});
+
 function release(version, byte, commit) {
   const updaterBytes = Buffer.from(byte);
   const downloadBytes = Buffer.from(`${byte}-download`);

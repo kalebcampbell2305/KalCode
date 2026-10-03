@@ -3,7 +3,7 @@ import { ProviderGlyph, Skeleton, StatusChip } from "@kalcode/ui/components";
 import { useMemo } from "react";
 import { useOptionalUiIntents } from "../../../runtime/uiIntents.tsx";
 import { compareThreads } from "../../../surfaces/dashboard/data/board.ts";
-import { useThreadSummaries } from "../../../surfaces/dashboard/data/DashboardData.tsx";
+import { useCodingAgents } from "../../../surfaces/dashboard/data/DashboardData.tsx";
 import { formatElapsed } from "../../../surfaces/dashboard/data/format.ts";
 import { useNow } from "../../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../../navigation.tsx";
@@ -14,14 +14,14 @@ function working(threads: readonly ThreadSummary[]): ThreadSummary[] {
 }
 
 export function useActiveAgentCount(): number | null {
-  const { state } = useThreadSummaries();
+  const { state } = useCodingAgents();
   const n = state.status === "ready" ? working(state.data).length : 0;
   return n > 0 ? n : null;
 }
 
 /** Agents working right now, with what each is doing (structured activity only). */
 export function ActiveAgentsWidget() {
-  const { state } = useThreadSummaries();
+  const { state } = useCodingAgents();
   const intents = useOptionalUiIntents();
   const { navigate } = useNavigation();
   const now = useNow(30_000);
@@ -41,7 +41,7 @@ export function ActiveAgentsWidget() {
 
   const open = (thread: ThreadSummary) => {
     if (intents) void intents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
-    else navigate("threads");
+    else navigate("code");
   };
 
   return (

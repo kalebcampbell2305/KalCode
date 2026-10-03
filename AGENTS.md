@@ -105,6 +105,28 @@ After shipping, preserve required artifacts/evidence and apply the permanent saf
 
 This file is the canonical engineering and release policy for every agent working in this repository: Claude Code, Codex, and any future agent. `CLAUDE.md` imports it. If another instruction file conflicts with this one, this one wins, unless the owner explicitly overrides it in the conversation.
 
+## Permanent definition: AGENT means a coding agent (owner directive 2026-10-02)
+
+"IN KALCODE, AN AGENT IS A REAL CODING AGENT RUNNING IN A CODING TERMINAL/PANE.
+
+AGENT IS NOT A THREAD.
+
+'START SIX CLAUDE CODE AGENTS' MEANS LAUNCH SIX CLAUDE CODE CODING TERMINALS.
+
+'START THREE CODEX AGENTS' MEANS LAUNCH THREE CODEX CODING TERMINALS.
+
+THE AGENTS TAB / AGENT FLEET REPRESENTS THESE REAL CODING AGENTS AND OPENS THEIR ACTUAL CODE TERMINALS.
+
+THREADS REMAIN A SEPARATE PRODUCT CONCEPT."
+
+This applies to Claude Code, Codex and every future agent, in product code, UI copy, KalVoice and orchestration.
+
+- **Agent** = a real provider coding session (Claude Code, Codex, Gemini CLI) running in its own terminal pane in Code, with a provider, account, exact model, effort, workspace, worktree/branch where relevant, live status and current task. N agents = N panes.
+- **Thread** = the chat-oriented surface in Threads. Never implement, list, count or open an agent as a Thread, and never call a thread an agent.
+- In code, an agent is a thread record whose `runtimeKind` is `interactive_pty` (native stamps it from the provider-pane marker on `thread_list`/`thread_get`; `isCodingAgent` in `apps/desktop/src/surfaces/dashboard/data/agents.ts`). Agent surfaces read `useCodingAgents()`; opening an agent goes through `uiIntents.focus({ kind: "thread", ... })`, which focuses its Code pane.
+- Code's **New agent** launcher (+) chooses provider → account (only when there are several) → exact model → effort → count, and starts that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on the Dashboard; "the agent that just finished" means the latest finished coding agent.
+- Agents rail, Agent Fleet, Needs You counts, widgets, Squads, Handoffs, Queue, Runs and future automation use this same definition. Do not create an alternate one.
+
 ## KalVoice integration rule (owner directive 2026-10-01)
 
 Codex and Claude Code share this policy, including the release lifecycle enforced by Claude's `tooling/release/ship.mjs lifecycle hook`. Apply the same delivery requirements regardless of agent. Reuse KalVoice's existing local speech, routing, provider authentication, workspace, terminal, app-control, and release systems. Prioritize working scene awareness, natural targeting, navigation, multi-agent launching, terminal prompting, follow-up context, focus illumination, and meaningful completion callbacks. Optional voice polish must not delay validated core improvements. Preserve native provider approvals and truthful account, plan, and hardware limits. Ship through the normal gates as the next internal build of the current public version on both Windows and macOS; do not create a new public version or treat a merge as delivery.
@@ -160,6 +182,94 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Never recreate terminals, Browser instances or other expensive components unnecessarily. Avoid needless re-renders and app-wide state churn. Keep polling cheap and quiet when nothing has changed. Never add artificial delay or let an animation gate an action.
 - Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
 - Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
+
+## Permanent parallel merge protocol (owner directive 2026-10-02)
+
+**EVERY KALCODE TERMINAL MAY MERGE. THREE TO FIVE MERGES CAN LAND AT ONCE. NO SINGLE MERGER, NO LEAD APPROVAL. COORDINATE SO NOTHING BREAKS.** This applies to every Claude Code and Codex session.
+
+**1. Merge your own work.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), merge it yourself. Don't wait for, or route through, another session.
+
+**2. Pre-merge check (fast; takes seconds).**
+- `git fetch origin`.
+- `git merge-tree --write-tree origin/main HEAD` must be conflict-free. If not, rebase or merge main and re-test.
+- If main moved since you tested, compare the files main changed (`git diff --name-only <tested-base> origin/main`) with your touched files and their direct dependents. Re-run the targeted tests only when they overlap.
+- Merge exactly what you tested: `gh pr merge <n> --merge --match-head-commit <sha>`.
+
+**3. Main stays green, and the breaker fixes it.** Before merging, run `biome ci .` (whole repo, about 1 s) and the tests for every file you touched, including tests that read source text. A format-only commit can break a regex test. If your merge breaks main, fixing it is your top priority. If you notice someone else's break, message that session at once (ListAgents → SendMessage).
+
+**4. The shared runners are the bottleneck** (one Windows gate runner, one Mac gate runner). Run fewer gates and use them better:
+- **Merge train.** With two or more PRs ready, whoever is ready first combines them on one branch (`train/<topic>`), runs ONE gate, and merges them all (see #107). Announce the train so the others don't gate separately.
+- **Cancel waste.** Cancel gate runs for branches that are already merged or superseded.
+- **Docs-only PRs skip the self-hosted gate** (Markdown, `docs/**` except `docs/releases/**`, `marketing/**`). The author still runs the lifecycle tests locally when `AGENTS.md` changes.
+- **Release-critical packaging gets the machines first.** While a release is packaging on the Mac or Windows release machine, the macOS gate job may be skipped for changes whose macOS risk the release itself proves. Windows gate jobs queue.
+
+**5. Announce shared hot spots.** Before merging changes to these areas, send a one-line SendMessage to the live sessions (ListAgents): KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater. Never force-push, rebase or merge another session's branch without asking that session.
+
+**6. One release build and one website deploy at a time** (shared hardware and a shared Worker); merges never wait for either.
+- **Release.** Claim it in `target/lanes/release.lock` (one line: session, commit C, build N, UTC start) and remove it after production verification. A release pins its commit C, so merges during a release don't restart it; they ride the next build. When a release publishes and main has unshipped desktop changes, the releasing session starts the next build immediately.
+- **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
+- **Takeover.** If a lock's session no longer appears in ListAgents, any session may take the lock over and finish the work (the kit and state are in `target/recovery-*`).
+
+**7. Log merges.** Append one line per merge to `target/lanes/merge-log.md`: UTC time, session, PR, merged sha, and the areas touched. Sessions read it to see what just landed.
+
+## Permanent visual quality rule (owner directive 2026-10-02)
+
+**FUNCTIONAL IS NOT ENOUGH FOR USER-FACING KALCODE. EVERYTHING USERS SEE MUST LOOK BEAUTIFUL, PREMIUM, INTENTIONAL, FAST AND UNMISTAKABLY KALCODE. NOTHING USER-FACING SHIPS BLAND. KEEP IT SIMPLE. KEEP IT BEAUTIFUL. KEEP IT FAST.**
+
+**Scope.** This covers every surface a user or the owner sees:
+- the desktop UI: Code tab, Threads, Browser, Agent Fleet, Operations, Account Hub, onboarding, settings, dialogs, menus, empty states, charts and widgets;
+- dashboards, including owner and internal ones;
+- websites, pricing and release pages;
+- marketing assets, videos, and installers where visual.
+
+It does not mean styling backend-only code, scripts, APIs or invisible infrastructure.
+
+**Standard.** Every visible surface feels premium, intentional, polished, modern and cohesive. It is information-rich without clutter, visually impressive, easy to understand, and fast.
+
+Never ship anything that looks like:
+- default framework UI, a generic SaaS dashboard, or plain Bootstrap-style cards and random rectangles;
+- unfinished developer tooling or bland enterprise software;
+- cheap gamer UI, excessive neon, or AI-generated visual slop;
+- a placeholder design.
+
+**If the first implementation works but looks bland, it is not done.**
+
+**KalCode design language.** Default to the established system:
+- **Base:** a near-black/graphite foundation, with a deep-space/midnight atmosphere where appropriate.
+- **Accent:** the signature electric-blue.
+- **Type:** bright, high-contrast typography.
+- **Surfaces:** restrained neutral borders, subtle depth, premium shadows, restrained glow, and clean glass/depth effects where useful.
+- **Shape and spacing:** radii of about 10–14px; tight, deliberate spacing.
+- **Motion:** smooth 160–260ms motion, plus subtle parallax/depth only when it genuinely helps.
+- **Provider colours:** mainly small identity indicators. KalCode owns the visual hierarchy.
+
+It should feel like a sophisticated AI engineering environment, not a bland IDE.
+
+**Hierarchy.** Not everything is equally prominent. Decide what matters most, what the user needs next, and what stays secondary. Express that with scale, spacing, typography, contrast, position, motion and depth. Important things feel important; secondary things stay quiet.
+
+**Motion makes KalCode feel alive.** Use pane transitions, hover feedback, animated state changes, subtle electric-blue focus, number/chart transitions, loading transitions, and polished open/close. Motion must communicate focus, state, movement, progress or causality, never mere decoration. It must never make the app feel slower.
+
+**Beautiful also means fast** (see the responsiveness rule). The target is CLICK → IMMEDIATE RESPONSE → BEAUTIFUL TRANSITION → RESULT, never CLICK → WAIT → ANIMATION → RESULT. Never trade responsiveness for effects.
+
+**Details matter.** Get these right:
+- typography, alignment, spacing and icon consistency;
+- button hierarchy;
+- hover, focus, loading, empty, error and disabled states;
+- tooltips, menus and scroll behaviour;
+- responsive resizing, truncation, long content and high-density layouts.
+
+A feature is not visually finished just because its happy-path screen looks good.
+
+**Don't over-engineer.** Prefer SIMPLE + BEAUTIFUL + FAST over COMPLEX + FLASHY + OVERBUILT. Use the smallest technically correct implementation at a high visual standard. Never turn a small feature into a large redesign unless it is necessary (see Scope discipline).
+
+**Final visual pass (required before user-facing work is complete).** Look at the actual rendered result: a screenshot, a Playwright run or the real app. Then ask:
+- Does it look premium and unmistakably KalCode?
+- Is anything bland or confusing?
+- Does the hierarchy make sense, and does it feel finished?
+- Is it still beautiful at realistic window sizes?
+- Does it feel fast?
+
+If any answer is no, polish it before shipping. Give subagents doing user-facing work these criteria explicitly.
 
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 

@@ -10,6 +10,14 @@ const MAX_WORDS: usize = 6;
 const ENOUGH_WORDS: usize = 4;
 
 pub const FALLBACK_NAME: &str = "New thread";
+/// An untitled coding agent (a provider pane started without a task) until its first prompt
+/// names it. Agents are coding terminals, not threads (AGENTS.md).
+pub const AGENT_FALLBACK_NAME: &str = "New agent";
+
+/// Whether `name` is still an untitled placeholder that the first prompt may replace.
+pub fn is_placeholder(name: &str) -> bool {
+    name == FALLBACK_NAME || name == AGENT_FALLBACK_NAME
+}
 
 /// Politeness and framing that precede the actual task.
 const LEADING_FILLER: &[&str] = &[

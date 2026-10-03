@@ -91,6 +91,8 @@ export function validatePolicy(p) {
   for (const g of p?.gates ?? []) {
     if (!/^[a-z0-9-]+$/.test(g.id ?? "")) problems.push(`gate ${g.id}: bad id`);
     if (!Array.isArray(g.run) || g.run.length === 0) problems.push(`gate ${g.id}: run required`);
+    if (g.timeoutMs !== undefined && !(Number.isInteger(g.timeoutMs) && g.timeoutMs > 0))
+      problems.push(`gate ${g.id}: timeoutMs must be a positive integer`);
   }
   if (new Set((p?.gates ?? []).map((g) => g.id)).size !== (p?.gates ?? []).length) problems.push("duplicate gate ids");
   return problems;

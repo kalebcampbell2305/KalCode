@@ -24,6 +24,8 @@ export interface CreatePaneInput {
   workspaceId: string;
   permissionMode: PermissionMode;
   model?: string | null;
+  /** Provider-native reasoning effort; missing means the provider default. */
+  effort?: string | null;
   name?: string | null;
 }
 
@@ -75,6 +77,7 @@ export class PaneChannel {
       providerAccountId: input.providerAccountId ?? null,
       workspaceId: input.workspaceId,
       model: input.model ?? null,
+      effort: input.effort ?? null,
       permissionMode: input.permissionMode,
       name: input.name ?? null,
     });

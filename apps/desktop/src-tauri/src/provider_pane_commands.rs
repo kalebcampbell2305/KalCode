@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use kalcode_contracts::agent::{AgentProvider, ProviderId};
 use kalcode_contracts::app::FeatureId;
 use kalcode_contracts::permissions::PermissionMode;
-use kalcode_contracts::threads::ThreadSummary;
+use kalcode_contracts::threads::{ThreadRuntimeKind, ThreadSummary};
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_hook_bridge::Endpoint;
 use kalcode_hook_bridge::server::{BridgeServer, BridgeShutdownError, ServerConfig};
@@ -115,7 +115,7 @@ impl TitleSink for Glue {
         };
         if runtime
             .get(thread_id)
-            .is_ok_and(|t| t.name == naming::FALLBACK_NAME)
+            .is_ok_and(|t| naming::is_placeholder(&t.name))
             && let Err(error) = runtime.rename(thread_id, &naming::name_from_prompt(prompt))
         {
             tracing::warn!(event = "pane.title_failed", error = %error.diagnostic());
@@ -191,6 +191,19 @@ impl ProviderPanesState {
             .retryable()
             .with_source(error)
         })
+    }
+
+    /// Stamps how the thread's provider runs: `interactive_pty` for a provider pane (a coding
+    /// agent in a Code terminal), `headless` for everything else. Agent surfaces (the Agents
+    /// rail, Agent Fleet, KalVoice) use it to tell coding agents from chat threads.
+    pub(crate) fn stamp_runtime_kind(&self, summary: &mut ThreadSummary) {
+        let interactive = self.panes.info(&summary.id).is_some()
+            || marked_interactive(&self.sessions_dir, &summary.id);
+        summary.runtime_kind = Some(if interactive {
+            ThreadRuntimeKind::InteractivePty
+        } else {
+            ThreadRuntimeKind::Headless
+        });
     }
 
     /// Starts the bridge when the feature is visible for this build, and registers the
@@ -386,7 +399,7 @@ fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
         ProviderError::SessionEnded => {
             return KalError::validation(
                 "pane_not_running",
-                "This pane's provider has ended. Resume the thread to start it again.",
+                "This agent's provider has ended. Resume the agent to start it again.",
             )
             .to_ipc();
         }
@@ -424,6 +437,7 @@ pub fn provider_pane_create(
     provider_account_id: Option<String>,
     workspace_id: String,
     model: Option<String>,
+    effort: Option<String>,
     permission_mode: PermissionMode,
     name: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
@@ -450,6 +464,7 @@ pub fn provider_pane_create(
         None,
     )
     .map_err(|e| e.log_and_convert("provider_pane_create_account"))?;
+    let effort = pane_effort(&provider_id, effort)?;
     threads.ensure_providers(app.core.as_ref());
     let runtime = threads.runtime()?;
     RuntimeRouter::create_interactive(|| {
@@ -459,12 +474,41 @@ pub fn provider_pane_create(
             account_label: account.map(|account| account.display_name),
             workspace_id,
             model,
-            effort: None,
+            effort,
             permission_mode,
             name,
         })
     })
+    .map(|mut thread| {
+        panes.stamp_runtime_kind(&mut thread);
+        thread
+    })
     .map_err(|e| e.log_and_convert("provider_pane_create"))
+}
+
+/// The provider-native effort a new pane starts with (`None`: the provider default). Gemini CLI
+/// has no effort setting.
+fn pane_effort(provider_id: &str, effort: Option<String>) -> Result<Option<String>, IpcError> {
+    let Some(effort) = effort
+        .map(|effort| effort.trim().to_ascii_lowercase())
+        .filter(|effort| !effort.is_empty() && effort != "default")
+    else {
+        return Ok(None);
+    };
+    let supported = match provider_id {
+        ProviderId::CLAUDE_CODE => kalcode_providers::claude::argv::valid_effort_name(&effort),
+        ProviderId::CODEX => kalcode_providers::codex::argv::valid_effort_name(&effort),
+        _ => false,
+    };
+    if supported {
+        Ok(Some(effort))
+    } else {
+        Err(KalError::validation(
+            "invalid_effort",
+            "That provider doesn't support this effort level.",
+        )
+        .to_ipc())
+    }
 }
 
 /// Streams a pane's output to the calling view (replay first, then live bytes). The view
@@ -604,7 +648,7 @@ fn provider_voice_error(error: PaneVoiceWriteError) -> IpcError {
     match error {
         PaneVoiceWriteError::SessionEnded => KalError::validation(
             "pane_not_running",
-            "This pane's provider has ended. Resume the thread to start it again.",
+            "This agent's provider has ended. Resume the agent to start it again.",
         ),
         PaneVoiceWriteError::TargetChanged => KalError::validation(
             "provider_target_changed",
@@ -698,7 +742,7 @@ mod tests {
         }
         let ended = provider_error(ProviderError::SessionEnded);
         assert_eq!(ended.code, "pane_not_running");
-        assert!(ended.message.contains("Resume the thread"));
+        assert!(ended.message.contains("Resume the agent"));
 
         assert_eq!(
             provider_voice_error(PaneVoiceWriteError::ProviderPrompt).code,

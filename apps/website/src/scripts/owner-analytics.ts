@@ -1,14 +1,17 @@
 /**
  * Owner command center (src/pages/owner/analytics.astro). The shell renders immediately; the two
  * data sources load independently so fast distribution counts never wait on Stripe. All data is
- * written with textContent / DOM nodes, never as HTML.
+ * written with textContent / DOM nodes, never as HTML. Every number shown comes from
+ * /v1/insights/*; motion only animates between real values.
  */
+import { compactUsd, milestoneLadder, milestoneProgress } from "../lib/owner-milestones";
 
 const API = "https://api.kalcoded.com";
 const REFRESH_MS = 60_000;
 const COLORS = ["#4c8dff", "#cf7a30", "#9085e9"] as const;
 const PLAN_IDS = ["pro", "max", "max2x"] as const;
-const PLAN_NAMES: Record<(typeof PLAN_IDS)[number], string> = { pro: "Pro", max: "MAX", max2x: "MAX 2X" };
+type PlanId = (typeof PLAN_IDS)[number];
+const PLAN_NAMES: Record<PlanId, string> = { pro: "Pro", max: "MAX", max2x: "MAX 2X" };
 type TimeRange = "24h" | "7d" | "30d" | "90d" | "all";
 const RANGE_LABEL: Record<TimeRange, string> = {
   "24h": "Last 24 hours",
@@ -17,11 +20,20 @@ const RANGE_LABEL: Record<TimeRange, string> = {
   "90d": "Last 90 days",
   all: "All time",
 };
+const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 interface Platforms {
   windows: number;
   macos: number;
   unknown: number;
+}
+interface ActivityEntry {
+  at: string;
+  kind: "download" | "update_download";
+  platform: string;
+  arch: string;
+  version: string;
+  fromVersion: string;
 }
 interface Distribution {
   generatedAt: string;
@@ -39,14 +51,7 @@ interface Distribution {
   builds: { version: string; downloads: number; updates: number }[];
   series: { start: string; downloads: number; updates: number }[];
   seriesUnit: "hour" | "day";
-  recent: {
-    at: string;
-    kind: "download" | "update_download";
-    platform: string;
-    arch: string;
-    version: string;
-    fromVersion: string;
-  }[];
+  recent: ActivityEntry[];
 }
 interface Accounts {
   accounts: number;
@@ -72,7 +77,7 @@ interface Revenue {
   activeSubscribers: number;
   mrrCents: number;
   arrCents: number;
-  byPlan: Record<(typeof PLAN_IDS)[number], PlanRevenue>;
+  byPlan: Record<PlanId, PlanRevenue>;
   pastDue: number;
   trialing: number;
   scheduledToCancel: number;
@@ -90,35 +95,104 @@ const $$ = <T extends Element = HTMLElement>(selector: string, root: ParentNode 
   Array.from(root.querySelectorAll(selector)) as T[];
 
 const numberFormat = new Intl.NumberFormat("en-US");
-const n = (value: number) => numberFormat.format(value);
-const usd = (cents: number, fraction = true) =>
+const n = (value: number) => numberFormat.format(Math.round(value));
+const usdFormat = (fraction: boolean) =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: fraction ? 2 : 0,
     maximumFractionDigits: fraction ? 2 : 0,
-  }).format(Math.round(cents) / 100);
+  });
+const USD2 = usdFormat(true);
+const USD0 = usdFormat(false);
+const usd = (cents: number, fraction = true) => (fraction ? USD2 : USD0).format(Math.round(cents) / 100);
 const plural = (count: number, word: string) => `${n(count)} ${word}${count === 1 ? "" : "s"}`;
 const pct = (value: number) => `${(value * 100).toFixed(value > 0 && value < 0.1 ? 1 : 0)}%`;
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const day = (iso: string) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" });
 const platformName = (p: string) => (p === "windows" ? "Windows" : p === "macos" ? "macOS" : "Unknown");
+function ago(iso: string): string {
+  const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (seconds < 60) return "moments ago";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h ago`;
+  return `${Math.floor(seconds / 86_400)} d ago`;
+}
 
 let range: TimeRange = "7d";
 let timer: ReturnType<typeof setTimeout> | undefined;
 let lastLoaded: Date | null = null;
+let lastError = false;
 let loading = false;
 let lastData: { distribution: Distribution | null; accounts: Accounts | null; revenue: Revenue | null } = {
   distribution: null,
   accounts: null,
   revenue: null,
 };
+const seenActivity = new Set<string>();
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+// ---------------------------------------------------------------- counting numbers
+
+type Format = "int" | "usd" | "usd0" | "usdAuto";
+const FORMATTERS: Record<Format, (value: number) => string> = {
+  int: (v) => n(v),
+  usd: (v) => usd(v, true),
+  usd0: (v) => usd(v, false),
+  // Cents while they matter; whole dollars from $10,000 so big figures stay readable.
+  usdAuto: (v) => usd(v, Math.abs(v) < 1_000_000),
+};
+const shown = new WeakMap<Element, number>();
+const running = new WeakMap<Element, number>();
+
+/** Tweens a number from what is on screen to the real value. Never delays anything else. */
+function count(key: string, value: number) {
+  const node = $(`[data-count="${key}"]`);
+  if (!node) return;
+  const format = FORMATTERS[(node.dataset.format as Format) ?? "int"] ?? FORMATTERS.int;
+  const from = shown.get(node) ?? 0;
+  shown.set(node, value);
+  // The placeholder shimmer is only ever replaced by a real value.
+  node.removeAttribute("data-pending");
+  const frame = running.get(node);
+  if (frame) cancelAnimationFrame(frame);
+  if (REDUCED || from === value) {
+    node.textContent = format(value);
+    return;
+  }
+  const start = performance.now();
+  const duration = 1100;
+  const step = (now: number) => {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - (1 - t) ** 4;
+    node.textContent = format(from + (value - from) * eased);
+    if (t < 1) running.set(node, requestAnimationFrame(step));
+  };
+  running.set(node, requestAnimationFrame(step));
+}
+
+function note(key: string, text: string) {
+  const node = $(`[data-note="${key}"]`);
+  if (node) node.textContent = text;
+}
+
+function facts(target: HTMLElement | null, rows: [string, string, string?][]) {
+  if (!target) return;
+  target.replaceChildren(
+    ...rows.map(([label, value, hint]) => {
+      const wrap = el("div", "facts__row");
+      const dd = el("dd", undefined, value);
+      if (hint) dd.append(el("span", "facts__hint", hint));
+      wrap.append(el("dt", undefined, label), dd);
+      return wrap;
+    }),
+  );
 }
 
 function emptyRow(text: string, columns: number) {
@@ -129,33 +203,83 @@ function emptyRow(text: string, columns: number) {
   return row;
 }
 
-function setKpi(key: string, value: string, note?: string) {
-  const card = $(`[data-kpi="${key}"]`);
-  if (!card) return;
-  const valueNode = $(".kpi__value", card);
-  if (valueNode && valueNode.textContent !== value) {
-    valueNode.textContent = value;
-    card.classList.remove("kpi--fresh");
-    void card.offsetWidth;
-    card.classList.add("kpi--fresh");
+// ---------------------------------------------------------------- atmosphere
+
+function starfield() {
+  const canvas = $<HTMLCanvasElement>("[data-stars]");
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context) return;
+  let stars: { x: number; y: number; r: number; a: number; s: number; d: number }[] = [];
+  let width = 0;
+  let height = 0;
+  let px = 0;
+  let py = 0;
+  const resize = () => {
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width * ratio;
+    canvas.height = height * ratio;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const total = Math.round(Math.min(260, (width * height) / 7000));
+    stars = Array.from({ length: total }, () => ({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      r: Math.random() ** 3 * 1.3 + 0.25,
+      a: Math.random() * 0.6 + 0.15,
+      s: Math.random() * 0.0012 + 0.0003,
+      d: Math.random() * 0.6 + 0.2,
+    }));
+  };
+  const draw = (now: number) => {
+    context.clearRect(0, 0, width, height);
+    for (const star of stars) {
+      const twinkle = REDUCED ? 1 : 0.65 + 0.35 * Math.sin(now * star.s + star.x);
+      context.globalAlpha = star.a * twinkle;
+      context.fillStyle = star.r > 1 ? "#cfe0ff" : "#ffffff";
+      context.beginPath();
+      context.arc(star.x + px * star.d, star.y + py * star.d, star.r, 0, Math.PI * 2);
+      context.fill();
+    }
+  };
+  resize();
+  window.addEventListener("resize", resize);
+  if (REDUCED) {
+    draw(0);
+    return;
   }
-  const noteNode = $("[data-note]", card);
-  if (noteNode && note !== undefined) noteNode.textContent = note;
-  card.classList.remove("kpi--loading");
+  window.addEventListener("pointermove", (event) => {
+    px = (event.clientX / width - 0.5) * -12;
+    py = (event.clientY / height - 0.5) * -8;
+  });
+  let last = 0;
+  const loop = (now: number) => {
+    // ~30 fps is plenty for a twinkle; nothing runs while the tab is hidden.
+    if (now - last > 33 && document.visibilityState === "visible") {
+      draw(now);
+      last = now;
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
 }
 
-function facts(target: HTMLElement | null, rows: [string, string, string?][]) {
-  if (!target) return;
-  target.replaceChildren(
-    ...rows.flatMap(([label, value, hint]) => {
-      const wrap = el("div", "facts__row");
-      const dt = el("dt", undefined, label);
-      const dd = el("dd", undefined, value);
-      if (hint) dd.append(el("span", "facts__hint", hint));
-      wrap.append(dt, dd);
-      return [wrap];
-    }),
-  );
+function mascotTilt() {
+  const stage = $("[data-tilt]");
+  const hero = stage?.closest<HTMLElement>(".hero");
+  if (!stage || !hero || REDUCED) return;
+  hero.addEventListener("pointermove", (event) => {
+    const box = hero.getBoundingClientRect();
+    const x = (event.clientX - box.left) / box.width - 0.5;
+    const y = (event.clientY - box.top) / box.height - 0.5;
+    stage.style.setProperty("--tilt-y", `${(x * 14).toFixed(2)}deg`);
+    stage.style.setProperty("--tilt-x", `${(-y * 10).toFixed(2)}deg`);
+    stage.style.setProperty("--shift-x", `${(x * 10).toFixed(1)}px`);
+    stage.style.setProperty("--shift-y", `${(y * 6).toFixed(1)}px`);
+  });
+  hero.addEventListener("pointerleave", () => {
+    for (const name of ["--tilt-x", "--tilt-y", "--shift-x", "--shift-y"]) stage.style.removeProperty(name);
+  });
 }
 
 // ---------------------------------------------------------------- charts (inline SVG, no library)
@@ -178,10 +302,9 @@ function showTip(x: number, y: number, title: string, rows: [string, string, str
     tooltip.append(row);
   }
   tooltip.hidden = false;
-  const { innerWidth } = window;
   const width = tooltip.offsetWidth;
-  tooltip.style.left = `${Math.min(innerWidth - width - 12, Math.max(12, x + 14))}px`;
-  tooltip.style.top = `${Math.max(12, y - tooltip.offsetHeight - 12)}px`;
+  tooltip.style.left = `${Math.min(window.innerWidth - width - 12, Math.max(12, x + 14))}px`;
+  tooltip.style.top = `${Math.max(12, y - tooltip.offsetHeight - 14)}px`;
 }
 function hideTip() {
   tooltip.hidden = true;
@@ -193,48 +316,89 @@ interface Series {
   values: number[];
 }
 
-/** Line chart with a soft area under the first series, crosshair and tooltip. One y-axis. */
+/** Round gridlines: a 1/2/5 × 10ⁿ step (never below `minStep`), at most five intervals. */
+function niceScale(value: number, minStep: number): { max: number; step: number } {
+  const raw = Math.max(minStep, value / 4);
+  const exponent = 10 ** Math.floor(Math.log10(raw));
+  const step = Math.max(minStep, ([1, 2, 5, 10].find((m) => m * exponent >= raw) ?? 10) * exponent);
+  return { max: Math.max(step, Math.ceil(value / step) * step), step };
+}
+
+/**
+ * Monotone cubic path (Fritsch–Carlson): smooth, but never overshoots a real value, so the curve
+ * never shows a peak or a dip the data does not have.
+ */
+function smoothPath(points: [number, number][]): string {
+  const count = points.length;
+  if (count === 0) return "";
+  const first = points[0] as [number, number];
+  if (count < 3) return points.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join(" ");
+  const dx: number[] = [];
+  const slope: number[] = [];
+  for (let i = 0; i < count - 1; i += 1) {
+    const a = points[i] as [number, number];
+    const b = points[i + 1] as [number, number];
+    dx.push(b[0] - a[0]);
+    slope.push((b[1] - a[1]) / (b[0] - a[0] || 1));
+  }
+  const tangent: number[] = [slope[0] as number];
+  for (let i = 1; i < count - 1; i += 1) {
+    const s0 = slope[i - 1] as number;
+    const s1 = slope[i] as number;
+    tangent.push(
+      s0 * s1 <= 0
+        ? 0
+        : (3 * ((dx[i - 1] as number) + (dx[i] as number))) /
+            ((2 * (dx[i] as number) + (dx[i - 1] as number)) / s0 +
+              ((dx[i] as number) + 2 * (dx[i - 1] as number)) / s1),
+    );
+  }
+  tangent.push(slope[count - 2] as number);
+  let d = `M${first[0].toFixed(1)},${first[1].toFixed(1)}`;
+  for (let i = 0; i < count - 1; i += 1) {
+    const a = points[i] as [number, number];
+    const b = points[i + 1] as [number, number];
+    const h = (dx[i] as number) / 3;
+    d += ` C${(a[0] + h).toFixed(1)},${(a[1] + h * (tangent[i] as number)).toFixed(1)} ${(b[0] - h).toFixed(1)},${(b[1] - h * (tangent[i + 1] as number)).toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}`;
+  }
+  return d;
+}
+
+const drawn = new Set<string>();
+
+/** Line/area chart with draw-in, crosshair and tooltip. One y-axis. */
 function lineChart(
-  target: HTMLElement | null,
+  key: string,
   labels: string[],
   series: Series[],
   format: (value: number) => string,
   empty: string,
   minStep = 1,
 ) {
+  const target = $(`[data-chart="${key}"]`);
   if (!target) return;
   target.replaceChildren();
   const total = series.reduce((sum, s) => sum + s.values.reduce((a, b) => a + b, 0), 0);
-  const width = Math.max(320, target.clientWidth || 640);
-  const height = target.classList.contains("chart--sm") ? 170 : 230;
-  const pad = { top: 14, right: 12, bottom: 26, left: 44 };
+  const width = Math.max(300, target.clientWidth || 640);
+  const height = target.classList.contains("chart--sm") ? 180 : 250;
+  const pad = { top: 16, right: 14, bottom: 28, left: 46 };
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const max = Math.max(1, ...series.flatMap((s) => s.values));
-  const scale = niceScale(max, minStep);
-  const nice = scale.max;
+  const scale = niceScale(Math.max(1, ...series.flatMap((s) => s.values)), minStep);
   const count = labels.length;
   const x = (i: number) => pad.left + (count <= 1 ? innerW / 2 : (i * innerW) / (count - 1));
-  const y = (v: number) => pad.top + innerH - (v / nice) * innerH;
+  const y = (v: number) => pad.top + innerH - (v / scale.max) * innerH;
   const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", height, class: "chart__svg" });
-
-  const gradientId = `g${Math.random().toString(36).slice(2, 8)}`;
   const defs = svg("defs", {});
-  const gradient = svg("linearGradient", { id: gradientId, x1: 0, x2: 0, y1: 0, y2: 1 });
-  gradient.append(
-    svg("stop", { offset: "0%", "stop-color": series[0]?.color ?? COLORS[0], "stop-opacity": 0.28 }),
-    svg("stop", { offset: "100%", "stop-color": series[0]?.color ?? COLORS[0], "stop-opacity": 0 }),
-  );
-  defs.append(gradient);
   root.append(defs);
 
-  for (let value = 0; value <= nice + scale.step / 2; value += scale.step) {
+  for (let value = 0; value <= scale.max + scale.step / 2; value += scale.step) {
     root.append(svg("line", { x1: pad.left, x2: width - pad.right, y1: y(value), y2: y(value), class: "chart__grid" }));
-    const label = svg("text", { x: pad.left - 8, y: y(value) + 4, class: "chart__axis", "text-anchor": "end" });
+    const label = svg("text", { x: pad.left - 10, y: y(value) + 4, class: "chart__axis", "text-anchor": "end" });
     label.textContent = format(value);
     root.append(label);
   }
-  const step = Math.max(1, Math.ceil(count / Math.max(2, Math.floor(innerW / 72))));
+  const step = Math.max(1, Math.ceil(count / Math.max(2, Math.floor(innerW / 76))));
   labels.forEach((text, i) => {
     if (i % step !== 0 && i !== count - 1) return;
     const label = svg("text", { x: x(i), y: height - 6, class: "chart__axis", "text-anchor": "middle" });
@@ -242,29 +406,48 @@ function lineChart(
     root.append(label);
   });
 
+  const animate = !REDUCED && !drawn.has(`${key}:${range}`);
+  drawn.add(`${key}:${range}`);
+  const floor = pad.top + innerH;
   series.forEach((s, index) => {
-    const points = s.values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-    if (index === 0 && points.length > 1) {
+    const points = s.values.map((v, i) => [x(i), y(v)] as [number, number]);
+    const path = smoothPath(points);
+    const id = `g-${key}-${index}`;
+    const gradient = svg("linearGradient", { id, x1: 0, x2: 0, y1: 0, y2: 1 });
+    gradient.append(
+      svg("stop", { offset: "0%", "stop-color": s.color, "stop-opacity": index === 0 ? 0.34 : 0.14 }),
+      svg("stop", { offset: "100%", "stop-color": s.color, "stop-opacity": 0 }),
+    );
+    defs.append(gradient);
+    if (points.length > 1) {
       root.append(
         svg("path", {
-          d: `M${x(0)},${y(0)} L${points.join(" L")} L${x(count - 1)},${y(0)} Z`,
-          fill: `url(#${gradientId})`,
-          class: "chart__area",
+          d: `${path} L${x(count - 1)},${floor} L${x(0)},${floor} Z`,
+          fill: `url(#${id})`,
+          class: animate ? "chart__area" : "",
         }),
       );
     }
-    root.append(svg("polyline", { points: points.join(" "), stroke: s.color, class: "chart__line" }));
-    if (count === 1) root.append(svg("circle", { cx: x(0), cy: y(s.values[0] ?? 0), r: 4, fill: s.color }));
+    const line = svg("path", { d: path, stroke: s.color, class: `chart__line${animate ? " chart__line--draw" : ""}` });
+    root.append(line);
+    const last = points.at(-1);
+    if (last) root.append(svg("circle", { cx: last[0], cy: last[1], r: 4, fill: s.color, class: "chart__end" }));
+    if (animate) {
+      requestAnimationFrame(() => {
+        const length = Math.ceil(line.getTotalLength?.() ?? 2000);
+        line.style.strokeDasharray = String(length);
+        line.style.setProperty("--len", String(length));
+      });
+    }
   });
 
-  const cross = svg("line", { y1: pad.top, y2: pad.top + innerH, class: "chart__cross", visibility: "hidden" });
-  const dots = series.map((s) => svg("circle", { r: 4.5, fill: s.color, class: "chart__dot", visibility: "hidden" }));
+  const cross = svg("line", { y1: pad.top, y2: floor, class: "chart__cross", visibility: "hidden" });
+  const dots = series.map((s) => svg("circle", { r: 5, fill: s.color, class: "chart__dot", visibility: "hidden" }));
   root.append(cross, ...dots);
-  const hit = svg("rect", { x: pad.left, y: pad.top, width: innerW, height: innerH, fill: "transparent" });
-  const move = (event: PointerEvent) => {
+  const hit = svg("rect", { x: pad.left - 8, y: 0, width: innerW + 16, height, fill: "transparent" });
+  hit.addEventListener("pointermove", (event) => {
     const box = root.getBoundingClientRect();
-    const scale = width / box.width;
-    const px = (event.clientX - box.left) * scale;
+    const px = (event.clientX - box.left) * (width / box.width);
     const i = count <= 1 ? 0 : Math.max(0, Math.min(count - 1, Math.round(((px - pad.left) / innerW) * (count - 1))));
     cross.setAttribute("x1", String(x(i)));
     cross.setAttribute("x2", String(x(i)));
@@ -280,8 +463,7 @@ function lineChart(
       labels[i] ?? "",
       series.map((s) => [s.color, s.name, format(s.values[i] ?? 0)]),
     );
-  };
-  hit.addEventListener("pointermove", move);
+  });
   hit.addEventListener("pointerleave", () => {
     cross.setAttribute("visibility", "hidden");
     for (const dot of dots) dot.setAttribute("visibility", "hidden");
@@ -290,14 +472,6 @@ function lineChart(
   root.append(hit);
   target.append(root);
   if (total === 0) target.append(el("p", "chart__empty", empty));
-}
-
-/** Round gridlines: a 1/2/5 × 10ⁿ step (never below `minStep`), at most five intervals. */
-function niceScale(value: number, minStep: number): { max: number; step: number } {
-  const raw = Math.max(minStep, value / 4);
-  const exponent = 10 ** Math.floor(Math.log10(raw));
-  const step = Math.max(minStep, ([1, 2, 5, 10].find((m) => m * exponent >= raw) ?? 10) * exponent);
-  return { max: Math.max(step, Math.ceil(value / step) * step), step };
 }
 
 function bars(
@@ -310,6 +484,7 @@ function bars(
     target.replaceChildren(el("p", "chart__empty chart__empty--inline", empty));
     return;
   }
+  const fills: [HTMLElement, number][] = [];
   target.replaceChildren(
     ...rows.map((row) => {
       const item = el("div", `bar${row.strong ? " bar--strong" : ""}`);
@@ -318,7 +493,7 @@ function bars(
       const track = el("div", "bar__track");
       const fill = el("div", "bar__fill");
       fill.style.background = row.color;
-      fill.style.width = `${Math.max(row.share > 0 ? 1.5 : 0, row.share * 100)}%`;
+      fills.push([fill, Math.max(row.share > 0 ? 1.5 : 0, row.share * 100)]);
       track.append(fill);
       item.append(head, track);
       item.addEventListener("pointermove", (e) =>
@@ -331,35 +506,118 @@ function bars(
       return item;
     }),
   );
+  requestAnimationFrame(() => {
+    for (const [fill, width] of fills) fill.style.width = `${width}%`;
+  });
 }
 
-// ---------------------------------------------------------------- rendering
+// ---------------------------------------------------------------- hero and milestones
+
+function renderHero(r: Revenue) {
+  const arrUsd = r.arrCents / 100;
+  count("arr", r.arrCents);
+  const goal = milestoneProgress(arrUsd);
+  $("[data-goal]")?.removeAttribute("data-pending");
+  const set = (selector: string, text: string) => {
+    const node = $(selector);
+    if (node) node.textContent = text;
+  };
+  set("[data-goal-next]", compactUsd(goal.next));
+  set("[data-goal-left]", usd(goal.remaining * 100, false));
+  set("[data-goal-from]", goal.reached ? compactUsd(goal.reached) : "$0");
+  set("[data-goal-to]", compactUsd(goal.next));
+  set("[data-goal-pct]", pct(goal.progress));
+  const fill = $("[data-goal-fill]");
+  if (fill) requestAnimationFrame(() => (fill.style.width = `${(goal.progress * 100).toFixed(2)}%`));
+  $("[data-goal-track]")?.setAttribute("aria-valuenow", (goal.progress * 100).toFixed(0));
+
+  const ladder = milestoneLadder(arrUsd);
+  const list = $("[data-ladder]");
+  if (list) {
+    list.style.setProperty("--count", String(ladder.length));
+    list.replaceChildren(
+      ...ladder.map((value, i) => {
+        const reached = arrUsd >= value;
+        const next = i === goal.nextIndex;
+        const item = el("li", `rung${reached ? " rung--reached" : ""}${next ? " rung--next" : ""}`);
+        item.append(
+          el("span", "rung__dot"),
+          el("span", "rung__value", compactUsd(value)),
+          el("span", "rung__state", reached ? "Reached" : next ? `${pct(goal.progress)}` : ""),
+        );
+        return item;
+      }),
+    );
+    // Fill between rung centres: reached rungs plus the share of the way to the next one.
+    const position = goal.nextIndex === 0 ? 0 : goal.nextIndex - 1 + goal.progress;
+    const fraction = ladder.length > 1 ? position / (ladder.length - 1) : 0;
+    requestAnimationFrame(() =>
+      list.style.setProperty(
+        "--ladder-fill",
+        `calc(${(fraction * 100).toFixed(3)}% - ${(fraction * 100) / ladder.length}%)`,
+      ),
+    );
+  }
+  const reachedCount = ladder.filter((value) => arrUsd >= value).length;
+  set(
+    "[data-ladder-summary]",
+    reachedCount === 0
+      ? `First milestone: ${compactUsd(goal.next)} ARR`
+      : `${plural(reachedCount, "milestone")} reached · next ${compactUsd(goal.next)}`,
+  );
+}
+
+// ---------------------------------------------------------------- pulse (live strip)
+
+function renderPulse() {
+  const list = $("[data-pulse]");
+  const d = lastData.distribution;
+  if (!list || !d) return;
+  const items: [string, string][] = [
+    [n(d.downloads.today), ` download${d.downloads.today === 1 ? "" : "s"} today`],
+    [n(lastData.accounts?.firstDesktopToday ?? 0), " new desktop installs today"],
+    [n(d.updates.today), ` update${d.updates.today === 1 ? "" : "s"} delivered today`],
+  ];
+  const r = lastData.revenue;
+  if (r)
+    items.push([n(r.movement.upgrades), ` upgrade${r.movement.upgrades === 1 ? "" : "s"} · ${range.toUpperCase()}`]);
+  const latest = d.recent[0];
+  if (latest) {
+    const what = latest.kind === "download" ? `${platformName(latest.platform)} download` : "Update delivered";
+    items.push([what, ` ${ago(latest.at)}`]);
+  }
+  list.replaceChildren(
+    ...items.map(([strong, rest], i) => {
+      const item = el("li");
+      item.style.animationDelay = `${i * 60}ms`;
+      item.append(el("strong", undefined, strong), document.createTextNode(rest));
+      return item;
+    }),
+  );
+}
+
+// ---------------------------------------------------------------- distribution
 
 function renderDistribution(d: Distribution, accounts: Accounts | null) {
-  const since = d.trackingSince
-    ? `Counting since ${day(`${d.trackingSince}T12:00:00Z`)}`
-    : "Counting starts with the next download";
-  setKpi("downloads.today", n(d.downloads.today), `${n(d.downloads.lastHour)} in the last hour`);
-  setKpi("downloads.last7d", n(d.downloads.last7d));
-  setKpi("downloads.last30d", n(d.downloads.last30d));
-  setKpi("downloads.allTime", n(d.downloads.allTime), since);
-  setKpi(
-    "activity.lastHour",
-    n(d.downloads.lastHour + d.updates.lastHour),
-    `${plural(d.downloads.lastHour, "download")} · ${plural(d.updates.lastHour, "update")}`,
+  count("downloadsToday", d.downloads.today);
+  count("downloadsAll", d.downloads.allTime);
+  note("downloadsToday", `${plural(d.downloads.lastHour, "download")} in the last hour`);
+  note(
+    "downloadsAll",
+    d.trackingSince
+      ? `Counting since ${day(`${d.trackingSince}T12:00:00Z`)}`
+      : "Counting starts with the next download",
   );
-  setKpi("updates.inRange", n(d.updates.inRange), `${RANGE_LABEL[range]} · ${n(d.updates.allTime)} all time`);
-  if (accounts) setKpi("installs.today", n(accounts.firstDesktopToday));
 
   const labels = d.series.map((b) => (d.seriesUnit === "hour" ? time(b.start) : day(b.start)));
   lineChart(
-    $("[data-chart=distribution]"),
+    "distribution",
     labels,
     [
       { name: "Downloads", color: COLORS[0], values: d.series.map((b) => b.downloads) },
       { name: "Updates", color: COLORS[1], values: d.series.map((b) => b.updates) },
     ],
-    (v) => n(Math.round(v)),
+    (v) => n(v),
     "No downloads or updates in this range yet.",
   );
   const table = $("[data-table=distribution]");
@@ -385,9 +643,16 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
   }
 
   const latest = d.latest?.publicVersion ?? null;
+  const share = d.adoption.latestShare;
+  const ringValue = $("[data-ring-value]");
+  if (ringValue) ringValue.textContent = share === null ? "—" : pct(share);
+  const ringCaption = $("[data-ring-caption]");
+  if (ringCaption) ringCaption.textContent = latest ? `on ${latest}` : "on latest";
+  const ring = $<SVGCircleElement>("[data-ring-fg]");
+  if (ring) requestAnimationFrame(() => (ring.style.strokeDashoffset = String(314.16 * (1 - (share ?? 0)))));
   bars(
     $("[data-adoption]"),
-    d.adoption.versions.slice(0, 6).map((v) => ({
+    d.adoption.versions.slice(0, 5).map((v) => ({
       label: v.version === latest ? `${v.version} · latest` : v.version,
       value: v.checks,
       share: v.share,
@@ -396,13 +661,11 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
     })),
     "No update checks in the last two days yet.",
   );
-  const hint = $("[data-adoption-hint]");
-  if (hint) hint.textContent = d.adoption.latestShare === null ? "" : `${pct(d.adoption.latestShare)} on latest`;
   facts($("[data-adoption-facts]"), [
     ["Latest public version", latest ?? "—"],
     ["Latest internal build", d.latest?.version ?? "—"],
     ["Updates to latest", n(d.updates.toLatest), "update downloads, all time"],
-    ["Update checks", n(d.adoption.checks), "last two days"],
+    ["Update checks", n(d.adoption.checks), "last two days · launch + every 6 h"],
   ]);
 
   const split = $("[data-split]");
@@ -410,7 +673,7 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
     const group = (title: string, counts: Platforms) => {
       const total = counts.windows + counts.macos + counts.unknown;
       const wrap = el("div", "split__group");
-      wrap.append(el("h3", undefined, `${title} · ${n(total)}`));
+      wrap.append(el("h4", undefined, `${title} · ${n(total)}`));
       const holder = el("div");
       bars(
         holder,
@@ -427,7 +690,7 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
       wrap.append(holder);
       return wrap;
     };
-    split.replaceChildren(group("Downloads", d.downloadsByPlatform), group("Updates", d.updatesByPlatform));
+    split.replaceChildren(group("Downloads", d.downloadsByPlatform), group("Updates delivered", d.updatesByPlatform));
   }
 
   const builds = $("[data-builds] tbody");
@@ -449,9 +712,10 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
 
   if (accounts) {
     facts($("[data-accounts]"), [
-      ["Accounts", n(accounts.accounts)],
-      ["New accounts", n(accounts.newSince), RANGE_LABEL[range].toLowerCase()],
-      ["First desktop sign-ins", n(accounts.firstDesktopSince), RANGE_LABEL[range].toLowerCase()],
+      ["New desktop installs", n(accounts.firstDesktopSince), "first desktop sign-in per account"],
+      ["Installs today", n(accounts.firstDesktopToday)],
+      ["Updates delivered", n(d.updates.inRange), `${n(d.updates.allTime)} all time`],
+      ["Accounts", n(accounts.accounts), `${n(accounts.newSince)} new in range`],
       [
         "Free → paid",
         accounts.activated ? pct(accounts.everPaid / accounts.activated) : "—",
@@ -462,20 +726,28 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
 
   const feed = $("[data-feed]");
   if (feed) {
+    const first = seenActivity.size === 0;
     feed.replaceChildren(
       ...(d.recent.length
         ? d.recent.map((e) => {
-            const item = el("li", `feed__item feed__item--${e.kind === "download" ? "download" : "update"}`);
+            const key = `${e.at}|${e.kind}|${e.version}|${e.platform}`;
+            const fresh = !first && !seenActivity.has(key);
+            seenActivity.add(key);
+            const item = el(
+              "li",
+              `feed__item feed__item--${e.kind === "download" ? "download" : "update"}${fresh ? " feed__item--new" : ""}`,
+            );
             const what =
               e.kind === "download"
                 ? `${platformName(e.platform)} download started`
-                : `Update downloaded · ${e.fromVersion} → ${e.version}`;
+                : `Update delivered · ${e.fromVersion} → ${e.version}`;
+            const stamp = el("time", "feed__time", time(e.at));
+            stamp.setAttribute("datetime", e.at);
             item.append(
-              el("time", "feed__time", time(e.at)),
+              stamp,
               el("span", "feed__what", what),
               el("span", "feed__meta", e.kind === "download" ? e.version : platformName(e.platform)),
             );
-            item.querySelector("time")?.setAttribute("datetime", e.at);
             return item;
           })
         : [el("li", "feed__empty", "No activity yet. Downloads and updates appear here as they happen.")]),
@@ -483,50 +755,52 @@ function renderDistribution(d: Distribution, accounts: Accounts | null) {
   }
 }
 
+// ---------------------------------------------------------------- revenue
+
 function renderRevenue(r: Revenue) {
-  setKpi(
-    "revenue.subscribers",
-    n(r.activeSubscribers),
-    r.pastDue ? `${n(r.pastDue)} past due (not counted)` : "Active, paid, live mode",
-  );
-  setKpi("revenue.mrr", usd(r.mrrCents));
-  setKpi("revenue.arr", usd(r.arrCents));
-  setKpi(
-    "revenue.cash",
-    usd(r.cash.thisMonth.netCents),
+  renderHero(r);
+  count("mrr", r.mrrCents);
+  count("cash", r.cash.thisMonth.netCents);
+  count("subscribers", r.activeSubscribers);
+  note(
+    "cash",
     r.cash.thisMonth.refundedCents
       ? `${usd(r.cash.thisMonth.grossCents)} charged · ${usd(r.cash.thisMonth.refundedCents)} refunded`
-      : "Succeeded charges, net of refunds",
+      : "Cash collected, net of refunds",
   );
+  note("subscribers", r.pastDue ? `${n(r.pastDue)} past due (not counted)` : "Active · paid · live mode");
 
+  const totalMrr = PLAN_IDS.reduce((sum, id) => sum + (r.byPlan[id]?.mrrCents ?? 0), 0);
   for (const id of PLAN_IDS) {
-    const row = $(`[data-plan="${id}"]`);
+    const card = $(`[data-plan="${id}"]`);
     const plan = r.byPlan[id];
-    if (!row || !plan) continue;
+    if (!card || !plan) continue;
     const set = (field: string, value: string) => {
-      const cell = $(`[data-f="${field}"]`, row);
+      const cell = $(`[data-f="${field}"]`, card);
       if (cell) cell.textContent = value;
     };
     set("subscribers", n(plan.subscribers));
     set("monthly", n(plan.monthly));
     set("yearly", n(plan.yearly));
     set("mrr", usd(plan.mrrCents));
-    set("arr", usd(plan.arrCents));
+    set("arr", usd(plan.arrCents, false));
+    const share = $<HTMLElement>('[data-f="share"]', card);
+    if (share) requestAnimationFrame(() => (share.style.width = `${totalMrr ? (plan.mrrCents / totalMrr) * 100 : 0}%`));
   }
   const bar = $("[data-plan-bar]");
   if (bar) {
-    const total = PLAN_IDS.reduce((sum, id) => sum + (r.byPlan[id]?.mrrCents ?? 0), 0);
     bar.replaceChildren(
-      ...(total === 0
-        ? [el("div", "stackbar__empty", "No recurring revenue yet")]
+      ...(totalMrr === 0
+        ? [el("div", "stackbar__empty", "NO RECURRING REVENUE YET")]
         : PLAN_IDS.filter((id) => (r.byPlan[id]?.mrrCents ?? 0) > 0).map((id) => {
             const seg = el("div", "stackbar__seg");
             const value = r.byPlan[id]?.mrrCents ?? 0;
+            const color = COLORS[PLAN_IDS.indexOf(id)] as string;
             seg.style.flexGrow = String(value);
-            seg.style.background = COLORS[PLAN_IDS.indexOf(id)] as string;
+            seg.style.background = color;
             seg.addEventListener("pointermove", (e) =>
               showTip(e.clientX, e.clientY, PLAN_NAMES[id], [
-                [COLORS[PLAN_IDS.indexOf(id)] as string, "MRR", `${usd(value)} · ${pct(value / total)}`],
+                [color, "MRR", `${usd(value)} · ${pct(value / totalMrr)}`],
               ]),
             );
             seg.addEventListener("pointerleave", hideTip);
@@ -535,18 +809,19 @@ function renderRevenue(r: Revenue) {
     );
   }
 
-  facts($("[data-cash]"), [
-    [
-      "This month",
-      usd(r.cash.thisMonth.netCents),
-      `${usd(r.cash.thisMonth.grossCents)} charged · ${usd(r.cash.thisMonth.refundedCents)} refunded`,
-    ],
-    [
-      "Last month",
-      usd(r.cash.lastMonth.netCents),
-      `${usd(r.cash.lastMonth.grossCents)} charged · ${usd(r.cash.lastMonth.refundedCents)} refunded`,
-    ],
-  ]);
+  const cash = $("[data-cash]");
+  if (cash) {
+    const period = (label: string, c: Cash, now: boolean) => {
+      const box = el("div", `cash__period${now ? " cash__period--now" : ""}`);
+      box.append(
+        el("span", "cash__label", label),
+        el("strong", "cash__value", usd(c.netCents)),
+        el("span", "cash__detail", `${usd(c.grossCents)} charged · ${usd(c.refundedCents)} refunded`),
+      );
+      return box;
+    };
+    cash.replaceChildren(period("This month", r.cash.thisMonth, true), period("Last month", r.cash.lastMonth, false));
+  }
 
   facts($("[data-movement]"), [
     ["New paid subscriptions", n(r.movement.newSubscriptions)],
@@ -574,7 +849,7 @@ function renderRevenue(r: Revenue) {
   for (const node of $$("[data-since]")) node.textContent = since;
   const labels = r.series.map((p) => day(`${p.day}T12:00:00Z`));
   lineChart(
-    $("[data-chart=mrr]"),
+    "mrr",
     labels,
     [{ name: "MRR", color: COLORS[0], values: r.series.map((p) => p.mrrCents) }],
     (v) => usd(v, false),
@@ -582,15 +857,15 @@ function renderRevenue(r: Revenue) {
     100,
   );
   lineChart(
-    $("[data-chart=subscribers]"),
+    "subscribers",
     labels,
     [{ name: "Paid subscribers", color: COLORS[2], values: r.series.map((p) => p.subscribers) }],
-    (v) => n(Math.round(v)),
+    (v) => n(v),
     "No paid subscribers yet.",
   );
 }
 
-// ---------------------------------------------------------------- loading
+// ---------------------------------------------------------------- loading and live state
 
 type Gate = "loading" | "signed-out" | "forbidden" | "error" | "open";
 function gate(state: Gate, message?: string) {
@@ -623,6 +898,22 @@ function gate(state: Gate, message?: string) {
   }
 }
 
+/** LIVE only while the data really is fresh: a successful load within two refresh periods. */
+function liveState() {
+  const badge = $("[data-live]");
+  const label = $("[data-live-label]");
+  if (!badge || !label) return;
+  const fresh = lastLoaded !== null && Date.now() - lastLoaded.getTime() < REFRESH_MS * 2 && !lastError;
+  const state =
+    document.visibilityState !== "visible" ? "paused" : lastLoaded === null ? "connecting" : fresh ? "live" : "stale";
+  badge.dataset.state = state;
+  label.textContent = { live: "Live", stale: "Reconnecting", paused: "Paused", connecting: "Connecting" }[state];
+  const updated = $("[data-updated]");
+  if (updated && lastLoaded) {
+    updated.textContent = `Updated ${lastLoaded.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
+  }
+}
+
 async function call(path: string): Promise<{ status: number; body: unknown }> {
   const response = await fetch(`${API}${path}`, { credentials: "include", headers: { accept: "application/json" } });
   let body: unknown = null;
@@ -632,14 +923,6 @@ async function call(path: string): Promise<{ status: number; body: unknown }> {
     body = null;
   }
   return { status: response.status, body };
-}
-
-function updatedLabel() {
-  const node = $("[data-updated]");
-  if (!node) return;
-  node.textContent = lastLoaded
-    ? `Updated ${lastLoaded.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`
-    : "Loading…";
 }
 
 async function load(fresh = false) {
@@ -654,34 +937,43 @@ async function load(fresh = false) {
     const d = await distribution;
     if (d.status === 401) return gate("signed-out");
     if (d.status === 403) return gate("forbidden");
-    if (d.status !== 200) return gate("error");
+    if (d.status !== 200) {
+      lastError = true;
+      if (!lastLoaded) gate("error");
+      return;
+    }
     const body = d.body as { distribution: Distribution | null; accounts: Accounts | null };
     gate("open");
     lastData = { ...lastData, distribution: body.distribution, accounts: body.accounts };
     if (body.distribution) renderDistribution(body.distribution, body.accounts);
     lastLoaded = new Date();
-    updatedLabel();
+    lastError = !body.distribution;
+    renderPulse();
+    liveState();
 
     const r = await revenue;
     const error = $("[data-revenue-error]");
-    const section = $$("[data-revenue]");
+    const sections = $$("[data-revenue]");
     if (r.status === 200) {
       if (error) error.hidden = true;
       lastData.revenue = (r.body as { revenue: Revenue }).revenue;
-      for (const node of section) node.classList.remove("is-stale");
+      for (const node of sections) node.classList.remove("is-stale");
       renderRevenue(lastData.revenue);
+      renderPulse();
     } else if (error) {
       error.hidden = false;
       error.textContent =
         (r.body as { message?: string } | null)?.message ??
         "Revenue is unavailable right now. Nothing is shown rather than guessed.";
-      for (const node of section) node.classList.add("is-stale");
+      for (const node of sections) node.classList.add("is-stale");
     }
   } catch {
+    lastError = true;
     if (!lastLoaded) gate("error");
   } finally {
     loading = false;
     document.body.classList.remove("is-loading");
+    liveState();
     schedule();
   }
 }
@@ -704,9 +996,15 @@ for (const button of $$<HTMLButtonElement>("[data-range]")) {
 }
 $("[data-refresh]")?.addEventListener("click", () => void load(true));
 document.addEventListener("visibilitychange", () => {
+  liveState();
   if (document.visibilityState === "visible" && lastLoaded && Date.now() - lastLoaded.getTime() > REFRESH_MS)
     void load();
 });
+// Relative times ("moments ago") and the LIVE badge stay truthful between loads.
+setInterval(() => {
+  liveState();
+  renderPulse();
+}, 15_000);
 let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
@@ -717,5 +1015,6 @@ window.addEventListener("resize", () => {
   }, 200);
 });
 
-for (const card of $$(".kpi")) card.classList.add("kpi--loading");
+starfield();
+mascotTilt();
 void load();

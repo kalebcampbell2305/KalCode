@@ -43,7 +43,11 @@ async function start(page: Page, theme: "dark" | "light") {
 }
 
 async function claudePane(page: Page, prompt: string) {
-  await page.getByRole("button", { name: "New Claude Code pane" }).click();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "New agent" })
+    .getByRole("button", { name: "Launch Claude Code agent" })
+    .click();
   const provider = page.locator("[data-provider-pane]").last();
   await expect(provider.locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
   await provider.locator("[data-pane-terminal] .xterm-screen").click();

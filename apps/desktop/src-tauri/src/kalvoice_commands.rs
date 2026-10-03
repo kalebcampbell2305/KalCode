@@ -926,6 +926,8 @@ pub struct KalVoiceServices {
     pub registry: Arc<ProviderRegistry>,
     pub provider_runtime: crate::provider_auth_commands::ProviderRuntimeAuthority,
     pub threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
+    /// Registers detected provider adapters before a voice launch (`ThreadsState::ensure_providers`).
+    pub ensure_providers: Option<Arc<dyn Fn() + Send + Sync>>,
     pub permissions: Option<Arc<kalcode_permissions::PermissionService>>,
     pub locator: Option<Arc<kalcode_locator::Locator>>,
     pub components: Arc<KalVoiceComponentManager>,
@@ -945,6 +947,7 @@ pub fn init(
         registry,
         provider_runtime,
         threads,
+        ensure_providers,
         permissions,
         locator,
         components,
@@ -1010,6 +1013,7 @@ pub fn init(
             core: core.clone(),
             account: Some(account),
             threads,
+            ensure_providers,
             permissions,
             // A gated Session Locator is never read by voice (it still runs for other callers).
             locator: locator.filter(|_| session_locator_enabled),

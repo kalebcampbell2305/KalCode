@@ -8,7 +8,7 @@ import { IconButton, Tooltip } from "@kalcode/ui/components";
 import { FolderOpen } from "lucide-react";
 import { useMemo } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
-import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { useNavigation } from "../navigation.tsx";
 import styles from "./ProjectList.module.css";
@@ -34,7 +34,7 @@ function countsByWorkspace(threads: readonly ThreadSummary[]): Map<string, Count
 
 export function ProjectList({ collapsed }: { collapsed: boolean }) {
   const { workspaces, active, activate, openFolder, state: loadState } = useWorkspaces();
-  const { state } = useThreadSummaries();
+  const { state } = useCodingAgents();
   const { navigate } = useNavigation();
   const counts = useMemo(() => (state.status === "ready" ? countsByWorkspace(state.data) : new Map()), [state]);
   const ordered = useMemo(

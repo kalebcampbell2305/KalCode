@@ -11,6 +11,11 @@ it.each([
   ["Show me this agent", { kind: "current" }],
   ["Open the terminal beside this", { kind: "beside_current" }],
   ["Open the other Codex session", { kind: "other", query: "Codex session", kinds: ["thread", "agent"] }],
+  // "Agent" means a coding agent (a Code terminal pane); "thing" or "thread" means anything.
+  ["Open the agent that just finished", { kind: "latest_completed", agents: true }],
+  ["Open the thing that just finished", { kind: "latest_completed" }],
+  ["Show the last failed agent", { kind: "latest_failed", agents: true }],
+  ["Show the last failed task", { kind: "latest_failed" }],
 ])("recognizes read-only scene reference %s", (text, expected) => {
   expect(sceneReference(text as string)).toEqual(expected);
 });

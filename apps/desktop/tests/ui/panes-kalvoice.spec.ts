@@ -93,7 +93,11 @@ test.describe("KalVoice pane intents", () => {
 
   test("arranging Claude Code and Codex says honestly that Codex has no pane yet", async ({ page }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New Claude Code pane" }).click();
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "New agent" })
+      .getByRole("button", { name: "Launch Claude Code agent" })
+      .click();
     await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
     const processes = await running(page);
 

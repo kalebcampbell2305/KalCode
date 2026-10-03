@@ -5,11 +5,11 @@ import type { ThreadSummary } from "./ThreadSummary.ts";
 /**
  * A snapshot of every open (non-archived) thread.
  */
-export type ThreadsStatusSummary = { total: number,
+export type ThreadsStatusSummary = { total: number, 
 /**
  * Threads whose provider is working now.
  */
-working: number,
+working: number, 
 /**
  * Threads that cannot continue until someone acts (approval, input, failure).
  */

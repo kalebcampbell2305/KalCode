@@ -212,6 +212,8 @@ export type PaneCommand =
   | { kind: "arrange-providers"; axis: SplitAxis; providerIds: string[] }
   /** Shows the exact provider pane threads created by the native executor. */
   | { kind: "open-provider-panes"; threadIds: string[] }
+  /** Opens Code's + launcher for coding agents (Claude Code unless a provider is named). */
+  | { kind: "open-agent-launcher"; providerId?: string }
   /** Applies a named, deterministic layout operation. */
   | { kind: "control-pane"; command: PaneControlCommand }
   /** Applies one bounded action to an embedded browser pane. */

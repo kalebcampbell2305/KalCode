@@ -275,7 +275,7 @@ function PaneHeader({
         {editing ? (
           <>
             <label className="visually-hidden" htmlFor={inputId}>
-              Thread name
+              Agent name
             </label>
             <input
               id={inputId}
@@ -312,7 +312,7 @@ function PaneHeader({
             type="button"
             className={styles.titleButton}
             title="Rename"
-            aria-label={`${thread.name}. Rename thread`}
+            aria-label={`${thread.name}. Rename agent`}
             onClick={() => setEditing(true)}
           >
             <span className={styles.title}>{thread.name}</span>

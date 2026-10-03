@@ -18,7 +18,7 @@ fn current_product_surfaces_route_without_local_reasoning() {
     for (text, surface) in [
         ("Open Operations", SurfaceId::Operations),
         ("Take me to Operations", SurfaceId::Operations),
-        ("Open Agent Fleet", SurfaceId::Agents),
+        ("Open Agent Fleet", SurfaceId::Dashboard),
         ("Open provider accounts", SurfaceId::Providers),
         ("Open Command Center", SurfaceId::CommandCenter),
     ] {
@@ -660,7 +660,7 @@ fn navigation() {
         ("go to missions", SurfaceId::Missions),
         ("open automations", SurfaceId::Automations),
         ("show skills", SurfaceId::Skills),
-        ("go to agents", SurfaceId::Agents),
+        ("go to agents", SurfaceId::Dashboard),
         ("open preferences", SurfaceId::Settings),
     ];
     for (text, surface) in cases {
@@ -1224,7 +1224,7 @@ fn dashboard_filters_by_chip() {
     assert_eq!(
         intent("show agents"),
         KalVoiceIntent::Navigate {
-            surface: SurfaceId::Agents
+            surface: SurfaceId::Dashboard
         }
     );
     assert_eq!(

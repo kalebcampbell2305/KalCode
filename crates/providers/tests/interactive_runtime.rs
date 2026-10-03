@@ -91,7 +91,7 @@ impl TitleSink for Glue {
         };
         if runtime
             .get(thread_id)
-            .is_ok_and(|t| t.name == naming::FALLBACK_NAME)
+            .is_ok_and(|t| naming::is_placeholder(&t.name))
         {
             let _ = runtime.rename(thread_id, &naming::name_from_prompt(prompt));
         }

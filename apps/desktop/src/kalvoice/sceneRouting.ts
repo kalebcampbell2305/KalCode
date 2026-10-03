@@ -22,9 +22,15 @@ export function sceneReference(text: string): VoiceSceneReference | null {
     return { kind: "current" };
   if (/^(?:(?:terminal|pane|one) )?(?:beside|next to) (?:this|this one|this terminal|me)$/i.test(query))
     return { kind: "beside_current" };
-  if (/^(?:thing|one|agent|terminal|thread) (?:that )?just (?:finished|completed)$/i.test(query))
-    return { kind: "latest_completed" };
-  if (/^last failed (?:terminal|agent|thread|task)$/i.test(query)) return { kind: "latest_failed" };
+  // "The agent that just finished" means a coding agent; "the thing/thread that just finished" means anything.
+  const finished = /^(thing|one|agent|terminal|thread) (?:that )?just (?:finished|completed)$/i.exec(query);
+  if (finished)
+    return /^agent$/i.test(finished[1] ?? "")
+      ? { kind: "latest_completed", agents: true }
+      : { kind: "latest_completed" };
+  const failed = /^last failed (terminal|agent|thread|task)$/i.exec(query);
+  if (failed)
+    return /^agent$/i.test(failed[1] ?? "") ? { kind: "latest_failed", agents: true } : { kind: "latest_failed" };
   if (/^other\s+/i.test(query)) {
     const named = query.replace(/^other\s+/i, "");
     return { kind: "other", query: named, kinds: kindHint(named) };

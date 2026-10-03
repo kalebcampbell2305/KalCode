@@ -83,6 +83,10 @@ pub struct DesktopExecutor {
     pub account: Option<Arc<crate::account::runtime::AccountRuntime>>,
     /// `None` when the thread runtime didn't start (then thread commands explain why).
     pub threads: Option<Arc<ThreadRuntime>>,
+    /// Registers the installed providers' adapters with `threads` the first time a session
+    /// operation needs them (`ThreadsState::ensure_providers`), exactly as the thread commands
+    /// do. Without it, a voice launch before any other thread operation sees no providers.
+    pub ensure_providers: Option<Arc<dyn Fn() + Send + Sync>>,
     /// `None` when the permission engine didn't start.
     pub permissions: Option<Arc<PermissionService>>,
     /// The Session Locator (Z7-W2), for Search and for Focus by meaning. `None` when it didn't
@@ -344,10 +348,10 @@ fn filter_summary(chip: DashboardChip, counts: Option<(usize, usize)>) -> String
             "{} waiting for you.",
             plural(count, "agent is", "agents are")
         ),
-        DashboardChip::Done if count == 0 => "No threads have completed yet.".into(),
+        DashboardChip::Done if count == 0 => "No agents have completed yet.".into(),
         DashboardChip::Done => format!(
             "Showing {count} completed {}.",
-            if count == 1 { "thread" } else { "threads" }
+            if count == 1 { "agent" } else { "agents" }
         ),
         DashboardChip::Idle if count == 0 => "No agents are idle.".into(),
         DashboardChip::Idle => format!(
@@ -477,6 +481,16 @@ fn stop_bound_targets(
 impl DesktopExecutor {
     fn threads(&self) -> Result<&Arc<ThreadRuntime>, ExecError> {
         self.threads.as_ref().ok_or_else(threads_unavailable)
+    }
+
+    /// The thread runtime with provider adapters registered, for operations that start or
+    /// resume provider sessions.
+    fn provider_threads(&self) -> Result<&Arc<ThreadRuntime>, ExecError> {
+        let runtime = self.threads()?;
+        if let Some(ensure) = &self.ensure_providers {
+            ensure();
+        }
+        Ok(runtime)
     }
 
     fn workspace_resolver(&self) -> CoreWorkspaces {
@@ -765,7 +779,7 @@ impl DesktopExecutor {
                 "Open between 1 and 16 provider sessions at a time.",
             ));
         }
-        let runtime = self.threads()?;
+        let runtime = self.provider_threads()?;
         let workspace = self.target_workspace(workspace_id)?;
         let options = runtime.options().map_err(|e| from_core(&e))?;
         // Resolve every account before starting anything: an unknown label in a later group
@@ -951,7 +965,7 @@ impl DesktopExecutor {
                 "Launch the sessions first, then say which model and effort to use for all of them.",
             ));
         }
-        let runtime = self.threads()?;
+        let runtime = self.provider_threads()?;
         let requested_ids = ctx
             .last_launch_instances
             .iter()
@@ -2508,7 +2522,7 @@ impl Executor for DesktopExecutor {
                 })
             }
             KalVoiceIntent::ResumeThreads { scope } => {
-                let outcomes = self.threads()?.resume_threads(scope);
+                let outcomes = self.provider_threads()?.resume_threads(scope);
                 Ok(Executed {
                     summary: bulk_summary(
                         "resume",
@@ -2558,17 +2572,27 @@ impl Executor for DesktopExecutor {
             KalVoiceIntent::StatusReport => self.status_report(),
             KalVoiceIntent::Search { query } => self.search(query),
             KalVoiceIntent::FilterDashboard { chip } => {
-                // Counting is best effort: the filter works even without the thread runtime.
+                // Counting is best effort: the filter works even without the thread runtime. The
+                // Fleet shows coding agents (provider panes), not chat threads, so only those count.
+                let sessions = self.core.paths().data_dir.join("sessions");
                 let counts = self
                     .threads
                     .as_ref()
                     .and_then(|runtime| runtime.list(None, false).ok())
                     .map(|threads| {
-                        let count = threads
+                        let agents: Vec<_> = threads
+                            .iter()
+                            .filter(|t| {
+                                kalcode_providers::interactive::provider::marked_interactive(
+                                    &sessions, &t.id,
+                                )
+                            })
+                            .collect();
+                        let count = agents
                             .iter()
                             .filter(|t| *chip == DashboardChip::All || t.status.chip() == *chip)
                             .count();
-                        (count, threads.len())
+                        (count, agents.len())
                     });
                 Ok(Executed {
                     summary: filter_summary(*chip, counts),
@@ -2747,6 +2771,7 @@ mod tests {
             core: Arc::new(core),
             account: None,
             threads: None,
+            ensure_providers: None,
             permissions: None,
             locator: None,
         }
@@ -3184,7 +3209,7 @@ mod tests {
         );
         assert_eq!(
             filter_summary(DashboardChip::Done, Some((3, 21))),
-            "Showing 3 completed threads."
+            "Showing 3 completed agents."
         );
         assert_eq!(
             filter_summary(DashboardChip::All, Some((21, 21))),
@@ -3845,6 +3870,71 @@ mod tests {
             f.runtime.list(None, false).expect("threads").len(),
             before_signed_out
         );
+    }
+
+    /// "Start a Codex agent" as the first thread operation after launch: provider adapters are
+    /// registered lazily (`ThreadsState::ensure_providers`), so the voice launch must register
+    /// them itself instead of answering "That provider is not ready".
+    #[test]
+    fn voice_launch_registers_detected_providers_before_resolving_the_provider() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let mut executor = executor(data.path());
+        let registry = Arc::new(kalcode_threads::ProviderRegistry::new());
+        let runtime = Arc::new(
+            ThreadRuntime::new(
+                executor.core.clone(),
+                registry.clone(),
+                Arc::new(CoreWorkspaces::new(executor.core.clone())),
+                Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+            )
+            .expect("runtime"),
+        );
+        executor.threads = Some(runtime.clone());
+        executor.visible.push(SurfaceId::Threads);
+        executor
+            .core
+            .open_workspace(project.path())
+            .expect("open workspace");
+        let launch = KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::CODEX)),
+                count: 1,
+                account_query: None,
+                model: None,
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: None,
+        };
+
+        // Nothing registered the adapters yet: this is the reported failure.
+        let refused = executor
+            .check_with_context(&launch, &ctx())
+            .expect_err("no adapters");
+        assert_eq!(refused.code, "provider_unavailable");
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        executor.ensure_providers = Some({
+            let calls = calls.clone();
+            let registry = registry.clone();
+            Arc::new(move || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if registry.get(&ProviderId::new(ProviderId::CODEX)).is_none() {
+                    registry.register(Arc::new(IdleProvider(ProviderId::CODEX, false)));
+                }
+            })
+        });
+        executor
+            .check_with_context(&launch, &ctx())
+            .expect("launch check");
+        let started = executor.execute(&launch, &ctx()).expect("launch");
+        assert!(matches!(
+            started.directive,
+            Some(UiDirective::OpenProviderPanes { ref thread_ids, .. }) if thread_ids.len() == 1
+        ));
+        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        runtime.shutdown();
     }
 
     #[test]

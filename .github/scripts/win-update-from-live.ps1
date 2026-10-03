@@ -61,6 +61,24 @@ function Run-Installer([string]$exe, [string[]]$args2) {
   $sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (InstallDir) -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Seconds 2 }
   if (-not (InstallDir)) { Refuse 'no KalCode uninstall entry after the installer' }
 }
+function Wait-ExeUnlocked([int]$sec = 60) {
+  # A killed KalCode's image can stay locked for a moment. NSIS cannot replace a locked kalcode.exe, so wait until it
+  # opens exclusively before running an installer over it (update-over-087 investigation, run 37060945856).
+  $d = InstallDir; if (-not $d) { return }; $exe = Join-Path $d 'kalcode.exe'; if (-not (Test-Path -LiteralPath $exe)) { return }
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  while ($true) {
+    try { $fs = [IO.File]::Open($exe, 'Open', 'ReadWrite', 'None'); $fs.Dispose(); Note "kalcode.exe unlocked after $([int]$sw.Elapsed.TotalSeconds)s"; return } catch { }
+    if ($sw.Elapsed.TotalSeconds -ge $sec) { Refuse "kalcode.exe is still locked ${sec}s after KalCode closed" }
+    Start-Sleep -Milliseconds 500
+  }
+}
+function Assert-InstalledVersion([string]$version, [switch]$NoteOnly) {
+  $exe = Join-Path (InstallDir) 'kalcode.exe'
+  $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+  Note "installed kalcode.exe FileVersion '$($vi.FileVersion)' ProductVersion '$($vi.ProductVersion)'"
+  if ($NoteOnly) { return }
+  if ($vi.ProductVersion -ne $version -or $vi.FileVersion -ne $version) { Refuse "installer exited 0 but did not replace kalcode.exe (it reports $($vi.ProductVersion), expected $version)" }
+}
 function Wait-Started([string]$version, [DateTime]$since, [int]$sec = 180) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while ($sw.Elapsed.TotalSeconds -lt $sec) {
@@ -185,12 +203,15 @@ try {
     if ((Sha $live) -ne $LiveSha256) { Refuse "the public live installer is $(Sha $live), not $LiveSha256" }
   }
   Run-Installer $live @('/S'); Note "installed live $LiveVersion into $(InstallDir)"
+  Assert-InstalledVersion $LiveVersion -NoteOnly
   $null = Launch $LiveVersion; $null = Close-App
   $pre = Db-Snapshot 'db-live'; $floorPre = if (Test-Path -LiteralPath $Floor) { (Read-Shared $Floor).Trim() } else { $null }
   Note "live database schema $($pre.schema), $(@($pre.tables.PSObject.Properties).Count) tables; floor '$floorPre'"
 
   # 2. candidate over live, exactly the in-app updater's after-exit install
+  Wait-ExeUnlocked
   Run-Installer $CandidateInstaller @('/S', '/UPDATE'); Note "candidate $CandidateVersion installed over live with /S /UPDATE"
+  Assert-InstalledVersion $CandidateVersion
   $receipt.checks.install = $true
   $null = Launch $CandidateVersion; $receipt.checks.launch = $true
   $null = Close-App
