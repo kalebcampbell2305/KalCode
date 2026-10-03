@@ -47,6 +47,20 @@ async function newWorkspace(page: Page, name: string) {
   await expect(item(page, new RegExp(`^${name}, active workspace`))).toBeVisible();
 }
 
+async function invoke<T>(page: Page, command: string, args?: Record<string, unknown>): Promise<T> {
+  return page.evaluate(
+    ([name, payload]) => {
+      const internals = (
+        window as typeof window & {
+          __TAURI_INTERNALS__: { invoke<R>(command: string, args?: Record<string, unknown>): Promise<R> };
+        }
+      ).__TAURI_INTERNALS__;
+      return internals.invoke<T>(name, payload);
+    },
+    [command, args] as const,
+  );
+}
+
 test("the rail persists across a relaunch and the Session Locator finds a workspace", async () => {
   test.setTimeout(240_000);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-w2-"));
@@ -98,12 +112,16 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
     await nav(page, "Home").click();
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Kaleb");
     await shot(page, "e2e-home-session-1");
+    const activeBeforeRestart = await invoke<{ id: string; name: string } | null>(page, "workspace_active");
+    if (!activeBeforeRestart) throw new Error("The rail fixture did not retain an active workspace");
     await closeGracefully(app);
 
     // ---- Relaunch: everything is where it was.
     app = await launch(dataDir, env);
     page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: activeBeforeRestart.name })).toBeVisible();
+    const activeAfterRestart = await invoke<{ id: string } | null>(page, "workspace_active");
+    expect(activeAfterRestart?.id).toBe(activeBeforeRestart.id);
     await showRail(page);
     await expect(item(page, /^Pinned, 1$/)).toBeVisible();
     const pinnedFirst = tree(page).getByRole("treeitem").nth(1);

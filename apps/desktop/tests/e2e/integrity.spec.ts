@@ -217,7 +217,7 @@ test("a v4 database from the installed app is upgraded to the latest schema with
     createDatabase(dataDir, projectDir, 4);
     const app = await launch(dataDir);
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "legacy-project" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
     const diagnostics = await invoke<{ database: { schemaVersion: number; latestSchemaVersion: number } }>(
@@ -361,7 +361,7 @@ test("a v5 database (the app after the L-1 update) is upgraded to the latest sch
     createDatabase(dataDir, projectDir, 5);
     const app = await launch(dataDir, { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "legacy-project" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
     const diagnostics = await invoke<{ database: { schemaVersion: number; latestSchemaVersion: number } }>(
@@ -465,7 +465,7 @@ test("a v6 database (the owner's installed app) reaches the latest schema in one
     createDatabase(dataDir, projectDir, 6);
     const app = await launch(dataDir);
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "legacy-project" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
     const diagnostics = await invoke<{ database: { schemaVersion: number; latestSchemaVersion: number } }>(

@@ -1,7 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PaneInfo, ThreadSummary } from "@kalcode/protocol";
 import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
@@ -37,6 +38,39 @@ const HELPER = join(dirname(EXE), "kalcode-hook.exe");
 test.skip(!existsSync(FAKE) || !existsSync(HELPER), "Run build:e2e: it builds kalcode-hook and the fake provider.");
 
 const FAKE_BANNER = "KalCode fake provider (interactive)";
+
+function invoke<T>(page: Page, command: string, args: Record<string, unknown> = {}): Promise<T> {
+  return page.evaluate(
+    ([name, payload]) =>
+      (
+        window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> };
+        }
+      ).__TAURI_INTERNALS__.invoke(name, payload),
+    [command, args] as const,
+  ) as Promise<T>;
+}
+
+interface FakeLaunch {
+  exe: string;
+  args: string[];
+}
+
+function claudeLaunches(bin: string): FakeLaunch[] {
+  const path = join(bin, "runs.log");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as FakeLaunch)
+    .filter(({ exe, args }) => exe.toLowerCase() === "claude.exe" && args.includes("--settings"));
+}
+
+function argAfter(args: readonly string[], flag: string): string | null {
+  const index = args.indexOf(flag);
+  return index >= 0 ? (args[index + 1] ?? null) : null;
+}
 
 const codeNav = (page: Page) =>
   page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true });
@@ -131,6 +165,134 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
     await closeGracefully(app);
     expect(processesMatching(bin), "no provider process outlives KalCode").toEqual([]);
   } finally {
+    removeDir(dataDir);
+    removeDir(root);
+  }
+});
+
+test("launching four Claude Code agents creates four fresh live terminals with the selected configuration", async () => {
+  test.setTimeout(240_000);
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-four-"));
+  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-panes-four-project-"));
+  const project = join(root, "four-agent-site");
+  const bin = join(root, "bin");
+  mkdirSync(project);
+  mkdirSync(bin);
+  writeFileSync(join(project, "README.md"), "# four agent site\n");
+  copyFileSync(FAKE, join(bin, "claude.exe"));
+  writeManagedFakeProviderConfig(bin);
+
+  const env = {
+    KALCODE_E2E_PICK_FOLDER: project,
+    KALCODE_E2E_HOOK_DECISIONS: "engine",
+    KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
+    PATH: `${bin};${process.env.PATH ?? ""}`,
+  };
+  let app: Awaited<ReturnType<typeof launch>> | null = null;
+
+  try {
+    app = await launch(dataDir, env);
+    const page = app.page;
+    await expect(codeNav(page)).toBeVisible();
+    await codeNav(page).click();
+    await page.getByRole("button", { name: "Open folder…" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "four-agent-site" })).toBeVisible();
+    const [workspace] = await invoke<{ id: string; name: string }[]>(page, "workspace_list");
+    expect(workspace?.name).toBe("four-agent-site");
+
+    await waitForProviderAdmission(page);
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    const launcher = page.getByRole("dialog", { name: "New agent" });
+    await expect(launcher).toBeVisible();
+    await launcher.getByRole("radio", { name: "Sonnet", exact: true }).click();
+    await launcher.getByRole("radio", { name: "High", exact: true }).click();
+    await launcher.getByLabel("Agents", { exact: true }).fill("4");
+
+    const accounts = await invoke<{ id: string; providerId: string }[]>(page, "provider_accounts_list");
+    const claudeAccounts = accounts.filter(({ providerId }) => providerId === "claude-code");
+    expect(claudeAccounts).toHaveLength(1);
+    const accountId = claudeAccounts[0]?.id;
+    expect(accountId).toBeTruthy();
+
+    await launcher.getByRole("button", { name: "Launch 4 Claude Code agents", exact: true }).click();
+    await expect(launcher).not.toBeVisible({ timeout: 30_000 });
+
+    const panes = page.locator("[data-provider-pane]");
+    await expect(panes).toHaveCount(4, { timeout: 30_000 });
+    for (const providerPane of await panes.all()) {
+      await expect(providerPane.locator("[data-pane-terminal] .xterm-rows")).toContainText(FAKE_BANNER, {
+        timeout: 30_000,
+      });
+      await expect(providerPane.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    }
+
+    await expect
+      .poll(
+        async () =>
+          (
+            await invoke<ThreadSummary[]>(page, "thread_list", {
+              workspaceId: workspace?.id ?? null,
+              includeArchived: false,
+            })
+          ).filter(({ providerId }) => providerId === "claude-code").length,
+        { timeout: 30_000 },
+      )
+      .toBe(4);
+    const threads = (
+      await invoke<ThreadSummary[]>(page, "thread_list", {
+        workspaceId: workspace?.id ?? null,
+        includeArchived: false,
+      })
+    ).filter(({ providerId }) => providerId === "claude-code");
+    expect(new Set(threads.map(({ id }) => id)).size).toBe(4);
+    for (const thread of threads) {
+      expect(thread).toMatchObject({
+        workspaceId: workspace?.id,
+        providerAccountId: accountId,
+        model: "sonnet",
+        effort: "high",
+        runtimeKind: "interactive_pty",
+      });
+    }
+
+    const infos = await Promise.all(
+      threads.map(({ id }) => invoke<PaneInfo>(page, "provider_pane_info", { threadId: id })),
+    );
+    expect(infos.every(({ running }) => running)).toBe(true);
+    expect(new Set(infos.map(({ instanceId }) => instanceId)).size).toBe(4);
+    expect(infos.every(({ instanceId }) => instanceId !== null)).toBe(true);
+    await expect.poll(() => processesMatching(bin).length, { timeout: 30_000 }).toBe(4);
+
+    await expect.poll(() => claudeLaunches(bin).length, { timeout: 30_000 }).toBe(4);
+    const launches = claudeLaunches(bin);
+    const sessionIds = launches.map(({ args }) => argAfter(args, "--session-id"));
+    expect(sessionIds.every((id) => id !== null)).toBe(true);
+    expect(new Set(sessionIds).size).toBe(4);
+    for (const { args } of launches) {
+      expect(args).not.toContain("--resume");
+      expect(argAfter(args, "--model")).toBe("sonnet");
+      expect(argAfter(args, "--effort")).toBe("high");
+    }
+
+    const focused = threads[2];
+    if (!focused) throw new Error("The four-agent launch did not return a focus target");
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Dashboard", exact: true })
+      .click();
+    const fleetCard = page.locator(`[data-thread-id="${focused.id}"]`);
+    await expect(fleetCard).toBeVisible({ timeout: 30_000 });
+    await fleetCard.getByRole("button", { name: focused.name, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "four-agent-site" })).toBeVisible();
+    await expect(
+      page.locator(`[data-pane-id][data-focused="true"] [data-provider-pane="${focused.id}"]`),
+    ).toBeVisible();
+
+    await closeGracefully(app);
+    app = null;
+    await expect.poll(() => processesMatching(bin), { timeout: 30_000 }).toEqual([]);
+  } finally {
+    if (app) await closeGracefully(app);
     removeDir(dataDir);
     removeDir(root);
   }

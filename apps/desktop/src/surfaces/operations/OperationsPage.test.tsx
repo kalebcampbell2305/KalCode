@@ -6,7 +6,7 @@ import type {
   ThreadOptions,
 } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -648,6 +648,51 @@ describe("OperationsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Services" }));
     await user.click(screen.getByRole("button", { name: /restart/i }));
     await waitFor(() => expect(client.serviceAction).toHaveBeenCalledWith("service-1", "restart"));
+  });
+
+  it("admits only one service mutation before its busy state renders", async () => {
+    seams.snapshot = {
+      ...baseSnapshot(),
+      services: [
+        {
+          id: "service-once",
+          runId: "run-1",
+          name: "Web",
+          status: "running",
+          pid: 3100,
+          processName: "node",
+          uptimeSeconds: 90,
+          ports: [3000],
+          urls: ["http://localhost:3000"],
+          workspaceId: "workspace-1",
+          workspaceName: "KalCode",
+          terminalId: "terminal-1",
+          canStop: true,
+          canRestart: true,
+          actionReason: null,
+        },
+      ],
+    };
+    let finish!: () => void;
+    const client = operations();
+    vi.mocked(client.serviceAction).mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage(client);
+    await user.click(screen.getByRole("tab", { name: "Services" }));
+    const restart = screen.getByRole("button", { name: /restart/i });
+
+    act(() => {
+      fireEvent.click(restart);
+      fireEvent.click(restart);
+    });
+    expect(client.serviceAction).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+    await waitFor(() => expect(restart).not.toBeDisabled());
   });
 
   it("creates and opens a terminal in the service workspace when no terminal is retained", async () => {

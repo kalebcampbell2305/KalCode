@@ -25,6 +25,7 @@ import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
 import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
 import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
+import { CodeStartup } from "./CodeStartup.tsx";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { AgentRail } from "./deck/AgentRail.tsx";
 import { CommandBar } from "./deck/CommandBar.tsx";
@@ -55,6 +56,7 @@ export function Shell() {
     <ProviderAccountSessionsProvider>
       <NavigationProvider flags={info.flags.surfaces} features={info.flags.features}>
         <WorkspaceProvider>
+          <CodeStartup />
           <PermissionsProvider>
             <ThreadsIntentProvider>
               {/* Z7-W3: cross-surface focus/filter intents and the notification center. */}

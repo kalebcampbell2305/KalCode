@@ -17,7 +17,7 @@ import {
   Settings as SettingsIcon,
   Workflow,
 } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
 
 export interface SurfaceMeta {
   id: SurfaceId;
@@ -66,8 +66,8 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     id: "agents",
     label: "Agents",
     icon: Bot,
-    summary: "Persistent AI teammates with a role, instructions, provider and permissions.",
-    dependsOn: "Threads and permissions",
+    summary: "Live Claude Code, Codex and Gemini coding terminals across your workspaces.",
+    dependsOn: "Provider sessions and workspace terminals",
   },
   missions: {
     id: "missions",
@@ -170,10 +170,10 @@ export function viewVisible(view: AppView, features: readonly FeatureFlag[] | un
 
 /** Navigation order within the sidebar. Settings is pinned to the bottom separately. */
 export const PRIMARY_ORDER: readonly SurfaceId[] = [
+  "code",
   "dashboard",
   "operations",
   "kalvoice",
-  "code",
   "threads",
   "agents",
   "missions",
@@ -188,6 +188,8 @@ export const PRIMARY_ORDER: readonly SurfaceId[] = [
 interface NavigationValue {
   current: Destination;
   navigate: (id: Destination) => void;
+  /** Accepted navigation intents since this provider mounted, including same-destination intents. */
+  getIntentRevision: () => number;
 }
 
 const NavigationContext = createContext<NavigationValue | null>(null);
@@ -202,11 +204,12 @@ export function NavigationProvider({
   features?: readonly FeatureFlag[];
   children: ReactNode;
 }) {
-  // Home is where a session starts once its feature is available (not merely visible in a
-  // development build), so gated builds keep the Dashboard as the first page.
+  // Home is the provisional start when its feature is available (not merely visible in a
+  // development build). CodeStartup resolves returning users with a restored workspace to Code.
   const [current, setCurrent] = useState<Destination>(() =>
     features?.some((f) => f.id === "workspace_home" && f.state === "available" && f.visible) ? "home" : "dashboard",
   );
+  const intentRevision = useRef(0);
   const visible = useMemo(() => {
     const ids = new Set<Destination>(flags.filter((f) => f.visible).map((f) => f.id));
     for (const view of ["home", "folder"] as const) if (viewVisible(view, features)) ids.add(view);
@@ -214,11 +217,15 @@ export function NavigationProvider({
   }, [flags, features]);
   const navigate = useCallback(
     (id: Destination) => {
-      if (visible.has(id)) setCurrent(id);
+      if (visible.has(id)) {
+        intentRevision.current += 1;
+        setCurrent(id);
+      }
     },
     [visible],
   );
-  const value = useMemo(() => ({ current, navigate }), [current, navigate]);
+  const getIntentRevision = useCallback(() => intentRevision.current, []);
+  const value = useMemo(() => ({ current, navigate, getIntentRevision }), [current, navigate, getIntentRevision]);
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }
 

@@ -55,6 +55,7 @@ import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
 import { useKalTidy } from "./kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS, codeShortcut } from "./shortcuts.ts";
+import { WorkspaceContextMenu } from "./WorkspaceContextMenu.tsx";
 import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 
 /** The Code surface: the active workspace as one flexible pane canvas (Z7-W1). */
@@ -422,6 +423,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
         </DropdownMenu>
       </SplitControl>
       <KalTidyActions />
+      <WorkspaceContextMenu controller={controller} />
       <span className={styles.groupDivider} aria-hidden="true" />
       <DropdownMenu
         onOpenChange={(open) => {
