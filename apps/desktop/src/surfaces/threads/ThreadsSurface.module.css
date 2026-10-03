@@ -4,6 +4,9 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* The surface shares the window with the workspace rail and side panels, so it lays out by its
+     own width, not the window's. */
+  container: threads / inline-size;
 }
 
 .header {
@@ -72,13 +75,15 @@
   align-items: center;
   justify-content: center;
   flex: 1;
-  padding: var(--space-8) var(--space-8);
+  padding: var(--space-8) var(--space-6);
+  /* A faint electric-blue horizon behind the next step, so an empty pane reads as ready, not blank. */
+  background: radial-gradient(55% 40% at 50% 50%, var(--color-accent-soft), transparent 72%);
 }
 
 /* The empty state keeps a readable width in the middle of a wide pane. */
 .placeholder > * {
   width: 100%;
-  max-width: 46rem;
+  max-width: 30rem;
 }
 
 .hint {
@@ -89,6 +94,19 @@
 @media (max-width: 1100px) {
   .body {
     grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
+  }
+}
+
+/* Beside the workspace rail and the Agents panel the surface is narrow: give the thread the room. */
+@container threads (max-width: 52rem) {
+  .header {
+    margin-inline: var(--space-5);
+  }
+
+  .body {
+    grid-template-columns: minmax(12.5rem, 15rem) minmax(0, 1fr);
+    gap: var(--space-2-5);
+    padding-inline: var(--space-5);
   }
 }
 
