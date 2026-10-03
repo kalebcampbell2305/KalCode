@@ -19,6 +19,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { flushSync } from "react-dom";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
+import { CodingAgentContextMenu } from "../code/CodingAgentContextMenu.tsx";
 import { useKalTidy } from "../code/kaltidy/kalTidyContext.ts";
 import { useProviderPanesEnabled } from "../code/panes/useProviderPanes.ts";
 import { useLaunchAgent } from "../code/useLaunchAgent.ts";
@@ -303,24 +304,27 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     ) : (
       <div className={styles.cardRow} style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
         {row.threads.map((thread) => (
-          <AgentCard
-            key={thread.id}
-            thread={thread}
-            now={now}
-            approvals={approvalsByThread.get(thread.id) ?? NO_APPROVALS}
-            pendingAction={pendingActions.get(thread.id)}
-            onFocus={onFocus}
-            onAction={runAction}
-            onDecide={permissions.decide}
-            onReviewApprovals={onReviewApprovals}
-            handle={handles.get(thread.id)}
-            worktree={worktrees.get(thread.id)}
-            readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
-            onCommitted={applyWorktree}
-            expanded={expanded.has(thread.id)}
-            onToggleExpanded={toggleCard}
-            onDismiss={canDismiss(thread.status) ? onDismiss : undefined}
-          />
+          <CodingAgentContextMenu key={thread.id} thread={thread}>
+            <div tabIndex={-1} style={{ minWidth: 0 }}>
+              <AgentCard
+                thread={thread}
+                now={now}
+                approvals={approvalsByThread.get(thread.id) ?? NO_APPROVALS}
+                pendingAction={pendingActions.get(thread.id)}
+                onFocus={onFocus}
+                onAction={runAction}
+                onDecide={permissions.decide}
+                onReviewApprovals={onReviewApprovals}
+                handle={handles.get(thread.id)}
+                worktree={worktrees.get(thread.id)}
+                readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
+                onCommitted={applyWorktree}
+                expanded={expanded.has(thread.id)}
+                onToggleExpanded={toggleCard}
+                onDismiss={canDismiss(thread.status) ? onDismiss : undefined}
+              />
+            </div>
+          </CodingAgentContextMenu>
         ))}
       </div>
     );

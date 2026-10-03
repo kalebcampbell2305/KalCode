@@ -208,6 +208,8 @@ pub enum EventPayload {
         exit_code: i64,
         closed_by_user: bool,
     },
+    #[serde(rename = "shell.renamed")]
+    ShellRenamed { terminal_id: String, title: String },
     #[serde(rename = "shell.failed")]
     ShellFailed { terminal_id: String, exit_code: i64 },
 
@@ -273,6 +275,12 @@ pub enum EventPayload {
     },
     #[serde(rename = "thread.renamed")]
     ThreadRenamed { thread_id: String, name: String },
+    #[serde(rename = "thread.moved")]
+    ThreadMoved {
+        thread_id: String,
+        from_workspace_id: String,
+        workspace_id: String,
+    },
     #[serde(rename = "thread.completed")]
     ThreadCompleted { thread_id: String },
     #[serde(rename = "thread.failed")]
@@ -644,6 +652,7 @@ impl EventPayload {
             Self::WorkspaceRemoved { .. } => "workspace.removed",
             Self::ShellStarted { .. } => "shell.started",
             Self::ShellCompleted { .. } => "shell.completed",
+            Self::ShellRenamed { .. } => "shell.renamed",
             Self::ShellFailed { .. } => "shell.failed",
             Self::ProviderDetected { .. } => "provider.detected",
             Self::ProviderConnected { .. } => "provider.connected",
@@ -655,6 +664,7 @@ impl EventPayload {
             Self::ThreadStarted { .. } => "thread.started",
             Self::ThreadStatusChanged { .. } => "thread.status_changed",
             Self::ThreadRenamed { .. } => "thread.renamed",
+            Self::ThreadMoved { .. } => "thread.moved",
             Self::ThreadCompleted { .. } => "thread.completed",
             Self::ThreadFailed { .. } => "thread.failed",
             Self::ThreadArchived { .. } => "thread.archived",

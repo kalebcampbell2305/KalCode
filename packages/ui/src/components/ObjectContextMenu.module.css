@@ -1,0 +1,28 @@
+.content {
+  /* Context actions also belong to content inside modal file previews. */
+  z-index: calc(var(--z-dialog) + 1);
+  min-width: 13rem;
+  max-height: min(28rem, var(--radix-context-menu-content-available-height));
+  transform-origin: var(--radix-context-menu-content-transform-origin);
+}
+
+.label {
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.chevron {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-left: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content[data-state="open"] {
+    animation: none;
+  }
+}

@@ -373,6 +373,35 @@ pub fn set_pending_approvals(conn: &Connection, id: &str, count: usize) -> Resul
     Ok(())
 }
 
+/// Copies history with new local ids and without provider-owned message identities.
+pub fn copy_messages(conn: &Connection, source: &str, destination: &str) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT role, content, created_at FROM thread_messages WHERE thread_id = ?1 ORDER BY seq",
+    )?;
+    let mut rows = stmt.query([source])?;
+    while let Some(row) = rows.next()? {
+        let role: String = row.get(0)?;
+        let content: String = row.get(1)?;
+        let created_at: String = row.get(2)?;
+        conn.execute("INSERT INTO thread_messages (id, thread_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)", params![new_id(), destination, role, content, created_at])?;
+    }
+    conn.execute("UPDATE threads SET last_read_seq = (SELECT COALESCE(MAX(seq), 0) FROM thread_messages WHERE thread_id = ?1) WHERE id = ?1", [destination])?;
+    Ok(())
+}
+
+pub fn move_to_workspace(
+    conn: &Connection,
+    id: &str,
+    workspace_id: &str,
+    workspace_name: &str,
+    cwd: &str,
+    now: &str,
+) -> Result<()> {
+    conn.execute("UPDATE threads SET workspace_id = ?2, workspace_name = ?3, cwd = ?4, provider_session_id = NULL, status = 'idle', current_activity = 'Moved to another workspace', last_activity_at = ?5, error_code = NULL, error_message = NULL WHERE id = ?1", params![id, workspace_id, workspace_name, cwd, now])?;
+    clear_undelivered(conn, id)?;
+    Ok(())
+}
+
 pub fn rename(conn: &Connection, id: &str, name: &str) -> Result<()> {
     conn.execute(
         "UPDATE threads SET name = ?2 WHERE id = ?1",

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terminal-stop"
+description = "Enables the terminal_stop command without any pre-configured scope."
+commands.allow = ["terminal_stop"]
+
+[[permission]]
+identifier = "deny-terminal-stop"
+description = "Denies the terminal_stop command without any pre-configured scope."
+commands.deny = ["terminal_stop"]

@@ -1,6 +1,6 @@
 import type { PaneContent } from "@kalcode/protocol";
 import { TooltipProvider } from "@kalcode/ui/components";
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, makeLeaf } from "./model.ts";
@@ -9,7 +9,7 @@ import { PaneFrame, type PaneFrameProps } from "./PaneFrame.tsx";
 const terminal = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const browser: PaneContent = { kind: "browser", browserId: "web", url: null };
 
-function setup() {
+function setup(initial: Partial<PaneFrameProps> = {}) {
   const describe = (content: PaneContent): TabInfo => ({
     title: contentKey(content),
     glyph: null,
@@ -54,7 +54,7 @@ function setup() {
   });
   const view = render(
     <TooltipProvider>
-      <PaneFrame {...props(leaf(0))} />
+      <PaneFrame {...props(leaf(0), initial)} />
     </TooltipProvider>,
   );
   const show = (next: LeafNode, extra: Partial<PaneFrameProps> = {}) =>
@@ -87,4 +87,35 @@ it("exposes the selected tab and its persistent content panel relationship", () 
   const tab = view.getByRole("tab", { name: "browser:web" });
   expect(tab).toHaveAttribute("aria-selected", "true");
   expect(tab).toHaveAttribute("aria-controls", "pane-pane-panel");
+});
+
+it("targets the right-clicked inactive terminal tab without switching tabs", async () => {
+  const action = vi.fn();
+  const activate = vi.fn();
+  const { view } = setup({
+    onActivate: activate,
+    contextMenu: (content, paneId) => [
+      { id: "stop", label: "Stop terminal", onSelect: () => action(contentKey(content), paneId) },
+    ],
+  });
+  const inactive = view.container.querySelector('[data-content-key="terminal:b"]');
+  expect(inactive).not.toBeNull();
+  fireEvent.contextMenu(inactive as Element);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Stop terminal" }));
+  expect(action).toHaveBeenCalledWith("terminal:b", "pane");
+  expect(activate).not.toHaveBeenCalled();
+});
+
+it("opens terminal actions from the keyboard and preserves its tab role and label", async () => {
+  const action = vi.fn();
+  const { view } = setup({
+    contextMenu: (content) => [{ id: "focus", label: "Focus", onSelect: () => action(contentKey(content)) }],
+  });
+  const tab = view.container.querySelector('[data-content-key="terminal:a"]') as HTMLElement;
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "F10", shiftKey: true });
+  expect(await screen.findByRole("menu", { name: "terminal:a actions" })).toBeVisible();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Focus" }));
+  expect(action).toHaveBeenCalledWith("terminal:a");
+  expect(tab).toHaveAttribute("role", "tab");
 });

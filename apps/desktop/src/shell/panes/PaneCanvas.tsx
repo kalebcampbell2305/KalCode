@@ -1,4 +1,5 @@
 import type { PaneContent, PaneNode } from "@kalcode/protocol";
+import { ObjectContextMenu, type ObjectMenuItem } from "@kalcode/ui/components";
 import {
   memo,
   type PointerEvent,
@@ -56,6 +57,8 @@ export interface PaneHost {
   renderEmpty(paneId: string): ReactNode;
   /** Items of a pane's "Add" menu. */
   addMenu(paneId: string): ReactNode;
+  /** Actions bound to the exact tab or body the user invoked. */
+  contextMenu?(content: PaneContent, paneId: string): readonly ObjectMenuItem[];
   /** Commands the host handles itself (return null to let the canvas handle it). */
   onCommand?(command: PaneCommand): PaneCommandResult | null;
 }
@@ -520,6 +523,7 @@ function PaneCanvasSurface({
               tabs={tabs}
               renderEmpty={host.renderEmpty}
               addMenu={host.addMenu}
+              contextMenu={host.contextMenu}
               onFocus={(paneId) => {
                 if (controller.focusedPaneId !== paneId) controller.focusPane(paneId, false);
               }}
@@ -583,6 +587,8 @@ function PaneCanvasSurface({
               active={active}
               parking={parking}
               renderContent={renderContent}
+              contextMenu={host.contextMenu}
+              title={describe(content).title}
               onFocus={() => {
                 if (leaf && visible) controller.focusPane(leaf.paneId, false);
               }}
@@ -610,6 +616,8 @@ function PersistentContent({
   active,
   parking,
   renderContent,
+  contextMenu,
+  title,
   onFocus,
 }: {
   content: PaneContent;
@@ -617,6 +625,8 @@ function PersistentContent({
   active: boolean;
   parking: RefObject<HTMLDivElement | null>;
   renderContent: (content: PaneContent, context: PaneRenderContext) => ReactNode;
+  contextMenu: PaneHost["contextMenu"];
+  title: string;
   onFocus: () => void;
 }) {
   const [container] = useState(() => document.createElement("div"));
@@ -636,10 +646,19 @@ function PersistentContent({
     if (context.visible && focused && document.activeElement !== focused) focused.focus({ preventScroll: true });
   });
   useLayoutEffect(() => () => container.remove(), [container]);
-  return createPortal(
+  const body = (
     <div className={styles.contentHost} onFocusCapture={onFocus} onPointerDownCapture={onFocus}>
       {renderContent(content, context)}
-    </div>,
+    </div>
+  );
+  return createPortal(
+    contextMenu ? (
+      <ObjectContextMenu label={`${title} actions`} items={contextMenu(content, context.paneId)}>
+        {body}
+      </ObjectContextMenu>
+    ) : (
+      body
+    ),
     container,
   );
 }
@@ -804,6 +823,7 @@ export function runCommand(
     case "arrange-providers":
     case "open-provider-panes":
     case "open-agent-launcher":
+    case "agent-browser-beside":
     case "control-pane":
       return { handled: false, message: "Provider panes aren't available here." };
     case "browser-control":

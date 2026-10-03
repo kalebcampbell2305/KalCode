@@ -3,6 +3,7 @@ import { Search } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { matchesQuery, presentThread } from "./model.ts";
+import { ThreadContextMenu, ThreadMenuDataProvider } from "./ThreadContextMenu.tsx";
 import styles from "./ThreadList.module.css";
 import type { useThreadList } from "./useThreads.ts";
 
@@ -116,72 +117,81 @@ export function ThreadList({
           {list.entries.length === 0 ? "Threads you start appear here." : `No threads match "${query.trim()}".`}
         </p>
       ) : (
-        <ul className={styles.list} aria-label="Threads" onKeyDown={onListKeyDown}>
-          {shown.map(({ thread, archived }) => {
-            const status = presentThread(thread);
-            const selected = thread.id === selectedId;
-            return (
-              <li key={thread.id}>
-                <button
-                  type="button"
-                  data-thread-row
-                  className={styles.row}
-                  aria-current={selected ? "true" : undefined}
-                  onClick={() => onSelect(thread.id)}
-                >
-                  <span className={styles.nameRow}>
-                    <span className={styles.name}>
-                      {thread.unreadMessages > 0 ? (
-                        <span className={styles.unread}>
-                          <span className="visually-hidden">
-                            {thread.unreadMessages === 1
-                              ? "1 unread message, "
-                              : `${thread.unreadMessages} unread messages, `}
+        <ThreadMenuDataProvider>
+          <ul className={styles.list} aria-label="Threads" onKeyDown={onListKeyDown}>
+            {shown.map(({ thread, archived }) => {
+              const status = presentThread(thread);
+              const selected = thread.id === selectedId;
+              return (
+                <li key={thread.id}>
+                  <ThreadContextMenu
+                    thread={thread}
+                    archived={archived}
+                    onChanged={() => void list.reload()}
+                    onDuplicated={(copy) => onSelect(copy.id)}
+                  >
+                    <button
+                      type="button"
+                      data-thread-row
+                      className={styles.row}
+                      aria-current={selected ? "true" : undefined}
+                      onClick={() => onSelect(thread.id)}
+                    >
+                      <span className={styles.nameRow}>
+                        <span className={styles.name}>
+                          {thread.unreadMessages > 0 ? (
+                            <span className={styles.unread}>
+                              <span className="visually-hidden">
+                                {thread.unreadMessages === 1
+                                  ? "1 unread message, "
+                                  : `${thread.unreadMessages} unread messages, `}
+                              </span>
+                            </span>
+                          ) : null}
+                          <span className={styles.nameText} title={thread.name}>
+                            {thread.name}
                           </span>
                         </span>
-                      ) : null}
-                      <span className={styles.nameText} title={thread.name}>
-                        {thread.name}
+                        <time
+                          className={styles.time}
+                          dateTime={thread.lastActivityAt}
+                          title={formatAbsolute(thread.lastActivityAt)}
+                        >
+                          {formatRelative(thread.lastActivityAt, now)}
+                        </time>
                       </span>
-                    </span>
-                    <time
-                      className={styles.time}
-                      dateTime={thread.lastActivityAt}
-                      title={formatAbsolute(thread.lastActivityAt)}
-                    >
-                      {formatRelative(thread.lastActivityAt, now)}
-                    </time>
-                  </span>
-                  <span className={styles.status}>
-                    <StatusChip
-                      variant="inline"
-                      size="sm"
-                      status={status.display}
-                      tone={status.tone}
-                      label={status.label}
-                    />
-                    {thread.currentActivity && thread.status !== "waiting_for_permission" ? (
-                      <span className={styles.activity}>{thread.currentActivity}</span>
-                    ) : null}
-                  </span>
-                  <span className={styles.meta}>
-                    <ProviderGlyph provider={thread.providerId} size="xs" />
-                    <span className={styles.metaText}>
-                      {thread.providerName}
-                      {thread.accountLabel ? ` · ${thread.accountLabel}` : ""} · {thread.workspaceName}
-                    </span>
-                    {thread.pendingApprovals > 0 ? (
-                      <Badge tone="waiting" className={styles.pending}>
-                        {thread.pendingApprovals === 1 ? "1 approval" : `${thread.pendingApprovals} approvals`}
-                      </Badge>
-                    ) : null}
-                    {archived ? <Badge tone="outline">Archived</Badge> : null}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+                      <span className={styles.status}>
+                        <StatusChip
+                          variant="inline"
+                          size="sm"
+                          status={status.display}
+                          tone={status.tone}
+                          label={status.label}
+                        />
+                        {thread.currentActivity && thread.status !== "waiting_for_permission" ? (
+                          <span className={styles.activity}>{thread.currentActivity}</span>
+                        ) : null}
+                      </span>
+                      <span className={styles.meta}>
+                        <ProviderGlyph provider={thread.providerId} size="xs" />
+                        <span className={styles.metaText}>
+                          {thread.providerName}
+                          {thread.accountLabel ? ` · ${thread.accountLabel}` : ""} · {thread.workspaceName}
+                        </span>
+                        {thread.pendingApprovals > 0 ? (
+                          <Badge tone="waiting" className={styles.pending}>
+                            {thread.pendingApprovals === 1 ? "1 approval" : `${thread.pendingApprovals} approvals`}
+                          </Badge>
+                        ) : null}
+                        {archived ? <Badge tone="outline">Archived</Badge> : null}
+                      </span>
+                    </button>
+                  </ThreadContextMenu>
+                </li>
+              );
+            })}
+          </ul>
+        </ThreadMenuDataProvider>
       )}
     </section>
   );

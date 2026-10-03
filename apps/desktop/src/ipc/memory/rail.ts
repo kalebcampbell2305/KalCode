@@ -1326,6 +1326,15 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
         totalEstimate: items.length,
       } satisfies Page<FileEntry>;
     },
+    utility_file_read: (args) => {
+      requireCore();
+      const w = workspaceOr404(requireId(args.workspaceId));
+      const handle = args.handle as { id?: string } | undefined;
+      const path = handle?.id ? handlePath.get(handle.id) : undefined;
+      if (!path || path.endsWith("/")) fail(validation("stale_handle", "That file is no longer available."));
+      const text = `// ${path}\n// Preview content from the UI test workspace.\nexport const workspace = ${JSON.stringify(w.name)};\n`;
+      return { file: { handle, workspaceId: w.id, displayPath: path }, text, bytes: text.length, truncated: false };
+    },
     git_status: (args) => {
       requireCore();
       const a = (args.args ?? {}) as { workspaceId: string };
@@ -1340,16 +1349,20 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
           truncated: false,
         };
       }
-      const file = (path: string, change: StatusFile["unstaged"], untracked = false): StatusFile => ({
-        file: { handle: { id: `st-${btoa(path)}` }, workspaceId: w.id, displayPath: path },
-        path,
-        origPath: null,
-        staged: null,
-        unstaged: change,
-        untracked,
-        conflict: null,
-        submodule: false,
-      });
+      const file = (path: string, change: StatusFile["unstaged"], untracked = false): StatusFile => {
+        const id = `st-${w.id}-${btoa(path)}`;
+        handlePath.set(id, path);
+        return {
+          file: { handle: { id }, workspaceId: w.id, displayPath: path },
+          path,
+          origPath: null,
+          staged: null,
+          unstaged: change,
+          untracked,
+          conflict: null,
+          submodule: false,
+        };
+      };
       const files = [
         file("src/auth/callback.ts", "modified"),
         file("src/auth/session.ts", "modified"),
