@@ -1,5 +1,11 @@
 # KalCode agent policy
 
+## Permanent active application protection (owner directive 2026-10-03)
+
+**NEVER CLOSE, RESTART, OR TERMINATE THE KALCODE APPLICATION THE OWNER IS WORKING IN.** It may contain many running coding terminals. This applies to development, testing, updates, release verification and cleanup. Never use process-wide termination or an updater/installer that would interrupt that instance or its terminals.
+
+Agents may open a separate KalCode instance for testing, using isolated application data and explicitly tracked process ownership. Stop only test instances and children that the task itself created. Verify update delivery with isolated installations/profiles; leave any proof requiring interruption of the owner's active instance pending until the owner closes it themselves. This rule overrides earlier release instructions that would close or restart the owner's active application.
+
 ## Permanent background process and focus rule (owner directive 2026-10-03)
 
 **KALCODE AGENTS MUST NEVER SPAM THE WINDOWS DESKTOP WITH EXTERNAL TERMINAL WINDOWS.** User-visible shell work runs inside KalCode's integrated terminals. Infrastructure and background commands run headless/hidden and must never steal focus. Do not launch Windows Terminal, cmd, PowerShell or another external console window unless the user explicitly requests an external terminal.
@@ -321,6 +327,52 @@ A feature is not visually finished just because its happy-path screen looks good
 - Does it feel fast?
 
 If any answer is no, polish it before shipping. Give subagents doing user-facing work these criteria explicitly.
+
+**Owner reaffirmation (2026-10-03), verbatim:**
+
+> "NOTHING USER-FACING IN KALCODE SHIPS BLAND.
+>
+> EVERY EXISTING AND NEW USER-FACING SURFACE SHOULD BE BEAUTIFUL, PREMIUM, POLISHED, FAST, SIMPLE, AND UNMISTAKABLY KALCODE.
+>
+> FUNCTIONAL IS NOT ENOUGH.
+>
+> REVIEW THE ACTUAL RENDERED UI.
+>
+> IF IT LOOKS GENERIC, UNFINISHED, CLUTTERED, OR BLAND, POLISH IT BEFORE SHIPPING.
+>
+> CODE IS KALCODE'S PRIMARY DAILY-USE SURFACE AND SHOULD RECEIVE THE HIGHEST LEVEL OF UX AND VISUAL QUALITY.
+>
+> USE OTHER GREAT PRODUCTS FOR INSPIRATION, NEVER FOR COPYING."
+
+- **Inspiration, never copying.** Study excellent AI and developer products for hierarchy, density, motion, terminal and agent organization, and status visualization. Never copy their frames, layouts or branding. The result must be an original KalCode design.
+- **No permanent clutter.** Don't add always-visible bars or chips that duplicate a dedicated surface (the bottom status strip was removed for this reason). Prefer more space for the work.
+
+## Permanent simplicity and UX polish rule (owner directive 2026-10-03)
+
+**KALCODE MUST BE EXTREMELY SIMPLE TO USE. EVERY WORKFLOW SHOULD USE THE FEWEST SAFE STEPS POSSIBLE. IF KALCODE ALREADY KNOWS SOMETHING, DO NOT ASK THE USER AGAIN. PUT ACTIONS WHERE THEY ARE NEEDED INSTEAD OF MAKING USERS HUNT THROUGH SETTINGS. CODE IS THE PRIMARY DAILY WORK SURFACE AND SHOULD RECEIVE FIRST-CLASS UX. EVERY USER-FACING SURFACE MUST BE BEAUTIFUL, FAST, POLISHED, AND UNMISTAKABLY KALCODE. SIMPLE DOES NOT MEAN BLAND. REMOVE UNNECESSARY FRICTION WITHOUT REMOVING USEFUL POWER.**
+
+The goal is fewer clicks, less hunting, less configuration, less waiting and less repetition. This applies to Claude Code, Codex and every future agent, for every surface.
+
+- **Fewest safe steps.** If three clicks can safely be one, make it one. Combine mechanical steps. When only one valid choice exists, use it automatically. When several exist, show the choice where the action happens, never behind a Settings detour.
+- **Never ask twice.** Reuse what KalCode already knows: the current workspace, provider account, preferred model and effort, layout, previous choices, recent terminal, Browser URL and project path. Remember reasonable preferences across restarts.
+- **No empty friction.** Remove confirmations that add no real safety, and modals where an inline action would do. Never remove a confirmation that protects user data, credentials, billing or running work.
+- **Errors lead to recovery.** Every failure shows what happened plus the most useful next action, for example "Claude session expired [Reconnect]", or "Port 3000 already in use [Stop conflicting process] [Use another port]".
+- **Remove clutter, keep power.** Drop UI that no longer serves a purpose, even if "it was already there". Use progressive disclosure: common actions visible, advanced actions available when needed.
+- **Code first.** Users should be able to do nearly all coding work without leaving Code: launch agents, pick the provider account, see account usage, pick the exact model and effort, run terminals, open Live Browser and Widgets, see Needs You and agent state, use KalVoice, review changes, run tests and switch accounts.
+- **Never slower.** Every simplification preserves or improves responsiveness (see the responsiveness rule). Menus, panels, launchers and navigation open immediately; slow work happens asynchronously.
+- **Keep account types distinct.** The KalCode account (the user's profile and login, with an editable display name) is separate from provider accounts (Claude A, Codex B). Renaming one never touches the other's identity or authentication.
+- Fix friction with the smallest correct change that has the biggest UX impact (see Scope discipline). An audit is not a license for a giant redesign.
+
+## Permanent account-usage rule (owner directive 2026-10-03)
+
+**USAGE FOLLOWS THE EXACT ACCOUNT.** Each connected provider account has one authoritative state: provider, nickname, email/identity, provider plan, authentication state, health, current usage, rolling-window usage (for example 5-hour), weekly usage, reset/cooldown, model availability and default status. Code and its launcher, New Agent, Accounts & Usage, Account Hub, Agent Fleet, terminal headers, Runs, Queue, Squads, Handoffs and KalVoice all read that same state; never maintain a disconnected account or usage system. An agent launched on "Claude B" uses Claude B's authentication, provider session, usage, reset information and model availability.
+
+- Read every usage signal the provider actually exposes before showing "Usage unavailable". Never invent or estimate usage; "Usage unavailable" is shown only when the provider genuinely exposes nothing for that account.
+- Usage refresh is asynchronous and never blocks opening a menu, the launcher, the Agents panel or Accounts & Usage. Cached values are labelled stale until refreshed (see the provider session persistence rule).
+
+## Permanent agent cleanup rule (owner directive 2026-10-03)
+
+Failed, stopped, finished and stale coding agents must be easy to clear. Each such agent card has a close (X) action where the user already is, and KalTidy is the one coherent cleanup tool: stop idle terminals, clear failed agents, clear finished/stopped agents, review what would be cleaned, and close all terminals and agents in the current workspace. Only Close all asks, with ONE confirmation ("Close all terminals and agents? Active agents, builds, tests, and running processes will be stopped." / Close all / Cancel). Every close terminates the underlying processes through the canonical close path (no orphan provider processes), removes dead agent state, and keeps Agent Fleet, Needs You and Runs truthful. Agents remain real coding terminals, never Threads.
 
 ## Permanent version rule (owner directive 2026-10-02; replaces the old release-and-marketing model)
 
