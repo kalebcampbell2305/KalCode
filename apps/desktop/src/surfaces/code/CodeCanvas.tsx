@@ -523,9 +523,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const [launcher, setLauncher] = useState<{ providerId: PaneProviderId; paneId: string | null } | null>(null);
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
+  // A fresh launcher never shows the previous launch's refusal.
+  const { clearLaunchError } = providerPanes;
   const openAgentLauncher = useCallback(
-    (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => setLauncher({ providerId, paneId }),
-    [],
+    (providerId: PaneProviderId = "claude-code", paneId: string | null = null) => {
+      clearLaunchError();
+      setLauncher({ providerId, paneId });
+    },
+    [clearLaunchError],
   );
   const launchAgents = useCallback(
     async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null) => {
