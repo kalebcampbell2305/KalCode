@@ -1,23 +1,27 @@
-/**
- * The Command Deck's projects list in the left rail: every workspace, the active one marked, each
- * with live counts of its agents (working, needing you). Choosing one makes it active and opens
- * Code. When the build has the workspace rail, that rail is the projects list instead.
- */
+/** Compact Projects view over canonical workspaces and the native rail's persistent pins. */
 import type { ThreadSummary } from "@kalcode/protocol";
-import { IconButton, Tooltip } from "@kalcode/ui/components";
-import { FolderOpen } from "lucide-react";
-import { useMemo } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  IconButton,
+  Tooltip,
+} from "@kalcode/ui/components";
+import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, MoreHorizontal, Pin, PinOff } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { useNavigation } from "../navigation.tsx";
+import { useRail } from "../rail/RailProvider.tsx";
+import { useDeckUi } from "./DeckUi.tsx";
 import styles from "./ProjectList.module.css";
 
 interface Counts {
   working: number;
   needsYou: number;
 }
-
 function countsByWorkspace(threads: readonly ThreadSummary[]): Map<string, Counts> {
   const map = new Map<string, Counts>();
   for (const thread of threads) {
@@ -36,116 +40,308 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
   const { workspaces, active, activate, openFolder, state: loadState } = useWorkspaces();
   const { state } = useCodingAgents();
   const { navigate } = useNavigation();
+  const pins = useRail();
+  const { projectsCollapsed, setProjectsCollapsed } = useDeckUi();
+  const id = useId();
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ id: string; over: string | null } | null>(null);
+  const gesture = useRef<{
+    id: string;
+    pointer: number;
+    x: number;
+    y: number;
+    active: boolean;
+    cancelled: boolean;
+  } | null>(null);
+  const suppressClick = useRef(false);
+  const list = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    const cancel = () => {
+      if (gesture.current) gesture.current.cancelled = true;
+      setDrag(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") cancel();
+    };
+    window.addEventListener("keydown", key);
+    window.addEventListener("blur", cancel);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("blur", cancel);
+    };
+  }, []);
   const counts = useMemo(() => (state.status === "ready" ? countsByWorkspace(state.data) : new Map()), [state]);
-  const ordered = useMemo(
-    () => [...workspaces].sort((a, b) => Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt)),
-    [workspaces],
-  );
-  const choose = (id: string) =>
-    void activate(id).then((ok) => {
+  const pinned = pins.rail?.pinned ?? [];
+  const ordered = useMemo(() => {
+    const byId = new Map(workspaces.map((w) => [w.id, w]));
+    const pinnedIds = new Set(pinned.map((e) => e.workspaceId));
+    return [
+      ...pinned.map((e) => ({
+        id: e.workspaceId,
+        name: byId.get(e.workspaceId)?.name ?? e.folderName,
+        available: byId.get(e.workspaceId)?.available ?? e.available,
+        displayPath: e.displayPath,
+        pinned: true,
+      })),
+      ...workspaces
+        .filter((w) => !pinnedIds.has(w.id))
+        .sort((a, b) => Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt))
+        .map((w) => ({ ...w, pinned: false })),
+    ];
+  }, [workspaces, pinned]);
+  const choose = (workspaceId: string) =>
+    void activate(workspaceId).then((ok) => {
       if (ok) navigate("code");
     });
   const open = () =>
     void openFolder().then((workspace) => {
       if (workspace) navigate("code");
     });
-
-  return (
-    <section
-      className={styles.projects}
-      aria-labelledby={collapsed ? undefined : "deck-projects"}
+  const canPin = pins.state === "ready" && pins.rail?.persistent === true;
+  // The narrow sidebar still offers the same section toggle, independently of sidebar width.
+  const toggle = (
+    <button
+      type="button"
+      className={collapsed ? styles.tile : styles.toggle}
       aria-label={collapsed ? "Projects" : undefined}
+      aria-expanded={!projectsCollapsed}
+      aria-controls={`${id}-list`}
+      onClick={() => setProjectsCollapsed(!projectsCollapsed)}
     >
       {collapsed ? (
-        <hr className={styles.divider} />
+        <FolderOpen aria-hidden="true" />
       ) : (
-        <div className={styles.header}>
-          <h2 className={styles.heading} id="deck-projects">
-            Projects
-          </h2>
+        <>
+          <span>Projects</span>
+          <ChevronRight className={styles.chevron} aria-hidden="true" />
+        </>
+      )}
+    </button>
+  );
+  return (
+    <section className={styles.projects} aria-label="Projects" data-section-collapsed={projectsCollapsed || undefined}>
+      <div className={styles.header} data-narrow={collapsed || undefined}>
+        <h2 className={styles.heading}>
+          {collapsed ? (
+            <Tooltip content="Projects" side="right">
+              {toggle}
+            </Tooltip>
+          ) : (
+            toggle
+          )}
+        </h2>
+        {collapsed ? null : (
           <Tooltip content="Open a project folder">
             <IconButton size="sm" label="Open a project folder" icon={<FolderOpen />} onClick={open} />
           </Tooltip>
-        </div>
-      )}
-      {ordered.length === 0 && loadState !== "loading" ? (
-        collapsed ? (
-          <Tooltip content="Open a project folder" side="right">
-            <button type="button" className={styles.tile} onClick={open} aria-label="Open a project folder">
-              <FolderOpen aria-hidden="true" />
-            </button>
-          </Tooltip>
-        ) : (
-          <button type="button" className={styles.emptyRow} onClick={open}>
-            <FolderOpen aria-hidden="true" />
-            Open a project folder
+        )}
+      </div>
+      <div id={`${id}-list`} className={styles.body} hidden={projectsCollapsed}>
+        {pins.state === "error" ? (
+          <button type="button" className={styles.notice} onClick={() => void pins.refresh()}>
+            Couldn't load pins. Retry
           </button>
-        )
-      ) : (
-        <ul className={styles.list}>
-          {ordered.map((workspace) => {
-            const c: Counts = counts.get(workspace.id) ?? { working: 0, needsYou: 0 };
-            const isActive = workspace.id === active?.id;
-            const status = [
-              c.working > 0 ? `${c.working} working` : null,
-              c.needsYou > 0 ? `${c.needsYou} ${c.needsYou === 1 ? "needs" : "need"} you` : null,
-              workspace.available ? null : "folder not found",
-            ]
-              .filter(Boolean)
-              .join(", ");
-            const label = status ? `${workspace.name}, ${status}` : workspace.name;
-            const button = (
-              <button
-                type="button"
-                className={collapsed ? styles.tile : styles.row}
-                aria-current={isActive ? "true" : undefined}
-                aria-label={collapsed || status ? label : undefined}
-                data-unavailable={workspace.available ? undefined : true}
-                onClick={() => choose(workspace.id)}
-              >
-                <span className={styles.initial} aria-hidden="true">
-                  {workspace.name.trim().charAt(0).toUpperCase() || "·"}
-                </span>
-                {collapsed ? (
-                  c.needsYou > 0 || c.working > 0 ? (
-                    <span
-                      className={styles.tileDot}
-                      data-tone={c.needsYou > 0 ? "waiting" : "working"}
-                      aria-hidden="true"
-                    />
-                  ) : null
-                ) : (
-                  <>
-                    <span className={styles.name}>{workspace.name}</span>
-                    <span className={styles.signals} aria-hidden="true">
-                      {c.working > 0 ? (
-                        <span className={styles.working}>
-                          <span className={styles.workingDot} />
-                          {c.working}
-                        </span>
+        ) : null}
+        {pins.rail && !pins.rail.persistent ? (
+          <p className={styles.notice}>Project pins are unavailable in this runtime.</p>
+        ) : null}
+        {ordered.length === 0 && loadState !== "loading" ? (
+          <button
+            type="button"
+            className={collapsed ? styles.tile : styles.emptyRow}
+            onClick={open}
+            aria-label="Open a project folder"
+          >
+            <FolderOpen aria-hidden="true" />
+            {collapsed ? null : "Open a project folder"}
+          </button>
+        ) : (
+          <ul className={styles.list} ref={list}>
+            {ordered.map((workspace, index) => {
+              const c: Counts = counts.get(workspace.id) ?? { working: 0, needsYou: 0 };
+              const status = [
+                workspace.pinned ? "pinned" : null,
+                c.working > 0 ? `${c.working} working` : null,
+                c.needsYou > 0 ? `${c.needsYou} ${c.needsYou === 1 ? "needs" : "need"} you` : null,
+                workspace.available ? null : "unavailable, folder not found",
+              ]
+                .filter(Boolean)
+                .join(", ");
+              const label = status ? `${workspace.name}, ${status}` : workspace.name;
+              return (
+                <li
+                  key={workspace.id}
+                  className={styles.project}
+                  data-project-id={workspace.id}
+                  data-pinned={workspace.pinned || undefined}
+                  data-dragging={drag?.id === workspace.id || undefined}
+                  data-drop={
+                    drag?.over === workspace.id && drag.id !== workspace.id
+                      ? pinned.findIndex((p) => p.workspaceId === drag.id) < index
+                        ? "after"
+                        : "before"
+                      : undefined
+                  }
+                >
+                  <Tooltip
+                    hidden={menuFor !== null || drag !== null}
+                    content={workspace.available ? workspace.displayPath : "Unavailable — folder not found"}
+                    side="right"
+                  >
+                    <button
+                      type="button"
+                      className={collapsed ? styles.tile : styles.row}
+                      aria-current={workspace.id === active?.id ? "true" : undefined}
+                      aria-label={label}
+                      aria-disabled={!workspace.available || undefined}
+                      data-unavailable={!workspace.available || undefined}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenuFor(workspace.id);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+                          e.preventDefault();
+                          setMenuFor(workspace.id);
+                        }
+                      }}
+                      onPointerDown={(e) => {
+                        suppressClick.current = false;
+                        if (!workspace.pinned || !canPin || e.button !== 0 || !e.isPrimary) return;
+                        gesture.current = {
+                          id: workspace.id,
+                          pointer: e.pointerId,
+                          x: e.clientX,
+                          y: e.clientY,
+                          active: false,
+                          cancelled: false,
+                        };
+                        e.currentTarget.setPointerCapture(e.pointerId);
+                      }}
+                      onPointerMove={(e) => {
+                        const g = gesture.current;
+                        if (!g || g.pointer !== e.pointerId || g.cancelled) return;
+                        if (!g.active && Math.hypot(e.clientX - g.x, e.clientY - g.y) < 6) return;
+                        g.active = true;
+                        const hit = document
+                          .elementFromPoint(e.clientX, e.clientY)
+                          ?.closest<HTMLElement>("[data-project-id][data-pinned]");
+                        setDrag({
+                          id: g.id,
+                          over: hit && list.current?.contains(hit) ? (hit.dataset.projectId ?? null) : null,
+                        });
+                        // Scroll only this list, so long pin lists remain reorderable.
+                        const bounds = list.current?.getBoundingClientRect();
+                        if (bounds && list.current) {
+                          if (e.clientY < bounds.top + 24) list.current.scrollTop -= 12;
+                          else if (e.clientY > bounds.bottom - 24) list.current.scrollTop += 12;
+                        }
+                      }}
+                      onPointerUp={(e) => {
+                        const g = gesture.current;
+                        if (!g || g.pointer !== e.pointerId) return;
+                        suppressClick.current = g.active;
+                        if (g.active && !g.cancelled && drag?.over && drag.over !== g.id) {
+                          const position = pinned.findIndex((p) => p.workspaceId === drag.over);
+                          if (position >= 0) void pins.pinProject(g.id, position);
+                        }
+                        gesture.current = null;
+                        setDrag(null);
+                      }}
+                      onLostPointerCapture={() => {
+                        gesture.current = null;
+                        setDrag(null);
+                      }}
+                      onPointerCancel={() => {
+                        gesture.current = null;
+                        setDrag(null);
+                      }}
+                      onClick={() => {
+                        if (suppressClick.current) {
+                          suppressClick.current = false;
+                          return;
+                        }
+                        if (workspace.available) choose(workspace.id);
+                      }}
+                    >
+                      <span className={styles.initial} data-pin={workspace.pinned || undefined} aria-hidden="true">
+                        {workspace.pinned ? <Pin /> : workspace.name.trim().charAt(0).toUpperCase() || "·"}
+                      </span>
+                      {collapsed ? (
+                        c.needsYou > 0 || c.working > 0 ? (
+                          <span
+                            className={styles.tileDot}
+                            data-tone={c.needsYou > 0 ? "waiting" : "working"}
+                            aria-hidden="true"
+                          />
+                        ) : null
+                      ) : (
+                        <>
+                          <span className={styles.name}>
+                            {workspace.name}
+                            {workspace.available ? null : <span className={styles.unavailable}>Unavailable</span>}
+                          </span>
+                          <span className={styles.signals} aria-hidden="true">
+                            {c.working > 0 ? (
+                              <span className={styles.working}>
+                                <span className={styles.workingDot} />
+                                {c.working}
+                              </span>
+                            ) : null}
+                            {c.needsYou > 0 ? <span className={styles.needs}>{c.needsYou}</span> : null}
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  </Tooltip>
+                  <DropdownMenu
+                    open={menuFor === workspace.id}
+                    onOpenChange={(show) => setMenuFor(show ? workspace.id : null)}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className={styles.menuButton}
+                        aria-label={`Project options for ${workspace.name}`}
+                        data-open={menuFor === workspace.id || undefined}
+                      >
+                        <MoreHorizontal aria-hidden="true" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="right" align="start" aria-label={`${workspace.name} project options`}>
+                      <DropdownMenuItem
+                        icon={workspace.pinned ? <PinOff /> : <Pin />}
+                        disabled={!canPin}
+                        onSelect={() => void pins.pinProject(workspace.id, !workspace.pinned)}
+                      >
+                        {workspace.pinned ? "Unpin Project" : "Pin Project"}
+                      </DropdownMenuItem>
+                      {workspace.pinned ? (
+                        <>
+                          <DropdownMenuItem
+                            icon={<ArrowUp />}
+                            disabled={!canPin || index === 0}
+                            onSelect={() => void pins.pinProject(workspace.id, index - 1)}
+                          >
+                            Move pin up
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            icon={<ArrowDown />}
+                            disabled={!canPin || index === pinned.length - 1}
+                            onSelect={() => void pins.pinProject(workspace.id, index + 1)}
+                          >
+                            Move pin down
+                          </DropdownMenuItem>
+                        </>
                       ) : null}
-                      {c.needsYou > 0 ? <span className={styles.needs}>{c.needsYou}</span> : null}
-                    </span>
-                  </>
-                )}
-              </button>
-            );
-            return (
-              <li key={workspace.id}>
-                {collapsed ? (
-                  <Tooltip content={label} side="right">
-                    {button}
-                  </Tooltip>
-                ) : (
-                  <Tooltip content={workspace.available ? workspace.displayPath : "Folder not found"} side="right">
-                    {button}
-                  </Tooltip>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

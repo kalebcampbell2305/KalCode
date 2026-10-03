@@ -6,6 +6,7 @@ import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation, viewVisible } from "../navigation.tsx";
+import { projectPinChange } from "./projectPins.ts";
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -19,6 +20,8 @@ export interface RailValue {
   hidden: boolean;
   refresh: () => Promise<void>;
   update: (update: RailUpdate) => Promise<WorkspaceRailEntry | null>;
+  /** Shared persistent project pins, including builds without the full rail UI. */
+  pinProject: (workspaceId: string, change: boolean | number) => Promise<void>;
   setSection: (section: RailSection, collapsed: boolean) => Promise<void>;
   toggleHidden: () => void;
   createGroup: (name: string) => Promise<WorkspaceGroup | null>;
@@ -55,7 +58,15 @@ export function RailProvider({ children }: { children: ReactNode }) {
   // A replacement client (or a newly enabled rail) owns fresh reads, actions and events.
   // biome-ignore lint/correctness/useExhaustiveDependencies: client and feature identity define the lifetime.
   const lifetime = useMemo(
-    () => ({ mounted: false, epoch: 0, request: 0, seen: 0, timer: null as ReturnType<typeof setTimeout> | null }),
+    () => ({
+      mounted: false,
+      epoch: 0,
+      request: 0,
+      seen: 0,
+      timer: null as ReturnType<typeof setTimeout> | null,
+      pinWrites: 0,
+      pinTail: Promise.resolve(),
+    }),
     [client, enabled],
   );
   const currentLifetime = useRef(lifetime);
@@ -110,8 +121,8 @@ export function RailProvider({ children }: { children: ReactNode }) {
   }, [lifetime]);
 
   const refresh = useCallback(async () => {
-    const isCurrent = captureRailLifetime();
-    if (!isCurrent()) return;
+    const isCurrent = captureLifetime();
+    if (!isCurrent() || lifetime.pinWrites > 0) return;
     const id = ++lifetime.request;
     try {
       const next = await client.railState();
@@ -127,7 +138,9 @@ export function RailProvider({ children }: { children: ReactNode }) {
         state: "error",
       }));
     }
-  }, [client, captureRailLifetime, lifetime]);
+  }, [client, captureLifetime, lifetime]);
+  const currentRefresh = useRef(refresh);
+  currentRefresh.current = refresh;
 
   // First load, and whenever Z1's workspace list changes (open, remove, activate).
   const workspaceKey = `${workspaces.workspaces.map((w) => `${w.id}:${w.lastOpenedAt}:${w.available}`).join("|")}#${workspaces.active?.id ?? ""}`;
@@ -139,7 +152,7 @@ export function RailProvider({ children }: { children: ReactNode }) {
   // Live counts and badges: refresh (debounced) after thread, approval and workspace events.
   const newest = events[0]?.seq ?? 0;
   useEffect(() => {
-    const isCurrent = captureRailLifetime();
+    const isCurrent = captureLifetime();
     if (!isCurrent()) return;
     const fresh = events.filter((e) => e.seq > lifetime.seen);
     lifetime.seen = Math.max(lifetime.seen, newest);
@@ -151,7 +164,7 @@ export function RailProvider({ children }: { children: ReactNode }) {
     }, 150);
     // Unrelated events must not cancel an already scheduled relevant refresh.
     // Lifetime cleanup above releases the timer on replacement/unmount.
-  }, [events, newest, refresh, captureRailLifetime, lifetime]);
+  }, [events, newest, refresh, captureLifetime, lifetime]);
 
   const fail = useCallback(
     (title: string, cause: unknown) => {
@@ -175,6 +188,38 @@ export function RailProvider({ children }: { children: ReactNode }) {
       }
     },
     [client, refresh, fail, captureRailLifetime],
+  );
+
+  const pinProject = useCallback(
+    async (workspaceId: string, change: boolean | number) => {
+      const isCurrent = captureLifetime();
+      if (!isCurrent()) return;
+      lifetime.request += 1;
+      lifetime.pinWrites += 1;
+      setRail((r) => (r ? projectPinChange(r, workspaceId, change) : r));
+      const write = lifetime.pinTail.then(async () => {
+        // Accepted preferences must finish even if Activity reconnects the view meanwhile.
+        // A replacement runtime still revokes the old client's queued work.
+        if (currentLifetime.current !== lifetime) return;
+        try {
+          await client.railUpdate({
+            workspaceId,
+            ...(typeof change === "boolean" ? { pinned: change } : { position: change }),
+          });
+        } catch (cause) {
+          if (isCurrent()) fail("Couldn't save project pins", cause);
+        }
+      });
+      lifetime.pinTail = write;
+      await write;
+      lifetime.pinWrites -= 1;
+      // An Activity reconnect may have waited on this old epoch's already-dispatched write.
+      // Re-read through the current callback, but never cross into a replacement client's store.
+      if (lifetime.pinWrites === 0 && lifetime.mounted && currentLifetime.current === lifetime) {
+        await currentRefresh.current();
+      }
+    },
+    [client, captureLifetime, lifetime, setRail, fail],
   );
 
   const setSection = useCallback(
@@ -372,6 +417,7 @@ export function RailProvider({ children }: { children: ReactNode }) {
       hidden,
       refresh,
       update,
+      pinProject,
       setSection,
       toggleHidden,
       createGroup,
@@ -391,6 +437,7 @@ export function RailProvider({ children }: { children: ReactNode }) {
       hidden,
       refresh,
       update,
+      pinProject,
       setSection,
       toggleHidden,
       createGroup,

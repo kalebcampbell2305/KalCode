@@ -3,14 +3,19 @@
  * Dashboard — whose board already lists every agent — the rail starts as its strip of live counts
  * and opens there only on request, so the board keeps its width.
  */
+
+import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 import { useNavigation } from "../navigation.tsx";
 
 const STORAGE_KEY = "kalcode.deck.agentsRail";
+const PROJECTS_KEY = "kalcode.deck.projectsCollapsed";
 /** Below this window width the agents rail starts as its narrow strip (until the person chooses). */
 const NARROW_PX = 1280;
 
 interface DeckUiValue {
+  projectsCollapsed: boolean;
+  setProjectsCollapsed: (collapsed: boolean) => void;
   agentsOpen: boolean;
   setAgentsOpen: (open: boolean) => void;
   /** Opens the rail and moves focus into it (from the top bar's "working" signal). */
@@ -31,6 +36,29 @@ function initialOpen(): boolean {
 }
 
 export function DeckUiProvider({ children }: { children: ReactNode }) {
+  const toast = useToast();
+  const [projectsCollapsed, setProjects] = useState(() => {
+    try {
+      return window.localStorage.getItem(PROJECTS_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setProjectsCollapsed = useCallback(
+    (collapsed: boolean) => {
+      setProjects(collapsed);
+      try {
+        window.localStorage.setItem(PROJECTS_KEY, String(collapsed));
+      } catch {
+        toast.show({
+          tone: "danger",
+          title: "Couldn't remember the Projects layout",
+          description: "Your choice applies until KalCode closes.",
+        });
+      }
+    },
+    [toast],
+  );
   const { current } = useNavigation();
   const onDashboard = current === "dashboard";
   const [saved, setSaved] = useState(initialOpen);
@@ -62,7 +90,10 @@ export function DeckUiProvider({ children }: { children: ReactNode }) {
     requestAnimationFrame(() => document.getElementById("deck-agents")?.focus());
   }, [setAgentsOpen]);
   const agentsOpen = onDashboard ? dashboardOpen : saved;
-  const value = useMemo(() => ({ agentsOpen, setAgentsOpen, revealAgents }), [agentsOpen, setAgentsOpen, revealAgents]);
+  const value = useMemo(
+    () => ({ agentsOpen, setAgentsOpen, revealAgents, projectsCollapsed, setProjectsCollapsed }),
+    [agentsOpen, setAgentsOpen, revealAgents, projectsCollapsed, setProjectsCollapsed],
+  );
   return <DeckUiContext.Provider value={value}>{children}</DeckUiContext.Provider>;
 }
 
