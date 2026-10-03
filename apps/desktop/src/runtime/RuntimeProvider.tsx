@@ -208,6 +208,11 @@ export function useRuntime(): RuntimeValue {
   return value;
 }
 
+/** The runtime when this component renders inside a RuntimeProvider (isolated tests may not). */
+export function useOptionalRuntime(): RuntimeValue | null {
+  return useContext(RuntimeContext);
+}
+
 export function useEvents() {
   const { feed, eventsState, eventsError, retryEvents, loadOlderEvents } = useRuntime();
   const { events, reachedStart } = useSyncExternalStore(feed.subscribe, feed.getSnapshot);

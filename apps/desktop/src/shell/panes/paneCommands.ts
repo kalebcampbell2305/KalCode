@@ -223,6 +223,12 @@ export type PaneCommand =
   | { kind: "control-pane"; command: PaneControlCommand }
   /** Applies one bounded action to an embedded browser pane. */
   | { kind: "browser-control"; command: BrowserControl }
+  /** Opens a Live Browser beside a pane, agent or terminal (far right when none is named). */
+  | {
+      kind: "open-live-browser";
+      url: string | null;
+      beside: { paneId: string } | { agentId: string } | { terminalId: string } | null;
+    }
   /** Grow the focused pane toward `direction` by `steps` steps. */
   | { kind: "resize"; direction: PaneDirection; steps: number }
   /** Move keyboard focus to a neighbouring pane. */

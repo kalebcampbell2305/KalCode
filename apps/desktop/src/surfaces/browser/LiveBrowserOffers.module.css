@@ -1,0 +1,125 @@
+/* A slim, glowing pill: a dev server came up and Live Browser can show it in one click. */
+.offer {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 11px;
+  border: 1px solid var(--color-border-lit-soft, rgb(92 150 255 / 0.26));
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgb(76 141 255 / 0.16), rgb(76 141 255 / 0.04) 70%), var(--color-surface-raised, #101a2d);
+  box-shadow:
+    0 0 22px -10px rgb(76 141 255 / 0.6),
+    inset 0 1px 0 rgb(200 220 255 / 0.05);
+  color: var(--color-text, #e6edf8);
+  font-size: 12px;
+  animation: offer-in 220ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+.pulse {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-success, #35c48d);
+  box-shadow: 0 0 8px rgb(53 196 141 / 0.8);
+}
+.pulse::after {
+  position: absolute;
+  inset: -4px;
+  border: 1px solid rgb(53 196 141 / 0.6);
+  border-radius: 50%;
+  animation: offer-pulse 1.8s ease-out infinite;
+  content: "";
+}
+.text {
+  overflow: hidden;
+  color: var(--color-text-secondary, #a8b4c9);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host {
+  color: var(--color-text, #e6edf8);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.open {
+  display: inline-flex;
+  min-width: 0;
+  height: 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-accent, #4c8dff);
+  box-shadow: 0 0 14px -4px var(--color-glow, rgb(76 141 255 / 0.45));
+  color: var(--color-accent-fg, #03060d);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    transform 160ms var(--ease-out, ease);
+}
+.open:hover {
+  background: var(--color-accent-hover, #6aa1ff);
+}
+.open:active {
+  transform: scale(0.97);
+}
+.open:focus-visible,
+.dismiss:focus-visible {
+  outline: 2px solid var(--color-border-focus, #4c8dff);
+  outline-offset: 2px;
+}
+.beside {
+  overflow: hidden;
+  max-width: 220px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+.dismiss {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted, #8593ab);
+  cursor: pointer;
+}
+.dismiss:hover {
+  background: var(--color-surface-hover, rgb(120 160 230 / 0.07));
+  color: var(--color-text, #e6edf8);
+}
+@keyframes offer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@keyframes offer-pulse {
+  from {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .offer,
+  .pulse::after {
+    animation: none;
+  }
+}

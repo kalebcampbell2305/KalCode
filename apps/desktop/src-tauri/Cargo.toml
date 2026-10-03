@@ -69,6 +69,8 @@ tauri-plugin-dialog = "2"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38.2"
 windows-core = "0.61.2"
+# Live Browser screenshots (WebView2 CapturePreview into an in-memory stream).
+windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
 
 # libproc bindings for the KalVoice loopback owner proof (kalvoice_guardian.rs).
@@ -76,7 +78,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Network
 libc = "0.2"
 block2 = "0.6.2"
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSEvent"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSEvent", "NSImage", "NSImageRep", "NSBitmapImageRep"] }
+# Live Browser screenshots (WKWebView takeSnapshot, exported as PNG).
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSString"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }
 
 [dev-dependencies]
 tempfile.workspace = true

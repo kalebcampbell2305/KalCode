@@ -13,6 +13,7 @@ mod startup_recovery_tests;
 mod window_lifecycle_tests;
 use runtime_coordinator::RuntimeCoordinator;
 mod browser_commands;
+mod browser_live;
 mod browser_policy;
 mod browser_profile;
 mod code_commands;
@@ -748,6 +749,10 @@ pub fn run(removed_overrides: Vec<String>) {
                 browser_commands::browser_close,
                 browser_commands::browser_hide_all,
                 browser_commands::browser_open_external,
+                browser_commands::browser_inspect,
+                browser_commands::browser_pick,
+                browser_commands::browser_screenshot,
+                browser_commands::browser_reveal_screenshot,
                 commands::boot,
                 commands::window_ready,
                 commands::settings_get,

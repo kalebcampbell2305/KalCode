@@ -670,5 +670,7 @@ export function runCommand(
       return { handled: false, message: "Provider panes aren't available here." };
     case "browser-control":
       return { handled: false, message: "The browser pane isn't available here." };
+    case "open-live-browser":
+      return { handled: false, message: "Live Browser isn't available here." };
   }
 }
