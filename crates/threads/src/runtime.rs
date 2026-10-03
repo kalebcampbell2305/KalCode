@@ -1487,6 +1487,141 @@ impl ThreadRuntime {
         self.inner.summary(thread_id)
     }
 
+    /// Copies saved conversation and configuration without starting or sharing a session.
+    pub fn duplicate(&self, thread_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        let source = self.inner.row(thread_id)?;
+        let workspace = self.inner.workspaces.resolve(&source.workspace_id)?;
+        let id = new_id();
+        let now = now_rfc3339();
+        let name = format!(
+            "{} (copy)",
+            source.name.chars().take(73).collect::<String>()
+        );
+        let cwd = workspace.root.to_string_lossy().into_owned();
+        self.inner.core.write_with_events(|tx| {
+            let source = store::get(tx, thread_id)?;
+            if source.workspace_id != workspace.id {
+                return Err(thread_workspace_changed());
+            }
+            store::insert_thread(
+                tx,
+                &NewThreadRow {
+                    id: &id,
+                    name: &name,
+                    provider_id: &source.provider_id,
+                    provider_name: &source.provider_name,
+                    model: source.model.as_deref(),
+                    effort: source.effort.as_deref(),
+                    provider_account_id: source.provider_account_id.as_deref(),
+                    account_label: source.account_label.as_deref(),
+                    workspace_id: &workspace.id,
+                    workspace_name: &workspace.name,
+                    cwd: &cwd,
+                    permission_mode: source.permission_mode,
+                    now: &now,
+                },
+            )?;
+            store::set_permission_mode(
+                tx,
+                &id,
+                source.permission_mode,
+                source.permission_profile_id.as_deref(),
+            )?;
+            store::set_status(
+                tx,
+                &id,
+                ThreadStatus::Idle,
+                Some("Copied conversation; starts a new provider session"),
+                &now,
+            )?;
+            store::copy_messages(tx, thread_id, &id)?;
+            let ctx = Ctx {
+                thread_id: id.clone(),
+                workspace_id: workspace.id.clone(),
+                provider_id: source.provider_id.clone(),
+            };
+            Ok((
+                (),
+                vec![ctx.event(
+                    EventSource::Ui,
+                    EventPayload::ThreadCreated {
+                        thread_id: id.clone(),
+                        name: name.clone(),
+                        provider_id: source.provider_id,
+                        workspace_id: workspace.id.clone(),
+                    },
+                )],
+            ))
+        })?;
+        self.inner.summary(&id)
+    }
+
+    /// Moves an inactive conversation. Historical messages stay; future execution starts fresh.
+    pub fn move_to_workspace(&self, thread_id: &str, workspace_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        validate::workspace_id(workspace_id)?;
+        let workspace = self.inner.workspaces.resolve(workspace_id)?;
+        let live = self.inner.live_thread(&self.inner.row(thread_id)?);
+        let mut state = live.lock();
+        let row = self.inner.row(thread_id)?;
+        if live.ctx.workspace_id != row.workspace_id {
+            return Err(thread_workspace_changed());
+        }
+        move_ready(&row)?;
+        if row.workspace_id == workspace_id {
+            return Ok(self.inner.summary_from_row(row));
+        }
+        if state.waiting.is_some() || !state.pending.is_empty() {
+            return Err(KalError::validation(
+                "thread_move_busy",
+                "Stop the thread before moving it.",
+            ));
+        }
+        if state.session.is_some() {
+            self.inner.end_session(
+                &live,
+                &mut state,
+                EndReason::Stopped {
+                    activity: "Moved to another workspace",
+                },
+            )?;
+        }
+        let now = now_rfc3339();
+        self.inner.core.write_with_events(|tx| {
+            let row = store::get(tx, thread_id)?;
+            move_ready(&row)?;
+            store::move_to_workspace(
+                tx,
+                thread_id,
+                &workspace.id,
+                &workspace.name,
+                &workspace.root.to_string_lossy(),
+                &now,
+            )?;
+            let ctx = Ctx::from_row(&row);
+            Ok((
+                (),
+                vec![ctx.event(
+                    EventSource::Ui,
+                    EventPayload::ThreadMoved {
+                        thread_id: thread_id.to_owned(),
+                        from_workspace_id: row.workspace_id.clone(),
+                        workspace_id: workspace.id.clone(),
+                    },
+                )],
+            ))
+        })?;
+        // LiveThread carries immutable workspace correlation. Never reuse it after a move.
+        self.inner
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(thread_id);
+        drop(state);
+        self.inner.summary(thread_id)
+    }
+
     /// Archives a thread that isn't running. Idempotent.
     pub fn archive(&self, thread_id: &str) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
@@ -2101,10 +2236,12 @@ impl Inner {
             && entry
                 .as_ref()
                 .is_some_and(|entry| entry.provider.capabilities().resume);
+        let can_move_workspace = Some(move_ready(&row).is_ok());
         let provider_name = entry.map_or(row.provider_name, |entry| {
             entry.provider.display_name().to_owned()
         });
         ThreadSummary {
+            can_move_workspace,
             id: row.id,
             name: row.name,
             provider_id: row.provider_id,
@@ -2287,6 +2424,37 @@ impl Inner {
     ) -> Result<()> {
         let live = self.live_thread(row);
         let mut state = live.lock();
+        let current_workspace = self.row(&row.id)?.workspace_id;
+        if live.ctx.workspace_id != current_workspace {
+            let mut entries = self
+                .live
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if entries
+                .get(&row.id)
+                .is_some_and(|entry| Arc::ptr_eq(entry, &live))
+            {
+                entries.remove(&row.id);
+            }
+            drop(entries);
+            drop(state);
+            if current_workspace != row.workspace_id {
+                return Err(thread_workspace_changed());
+            }
+            // A caller captured the previous workspace's Arc before the move committed.
+            // Reacquire the current authority rather than stranding a valid new start.
+            return self.start_session(
+                row,
+                entry,
+                resume_session_id,
+                first_input,
+                notice,
+                redeliver,
+            );
+        }
+        if current_workspace != row.workspace_id {
+            return Err(thread_workspace_changed());
+        }
         if state.session.is_some() || state.waiting.is_some() {
             return Err(KalError::validation(
                 "thread_already_running",
@@ -3808,6 +3976,9 @@ impl Inner {
             // A thread keeps its own account: when that account was removed from KalCode, say
             // so instead of launching (or falling back to another account).
             let current = store::get(tx, thread_id)?;
+            if current.workspace_id != row.workspace_id {
+                return Err(thread_workspace_changed());
+            }
             if let Some(account_id) = &current.provider_account_id
                 && store::account(tx, account_id)?.is_some_and(|account| account.archived)
             {
@@ -4036,6 +4207,42 @@ impl Inner {
         })?;
         Ok(())
     }
+}
+
+fn thread_workspace_changed() -> KalError {
+    KalError::validation(
+        "thread_workspace_changed",
+        "The thread moved. Try again in its new workspace.",
+    )
+}
+
+fn move_ready(row: &ThreadRow) -> Result<()> {
+    if row.archived_at.is_some() {
+        return Err(archived());
+    }
+    if row.isolated {
+        return Err(KalError::validation(
+            "thread_move_worktree",
+            "Threads with their own worktree cannot move to another workspace.",
+        ));
+    }
+    if row.pending_approvals > 0
+        || !matches!(
+            row.status,
+            ThreadStatus::Idle
+                | ThreadStatus::WaitingForUser
+                | ThreadStatus::Completed
+                | ThreadStatus::Interrupted
+                | ThreadStatus::Failed
+                | ThreadStatus::Offline
+        )
+    {
+        return Err(KalError::validation(
+            "thread_move_busy",
+            "Stop the thread before moving it.",
+        ));
+    }
+    Ok(())
 }
 
 fn archived() -> KalError {

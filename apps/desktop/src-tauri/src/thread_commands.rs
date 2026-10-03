@@ -1429,11 +1429,22 @@ pub fn thread_rebind_account(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
     state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
     provider_account_id: String,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     let runtime = state.runtime()?;
+    if panes
+        .handoff_info(&thread_id)
+        .is_some_and(|info| info.running)
+    {
+        return Err(KalError::validation(
+            "thread_rebind_busy",
+            "Stop the coding agent before changing its account.",
+        )
+        .log_and_convert("thread_rebind_account"));
+    }
     // The cached plan truth only: a rebind never refreshes or signs in (that happens at launch).
     let codex_plan = |account_id: &str| {
         state
@@ -1506,6 +1517,57 @@ pub fn thread_stop(
         .runtime()?
         .stop(&thread_id)
         .map_err(|e| e.log_and_convert("thread_stop"))
+}
+
+#[tauri::command(async)]
+pub fn thread_duplicate(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
+    thread_id: String,
+) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
+    let runtime = state.runtime()?;
+    let mut source = runtime
+        .get(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_duplicate"))?;
+    panes.stamp_runtime_kind(&mut source);
+    if source.runtime_kind == Some(kalcode_contracts::threads::ThreadRuntimeKind::InteractivePty) {
+        return Err(KalError::validation(
+            "thread_is_coding_agent",
+            "Duplicate coding agents from their Code pane.",
+        )
+        .log_and_convert("thread_duplicate"));
+    }
+    runtime
+        .duplicate(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_duplicate"))
+}
+
+#[tauri::command(async)]
+pub fn thread_move(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
+    thread_id: String,
+    workspace_id: String,
+) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
+    let runtime = state.runtime()?;
+    let mut source = runtime
+        .get(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_move"))?;
+    panes.stamp_runtime_kind(&mut source);
+    if source.runtime_kind == Some(kalcode_contracts::threads::ThreadRuntimeKind::InteractivePty) {
+        return Err(KalError::validation(
+            "thread_is_coding_agent",
+            "Coding agents remain in the workspace of their Code pane.",
+        )
+        .log_and_convert("thread_move"));
+    }
+    runtime
+        .move_to_workspace(&thread_id, &workspace_id)
+        .map_err(|e| e.log_and_convert("thread_move"))
 }
 
 #[tauri::command(async)]

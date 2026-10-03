@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terminal-rename"
+description = "Enables the terminal_rename command without any pre-configured scope."
+commands.allow = ["terminal_rename"]
+
+[[permission]]
+identifier = "deny-terminal-rename"
+description = "Denies the terminal_rename command without any pre-configured scope."
+commands.deny = ["terminal_rename"]

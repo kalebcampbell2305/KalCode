@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-move"
+description = "Enables the thread_move command without any pre-configured scope."
+commands.allow = ["thread_move"]
+
+[[permission]]
+identifier = "deny-thread-move"
+description = "Denies the thread_move command without any pre-configured scope."
+commands.deny = ["thread_move"]

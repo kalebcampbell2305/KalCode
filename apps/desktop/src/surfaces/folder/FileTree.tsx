@@ -1,9 +1,11 @@
-import type { FileEntry } from "@kalcode/protocol";
+import type { FileEntry, FileRef } from "@kalcode/protocol";
 import { Skeleton } from "@kalcode/ui/components";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
+import { FilePreview } from "../../shell/context/FilePreview.tsx";
 import styles from "./Folder.module.css";
 import { fileSize, splitPath } from "./folderModel.ts";
 
@@ -52,6 +54,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [preview, setPreview] = useState<FileRef | null>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
   const focusFrame = useRef<number | null>(null);
   const focusGeneration = useRef(0);
@@ -67,6 +70,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
     setOpen(new Set());
     setFocusKey(null);
     setSelected(null);
+    setPreview(null);
     return () => {
       lifecycle.mounted = false;
       lifecycle.epoch += 1;
@@ -196,9 +200,14 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
   }
   if (root.state === "error") {
     return (
-      <p className={styles.note} role="alert">
-        {root.error}
-      </p>
+      <ContentContextMenu
+        workspaceId={workspaceId}
+        context={{ kind: "error", label: "File listing error", text: root.error ?? "Could not list files" }}
+      >
+        <p className={styles.note} role="alert">
+          {root.error}
+        </p>
+      </ContentContextMenu>
     );
   }
   if (visible.length === 0) {
@@ -231,50 +240,71 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
                     : null
               : null;
           return (
-            <div
+            <ContentContextMenu
               key={row.key}
-              ref={(el) => {
-                if (el) rows.current.set(row.key, el);
-                else rows.current.delete(row.key);
+              workspaceId={workspaceId}
+              context={{
+                kind: "file",
+                label: name,
+                path: entry.file.displayPath,
+                text: entry.isDir ? "Workspace folder" : "Workspace file",
               }}
-              role="treeitem"
-              aria-level={row.level}
-              aria-expanded={entry.isDir ? isOpen : undefined}
-              aria-selected={selected === row.key}
-              aria-busy={child?.state === "loading" || undefined}
-              tabIndex={row.key === tabKey ? 0 : -1}
-              className={styles.fileRow}
-              style={{ paddingLeft: `calc(${row.level - 1} * 0.875rem + 0.375rem)` }}
-              data-ignored={entry.ignored || undefined}
-              data-selected={selected === row.key || undefined}
-              aria-label={`${name}${entry.isDir ? ", folder" : ""}${entry.ignored ? ", ignored" : ""}${childNote === "empty" ? ", empty" : ""}`}
-              onClick={() => {
-                cancelFocus();
-                setFocusKey(row.key);
-                if (entry.isDir) toggle(row);
-                else setSelected(row.key);
-              }}
-              onKeyDown={(e) => onKeyDown(e, index)}
-              onFocus={() => {
-                cancelFocus();
-                setFocusKey(row.key);
+              onOpen={() => {
+                if (entry.isDir) toggle(row, true);
+                else setPreview(entry.file);
               }}
             >
-              <span className={styles.fileCaret} data-open={isOpen || undefined} aria-hidden="true">
-                {entry.isDir ? <ChevronRight /> : null}
-              </span>
-              <span className={styles.fileIcon} aria-hidden="true">
-                {entry.isDir ? isOpen ? <FolderOpen /> : <Folder /> : <File />}
-              </span>
-              <span className={styles.fileName}>{name}</span>
-              {entry.ignored ? <span className={styles.ignored}>ignored</span> : null}
-              {childNote ? <span className={styles.fileNote}>{childNote}</span> : null}
-              {entry.isDir ? null : <span className={styles.fileSize}>{fileSize(entry.bytes)}</span>}
-            </div>
+              <div
+                ref={(el) => {
+                  if (el) rows.current.set(row.key, el);
+                  else rows.current.delete(row.key);
+                }}
+                role="treeitem"
+                aria-level={row.level}
+                aria-expanded={entry.isDir ? isOpen : undefined}
+                aria-selected={selected === row.key}
+                aria-busy={child?.state === "loading" || undefined}
+                tabIndex={row.key === tabKey ? 0 : -1}
+                className={styles.fileRow}
+                style={{ paddingLeft: `calc(${row.level - 1} * 0.875rem + 0.375rem)` }}
+                data-ignored={entry.ignored || undefined}
+                data-selected={selected === row.key || undefined}
+                aria-label={`${name}${entry.isDir ? ", folder" : ""}${entry.ignored ? ", ignored" : ""}${childNote === "empty" ? ", empty" : ""}`}
+                onClick={() => {
+                  cancelFocus();
+                  setFocusKey(row.key);
+                  if (entry.isDir) toggle(row);
+                  else setSelected(row.key);
+                }}
+                onKeyDown={(e) => onKeyDown(e, index)}
+                onFocus={() => {
+                  cancelFocus();
+                  setFocusKey(row.key);
+                }}
+              >
+                <span className={styles.fileCaret} data-open={isOpen || undefined} aria-hidden="true">
+                  {entry.isDir ? <ChevronRight /> : null}
+                </span>
+                <span className={styles.fileIcon} aria-hidden="true">
+                  {entry.isDir ? isOpen ? <FolderOpen /> : <Folder /> : <File />}
+                </span>
+                <span className={styles.fileName}>{name}</span>
+                {entry.ignored ? <span className={styles.ignored}>ignored</span> : null}
+                {childNote ? <span className={styles.fileNote}>{childNote}</span> : null}
+                {entry.isDir ? null : <span className={styles.fileSize}>{fileSize(entry.bytes)}</span>}
+              </div>
+            </ContentContextMenu>
           );
         })}
       </div>
       {root.truncated ? <p className={styles.note}>Showing the first {PAGE} entries of this folder.</p> : null}
+      {preview ? (
+        <FilePreview
+          file={preview}
+          returnFocus={rows.current.get(preview.displayPath)}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </>
   );
 }

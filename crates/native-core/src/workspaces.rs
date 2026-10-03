@@ -108,7 +108,7 @@ pub struct TerminalInfo {
     pub workspace_id: String,
     /// Detected shell id this tab runs (see `ShellOption`).
     pub shell_id: String,
-    /// The shell's display name.
+    /// The tab's name, initially the shell's display name.
     pub title: String,
     pub position: i64,
     pub status: TerminalStatus,
@@ -157,6 +157,8 @@ pub struct TerminalRegistry {
     /// Operations sessions deliberately stopped while their tab and scrollback are retained.
     /// The generation prevents a late exit from changing the meaning of a replacement session.
     operation_stopping: Mutex<HashMap<String, u64>>,
+    /// User-stopped ordinary shells retain their tabs and emit completion, not failure.
+    user_stopping: Mutex<HashMap<String, u64>>,
     attachments: Mutex<HashMap<AttachmentId, Attachment>>,
     next_attachment: AtomicU64,
     shutting_down: AtomicBool,
@@ -782,6 +784,86 @@ impl Core {
         self.terminal_in(&self.conn(), id)
     }
 
+    /// Renames one tab without replacing its running process or scrollback.
+    pub fn rename_terminal(&self, id: &str, title: &str) -> Result<TerminalInfo> {
+        validate_id(id)?;
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 256 || title.chars().any(char::is_control) {
+            return Err(KalError::validation(
+                "invalid_terminal_title",
+                "Use a terminal name of 1 to 256 characters without control characters.",
+            ));
+        }
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut terminal = self.terminal_in(&tx, id)?;
+        if terminal.title == title {
+            return Ok(terminal);
+        }
+        tx.execute(
+            "UPDATE terminals SET title = ?1 WHERE id = ?2",
+            params![title, id],
+        )?;
+        let envelope = append(
+            &tx,
+            &terminal.workspace_id,
+            EventPayload::ShellRenamed {
+                terminal_id: id.to_owned(),
+                title: title.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        self.publish(&envelope);
+        terminal.title = title.to_owned();
+        Ok(terminal)
+    }
+
+    /// Stops the selected shell while retaining its tab, attachments and scrollback.
+    pub fn stop_terminal(&self, id: &str) -> Result<TerminalInfo> {
+        validate_id(id)?;
+        let registry = self.terminal_registry();
+        let conn = self.conn();
+        let terminal = self.terminal_in(&conn, id)?;
+        if terminal.shell_id.starts_with(OPERATION_SHELL_PREFIX) {
+            return Err(KalError::validation(
+                "terminal_operation_owned",
+                "Stop this operation from Operations.",
+            ));
+        }
+        let session = {
+            let sessions = lock(&registry.sessions);
+            let Some((generation, session)) = sessions.get(id) else {
+                return Ok(terminal);
+            };
+            if session.exit_info().is_some() {
+                return Ok(terminal);
+            }
+            lock(&registry.user_stopping).insert(id.to_owned(), *generation);
+            session.clone()
+        };
+        // The connection lock fences restart until kill targets this exact retained session.
+        if let Err(error) = session.kill() {
+            lock(&registry.user_stopping).remove(id);
+            return Err(terminal_error(
+                "terminal_stop_failed",
+                "KalCode couldn't stop that terminal.",
+            )(error));
+        }
+        drop(conn);
+        let deadline = Instant::now() + CLOSE_TIMEOUT;
+        while session.exit_info().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        if session.exit_info().is_none() {
+            return Err(KalError::new(
+                ErrorCategory::Terminal,
+                "terminal_stop_unproven",
+                "KalCode could not verify that the terminal stopped.",
+            ));
+        }
+        self.terminal(id)
+    }
+
     /// Opens a new terminal tab in `workspace_id` running `shell_id` (or the default shell) in
     /// the workspace folder, refusing it when `limit.max` terminals are already open across all
     /// workspaces. Existing tabs are never closed. Emits `shell.started`.
@@ -1148,7 +1230,7 @@ impl Core {
         }
     }
 
-    /// Records a shell's exit: `shell.completed` for exit code 0 or a tab the user closed,
+    /// Records a shell's exit: `shell.completed` for exit code 0 or a user stop/close,
     /// `shell.failed` otherwise. Runs on the session's exit-watcher thread.
     pub(crate) fn on_terminal_exit(&self, id: &str, generation: u64, exit: ExitInfo) {
         let registry = self.terminal_registry();
@@ -1168,6 +1250,9 @@ impl Core {
         // Taken after the connection lock, so a close in progress has registered itself.
         let closing = lock(&registry.closing).remove(id);
         let operation_stopped = lock(&registry.operation_stopping)
+            .remove(id)
+            .is_some_and(|stopped_generation| stopped_generation == generation);
+        let user_stopped = lock(&registry.user_stopping)
             .remove(id)
             .is_some_and(|stopped_generation| stopped_generation == generation);
         if closing.is_some() {
@@ -1213,12 +1298,12 @@ impl Core {
                              WHERE id = ?4",
                             params![now_rfc3339(), exit_code, end_reason, id],
                         )?;
-                        let event = if exit.success || operation_stopped {
+                        let event = if exit.success || operation_stopped || user_stopped {
                             EventPayload::ShellCompleted {
                                 terminal_id: id.to_owned(),
                                 exit_code,
-                                // The Operations layer records the deliberate Stop/Cancel. The
-                                // terminal tab itself remains available for its scrollback.
+                                // A deliberate Stop retains the terminal for its scrollback;
+                                // it is distinct from closing and removing the tab.
                                 closed_by_user: false,
                             }
                         } else {

@@ -82,6 +82,7 @@ pub struct Harness {
 
 pub fn thread_summary(id: &str, workspace_id: &str, mode: PermissionMode) -> ThreadSummary {
     ThreadSummary {
+        can_move_workspace: None,
         id: id.to_owned(),
         name: "Fix the login bug".into(),
         provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),

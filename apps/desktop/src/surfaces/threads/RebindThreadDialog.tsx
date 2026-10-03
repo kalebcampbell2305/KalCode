@@ -4,6 +4,7 @@ import { AlertDialog } from "radix-ui";
 import styles from "./RebindThreadDialog.module.css";
 
 export interface RebindThreadDialogProps {
+  objectKind?: "thread" | "agent";
   open: boolean;
   /** The thread's current account label. */
   from: string;
@@ -28,6 +29,7 @@ export interface RebindThreadDialogProps {
  * Radix AlertDialog puts focus on Cancel when it opens.
  */
 export function RebindThreadDialog({
+  objectKind = "thread",
   open,
   from,
   to,
@@ -51,13 +53,23 @@ export function RebindThreadDialog({
             returnFocus();
           }}
         >
-          <AlertDialog.Title className={styles.title}>Rebind thread?</AlertDialog.Title>
+          <AlertDialog.Title className={styles.title}>
+            {objectKind === "agent" ? "Change agent account?" : "Rebind thread?"}
+          </AlertDialog.Title>
           <AlertDialog.Description asChild>
             <div className={styles.body}>
-              <p>This thread currently belongs to {from}.</p>
-              <p>Switch future messages to {to}?</p>
+              <p>
+                This {objectKind} currently belongs to {from}.
+              </p>
+              <p>
+                {objectKind === "agent"
+                  ? `Use ${to} the next time this coding agent starts?`
+                  : `Switch future messages to ${to}?`}
+              </p>
               <p className={styles.note}>
-                Past conversation history remains unchanged. Only future provider requests use {to}.
+                {objectKind === "agent"
+                  ? "The agent stays stopped until you resume it. Existing provider sign-in and approval rules still apply."
+                  : `Past conversation history remains unchanged. Only future provider requests use ${to}.`}
               </p>
             </div>
           </AlertDialog.Description>

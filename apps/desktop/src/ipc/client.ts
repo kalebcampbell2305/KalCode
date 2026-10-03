@@ -15,6 +15,7 @@ import type {
   EventQuery,
   FileEntry,
   FileHandle,
+  FileRef,
   GitStatusSummary,
   HealthRollup,
   HomeSummary,
@@ -684,6 +685,14 @@ export class KalCodeClient {
     return this.call("thread_rebind_account", { threadId, providerAccountId });
   }
 
+  duplicateThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_duplicate", { threadId });
+  }
+
+  moveThread(threadId: string, workspaceId: string): Promise<ThreadSummary> {
+    return this.call("thread_move", { threadId, workspaceId });
+  }
+
   renameThread(threadId: string, name: string): Promise<ThreadSummary> {
     return this.call("thread_rename", { threadId, name });
   }
@@ -782,6 +791,21 @@ export class KalCodeClient {
 
   restartTerminal(terminalId: string, size: TerminalSize): Promise<TerminalInfo> {
     return this.call("terminal_restart", { terminalId, ...clampTerminalSize(size) });
+  }
+
+  renameTerminal(terminalId: string, title: string): Promise<TerminalInfo> {
+    return this.call("terminal_rename", { terminalId, title });
+  }
+
+  stopTerminal(terminalId: string): Promise<TerminalInfo> {
+    return this.call("terminal_stop", { terminalId });
+  }
+
+  readWorkspaceFile(
+    workspaceId: string,
+    handle: FileHandle,
+  ): Promise<{ file: FileRef; text: string; bytes: number; truncated: boolean }> {
+    return this.call("utility_file_read", { workspaceId, handle });
   }
 
   closeTerminal(terminalId: string): Promise<void> {

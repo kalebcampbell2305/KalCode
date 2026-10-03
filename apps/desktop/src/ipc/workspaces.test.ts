@@ -42,6 +42,38 @@ describe("terminal client", () => {
 });
 
 describe("memory runtime: workspaces and terminals", () => {
+  it("renames and stops only the clicked terminal while preserving its tab and output", async () => {
+    const { client, workspace, events } = await setup();
+    const terminal = await client.createTerminal(workspace.id, "cmd", { cols: 80, rows: 24 });
+    const other = await client.createTerminal(workspace.id, "cmd", { cols: 80, rows: 24 });
+    await client.writeTerminal(terminal.id, "echo retained-output\r");
+    await expect(
+      client.transport.invoke("terminal_rename", { terminalId: terminal.id, title: "  Build logs  " }),
+    ).resolves.toMatchObject({ title: "Build logs" });
+    await expect(
+      client.transport.invoke("terminal_rename", { terminalId: terminal.id, title: "\n" }),
+    ).rejects.toMatchObject({ code: "invalid_terminal_title" });
+    await expect(client.transport.invoke("terminal_stop", { terminalId: terminal.id })).resolves.toMatchObject({
+      status: "exited",
+      title: "Build logs",
+    });
+    const tabs = await client.listTerminals(workspace.id);
+    expect(tabs).toHaveLength(2);
+    expect(tabs.find((tab) => tab.id === other.id)?.status).toBe("running");
+    const chunks: string[] = [];
+    await client.attachTerminal(terminal.id, (bytes) => chunks.push(new TextDecoder().decode(bytes)));
+    expect(chunks.join("")).toContain("retained-output");
+    await expect(client.writeTerminal(terminal.id, "x")).rejects.toMatchObject({ code: "terminal_not_running" });
+    await client.transport.invoke("terminal_stop", { terminalId: terminal.id });
+    await tick();
+    expect(events.filter((event) => event.type === "shell.completed")).toHaveLength(1);
+    expect(events.some((event) => event.type === "shell.renamed")).toBe(true);
+    expect(await client.restartTerminal(terminal.id, { cols: 80, rows: 24 })).toMatchObject({
+      title: "Build logs",
+      status: "running",
+    });
+  });
+
   it("opens folders from the picker, reuses workspaces and emits events", async () => {
     const { transport, client, events, workspace } = await setup();
     expect(workspace.name).toBe("site");

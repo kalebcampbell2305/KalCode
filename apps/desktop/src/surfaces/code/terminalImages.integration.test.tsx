@@ -6,6 +6,10 @@ import type { PaneChannel } from "./panes/paneChannel.ts";
 import { TerminalView } from "./TerminalView.tsx";
 import { resetTerminalImageTargetsForTests, terminalImageState, terminalImageTargetKey } from "./terminalImages.ts";
 
+vi.mock("../../shell/context/ContentContextMenu.tsx", () => ({
+  ContentContextMenu: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 interface TestTerminal {
   onInput: ((data: string) => void) | null;
   pastes: string[];
