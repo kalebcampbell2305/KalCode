@@ -43,6 +43,7 @@ import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
+import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { accountInlineLabel, accountName, accountSignIn, sortAccounts } from "../surfaces/providers/accountIdentity.ts";
 import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
@@ -235,7 +236,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     let live = true;
     client
       .listThreads({ includeArchived: false })
-      .then((listed) => live && setThreads(listed.filter((t) => t.archivedAt === null).slice(0, PALETTE_THREADS)))
+      .then(
+        (listed) =>
+          // Coding agents are not threads: they open from the Agents rail and Fleet (AGENTS.md).
+          live &&
+          setThreads(listed.filter((t) => t.archivedAt === null && !isCodingAgent(t)).slice(0, PALETTE_THREADS)),
+      )
       .catch(() => live && setThreads([]));
     return () => {
       live = false;

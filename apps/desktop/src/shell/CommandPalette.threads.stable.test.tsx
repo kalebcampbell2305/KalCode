@@ -98,4 +98,22 @@ describe("palette threads (Stable)", () => {
       expect(within(detail).getByRole("heading", { name: "Write Unit Tests for Parser Module" })).toBeInTheDocument(),
     );
   }, 15_000);
+
+  it("never lists a coding agent under Threads", async () => {
+    const { user, client } = await mountStable();
+    const listThreads = client.listThreads.bind(client);
+    vi.spyOn(client, "listThreads").mockImplementation(async (args) => {
+      const listed = await listThreads(args);
+      const base = listed.find((t) => t.archivedAt === null);
+      if (!base) return listed;
+      const agent = { ...base, id: "agent-parser", name: "Parser Agent", runtimeKind: "interactive_pty" as const };
+      return [...listed, agent];
+    });
+    const palette = await openPalette(user);
+    await user.type(palette.getByRole("combobox"), "parser");
+    expect(
+      await palette.findByRole("option", { name: "Write Unit Tests for Parser Module · Claude Code · Personal" }),
+    ).toBeInTheDocument();
+    expect(palette.queryByRole("option", { name: /Parser Agent/ })).toBeNull();
+  }, 15_000);
 });
