@@ -1,10 +1,30 @@
-import { Button, cx, Skeleton } from "@kalcode/ui/components";
-import { BroomSparkles, CircleAlert, Lock, RefreshCw } from "lucide-react";
+import type { ThreadSummary } from "@kalcode/protocol";
+import { Button, cx, ProviderGlyph, Skeleton } from "@kalcode/ui/components";
+import { BroomSparkles, CircleAlert, Lock, Power, RefreshCw } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useId, useMemo, useState } from "react";
+import { formatRelative } from "../../../runtime/describeEvent.ts";
+import { STATUS_META } from "../../dashboard/data/status.ts";
+import { type AgentCleanup, agentCleanup } from "./agents.ts";
 import type { TidyEntry, TidyScan } from "./classify.ts";
 import styles from "./KalTidy.module.css";
 import type { KalTidyClass } from "./kalTidyContext.ts";
+
+/** The review's coding agents (every workspace), or why they couldn't be read. */
+export interface ReviewAgents {
+  list: ThreadSummary[];
+  error: string | null;
+}
+
+const AGENT_GROUPS: { which: AgentCleanup; title: string; hint: string; action: string }[] = [
+  { which: "failed", title: "Failed agents", hint: "Their sessions are over.", action: "Clear failed" },
+  {
+    which: "finished",
+    title: "Finished agents",
+    hint: "Finished, stopped or offline.",
+    action: "Clear finished",
+  },
+];
 
 const GROUPS: { cls: KalTidyClass; title: string; hint: string }[] = [
   { cls: "idle", title: "Idle", hint: "At the prompt and quiet, or already ended. Safe to stop." },
@@ -29,6 +49,15 @@ export interface KalTidyDialogProps {
   onRescan: () => void;
   /** The chosen terminals' ids. */
   onConfirm: (terminalIds: string[]) => void;
+  /** Coding agents; null while the first read runs. */
+  agents?: ReviewAgents | null;
+  /** The clear in progress, if any. */
+  clearing?: AgentCleanup | null;
+  /** The current workspace, which "Close all" covers. */
+  activeWorkspaceId?: string | null;
+  onClear?: (which: AgentCleanup) => void;
+  /** Opens the "Close all" confirmation. */
+  onCloseAll?: () => void;
 }
 
 /**
@@ -43,6 +72,11 @@ export function KalTidyDialog({
   stopping,
   onRescan,
   onConfirm,
+  agents = null,
+  clearing = null,
+  activeWorkspaceId = null,
+  onClear,
+  onCloseAll,
 }: KalTidyDialogProps) {
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   // Each new scan starts from its idle terminals.
@@ -59,6 +93,20 @@ export function KalTidyDialog({
   );
   const selected = scan?.entries.filter((e) => chosen.has(e.terminal.id) && selectable(e.cls)) ?? [];
   const idleCount = scan?.entries.filter((e) => e.cls === "idle").length ?? 0;
+  const agentGroups = useMemo(
+    () =>
+      AGENT_GROUPS.map((group) => ({
+        ...group,
+        agents: agents?.list.filter((a) => agentCleanup(a) === group.which) ?? [],
+      })),
+    [agents],
+  );
+  // What "Close all" would end: the current workspace's terminals and agents, whatever they do.
+  const closeAllCount =
+    scan && agents && activeWorkspaceId
+      ? scan.entries.filter((e) => e.terminal.workspaceId === activeWorkspaceId).length +
+        agents.list.filter((a) => a.workspaceId === activeWorkspaceId).length
+      : null;
   const toggle = (id: string, on: boolean) =>
     setChosen((current) => {
       const next = new Set(current);
@@ -77,12 +125,35 @@ export function KalTidyDialog({
               <BroomSparkles />
             </span>
             <div className={styles.headText}>
-              <Dialog.Title className={styles.title}>KalTidy — Stop idle terminals</Dialog.Title>
+              <Dialog.Title className={styles.title}>KalTidy — Review terminals and agents</Dialog.Title>
               <Dialog.Description className={styles.description}>
                 Idle terminals are selected. Anything doing work keeps running unless you choose it.
               </Dialog.Description>
             </div>
           </div>
+
+          {/* What each action would clean, before anything runs. */}
+          <ul className={styles.plan} aria-label="What each action would clean">
+            <PlanTile tone="idle" label="Stop idle" value={scan ? idleCount : null} unit="terminals" />
+            <PlanTile
+              tone="failed"
+              label="Clear failed"
+              value={agents ? (agentGroups[0]?.agents.length ?? 0) : null}
+              unit="agents"
+            />
+            <PlanTile
+              tone="finished"
+              label="Clear finished"
+              value={agents ? (agentGroups[1]?.agents.length ?? 0) : null}
+              unit="agents"
+            />
+            <PlanTile
+              tone="danger"
+              label="Close all"
+              value={activeWorkspaceId ? closeAllCount : 0}
+              unit={activeWorkspaceId ? "in workspace" : "no workspace open"}
+            />
+          </ul>
 
           {scan?.blocked ? (
             <p className={styles.alert} role="alert">
@@ -119,6 +190,23 @@ export function KalTidyDialog({
                 ))}
               </>
             )}
+            {agents?.error ? (
+              <p className={styles.alert} role="alert">
+                <CircleAlert aria-hidden="true" />
+                <span>{agents.error}</span>
+              </p>
+            ) : null}
+            {agentGroups.map((group) =>
+              group.agents.length > 0 ? (
+                <AgentGroup
+                  key={group.which}
+                  {...group}
+                  busy={clearing === group.which}
+                  disabled={clearing !== null || stopping}
+                  onClear={() => onClear?.(group.which)}
+                />
+              ) : null,
+            )}
           </div>
 
           <div className={styles.footer}>
@@ -133,6 +221,18 @@ export function KalTidyDialog({
               >
                 Rescan
               </Button>
+              {onCloseAll ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={<Power />}
+                  className={styles.closeAllButton}
+                  disabled={stopping || !activeWorkspaceId}
+                  onClick={onCloseAll}
+                >
+                  Close all…
+                </Button>
+              ) : null}
               {scan && scan.entries.length > 0 ? (
                 <span className={styles.count} aria-live="polite">
                   {selected.length} of {scan.entries.length} selected
@@ -243,5 +343,100 @@ function Row({
         </span>
       </label>
     </li>
+  );
+}
+
+function PlanTile({
+  tone,
+  label,
+  value,
+  unit,
+}: {
+  tone: "idle" | "failed" | "finished" | "danger";
+  label: string;
+  value: number | null;
+  unit: string;
+}) {
+  return (
+    <li className={styles.planTile} data-tone={tone} data-empty={value === 0 || undefined}>
+      <span className={styles.planLabel}>
+        <span className={styles.planDot} aria-hidden="true" />
+        {label}
+      </span>
+      <span className={styles.planValue}>
+        {value === null ? <Skeleton width="1.5rem" height="1.25rem" /> : value}
+        <span className={styles.planUnit}>{unit}</span>
+      </span>
+    </li>
+  );
+}
+
+function agentReason(agent: ThreadSummary, now: number): string {
+  if (agent.status === "failed" && agent.error?.message) return agent.error.message;
+  return `${STATUS_META[agent.status].label} ${formatRelative(agent.lastActivityAt, now)}`;
+}
+
+function AgentGroup({
+  which,
+  title,
+  hint,
+  action,
+  agents,
+  busy,
+  disabled,
+  onClear,
+}: {
+  which: AgentCleanup;
+  title: string;
+  hint: string;
+  action: string;
+  agents: ThreadSummary[];
+  busy: boolean;
+  disabled: boolean;
+  onClear: () => void;
+}) {
+  const headingId = useId();
+  const now = Date.now();
+  return (
+    <section className={styles.group} data-class={which} aria-labelledby={headingId}>
+      <div className={styles.groupHead}>
+        <span className={styles.dot} aria-hidden="true" />
+        <h3 id={headingId} className={styles.groupTitle}>
+          {title}
+          <span className={styles.groupCount}>{agents.length}</span>
+        </h3>
+        <span className={styles.groupHint}>{hint}</span>
+        <Button
+          size="sm"
+          variant="secondary"
+          busy={busy}
+          disabled={disabled}
+          className={styles.groupAction}
+          onClick={onClear}
+        >
+          {action}
+        </Button>
+      </div>
+      <ul className={styles.rows}>
+        {agents.map((agent) => (
+          <li key={agent.id} className={styles.row}>
+            <div className={cx(styles.rowLabel, styles.agentRow)}>
+              <span className={styles.agentGlyph} aria-hidden="true">
+                <ProviderGlyph provider={agent.providerId} size="xs" />
+              </span>
+              <span className={styles.name}>
+                <span className={styles.terminal}>{agent.name}</span>
+                <span className={styles.workspace}>
+                  {agent.providerName} · {agent.workspaceName}
+                </span>
+              </span>
+              <span className={styles.reason} title={agentReason(agent, now)}>
+                {agentReason(agent, now)}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

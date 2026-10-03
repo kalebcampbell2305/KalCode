@@ -3,25 +3,29 @@
  * terminal pane), grouped by what it needs — agents waiting on the person first, then working,
  * then blocked; idle agents fold away and the last few that finished stay briefly. Each row opens
  * the agent's terminal in Code. Chat threads live in Threads, not here. Collapses to a narrow
- * strip of live counts.
+ * strip of live counts: on its own while no agent runs and nothing needs the person, or when the
+ * person collapses it.
  */
 import type { ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
-import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw, X } from "lucide-react";
+import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
+import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
+import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useArchivedCodingAgents, useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
+import { beginLiveResize } from "../panes/liveResize.ts";
 import styles from "./AgentRail.module.css";
 import { useDeckUi } from "./DeckUi.tsx";
 import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
 
 export function AgentRail() {
-  const { agentsOpen, setAgentsOpen } = useDeckUi();
+  const { agentsOpen, setAgentsOpen, setAgentsActive } = useDeckUi();
   const { state, reload } = useCodingAgents();
   const now = useNow(30_000);
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
@@ -35,58 +39,102 @@ export function AgentRail() {
       ]),
     [state, archived],
   );
-
-  if (!agentsOpen) {
-    return (
-      <aside className={styles.strip} aria-label="Agents (collapsed)" data-deck-agents>
-        <Tooltip content="Show agents" side="left">
-          <IconButton size="sm" label="Show agents" icon={<PanelRightOpen />} onClick={() => setAgentsOpen(true)} />
-        </Tooltip>
-        {sections ? <StripCounts sections={sections} onOpen={() => setAgentsOpen(true)} /> : null}
-      </aside>
-    );
-  }
+  // Until the person pins or collapses it, the rail opens while an agent runs or needs them.
+  const active = sections ? runningAgentCount(sections) > 0 || sections.needsYou.length > 0 : null;
+  useEffect(() => {
+    if (active !== null) setAgentsActive(active);
+  }, [active, setAgentsActive]);
+  const dock = useRef<HTMLElement>(null);
+  useWidthTransition(dock, agentsOpen);
 
   const running = sections ? runningAgentCount(sections) : 0;
   return (
     <aside
-      id="deck-agents"
-      className={styles.rail}
-      aria-labelledby="deck-agents-heading"
-      tabIndex={-1}
+      ref={dock}
+      className={styles.dock}
+      data-open={agentsOpen || undefined}
       data-deck-agents
+      {...(agentsOpen
+        ? { id: "deck-agents", "aria-labelledby": "deck-agents-heading", tabIndex: -1 }
+        : { "aria-label": "Agents (collapsed)" })}
     >
-      <div className={styles.header}>
-        <h2 className={styles.heading} id="deck-agents-heading">
-          Agents
-          {running > 0 ? <span className={styles.headingCount}>{running}</span> : null}
-        </h2>
-        <Tooltip content="Hide agents" side="left">
-          <IconButton size="sm" label="Hide agents" icon={<PanelRightClose />} onClick={() => setAgentsOpen(false)} />
-        </Tooltip>
-      </div>
-      <div className={styles.body}>
-        {state.status === "loading" ? (
-          <div className={styles.loading} aria-busy="true">
-            <Skeleton width="80%" />
-            <Skeleton width="62%" />
-            <Skeleton width="70%" />
+      {agentsOpen ? (
+        <div className={styles.rail}>
+          <div className={styles.header}>
+            <h2 className={styles.heading} id="deck-agents-heading">
+              Agents
+              {running > 0 ? <span className={styles.headingCount}>{running}</span> : null}
+            </h2>
+            <Tooltip content="Hide agents" side="left">
+              <IconButton
+                size="sm"
+                label="Hide agents"
+                icon={<PanelRightClose />}
+                onClick={() => setAgentsOpen(false)}
+              />
+            </Tooltip>
           </div>
-        ) : state.status === "error" ? (
-          <div className={styles.problem} role="alert">
-            <p>Agents couldn't load. {state.error.message}</p>
-            <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
-              Try again
-            </Button>
+          <div className={styles.body}>
+            {state.status === "loading" ? (
+              <div className={styles.loading} aria-busy="true">
+                <Skeleton width="80%" />
+                <Skeleton width="62%" />
+                <Skeleton width="70%" />
+              </div>
+            ) : state.status === "error" ? (
+              <div className={styles.problem} role="alert">
+                <p>Agents couldn't load. {state.error.message}</p>
+                <Button size="sm" variant="secondary" icon={<RotateCw />} onClick={reload}>
+                  Try again
+                </Button>
+              </div>
+            ) : sections ? (
+              <AgentList sections={sections} now={now} handles={handles} />
+            ) : (
+              <p className={styles.quiet}>Agents aren't part of this build.</p>
+            )}
           </div>
-        ) : sections ? (
-          <AgentList sections={sections} now={now} handles={handles} />
-        ) : (
-          <p className={styles.quiet}>Agents aren't part of this build.</p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className={styles.strip}>
+          <Tooltip content="Show agents" side="left">
+            <IconButton size="sm" label="Show agents" icon={<PanelRightOpen />} onClick={() => setAgentsOpen(true)} />
+          </Tooltip>
+          {sections ? <StripCounts sections={sections} onOpen={() => setAgentsOpen(true)} /> : null}
+        </div>
+      )}
     </aside>
   );
+}
+
+/**
+ * The rail's width eases between its strip and its full width. Terminals beside it fit once when
+ * the change settles (the pane divider's live-resize path) instead of re-flowing every frame.
+ */
+function useWidthTransition(dock: RefObject<HTMLElement | null>, open: boolean) {
+  const first = useRef(true);
+  useEffect(() => {
+    void open;
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    const element = dock.current;
+    if (!element) return;
+    const end = beginLiveResize();
+    const finish = (event?: TransitionEvent) => {
+      if (event && (event.target !== element || event.propertyName !== "width")) return;
+      end();
+    };
+    element.addEventListener("transitionend", finish);
+    // Reduced motion (no transition) or an interrupted one still ends the live resize.
+    const timer = window.setTimeout(() => finish(), 400);
+    return () => {
+      element.removeEventListener("transitionend", finish);
+      window.clearTimeout(timer);
+      end();
+    };
+  }, [dock, open]);
 }
 
 function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: () => void }) {
@@ -129,6 +177,26 @@ function AgentList({
   const [showIdle, setShowIdle] = useState(false);
   const idleId = useId();
   const running = runningAgentCount(sections);
+  // An agent whose session is over can be cleared from its row (KalTidy's canonical removal).
+  // The row leaves at once; it comes back, with a toast, only if the removal fails.
+  const kalTidy = useKalTidy();
+  const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
+  const dismiss = useCallback(
+    (thread: ThreadSummary) => {
+      if (!kalTidy) return;
+      setLeaving((current) => new Set(current).add(thread.id));
+      void kalTidy.dismissAgent(thread.id).then((removed) => {
+        if (removed) return;
+        setLeaving((current) => {
+          const next = new Set(current);
+          next.delete(thread.id);
+          return next;
+        });
+      });
+    },
+    [kalTidy],
+  );
+  const rowActions = { leaving, onDismiss: kalTidy ? dismiss : undefined };
   // An agent opens its own terminal pane in Code (the focus intent finds and focuses it).
   const open = (thread: ThreadSummary) => {
     if (intents) void intents.focus({ kind: "agent", agentId: thread.id, workspaceId: thread.workspaceId });
@@ -155,7 +223,15 @@ function AgentList({
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} handles={handles} />
+      <Group
+        title="Needs you"
+        tone="waiting"
+        threads={sections.needsYou}
+        now={now}
+        onOpen={open}
+        handles={handles}
+        {...rowActions}
+      />
       <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} handles={handles} />
       <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
       {sections.idle.length > 0 ? (
@@ -174,13 +250,28 @@ function AgentList({
           {showIdle ? (
             <ul id={idleId} className={styles.list}>
               {sections.idle.map((thread) => (
-                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} handle={handles.get(thread.id)} />
+                <AgentRow
+                  key={thread.id}
+                  thread={thread}
+                  now={now}
+                  onOpen={open}
+                  handle={handles.get(thread.id)}
+                  {...rowActions}
+                />
               ))}
             </ul>
           ) : null}
         </section>
       ) : null}
-      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} handles={handles} />
+      <Group
+        title="Just finished"
+        tone="done"
+        threads={sections.finished}
+        now={now}
+        onOpen={open}
+        handles={handles}
+        {...rowActions}
+      />
     </>
   );
 }
@@ -192,9 +283,11 @@ interface GroupProps {
   now: number;
   onOpen: (thread: ThreadSummary) => void;
   handles: ReadonlyMap<string, string>;
+  leaving?: ReadonlySet<string>;
+  onDismiss?: (thread: ThreadSummary) => void;
 }
 
-function Group({ title, tone, threads, now, onOpen, handles }: GroupProps) {
+function Group({ title, tone, threads, now, onOpen, handles, leaving, onDismiss }: GroupProps) {
   const headingId = useId();
   if (threads.length === 0) return null;
   return (
@@ -205,7 +298,15 @@ function Group({ title, tone, threads, now, onOpen, handles }: GroupProps) {
       </h3>
       <ul className={styles.list}>
         {threads.map((thread) => (
-          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} handle={handles.get(thread.id)} />
+          <AgentRow
+            key={thread.id}
+            thread={thread}
+            now={now}
+            onOpen={onOpen}
+            handle={handles.get(thread.id)}
+            leaving={leaving}
+            onDismiss={onDismiss}
+          />
         ))}
       </ul>
     </section>
@@ -217,19 +318,31 @@ function AgentRow({
   now,
   onOpen,
   handle,
+  leaving,
+  onDismiss,
 }: {
   thread: ThreadSummary;
   now: number;
   onOpen: (t: ThreadSummary) => void;
   handle?: string;
+  leaving?: ReadonlySet<string>;
+  /** Present for agents whose session is over: the row's X clears them. */
+  onDismiss?: (t: ThreadSummary) => void;
 }) {
   const meta = STATUS_META[thread.status];
   const since = Date.parse(thread.lastActivityAt);
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
   const live = meta.group === "working";
   const detail = meta.group === "working" && thread.currentActivity ? thread.currentActivity : meta.label;
+  const dismissible = onDismiss !== undefined && isClearableAgent(thread);
+  const isLeaving = leaving?.has(thread.id) ?? false;
   return (
-    <li>
+    <li
+      className={styles.rowItem}
+      data-dismissible={dismissible || undefined}
+      data-leaving={isLeaving || undefined}
+      aria-hidden={isLeaving || undefined}
+    >
       <button
         type="button"
         className={styles.row}
@@ -258,6 +371,18 @@ function AgentRow({
           </span>
         </span>
       </button>
+      {dismissible ? (
+        <button
+          type="button"
+          className={styles.rowDismiss}
+          aria-label={`Clear ${thread.name}`}
+          title="Clear agent"
+          disabled={isLeaving}
+          onClick={() => onDismiss?.(thread)}
+        >
+          <X aria-hidden="true" />
+        </button>
+      ) : null}
     </li>
   );
 }

@@ -1,4 +1,22 @@
 /* The Command Deck's agents rail (right) and its collapsed strip. */
+/* The rail's frame: eases between the strip and the full rail (no re-flow of what's beside it). */
+.dock {
+  position: relative;
+  width: var(--sidebar-w-collapsed);
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid var(--color-border);
+  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
+  outline: none;
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+/* Open, its left edge carries the mirrored lit hairline: the deck's right edge glows like the sidebar's. */
+.dock[data-open] {
+  width: var(--deck-agents-w, 18rem);
+  border-image: linear-gradient(180deg, var(--color-border-lit), var(--color-border) 14rem) 1;
+}
+
 .rail {
   position: relative;
   display: flex;
@@ -6,23 +24,10 @@
   width: var(--deck-agents-w, 18rem);
   min-width: 0;
   height: 100%;
-  border-left: 1px solid var(--color-border);
   background:
     radial-gradient(18rem 14rem at 100% 0%, var(--color-accent-soft), transparent 70%),
     linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
   outline: none;
-}
-
-/* The mirrored lit hairline: the deck's right edge glows like the sidebar's. */
-.rail::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 14rem;
-  background: linear-gradient(180deg, var(--color-border-lit), transparent);
-  pointer-events: none;
 }
 
 .header {
@@ -171,6 +176,91 @@
 
 /* ---- Agent rows ---- */
 
+/* A row whose agent's session is over carries a clear (X), revealed on hover or focus. */
+.rowItem {
+  position: relative;
+}
+
+.rowDismiss {
+  position: absolute;
+  top: var(--space-1-5);
+  right: var(--space-1-5);
+  display: grid;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  opacity: 0;
+  transform: scale(0.9);
+  cursor: pointer;
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.rowDismiss svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.rowItem:hover .rowDismiss,
+.rowItem:focus-within .rowDismiss {
+  opacity: 1;
+  transform: none;
+}
+
+.rowDismiss:hover,
+.rowDismiss:focus-visible {
+  border-color: var(--status-failed-line);
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+  box-shadow: 0 0 12px -4px var(--status-failed-line);
+}
+
+.rowDismiss:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.rowItem[data-dismissible] .rowTime {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.rowItem[data-dismissible]:hover .rowTime,
+.rowItem[data-dismissible]:focus-within .rowTime {
+  opacity: 0;
+}
+
+/* Cleared: the row slides out and folds away at once, before the list catches up. */
+.rowItem[data-leaving] {
+  overflow: hidden;
+  pointer-events: none;
+  animation: row-leave var(--dur-base) var(--ease-out) forwards;
+}
+
+@keyframes row-leave {
+  from {
+    max-height: 5rem;
+    opacity: 1;
+  }
+  60% {
+    opacity: 0;
+    transform: translateX(0.75rem);
+  }
+  to {
+    max-height: 0;
+    opacity: 0;
+    transform: translateX(0.75rem);
+  }
+}
+
 .row {
   --_c: var(--status-muted);
   position: relative;
@@ -282,6 +372,16 @@
 
 @media (prefers-reduced-motion: reduce) {
   .rowDot[data-pulse]::after {
+    animation: none;
+  }
+
+  .dock,
+  .rowDismiss {
+    transition: none;
+  }
+
+  .rowItem[data-leaving] {
+    display: none;
     animation: none;
   }
 }
@@ -404,8 +504,6 @@
   width: var(--sidebar-w-collapsed);
   height: 100%;
   padding: var(--space-2) 0;
-  border-left: 1px solid var(--color-border);
-  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg-sunken) 60%);
 }
 
 .stripCounts {
