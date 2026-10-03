@@ -176,6 +176,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
 
     await app.page.getByRole("button", { name: "Providers" }).click();
     await expect(app.page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+    await app.page.getByRole("tab", { name: "Setup", exact: true }).click();
 
     const claude = app.page.getByRole("region", { name: "Claude Code", exact: true });
     await expect(claude.getByText(/^Installed, version \d+\.\d+\.\d+/)).toBeVisible({ timeout: 30_000 });

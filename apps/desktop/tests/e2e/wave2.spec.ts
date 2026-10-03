@@ -84,7 +84,7 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
     await expect(form.getByRole("heading", { name: "New thread" })).toBeVisible();
     await expect(
       form
-        .getByRole("combobox", { name: "Provider", exact: true })
+        .getByRole("combobox", { name: "Workspace", exact: true })
         .or(form.getByRole("heading", { name: "No provider is ready for threads", exact: true })),
     ).toBeVisible({ timeout: 60_000 });
 

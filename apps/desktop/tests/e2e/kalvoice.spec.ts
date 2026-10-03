@@ -179,8 +179,8 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     expect(routed.events.map((e) => e.payload.outcome)).toEqual(["command", "dictation", "request"]);
     expect(JSON.stringify(routed.events)).not.toContain("parser");
 
-    // Deterministic app control has no second KalVoice approval layer. The two idle threads retain
-    // Approve mode, so provider-native tool permissions remain authoritative when a CLI starts.
+    // Deterministic app control has no second KalVoice approval layer. The two idle agents use
+    // the canonical Bypass start mode, matching agents launched through Code.
     await waitForProviderAdmission(page);
     const providers = await invoke<
       { id: string; detection: { state: string; displayPath: string | null; version: string | null } | null }[]
@@ -217,8 +217,8 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
         })),
       )
       .toEqual([
-        { providerId: "codex", workspaceId, status: "idle", permissionMode: "approve" },
-        { providerId: "codex", workspaceId, status: "idle", permissionMode: "approve" },
+        { providerId: "codex", workspaceId, status: "idle", permissionMode: "bypass" },
+        { providerId: "codex", workspaceId, status: "idle", permissionMode: "bypass" },
       ]);
     const byRequest = () =>
       invoke<{ events: { type: string; payload: { code?: string } }[] }>(page, "events_query", {

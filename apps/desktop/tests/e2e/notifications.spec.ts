@@ -132,7 +132,7 @@ test("a pane's permission request and completion reach the notification center, 
     await expect(bell(page)).toHaveAccessibleName("Notifications, 1 unread", { timeout: 15_000 });
 
     await nav(page, "Dashboard").click();
-    await expect(board.getByRole("article").first().getByText("Completed", { exact: true })).toBeVisible({
+    await expect(board.getByRole("article").first().getByText("Done", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     await shot(page, "e2e-dashboard-done");
