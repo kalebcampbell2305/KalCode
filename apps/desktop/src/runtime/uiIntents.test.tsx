@@ -76,6 +76,9 @@ describe("coding agent focus never falls back to Threads", () => {
     expect(mocks.activate).toHaveBeenCalledWith("missing");
     expect(mocks.navigate).not.toHaveBeenCalledWith("threads");
     expect(mocks.request).not.toHaveBeenCalled();
+    // The click still lands in Code (never a silent no-op), with no pane to focus.
+    expect(mocks.navigate.mock.calls).toEqual([["code"]]);
+    expect(view.result.current.paneFocus).toBeNull();
   });
 
   it("returns to the previous coding agent without consulting chat metadata", async () => {

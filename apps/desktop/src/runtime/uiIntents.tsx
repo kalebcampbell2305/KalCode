@@ -153,9 +153,12 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
           // Agent identity is explicit. Transient metadata failures must never turn a
           // coding terminal into a chat navigation request.
           const ok = await workspaces.activate(target.workspaceId);
-          if (!isCurrent() || !ok) return;
-          recordFocus(target);
+          if (!isCurrent()) return;
+          // The click always lands in Code. When the workspace can't be opened (activation
+          // already reported why) there is no pane to focus, but the agent never opens elsewhere.
           navigate("code");
+          if (!ok) return;
+          recordFocus(target);
           setPaneState({ owner: session, request: { threadId: target.agentId, nonce: generation } });
           return;
         }
