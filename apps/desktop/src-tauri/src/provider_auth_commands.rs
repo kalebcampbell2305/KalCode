@@ -930,6 +930,8 @@ impl ProviderRuntimeAuthority {
         let operation = self.begin_codex_operation(account_id)?;
         let generation = operation.generation;
         let observer = self.clone();
+        let recorded_failure = Arc::new(Mutex::new(None));
+        let provider_failure = Arc::clone(&recorded_failure);
         let result = self.inner.accounts.authenticate_with_active_account(
             &self.inner.profiles,
             ProviderId::CODEX,
@@ -939,14 +941,31 @@ impl ProviderRuntimeAuthority {
                     .read_account_with_lease_observed(account_id, lease, move |result| {
                         observer.observe_codex(account_id, generation, result)
                     })
-                    .map_err(|error| ProviderError::Start(error.to_string()))
+                    .map_err(|error| {
+                        *provider_failure
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                        ProviderError::Start(error.to_string())
+                    })
             },
         );
         drop(operation);
         if let Err(error) = result {
+            let failure = recorded_failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
             // A busy profile ran no account check, so it changes no account state.
-            if is_profile_busy(&error) {
+            if failure.is_none() && is_profile_busy(&error) {
                 return Err(RuntimeAuthError::Busy);
+            }
+            // An uncertified Codex CLI is refused before the account check starts: the account
+            // is unchanged, and the refusal names the supported versions instead of reporting a
+            // failed account check.
+            if failure == Some(CodexAccountAuthError::UnsupportedVersion) {
+                return Err(RuntimeAuthError::Provider(
+                    CodexAccountAuthError::UnsupportedVersion,
+                ));
             }
             let _ = self.inner.accounts.mark_authentication(
                 account_id,
@@ -2740,6 +2759,76 @@ mod tests {
         assert_eq!(after.last_error_code, None);
         assert_eq!(after.last_checked_at, before.last_checked_at);
         drop(session);
+    }
+
+    /// Installs a Codex auth manager whose CLI reports `version` and does nothing else.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn install_codex_reporting(fixture: &mut Fixture, version: &str) {
+        let dir = fixture._temp.path().join(format!("codex-{version}"));
+        std::fs::create_dir_all(&dir).expect("fake codex directory");
+        #[cfg(windows)]
+        let executable = {
+            let script = dir.join("codex.cmd");
+            std::fs::write(&script, format!("@echo off\r\necho codex-cli {version}\r\n"))
+                .expect("fake codex");
+            script
+        };
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.join("codex");
+            std::fs::write(&script, format!("#!/bin/sh\nprintf 'codex-cli {version}\\n'\n"))
+                .expect("fake codex");
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+                .expect("executable fake codex");
+            script
+        };
+        let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
+        inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
+            executable,
+            inner.source_env.clone(),
+            Arc::clone(&inner.profiles),
+            env!("KALCODE_PUBLIC_VERSION"),
+        )));
+    }
+
+    /// Codex CLI 0.160.0 shipped while 0.1.9 certified only 0.155-0.158: the launch's plan check
+    /// was refused by the version gate before any account check, yet it was reported as
+    /// `provider_account_check_failed` and flagged the account "Needs attention".
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn uncertified_codex_cli_is_a_version_refusal_that_leaves_the_account_unchanged() {
+        let mut fixture = Fixture::new();
+        install_codex_reporting(&mut fixture, "0.161.0");
+        let store = fixture.runtime.account_store();
+        let before = store.get(&fixture.account.id).expect("account");
+
+        assert!(matches!(
+            fixture.runtime.refresh_codex_account(&fixture.account.id),
+            Err(RuntimeAuthError::Provider(
+                CodexAccountAuthError::UnsupportedVersion
+            ))
+        ));
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_VERSION_UNSUPPORTED)
+        );
+        let after = store.get(&fixture.account.id).expect("account");
+        assert_eq!(after.authentication_state, before.authentication_state);
+        assert_eq!(after.last_error_code, None, "no account check ran");
+    }
+
+    /// A Codex CLI that can't report a version is still an account-check failure, not a version
+    /// refusal that would tell the person to install a version they may already have.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn unrunnable_codex_cli_is_not_reported_as_an_unsupported_version() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
+        );
     }
 
     #[cfg(any(windows, target_os = "macos"))]

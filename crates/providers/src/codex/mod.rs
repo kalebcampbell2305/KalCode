@@ -48,6 +48,8 @@ pub const MANAGED_VERSIONS: VersionWindow = VersionWindow {
         Version::new(0, 156, 0),
         Version::new(0, 157, 0),
         Version::new(0, 158, 0),
+        Version::new(0, 159, 0),
+        Version::new(0, 160, 0),
     ],
 };
 
@@ -542,7 +544,7 @@ mod tests {
         let version = |value| Version::parse(value).expect("version");
         for supported in [
             "0.155.1", "0.155.2", "0.156.0", "0.156.1", "0.156.7", "0.157.0", "0.157.1", "0.158.0",
-            "0.158.4",
+            "0.158.4", "0.159.0", "0.159.3", "0.160.0", "0.160.2",
         ] {
             assert!(
                 managed_version_supported(&version(supported)),
@@ -558,8 +560,9 @@ mod tests {
         for refused in [
             "0.154.9",
             "0.155.0",
-            "0.159.0",
+            "0.161.0",
             "0.158.0-alpha.15",
+            "0.160.0-alpha.1",
             "0.157.1-alpha.1",
             "0.158.0+build.1",
             "1.0.0",
@@ -574,20 +577,22 @@ mod tests {
 
     #[test]
     fn codex_refusal_names_the_found_version_the_supported_range_and_the_install_command() {
-        let found = Version::parse("0.159.0").expect("version");
+        let found = Version::parse("0.161.0").expect("version");
         let ProviderError::Refused { code, message } =
-            require_managed_version(&found).expect_err("0.159.0 must fail closed")
+            require_managed_version(&found).expect_err("0.161.0 must fail closed")
         else {
             panic!("unsupported Codex must be a typed refusal");
         };
         assert_eq!(code, "provider_version_unsupported");
-        assert!(message.contains("Codex CLI 0.159.0"), "{message}");
+        assert!(message.contains("Codex CLI 0.161.0"), "{message}");
         assert!(
-            message.contains("0.155.x (0.155.1 or later), 0.156.x, 0.157.x or 0.158.x"),
+            message.contains(
+                "0.155.x (0.155.1 or later), 0.156.x, 0.157.x, 0.158.x, 0.159.x or 0.160.x"
+            ),
             "{message}"
         );
         assert!(
-            message.contains("npm install -g @openai/codex@0.158.0"),
+            message.contains("npm install -g @openai/codex@0.160.0"),
             "{message}"
         );
 
@@ -653,7 +658,9 @@ printf 'codex-cli {version}\n'
             ("0.156.1", true),
             ("0.157.1", true),
             ("0.158.0", true),
-            ("0.159.0", false),
+            ("0.159.0", true),
+            ("0.160.0", true),
+            ("0.161.0", false),
             ("0.158.0-alpha.15", false),
         ]
         .into_iter()
