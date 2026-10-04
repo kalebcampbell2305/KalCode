@@ -440,7 +440,7 @@ export function runSuite(
       // runner nobody can open is still diagnosable.
       const failing = `${child.stdout ?? ""}\n${child.stderr ?? ""}`
         .split(/\r?\n/)
-        .filter((line) => /^\s*(?:not ok \d+ - |✖ |error: )/u.test(line))
+        .filter((line) => /^\s*(?:not ok \d+ - |✖ |[A-Za-z]*Error: )/u.test(line))
         .map((line) => line.trim().slice(0, 200))
         .filter((line, index, all) => all.indexOf(line) === index)
         .slice(0, 20);
