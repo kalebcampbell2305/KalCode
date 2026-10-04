@@ -119,8 +119,12 @@ function Cleanup {
   $rv = Get-ItemProperty -LiteralPath $runKey -ErrorAction SilentlyContinue
   if ($rv) { foreach ($n in @($rv.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and [string]$_.Value -match '(?i)kalcode' } | ForEach-Object Name)) { Remove-ItemProperty -LiteralPath $runKey -Name $n -ErrorAction SilentlyContinue } }
   $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-  foreach ($p in $AppData, $LocalData, (Join-Path $env:LOCALAPPDATA 'KalCode'), (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk'), (Join-Path $programs 'KalCode.lnk'), (Join-Path $programs 'KalCode')) {
-    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+  # WebView2 and the uninstaller can hold files for a few seconds after exit, so retry the data removal briefly.
+  $paths = @($AppData, $LocalData, (Join-Path $env:LOCALAPPDATA 'KalCode'), (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk'), (Join-Path $programs 'KalCode.lnk'), (Join-Path $programs 'KalCode'))
+  for ($attempt = 0; $attempt -lt 10; $attempt++) {
+    foreach ($p in $paths) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue } }
+    if (-not @($paths | Where-Object { Test-Path -LiteralPath $_ }).Count) { break }
+    Start-Sleep -Seconds 3
   }
   $left = Leftovers
   if ($left.Values -contains $true) { Note ('LEFTOVER: ' + ($left | ConvertTo-Json -Compress)); return $false }
