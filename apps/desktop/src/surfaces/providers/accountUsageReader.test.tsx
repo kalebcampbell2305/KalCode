@@ -201,6 +201,33 @@ describe("useAccountUsageReader", () => {
     }
   });
 
+  it("refreshes on picker demand while preserving cached usage during the asynchronous read", async () => {
+    let complete: ((read: ProviderAccountUsage[]) => void) | undefined;
+    const { client, providerAccountUsage } = usageClient(async () => [claudeUsage()]);
+    const view = renderHook(({ request }) => useAccountUsageReader(client, [CLAUDE], null, request), {
+      initialProps: { request: 0 },
+    });
+    await flush();
+    providerAccountUsage.mockImplementationOnce(
+      () =>
+        new Promise<ProviderAccountUsage[]>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    view.rerender({ request: 1 });
+    await flush();
+    expect(providerAccountUsage).toHaveBeenCalledTimes(2);
+    expect(view.result.current.get(CLAUDE.id)?.windows[0]?.remainingPercent).toBe(42);
+    complete?.([
+      {
+        ...claudeUsage(),
+        windows: [{ id: "weekly", label: "Weekly", remainingPercent: 33, resetsAt: iso(86_400_000) }],
+      },
+    ]);
+    await flush();
+    expect(view.result.current.get(CLAUDE.id)?.windows[0]?.remainingPercent).toBe(33);
+  });
+
   it("re-reads shortly after an agent session ends", async () => {
     const feed = new EventFeed();
     const { client, providerAccountUsage } = usageClient(async () => [claudeUsage()]);

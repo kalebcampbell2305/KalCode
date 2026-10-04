@@ -102,20 +102,29 @@ describe("buildEntitlement", () => {
     expect(max.unrestricted).toBe(false);
     expect(max.limits).toEqual({
       kalvoiceRequestsPerMonth: 500,
-      openTerminals: 18,
-      parallelAgents: 10,
+      openTerminals: null,
+      parallelAgents: null,
       workspaces: null,
-      providerAccounts: 8,
+      providerAccounts: 12,
+      brainstormsPerMonth: null,
+      launchRecipes: null,
+      externalIntegrations: 25,
+      operationsHistoryDays: 365,
+      queuedTasks: null,
     });
     expect(hasFeature(max, "advancedMissions")).toBe(true);
     const free = buildEntitlement(ACCOUNT, { tier: "free", grantExpiresAt: null, billingAnchor: null }, NOW, "k1");
-    expect(free.features).toEqual([]);
     expect(free.limits).toEqual({
       kalvoiceRequestsPerMonth: 25,
-      openTerminals: 4,
-      parallelAgents: 1,
+      openTerminals: null,
+      parallelAgents: null,
       workspaces: 2,
       providerAccounts: 2,
+      brainstormsPerMonth: 3,
+      launchRecipes: 1,
+      externalIntegrations: 1,
+      operationsHistoryDays: null,
+      queuedTasks: 3,
     });
     expect(limitFor(free, "concurrentThreads")).toBe(0);
     const pro = buildEntitlement(
@@ -125,7 +134,7 @@ describe("buildEntitlement", () => {
       "k1",
     );
     expect(limitFor(pro, "kalvoiceRequestsPerMonth")).toBe(150);
-    expect(limitFor(pro, "parallelAgents")).toBe(4);
+    expect(limitFor(pro, "parallelAgents")).toBeNull();
   });
 
   it("does not outlive the paid period it reflects", () => {

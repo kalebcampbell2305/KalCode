@@ -20,6 +20,7 @@ import { Check, Copy, LogIn, Minus, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { useNavigation } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
 import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import { ProviderAccountsView, type ProviderSignInRequest } from "./ProviderAccountsView.tsx";
@@ -55,12 +56,41 @@ function useNow(intervalMs = 30_000): number {
 }
 
 export function ProvidersPage() {
+  const { recordLocation, registerRestorer } = useNavigation();
   const { statuses, listError, retryList, detect, detecting, detectError } = useProviders();
   const now = useNow();
   const lastChecked = latestCheck(statuses);
   const request = useProvidersTabRequest();
   // Accounts first: it is where sign-in and usage live, and it opens without a provider check.
   const [tab, setTab] = useState<ProvidersTab>(request?.tab ?? "accounts");
+  useEffect(
+    () =>
+      registerRestorer?.(async (entry, isCurrent) => {
+        if (entry.destination !== "providers" || entry.target?.kind !== "provider") return undefined;
+        if (!isCurrent()) return false;
+        setTab(entry.target.tab);
+        const id = entry.target.sectionId;
+        if (id) {
+          for (let attempt = 0; attempt < 90 && isCurrent(); attempt += 1) {
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            if (!isCurrent()) return false;
+            const section = document.getElementById(id);
+            if (section) {
+              section.scrollIntoView?.({ block: "start" });
+              section.tabIndex = -1;
+              section.focus({ preventScroll: true });
+              return true;
+            }
+          }
+          return false;
+        }
+        return true;
+      }),
+    [registerRestorer],
+  );
+  useEffect(() => {
+    recordLocation?.({ destination: "providers", label: `Providers · ${tab}`, target: { kind: "provider", tab } });
+  }, [tab, recordLocation]);
   const [signInRequest, setSignInRequest] = useState<ProviderSignInRequest | null>(null);
   // Setup reads sign-in from the same canonical accounts the Accounts tab shows.
   const accounts = useOptionalProviderAccountSessions()?.accounts ?? null;
@@ -87,88 +117,100 @@ export function ProvidersPage() {
   }, [detecting, refreshHealth]);
 
   return (
-    <Page
-      title="Providers"
-      description="KalCode runs each provider through its own command-line tool, signed in with your own provider account. KalCode never pays for or proxies your AI usage."
-      actions={
-        <div className={styles.headerActions}>
-          <p className={styles.checked} role="status">
-            {detecting ? "Checking providers…" : lastChecked ? `Checked ${formatRelative(lastChecked, now)}` : ""}
-          </p>
-          <Button icon={<RefreshCw />} onClick={() => void detect()} busy={detecting} disabled={!statuses}>
-            Check again
-          </Button>
-        </div>
-      }
+    <div
+      onFocusCapture={(event) => {
+        const section = event.target.closest<HTMLElement>("section[id]");
+        if (section?.id)
+          recordLocation?.({
+            destination: "providers",
+            label: section.getAttribute("aria-label") ?? section.querySelector("h2")?.textContent ?? tab,
+            target: { kind: "provider", tab, sectionId: section.id },
+          });
+      }}
     >
-      <Tabs value={tab} onValueChange={(value) => setTab(value as ProvidersTab)} className={styles.tabs}>
-        <TabsList aria-label="Provider views">
-          <TabsTrigger value="setup">Setup</TabsTrigger>
-          <TabsTrigger value="accounts">Accounts</TabsTrigger>
-          <TabsTrigger value="health">Health</TabsTrigger>
-        </TabsList>
-        <TabsContent value="setup" className={styles.tabPanel}>
-          {listError && !statuses ? (
-            <ErrorState
-              title="Providers couldn't load"
-              code={`${listError.category}/${listError.code}`}
-              actions={<Button onClick={retryList}>Try again</Button>}
-            >
-              <p>{listError.message}</p>
-            </ErrorState>
-          ) : !statuses ? (
-            <Panel as="div" className={styles.loading} role="status" aria-busy="true">
-              <span className="visually-hidden">Loading providers</span>
-              <Skeleton width="30%" height="1rem" />
-              <Skeleton width="65%" />
-              <Skeleton width="55%" />
-              <Skeleton width="60%" />
-            </Panel>
-          ) : (
-            <>
-              {detectError ? (
-                <ErrorState
-                  title="Couldn't check providers"
-                  code={`${detectError.category}/${detectError.code}`}
-                  actions={
-                    <Button onClick={() => void detect()} busy={detecting}>
-                      Try again
-                    </Button>
-                  }
-                >
-                  <p>{detectError.message} Nothing on your system was changed.</p>
-                </ErrorState>
-              ) : null}
-              {statuses.map((status) => (
-                <ProviderSection
-                  key={status.id}
-                  status={status}
-                  checking={detecting}
-                  now={now}
-                  accounts={accounts ? accounts.filter((account) => account.providerId === status.id) : null}
-                  onSignIn={requestSignIn}
-                />
-              ))}
-            </>
-          )}
-        </TabsContent>
-        <TabsContent value="accounts" className={styles.tabPanel}>
-          <section aria-label="Provider accounts" className={styles.tabPanel}>
-            <ProviderAccountsView
-              enabled={tab === "accounts"}
-              statuses={statuses}
-              health={health.list}
-              signInRequest={signInRequest}
-            />
-          </section>
-        </TabsContent>
-        <TabsContent value="health" className={styles.tabPanel}>
-          <section aria-label="Provider health" className={styles.tabPanel}>
-            <ProviderHealthView data={health} statuses={statuses} now={now} />
-          </section>
-        </TabsContent>
-      </Tabs>
-    </Page>
+      <Page
+        title="Providers"
+        description="KalCode runs each provider through its own command-line tool, signed in with your own provider account. KalCode never pays for or proxies your AI usage."
+        actions={
+          <div className={styles.headerActions}>
+            <p className={styles.checked} role="status">
+              {detecting ? "Checking providers…" : lastChecked ? `Checked ${formatRelative(lastChecked, now)}` : ""}
+            </p>
+            <Button icon={<RefreshCw />} onClick={() => void detect()} busy={detecting} disabled={!statuses}>
+              Check again
+            </Button>
+          </div>
+        }
+      >
+        <Tabs value={tab} onValueChange={(value) => setTab(value as ProvidersTab)} className={styles.tabs}>
+          <TabsList aria-label="Provider views">
+            <TabsTrigger value="setup">Setup</TabsTrigger>
+            <TabsTrigger value="accounts">Accounts</TabsTrigger>
+            <TabsTrigger value="health">Health</TabsTrigger>
+          </TabsList>
+          <TabsContent value="setup" className={styles.tabPanel}>
+            {listError && !statuses ? (
+              <ErrorState
+                title="Providers couldn't load"
+                code={`${listError.category}/${listError.code}`}
+                actions={<Button onClick={retryList}>Try again</Button>}
+              >
+                <p>{listError.message}</p>
+              </ErrorState>
+            ) : !statuses ? (
+              <Panel as="div" className={styles.loading} role="status" aria-busy="true">
+                <span className="visually-hidden">Loading providers</span>
+                <Skeleton width="30%" height="1rem" />
+                <Skeleton width="65%" />
+                <Skeleton width="55%" />
+                <Skeleton width="60%" />
+              </Panel>
+            ) : (
+              <>
+                {detectError ? (
+                  <ErrorState
+                    title="Couldn't check providers"
+                    code={`${detectError.category}/${detectError.code}`}
+                    actions={
+                      <Button onClick={() => void detect()} busy={detecting}>
+                        Try again
+                      </Button>
+                    }
+                  >
+                    <p>{detectError.message} Nothing on your system was changed.</p>
+                  </ErrorState>
+                ) : null}
+                {statuses.map((status) => (
+                  <ProviderSection
+                    key={status.id}
+                    status={status}
+                    checking={detecting}
+                    now={now}
+                    accounts={accounts ? accounts.filter((account) => account.providerId === status.id) : null}
+                    onSignIn={requestSignIn}
+                  />
+                ))}
+              </>
+            )}
+          </TabsContent>
+          <TabsContent value="accounts" className={styles.tabPanel}>
+            <section aria-label="Provider accounts" className={styles.tabPanel}>
+              <ProviderAccountsView
+                enabled={tab === "accounts"}
+                statuses={statuses}
+                health={health.list}
+                signInRequest={signInRequest}
+              />
+            </section>
+          </TabsContent>
+          <TabsContent value="health" className={styles.tabPanel}>
+            <section aria-label="Provider health" className={styles.tabPanel}>
+              <ProviderHealthView data={health} statuses={statuses} now={now} />
+            </section>
+          </TabsContent>
+        </Tabs>
+      </Page>
+    </div>
   );
 }
 

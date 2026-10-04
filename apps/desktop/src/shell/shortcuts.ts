@@ -12,7 +12,7 @@ export { IS_MAC };
 /** Display label for the platform's primary modifier. */
 export const MOD_LABEL = formatShortcut(["Mod"]);
 
-export type GlobalShortcut = "open-palette" | "toggle-sidebar";
+export type GlobalShortcut = "open-palette" | "toggle-sidebar" | "back" | "forward" | "open-settings";
 
 type GlobalShortcutEvent = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
 
@@ -21,10 +21,19 @@ export function globalShortcut(
   event: GlobalShortcutEvent,
   platform: DesktopPlatform = DESKTOP_PLATFORM,
 ): GlobalShortcut | null {
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    if (event.key === "ArrowLeft") return "back";
+    if (event.key === "ArrowRight") return "forward";
+  }
+  if (platform === "macos" && hasPrimaryModifier(event, platform) && !event.altKey && !event.shiftKey) {
+    if (event.key === "[") return "back";
+    if (event.key === "]") return "forward";
+  }
   if (!hasPrimaryModifier(event, platform) || event.altKey || event.shiftKey) return null;
   const key = event.key.toLowerCase();
   if (key === "k") return "open-palette";
   if (key === "b") return "toggle-sidebar";
+  if (key === ",") return "open-settings";
   return null;
 }
 
@@ -38,6 +47,9 @@ export function isRailToggleShortcut(
 interface ShortcutHandlers {
   openPalette: () => void;
   toggleSidebar: () => void;
+  back?: () => void;
+  forward?: () => void;
+  openSettings?: () => void;
 }
 
 /** Global shortcuts: Mod+K command palette, Mod+B sidebar. */
@@ -47,6 +59,7 @@ export function useShortcuts(handlers: ShortcutHandlers) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.repeat) return;
       const shortcut = globalShortcut(event);
       if (shortcut === "open-palette") {
         event.preventDefault();
@@ -54,9 +67,16 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       } else if (shortcut === "toggle-sidebar") {
         event.preventDefault();
         latest.current.toggleSidebar();
+      } else if (shortcut === "back" || shortcut === "forward" || shortcut === "open-settings") {
+        const handler = shortcut === "open-settings" ? latest.current.openSettings : latest.current[shortcut];
+        if (handler) {
+          event.preventDefault();
+          handler();
+        }
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // Capture before xterm consumes application navigation chords.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);
 }

@@ -5,6 +5,7 @@ import {
   type AccountTransport,
   PLAN_CATALOG,
   parseAccountSnapshot,
+  parseAccountUsage,
   parseRuntimeStatus,
   tierName,
 } from "./account.ts";
@@ -209,4 +210,23 @@ describe("account display name", () => {
       { command: "account_set_display_name", args: { displayName: null } },
     ]);
   });
+});
+
+describe("verified billing interval", () => {
+  it("reads the actual interval without assuming monthly for older builds", () => {
+    expect(parseAccountSnapshot({ ...ready, billingInterval: "year" }).billingInterval).toBe("year");
+    expect(parseAccountSnapshot({ ...ready, billingInterval: "month" }).billingInterval).toBe("month");
+    expect(parseAccountSnapshot({ ...ready, billingInterval: null }).billingInterval).toBeNull();
+    expect(parseAccountSnapshot(ready).billingInterval).toBeUndefined();
+    expect(() => parseAccountSnapshot({ ...ready, billingInterval: "week" })).toThrow(
+      "Invalid native billing interval",
+    );
+  });
+});
+
+it("reads optional billing metadata with usage and rejects invalid intervals", () => {
+  const usage = { used: 1, allowance: 150, periodStart: "2026-10-01T00:00:00Z", resetsAt: "2026-11-01T00:00:00Z" };
+  expect(parseAccountUsage({ ...usage, billingInterval: "year" }).billingInterval).toBe("year");
+  expect(parseAccountUsage(usage).billingInterval).toBeUndefined();
+  expect(() => parseAccountUsage({ ...usage, billingInterval: "week" })).toThrow("Invalid native billing interval");
 });

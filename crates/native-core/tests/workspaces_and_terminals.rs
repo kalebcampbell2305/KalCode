@@ -669,6 +669,14 @@ fn closing_a_tab_ends_its_shell_and_records_it() {
         .expect("create");
     let events = collect_events(&core);
 
+    assert_eq!(
+        core.close_terminal_if_ended(&terminal.id)
+            .expect_err("protect live shell")
+            .code,
+        "terminal_still_running"
+    );
+    assert_eq!(core.running_terminals().expect("still running").len(), 1);
+
     core.close_terminal(&terminal.id).expect("close");
     assert!(core.terminals(&workspace.id).expect("list").is_empty());
     assert!(core.running_terminals().expect("running").is_empty());
@@ -901,58 +909,38 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
 }
 
 #[test]
-fn a_limited_plan_bounds_open_terminals_across_workspaces_and_an_unlimited_one_does_not() {
+fn every_plan_can_open_terminals_beyond_the_obsolete_caps_across_workspaces() {
     let data = tempfile::tempdir().expect("data");
-    let first_project = tempfile::tempdir().expect("first project");
-    let second_project = tempfile::tempdir().expect("second project");
+    let projects = [
+        tempfile::tempdir().expect("project"),
+        tempfile::tempdir().expect("project"),
+    ];
     let core = open(data.path());
-    let first = core.open_workspace(first_project.path()).expect("open");
-    let second = core.open_workspace(second_project.path()).expect("open");
+    let workspaces = projects
+        .iter()
+        .map(|p| core.open_workspace(p.path()).expect("open"))
+        .collect::<Vec<_>>();
     let shell = test_shell(&core);
-    let limit = PlanTier::Free.limit(Limited::OpenTerminals);
-    assert_eq!(limit.map(|l| l.max), Some(4));
-    // The cap is a total across all workspaces: two tabs in each fill the Free plan's four.
-    let tabs: Vec<_> = [&first, &first, &second, &second]
-        .into_iter()
-        .map(|workspace| {
-            core.create_terminal(&workspace.id, Some(&shell), size(), limit)
-                .expect("create")
-        })
-        .collect();
-    for workspace in [&first, &second] {
-        let refused = core
-            .create_terminal(&workspace.id, Some(&shell), size(), limit)
-            .expect_err("limit");
-        assert_eq!(refused.code, "too_many_terminals");
-        assert_eq!(
-            refused.message,
-            "The Free plan allows 4 open terminals. Close one to open another, or upgrade to Pro for 12."
-        );
+    for tier in kalcode_core::plans::PUBLIC_PLANS {
+        assert_eq!(tier.limit(Limited::OpenTerminals), None);
+        for i in 0..5 {
+            core.create_terminal(
+                &workspaces[i % 2].id,
+                Some(&shell),
+                size(),
+                tier.limit(Limited::OpenTerminals),
+            )
+            .expect("unlimited local terminal");
+        }
     }
-    // Hitting the cap never closes anything: every existing tab is still there and running.
-    for workspace in [&first, &second] {
-        let listed = core.terminals(&workspace.id).expect("list");
-        assert_eq!(
-            listed.iter().map(|t| t.position).collect::<Vec<_>>(),
-            [0, 1]
-        );
-        assert!(listed.iter().all(|t| t.status == TerminalStatus::Running));
-    }
-    // Closing one frees a slot.
-    core.close_terminal(&tabs[0].id).expect("close");
-    let reopened = core
-        .create_terminal(&second.id, Some(&shell), size(), limit)
-        .expect("a closed tab frees a slot");
-    // No KalCode-side cap (Owner, MAX 2X): well past every capped plan.
-    let more: Vec<_> = (0..15)
-        .map(|_| {
-            core.create_terminal(&first.id, Some(&shell), size(), None)
-                .expect("unlimited")
-        })
-        .collect();
-    assert_eq!(core.terminals(&first.id).expect("list").len(), 16);
+    assert_eq!(
+        workspaces
+            .iter()
+            .map(|w| core.terminals(&w.id).expect("list").len())
+            .sum::<usize>(),
+        20
+    );
     core.shutdown();
-    drop((tabs, reopened, more));
 }
 
 #[test]

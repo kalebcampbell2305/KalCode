@@ -291,11 +291,12 @@ test.describe("provider panes", () => {
           ).__kalcodeMemory.panes.text(id as string),
         threadId,
       );
-    // The pane's tab close control, with no confirmation: the agent stops and its tab goes away.
+    // The pane's tab close control, after Stop and Close: the agent stops and its tab goes away.
     // Its tab, by the pane's content (the tab reads the agent's call sign, e.g. "Claude A").
     const tab = page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`);
     await tab.hover();
     await tab.locator("[data-tab-close]").click();
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect(page.locator(`[data-provider-pane="${threadId}"]`)).toHaveCount(0);
     await expect.poll(output).toContain("[stopped by KalCode]");
     await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
@@ -307,6 +308,7 @@ test.describe("provider panes", () => {
     await newPane(page);
     const threadId = await pane(page).getAttribute("data-provider-pane");
     await page.getByRole("button", { name: "Close pane 1" }).click();
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect(page.locator(`[data-provider-pane="${threadId}"]`)).toHaveCount(0);
     await expect
       .poll(() =>

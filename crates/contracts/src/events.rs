@@ -1058,7 +1058,7 @@ mod tests {
             },
             EventPayload::ResourceTaskReleased {
                 task_id: s(),
-                held_ms: 1500,
+                held_ms: 150,
                 cause: ResourceReleaseCause::LimitFreed,
             },
             EventPayload::KalVoiceDictationStarted { session_id: s() },
@@ -1089,7 +1089,7 @@ mod tests {
                 code: s(),
             },
             EventPayload::KalVoiceLimitReached {
-                allowance: 75,
+                allowance: 25,
                 resets_at: s(),
             },
             EventPayload::KalVoiceProviderSelected {

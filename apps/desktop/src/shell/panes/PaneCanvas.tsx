@@ -280,18 +280,17 @@ function PaneCanvasSurface({
   latestHost.current = host;
   const activeRef = useRef(active);
   activeRef.current = active;
-  useEffect(
-    () =>
-      listenForPaneCommands((command) => {
-        const handled = latestHost.current.onCommand?.(command);
-        if (handled) return handled;
-        return runCommand(latestController.current, command, (content) => {
-          const owned = latestHost.current.describe(content);
-          return owned ?? registeredRenderer(content)?.describe(content) ?? describeBuiltin(content);
-        });
-      }, scope ?? null),
-    [scope],
-  );
+  useEffect(() => {
+    if (!active) return;
+    return listenForPaneCommands((command) => {
+      const handled = latestHost.current.onCommand?.(command);
+      if (handled) return handled;
+      return runCommand(latestController.current, command, (content) => {
+        const owned = latestHost.current.describe(content);
+        return owned ?? registeredRenderer(content)?.describe(content) ?? describeBuiltin(content);
+      });
+    }, scope ?? null);
+  }, [scope, active]);
 
   // ---------- Keyboard shortcuts ----------
   // Anywhere on the surface hosting the canvas, including inside terminals (they let pane
@@ -590,7 +589,10 @@ function PaneCanvasSurface({
               contextMenu={host.contextMenu}
               title={describe(content).title}
               onFocus={() => {
-                if (leaf && visible) controller.focusPane(leaf.paneId, false);
+                if (leaf && visible) {
+                  describe(content).onAttentionSeen?.();
+                  controller.focusPane(leaf.paneId, false);
+                }
               }}
             />
           );
@@ -601,7 +603,12 @@ function PaneCanvasSurface({
             items={layout.dock.map((content) => ({ content, info: describe(content) }))}
             style={{ left: paneWidth + DOCK_GAP, top: 0, width: DOCK_PX, height: extent.height }}
             onOpen={(i) => controller.undock(i)}
-            onRemove={(i) => controller.removeFromDock(i)}
+            onRemove={(i) => {
+              const content = layout.dock[i];
+              const close = content && describe(content).onClose;
+              if (close) close();
+              else controller.removeFromDock(i);
+            }}
           />
         ) : null}
       </div>

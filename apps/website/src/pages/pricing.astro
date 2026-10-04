@@ -52,7 +52,7 @@ const featureCell = (feature: PlanFeature, planId: (typeof PLANS)[number]["id"])
 const faq = [
   {
     q: "What is a KalVoice Request?",
-    a: "Each KalVoice command that KalCode carries out counts once, however many steps it takes. “Open a terminal” is one request. “Pause every active thread” is also one request, however many threads it pauses.",
+    a: "Each cloud-backed KalVoice request counts once, however many steps it takes. Local/on-device commands, dictation and voice into terminals never consume cloud quota.",
   },
   {
     q: "Does dictation count?",
@@ -64,7 +64,11 @@ const faq = [
   },
   {
     q: "What happens when I reach a limit?",
-    a: "Nothing you already have open is closed. KalCode never closes open terminals, workspaces, provider accounts or running agents; it only declines to open one more past your plan's limit. KalVoice commands pause until your monthly allowance resets, and dictation keeps working.",
+    a: "Nothing you already have open is closed. Local terminals and coding agents have no KalCode plan cap. Workspace, account and premium capability limits apply when adding more; existing work stays intact. KalVoice cloud requests pause until your monthly allowance resets, and dictation keeps working.",
+  },
+  {
+    q: "How is MAX 2X different from MAX?",
+    a: "With MAX, you orchestrate KalCode: coordinate agents, handoffs and delivery. MAX 2X adds the strongest autonomy as it ships: KalCode prepares context, routes work, tests, recovers, reviews and prepares a preview or deployment, involving you when a genuine decision is needed. Features still in development are marked Coming soon.",
   },
   {
     q: "What does “Coming soon” mean?",
@@ -96,7 +100,7 @@ const faq = [
   <PageHead
     backdrop="nebula"
     title="Pricing"
-    lead="Start free. Upgrade for more agents, more terminals and more autonomy. Your AI usage stays on your own provider account."
+    lead="Unlimited local coding agents + terminals on every plan. Bring your AI accounts. KalCode handles the workflow."
     status={checkoutOpen ? "Paid plans are open · monthly or yearly" : "Paid plans open soon · start on Free today"}
   />
 
@@ -221,6 +225,8 @@ const faq = [
         <div class="includes">
           <p class="includes__label">Every plan includes</p>
           <ul class="chips" role="list">
+            <li class="chip chip--built">All supported providers</li>
+            <li class="chip chip--built">Unlimited local agents and terminals</li>
             <li class="chip chip--built">Your own provider accounts</li>
             <li class="chip chip--built">Plan, Approve and Auto modes</li>
             <li class="chip chip--built">Unlimited on-device dictation</li>

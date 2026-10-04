@@ -328,6 +328,9 @@ pub trait AccountApi: Send + Sync {
     fn refresh_session(&self, bearer: &str) -> Result<SignedInResponse, ApiError>;
     fn logout(&self, bearer: &str) -> Result<(), ApiError>;
     fn account(&self, bearer: &str) -> Result<ApiAccount, ApiError>;
+    fn billing_interval(&self, _bearer: &str) -> Result<Option<BillingInterval>, ApiError> {
+        Ok(None)
+    }
     /// Sets (`Some`) or clears (`None`) the account's cosmetic display name and returns the
     /// updated account. The server trims, validates and normalizes the name.
     fn set_display_name(
@@ -566,6 +569,23 @@ impl AccountApi for HttpAccountApi {
         wire.into_account()
     }
 
+    fn billing_interval(&self, bearer: &str) -> Result<Option<BillingInterval>, ApiError> {
+        #[derive(Deserialize)]
+        struct Billing {
+            interval: Option<BillingInterval>,
+        }
+        #[derive(Deserialize)]
+        struct Status {
+            ok: bool,
+            billing: Billing,
+        }
+        let status: Status = self.get("/v1/billing/status", bearer)?;
+        if !status.ok {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(status.billing.interval)
+    }
+
     fn set_display_name(
         &self,
         bearer: &str,
@@ -641,6 +661,7 @@ impl AccountApi for HttpAccountApi {
         }
         Ok(UsageResponse {
             usage: AccountUsageSnapshot {
+                billing_interval: None,
                 used: wire.usage.used,
                 allowance: wire.usage.allowance,
                 period_start: wire.usage.period_start,
@@ -688,6 +709,7 @@ impl AccountApi for HttpAccountApi {
             allowed: wire.allowed,
             usage: UsageResponse {
                 usage: AccountUsageSnapshot {
+                    billing_interval: None,
                     used: wire.usage.used,
                     allowance: wire.usage.allowance,
                     period_start: wire.usage.period_start,

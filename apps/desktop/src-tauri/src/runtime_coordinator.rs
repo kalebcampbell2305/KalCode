@@ -102,7 +102,12 @@ impl RuntimeBundle {
                 weak.upgrade()
                     .is_some_and(|account| account.validate_active_lease(&lease))
             });
-            match crate::integration_commands::IntegrationState::start(state, &identity.id, valid) {
+            match crate::integration_commands::IntegrationState::start(
+                state,
+                &identity.id,
+                valid,
+                account.clone(),
+            ) {
                 Ok(integrations) => bundle.integrations = Some(Arc::new(integrations)),
                 Err(_) => tracing::warn!(event = "integrations.start_failed"),
             }

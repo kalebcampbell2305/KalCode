@@ -46,8 +46,8 @@ describe("plans", () => {
   it("positions the plans TRY → BUILD → ORCHESTRATE → AUTOMATE with MAX as the one most popular plan", () => {
     expect(PLANS.map((plan) => [plan.stage, plan.tagline])).toEqual([
       ["TRY", "Try KalCode."],
-      ["BUILD", "For developers using AI every day."],
-      ["ORCHESTRATE", "Serious multi-agent development."],
+      ["BUILD", "Your everyday AI engineering workspace."],
+      ["ORCHESTRATE", "Run serious multi-agent engineering workflows."],
       ["AUTOMATE", "Maximum KalCode. Maximum autonomy."],
     ]);
     expect(PLANS.filter((plan) => plan.popular).map((plan) => plan.id)).toEqual(["max"]);
@@ -63,9 +63,9 @@ describe("plans", () => {
       plan.limits.providerAccounts,
     ]);
     expect(table).toEqual([
-      ["free", 25, 4, 1, 2, 2],
-      ["pro", 150, 12, 4, 10, 6],
-      ["max", 500, 18, 10, null, 8],
+      ["free", 25, null, null, 2, 2],
+      ["pro", 150, null, null, 10, 6],
+      ["max", 500, null, null, null, 12],
       ["max2x", 1000, null, null, null, null],
     ]);
     expect(formatKalVoiceAllowance(limitsFor("max2x"))).toBe("1,000");
@@ -78,11 +78,38 @@ describe("plans", () => {
       ["max", null],
       ["max2x", null],
     ]);
-    const history = getPlanFeature("operations-history");
+    expect(getPlanFeature("operations-history").values).toEqual({
+      free: "Recent 10",
+      pro: "30 days",
+      max: "1 year",
+      max2x: "Maximum",
+    });
+    expect(
+      PLANS.map((plan) => [
+        plan.limits.brainstormsPerMonth,
+        plan.limits.launchRecipes,
+        plan.limits.externalIntegrations,
+        plan.limits.operationsHistoryDays,
+        plan.limits.queuedTasks,
+      ]),
+    ).toEqual([
+      [3, 1, 1, null, 3],
+      [null, 10, 5, 30, null],
+      [null, null, 25, 365, null],
+      [null, null, null, null, null],
+    ]);
+  });
+
+  it("keeps local agents, terminals, Fleet, basic memory and recipes accessible on Free", () => {
     for (const plan of PLANS) {
-      const limit = plan.limits.runHistory;
-      expect(history.values?.[plan.id], plan.id).toBe(limit === null ? "Full" : `Recent ${limit}`);
+      expect(plan.limits.openTerminals).toBeNull();
+      expect(plan.limits.parallelAgents).toBeNull();
     }
+    for (const id of ["agent-fleet", "unified-memory", "launch-recipes", "terminal-smart"]) {
+      expect(planIncludes("free", getPlanFeature(id))).toBe(true);
+    }
+    expect(PLANS.map((plan) => plan.limits.remote)).toEqual(["none", "none", "standard", "full"]);
+    expect(PLANS.map((plan) => plan.limits.autonomy)).toEqual(["manual", "manual", "manual", "maximum"]);
   });
 
   it("gives OWNER no KalCode-side limit", () => {
@@ -95,15 +122,15 @@ describe("plans", () => {
 
   it("formats the plan-card limit lines", () => {
     expect(CORE_LIMITS.map((limit) => formatCoreLimit(getPlan("free").limits, limit))).toEqual([
-      "1 agent",
-      "4 terminals",
+      "Unlimited local agents",
+      "Unlimited local terminals",
       "2 workspaces",
       "2 accounts",
       "25 KalVoice",
     ]);
     expect(CORE_LIMITS.map((limit) => formatCoreLimit(getPlan("max2x").limits, limit))).toEqual([
-      "Unlimited agents",
-      "Unlimited terminals",
+      "Unlimited local agents",
+      "Unlimited local terminals",
       "Unlimited workspaces",
       "Unlimited accounts",
       "1,000 KalVoice",
@@ -165,11 +192,13 @@ describe("plan roadmap", () => {
     expect(
       ["core-code", "core-threads", "core-browser", "kaltidy", "account-hub", "needs-you", "operations"].map(from),
     ).toEqual(Array(7).fill("free"));
-    expect(["agent-fleet", "launch-recipes", "browser-studio", "operations-full"].map(from)).toEqual(
+    expect(["browser-studio", "operations-full", "adaptive-canvas", "mission-control"].map(from)).toEqual(
       Array(4).fill("pro"),
     );
     expect(
-      ["squads", "handoff-chains", "agent-files", "stuck-agents", "mission-control", "deploy", "remote"].map(from),
+      ["squads", "handoff-chains", "agent-files", "stuck-agents", "unified-orchestration", "deploy", "remote"].map(
+        from,
+      ),
     ).toEqual(Array(7).fill("max"));
     expect(["keep-working", "auto-routing", "kalvoice-live", "cloud-capacity"].map(from)).toEqual(
       Array(4).fill("max2x"),

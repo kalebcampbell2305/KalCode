@@ -19,6 +19,7 @@ import { ResourceGovernorSettingsGate } from "../resources/ResourceGovernorSetti
 import { ProfileSettings } from "./ProfileSettings.tsx";
 import { SettingsAccount } from "./SettingsAccount.tsx";
 import styles from "./SettingsPage.module.css";
+import { useSettingsNavigation } from "./settingsIntent.ts";
 import { UpdaterSettings } from "./UpdaterSettings.tsx";
 import { useDiagnosticsActions } from "./useDiagnosticsActions.ts";
 
@@ -30,29 +31,38 @@ function formatOs(family: string): string {
 
 export function SettingsPage() {
   const { info } = useRuntime();
+  const recordFocus = useSettingsNavigation();
   // The display name only appears on Home; without Home (Stable) the setting would do nothing.
   const homeVisible = viewVisible("home", info.flags.features);
   return (
-    <Page title="Settings" description="Changes apply immediately and are saved on this device.">
-      <IntegrationSettings />
-      {/* One column up to wide windows; then permissions get a column of their own. */}
-      <div className={styles.layout}>
-        <div className={styles.column}>
-          {homeVisible ? <ProfileSettings /> : null}
-          <SettingsAccount />
-          <Appearance />
-          <KalVoiceSettings />
-          <ResourceGovernorSettingsGate />
-          <DoctorSettings />
-          <UpdaterSettings />
-          <DiagnosticsSection />
-          <About />
+    <div onFocusCapture={(event) => recordFocus(event.target)}>
+      <Page title="Settings" description="Changes apply immediately and are saved on this device.">
+        <div id="integrations" data-settings-section>
+          <IntegrationSettings />
         </div>
-        <div className={styles.column}>
-          <PermissionsSettings />
+        {/* One column up to wide windows; then permissions get a column of their own. */}
+        <div className={styles.layout}>
+          <div className={styles.column}>
+            {homeVisible ? <ProfileSettings /> : null}
+            <SettingsAccount />
+            <Appearance />
+            <KalVoiceSettings />
+            <div id="resources" data-settings-section>
+              <ResourceGovernorSettingsGate />
+            </div>
+            <div id="doctor" data-settings-section>
+              <DoctorSettings />
+            </div>
+            <UpdaterSettings />
+            <DiagnosticsSection />
+            <About />
+          </div>
+          <div className={styles.column}>
+            <PermissionsSettings />
+          </div>
         </div>
-      </div>
-    </Page>
+      </Page>
+    </div>
   );
 }
 

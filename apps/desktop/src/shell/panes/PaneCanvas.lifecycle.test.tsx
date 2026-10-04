@@ -5,9 +5,63 @@ import { useEffect } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { computeGeometry, contentKey, makeLeaf } from "./model.ts";
 import { CANVAS_GEOMETRY, canvasExtent, hitTest, PaneCanvas, type PaneHost } from "./PaneCanvas.tsx";
+import { dispatchPaneCommand, paneCanvasListening } from "./paneCommands.ts";
 import { type PaneController, usePaneController } from "./usePaneController.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("only the visible retained workspace receives commands and drains its queued commands on return", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const commands = { one: vi.fn(() => ({ handled: true as const })), two: vi.fn(() => ({ handled: true as const })) };
+  const initial: PaneLayout = { schemaVersion: 1, root: makeLeaf([], "pane"), maximizedPaneId: null, dock: [] };
+  const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
+  function Canvas({ id, active }: { id: "one" | "two"; active: boolean }) {
+    const controller = usePaneController({ scope: id, store, initial: () => initial, titleOf: () => id });
+    const host: PaneHost = {
+      describe: () => null,
+      render: () => null,
+      renderEmpty: () => null,
+      addMenu: () => null,
+      onCommand: commands[id],
+    };
+    return controller.ready ? (
+      <PaneCanvas controller={controller} host={host} scope={id} active={active} label={id} />
+    ) : null;
+  }
+  function Harness({ active }: { active: string }) {
+    return (
+      <TooltipProvider>
+        <Canvas id="one" active={active === "one"} />
+        <Canvas id="two" active={active === "two"} />
+      </TooltipProvider>
+    );
+  }
+  const view = render(<Harness active="one" />);
+  await waitFor(() => expect(paneCanvasListening("one")).toBe(true));
+  act(() => {
+    dispatchPaneCommand({ kind: "even" });
+    dispatchPaneCommand({ kind: "even" }, { scope: "two", queue: true });
+  });
+  expect(commands.one).toHaveBeenCalledTimes(1);
+  expect(commands.two).not.toHaveBeenCalled();
+  view.rerender(<Harness active="two" />);
+  expect(commands.two).toHaveBeenCalledTimes(1);
+  expect(paneCanvasListening("two")).toBe(true);
+  view.rerender(<Harness active="one" />);
+  act(() => {
+    dispatchPaneCommand({ kind: "even" });
+  });
+  expect(commands.one).toHaveBeenCalledTimes(2);
+  expect(commands.two).toHaveBeenCalledTimes(1);
+  view.unmount();
+  expect(paneCanvasListening()).toBe(false);
+});
 
 it.each(["terminal", "browser", "widget", "agent"] as const)(
   "retains %s mounts and DOM identity across tabs, moves, minimize, maximize, dock and presets",
@@ -132,6 +186,46 @@ it("keeps every pane readable in dense layouts and maximizes within the viewport
     expect(rect.height).toBeGreaterThanOrEqual(220);
   }
   expect(canvasExtent({ ...layout, maximizedPaneId: "a" }, 640, 480)).toEqual({ width: 640, height: 480 });
+});
+
+it("acknowledges attention through the persistent terminal portal only when the user visits it", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const seen = vi.fn();
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([{ kind: "agent", agentId: "done" }], "left"),
+    maximizedPaneId: null,
+    dock: [],
+  };
+  const host: PaneHost = {
+    describe: () => ({ title: "Finished agent", glyph: null, attention: "completed", onAttentionSeen: seen }),
+    render: () => <input aria-label="Agent prompt" defaultValue="next task" />,
+    renderEmpty: () => null,
+    addMenu: () => null,
+  };
+  const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
+  function Harness() {
+    const controller = usePaneController({ scope: "attention", store, initial: () => initial, titleOf: () => "Agent" });
+    return controller.ready ? <PaneCanvas controller={controller} host={host} label="Test canvas" /> : null;
+  }
+  render(
+    <TooltipProvider>
+      <Harness />
+    </TooltipProvider>,
+  );
+  const input = await screen.findByRole("textbox", { name: "Agent prompt" });
+  expect(seen).not.toHaveBeenCalled();
+  fireEvent.pointerDown(input);
+  expect(seen).toHaveBeenCalledOnce();
+  fireEvent.focus(input);
+  expect(seen).toHaveBeenCalledTimes(2);
+  expect(input).toHaveValue("next task");
 });
 
 it("holds magnetic snap zones through small pointer jitter but releases intentionally", () => {

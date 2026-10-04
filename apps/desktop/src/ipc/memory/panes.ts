@@ -297,6 +297,8 @@ export function createPanesMemory(options: {
     provider_pane_create: async (args) => {
       requireEnabled();
       await options.beforeCreate?.();
+      if (args.switchAccountId !== undefined && typeof args.sourceThreadId !== "string")
+        invalid("pane_switch_source_required", "Choose a coding session before switching accounts.");
       if (typeof args.sourceThreadId === "string") {
         const source = (await threads.handlers.thread_get({ threadId: args.sourceThreadId })) as ThreadSummary;
         if (source.archivedAt !== null || source.permissionMode === "custom")
@@ -304,7 +306,7 @@ export function createPanesMemory(options: {
         args = {
           ...args,
           providerId: source.providerId,
-          providerAccountId: source.providerAccountId,
+          providerAccountId: args.switchAccountId ?? source.providerAccountId,
           workspaceId: source.workspaceId,
           model: source.model,
           effort: source.effort,

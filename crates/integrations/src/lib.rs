@@ -80,6 +80,7 @@ pub struct IntegrationBroker {
     state: Mutex<State>,
     secrets: Arc<dyn SecretStore>,
     authority: Arc<dyn Fn() -> bool + Send + Sync>,
+    connection_limit: Arc<dyn Fn() -> Option<kalcode_core::plans::PlanLimit> + Send + Sync>,
 }
 
 fn now() -> u64 {
@@ -159,6 +160,31 @@ fn write_record(db: &Connection, record: &Record) -> Result<()> {
 }
 
 impl IntegrationBroker {
+    /// Native host supplies the current verified plan. Checked inside the storage lock so
+    /// concurrent saves and OAuth reconnects cannot overbook the allowance.
+    pub fn with_connection_limit(
+        mut self,
+        limit: Arc<dyn Fn() -> Option<kalcode_core::plans::PlanLimit> + Send + Sync>,
+    ) -> Self {
+        self.connection_limit = limit;
+        self
+    }
+
+    fn admit_connection(&self, db: &Connection, existing: Option<&Record>) -> Result<()> {
+        if existing.is_some_and(|r| r.view.connected) {
+            return Ok(());
+        }
+        let Some(limit) = (self.connection_limit)() else {
+            return Ok(());
+        };
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM integrations WHERE json_extract(document, '$.view.connected') = 1", [], |row| row.get(0)
+        ).map_err(|_| Error::Storage)?;
+        limit
+            .admit(count)
+            .map_err(|error| Error::Invalid(error.message))
+    }
+
     /// Bind the broker to the active account lifetime. Revocation is checked again after awaits.
     pub fn with_authority(mut self, authority: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
         self.authority = authority;
@@ -218,6 +244,7 @@ impl IntegrationBroker {
             ));
         }
         let record = read_record(&state.db, id)?;
+        self.admit_connection(&state.db, Some(&record))?;
         // Reconnect uses saved configuration but never silently re-enables old grants.
         let oauth_state = format!(
             "{}{}",
@@ -306,6 +333,7 @@ impl IntegrationBroker {
         if current.view.revision != pending.revision {
             return Err(Error::Changed);
         }
+        self.admit_connection(&state.db, Some(&current))?;
         self.secrets
             .set(&key(&pending.integration_id)?, &token)
             .map_err(|_| Error::CredentialStore)?;
@@ -335,6 +363,10 @@ impl IntegrationBroker {
             }),
             secrets,
             authority: Arc::new(|| true),
+            connection_limit: Arc::new(|| {
+                kalcode_core::plans::PlanTier::Free
+                    .limit(kalcode_core::plans::Limited::ExternalIntegrations)
+            }),
         })
     }
 
@@ -447,6 +479,7 @@ impl IntegrationBroker {
             .as_deref()
             .map(|id| read_record(&state.db, id))
             .transpose()?;
+        self.admit_connection(&state.db, old.as_ref())?;
         let id = old
             .as_ref()
             .map(|r| r.view.id.clone())

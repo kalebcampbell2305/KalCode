@@ -1,6 +1,7 @@
+import { formatLimit, getPlan, limitsFor, PLAN_FEATURE_GROUPS } from "@kalcode/protocol";
 import { Button, Panel } from "@kalcode/ui/components";
 import { LogOut, UserRound } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAccount } from "../../account/AccountProvider.tsx";
 import type { AccountUiError } from "../../account/accountState.ts";
 import {
@@ -11,6 +12,7 @@ import {
   tierName,
 } from "../../ipc/account.ts";
 import { usageLine } from "../../kalvoice/assistantState.ts";
+import { createBrowserBridge } from "../browser/browserBridge.ts";
 import { AccountDisplayName } from "./AccountDisplayName.tsx";
 import styles from "./SettingsAccount.module.css";
 
@@ -35,6 +37,7 @@ export interface SettingsAccountViewProps {
   busy: boolean;
   error: AccountUiError | null;
   onManage(): Promise<void>;
+  onComparePlans?(): Promise<void>;
   onLogout(): Promise<void>;
   /** Saves the account display name; without it the panel shows no name editor. */
   onSaveDisplayName?(displayName: string): Promise<AccountUiError | null>;
@@ -42,6 +45,19 @@ export interface SettingsAccountViewProps {
 
 export function SettingsAccount() {
   const { snapshot, usage, busy, error, actions } = useAccount();
+  const [compareError, setCompareError] = useState<AccountUiError | null>(null);
+  const comparePlans = async () => {
+    setCompareError(null);
+    try {
+      await createBrowserBridge().openExternal("https://kalcoded.com/pricing");
+    } catch {
+      setCompareError({
+        code: "browser_unavailable",
+        message: "Open kalcoded.com/pricing in your browser to compare plans, or try again.",
+        retryable: true,
+      });
+    }
+  };
   // Requests used since the last account action: read fresh usage whenever this section opens.
   const { refreshUsage } = actions;
   useEffect(() => {
@@ -52,7 +68,8 @@ export function SettingsAccount() {
       account={snapshot}
       usage={usage}
       busy={busy}
-      error={error}
+      error={compareError ?? error}
+      onComparePlans={comparePlans}
       onManage={actions.portal}
       onLogout={actions.logout}
       onSaveDisplayName={actions.setDisplayName}
@@ -66,9 +83,16 @@ export function SettingsAccountView({
   busy,
   error,
   onManage,
+  onComparePlans,
   onLogout,
   onSaveDisplayName,
 }: SettingsAccountViewProps) {
+  const limits = limitsFor(account.tier ?? "free");
+  const billingInterval = usage?.billingInterval ?? account.billingInterval;
+  const plan = getPlan(account.tier === "owner" ? "max2x" : (account.tier ?? "free"));
+  const highlights = PLAN_FEATURE_GROUPS.flatMap((group) => group.features).filter((feature) =>
+    plan.cardFeatures.includes(feature.id),
+  );
   const paid = account.tier === "pro" || account.tier === "max" || account.tier === "max2x";
   const usageLabel = usage?.allowance === null ? "Unlimited requests" : usage ? usageLine(usage) : "Usage unavailable";
   // Share of this period's allowance used, for the meter beside the numbers (null when unlimited/unknown).
@@ -79,13 +103,18 @@ export function SettingsAccountView({
       id="kalcode-account"
       title="KalCode account"
       icon={<UserRound />}
-      description="Your name, identity, verified plan, and KalVoice request allowance."
+      description="Your verified plan, workspace capacity and KalVoice cloud allowance."
       padding="none"
       footer={
         <div className={styles.actions}>
           {paid ? (
             <Button disabled={busy} onClick={() => void onManage()}>
               Manage plan
+            </Button>
+          ) : null}
+          {onComparePlans && account.tier !== "owner" ? (
+            <Button variant={paid ? "ghost" : "primary"} disabled={busy} onClick={() => void onComparePlans()}>
+              {paid ? "Compare plans" : "Upgrade plan"}
             </Button>
           ) : null}
           <Button variant="ghost" icon={<LogOut />} disabled={busy} onClick={() => void onLogout()}>
@@ -126,15 +155,61 @@ export function SettingsAccountView({
           </dd>
         </div>
         <div>
-          <dt>Dictation</dt>
-          <dd>Unlimited</dd>
+          <dt>Local coding</dt>
+          <dd>Unlimited local terminals and coding agents</dd>
         </div>
+        <div>
+          <dt>Workspaces</dt>
+          <dd>{formatLimit(limits.workspaces)}</dd>
+        </div>
+        <div>
+          <dt>Provider accounts</dt>
+          <dd>{formatLimit(limits.providerAccounts)} · All supported providers</dd>
+        </div>
+        <div>
+          <dt>Integrations</dt>
+          <dd>{formatLimit(limits.externalIntegrations)}</dd>
+        </div>
+        <div>
+          <dt>Operations history</dt>
+          <dd>
+            {limits.runHistory !== null
+              ? `Recent ${limits.runHistory} runs`
+              : limits.operationsHistoryDays !== null
+                ? `${limits.operationsHistoryDays}-day history`
+                : "Full history"}
+          </dd>
+        </div>
+        <div>
+          <dt>Included capabilities</dt>
+          <dd>
+            {highlights
+              .map((feature) => `${feature.label}${feature.status === "coming_soon" ? " (Coming soon)" : ""}`)
+              .join(" · ")}
+          </dd>
+        </div>
+        <div>
+          <dt>Dictation</dt>
+          <dd>Unlimited on-device · No cloud requests used</dd>
+        </div>
+        {paid ? (
+          <div>
+            <dt>Billing</dt>
+            <dd>
+              {billingInterval === "year"
+                ? "Yearly"
+                : billingInterval === "month"
+                  ? "Monthly"
+                  : "View billing interval in Manage plan"}
+            </dd>
+          </div>
+        ) : null}
         {account.tier === "free" ? (
           <div>
             <dt>Billing</dt>
             <dd>
-              No subscription. {PAID_PLAN_NAMES} add more KalVoice requests; compare plans at{" "}
-              <span data-selectable>kalcoded.com/pricing</span>.
+              No subscription. {PAID_PLAN_NAMES} add workspace capacity, cloud requests and premium workflows; compare
+              plans at <span data-selectable>kalcoded.com/pricing</span>.
             </dd>
           </div>
         ) : null}

@@ -61,6 +61,8 @@ export interface PaneControllerOptions {
   titleOf: (content: PaneContent) => string;
   /** Called for each content of a pane being closed, so the host can end it (a shell terminal ends). */
   onCloseContent?: (content: PaneContent) => void;
+  /** Authorize one pane close before changing its layout; the host owns process cleanup. */
+  requestClose?: (contents: readonly PaneContent[], closed: () => void) => void;
 }
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -134,6 +136,7 @@ export function usePaneController({
   initial,
   titleOf,
   onCloseContent,
+  requestClose,
 }: PaneControllerOptions): PaneController {
   const [layout, setLayout] = useState<PaneLayout>(() => initial());
   const [ready, setReady] = useState(false);
@@ -152,6 +155,8 @@ export function usePaneController({
   titleRef.current = titleOf;
   const onCloseContentRef = useRef(onCloseContent);
   onCloseContentRef.current = onCloseContent;
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
   const initialRef = useRef(initial);
   initialRef.current = initial;
   const lastSaved = useRef<string | null>(null);
@@ -321,6 +326,22 @@ export function usePaneController({
         return pane.paneId;
       },
       close: (paneId) => {
+        const request = requestCloseRef.current;
+        if (request) {
+          const pane = findLeaf(latest.current, paneId);
+          if (!pane) return;
+          const keys = new Set(pane.tabs.map(contentKey));
+          request(pane.tabs, () => {
+            // A tab opened while the confirmation was showing was never part of this close.
+            const now = findLeaf(latest.current, paneId);
+            if (now?.tabs.every((content) => keys.has(contentKey(content)))) {
+              const result = closePane(latest.current, paneId);
+              if (result.closed) setClosed((list) => [result.closed as ClosedPane, ...list].slice(0, CLOSED_KEPT));
+              apply(removeContents(result.layout, keys), "Closed the pane.");
+            } else apply(removeContents(latest.current, keys), "Closed the selected tabs.");
+          });
+          return;
+        }
         const title = paneTitle(paneId);
         const result = closePane(latest.current, paneId);
         if (result.closed) setClosed((list) => [result.closed as ClosedPane, ...list].slice(0, CLOSED_KEPT));

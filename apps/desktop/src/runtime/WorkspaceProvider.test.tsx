@@ -6,7 +6,13 @@ import { describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "./RuntimeProvider.tsx";
-import { useWorkspaces, WorkspaceProvider, type WorkspaceValue } from "./WorkspaceProvider.tsx";
+import {
+  useWorkspaces,
+  useWorkspaceVisible,
+  WorkspaceProvider,
+  WorkspaceScope,
+  type WorkspaceValue,
+} from "./WorkspaceProvider.tsx";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -129,6 +135,55 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true,
 }
 
 describe("WorkspaceProvider lifecycle", () => {
+  it("retains hidden workspace terminals and scopes callbacks without moving focus into that workspace", async () => {
+    const f = await fixture("old");
+    const old = f.native.active;
+    const next = workspace("next");
+    const nextTerminal = { ...terminal, id: "next-terminal", workspaceId: next.id };
+    vi.mocked(f.client.listTerminals).mockImplementation(async (id) => (id === old.id ? [terminal] : [nextTerminal]));
+    vi.mocked(f.client.listWorkspaces).mockResolvedValue([old, next]);
+    mockActions(f.client);
+    vi.spyOn(f.client, "activateWorkspace").mockImplementation(async (id) => {
+      f.native.active = id === old.id ? old : next;
+      return f.native.active;
+    });
+    let scoped!: WorkspaceValue;
+    let visible = false;
+    function Observe() {
+      scoped = useWorkspaces();
+      visible = useWorkspaceVisible();
+      return null;
+    }
+    const view = await mount(f, true, () => (
+      <WorkspaceScope workspace={old}>
+        <Observe />
+      </WorkspaceScope>
+    ));
+    expect(scoped.terminals).toEqual([terminal]);
+    expect(visible).toBe(true);
+    await act(async () => {
+      await view.result.current.activate(next.id);
+    });
+    expect(view.result.current.terminals).toEqual([nextTerminal]);
+    expect(scoped.active?.id).toBe(old.id);
+    expect(scoped.terminals).toEqual([terminal]);
+    expect(scoped.focusRequest.terminalId).toBe("");
+    expect(visible).toBe(false);
+    const focusBefore = view.result.current.focusRequest;
+    act(() => scoped.selectTerminal(terminal.id, true));
+    expect(f.client.setActiveTerminal).toHaveBeenLastCalledWith(old.id, terminal.id);
+    expect(view.result.current.focusRequest).toBe(focusBefore);
+    await act(async () => {
+      await scoped.createTerminal();
+    });
+    expect(f.client.createTerminal).toHaveBeenLastCalledWith(old.id, null, { cols: 120, rows: 30 });
+    expect(view.result.current.active?.id).toBe(next.id);
+    await act(async () => {
+      await view.result.current.activate(old.id);
+    });
+    expect(visible).toBe(true);
+    expect(scoped.terminals).toEqual([terminal]);
+  });
   it("creates in an explicit workspace after activation even through the previous render callback", async () => {
     const f = await fixture("old");
     const next = workspace("service-workspace");

@@ -169,6 +169,24 @@ test.describe("pricing", () => {
     expect(await wrap.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
   });
 
+  test("keeps local agents and terminals unlimited while pricing scale and autonomy", async ({ page }) => {
+    await page.goto("/pricing");
+    await expect(page.locator(".page-head")).toContainText("Unlimited local coding agents + terminals on every plan");
+    for (const plan of PLANS) {
+      const card = page.locator(`.tier[data-plan="${plan.id}"]`);
+      await expect(card.locator('[data-limit="parallelAgents"]')).toContainText("Unlimited local agents");
+      await expect(card.locator('[data-limit="openTerminals"]')).toContainText("Unlimited local terminals");
+    }
+    await expect(page.locator('#plan-max [data-limit="providerAccounts"]')).toContainText("12 accounts");
+    await page.getByText("Compare all features", { exact: true }).click();
+    const integrations = page.locator('[data-feature="external-integrations"]');
+    for (const [index, value] of ["1", "5", "25", "Unlimited"].entries()) {
+      await expect(integrations.locator("td").nth(index)).toHaveText(value);
+    }
+    const history = page.locator('[data-feature="operations-history"]');
+    for (const value of ["Recent 10", "30 days", "1 year", "Maximum"]) await expect(history).toContainText(value);
+  });
+
   test("the FAQ is a keyboard-operable accordion", async ({ page }) => {
     await page.goto("/pricing");
     const question = page.getByText("Does dictation count?");
@@ -205,7 +223,7 @@ test.describe("pricing", () => {
     await expect(main).toContainText("your usage is billed by each provider");
   });
 
-  test("fits desktop and phone widths with no sideways scroll", async ({ page }) => {
+  test("fits desktop and phone widths with no sideways scroll", async ({ page }, testInfo) => {
     for (const [width, height] of [
       [1440, 900],
       [390, 844],
@@ -217,6 +235,7 @@ test.describe("pricing", () => {
         await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
         `${width}px`,
       ).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: testInfo.outputPath(`pricing-${width}.png`), fullPage: true });
       // The head clips its overflow, so check the status chip, lead and toggle themselves.
       for (const selector of [".page-head .chip", ".page-head .lead", "[data-interval-toggle]"]) {
         const box = await page.locator(selector).boundingBox();

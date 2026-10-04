@@ -30,6 +30,7 @@ const HANDLED_EVENTS = new Set([
 ]);
 
 export interface BillingService {
+  status(accountId: string): Promise<Response>;
   checkout(request: Request, accountId: string): Promise<Response>;
   portal(request: Request, accountId: string): Promise<Response>;
   webhook(request: Request): Promise<Response>;
@@ -130,6 +131,22 @@ export function billingService(options: Options): BillingService {
   }
 
   return {
+    async status(accountId) {
+      const subscription = await options.store.subscriptionForAccount(accountId);
+      if (!subscription) return json({ ok: true, billing: { interval: null } }, 200);
+      const raw = await options.stripe.retrieveSubscription(subscription.id);
+      const snapshot = parseStripeSubscription(raw, options.catalog);
+      if (snapshot.id !== subscription.id || snapshot.customerId !== subscription.customerId) {
+        return apiError(503, "billing_unavailable", "Billing details are temporarily unavailable.");
+      }
+      if (snapshot.status === "canceled" || snapshot.status === "incomplete_expired") {
+        return json({ ok: true, billing: { interval: null } }, 200);
+      }
+      // The verified live Price, never an estimate from period length or a client-provided tier.
+      const priceId = (raw as { items: { data: [{ price: { id: string } }] } }).items.data[0].price.id;
+      const interval = options.catalog.planForPrice[priceId]?.interval ?? null;
+      return json({ ok: true, billing: { interval } }, 200);
+    },
     async checkout(request, accountId) {
       const forbidden = noBrowserWrite(request);
       if (forbidden) return forbidden;

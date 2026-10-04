@@ -405,8 +405,8 @@ mod tests {
     fn counts_each_request_once() {
         let conn = conn();
         let id = new_id();
-        assert!(matches!(take(&conn, &id, NOW, Some(75)), Consumption::Recorded(u) if u.used == 1));
-        match take(&conn, &id, NOW, Some(75)) {
+        assert!(matches!(take(&conn, &id, NOW, Some(25)), Consumption::Recorded(u) if u.used == 1));
+        match take(&conn, &id, NOW, Some(25)) {
             Consumption::AlreadyRecorded { usage, execution } => {
                 assert_eq!(usage.used, 1);
                 assert_eq!(
@@ -418,9 +418,9 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let u = usage(&conn, NOW, 1, Some(75)).expect("usage");
+        let u = usage(&conn, NOW, 1, Some(25)).expect("usage");
         assert_eq!(u.used, 1);
-        assert_eq!(u.remaining(), Some(74));
+        assert_eq!(u.remaining(), Some(24));
     }
 
     #[test]
@@ -428,7 +428,7 @@ mod tests {
         let conn = conn();
         let completed = new_id();
         assert!(matches!(
-            take(&conn, &completed, NOW, Some(75)),
+            take(&conn, &completed, NOW, Some(25)),
             Consumption::Recorded(_)
         ));
         assert!(finish(&conn, &completed, OWNER, ExecutionResult::Completed).expect("finish"));
@@ -447,7 +447,7 @@ mod tests {
         );
 
         let failed = new_id();
-        take(&conn, &failed, NOW, Some(75));
+        take(&conn, &failed, NOW, Some(25));
         assert!(
             finish(
                 &conn,
@@ -533,7 +533,7 @@ mod tests {
             ConsumptionContext {
                 now: NOW,
                 anchor_day: 1,
-                allowance: Some(75),
+                allowance: Some(25),
             },
         )
         .expect("consume");
@@ -569,7 +569,7 @@ mod tests {
             ConsumptionContext {
                 now: NOW,
                 anchor_day: 1,
-                allowance: Some(75),
+                allowance: Some(25),
             },
         )
         .expect("nav");
@@ -586,7 +586,7 @@ mod tests {
             ConsumptionContext {
                 now: NOW,
                 anchor_day: 1,
-                allowance: Some(75),
+                allowance: Some(25),
             },
         )
         .expect("stop");
@@ -596,7 +596,7 @@ mod tests {
         assert!(!refund(&conn, &stop, NOW, time::Duration::minutes(2)).expect("irreversible"));
         assert!(refund(&conn, &nav, NOW, time::Duration::minutes(2)).expect("refund"));
         assert!(!refund(&conn, &nav, NOW, time::Duration::minutes(2)).expect("twice"));
-        assert_eq!(usage(&conn, NOW, 1, Some(75)).expect("usage").used, 1);
+        assert_eq!(usage(&conn, NOW, 1, Some(25)).expect("usage").used, 1);
     }
 
     #[test]

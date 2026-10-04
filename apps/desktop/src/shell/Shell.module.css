@@ -4,7 +4,7 @@
  */
 .frame {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
   /* The deep-space atmosphere: a faint star field over blue washes, visible in the gutters
      between opaque panels (tokens.css turns it off in high contrast). */

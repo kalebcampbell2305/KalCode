@@ -47,7 +47,7 @@ import {
 } from "../../kalvoice/useVoiceScene.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
-import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useWorkspaces, useWorkspaceVisible } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
 import { useNavigation, viewVisible } from "../../shell/navigation.tsx";
 import { suggestTask, type TaskLayout } from "../../shell/panes/adaptiveCanvas.ts";
@@ -100,6 +100,8 @@ import { type Organization, useOrganization } from "./organization/useOrganizati
 import { readLaunchMemory } from "./panes/agentLaunch.ts";
 import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
+import { agentAttention, useAgentAttention } from "./useAgentAttention.ts";
+import { SmartCloseDialog, useSmartClose } from "./useSmartClose.tsx";
 import "./paneContents.tsx";
 import {
   BrowserPane,
@@ -220,7 +222,8 @@ function CanvasSkeleton({ label }: { label: string }) {
  * layout of a workspace can include them.
  */
 export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
-  const providerPanes = useProviderPanes(workspace, { active: useNavigation().current === "code" });
+  const workspaceVisible = useWorkspaceVisible();
+  const providerPanes = useProviderPanes(workspace, { active: useNavigation().current === "code" && workspaceVisible });
   if (!providerPanes.loaded) return <>{children(null, <CanvasSkeleton label="Loading panes" />)}</>;
   return (
     <LoadedCanvas workspace={workspace} providerPanes={providerPanes}>
@@ -236,7 +239,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const toast = useToast();
   const accountSessions = useOptionalProviderAccountSessions();
   const hasSharedAccountSessions = accountSessions !== null;
-  const { current, navigate } = useNavigation();
+  const { current, navigate, recordLocation, registerRestorer } = useNavigation();
+  const workspaceVisible = useWorkspaceVisible();
+  const codeShown = current === "code" && workspaceVisible;
   const threadsIntent = useThreadsIntent();
   const theme = useResolvedTheme();
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccount[] | null>(null);
@@ -247,7 +252,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     activeTerminalId,
     focusRequest,
     createTerminal,
-    closeTerminal,
     restartTerminal,
     selectTerminal,
     refresh: refreshWorkspaces,
@@ -260,7 +264,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     terminals,
     shells,
     panes: providerPanes.panes,
-    active: current === "code",
+    active: codeShown,
   });
   const orgItems = organization.byKey;
   useEffect(() => {
@@ -313,19 +317,47 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [terminalById, labels, paneById, accountFor, orgItems],
   );
 
-  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running,
-  // and a launch still held for resources is cancelled rather than starting later without a pane.
-  const stopAgent = useCallback(
-    async (threadId: string) => {
-      if (!paneById.has(threadId)) return;
-      try {
-        providerPanes.updated(await client.stopThread(threadId));
-      } catch (error) {
-        if (import.meta.env.DEV) console.warn("stop on close failed", error);
+  const smartClose = useSmartClose({
+    inspect: async (content) => {
+      if (content.kind === "terminal") {
+        const terminal = (await client.listTerminals(workspace.id)).find((t) => t.id === content.terminalId);
+        return terminal?.status === "running";
+      }
+      if (content.kind === "agent") {
+        const [thread, pane] = await Promise.all([
+          client.getThread(content.agentId),
+          providerPanes.channel.info(content.agentId),
+        ]);
+        return pane?.running !== false || !["completed", "failed", "interrupted", "offline"].includes(thread.status);
+      }
+      return false;
+    },
+    stop: async (content, confirmed) => {
+      if (content.kind === "terminal") {
+        // Use the throwing API: a failed stop must leave the pane visible.
+        const terminal = (await client.listTerminals(workspace.id)).find((t) => t.id === content.terminalId);
+        if (terminal) await client.closeTerminal(content.terminalId, !confirmed);
+        await refreshWorkspaces();
+      } else if (content.kind === "agent") {
+        const [thread, pane] = await Promise.all([
+          client.getThread(content.agentId),
+          providerPanes.channel.info(content.agentId),
+        ]);
+        if (pane?.running === false && ["completed", "failed", "interrupted", "offline"].includes(thread.status))
+          return;
+        if (!confirmed)
+          throw {
+            category: "terminal",
+            code: "agent_still_running",
+            message: "This agent is running.",
+            retryable: true,
+          };
+        providerPanes.updated(await client.stopThread(content.agentId));
       }
     },
-    [paneById, providerPanes, client],
-  );
+  });
+  const agentThreads = useMemo(() => providerPanes.panes.map((entry) => entry.thread), [providerPanes.panes]);
+  const attention = useAgentAttention(agentThreads);
 
   const initialState = useRef({
     terminals,
@@ -361,10 +393,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         initialState.current.panes,
       ),
     titleOf,
-    onCloseContent: (content) => {
-      if (content.kind === "terminal") void closeTerminal(content.terminalId);
-      if (content.kind === "agent") void stopAgent(content.agentId);
-    },
+    requestClose: smartClose.request,
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
@@ -404,7 +433,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     workspaceName: workspace.name,
   };
   // Code stays mounted (hidden) while other pages are shown; KalVoice sees its panes only when shown.
-  const codeShown = current === "code";
   useEffect(() => {
     if (!codeShown) return;
     const registration: VoicePaneSceneRegistration = {
@@ -595,17 +623,47 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const handledFocus = useRef(-1);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs per focus request.
   useEffect(() => {
-    if (!controller.ready || focusRequest.n === handledFocus.current) return;
+    if (!codeShown || !controller.ready || focusRequest.n === handledFocus.current) return;
     // A new terminal's request can arrive before the terminal list has it; wait for it.
     if (!terminalById.has(focusRequest.terminalId)) return;
     handledFocus.current = focusRequest.n;
     seenTerminals.current.add(focusRequest.terminalId);
     controller.show(terminalContent(focusRequest.terminalId), { focus: true });
-  }, [focusRequest, controller.ready, terminalById]);
+  }, [focusRequest, controller.ready, terminalById, codeShown]);
 
   // The terminal in the focused pane is the workspace's active terminal (palette, Dashboard).
   const focusedLeaf = leaves(controller.layout.root).find((l) => l.paneId === controller.focusedPaneId);
   const focusedContent = focusedLeaf?.tabs[focusedLeaf.activeTab];
+  // Pane focus (including Browser and Runs widgets) is application navigation. Replaying
+  // selects the current content by identity without replacing its live state or URL.
+  useEffect(() => {
+    if (!codeShown || !controller.ready) return;
+    recordLocation({
+      destination: "code",
+      workspaceId: workspace.id,
+      label: focusedContent ? titleOf(focusedContent) : workspace.name,
+      ...(focusedContent ? { target: { kind: "pane" as const, content: focusedContent } } : {}),
+    });
+  }, [codeShown, controller.ready, workspace.id, workspace.name, focusedContent, titleOf, recordLocation]);
+  useEffect(
+    () =>
+      registerRestorer((entry, isCurrent) => {
+        if (entry.destination !== "code" || entry.workspaceId !== workspace.id || entry.target?.kind !== "pane")
+          return undefined;
+        const current = controllerRef.current;
+        if (!current.ready) return undefined;
+        const key = contentKey(entry.target.content);
+        const leaf = leaves(current.layout.root).find((pane) =>
+          pane.tabs.some((content) => contentKey(content) === key),
+        );
+        if (!leaf) return false;
+        const content = leaf.tabs.find((content) => contentKey(content) === key);
+        if (!content || !isCurrent()) return false;
+        current.show(content, { focus: true });
+        return true;
+      }),
+    [registerRestorer, workspace.id],
+  );
   const focusedTerminalId = focusedContent?.kind === "terminal" ? focusedContent.terminalId : null;
   const focusedAgentId = focusedContent?.kind === "agent" ? focusedContent.agentId : null;
   // The shell reads only the visible pane's identity; it resolves account metadata from the
@@ -623,10 +681,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   }, [codeShown, controller.ready, workspace.id, focusedAgentId, focusedTerminalId]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: follow the focused pane only.
   useEffect(() => {
-    if (focusedTerminalId && focusedTerminalId !== activeTerminalId && terminalById.has(focusedTerminalId)) {
+    if (
+      codeShown &&
+      focusedTerminalId &&
+      focusedTerminalId !== activeTerminalId &&
+      terminalById.has(focusedTerminalId)
+    ) {
       selectTerminal(focusedTerminalId, false);
     }
-  }, [focusedTerminalId]);
+  }, [focusedTerminalId, codeShown]);
 
   // Agent tabs whose threads no longer exist leave the layout once a list read succeeded (else
   // they'd wait on "Connecting" forever). Ids just announced by a command are kept until the
@@ -644,7 +707,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   // Z7-W3: a Dashboard card, a notification or KalVoice asked to focus a provider pane's thread.
   usePaneFocusRequests((threadId) => {
-    if (!controller.ready || !paneById.has(threadId)) return false;
+    if (!codeShown || !controller.ready || !paneById.has(threadId)) return false;
     controller.replace(migrateAgentContents(controller.layout, new Set([threadId])));
     controller.show(agentContent(threadId), { focus: true });
     return true;
@@ -687,21 +750,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     }
     return handler;
   }, []);
-  // One stable close handler per thread for the ended bar: stops the agent and drops its tab.
-  const closeAgentHandlers = useRef(new Map<string, () => void>());
-  const stopAgentRef = useRef(stopAgent);
-  stopAgentRef.current = stopAgent;
-  const closeAgentFor = useCallback((threadId: string) => {
-    let handler = closeAgentHandlers.current.get(threadId);
-    if (!handler) {
-      handler = () => {
-        void stopAgentRef.current(threadId);
-        controllerRef.current.forget(new Set([contentKey(agentContent(threadId))]));
-      };
-      closeAgentHandlers.current.set(threadId, handler);
-    }
-    return handler;
-  }, []);
+  const requestContentClose = useCallback(
+    (content: PaneContent) => {
+      void smartClose.request([content], () => controllerRef.current.forget(new Set([contentKey(content)])));
+    },
+    [smartClose.request],
+  );
+  const closeAgentFor = useCallback(
+    (threadId: string) => () => requestContentClose(agentContent(threadId)),
+    [requestContentClose],
+  );
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
   // A fresh launcher never shows the previous launch's refusal.
@@ -758,15 +816,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   // ---------- Contents ----------
-  // Closing a terminal's tab ends it (the shell and everything it started, owner decision). The
-  // tab leaves the layout at once; ending the process tree finishes in the background, and a
-  // failure is reported by `closeTerminal` (the terminal then stays listed in the background).
   const closeTerminalTab = useCallback(
-    (terminalId: string) => {
-      controllerRef.current.forget(new Set([contentKey(terminalContent(terminalId))]));
-      void closeTerminal(terminalId);
-    },
-    [closeTerminal],
+    (terminalId: string) => requestContentClose(terminalContent(terminalId)),
+    [requestContentClose],
   );
 
   const restartById = useCallback((terminalId: string) => void restartTerminal(terminalId), [restartTerminal]);
@@ -918,11 +970,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         tone: "danger",
         onSelect: () => {
           if (terminal) closeTerminalTab(terminal.id);
-          else if (entry)
-            runMenuAction(`close:${key}`, "Closing agent", async () => {
-              providerPanes.updated(await client.stopThread(entry.thread.id));
-              controllerRef.current.forget(new Set([key]));
-            });
+          else if (entry) requestContentClose(agentContent(entry.thread.id));
         },
       });
       return items;
@@ -938,6 +986,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       client,
       refreshWorkspaces,
       closeTerminalTab,
+      requestContentClose,
     ],
   );
 
@@ -984,16 +1033,40 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             entry.info?.running && entry.info.instanceId ? (
               <TerminalImageButton targetKey={terminalImageTargetKey("agent", entry.thread.id)} />
             ) : undefined,
-          // Closing the tab stops the agent and takes the pane thread out of the layout.
-          onClose: () => {
-            void stopAgent(entry.thread.id);
-            controllerRef.current.forget(new Set([contentKey(agentContent(entry.thread.id))]));
-          },
+          attention: attention.pending.get(entry.thread.id),
+          onAttentionSeen: () => attention.acknowledge(entry.thread.id),
+          stateLabel:
+            agentAttention(entry.thread) === "needs-you"
+              ? "Needs You"
+              : entry.thread.status === "completed"
+                ? "Done"
+                : undefined,
+          onClose: () => requestContentClose(agentContent(entry.thread.id)),
         };
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminalTab, accountFor, stopAgent, orgItems],
+    [terminalById, labels, paneById, closeTerminalTab, accountFor, requestContentClose, orgItems, attention],
+  );
+
+  const continueWithAccount = useCallback(
+    async (threadId: string, accountId: string) => {
+      const source = paneById.get(threadId)?.thread;
+      const input = source ? duplicatePaneInput(source) : null;
+      if (!input) throw new Error("This coding session cannot be continued with its current settings.");
+      const created = await providerPanes.channel.create({ ...input, switchAccountId: accountId });
+      pendingAgents.current.add(created.id);
+      const content = agentContent(created.id);
+      const current = controllerRef.current;
+      const pane = leaves(current.layout.root).find((leaf) =>
+        leaf.tabs.some((tab) => contentKey(tab) === contentKey(agentContent(threadId))),
+      );
+      current.forget(new Set([contentKey(content)]));
+      current.show(content, { paneId: pane?.paneId, focus: true, placement: "tab" });
+      // Creation succeeded. A failed list refresh must not invite a duplicate launch on retry.
+      void Promise.all([refreshWorkspaces(), providerPanes.refresh()]).catch(() => undefined);
+    },
+    [paneById, providerPanes, refreshWorkspaces],
   );
 
   const render = useCallback(
@@ -1006,7 +1079,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             workspaceId={workspace.id}
             context={context}
             controllerRef={controllerRef}
-            visible={current === "code" && context.visible !== false}
+            visible={codeShown && context.visible !== false}
             initialUrl={initialBrowserUrls.current.get(content.browserId)}
           />
         );
@@ -1042,8 +1115,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             theme={theme}
             focusRequest={context.focusRequest}
             visible={context.visible !== false && codeShown}
+            closePending={smartClose.pending !== null}
             throttled={!context.focused || !codeShown}
             onChanged={providerPanes.updated}
+            onContinue={continueWithAccount}
             onHandOff={handOffFor(entry.thread.id)}
             onClose={closeAgentFor(entry.thread.id)}
           />
@@ -1060,12 +1135,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       restartById,
       closeTerminalTab,
       providerPanes,
-      current,
       codeShown,
       accountFor,
       browserBridge,
       handOffFor,
       closeAgentFor,
+      continueWithAccount,
+      smartClose.pending,
     ],
   );
 
@@ -1464,6 +1540,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   return (
     <>
+      <SmartCloseDialog close={smartClose} />
       <UtilityDockRegistration />
       <CodeContextOperationsRegistration />
       {children(api, canvas)}

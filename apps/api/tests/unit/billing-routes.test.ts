@@ -26,6 +26,7 @@ function fakeStore(overrides: Record<string, unknown> = {}): BillingStore {
     })),
     bindCustomer: vi.fn(async () => true),
     customerForAccount: vi.fn(async () => "cus_12345678"),
+    subscriptionForAccount: vi.fn(async () => ({ id: "sub_12345678", customerId: "cus_12345678" })),
     reserveCheckout: vi.fn(async ({ idempotencyKey }) => ({ status: "reserved" as const, idempotencyKey })),
     bindCheckoutParameters: vi.fn(async ({ parameters }) => ({
       parameters: { ...parameters, expiresAt: Math.floor(NOW.getTime() / 1000) + 2100 },
@@ -103,6 +104,37 @@ async function signedWebhook(event: unknown, secret = "whsec_test", timestamp = 
 }
 
 describe("billing routes", () => {
+  it("reports the actual catalog interval without creating billing objects", async () => {
+    const stripe = fakeStripe();
+    const store = fakeStore();
+    const billing = billingService({ store, stripe, catalog, webhookSecret: "whsec_test", now: () => NOW });
+    expect(await (await billing.status("acct_123")).json()).toEqual({ ok: true, billing: { interval: "month" } });
+    const subscription = (await stripe.retrieveSubscription("sub_12345678")) as {
+      items: { data: [{ price: { id: string } }] };
+    };
+    subscription.items.data[0].price.id = "price_max_year_456";
+    vi.mocked(stripe.retrieveSubscription).mockResolvedValue(subscription);
+    expect(await (await billing.status("acct_123")).json()).toEqual({ ok: true, billing: { interval: "year" } });
+    vi.mocked(store.subscriptionForAccount).mockResolvedValue(null);
+    expect(await (await billing.status("acct_free")).json()).toEqual({ ok: true, billing: { interval: null } });
+    expect(stripe.createCustomer).not.toHaveBeenCalled();
+    expect(stripe.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it("refuses another customer's subscription details", async () => {
+    const store = fakeStore({
+      subscriptionForAccount: vi.fn(async () => ({ id: "sub_12345678", customerId: "cus_other" })),
+    });
+    const billing = billingService({
+      store,
+      stripe: fakeStripe(),
+      catalog,
+      webhookSecret: "whsec_test",
+      now: () => NOW,
+    });
+    expect((await billing.status("acct_123")).status).toBe(503);
+  });
+
   it("holds checkout before any billing effects while retaining existing-customer portal access", async () => {
     const store = fakeStore();
     const stripe = fakeStripe();

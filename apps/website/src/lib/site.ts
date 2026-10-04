@@ -138,7 +138,7 @@ export const PAGES = [
   {
     path: "/pricing",
     title: "Pricing & Plans — KalCode",
-    description: `Compare KalCode ${PLAN_NAMES} plans, billed monthly or yearly. Find the right limits for coding agents, terminals, workspaces and KalVoice Requests.`,
+    description: `Compare KalCode ${PLAN_NAMES} plans, monthly or yearly. Unlimited local coding agents and terminals. Upgrade workflow, scale and autonomy.`,
   },
   {
     path: "/download",

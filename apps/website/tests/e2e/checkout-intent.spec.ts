@@ -53,6 +53,8 @@ async function mockApi(page: Page, account: Account) {
       account.activated = true;
       account.tier = "free";
       body = { ok: true };
+    } else if (path === "/v1/billing/status") {
+      body = { ok: true, billing: { interval: "year" } };
     } else if (path === "/v1/billing/checkout") {
       calls.checkout.push(request.postDataJSON());
       body = { ok: true, url: STRIPE };
@@ -194,7 +196,7 @@ test.describe("checkout intent", () => {
     const calls = await mockApi(page, { signedIn: true, activated: false, tier: "free" });
     await page.goto("/account?plan=free&interval=month");
     await expect(page.locator("[data-account-status]")).toHaveText("Free is active.");
-    await expect(page.locator("[data-account-plan]")).toHaveText("FREE");
+    await expect(page.locator("[data-account-plan]")).toHaveText(getPlan("free").name);
     expect(calls.activateFree).toBe(1);
     expect(calls.checkout).toEqual([]);
     expect(await storedIntent(page)).toBeNull();
@@ -214,11 +216,20 @@ test.describe("checkout intent", () => {
     const calls = await mockApi(page, { signedIn: true, activated: true, tier: "free" });
     for (const query of ["plan=owner&interval=month", "plan=max&interval=week", "plan=max&plan=pro", "plan=MAX"]) {
       await page.goto(`/account?${query}`);
-      await expect(page.locator("[data-account-plan]")).toHaveText("FREE");
+      await expect(page.locator("[data-account-plan]")).toHaveText(getPlan("free").name);
       expect(await storedIntent(page), query).toBeNull();
     }
     expect(calls.checkout).toEqual([]);
     await expect(page.locator("[data-checkout-intent]")).toBeHidden();
+  });
+
+  test("shows canonical scale entitlements and the actual billing interval", async ({ page }) => {
+    await mockApi(page, { signedIn: true, activated: true, tier: "max" });
+    await page.goto("/account");
+    await expect(page.locator("[data-account-workspaces]")).toHaveText("Unlimited");
+    await expect(page.locator("[data-account-providers]")).toHaveText("12");
+    await expect(page.locator("[data-account-integrations]")).toHaveText("25");
+    await expect(page.locator("[data-account-interval]")).toHaveText("Yearly");
   });
 
   test("account buttons check out with the selected interval", async ({ page }) => {

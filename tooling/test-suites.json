@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 23,
-          "skippedMaximum": 23,
+          "skippedMinimum": 24,
+          "skippedMaximum": 24,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 20,
-          "skippedMaximum": 20,
+          "skippedMinimum": 21,
+          "skippedMaximum": 21,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 365,
+          "minimumExecuted": 372,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
@@ -378,6 +378,10 @@
     {
       "path": "crates/providers/tests/codex_certification_real.rs",
       "reason": "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"
+    },
+    {
+      "path": "crates/providers/tests/cursor_real.rs",
+      "reason": "requires KALCODE_TEST_CURSOR_BIN containing an official Cursor Agent installation"
     },
     {
       "path": "crates/providers/tests/gemini_sign_in_real.rs",

@@ -7,6 +7,8 @@ import {
   moveQueueItem,
   operationDurationLabel,
   orderedQueue,
+  planActivityHistory,
+  planRunHistory,
   queueSections,
 } from "./model.ts";
 
@@ -148,5 +150,63 @@ describe("Operations view model", () => {
     expect(result.rangeNote).toMatch(/no completed release is recorded/i);
     expect(result.rows).toEqual([]);
     expect(result.bins.length).toBeLessThanOrEqual(56);
+  });
+});
+
+describe("plan history retention", () => {
+  const observedAt = "2026-10-04T12:00:00Z";
+  function completed(id: string, daysAgo: number): OperationRecord {
+    return {
+      ...record(id, "succeeded", "next", 0),
+      endedAt: new Date(Date.parse(observedAt) - daysAgo * 86_400_000).toISOString(),
+    };
+  }
+  it("keeps Pro's last 30 days and Max's last year without hiding ongoing work", () => {
+    const active = { ...record("active", "running", "next", 0), startedAt: "2020-01-01T00:00:00Z" };
+    const runs = [
+      completed("recent", 1),
+      completed("boundary", 30),
+      completed("old", 31),
+      completed("year", 365),
+      completed("older", 366),
+      active,
+    ];
+    expect(planRunHistory(runs, "pro", observedAt).map((run) => run.id)).toEqual(["recent", "boundary", "active"]);
+    expect(planRunHistory(runs, "max", observedAt).map((run) => run.id)).toEqual([
+      "recent",
+      "boundary",
+      "old",
+      "year",
+      "active",
+    ]);
+    expect(planRunHistory(runs, "max2x", observedAt)).toEqual(runs);
+    expect(planRunHistory(runs, "pro", observedAt, "older").map((run) => run.id)).toContain("older");
+  });
+  it("shows Free ten recent finished runs while retaining active work", () => {
+    const runs = Array.from({ length: 12 }, (_, index) => completed(String(index), index));
+    runs.push(record("active", "running", "next", 0));
+    expect(planRunHistory(runs, "free", observedAt).map((run) => run.id)).toEqual([
+      ...Array.from({ length: 10 }, (_, index) => String(index)),
+      "active",
+    ]);
+  });
+});
+
+describe("Activity history plan retention", () => {
+  it("keeps Starter recent and applies Pro/Max windows without truncating Max 2X", () => {
+    const observedAt = "2026-10-04T12:00:00Z";
+    const events: OperationActivity[] = Array.from({ length: 13 }, (_, i) => ({
+      id: String(i),
+      at: new Date(Date.parse(observedAt) - i * 31 * 86_400_000).toISOString(),
+      kind: "run",
+      name: "Completed",
+      area: "Code",
+      workspaceId: null,
+      runId: null,
+    }));
+    expect(planActivityHistory(events, "free", observedAt)).toHaveLength(10);
+    expect(planActivityHistory(events, "pro", observedAt).map((event) => event.id)).toEqual(["0"]);
+    expect(planActivityHistory(events, "max", observedAt)).toHaveLength(12);
+    expect(planActivityHistory(events, "max2x", observedAt)).toEqual(events);
   });
 });

@@ -18,6 +18,20 @@ async function setup() {
 }
 
 describe("terminal client", () => {
+  it("an automatic close refuses a live or restarted shell", async () => {
+    const { client, workspace } = await setup();
+    const terminal = await client.createTerminal(workspace.id, "cmd", { cols: 80, rows: 24 });
+    await expect(client.closeTerminal(terminal.id, true)).rejects.toMatchObject({ code: "terminal_still_running" });
+    expect((await client.listTerminals(workspace.id))[0]?.status).toBe("running");
+    await client.writeTerminal(terminal.id, "exit 0\r");
+    await tick();
+    await client.restartTerminal(terminal.id, { cols: 80, rows: 24 });
+    await expect(client.closeTerminal(terminal.id, true)).rejects.toMatchObject({ code: "terminal_still_running" });
+    await client.writeTerminal(terminal.id, "exit 0\r");
+    await tick();
+    await client.closeTerminal(terminal.id, true);
+    expect(await client.listTerminals(workspace.id)).toEqual([]);
+  });
   it("clamps sizes to what native accepts", () => {
     expect(clampTerminalSize({ cols: 0, rows: 5000 })).toEqual({ cols: 2, rows: 1000 });
     expect(clampTerminalSize({ cols: 80.7, rows: Number.NaN })).toEqual({ cols: 80, rows: 2 });

@@ -213,3 +213,33 @@ it("closing a pane hands every content it held to the host to close (a shell ter
   act(() => result.current.close("pane"));
   expect(onCloseContent.mock.calls.map(([content]) => content)).toEqual([terminal("one"), terminal("two")]);
 });
+
+it("requests one close for all tabs and preserves work opened while the decision is pending", async () => {
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([terminal("one"), terminal("two")], "pane", 0),
+    maximizedPaneId: null,
+    dock: [],
+  };
+  const requestClose = vi.fn();
+  const onCloseContent = vi.fn();
+  const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
+  const { result } = renderHook(() =>
+    usePaneController({
+      scope: "smart-close",
+      store,
+      initial: () => initial,
+      titleOf: () => "Terminal",
+      requestClose,
+      onCloseContent,
+    }),
+  );
+  await waitFor(() => expect(result.current.ready).toBe(true));
+  act(() => result.current.close("pane"));
+  expect(requestClose).toHaveBeenCalledExactlyOnceWith([terminal("one"), terminal("two")], expect.any(Function));
+  expect(result.current.layout).toEqual(initial);
+  expect(onCloseContent).not.toHaveBeenCalled();
+  act(() => result.current.show(terminal("new")));
+  act(() => requestClose.mock.calls[0]?.[1]());
+  expect(findLeaf(result.current.layout, "pane")?.tabs).toEqual([terminal("new")]);
+});

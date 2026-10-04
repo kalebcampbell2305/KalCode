@@ -191,18 +191,18 @@ fn plan_limits_follow_the_verified_plan() {
     };
     let max = |snapshot: &AccountSnapshot, kind| snapshot.plan_limit(kind).map(|limit| limit.max);
     let free = active(AccountTier::Free);
-    assert_eq!(free.terminal_limit().map(|limit| limit.max), Some(4));
-    assert_eq!(max(&free, Limited::ParallelAgents), Some(1));
+    assert_eq!(free.terminal_limit().map(|limit| limit.max), None);
+    assert_eq!(max(&free, Limited::ParallelAgents), None);
     assert_eq!(max(&free, Limited::Workspaces), Some(2));
     assert_eq!(max(&free, Limited::ProviderAccounts), Some(2));
     assert_eq!(max(&free, Limited::QueuedTasks), Some(3));
     let pro = active(AccountTier::Pro);
-    assert_eq!(pro.terminal_limit().map(|limit| limit.max), Some(12));
-    assert_eq!(max(&pro, Limited::ParallelAgents), Some(4));
+    assert_eq!(pro.terminal_limit().map(|limit| limit.max), None);
+    assert_eq!(max(&pro, Limited::ParallelAgents), None);
     assert_eq!(max(&pro, Limited::QueuedTasks), None);
-    // MAX is capped at 18 terminals now; only MAX 2X and Owner are uncapped.
+    // Every plan has unlimited local terminals and coding agents.
     let max_plan = active(AccountTier::Max);
-    assert_eq!(max_plan.terminal_limit().map(|limit| limit.max), Some(18));
+    assert_eq!(max_plan.terminal_limit().map(|limit| limit.max), None);
     assert_eq!(max(&max_plan, Limited::Workspaces), None);
     for tier in [AccountTier::Max2x, AccountTier::Owner] {
         assert_eq!(active(tier).terminal_limit(), None, "{tier:?}");
