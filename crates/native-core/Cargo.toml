@@ -11,6 +11,7 @@ publish = false
 name = "kalcode_core"
 
 [dependencies]
+sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 kalcode-pty = { path = "../pty" }
 kalcode-contracts = { path = "../contracts" }
 serde.workspace = true

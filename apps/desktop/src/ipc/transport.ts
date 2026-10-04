@@ -148,6 +148,7 @@ export type CommandName =
   | "shells_list"
   | "terminal_list"
   | "terminal_create"
+  | "terminal_duplicate"
   | "terminal_restart"
   | "terminal_close"
   | "terminal_rename"

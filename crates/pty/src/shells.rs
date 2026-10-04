@@ -46,12 +46,23 @@ fn find_on_path(path: Option<&std::ffi::OsStr>, file: &str) -> Option<PathBuf> {
         .find(|p| p.is_absolute() && p.is_file())
 }
 
+// PowerShell keeps its provider location separate from the process directory. Synchronize
+// filesystem locations at each prompt so native duplication can read cwd without injecting
+// input into the source session. Preserve the user's profile and original prompt.
+#[cfg(windows)]
+const POWERSHELL_PROMPT: &str = "$global:KalCodeOriginalPrompt = $function:prompt; function global:prompt { if ($pwd.Provider.Name -eq 'FileSystem') { [System.Environment]::CurrentDirectory = $pwd.ProviderPath }; & $global:KalCodeOriginalPrompt }";
+
 #[cfg(windows)]
 fn platform_shells() -> Vec<ShellInfo> {
     let mut shells = Vec::new();
     // Only a real executable: a `pwsh.cmd` or `.bat` earlier on PATH is not PowerShell.
     if let Some(pwsh) = find_on_path(std::env::var_os("PATH").as_deref(), "pwsh.exe") {
-        shells.push(shell("pwsh", "PowerShell 7", pwsh, &["-NoLogo"]));
+        shells.push(shell(
+            "pwsh",
+            "PowerShell 7",
+            pwsh,
+            &["-NoLogo", "-NoExit", "-Command", POWERSHELL_PROMPT],
+        ));
     }
     // Every location comes from an absolute path: a relative `SystemRoot`, `ComSpec` or
     // `ProgramFiles` would resolve against KalCode's current folder.
@@ -65,7 +76,7 @@ fn platform_shells() -> Vec<ShellInfo> {
             "powershell",
             "Windows PowerShell",
             powershell,
-            &["-NoLogo"],
+            &["-NoLogo", "-NoExit", "-Command", POWERSHELL_PROMPT],
         ));
     }
     let cmd = std::env::var_os("ComSpec")

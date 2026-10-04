@@ -1,8 +1,15 @@
 import type { PaneInfo, ProviderAccount, ThreadSummary } from "@kalcode/protocol";
 import { expect, it } from "vitest";
-import { canStopPane, duplicatePaneInput, paneRebindAccounts } from "./paneContextActions.ts";
+import {
+  canStopPane,
+  duplicatePaneInput,
+  duplicatePlacement,
+  paneRebindAccounts,
+  rememberDuplicatePlacement,
+} from "./paneContextActions.ts";
 
 const thread = {
+  id: "source",
   providerId: "codex",
   providerAccountId: "current",
   archivedAt: null,
@@ -51,6 +58,7 @@ it("duplicates exact launch settings without widening permission mode or copying
     effort: "high",
   } as ThreadSummary;
   expect(duplicatePaneInput(source)).toEqual({
+    sourceThreadId: "source",
     providerId: "codex",
     providerAccountId: "current",
     workspaceId: "clicked-workspace",
@@ -68,4 +76,12 @@ it("offers Stop for a live or queued coding agent and omits it after the process
   expect(canStopPane({ ...thread, status: "starting" }, null)).toBe(true);
   expect(canStopPane({ ...thread, status: "waiting_for_dependency" }, null)).toBe(true);
   expect(canStopPane({ ...thread, status: "completed" }, { running: false } as PaneInfo)).toBe(false);
+});
+
+it("defaults to beside the source and remembers the selected workspace placement", () => {
+  expect(duplicatePlacement("new-workspace")).toBe("split");
+  rememberDuplicatePlacement("new-workspace", "tab");
+  expect(duplicatePlacement("new-workspace")).toBe("tab");
+  expect(duplicatePlacement("different-workspace")).toBe("split");
+  rememberDuplicatePlacement("new-workspace", "split");
 });

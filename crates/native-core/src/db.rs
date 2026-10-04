@@ -81,6 +81,11 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0023_cursor_accounts.sql"),
     },
     UNIFIED_MEMORY_MIGRATION,
+    Migration {
+        version: 25,
+        name: "terminal_directory",
+        sql: include_str!("../migrations/0025_terminal_directory.sql"),
+    },
 ];
 
 /// Shared, provider-independent project memory and its incremental full-text index.
