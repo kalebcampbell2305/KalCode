@@ -4,15 +4,15 @@ import type { FixStatus } from "./FixStatus.ts";
 /**
  * One entry of the fix log.
  */
-export type FixLogEntry = {
+export type FixLogEntry = { 
 /**
  * The fix log id (`None` while the fix waits for approval).
  */
-id: string | null, findingCode: string, fixCode: string, workspaceId: string | null, summary: string, status: FixStatus, approvalId: string | null, appliedAt: string | null, revertedAt: string | null,
+id: string | null, findingCode: string, fixCode: string, workspaceId: string | null, summary: string, status: FixStatus, approvalId: string | null, appliedAt: string | null, revertedAt: string | null, 
 /**
  * Undo is possible now.
  */
-canUndo: boolean,
+canUndo: boolean, 
 /**
  * Why it failed (stable code) when `status` is `failed`.
  */

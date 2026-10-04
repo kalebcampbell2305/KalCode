@@ -4,19 +4,19 @@ import type { FixOption } from "./FixOption.ts";
 /**
  * What Fix will do, shown before anything runs (DOC-03).
  */
-export type FixPreview = { runId: string, findingCode: string, fix: FixOption,
+export type FixPreview = { runId: string, findingCode: string, fix: FixOption, 
 /**
  * Every change, one line each ("Adds the line /.env to .gitignore").
  */
-changes: Array<string>,
+changes: Array<string>, 
 /**
  * The file or setting that changes, for display.
  */
-target: string | null,
+target: string | null, 
 /**
  * How to undo it, in plain words.
  */
-undo: string,
+undo: string, 
 /**
  * The permission engine asks you before it runs (always, for Doctor fixes).
  */

@@ -5,19 +5,19 @@ import type { DoctorFinding } from "./DoctorFinding.ts";
 import type { FindingCounts } from "./FindingCounts.ts";
 import type { RunStatus } from "./RunStatus.ts";
 
-export type DoctorRun = { id: string, status: RunStatus, startedAt: string, finishedAt: string | null,
+export type DoctorRun = { id: string, status: RunStatus, startedAt: string, finishedAt: string | null, 
 /**
  * Areas this run covers.
  */
-areas: Array<DoctorArea>,
+areas: Array<DoctorArea>, 
 /**
  * The project the "current project" checks looked at.
  */
-workspaceId: string | null, workspaceName: string | null,
+workspaceId: string | null, workspaceName: string | null, 
 /**
  * Per-check timeout in milliseconds (15 s).
  */
-timeoutMs: number, checks: Array<CheckResult>, findings: Array<DoctorFinding>, counts: FindingCounts,
+timeoutMs: number, checks: Array<CheckResult>, findings: Array<DoctorFinding>, counts: FindingCounts, 
 /**
  * False when ignores and the fix log last only for this session (schema v16 not installed).
  */

@@ -42,7 +42,7 @@ const PLAN_AUTHORITY_TOOLS: &[&str] = &[
     "list_mcp_resources",
 ];
 
-//// Profile-scoped launch material shared by headless sessions and interactive panes.
+/// Profile-scoped launch material shared by headless sessions and interactive panes.
 ///
 /// A managed session runs in the real workspace with the user's native Gemini configuration
 /// (native provider parity): user and workspace settings, `GEMINI.md`, MCP servers, extensions,
