@@ -119,38 +119,38 @@ export const OWNER_PAGE = {
 export const PAGES = [
   {
     path: "/",
-    title: "KalCode — AI engineering. One workspace.",
+    title: "KalCode — AI Coding Workspace for Claude Code & Codex",
     description:
-      "KalCode is the desktop workspace for AI coding. Run Claude Code and Codex agents in real terminals, see every agent in Agent Fleet, preview your app in Live Browser and control it all with KalVoice. Try it live in your browser.",
+      "KalCode brings Claude Code and Codex into one AI coding workspace. Run agents in real terminals, preview your app and use KalVoice. Explore the official site.",
   },
   {
     path: "/product",
-    title: "Product — KalCode",
+    title: "AI Coding Workspace Features — KalCode",
     description:
-      "The KalCode workspace piece by piece: terminals and panes, provider threads, the Dashboard, permission modes, KalVoice and local-first storage, with an honest table of what is built today and what is planned.",
+      "Explore KalCode's AI coding workspace: agent terminals, provider threads, Dashboard, KalVoice and local-first storage. See available features and the roadmap.",
   },
   {
     path: "/kalvoice",
-    title: "KalVoice — KalCode",
+    title: "KalVoice: Voice Commands for AI Coding — KalCode",
     description:
       "KalVoice is the voice layer in KalCode: hold F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace. In development.",
   },
   {
     path: "/pricing",
-    title: "Pricing — KalCode",
-    description: `KalCode plans: ${PLAN_NAMES}, monthly or yearly. Plans scale coding agents, open terminals, workspaces, provider accounts and KalVoice Requests; every plan includes the Plan, Approve and Auto modes and unlimited on-device dictation. AI usage stays on your own provider account.`,
+    title: "Pricing & Plans — KalCode",
+    description: `Compare KalCode ${PLAN_NAMES} plans, billed monthly or yearly. Find the right limits for coding agents, terminals, workspaces and KalVoice Requests.`,
   },
   {
     path: "/download",
-    title: "Download — KalCode",
+    title: "Download KalCode — Official Desktop App",
     description:
-      "Download KalCode for your platform, with the version, size and SHA-256 of every build — or join early access while there is no public build yet.",
+      "Get the official KalCode desktop app. Find available Windows and macOS downloads, release details and checksums, and start your AI coding workspace.",
   },
   {
     path: "/docs",
-    title: "Docs — KalCode",
+    title: "Documentation & Setup Guide — KalCode",
     description:
-      "Documentation for KalCode as it is designed: permissions, providers, KalVoice, and local-first storage.",
+      "Get started with KalCode: connect your coding providers, choose permissions, use KalVoice and learn how your AI coding workspace stores data locally.",
   },
   {
     path: "/docs/permissions",
@@ -178,7 +178,7 @@ export const PAGES = [
   },
   {
     path: "/updates",
-    title: "Updates — KalCode",
+    title: "Release Notes & Product Updates — KalCode",
     description:
       "KalCode product updates: Windows releases, KalVoice progress, provider workspace improvements and meaningful product news without the engineering noise.",
   },
@@ -192,7 +192,7 @@ export const PAGES = [
     path: "/privacy",
     title: "Privacy — KalCode",
     description:
-      "What kalcoded.com collects (only early-access emails), where it is stored, how to remove your email, and how KalVoice keeps voice audio on your device.",
+      "Read KalCode's privacy notice for the website, accounts and desktop app, including data storage, email removal and on-device voice processing.",
   },
   {
     path: "/terms",

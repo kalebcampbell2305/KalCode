@@ -134,6 +134,7 @@
     "allow-shells-list",
     "allow-terminal-list",
     "allow-terminal-create",
+    "allow-terminal-duplicate",
     "allow-terminal-restart",
     "allow-terminal-close",
     "allow-terminal-rename",

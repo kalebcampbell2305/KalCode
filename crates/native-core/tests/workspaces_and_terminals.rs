@@ -1130,3 +1130,137 @@ fn logout_releases_terminal_epoch_authority_before_next_account_starts() {
     core.drain_terminals_for_logout()
         .expect("second verified drain");
 }
+
+#[test]
+fn duplicate_terminal_is_independent_preserves_directory_and_omits_transient_environment() {
+    let dir = tempfile::tempdir().expect("temp");
+    let core = open(dir.path());
+    let project = tempfile::tempdir().expect("project");
+    let nested = project.path().join("nested folder");
+    std::fs::create_dir(&nested).expect("nested");
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let original = core
+        .create_terminal(&workspace.id, Some(&test_shell(&core)), size(), None)
+        .expect("original");
+    core.rename_terminal(&original.id, "Build / review")
+        .expect("rename");
+    let output = Output::attach(&core, &original.id);
+    let change = if cfg!(windows) {
+        format!(
+            "cd /d \"{}\"\r\nset KALCODE_DUPLICATE_SECRET=private-marker\r\necho READY%KALCODE_DUPLICATE_SECRET%\r\n",
+            nested.display()
+        )
+    } else {
+        format!(
+            "cd '{}'\nexport KALCODE_DUPLICATE_SECRET=private-marker\necho READY$KALCODE_DUPLICATE_SECRET\n",
+            nested.display()
+        )
+    };
+    core.write_terminal(&original.id, change.as_bytes())
+        .expect("cd");
+    // Wait for the command's result, not echoed input.
+    output.wait_for("READYprivate-marker");
+    let identity = core
+        .terminal_session_identity(&original.id)
+        .expect("source identity");
+    let copy = core
+        .duplicate_terminal(&original.id, size(), None)
+        .expect("duplicate");
+    assert_ne!(copy.id, original.id);
+    assert_eq!(copy.workspace_id, original.workspace_id);
+    assert_eq!(copy.shell_id, original.shell_id);
+    assert_eq!(copy.title, "Build / review (copy)");
+    assert_eq!(copy.status, TerminalStatus::Running);
+    assert_ne!(
+        core.terminal_session_identity(&copy.id)
+            .expect("copy identity")
+            .pid,
+        identity.pid
+    );
+    let copied_output = Output::attach(&core, &copy.id);
+    let inspect = if cfg!(windows) {
+        "cd\r\nif defined KALCODE_DUPLICATE_SECRET (echo SECRET_PRESENT) else (echo SECRET_ABSENT)\r\n"
+    } else {
+        "pwd\nif [ -n \"$KALCODE_DUPLICATE_SECRET\" ]; then echo SECRET_PRESENT; else echo SECRET_ABSENT; fi\n"
+    };
+    core.write_terminal(&copy.id, inspect.as_bytes())
+        .expect("inspect copy");
+    copied_output.wait_for(nested.to_str().expect("path"));
+    copied_output.wait_for("\r\nSECRET_ABSENT");
+    assert_eq!(
+        core.terminal_session_identity(&original.id)
+            .expect("still live"),
+        identity
+    );
+    core.stop_terminal(&copy.id).expect("stop copy");
+    assert_eq!(
+        core.terminal(&original.id).expect("source").status,
+        TerminalStatus::Running
+    );
+    core.write_terminal(&original.id, b"echo ORIGINAL_STILL_LIVE\r\n")
+        .expect("source input");
+    output.wait_for("ORIGINAL_STILL_LIVE");
+    // Ended duplicates retain their launch directory, including across runtime restarts.
+    let saved: String = core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT launch_cwd FROM terminals WHERE id = ?1",
+                [&copy.id],
+                |r| r.get(0),
+            )?)
+        })
+        .expect("cwd");
+    assert_eq!(
+        std::fs::canonicalize(saved).unwrap(),
+        std::fs::canonicalize(&nested).unwrap()
+    );
+    core.close_terminal(&original.id).expect("close source");
+}
+
+#[cfg(windows)]
+#[test]
+fn powershell_duplicate_uses_provider_location_and_keeps_custom_names() {
+    let dir = tempfile::tempdir().expect("temp");
+    let core = open(dir.path());
+    let project = tempfile::tempdir().expect("project");
+    let nested = project.path().join("PowerShell folder");
+    std::fs::create_dir(&nested).unwrap();
+    let workspace = core.open_workspace(project.path()).unwrap();
+    for shell in core
+        .shells()
+        .into_iter()
+        .filter(|s| s.id == "pwsh" || s.id == "powershell")
+    {
+        let original = core
+            .create_terminal(&workspace.id, Some(&shell.id), size(), None)
+            .unwrap();
+        let output = Output::attach(&core, &original.id);
+        let command = format!(
+            "Set-Location -LiteralPath '{}'; Write-Output ('READY' + '-POWERSHELL')\r\n",
+            nested.display()
+        );
+        core.write_terminal(&original.id, command.as_bytes())
+            .unwrap();
+        output.wait_for("READY-POWERSHELL");
+        // Prompt synchronization follows output; wait for it before invoking the user action.
+        output.wait_for(&format!("{}>", nested.display()));
+        let copy = core
+            .duplicate_terminal(&original.id, size(), None)
+            .expect("PowerShell duplicate");
+        let saved: String = core
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT launch_cwd FROM terminals WHERE id = ?1",
+                    [&copy.id],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::canonicalize(saved).unwrap(),
+            std::fs::canonicalize(&nested).unwrap()
+        );
+        core.close_terminal(&copy.id).unwrap();
+        core.close_terminal(&original.id).unwrap();
+    }
+}

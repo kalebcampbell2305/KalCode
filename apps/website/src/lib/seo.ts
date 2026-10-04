@@ -8,7 +8,7 @@
  */
 import { BILLING_INTERVALS, PLANS, priceFor } from "@kalcode/protocol/plans";
 import { OS_NAMES, RELEASES, type ReleaseManifest } from "./releases";
-import { CONTACT_EMAIL, SITE_NAME, SITE_ORIGIN, SOCIAL } from "./site";
+import { CONTACT_EMAIL, PAGES, type PageInfo, SITE_NAME, SITE_ORIGIN, SOCIAL } from "./site";
 
 export const TWITTER_SITE = SOCIAL.official.handle;
 
@@ -21,6 +21,7 @@ export function structuredData(manifest: ReleaseManifest = RELEASES): Record<str
     name: SITE_NAME,
     url: `${SITE_ORIGIN}/`,
     applicationCategory: "DeveloperApplication",
+    image: `${SITE_ORIGIN}/og.png`,
     description:
       "A desktop workspace that connects the coding agents you already use — Claude Code, and Codex on a personal ChatGPT plan — on your own accounts.",
     publisher: { "@id": organizationId },
@@ -67,10 +68,46 @@ export function structuredData(manifest: ReleaseManifest = RELEASES): Record<str
         name: SITE_NAME,
         url: `${SITE_ORIGIN}/`,
         publisher: { "@id": organizationId },
+        alternateName: "kalcoded.com",
+        inLanguage: "en",
       },
       application,
     ],
   };
+}
+
+/** Describe the rendered page, with the same canonical URL and copy its visitors see. */
+export function pageStructuredData(page: PageInfo, siteData?: Record<string, unknown>): Record<string, unknown> {
+  const url = new URL(page.path, SITE_ORIGIN).href;
+  const graph: Record<string, unknown>[] = Array.isArray(siteData?.["@graph"]) ? [...siteData["@graph"]] : [];
+  graph.push({
+    "@type": "WebPage",
+    "@id": `${url}#webpage`,
+    url,
+    name: page.title,
+    description: page.description,
+    inLanguage: "en",
+    isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
+    about: { "@id": `${SITE_ORIGIN}/#software` },
+    ...(page.path === "/"
+      ? { mainEntity: { "@id": `${SITE_ORIGIN}/#software` } }
+      : { breadcrumb: { "@id": `${url}#breadcrumb` } }),
+  });
+  if (page.path !== "/") {
+    const ancestors = PAGES.filter((entry) => entry.path !== "/" && page.path.startsWith(`${entry.path}/`));
+    const crumbs = [{ path: "/", title: SITE_NAME }, ...ancestors, page];
+    graph.push({
+      "@type": "BreadcrumbList",
+      "@id": `${url}#breadcrumb`,
+      itemListElement: crumbs.map((entry, index) => ({
+        "@type": "ListItem",
+        position: index + 1,
+        name: entry.title.split(" — ")[0],
+        item: new URL(entry.path, SITE_ORIGIN).href,
+      })),
+    });
+  }
+  return { "@context": "https://schema.org", "@graph": graph };
 }
 
 /** Serialises JSON-LD for an HTML data block: `<` is escaped so the text can never close the tag. */

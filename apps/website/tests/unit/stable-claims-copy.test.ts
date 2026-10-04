@@ -270,11 +270,12 @@ describe("plans", () => {
     expect(rowHeads).toEqual(CORE_LIMITS.map((limit) => limit.label));
     const description = PAGES.find((p) => p.path === "/pricing")?.description ?? "";
     expect(description).toContain(
-      `KalCode plans: ${PLANS.map((plan) => plan.name)
+      `Compare KalCode ${PLANS.map((plan) => plan.name)
         .join(", ")
         .replace(/, ([^,]*)$/, " and $1")}`,
     );
-    expect(description).toContain("AI usage stays on your own provider account.");
+    expect(description).toContain("monthly or yearly");
+    expect(description).toContain("coding agents, terminals, workspaces and KalVoice Requests");
     expect(description).not.toMatch(/plans differ in KalVoice Requests/i);
   });
 
@@ -318,7 +319,8 @@ describe("home page", () => {
 
   it("says in the home meta that agents run in real terminals, without a panes claim", () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
-    expect(home).toContain("Run Claude Code and Codex agents in real terminals");
+    expect(home).toContain("Claude Code and Codex");
+    expect(home).toContain("Run agents in real terminals");
     expect(home).not.toMatch(/threads/i);
     expect(PAGES.find((p) => p.path === "/product")?.description).not.toMatch(/provider panes/i);
   });
@@ -751,9 +753,9 @@ describe("signed-build claims on a Windows-only Stable", () => {
 describe("home meta description", () => {
   it("describes KalCode as released, not in private development", async () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
-    expect(home).toBe(
-      "KalCode is the desktop workspace for AI coding. Run Claude Code and Codex agents in real terminals, see every agent in Agent Fleet, preview your app in Live Browser and control it all with KalVoice. Try it live in your browser.",
-    );
+    expect(home).toContain("AI coding workspace");
+    expect(home).toContain("KalVoice");
+    expect(home.length).toBeLessThanOrEqual(160);
     expect(home).not.toMatch(/private development/i);
     selectSignedStable();
     expect(metaDescription(await render(Home, "/"))).toBe(home);

@@ -112,7 +112,14 @@ import {
   updateBrowserUrl,
 } from "../browser/index.ts";
 import { resolveBrowserTarget } from "./browserTarget.ts";
-import { canStopPane, duplicatePaneInput, paneRebindAccounts } from "./paneContextActions.ts";
+import {
+  canStopPane,
+  type DuplicatePlacement,
+  duplicatePaneInput,
+  duplicatePlacement,
+  paneRebindAccounts,
+  rememberDuplicatePlacement,
+} from "./paneContextActions.ts";
 import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
@@ -827,27 +834,48 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             entry.thread.permissionMode !== "custom" &&
             isPaneProvider(entry.thread.providerId) &&
             (entry.thread.providerId === "claude-code" || providerPanes.offered.includes(entry.thread.providerId)));
-      if (duplicateAllowed)
-        items.push({
-          id: "duplicate",
-          label: terminal ? "Duplicate terminal" : "Duplicate agent",
-          icon: <Copy />,
-          onSelect: () => {
-            runMenuAction(`duplicate:${key}`, terminal ? "Duplicating terminal" : "Duplicating agent", async () => {
-              if (terminal) {
-                const created = await createTerminal(terminal.shellId, workspace.id);
-                if (created) controllerRef.current.show(terminalContent(created.id), { paneId, focus: true });
-              } else if (entry && isPaneProvider(entry.thread.providerId)) {
-                const input = duplicatePaneInput(entry.thread);
-                if (!input) return;
-                const created = await providerPanes.channel.create(input);
-                pendingAgents.current.add(created.id);
-                await providerPanes.refresh();
-                controllerRef.current.show(agentContent(created.id), { paneId, focus: true });
-              }
-            });
+      if (duplicateAllowed) {
+        const duplicate = (placement: DuplicatePlacement) => {
+          rememberDuplicatePlacement(workspace.id, placement);
+          runMenuAction(`duplicate:${key}`, "Starting a new session", async () => {
+            let createdContent: PaneContent;
+            if (terminal) {
+              const created = await client.duplicateTerminal(terminal.id, { cols: 100, rows: 30 });
+              seenTerminals.current?.add(created.id);
+              createdContent = terminalContent(created.id);
+            } else if (entry) {
+              const input = duplicatePaneInput(entry.thread);
+              if (!input) return;
+              const created = await providerPanes.channel.create(input);
+              pendingAgents.current.add(created.id);
+              createdContent = agentContent(created.id);
+            } else return;
+            const current = controllerRef.current;
+            // An early runtime event may already have revealed the new item as a tab.
+            // Move only the new identity; the source and its attachments stay untouched.
+            current.forget(new Set([contentKey(createdContent)]));
+            current.show(createdContent, { paneId, focus: true, placement });
+            await Promise.all([refreshWorkspaces(), providerPanes.refresh()]);
+          });
+        };
+        items.push(
+          {
+            id: "duplicate",
+            label: "New like this",
+            icon: <Copy />,
+            onSelect: () => duplicate(duplicatePlacement(workspace.id)),
           },
-        });
+          {
+            id: "duplicate-placement",
+            label: "New like this in",
+            icon: <Copy />,
+            children: [
+              { id: "beside", label: "Pane beside this one", onSelect: () => duplicate("split") },
+              { id: "tab", label: "Tab in this pane", onSelect: () => duplicate("tab") },
+            ],
+          },
+        );
+      }
       items.push({
         id: "rename",
         label: "Rename",
@@ -916,7 +944,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       workspace,
       shells,
       providerPanes,
-      createTerminal,
       runMenuAction,
       restoredProviderAccounts,
       client,

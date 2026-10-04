@@ -265,6 +265,27 @@ pub fn terminal_create(
         .map_err(|e| e.log_and_convert("terminal_create"))
 }
 
+/// Fresh shell, with the source context resolved natively and normal plan admission.
+#[tauri::command(async)]
+pub fn terminal_duplicate(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    account: State<'_, Arc<AccountRuntime>>,
+    terminal_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<TerminalInfo, IpcError> {
+    _runtime_access.revalidate()?;
+    state
+        .core()?
+        .duplicate_terminal(
+            &terminal_id,
+            size(cols, rows)?,
+            account.snapshot().terminal_limit(),
+        )
+        .map_err(|e| e.log_and_convert("terminal_duplicate"))
+}
+
 #[tauri::command(async)]
 pub fn terminal_restart(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,

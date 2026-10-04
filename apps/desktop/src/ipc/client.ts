@@ -825,6 +825,10 @@ export class KalCodeClient {
     return this.call("terminals_running");
   }
 
+  duplicateTerminal(terminalId: string, size: TerminalSize): Promise<TerminalInfo> {
+    return this.call("terminal_duplicate", { terminalId, ...clampTerminalSize(size) });
+  }
+
   createTerminal(workspaceId: string, shellId: string | null, size: TerminalSize): Promise<TerminalInfo> {
     return this.call("terminal_create", { workspaceId, shellId, ...clampTerminalSize(size) });
   }

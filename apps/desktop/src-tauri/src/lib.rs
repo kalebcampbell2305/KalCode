@@ -824,6 +824,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 code_commands::shells_list,
                 code_commands::terminal_list,
                 code_commands::terminal_create,
+                code_commands::terminal_duplicate,
                 code_commands::terminal_restart,
                 code_commands::terminal_close,
                 code_commands::terminal_rename,
