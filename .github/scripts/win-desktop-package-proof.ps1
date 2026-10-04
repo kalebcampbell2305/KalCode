@@ -64,7 +64,18 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $before = Copy-ClosedDatabase 'db-live'
   $floorPath = Join-Path $Updates 'rollback-floor'
   $floorBefore = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { $null }
-  Run-Installer $package.exe @('/S', '/UPDATE')
+  Wait-InstalledImagesUnlocked
+  try {
+    Run-Installer $package.exe @('/S', '/UPDATE')
+  } catch {
+    # NSIS aborts with exit 2 when it can't replace a file; nothing was changed. One more wait for the
+    # images, then one retry, both in the receipt's steps.
+    if ("$_" -notmatch 'installer failed: 2$') { throw }
+    Note 'installer aborted (exit 2) right after shutdown; waiting for installed executables and retrying once'
+    Start-Sleep -Seconds 5
+    Wait-InstalledImagesUnlocked
+    Run-Installer $package.exe @('/S', '/UPDATE')
+  }
   $receipt.applied = Installed
   if (-not $receipt.applied -or $receipt.applied.productVersion -cne $CandidateVersion -or $receipt.applied.fileVersion -cne $CandidateVersion -or $receipt.applied.signature -cne 'Valid') { Refuse 'installed candidate identity/signature mismatch' }
   $receipt.checks.install = $true

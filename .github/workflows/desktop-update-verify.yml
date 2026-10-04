@@ -27,6 +27,7 @@ on:
       clean_verifier_sha256: { description: Exact candidate verify-windows.mjs SHA-256 inside the clean packet, required: false, type: string }
       live_schema: { description: Expected live SQLite schema for migration proof, required: false, default: '0', type: string }
       changes_data: { description: Require forward-only restore guard after schema migration, required: false, default: false, type: boolean }
+      recover_profile: { description: Remove a KalCode profile an earlier failed package proof preserved before this run, required: false, default: false, type: boolean }
 
 permissions:
   contents: read
@@ -70,6 +71,7 @@ jobs:
           CLEAN_VERIFIER_SHA256: ${{ inputs.clean_verifier_sha256 }}
           LIVE_SCHEMA: ${{ inputs.live_schema }}
           CHANGES_DATA: ${{ inputs.changes_data }}
+          RECOVER_PROFILE: ${{ inputs.recover_profile }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -78,6 +80,7 @@ jobs:
           $packageArgs = @()
           if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA, '-LiveSchema', $env:LIVE_SCHEMA) }
           if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
+          if ($env:RECOVER_PROFILE -eq 'true') { $packageArgs += '-RecoverPreservedProfile' }
           if ($env:CLEAN_PACKET_SHA256 -or $env:CLEAN_VERIFIER_SHA256) { $packageArgs += @('-CleanPacketSha256', $env:CLEAN_PACKET_SHA256, '-CleanVerifierSha256', $env:CLEAN_VERIFIER_SHA256) }
           & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
             -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
