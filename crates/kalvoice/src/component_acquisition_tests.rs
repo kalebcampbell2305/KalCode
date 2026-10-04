@@ -334,13 +334,17 @@ fn production_transport_stalled_body_is_bounded_and_cancel_is_not_a_network_fail
                 cancellation.store(true, Ordering::SeqCst);
             }
         });
-        let started = std::time::Instant::now();
+        // Time the stalled read from the first body byte, where the stall begins: connecting and
+        // receiving headers are bounded separately, and on a loaded gate machine they added
+        // seconds to a clock started before the request (7.2 s measured; the bound fired at 5 s).
+        let first_byte = std::cell::Cell::new(None::<std::time::Instant>);
         let result = acquirer.acquire(&token(&key, bytes), NOW, true, &cancel, |received, _| {
             if received == 1 {
+                first_byte.set(Some(std::time::Instant::now()));
                 let _ = progress_tx.try_send(());
             }
         });
-        let elapsed = started.elapsed();
+        let elapsed = first_byte.get().expect("first byte received").elapsed();
         canceller.join().expect("joined canceller");
         worker.join().expect("joined loopback fixture");
         assert!(

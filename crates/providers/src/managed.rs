@@ -254,7 +254,7 @@ impl ProfileLeaseError {
             Self::InUse => ProviderError::Refused {
                 code: kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY.to_owned(),
                 message: "This account is busy with a sign-in or account change in KalCode. \
-                          Finish it, then resume this thread."
+                          Finish it, then try launching the agent again."
                     .to_owned(),
             },
             Self::Unavailable(error) => error,
@@ -503,7 +503,14 @@ impl ManagedProfiles {
         })
     }
 
-    /// The complete sanitized environment to pass to a managed provider process.
+    /// Where the user's native provider configuration lives for `source`, ignoring anything
+    /// inside this managed root.
+    pub(crate) fn native_homes(&self, source: &DetectEnv) -> crate::native_config::NativeHomes {
+        crate::native_config::NativeHomes::from_env(source, &self.root)
+    }
+
+    /// The complete environment to pass to a managed provider process: the user's own
+    /// environment with this account's profile selector.
     pub fn launch_env(
         &self,
         provider: &str,
@@ -516,34 +523,34 @@ impl ManagedProfiles {
             return Ok(source.provider_env(&EnvPolicy::NATIVE));
         };
         let home = self.profile_home(provider.id(), account_id)?;
-        // BASE retains only ordinary OS/process launch variables. In particular, API keys and
-        // provider-owned selectors from either provider are absent before the managed selector
-        // is inserted.
-        let mut env = source.provider_env(&EnvPolicy::BASE);
-        remove_variable(&mut env, "CLAUDE_CONFIG_DIR");
-        remove_variable(&mut env, "CLAUDE_SECURESTORAGE_CONFIG_DIR");
-        remove_variable(&mut env, "CODEX_HOME");
-        remove_variable(&mut env, "GEMINI_CLI_HOME");
-        let selected_home = match provider {
-            // Gemini CLI 0.61.0 (Node.js) crashes at startup ("EISDIR: illegal operation on a
-            // directory, lstat 'C:'") when GEMINI_CLI_HOME carries the Windows verbatim prefix
-            // that `std::fs::canonicalize` returns. The plain form names the same directory.
-            ManagedProvider::Gemini => plain_path(&home),
-            ManagedProvider::Claude | ManagedProvider::Codex | ManagedProvider::Cursor => {
-                home.clone()
-            }
-        };
-        env.insert(home_variable.into(), selected_home.into_os_string());
+        // The user's own environment, as in a native terminal (native provider parity), minus
+        // only what would make this provider authenticate as something other than the selected
+        // account: its API keys/tokens and its own profile selectors.
+        let mut env = source.provider_env(&EnvPolicy::NATIVE);
+        crate::env::strip_auth_overrides(&mut env, provider.id());
+        // The plain form names the same directory as the canonical `\\?\` verbatim path, which
+        // Node.js tools, shells and plugin hooks running under the provider do not handle
+        // (Gemini CLI 0.61.0 crashes at startup with "EISDIR: illegal operation on a directory,
+        // lstat 'C:'"; `cmd.exe` refuses a verbatim working directory).
+        let selected_home = plain_path(&home);
+        env.insert(home_variable.into(), selected_home.clone().into_os_string());
         if matches!(provider, ManagedProvider::Claude) {
             // Claude Code resolves its credential store independently from general config in
-            // current native builds. Pin both selectors to the exact same canonical account
-            // directory so a managed session cannot authenticate as a standalone or different
-            // managed account while displaying this profile's cached identity.
+            // current native builds. Pin both selectors to the exact same account directory so
+            // a managed session cannot authenticate as a standalone or different managed
+            // account while displaying this profile's cached identity.
             env.insert(
                 "CLAUDE_SECURESTORAGE_CONFIG_DIR".into(),
-                home.into_os_string(),
+                selected_home.into_os_string(),
             );
         }
+        // The user's native settings, MCP servers, plugins, skills, agents and instructions
+        // reach this profile; its credentials and session state stay its own.
+        crate::native_config::sync(
+            provider.id(),
+            &crate::native_config::NativeHomes::from_env(source, &self.root),
+            &home,
+        );
         Ok(env)
     }
 
@@ -914,13 +921,6 @@ fn safe_component(value: &str) -> bool {
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
-fn remove_variable(env: &mut BTreeMap<OsString, OsString>, name: &str) {
-    env.retain(|key, _| {
-        !key.to_str()
-            .is_some_and(|key| key.eq_ignore_ascii_case(name))
-    });
-}
-
 fn canonicalize_directory(path: &Path) -> Result<PathBuf, ProviderError> {
     std::fs::canonicalize(path).map_err(|error| io_error("couldn't resolve managed storage", error))
 }
@@ -1197,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_env_is_base_only_and_never_touches_original_auth_files() {
+    fn launch_env_is_the_users_environment_and_never_touches_original_auth_files() {
         let temp = tempfile::tempdir().expect("temp");
         let temp_root = fixture_root(&temp);
         let original = temp_root.join("person");
@@ -1256,59 +1256,54 @@ mod tests {
 
         assert_eq!(value(&codex, "HOME"), Some(original.as_os_str()));
         assert_eq!(value(&codex, "USERPROFILE"), Some(original.as_os_str()));
+        let home = |provider: &str, account: &str| {
+            plain_path(&profiles.profile_home(provider, account).expect("home")).into_os_string()
+        };
+        // Each provider's own selector names this account's profile, in the plain path form.
         assert_eq!(
             value(&codex, "CODEX_HOME"),
-            Some(
-                profiles
-                    .profile_home("codex", &account_a)
-                    .expect("home")
-                    .as_os_str()
-            )
+            Some(home("codex", &account_a).as_os_str())
         );
-        assert!(value(&codex, "GEMINI_CLI_HOME").is_none());
         assert_eq!(
             value(&gemini, "GEMINI_CLI_HOME"),
-            Some(
-                plain_path(
-                    &profiles
-                        .profile_home("gemini-cli", &account_a)
-                        .expect("home")
-                )
-                .as_os_str()
-            )
+            Some(home("gemini-cli", &account_a).as_os_str())
         );
-        assert!(value(&gemini, "CODEX_HOME").is_none());
         assert_eq!(
             value(&claude, "CLAUDE_CONFIG_DIR"),
-            Some(
-                profiles
-                    .profile_home("claude-code", &account_a)
-                    .expect("home")
-                    .as_os_str()
-            )
+            Some(home("claude-code", &account_a).as_os_str())
         );
         assert_eq!(
             value(&claude, "CLAUDE_SECURESTORAGE_CONFIG_DIR"),
             value(&claude, "CLAUDE_CONFIG_DIR"),
             "Claude's credential store and account metadata must select the same managed profile"
         );
-        assert!(value(&codex, "CLAUDE_SECURESTORAGE_CONFIG_DIR").is_none());
-        assert!(value(&gemini, "CLAUDE_SECURESTORAGE_CONFIG_DIR").is_none());
-        assert!(value(&claude, "CODEX_HOME").is_none());
-        assert!(value(&claude, "GEMINI_CLI_HOME").is_none());
         assert_ne!(value(&codex, "CODEX_HOME"), value(&codex_b, "CODEX_HOME"));
+        // Only what would authenticate a provider as someone else is dropped, and only for that
+        // provider; everything else is the user's own environment, as in a native terminal.
+        assert!(value(&codex, "OPENAI_API_KEY").is_none());
+        assert!(value(&claude, "ANTHROPIC_API_KEY").is_none());
+        assert!(value(&gemini, "GEMINI_API_KEY").is_none());
+        assert_eq!(
+            value(&codex, "ANTHROPIC_API_KEY"),
+            Some(OsStr::new("fixture-anthropic"))
+        );
+        assert_eq!(
+            value(&claude, "OPENAI_API_KEY"),
+            Some(OsStr::new("fixture-openai"))
+        );
+        assert_eq!(
+            value(&codex, "CLAUDE_CONFIG_DIR"),
+            Some(hostile_claude.as_os_str())
+        );
         for name in [
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "GEMINI_API_KEY",
             "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
-            "GEMINI_FORCE_FILE_STORAGE",
             "GOOGLE_APPLICATION_CREDENTIALS",
-            "KALCODE_INTERNAL",
         ] {
-            assert!(value(&codex, name).is_none(), "codex inherited {name}");
-            assert!(value(&gemini, name).is_none(), "gemini inherited {name}");
-            assert!(value(&claude, name).is_none(), "claude inherited {name}");
+            assert!(value(&claude, name).is_some(), "claude lost {name}");
+            assert!(value(&gemini, name).is_some(), "gemini lost {name}");
+        }
+        for env in [&codex, &gemini, &claude] {
+            assert!(value(env, "KALCODE_INTERNAL").is_none());
         }
         assert_eq!(codex.probe_timeout, source.probe_timeout);
         assert_eq!(gemini.windows, source.windows);

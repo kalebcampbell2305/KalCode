@@ -29,7 +29,12 @@ import { useSelectedCodeContext, useSelectedThread } from "../../surfaces/thread
 import { ACCOUNT_PROVIDER_NAMES, accountProviderName } from "../accountCommands.ts";
 import { useNavigation } from "../navigation.tsx";
 import styles from "./AccountUsageCenter.module.css";
-import { accountCenterStatus, focusedAccountSession, selectedLaunchAccount } from "./accountCenterModel.ts";
+import {
+  accountCenterHealthStatus,
+  accountCenterStatus,
+  focusedAccountSession,
+  selectedLaunchAccount,
+} from "./accountCenterModel.ts";
 import { useDeckData } from "./DeckData.tsx";
 
 /** A projection of the shared registry. Closing the popover must not cancel native browser login. */
@@ -66,11 +71,15 @@ export function AccountUsageCenter() {
   const launchAccount =
     bindings && providerId ? selectedLaunchAccount(accounts, bindings, providerId, active?.id ?? null) : null;
   const chipAccount = focused ? focusedAccount : launchAccount;
-  const signInStatus = chipAccount
-    ? accountCenterStatus(chipAccount, model.checking.has(chipAccount.id), model.validationErrors.get(chipAccount.id))
-    : null;
+  const canonicalChip = chipAccount ? sessions?.states.get(chipAccount.id) : undefined;
+  const signInStatus = canonicalChip
+    ? accountCenterHealthStatus(canonicalChip.health)
+    : chipAccount
+      ? accountCenterStatus(chipAccount, model.checking.has(chipAccount.id), model.validationErrors.get(chipAccount.id))
+      : null;
   // A ready account shows its canonical usage on the chip ("64% left"); anything else, its state.
-  const chipUsage = useAccountUsage(chipAccount?.id);
+  const fallbackChipUsage = useAccountUsage(chipAccount?.id);
+  const chipUsage = canonicalChip?.usage ?? fallbackChipUsage;
   const chipSummary = usageSummary(chipUsage);
   const chipStatus =
     signInStatus?.tone === "healthy" && (chipUsage.status === "fresh" || chipUsage.status === "stale")
@@ -385,8 +394,12 @@ function AccountEntry({
   const detailsId = useId();
   const nameId = useId();
   const now = useClock();
-  const usage = useAccountUsage(account.id);
-  const status = accountCenterStatus(account, model.checking.has(account.id), model.validationErrors.get(account.id));
+  const canonical = useOptionalProviderAccountSessions()?.states.get(account.id);
+  const fallbackUsage = useAccountUsage(account.id);
+  const usage = canonical?.usage ?? fallbackUsage;
+  const status = canonical
+    ? accountCenterHealthStatus(canonical.health)
+    : accountCenterStatus(account, model.checking.has(account.id), model.validationErrors.get(account.id));
   const label = accountName(account);
   const known = (usage.status === "fresh" || usage.status === "stale") && usage.windows.length > 0;
   const low = known && usageSummary(usage).low;
@@ -460,7 +473,11 @@ function AccountEntry({
                 className={styles.signIn}
                 disabled={disabled}
                 aria-label={`Sign in ${label}`}
-                onClick={() => void run(() => model.signInAuth(account))}
+                onClick={() =>
+                  void run(async () => {
+                    await model.signInAuth(account);
+                  })
+                }
               >
                 <LogIn size={12} aria-hidden="true" />
                 Sign in

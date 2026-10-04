@@ -55,6 +55,17 @@ jobs:
           pnpm --filter @kalcode/desktop exec playwright install chromium
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           pnpm --filter @kalcode/website exec playwright install chromium
+      # tooling-unit runs the desktop package proof's real SQLite comparison through `python`.
+      # The gate machine has no system Python, so use the same pinned, signature-checked
+      # portable runtime the desktop QA workflows use, scoped to this run.
+      - name: Prepare portable Python
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1
+      # build:e2e compiles kalvoice-whisper: whisper-rs-sys needs CMake and libclang (bindgen),
+      # which the gate machine lacks. Pinned, hash-checked official archives, scoped to this run.
+      - name: Prepare portable CMake and libclang
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-portable-cmake.ps1
       - name: Gate
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
@@ -65,6 +76,14 @@ jobs:
         run: |
           Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
           node tooling/release/ship.mjs gate --base $env:BASE
+      - name: Remove this run's portable Python
+        if: always()
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1 -Cleanup
+      - name: Remove this run's portable CMake and libclang
+        if: always()
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-portable-cmake.ps1 -Cleanup
 
   macos:
     name: Gate (macOS, Rust)

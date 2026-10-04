@@ -9,6 +9,12 @@ const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 async function open(page: Page, scenario: string) {
   await page.goto(`/?scenario=${scenario}&channel=stable`);
+  // A returning user with an active workspace is sent to Code once restore finishes; choose
+  // Dashboard explicitly so the check never races that redirect.
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "Dashboard", exact: true })
+    .click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" }).first()).toBeVisible();
 }
 

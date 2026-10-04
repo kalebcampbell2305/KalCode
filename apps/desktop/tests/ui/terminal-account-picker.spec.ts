@@ -15,8 +15,7 @@ test("terminal header confirms a fresh account session and keeps the original ac
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   await launcher.getByRole("group", { name: "Codex", exact: true }).getByRole("option", { name: /Work/ }).click();
-  await launcher.getByRole("button", { name: "Sign in to Work" }).click();
-  await launcher.getByRole("button", { name: "Launch Codex agent" }).click();
+  await launcher.getByRole("button", { name: "Reconnect" }).click();
   const source = page.locator("[data-provider-pane]").first();
   await expect(source).toBeVisible();
   const sourceId = await source.getAttribute("data-provider-pane");

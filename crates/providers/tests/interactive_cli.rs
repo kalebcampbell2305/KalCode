@@ -507,26 +507,107 @@ fn managed_cli_panes_fail_closed_without_a_native_guardian() {
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn managed_codex_requires_authoritative_cloud_eligibility_before_any_provider_process() {
+fn managed_codex_launches_without_a_plan_metadata_resolver() {
     let rig = Rig::new_managed(PaneCli::Codex, None);
-    let error = rejected_start(&rig, Some(new_id()));
-    assert!(error.to_string().contains("eligibility"), "{error}");
-    rig.assert_no_provider_process_started();
+    let pane = rig
+        .start_with_account(PermissionMode::Plan, Some(new_id()))
+        .expect("missing plan metadata does not block native Codex");
+    pane._session.terminate().expect("terminate");
 }
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn managed_codex_rejects_non_consumer_eligibility_before_any_provider_process() {
+fn three_managed_codex_agents_keep_account_model_effort_workspace_and_distinct_sessions() {
+    let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Unknown));
+    let account = new_id();
+    let workspace = new_id();
+    let mut panes = Vec::new();
+    for _ in 0..3 {
+        let mut config = rig.config(PermissionMode::Bypass, Some(account.clone()));
+        config.workspace_id = workspace.clone();
+        config.model = Some("gpt-5.3-codex".into());
+        config.effort = Some("high".into());
+        assert!(config.resume_session_id.is_none());
+        let id = config.thread_id.clone();
+        let (tx, rx) = mpsc::channel();
+        let session = rig
+            .provider
+            .start_session(
+                config,
+                Box::new(move |event| {
+                    let _ = tx.send(event);
+                }),
+            )
+            .expect("native managed session");
+        panes.push(rig.attach_started(id, session, rx).expect("real PTY pane"));
+        let args = rig.args();
+        assert_eq!(after(&args, "-m"), Some("gpt-5.3-codex"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "model_reasoning_effort='high'"),
+            "{args:?}"
+        );
+        assert_eq!(rig.launch_cwd(), rig.work.path());
+    }
+    assert_eq!(
+        &*rig.resolved_accounts.lock().unwrap(),
+        &[account.clone(), account.clone(), account]
+    );
+    let instances: HashSet<_> = panes
+        .iter()
+        .map(|pane| {
+            let info = rig.panes.info(&pane.thread_id).expect("pane info");
+            assert!(info.running);
+            info.instance_id.expect("native process identity")
+        })
+        .collect();
+    assert_eq!(
+        instances.len(),
+        3,
+        "each agent owns an independent live PTY process"
+    );
+    let mut provider_sessions = HashSet::new();
+    for (index, pane) in panes.iter().enumerate() {
+        pane.type_line(&format!("agent {index}"));
+        let events = pane.events_until(|event| matches!(event, AgentEvent::TurnCompleted { .. }));
+        let session = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::SessionStarted {
+                    provider_session_id,
+                    ..
+                } => Some(provider_session_id.clone()),
+                _ => None,
+            })
+            .or_else(|| pane._session.provider_session_id())
+            .expect("provider session identity");
+        assert!(
+            provider_sessions.insert(session),
+            "each agent has a fresh provider session"
+        );
+    }
+    for pane in panes {
+        pane._session
+            .terminate()
+            .expect("terminate owned test agent");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn managed_codex_launches_organization_and_unknown_plans_like_native_codex() {
     for eligibility in [
         CloudConfigEligibility::Eligible,
         CloudConfigEligibility::Unknown,
     ] {
         let rig = Rig::new_managed(PaneCli::Codex, Some(eligibility));
         let account_id = new_id();
-        let error = rejected_start(&rig, Some(account_id.clone()));
-        assert!(error.to_string().contains("verified consumer"), "{error}");
+        let pane = rig
+            .start_with_account(PermissionMode::Plan, Some(account_id.clone()))
+            .expect("every Codex plan launches (native provider parity)");
         assert_eq!(&*rig.resolved_accounts.lock().unwrap(), &[account_id]);
-        rig.assert_no_provider_process_started();
+        pane._session.terminate().expect("terminate");
     }
 }
 
@@ -545,17 +626,21 @@ fn managed_codex_panes_use_the_exact_account_policy_and_hold_the_lease_until_dro
     );
     let args = rig.args();
     assert!(
-        args.windows(2)
+        !args
+            .windows(2)
             .any(|pair| pair[0] == "-c" && pair[1].starts_with("projects={")),
-        "managed repository trust binding missing: {args:?}"
+        "the user's own project trust applies, not a forced override: {args:?}"
     );
     let names = rig.env_names();
     assert!(names.iter().any(|name| name == "CODEX_HOME"), "{names:?}");
     assert!(
-        !names.iter().any(|name| {
-            name == "OPENAI_API_KEY" || name == "GEMINI_API_KEY" || name == "GEMINI_CLI_HOME"
-        }),
-        "standalone credentials/selectors reached managed Codex: {names:?}"
+        !names.iter().any(|name| name == "OPENAI_API_KEY"),
+        "a standalone OpenAI key would override the selected account: {names:?}"
+    );
+    // Everything else is the user's own environment, as in a native terminal.
+    assert!(
+        names.iter().any(|name| name == "GEMINI_API_KEY"),
+        "{names:?}"
     );
 
     let profiles = rig.profiles.as_ref().expect("profiles");
@@ -664,7 +749,7 @@ fn six_codex_agents_start_distinct_live_terminals_with_the_selected_accounts() {
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
+fn managed_gemini_panes_run_in_the_workspace_with_the_account_profile_and_lease() {
     let rig = Rig::new_managed(PaneCli::Gemini, None);
     let account_id = new_id();
     let pane = rig
@@ -672,9 +757,10 @@ fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
         .expect("managed Gemini pane");
 
     let args = rig.args();
-    assert!(!args.iter().any(|arg| arg == "--ignore-env"), "{args:?}");
-    for expected in [
-        "--skip-trust",
+    assert!(args.iter().any(|arg| arg == "--skip-trust"), "{args:?}");
+    // Native provider parity: the user's MCP servers, extensions and policies apply.
+    for forbidden in [
+        "--ignore-env",
         "--include-directories",
         "--allowed-mcp-server-names",
         "--policy",
@@ -682,8 +768,8 @@ fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
         "--extensions",
     ] {
         assert!(
-            args.iter().any(|arg| arg == expected),
-            "{expected}: {args:?}"
+            !args.iter().any(|arg| arg == forbidden),
+            "{forbidden}: {args:?}"
         );
     }
     assert_eq!(after(&args, "--approval-mode"), Some("plan"));
@@ -693,17 +779,11 @@ fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
         "{names:?}"
     );
     assert!(
-        !names
-            .iter()
-            .any(|name| name == "GEMINI_API_KEY" || name == "OPENAI_API_KEY"),
-        "standalone credentials reached managed Gemini: {names:?}"
+        !names.iter().any(|name| name == "GEMINI_API_KEY"),
+        "a standalone Gemini key would override the selected account: {names:?}"
     );
     let profiles = rig.profiles.as_ref().expect("profiles");
-    let session_dir = profiles
-        .session_dir("gemini-cli", &account_id, &pane.thread_id)
-        .expect("session directory");
-    assert!(rig.launch_cwd().starts_with(session_dir));
-    assert_ne!(
+    assert_eq!(
         std::fs::canonicalize(rig.launch_cwd()).expect("managed cwd"),
         std::fs::canonicalize(rig.work.path()).expect("workspace")
     );
@@ -910,11 +990,8 @@ fn a_codex_pane_uses_native_approve_mode_and_reports_status_from_authenticated_n
         names.iter().any(|n| n == "KALCODE_HOOK_KEY"),
         "the notify helper needs the key"
     );
-    assert!(
-        !names
-            .iter()
-            .any(|n| n == "ANTHROPIC_API_KEY" || n == "KALCODE_DATA_DIR")
-    );
+    assert!(names.iter().any(|n| n == "ANTHROPIC_API_KEY"));
+    assert!(!names.iter().any(|n| n == "KALCODE_DATA_DIR"));
 
     let info = rig.panes.info(&pane.thread_id).expect("info");
     assert!(!info.kalcode_answers_approvals, "approvals stay in Codex");
@@ -1132,12 +1209,14 @@ fn a_gemini_pane_runs_with_process_state_only() {
     let info = rig.panes.info(&pane.thread_id).expect("info");
     assert_eq!(info.hook_channel, HookChannelState::Limited);
     assert!(!info.kalcode_answers_approvals);
+    // The user's environment, as in a native terminal.
     let names = rig.env_names();
     assert!(
-        !names
+        names
             .iter()
             .any(|n| n == "OPENAI_API_KEY" || n == "ANTHROPIC_API_KEY")
     );
+    assert!(!names.iter().any(|n| n == "KALCODE_DATA_DIR"));
     pane.type_line("say Status: DONE");
     pane.wait_for_text("(fake) say Status: DONE");
     pane.type_line("exit");

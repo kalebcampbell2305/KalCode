@@ -804,10 +804,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           for (const id of created) current.show(agentContent(id), { focus: id === first, placement: "tab" });
         }
       }
-      // Any started agent closes the launcher, so a retry never duplicates them; a failure that
-      // stopped the batch stays visible in the Code toolbar.
+      // Report the completed count so reconnect/retry creates only the unfinished agents.
       if (returnToHandoff && first) setHandoffTargetId(first);
-      return created.length > 0;
+      return created.length;
     },
     [providerPanes],
   );

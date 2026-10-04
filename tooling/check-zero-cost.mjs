@@ -142,6 +142,13 @@ for (const file of files) {
     // Bind the exception to this exact file and complete statement, not a general key allowlist.
     if (file === "crates/providers/src/account_auth.rs" && line.trim() === 'remove_env(&mut env, "OPENAI_API_KEY");')
       return;
+    // Audited managed-account isolation (`env::auth_overrides`): these entries name the user's
+    // own provider keys only so a managed session can drop them; nothing reads or forwards them.
+    if (
+      file === "crates/providers/src/env.rs" &&
+      ['"ANTHROPIC_API_KEY",', '"OPENAI_API_KEY",', '"GEMINI_API_KEY",'].includes(line.trim())
+    )
+      return;
     // Live plan-usage read: Anthropic's free OAuth usage endpoint with the user's own Claude Code
     // sign-in (no inference, no company key). Bound to this exact file and declaration.
     if (

@@ -41,36 +41,49 @@ pub const MINIMUM_VERSION: Version = Version::new(0, 155, 1);
 #[cfg(windows)]
 pub const MINIMUM_VERSION: Version = Version::new(0, 160, 0);
 
-/// Shared scalar floor for panes and headless turns. The empty MCP table is defense in depth:
-/// Codex merges maps across layers, so managed profile reset, repository trust binding, and the
-/// cloud-eligibility gate remain required boundaries.
+/// Config KalCode sets for panes and headless turns. Deliberately small: Codex keeps its native
+/// tools and the person's own config (MCP servers, web search, plugins, apps, skills, shell
+/// environment, sandbox network settings), as in a native terminal (AGENTS.md "Permanent
+/// provider tool capability rule"). The selected sandbox and approval policy still apply.
 pub(crate) const POLICY_CONFIG: &[&str] = &[
+    // Without a Windows backend selection Codex downgrades workspace-write to read-only. Use its
+    // restricted-token backend without elevation; the selected sandbox/approval mode still applies.
+    #[cfg(target_os = "windows")]
+    "windows.sandbox='unelevated'",
+    // The local execution host is stable and starts automatically. Disabling it prevents
+    // model-selected Code Mode tools from running; it is not a permission boundary.
+    "features.code_mode_host=true",
+];
+
+/// Config for KalCode's own account probes (sign-in, account and usage reads through
+/// app-server). No model turn runs there, so nothing is lost by not starting the person's MCP
+/// servers, apps or plugins for every probe. Never used for a session or pane.
+pub(crate) const PROBE_CONFIG: &[&str] = &[
+    #[cfg(target_os = "windows")]
+    "windows.sandbox='unelevated'",
+    "mcp_servers={}",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.hooks=false",
+];
+
+/// Overrides KalCode no longer passes because they removed native Codex tools. Tests keep them out.
+pub const TOOL_STRIPPING: &[&str] = &[
     "mcp_servers={}",
     "web_search='disabled'",
     "shell_environment_policy.inherit='core'",
     "sandbox_workspace_write.network_access=false",
-    "sandbox_workspace_write.writable_roots=[]",
-    // --ignore-user-config also removes the Windows backend selection. Without one,
-    // Codex downgrades workspace-write to read-only. Use its restricted-token
-    // backend without elevation; the selected sandbox/approval mode still applies.
-    #[cfg(target_os = "windows")]
-    "windows.sandbox='unelevated'",
     "features.apps=false",
     "features.plugins=false",
-    "features.remote_plugin=false",
     "features.hooks=false",
     "features.skill_mcp_dependency_install=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
     "features.browser_use=false",
-    "features.browser_use_external=false",
     "features.computer_use=false",
     "features.in_app_browser=false",
     "features.image_generation=false",
-    // The local execution host is stable and starts automatically. Disabling it prevents
-    // model-selected Code Mode tools from running; it is not a permission boundary. Leave
-    // experimental code_mode selection to Codex while preserving the sandbox below.
-    "features.code_mode_host=true",
-    "features.auth_elicitation=false",
-    "features.tool_call_mcp_elicitation=false",
+    "--ignore-user-config",
 ];
 
 /// Flags and values KalCode never passes to Codex, in any mode.
@@ -78,12 +91,9 @@ pub const FORBIDDEN: &[&str] = &[
     "--dangerously-bypass-approvals-and-sandbox",
     "--dangerously-bypass-hook-trust",
     "--approve-for-me",
-    "--search",
     "--add-dir",
     "--oss",
     "--worktree",
-    "network_access=true",
-    "web_search='live'",
 ];
 
 /// Set for every turn, in every mode.
@@ -92,8 +102,6 @@ const COMMON: &[&str] = &[
     "--json",
     // Repository-supplied execpolicy rules never grant anything (K4); see PROVIDERS.md §5.
     "--ignore-rules",
-    // Authentication remains in CODEX_HOME; user config cannot grant independent authority.
-    "--ignore-user-config",
 ];
 
 /// Provider-native sandbox and approval mapping. `Custom` uses the same bounded prompt policy
@@ -160,22 +168,22 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
         map(
             PermissionMode::Approve,
             format!(
-                "Workspace writes use Codex's native on-request approval prompt; connected tools \
-                 and web search remain disabled. {NOT_ENFORCED}"
+                "Workspace writes use Codex's native on-request approval prompt. Provider-native \
+                 connected tools and web search keep the user's configuration. {NOT_ENFORCED}"
             ),
         ),
         map(
             PermissionMode::Auto,
             format!(
                 "Workspace writes run without approval prompts inside Codex's native sandbox; \
-                 connected tools and web search remain disabled. {NOT_ENFORCED}"
+                 provider-native connected tools and web search keep the user's configuration. {NOT_ENFORCED}"
             ),
         ),
         map(
             PermissionMode::Bypass,
             format!(
                 "Uses Codex's explicit danger-full-access sandbox with approval prompts disabled; \
-                 connected tools and web search remain disabled. {NOT_ENFORCED}"
+                 provider-native connected tools and web search keep the user's configuration. {NOT_ENFORCED}"
             ),
         ),
     ]
@@ -370,11 +378,15 @@ mod tests {
                 }
             };
             assert!(configs.contains(&expected_approval), "{mode:?}");
-            assert!(configs.contains(&"web_search='disabled'"), "{mode:?}");
-            assert!(configs.contains(&"shell_environment_policy.inherit='core'"));
+            // Native tools and the person's own config stay (MCP, web search, plugins, env).
+            for stripping in TOOL_STRIPPING {
+                assert!(
+                    !args.iter().any(|a| a == stripping),
+                    "{mode:?} strips a native tool with {stripping}"
+                );
+            }
             assert!(args.iter().any(|a| a == "--ignore-rules"));
             if mode != PermissionMode::Plan {
-                assert!(configs.contains(&"sandbox_workspace_write.network_access=false"));
                 // Codex's own "is this a Git repository" guard stays on whenever it can write.
                 assert!(!args.iter().any(|a| a == "--skip-git-repo-check"));
             }
@@ -433,10 +445,9 @@ mod tests {
             .into_iter()
             .map(|arg| arg.into_string().expect("utf8"))
             .collect();
-        assert!(
-            args.windows(2)
-                .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] })
-        );
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] }));
         for effort in EFFORT_LEVELS {
             assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
         }

@@ -80,7 +80,7 @@ describe("resource model", () => {
     };
 
     expect(admissionSummary(held)).toEqual({
-      label: "New provider work is paused",
+      label: "Background work is paused",
       detail: "Waiting for a current resource sample.",
       tone: "warning",
     });
@@ -103,7 +103,7 @@ describe("resource model", () => {
     } as unknown as ResourceAdmissionDecision;
 
     expect(admissionSummary(held)).toEqual({
-      label: "New provider work is paused",
+      label: "Background work is paused",
       detail: "Waiting for a resource sample under the selected mode.",
       tone: "warning",
     });

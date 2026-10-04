@@ -24,7 +24,7 @@ beforeEach(() => {
 describe("account usage badge", () => {
   it("shows the canonical remaining quota, and says so when it isn't known", () => {
     const { rerender } = render(<AccountUsageBadge account={account} />);
-    expect(screen.getByText("Not checked")).toBeVisible();
+    expect(screen.getByText("Usage unavailable")).toBeVisible();
     usage.map = new Map([
       [
         account.id,
@@ -42,7 +42,7 @@ describe("account usage badge", () => {
     expect(screen.getByText("64% left").parentElement).toHaveAttribute("data-tone", "ok");
   });
 
-  it("marks low usage subtly", () => {
+  it("does not warn about stale usage as if it were current", () => {
     usage.map = new Map([
       [
         account.id,
@@ -56,8 +56,8 @@ describe("account usage badge", () => {
       ],
     ]);
     render(<UsageMeter usage={usage.map.get(account.id) as AccountUsageState} />);
-    const meter = screen.getByText("8% left").parentElement;
-    expect(meter).toHaveAttribute("data-tone", "low");
+    const meter = screen.getByText("Usage unavailable").parentElement;
+    expect(meter).toHaveAttribute("data-tone", "muted");
     expect(meter).toHaveAttribute("data-stale");
   });
 

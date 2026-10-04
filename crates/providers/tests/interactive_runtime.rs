@@ -229,7 +229,7 @@ impl Stack {
         let providers = Arc::new(ProviderRegistry::new());
         let router = RuntimeRouter::new(Arc::new(ClaudeCodeProvider::new(env)), interactive);
         let router = if let Some(admitted) = admitted {
-            router.with_session_guards(|inner| {
+            router.with_session_guards(|inner, _interactive| {
                 Arc::new(HeldProvider {
                     inner,
                     admitted: admitted.clone(),

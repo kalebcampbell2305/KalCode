@@ -33,6 +33,7 @@ pub mod interactive;
 pub mod launch;
 pub mod managed;
 pub mod model;
+pub mod native_config;
 #[cfg(unix)]
 mod node_managers;
 pub mod process;

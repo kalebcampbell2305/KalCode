@@ -372,7 +372,8 @@ test.describe("widgets", () => {
     await open(page, "busy");
     const health = page.getByRole("region", { name: "Provider health" });
     // Never-checked providers show their accounts' sign-in (or "Not checked yet"); none is detected.
-    await expect(health.locator("[data-provider-health]")).toHaveCount(3);
+    // Claude Code, Codex, Gemini CLI and Cursor.
+    await expect(health.locator("[data-provider-health]")).toHaveCount(4);
     await expect(health.locator('[data-provider-health] >> text="Healthy"')).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
   });

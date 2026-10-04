@@ -539,6 +539,11 @@ test.describe("accessibility", () => {
   for (const theme of ["dark", "light"] as const) {
     test(`panes pass axe in ${theme} theme: split, provider pane, collapsed, maximized, empty`, async ({ page }) => {
       await page.goto("/?scenario=code");
+      // Choose Dashboard explicitly: a returning user is otherwise sent to Code after restore.
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Dashboard", exact: true })
+        .click();
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
       if (theme === "light") {
         await page.getByRole("button", { name: "Settings", exact: true }).click();

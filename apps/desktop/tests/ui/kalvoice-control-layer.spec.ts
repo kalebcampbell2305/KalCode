@@ -32,7 +32,6 @@ async function talk(page: Page, text: string) {
 
 async function openCode(page: Page) {
   await page.goto("/?scenario=code");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
 }
@@ -40,6 +39,11 @@ async function openCode(page: Page) {
 test.describe("KalVoice Operations control layer", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/?scenario=code");
+    // Choose Dashboard explicitly: a returning user is otherwise sent to Code after restore.
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Dashboard", exact: true })
+      .click();
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   });
 

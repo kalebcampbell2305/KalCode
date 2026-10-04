@@ -162,13 +162,6 @@ impl Rig {
     }
 
     #[cfg(any(windows, target_os = "macos"))]
-    fn neutral(&self) -> PathBuf {
-        self.profiles
-            .session_dir("gemini-cli", &self.account_id, &self.thread_id)
-            .expect("session")
-            .join("neutral")
-    }
-
     #[cfg(any(windows, target_os = "macos"))]
     fn read_json(&self, name: &str) -> serde_json::Value {
         serde_json::from_slice(&std::fs::read(self.bin.join(name)).expect(name)).expect(name)
@@ -421,7 +414,7 @@ fn managed_headless_turn_refuses_up_front_without_a_gemini_sign_in() {
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
+fn managed_headless_turn_runs_in_the_workspace_with_the_account_profile() {
     let rig = Rig::new();
     rig.sign_in();
     let provider = GeminiProvider::new_managed(rig.env(), rig.profiles.clone());
@@ -464,28 +457,30 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         "--approval-mode",
         "plan",
         "--skip-trust",
+    ] {
+        assert!(args.iter().any(|arg| arg == required), "{args:?}");
+    }
+    // Native provider parity: no KalCode-only overrides of the user's MCP servers, extensions,
+    // policies or workspace.
+    for forbidden in [
         "--include-directories",
         "--allowed-mcp-server-names",
         "--policy",
         "--admin-policy",
         "--extensions",
-        "none",
+        "--yolo",
+        // Gemini CLI 0.61.0 rejects `--ignore-env` as an unknown argument.
+        "--ignore-env",
     ] {
-        assert!(args.iter().any(|arg| arg == required), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == forbidden), "{args:?}");
     }
-    assert!(!args.iter().any(|arg| arg == "--yolo"), "{args:?}");
-    // Gemini CLI 0.61.0 rejects `--ignore-env` as an unknown argument and exits before the turn.
-    assert!(!args.iter().any(|arg| arg == "--ignore-env"), "{args:?}");
     let cwd = std::fs::read_to_string(rig.bin.join("last-cwd.txt")).expect("cwd");
-    assert_eq!(canonical(cwd.trim()), canonical(rig.neutral()));
-    assert_ne!(canonical(cwd.trim()), canonical(&rig.workspace));
+    assert_eq!(canonical(cwd.trim()), canonical(&rig.workspace));
     let env_names: Vec<String> =
         serde_json::from_value(rig.read_json("last-env.json")).expect("environment names");
     for required in [
         "GEMINI_CLI_HOME",
         "GEMINI_CLI_TRUST_WORKSPACE",
-        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-        "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
         "GEMINI_FORCE_FILE_STORAGE",
         "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
         "GOOGLE_GENAI_USE_GCA",
@@ -498,19 +493,19 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
             "missing {required}: {env_names:?}"
         );
     }
-    assert!(
-        !env_names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case("GEMINI_API_KEY")),
-        "inherited GEMINI_API_KEY: {env_names:?}"
-    );
+    for absent in [
+        "GEMINI_API_KEY",
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+        "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+    ] {
+        assert!(
+            !env_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(absent)),
+            "{absent}: {env_names:?}"
+        );
+    }
 
-    let settings = rig.neutral().join(".gemini/settings.json");
-    std::fs::write(
-        &settings,
-        r#"{"tools":{"core":["run_shell_command","exit_plan_mode"]}}"#,
-    )
-    .expect("mutate settings between turns");
     session
         .send(AgentInput::Text {
             text: "second turn".into(),
@@ -518,13 +513,6 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         .expect("second send");
     wait_for_turn(&rx);
     lifecycle.wait_for_second_completion();
-    let restored: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(settings).expect("restored settings"))
-            .expect("restored JSON");
-    assert_eq!(
-        restored["tools"]["core"],
-        serde_json::json!(["list_directory", "read_file", "grep_search", "glob"])
-    );
 
     session.terminate().expect("terminate");
     assert!(

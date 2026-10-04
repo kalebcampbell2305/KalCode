@@ -1,5 +1,19 @@
 # KalCode agent policy
 
+## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
+
+**UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
+
+- Authentication, plan metadata, usage/reset timing and model discovery are distinct facts in the shared provider account authority. Every surface uses the same account ID, nickname, identity and default; informational failures never revoke a valid session.
+- Display a percentage only from a valid provider-reported measurement. Missing, malformed, unsupported, failed or stale usage is **Usage unavailable** (or **Checking usage…** while fetching), never fake 0%, Low or Exhausted. Preserve legitimate zero and distinguish positive fractions below 1% from zero.
+- Restore persisted identities and provider-native authentication immediately; validate safely and refresh metadata asynchronously. Require reconnection only when the provider actually reports expired/revoked or missing authentication, never because plan, usage, reset or model metadata could not be read.
+- A valid provider session that can start must launch regardless of unknown plan/usage. Provider adapters preserve native authentication, configuration and account isolation. Provider-enforced restrictions remain authoritative.
+- **Agent means a real coding terminal, never a Thread.** Agent creation never routes to Threads or says “resume this thread.” Launch N creates N independent provider sessions in the current workspace using the explicitly selected account, model and effort.
+- Genuine expiry offers inline **Reconnect**, preserves the pending launch, and automatically creates only its unfinished agents after successful authentication. Never make the user navigate away and reconstruct the request.
+- Apply this to Claude Code, Codex, Cursor, Gemini and every future provider. Validate available/unavailable metadata, genuine expiry/reconnect, multi-agent creation and restart persistence through the shared paths.
+
+This file is the authority imported by `CLAUDE.md`; Claude Code and Codex follow the same rule.
+
 ## Permanent Unified Memory definition (owner directive 2026-10-04)
 
 **UNIFIED MEMORY IS KALCODE'S SHARED, PROVIDER-INDEPENDENT PROJECT MEMORY.** It preserves useful
@@ -152,6 +166,48 @@ KalCode agents must never spam the Windows desktop with external terminal window
 
 For Codex tool execution on Windows, use the existing PTY execution mode (`exec_command` with `tty: true`) so commands stay contained. Any explicitly launched background helper must use the platform's no-window creation mechanism (`windowsHide`, `CREATE_NO_WINDOW`, or `Start-Process -WindowStyle Hidden` as applicable). Test the actual owning spawn path and observe window/focus events; reduced popup frequency is not completion.
 
+## Permanent provider tool capability rule (owner directive 2026-10-04)
+
+"KALCODE MUST NOT BREAK OR STRIP AWAY A CODING PROVIDER'S LEGITIMATE TOOL CAPABILITIES.
+
+PROVIDER SESSIONS INSIDE KALCODE SHOULD RETAIN THEIR NATIVE FILE, SHELL, SEARCH, MCP, BROWSER/RESEARCH, AND OTHER TOOL CAPABILITIES WHERE THE PROVIDER SUPPORTS THEM.
+
+TOOL CALLING MUST FLOW CORRECTLY THROUGH THE PROVIDER ADAPTER, EXECUTION HOST, AND RESULT PATH.
+
+DO NOT APPLY PROVIDER-SPECIFIC HACKS WHEN THE BUG BELONGS TO THE SHARED TOOL/ADAPTER ARCHITECTURE.
+
+NORMAL SAFE DEVELOPMENT TOOL USE SHOULD NOT BE BLOCKED BY KALCODE-INTERNAL PERMISSION FRICTION."
+
+- KalCode's hook channel (`kalcode-hook`, `crates/hook-bridge`) **observes** ordinary provider sessions. A KalCode-side failure (slow, busy, restarting, updating, unreachable, stale session, oversized input) must never block or prompt for a tool call: the provider's own permission system decides. Only engine routing passes `enforce` and fails closed.
+- Launch flags must not remove native tools. No blanket `--strict-mcp-config`, `mcp_servers={}`, `web_search='disabled'`, MCP sentinels, `--extensions none`, or feature switches that turn off provider-native tools. Plan mode keeps the provider's own read-only research tools (web search/fetch, read-only shell).
+- Repository-supplied configuration that would run with no trust prompt (for example `.mcp.json` servers in Claude's `-p` mode) stays out; the user's own configured servers and tools are passed through.
+- Each adapter declares its tools truthfully in `ProviderCapabilities.tools` (native, needs configuration, or unavailable with the real reason). Never fake a tool, and never tell a provider the whole tool system is unusable when one capability is missing.
+- When a tool genuinely fails, surface the real reason (MCP server unavailable, provider session expired, not supported by this provider, execution host failed), never a generic harness refusal.
+
+## Permanent provider-agnostic rule (owner directive 2026-10-04)
+
+"KALCODE IS PROVIDER-AGNOSTIC BY DEFAULT.
+
+EVERY CORE FEATURE, WORKFLOW, FIX, AND UX IMPROVEMENT SHOULD WORK ACROSS ALL CURRENT AND FUTURE CODING PROVIDERS THROUGH SHARED KALCODE SYSTEMS.
+
+PROVIDER-SPECIFIC DIFFERENCES BELONG INSIDE CLEAN ADAPTER/CAPABILITY LAYERS.
+
+DO NOT HARD-CODE KALCODE AROUND CLAUDE CODE, CODEX, CURSOR, GEMINI, OR ANY ONE PROVIDER.
+
+IF A FEATURE CAN BE SHARED, BUILD IT ONCE.
+
+IF PROVIDER CAPABILITIES DIFFER, HANDLE THE DIFFERENCE TRUTHFULLY AND GRACEFULLY."
+
+- Applies to Code, coding agents, terminals, Agent Fleet, Accounts, Usage, Models, KalVoice, Runs, Queue, Squads, Handoffs, Launch Recipes, Stuck Agent Detection, Agent File Ownership, KalTidy, Unified Memory, Live Browser, tool calling, external APIs, provider session persistence, permissions, navigation, orchestration, automatic routing, status, model selection and account switching. Assume each works with Claude Code, Codex, Cursor, Gemini and future providers unless a real technical reason prevents it.
+- Core features talk to one shared provider interface (KalCode core → shared provider capability layer → per-provider adapters). Do not scatter `if Claude … else if Codex …` through the product; keep provider-specific behavior inside the adapter/capability layer.
+- Ask "does this provider support this capability?" (multiple accounts, model selection, reasoning/effort, usage reporting, session resume, MCP, web/search, subagents, tool calling, file editing, terminal execution, native plugins/extensions), never "is this Claude Code?".
+- No fake parity. Use a capability when the provider has it; otherwise show a truthful fallback ("Usage unavailable", "Model selection controlled by provider", "Session resume unsupported"). Never invent provider features to make the UI look consistent.
+- For every provider, an agent is a real coding terminal/session (four Cursor agents = four Cursor coding terminals). Never turn one provider's agent into a Thread while another gets a terminal.
+- Every provider account joins the same canonical account system (nickname, identity, plan, auth state, health, usage, reset time, models, default where supported) with consistent UI and behavior.
+- KalVoice is provider-independent and routes through the same provider/orchestration layer ("launch four agents" uses context/default; "launch two Codex agents using Codex B" uses Codex B; "open the agent that just finished" opens whichever provider owns it).
+- Unified Memory belongs to KalCode and the workspace, not to any provider; every provider consumes relevant project memory through the same KalCode memory system.
+- The Code tab treats providers consistently; the + launcher offers each provider, Terminal, Live Browser and Widget. New providers plug into the existing Agent Fleet, Runs, Queue, Accounts, KalVoice, Usage UI, KalTidy, Handoffs, Squads, Unified Memory, terminal lifecycle and navigation without rebuilding them.
+
 
 ## Permanent multi-shipper / parallel release rule (owner directive 2026-10-03)
 
@@ -187,7 +243,7 @@ This replaces the single-release-driver model, including the old "one release at
 **KEEP THE BUILD CACHE. NEVER FORCE A FULL REBUILD.** Release builds on the Mac and on Windows reuse the warm compiled cache (`target/`, including Cargo `.fingerprint` and incremental data) from the most recent build of the nearest commit. Never delete Cargo fingerprints, incrementals or the release `target` before a release build, and never start from a cold clone when a warm one exists. Cargo's own fingerprinting decides what is stale, so a warm cache is correct, not a shortcut. The only exception is a targeted removal of one artifact that is proven to be wrongly reused, such as `guardian-packaging.mjs` and `hook-packaging.mjs` forcing their one binary to relink; never remove a whole cache. A slow cold rebuild is a pipeline bug to fix.
 
 - **Release builds always run on the owner's main Windows PC** (and the Mac for macOS). Building, signing and packaging never move to another machine.
-- **The second Windows machine runs gates**, under its own runner name and label (`kalcode-win-gate-2`, `kalcode-gate-2`; see `tooling/runners/README.md`). Gates there never compete with release builds for memory. Windows update QA stays on the build PC, where its packets are staged.
+- **The build PC runs everything (owner directive 2026-10-04: it now has 64 GB of RAM).** Gates (`kalcode-win-gate`, label `kalcode-gate`), builds, tests and QA run on the owner's main Windows PC. Do not use the second Windows machine (`kalcode-win-gate-2`, `kalcode-win-desktop-qa`) for gates, QA or anything else.
 
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 

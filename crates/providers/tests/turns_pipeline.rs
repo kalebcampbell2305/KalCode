@@ -222,20 +222,21 @@ fn codex_text_turn_streams_to_done_and_the_next_turn_resumes_the_thread() {
     assert!(!args.iter().any(|a| a == "approval_policy='never'"));
     assert!(!args.iter().any(|a| a == "resume"));
 
-    // Credential scoping: only Codex's own variables reach Codex.
+    // The user's environment, as in a native terminal; KalCode's own settings never reach it.
     let names = fake.env_names();
-    assert!(names.iter().any(|n| n == "OPENAI_API_KEY"));
-    for foreign in [
+    for inherited in [
+        "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
-        "KALCODE_DATA_DIR",
         "GITHUB_TOKEN",
     ] {
-        assert!(
-            !names.iter().any(|n| n.eq_ignore_ascii_case(foreign)),
-            "{foreign} passed"
-        );
+        assert!(names.iter().any(|n| n == inherited), "{inherited}");
     }
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case("KALCODE_DATA_DIR"))
+    );
 
     // Turn two resumes the same Codex thread.
     let events = turn(session.as_ref(), &rx, "and again");
@@ -535,18 +536,20 @@ fn gemini_turns_stream_to_done_and_resume_by_session_id() {
     assert!(fake.stdin().contains("hello gemini"));
     assert!(!args.iter().any(|a| a.contains("hello gemini")));
     let names = fake.env_names();
-    assert!(names.iter().any(|n| n == "GEMINI_API_KEY"));
-    for foreign in [
+    // The user's environment, as in a native terminal (native provider parity).
+    for inherited in [
+        "GEMINI_API_KEY",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        "KALCODE_DATA_DIR",
         "GITHUB_TOKEN",
     ] {
-        assert!(
-            !names.iter().any(|n| n.eq_ignore_ascii_case(foreign)),
-            "{foreign} passed"
-        );
+        assert!(names.iter().any(|n| n == inherited), "{inherited}");
     }
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case("KALCODE_DATA_DIR"))
+    );
 
     let events = turn(session.as_ref(), &rx, "use tools");
     assert!(

@@ -52,6 +52,148 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 describe("provider account session restoration", () => {
+  it("does not let an earlier metadata reload undo provider-confirmed expiration", async () => {
+    const saved = account("codex-b", "codex", "Codex B");
+    const check = deferred<ProviderAccount>();
+    const staleList = deferred<ProviderAccount[]>();
+    runtime.client = {
+      listProviderAccounts: vi
+        .fn()
+        .mockResolvedValueOnce([saved])
+        .mockImplementationOnce(() => staleList.promise),
+      refreshCodexAccount: vi.fn(() => check.promise),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.checking.has(saved.id)).toBe(true));
+    let reload: Promise<ProviderAccount[] | null> | undefined;
+    act(() => {
+      reload = view.result.current?.reload();
+    });
+    const expired = { ...saved, authenticationState: "not_authenticated" as const };
+    await act(async () => {
+      check.resolve(expired);
+    });
+    await waitFor(() => expect(view.result.current?.states.get(saved.id)?.health.state).toBe("expired"));
+    await act(async () => {
+      staleList.resolve([saved]);
+      await reload;
+    });
+    expect(view.result.current?.states.get(saved.id)).toMatchObject({ account: expired, health: { usable: false } });
+  });
+
+  it("publishes models for the identity confirmed by the same Cursor response", async () => {
+    const saved = account("cursor-a", "cursor", "Work");
+    const checked = { ...saved, providerReportedIdentity: "verified@example.com" };
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [saved]),
+      refreshCursorAccount: vi.fn(async () => ({ account: checked, models: [], modelsError: null })),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([saved]));
+    await act(async () => {
+      await view.result.current?.discoverModels(saved.id);
+    });
+    expect(view.result.current?.states.get(saved.id)).toMatchObject({
+      account: checked,
+      models: { status: "available" },
+    });
+  });
+
+  it.each(["codex", "claude-code", "cursor", "gemini-cli"] as const)(
+    "keeps persisted %s authentication usable across metadata failures and restart",
+    async (providerId) => {
+      const saved = account("saved-account", providerId, "Work");
+      runtime.client = {
+        listProviderAccounts: vi.fn(async () => [saved]),
+        refreshCodexAccount: vi.fn(async () => saved),
+        refreshGeminiAccount: vi.fn(async () => saved),
+        refreshCursorAccount: vi.fn(async () => {
+          throw new Error("Models unavailable");
+        }),
+        threadOptions: vi.fn(async () => {
+          throw new Error("Models unavailable");
+        }),
+        providerAccountUsage: vi.fn(async () => {
+          throw new Error("Usage unavailable");
+        }),
+      } as unknown as KalCodeClient;
+      const first = renderHook(useOptionalProviderAccountSessions, { wrapper });
+      await waitFor(() => expect(first.result.current?.states.get(saved.id)?.health.state).toBe("connected"));
+      await act(async () => {
+        await first.result.current?.discoverModels(saved.id);
+      });
+      expect(first.result.current?.states.get(saved.id)).toMatchObject({
+        account: saved,
+        health: { state: "connected", usable: true },
+        plan: { status: "unavailable", name: null },
+        models: { status: "unavailable", items: [] },
+      });
+      first.unmount();
+      const restarted = renderHook(useOptionalProviderAccountSessions, { wrapper });
+      await waitFor(() =>
+        expect(restarted.result.current?.states.get(saved.id)).toMatchObject({
+          account: saved,
+          health: { state: "connected", usable: true },
+          models: null,
+        }),
+      );
+      expect(runtime.client.listProviderAccounts).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("coalesces model discovery and discards results after the same account changes identity", async () => {
+    const original = account("cursor-a", "cursor", "Work");
+    const discovered = deferred<Awaited<ReturnType<KalCodeClient["refreshCursorAccount"]>>>();
+    const list = vi.fn(async () => [original]);
+    runtime.client = {
+      listProviderAccounts: list,
+      refreshCursorAccount: vi.fn(() => discovered.promise),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([original]));
+    let request: Promise<void> | undefined;
+    act(() => {
+      request = view.result.current?.discoverModels(original.id);
+      expect(view.result.current?.discoverModels(original.id)).toBe(request);
+    });
+    await waitFor(() => expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1));
+    const changed = { ...original, providerReportedIdentity: "other@example.com" };
+    list.mockResolvedValue([changed]);
+    await act(async () => {
+      await view.result.current?.reload();
+    });
+    await act(async () => {
+      discovered.resolve({ account: original, models: [], modelsError: null });
+      await request;
+    });
+    expect(view.result.current?.states.get(original.id)).toMatchObject({ account: changed, models: null });
+  });
+
+  it("clears model state when the runtime changes and ignores the old client's response", async () => {
+    const original = account("cursor-a", "cursor", "Work");
+    const discovered = deferred<Awaited<ReturnType<KalCodeClient["refreshCursorAccount"]>>>();
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [original]),
+      refreshCursorAccount: vi.fn(() => discovered.promise),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([original]));
+    let request: Promise<void> | undefined;
+    act(() => {
+      request = view.result.current?.discoverModels(original.id);
+    });
+    await waitFor(() => expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1));
+    const changed = { ...original, providerReportedIdentity: "other@example.com" };
+    runtime.client = { listProviderAccounts: vi.fn(async () => [changed]) } as unknown as KalCodeClient;
+    view.rerender();
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([changed]));
+    await act(async () => {
+      discovered.resolve({ account: original, models: [], modelsError: null });
+      await request;
+    });
+    expect(view.result.current?.states.get(original.id)).toMatchObject({ account: changed, models: null });
+  });
+
   it("restores Cursor native identity without running a credential-refreshing observer", async () => {
     const cursor = account("cursor-native", "cursor", "Cursor A");
     runtime.client = {

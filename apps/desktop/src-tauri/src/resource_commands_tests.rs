@@ -207,6 +207,115 @@ fn projected(
 }
 
 #[test]
+fn interactive_agents_ignore_cpu_but_keep_independent_memory_and_custom_limits() {
+    let mut snapshot = measured_snapshot();
+    let mut limits = ModeLimits::balanced();
+    let request = kalcode_resources::CapacityRequest::default();
+    let running = kalcode_resources::RunningWork::default();
+    let budget = ReservationBudget {
+        cpu_millicores: 1_000,
+        memory_mib: 256,
+        disk_mib: 0,
+    };
+    let decide = |snapshot: Option<&ResourceSnapshot>, limits: &ModeLimits, pending| {
+        super::interactive_provider_admission(
+            snapshot, limits, &running, &request, pending, budget, NOW_MS,
+        )
+    };
+    snapshot.cpu = Reading::Value(CpuReading {
+        total_percent: 100.0,
+        smoothed_percent: 100.0,
+        logical_cores: 4,
+    });
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::Cpu,
+        level: PressureLevel::Critical,
+        signal: Signal::CpuPercent,
+        value: 100.0,
+        threshold: Some(90.0),
+        approaching: false,
+    });
+    assert_eq!(
+        decide(Some(&snapshot), &limits, ReservationBudget::default()).state,
+        AdmissionState::Allowed
+    );
+    snapshot.cpu = Reading::unknown("not sampled yet");
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::Memory,
+        level: PressureLevel::High,
+        signal: Signal::MemoryUsedPercent,
+        value: 90.0,
+        threshold: Some(88.0),
+        approaching: false,
+    });
+    assert_eq!(
+        decide(Some(&snapshot), &limits, ReservationBudget::default()).state,
+        AdmissionState::Allowed
+    );
+    assert_eq!(
+        decide(None, &limits, ReservationBudget::default()).state,
+        AdmissionState::Allowed,
+        "an unfinished startup sampler is not a real resource failure"
+    );
+    let projected = decide(
+        Some(&snapshot),
+        &limits,
+        ReservationBudget {
+            memory_mib: 4 * 1024,
+            ..ReservationBudget::default()
+        },
+    );
+    assert_eq!(
+        projected.state,
+        AdmissionState::Held,
+        "concurrent reservations retain memory protection"
+    );
+    assert!(kalcode_resources::decision_codes(&projected).contains(&"memory_headroom"));
+    limits.max_agents = 0;
+    assert_eq!(
+        decide(None, &limits, ReservationBudget::default()).state,
+        AdmissionState::Held,
+        "custom count limits do not depend on telemetry"
+    );
+    assert_eq!(
+        decide(Some(&snapshot), &limits, ReservationBudget::default()).state,
+        AdmissionState::Held,
+        "an explicit custom agent limit still applies"
+    );
+}
+
+#[test]
+fn interactive_agents_retain_measured_disk_pressure_with_truthful_reason() {
+    let mut snapshot = measured_snapshot();
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::DiskSpace,
+        level: PressureLevel::Critical,
+        signal: Signal::DiskFreeMb { mount: "/".into() },
+        value: 0.0,
+        threshold: Some(256.0),
+        approaching: false,
+    });
+    let decision = super::interactive_provider_admission(
+        Some(&snapshot),
+        &ModeLimits::balanced(),
+        &kalcode_resources::RunningWork::default(),
+        &kalcode_resources::CapacityRequest::default(),
+        ReservationBudget::default(),
+        ReservationBudget {
+            cpu_millicores: 1000,
+            memory_mib: 256,
+            disk_mib: 0,
+        },
+        NOW_MS,
+    );
+    assert_eq!(decision.state, AdmissionState::Held);
+    assert!(
+        matches!(&decision.reasons[0], AdmissionReason::Capacity { holds }
+        if holds.iter().any(|hold| matches!(hold, kalcode_resources::HoldReason::Pressure { resource: ResourceKind::DiskSpace, .. })))
+    );
+}
+
+#[test]
 fn local_workload_estimates_reject_unknown_and_unbounded_values() {
     assert!(LocalWorkloadEstimate::inference(None, Some(512)).is_err());
     assert!(LocalWorkloadEstimate::inference(Some(500), None).is_err());
@@ -804,6 +913,7 @@ impl AgentProvider for FakeProvider {
             models: Vec::new(),
             permission_mappings: Vec::new(),
             interactive: None,
+            tools: Vec::new(),
         }
     }
 
@@ -1176,7 +1286,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 
 /// The owner's 24-thread, 31 GiB PC on a quiet moment.
-fn healthy_governor() -> Arc<ResourceGovernorState> {
+pub(crate) fn healthy_governor() -> Arc<ResourceGovernorState> {
     let state = Arc::new(ResourceGovernorState::start_with_probe(Box::new(
         SteadyProbe {
             cpu_percent: 12.0,
