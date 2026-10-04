@@ -129,8 +129,13 @@ pub trait ApprovalExpiry: Send + Sync {
     fn answered_in_provider(&self, thread_id: &str, action_id: &str);
 }
 
-/// Receives the first prompt of an interactive session so the deterministic namer can title the
-/// thread. The prompt must not be stored or put in an event.
+/// Receives submitted user tasks for the shared deterministic namer. The historical method name
+/// is retained; the durable naming authority chooses the first meaningful task and explicit task
+/// changes, never overwriting manual names. Prompts must not be stored or put in an event.
 pub trait TitleSink: Send + Sync {
     fn first_prompt(&self, thread_id: &str, prompt: &str);
+
+    /// Raw terminal input may be an authentication response rather than a task. Receivers must
+    /// require explicit task intent; without a receiver implementing that policy it is ignored.
+    fn terminal_prompt(&self, _thread_id: &str, _prompt: &str) {}
 }

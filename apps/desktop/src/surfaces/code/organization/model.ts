@@ -242,17 +242,10 @@ export function terminalPurpose(terminal: TerminalInfo, operations: OperationsSn
   return { name: null, group: "Terminals" };
 }
 
-/** The placeholder name an agent has until it is named (`AGENT_FALLBACK_NAME` in Rust). */
-export const AGENT_PLACEHOLDER_NAME = "New agent";
-
-/**
- * An agent's display name: its call sign, then its name ("Claude A - Dashboard"), or the call
- * sign alone while it still has the placeholder name.
- */
-export function agentDisplayName(thread: ThreadSummary, handle: string | undefined): string {
-  const named = thread.name.trim() && thread.name !== AGENT_PLACEHOLDER_NAME;
-  if (!handle) return thread.name;
-  return named ? `${handle} - ${thread.name}` : handle;
+/** Native restores legacy defaults; every nonempty persisted name can be an explicit manual choice. */
+export function agentDisplayName(thread: ThreadSummary): string {
+  const name = thread.name.trim();
+  return name || thread.providerName || thread.providerId;
 }
 
 /** Numbers repeated names in order ("Tests", "Tests (2)"), like terminal tab labels. */

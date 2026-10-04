@@ -31,8 +31,8 @@ const agent = (id: string, name: string, createdAt: string): ThreadSummary =>
     runtimeKind: "interactive_pty",
   }) as unknown as ThreadSummary;
 
-const SOURCE = agent("source", "Claude A", "2026-10-01T00:00:00.000Z");
-const TARGET = agent("target", "Claude B", "2026-10-01T00:01:00.000Z");
+const SOURCE = agent("source", "Implement Dashboard", "2026-10-01T00:00:00.000Z");
+const TARGET = agent("target", "Review Dashboard", "2026-10-01T00:01:00.000Z");
 
 const record = (status: HandoffRecord["status"]): HandoffRecord => ({
   id: `h-${status}`,
@@ -117,7 +117,7 @@ describe("HandOffDialog", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = client({ list: vi.fn(async () => [record("completed")]) });
     dialog();
-    await screen.findByText(/To Claude B/);
+    await screen.findByText(/To Review Dashboard/);
     await act(async () => {
       vi.advanceTimersByTime(8_000);
     });
@@ -128,13 +128,13 @@ describe("HandOffDialog", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = client({ list: vi.fn(async () => [record("delivered")]) });
     dialog();
-    await screen.findByText(/To Claude B/);
+    await screen.findByText(/To Review Dashboard/);
     await act(async () => {
       vi.advanceTimersByTime(2_600);
     });
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("status", { name: "Loading handoffs" })).not.toBeInTheDocument();
-    expect(screen.getByText(/To Claude B/)).toBeInTheDocument();
+    expect(screen.getByText(/To Review Dashboard/)).toBeInTheDocument();
     await act(async () => {
       vi.advanceTimersByTime(2_600);
     });

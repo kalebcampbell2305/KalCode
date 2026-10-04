@@ -342,9 +342,11 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 376);
-  assert.equal(visual.size, 56);
-  assert.equal(established.size, 432);
+  // These are established coverage floors, not ceilings: adding regressions must
+  // not fail inventory validation. Exact disjoint coverage is checked below.
+  assert.ok(functional.size >= 376);
+  assert.ok(visual.size >= 56);
+  assert.equal(established.size, functional.size + visual.size);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

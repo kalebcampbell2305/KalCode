@@ -100,7 +100,7 @@ it("duplicates a real coding pane with the clicked agent's exact launch settings
         model: "exact-model",
         effort: "high",
         permissionMode: "plan",
-        name: "Review (copy)",
+        name: null,
       }),
     ),
   );

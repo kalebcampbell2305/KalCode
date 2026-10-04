@@ -19,6 +19,283 @@ pub fn is_placeholder(name: &str) -> bool {
     name == FALLBACK_NAME || name == AGENT_FALLBACK_NAME
 }
 
+/// Explicit changes of primary task, rather than ordinary replies or refinements.
+pub fn new_primary_task(prompt: &str) -> bool {
+    task_prefix(prompt.trim()).is_some()
+}
+
+/// Raw PTY input is not an authenticated user-prompt hook. Require a clear task
+/// instruction so an ordinary multiword password cannot become a visible title.
+pub fn has_task_intent(prompt: &str) -> bool {
+    if unsafe_title_input(prompt) {
+        return false;
+    }
+    let prompt = task_prefix(prompt.trim()).unwrap_or(prompt.trim());
+    first_sentence_words(prompt)
+        .iter()
+        .map(|word| word.to_lowercase())
+        .find(|word| !LEADING_FILLER.contains(&word.as_str()))
+        .is_some_and(|word| task_action(&word).is_some())
+}
+
+fn unsafe_title_input(prompt: &str) -> bool {
+    prompt.chars().any(|c| {
+        (c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+    })
+}
+
+/// Keep titles stable for refinements and routine test/review instructions. A complete
+/// implementation request with a different subject can establish a new primary task
+/// even when the user does not literally say "new task".
+pub fn should_update_task(current_name: &str, prompt: &str) -> bool {
+    if new_primary_task(prompt) {
+        return true;
+    }
+    let words = first_sentence_words(prompt);
+    if words.iter().any(|word| {
+        [
+            "it", "its", "this", "that", "these", "those", "too", "also", "again", "same",
+            "instead",
+        ]
+        .contains(&word.to_lowercase().as_str())
+    }) {
+        return false;
+    }
+    let Some((index, action)) =
+        words.iter().take(10).enumerate().find_map(|(index, word)| {
+            task_action(&word.to_lowercase()).map(|action| (index, action))
+        })
+    else {
+        return false;
+    };
+    if !matches!(
+        action,
+        "Build" | "Fix" | "Redesign" | "Refactor" | "Migration"
+    ) {
+        return false;
+    }
+    let Some(next_name) = task_name_from_prompt(prompt) else {
+        return false;
+    };
+    let topic = |name: &str| -> Vec<String> {
+        name.split_whitespace()
+            .map(str::to_lowercase)
+            .filter(|word| {
+                task_action(word).is_none()
+                    && ![
+                        "new",
+                        "page",
+                        "screen",
+                        "task",
+                        "code",
+                        "work",
+                        "update",
+                        "migration",
+                    ]
+                    .contains(&word.as_str())
+            })
+            .collect()
+    };
+    let next = topic(&next_name);
+    let current = topic(current_name);
+    // A single generic subject ("fix tests") is not sufficient evidence to relabel.
+    index < words.len()
+        && next.len() >= 2
+        && !current.is_empty()
+        && !next.iter().any(|word| current.contains(word))
+}
+
+fn task_prefix(prompt: &str) -> Option<&str> {
+    [
+        "new task:",
+        "new task ",
+        "next task:",
+        "next task ",
+        "different task:",
+        "different task ",
+        "switch to ",
+        "switch tasks:",
+        "instead, ",
+        "instead ",
+        "now focus on ",
+        "let's work on ",
+        "lets work on ",
+        "now let's ",
+        "now lets ",
+    ]
+    .into_iter()
+    .find_map(|prefix| {
+        prompt
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            .then(|| prompt[prefix.len()..].trim())
+    })
+}
+
+/// A local, provider-independent task title. Never stores the prompt, calls a model, or
+/// turns authentication input, slash commands and conversational replies into tab names.
+/// Existing chat naming remains compatible through `name_from_prompt` below.
+pub fn task_name_from_prompt(prompt: &str) -> Option<String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty()
+        || unsafe_title_input(prompt)
+        || prompt.starts_with(['/', '<', '{', '[', '`'])
+    {
+        return None;
+    }
+    let prompt = task_prefix(prompt).unwrap_or(prompt);
+    let words = first_sentence_words(prompt);
+    if words.is_empty() {
+        return None;
+    }
+    let first = words[0].to_lowercase();
+    if [
+        "password",
+        "passphrase",
+        "secret",
+        "token",
+        "bearer",
+        "authorization",
+        "api_key",
+        "api-key",
+    ]
+    .contains(&first.as_str())
+    {
+        return None;
+    }
+    // Find the intent after a polite or provider-addressed opening without knowing
+    // anything about the provider itself ("Assistant, could you please fix ...").
+    let intent =
+        words.iter().take(10).enumerate().find_map(|(index, word)| {
+            task_action(&word.to_lowercase()).map(|action| (index, action))
+        });
+    if intent.is_none()
+        && [
+            "thank", "thanks", "yes", "no", "ok", "okay", "hi", "hello", "looks", "continue",
+            "proceed",
+        ]
+        .contains(&first.as_str())
+    {
+        return None;
+    }
+    let (start, action) = intent.map_or((0, None), |(index, action)| (index + 1, Some(action)));
+    let mut subject = Vec::new();
+    for word in &words[start..] {
+        let lower = word.to_lowercase();
+        if BOUNDARIES.contains(&lower.as_str()) {
+            if !subject.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if DROPPED.contains(&lower.as_str())
+            || LEADING_FILLER.contains(&lower.as_str())
+            || [
+                "new", "existing", "all", "it", "them", "that", "this", "now", "again", "same",
+                "yes", "no", "thanks", "thank", "great", "good", "looks", "continue", "proceed",
+                "done", "okay", "sure", "right", "more", "do",
+            ]
+            .contains(&lower.as_str())
+        {
+            continue;
+        }
+        // Identifiers are useful; credentials, URLs, email addresses, command flags,
+        // assignments and long opaque tokens are not useful human-readable titles.
+        if word.chars().count() > 32
+            || word.contains(['@', '=', ':', '/', '\\'])
+            || word.starts_with('-')
+            || ["sk-", "sk_", "ghp_", "github_pat_", "xoxb-", "xoxp-", "eyJ"]
+                .iter()
+                .any(|prefix| word.starts_with(prefix))
+            || word.chars().filter(char::is_ascii_digit).count() > 6
+            || !word.chars().any(char::is_alphabetic)
+        {
+            continue;
+        }
+        subject.push(word.as_str());
+        if subject.len() == 4 {
+            break;
+        }
+    }
+    // A title needs a topic. A single unrecognised token is usually a reply, code,
+    // or authentication input, not a task. Non-Latin task phrases need not use spaces.
+    if subject.is_empty()
+        || (action.is_none()
+            && subject.len() < 2
+            && !(subject[0].chars().count() >= 6 && !subject[0].is_ascii()))
+    {
+        return None;
+    }
+    if action == Some("Redesign")
+        && subject.len() > 1
+        && subject.last().is_some_and(|word| {
+            ["page", "screen", "interface"].contains(&word.to_lowercase().as_str())
+        })
+    {
+        subject.pop();
+    }
+    // "Provider tool calling" is already described by "Provider Tool Fix";
+    // keep meaningful two-word topics such as "Error Handling" intact.
+    if action == Some("Fix")
+        && subject.len() > 2
+        && subject
+            .last()
+            .is_some_and(|word| word.to_lowercase().ends_with("ing"))
+    {
+        subject.pop();
+    }
+    let mut parts: Vec<String> = subject.into_iter().map(task_word).collect();
+    match action {
+        Some(
+            action @ ("Fix" | "Redesign" | "Refactor" | "Optimization" | "Update" | "Removal"
+            | "Migration"),
+        ) => parts.push(action.to_owned()),
+        Some(action) if parts.len() == 1 => parts.insert(0, action.to_owned()),
+        _ => {}
+    }
+    let mut result = String::new();
+    for word in parts.into_iter().take(5) {
+        let extra = word.chars().count() + usize::from(!result.is_empty());
+        if result.chars().count() + extra > MAX_CHARS {
+            break;
+        }
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        result.push_str(&word);
+    }
+    (!result.is_empty()).then_some(result)
+}
+
+fn task_action(word: &str) -> Option<&'static str> {
+    Some(match word {
+        "fix" | "repair" | "debug" | "resolve" => "Fix",
+        "redesign" => "Redesign",
+        "refactor" => "Refactor",
+        "optimize" => "Optimization",
+        "update" | "upgrade" | "change" | "improve" => "Update",
+        "remove" | "delete" => "Removal",
+        "migrate" => "Migration",
+        "review" | "audit" | "inspect" => "Review",
+        "build" | "implement" | "create" | "add" | "design" => "Build",
+        "write" => "Write",
+        "test" | "verify" | "check" => "Test",
+        "run" => "Run",
+        "deploy" | "release" | "ship" => "Release",
+        "investigate" | "research" | "explain" | "find" => "Investigate",
+        _ => return None,
+    })
+}
+
+fn task_word(word: &str) -> String {
+    if word.len() > 4 && word.chars().all(|c| c.is_ascii_uppercase()) {
+        style(&word.to_lowercase())
+    } else {
+        style(word)
+    }
+}
+
 /// Politeness and framing that precede the actual task.
 const LEADING_FILLER: &[&str] = &[
     "please", "pls", "plz", "hey", "hi", "hello", "ok", "okay", "so", "can", "could", "would",
@@ -190,6 +467,123 @@ fn style(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_titles_describe_primary_topic_without_copying_the_prompt() {
+        for (prompt, expected) in [
+            (
+                "Redesign the pricing page and update annual plans.",
+                "Pricing Redesign",
+            ),
+            (
+                "Fix provider tool calling for all adapters.",
+                "Provider Tool Fix",
+            ),
+            (
+                "Review the billing webhooks and fix cancellation sync.",
+                "Billing Webhooks",
+            ),
+            ("Build the new Live Browser.", "Live Browser"),
+            (
+                "Assistant, could you please fix the OAuth callback race?",
+                "OAuth Callback Race Fix",
+            ),
+            (
+                "Add keyboard shortcuts for switching workspaces",
+                "Keyboard Shortcuts",
+            ),
+            ("New task: build the settings page", "Settings Page"),
+            ("Run tests", "Run Tests"),
+            ("Billing webhooks", "Billing Webhooks"),
+            ("修复设置页面中的错误", "修复设置页面中的错误"),
+        ] {
+            assert_eq!(
+                task_name_from_prompt(prompt).as_deref(),
+                Some(expected),
+                "{prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_titles_ignore_non_tasks_and_sensitive_inputs() {
+        for prompt in [
+            "",
+            "yes",
+            "thanks very much",
+            "looks good to me",
+            "please",
+            "continue",
+            "continue with that",
+            "fix it",
+            "/model",
+            "/login user@example.com",
+            "password secret-value",
+            "Bearer eyJhbGciOiJIUzI1NiJ9",
+            "sk-proj-1234567890",
+            "user@example.com",
+            "https://example.com",
+            "<environment_context>private setup</environment_context>",
+            "Fix foo\u{1b}bar",
+            "Fix foo\u{202e}bar",
+        ] {
+            assert_eq!(task_name_from_prompt(prompt), None, "{prompt}");
+        }
+        let title = task_name_from_prompt(
+            "Fix authentication sk-proj-secret123456789012345678901234567890",
+        )
+        .unwrap();
+        assert!(!title.contains("secret"));
+        assert!(!title.contains("sk-proj"));
+        assert!(!has_task_intent("correct horse battery staple"));
+        assert!(!has_task_intent("correct horse build stable"));
+        assert!(!has_task_intent("Fix foo\u{1b}bar"));
+        assert!(has_task_intent("Please build the new Live Browser"));
+        assert!(has_task_intent("New task: fix billing webhooks"));
+    }
+
+    #[test]
+    fn agent_titles_are_bounded_and_primary_task_changes_are_explicit() {
+        let title = task_name_from_prompt(
+            "Implement responsive accessible keyboard navigation controls everywhere",
+        )
+        .unwrap();
+        assert!(title.chars().count() <= MAX_CHARS);
+        assert!(title.split_whitespace().count() <= 5);
+        for prompt in [
+            "New task: build a dashboard",
+            "Switch to fixing billing",
+            "Instead, review webhooks",
+            "Now focus on the browser",
+        ] {
+            assert!(new_primary_task(prompt), "{prompt}");
+        }
+        for prompt in [
+            "Fix its label too",
+            "Run the tests again",
+            "Keep working",
+            "Can you explain that change?",
+            "That next task can wait",
+            "New tasK: build the browser",
+        ] {
+            assert!(!new_primary_task(prompt), "{prompt}");
+        }
+        assert!(should_update_task(
+            "Pricing Redesign",
+            "Build the new Live Browser."
+        ));
+        assert!(should_update_task("Live Browser", "Fix billing webhooks"));
+        for prompt in [
+            "Run the tests again",
+            "Fix its label too",
+            "Review billing webhooks",
+            "Fix pricing layout",
+            "Build this responsive layout",
+            "Fix tests",
+        ] {
+            assert!(!should_update_task("Pricing Redesign", prompt), "{prompt}");
+        }
+    }
 
     #[test]
     fn names_describe_the_task() {

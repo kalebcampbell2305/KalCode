@@ -1948,7 +1948,7 @@ fn idle_threads_start_without_a_task() {
     for thread in created {
         let thread = thread.expect("created");
         assert_eq!(thread.status, ThreadStatus::Idle, "waiting for input");
-        assert_eq!(thread.name, "New agent");
+        assert_eq!(thread.name, "Fake Provider");
         assert!(h.runtime.messages(&thread.id, 10, None).unwrap().is_empty());
     }
     assert!(
@@ -1987,6 +1987,162 @@ fn idle_request(h: &Harness) -> kalcode_threads::CreateIdleThread {
         permission_mode: PermissionMode::Approve,
         name: None,
     }
+}
+
+#[test]
+fn smart_agent_names_follow_meaningful_tasks_and_preserve_manual_intent() {
+    let h = Harness::new();
+    let agent = h.runtime.create_idle(idle_request(&h)).unwrap();
+    for filler in ["hello", "yes", "continue", "/model"] {
+        assert_eq!(
+            h.runtime.name_from_task(&agent.id, filler).unwrap().name,
+            "Fake Provider"
+        );
+    }
+    assert_eq!(
+        h.runtime
+            .name_from_task(&agent.id, "Redesign the pricing page and all plan tiers")
+            .unwrap()
+            .name,
+        "Pricing Redesign"
+    );
+    assert_eq!(
+        h.runtime
+            .name_from_task(&agent.id, "add tests and fix the failing cases")
+            .unwrap()
+            .name,
+        "Pricing Redesign"
+    );
+    assert_eq!(
+        h.runtime
+            .name_from_task(&agent.id, "New task: fix billing cancellation webhooks")
+            .unwrap()
+            .name,
+        "Billing Cancellation Webhooks Fix"
+    );
+    assert_eq!(
+        h.runtime
+            .name_from_task(&agent.id, "Build the new Live Browser")
+            .unwrap()
+            .name,
+        "Live Browser"
+    );
+    h.runtime.rename(&agent.id, "Fake Provider").unwrap();
+    assert_eq!(
+        h.runtime
+            .name_from_task(&agent.id, "New task: redesign the pricing page")
+            .unwrap()
+            .name,
+        "Fake Provider"
+    );
+    let pinned = h.runtime.create_idle(idle_request(&h)).unwrap();
+    // Choosing exactly the existing default is still an explicit manual choice.
+    h.runtime.rename(&pinned.id, "Fake Provider").unwrap();
+    assert_eq!(
+        h.runtime
+            .name_from_task(&pinned.id, "Redesign the pricing page")
+            .unwrap()
+            .name,
+        "Fake Provider"
+    );
+    assert!(
+        h.runtime.messages(&agent.id, 10, None).unwrap().is_empty(),
+        "title callbacks never persist user input"
+    );
+}
+
+#[test]
+fn smart_agent_names_survive_restart_and_concurrent_manual_rename() {
+    let h = Harness::new();
+    let agent = h.runtime.create_idle(idle_request(&h)).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            h.runtime
+                .name_from_task(&agent.id, "Redesign pricing plans")
+                .unwrap();
+        });
+        scope.spawn(|| {
+            h.runtime.rename(&agent.id, "My Release").unwrap();
+        });
+    });
+    assert_eq!(h.runtime.get(&agent.id).unwrap().name, "My Release");
+    h.runtime.shutdown();
+    let restarted = ThreadRuntime::new(
+        h.core.clone(),
+        h.registry.clone(),
+        h.workspaces.clone(),
+        h.gate.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        restarted
+            .name_from_task(&agent.id, "New task: fix billing cancellation webhooks")
+            .unwrap()
+            .name,
+        "My Release"
+    );
+}
+
+#[test]
+fn smart_agent_names_are_shared_by_direct_native_task_submission() {
+    let h = Harness::new();
+    let agent = h.runtime.create_idle(idle_request(&h)).unwrap();
+    let submitted = h
+        .runtime
+        .send(&agent.id, "Redesign the pricing page")
+        .unwrap();
+    assert_eq!(submitted.name, "Pricing Redesign");
+    assert!(
+        h.runtime
+            .list(None, false)
+            .unwrap()
+            .iter()
+            .any(|item| item.id == agent.id && item.name == submitted.name)
+    );
+}
+
+#[test]
+fn smart_agent_names_restore_legacy_defaults_without_rewriting_manual_names() {
+    let h = Harness::new();
+    let old = h.runtime.create_idle(idle_request(&h)).unwrap();
+    let manual = h.runtime.create_idle(idle_request(&h)).unwrap();
+    h.runtime.rename(&manual.id, "New agent").unwrap();
+    h.runtime.shutdown();
+    // Pre-upgrade rows have no naming metadata. Their rename event remains authoritative.
+    h.core
+        .write_with_events(|tx| {
+            tx.execute("UPDATE threads SET name='New agent' WHERE id=?1", [&old.id])?;
+            for id in [&old.id, &manual.id] {
+                tx.execute(
+                    "DELETE FROM app_meta WHERE key=?1",
+                    [format!("thread.name.origin:{id}")],
+                )?;
+            }
+            Ok(((), Vec::new()))
+        })
+        .unwrap();
+    let restarted = ThreadRuntime::new(
+        h.core.clone(),
+        h.registry.clone(),
+        h.workspaces.clone(),
+        h.gate.clone(),
+    )
+    .unwrap();
+    assert_eq!(restarted.get(&old.id).unwrap().name, "Fake Provider");
+    assert_eq!(
+        restarted
+            .name_from_task(&old.id, "Redesign the pricing page")
+            .unwrap()
+            .name,
+        "Pricing Redesign"
+    );
+    assert_eq!(
+        restarted
+            .name_from_task(&manual.id, "Redesign the pricing page")
+            .unwrap()
+            .name,
+        "New agent"
+    );
 }
 
 #[test]
