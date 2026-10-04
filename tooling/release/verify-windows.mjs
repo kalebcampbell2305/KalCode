@@ -337,7 +337,8 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
     resolveInstalledDirectory();
 
     check(`${name}: kalcode.exe installed`, existsSync(join(installDir, "kalcode.exe")));
-    check(`${name}: uninstall.exe installed`, existsSync(join(installDir, "uninstall.exe")));
+    const installedUninstaller = join(installDir, "uninstall.exe");
+    check(`${name}: uninstall.exe installed`, existsSync(installedUninstaller));
     if (rehearseUpdate) {
       result.updateModeRehearsal =
         existsSync(updateSentinel) && readFileSync(updateSentinel, "utf8") === "preserve-across-update\n";
@@ -394,6 +395,25 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
     check(
       `${name}: installed kalcode.exe and installer use the same signing identity`,
       result.installedAppSignerMatchesInstaller,
+    );
+    result.installedUninstallerSignature = authenticodeStatus(installedUninstaller, powershellJson);
+    check(
+      `${name}: installed uninstaller has a valid Authenticode signature`,
+      result.installedUninstallerSignature.status === "Valid",
+      result.installedUninstallerSignature.status,
+    );
+    check(
+      `${name}: installed uninstaller signature has a trusted timestamp`,
+      result.installedUninstallerSignature.timestamped === true,
+    );
+    result.installedUninstallerSignerMatchesInstaller = sameAuthenticodeSigner(
+      installer,
+      installedUninstaller,
+      powershellJson,
+    );
+    check(
+      `${name}: installed uninstaller and installer use the same signing identity`,
+      result.installedUninstallerSignerMatchesInstaller,
     );
     const guardian = join(installDir, build.guardian.file);
     const guardianExists = existsSync(guardian);
@@ -463,7 +483,7 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
     check(`${name}: InstallLocation points at the temp dir`, reg.InstallLocation === `"${installDir}"`);
     check(
       `${name}: UninstallString points at the temp uninstaller`,
-      reg.UninstallString === `"${join(installDir, "uninstall.exe")}"`,
+      reg.UninstallString === `"${installedUninstaller}"`,
     );
     const runValue = powershell(`(Get-ItemProperty ${psQuote(RUN_KEY)} -ErrorAction SilentlyContinue).'${PRODUCT}'`);
     check(`${name}: no autostart entry`, runValue === "");

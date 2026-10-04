@@ -50,6 +50,7 @@ function codexSetting(mode: PermissionMapping["mode"]): string {
     "shell_environment_policy.inherit='core'",
     "sandbox_workspace_write.network_access=false",
     "sandbox_workspace_write.writable_roots=[]",
+    "windows.sandbox='unelevated'",
     "features.apps=false",
     "features.plugins=false",
     "features.remote_plugin=false",
