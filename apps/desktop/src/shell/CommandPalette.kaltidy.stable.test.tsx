@@ -120,7 +120,11 @@ async function mountStable({ scan = true } = {}) {
     const workspaces = await client.listWorkspaces();
     return (await Promise.all(workspaces.map((w) => client.listTerminals(w.id)))).flat();
   };
-  return { user: userEvent.setup(), client, closed, terminals };
+  // This global palette fixture intentionally has no Code terminal focused. Focus protection is
+  // covered by the classifier; these cases exercise idle cleanup across every workspace.
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Dashboard", exact: true }));
+  return { user, client, closed, terminals };
 }
 
 async function openPalette(user: ReturnType<typeof userEvent.setup>) {

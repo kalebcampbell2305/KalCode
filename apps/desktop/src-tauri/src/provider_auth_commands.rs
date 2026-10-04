@@ -37,7 +37,9 @@ use crate::AppState;
 mod e2e;
 
 const CODEX_TRUTH_TTL: Duration = Duration::from_secs(5 * 60);
-const ACCOUNT_VALIDATION_PREEMPT_TIMEOUT: Duration = Duration::from_secs(2);
+// Cancellation must allow the observer's 500 ms termination grace plus Windows'
+// bounded 5 s process-tree reap before treating the account as still busy.
+const ACCOUNT_VALIDATION_PREEMPT_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_PENDING_LOGINS: usize = 8;
 const AUTH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
