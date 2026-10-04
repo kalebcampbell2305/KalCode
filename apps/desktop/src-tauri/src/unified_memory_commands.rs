@@ -16,7 +16,7 @@ use kalcode_contracts::unified_memory::{
 use kalcode_core::{Core, IpcError, KalError, Result};
 
 use crate::account::runtime::{AccountRuntime, AuthorityLease};
-use crate::runtime_coordinator::RuntimeState;
+use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
 use crate::thread_commands::ThreadsState;
 
 enum Work {
@@ -270,7 +270,7 @@ fn service(
 
 #[tauri::command(async)]
 pub fn unified_memory_list(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
     query: Option<String>,
 ) -> std::result::Result<Vec<MemoryRecord>, IpcError> {
@@ -290,7 +290,7 @@ pub fn unified_memory_list(
 
 #[tauri::command(async)]
 pub fn unified_memory_save(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
     id: Option<String>,
     mut input: MemoryInput,
@@ -325,7 +325,7 @@ pub fn unified_memory_save(
 
 #[tauri::command(async)]
 pub fn unified_memory_review(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
     id: String,
 ) -> std::result::Result<MemoryRecord, IpcError> {
@@ -348,7 +348,7 @@ pub fn unified_memory_review(
 
 #[tauri::command(async)]
 pub fn unified_memory_delete(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
     id: String,
 ) -> std::result::Result<bool, IpcError> {
@@ -369,7 +369,7 @@ pub fn unified_memory_delete(
 
 #[tauri::command(async)]
 pub fn unified_memory_preferences(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
 ) -> std::result::Result<MemorySettings, IpcError> {
     let service = service(&threads)?;
@@ -382,7 +382,7 @@ pub fn unified_memory_preferences(
 
 #[tauri::command(async)]
 pub fn unified_memory_set_preferences(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
     settings: MemorySettings,
 ) -> std::result::Result<MemorySettings, IpcError> {
@@ -402,7 +402,7 @@ pub fn unified_memory_set_preferences(
 
 #[tauri::command(async)]
 pub fn unified_memory_retrieve(
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     workspace_id: String,
     query: String,
 ) -> std::result::Result<String, IpcError> {
