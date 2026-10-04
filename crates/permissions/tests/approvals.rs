@@ -1163,7 +1163,8 @@ fn migrations_keep_permissions_at_v4() {
             (21, "threads_effort"),
             (22, "handoffs"),
             (23, "cursor_accounts"),
-            (24, "unified_memory")
+            (24, "unified_memory"),
+            (25, "terminal_directory")
         ]
     );
 }
