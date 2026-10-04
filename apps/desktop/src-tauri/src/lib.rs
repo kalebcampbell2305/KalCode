@@ -30,6 +30,8 @@ mod doctor_commands;
 #[allow(dead_code)]
 mod git_commands;
 mod handoff_commands;
+mod integration_bridge;
+mod integration_commands;
 mod kalvoice_accounting;
 mod kalvoice_callbacks;
 mod kalvoice_commands;
@@ -697,6 +699,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                integration_commands::integration_dispatch,
                 runtime_coordinator::runtime_status,
                 runtime_coordinator::runtime_retry,
                 account_commands::account_bootstrap,

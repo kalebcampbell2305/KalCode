@@ -13,6 +13,7 @@ export type CommandName =
   | "unified_memory_preferences"
   | "unified_memory_set_preferences"
   | "unified_memory_retrieve"
+  | "integration_dispatch"
   | HandoffsCommandName
   | OperationsCommandName
   | "boot"

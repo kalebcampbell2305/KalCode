@@ -11,6 +11,7 @@
     "allow-unified-memory-preferences",
     "allow-unified-memory-set-preferences",
     "allow-unified-memory-retrieve",
+    "allow-integration-dispatch",
     "allow-account-bootstrap",
     "allow-account-status",
     "allow-account-email-start",

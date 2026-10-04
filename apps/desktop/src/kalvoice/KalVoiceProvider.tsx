@@ -61,6 +61,7 @@ import {
   waitForProviderThreadTarget,
 } from "./dictation.ts";
 import { type DictationCapture, type DictationSession, DictationSessions } from "./dictationSessions.ts";
+import { explicitlyRequestsIntegrations, routesToIntegrations, runVoiceIntegration } from "./integrationRouting.ts";
 import { parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import {
@@ -1232,6 +1233,21 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       );
       dispatch({ type: "submitted", requestId });
       try {
+        if (await routesToIntegrations(trimmed)) {
+          if (scope.signal.aborted || activeRequest.current !== lease) return;
+          nativeRequestInFlight.current = lease;
+          try {
+            const message = await runVoiceIntegration(
+              trimmed,
+              workspaceIdOverride ?? workspaces.active?.id ?? null,
+              scope.signal,
+            );
+            if (!scope.signal.aborted && activeRequest.current === lease) scope.report({ ok: true, message });
+          } finally {
+            if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+          }
+          return;
+        }
         const tidy = parseKalTidyCommand(trimmed);
         if (tidy) {
           nativeRequestInFlight.current = lease;
@@ -1327,6 +1343,21 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             choiceRef.current = null;
             setSessionChoice(null);
           }
+        }
+        if (
+          (!target || !targetIsAlive(target) || explicitlyRequestsIntegrations(text)) &&
+          (await routesToIntegrations(text))
+        ) {
+          if (signal.aborted || activeRequest.current !== lease) return;
+          nativeRequestInFlight.current = lease;
+          try {
+            const message = await runVoiceIntegration(text, workspaces.active?.id ?? null, signal);
+            if (!signal.aborted && activeRequest.current === lease) scope.report({ ok: true, message });
+          } finally {
+            if (nativeRequestInFlight.current === lease) nativeRequestInFlight.current = null;
+          }
+          recordAction();
+          return;
         }
         const tidy = parseKalTidyCommand(text);
         if (tidy) {

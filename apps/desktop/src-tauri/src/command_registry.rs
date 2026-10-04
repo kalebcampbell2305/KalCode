@@ -7,6 +7,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "unified_memory_preferences",
     "unified_memory_set_preferences",
     "unified_memory_retrieve",
+    "integration_dispatch",
     "account_bootstrap",
     "account_status",
     "account_email_start",
