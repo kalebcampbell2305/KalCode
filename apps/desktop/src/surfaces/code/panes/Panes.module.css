@@ -406,7 +406,6 @@
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
-  opacity: 0.8;
 }
 
 .toolEyebrow::before {
