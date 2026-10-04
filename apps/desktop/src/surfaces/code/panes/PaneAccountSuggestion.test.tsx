@@ -74,9 +74,15 @@ it("dismisses the current condition but surfaces a different account failure", a
   rerender(<PaneAccountSuggestion thread={thread} account={null} onContinue={onContinue} />);
   expect(onContinue).not.toHaveBeenCalled();
   expect(screen.queryByRole("complementary", { name: "Account suggestion" })).not.toBeInTheDocument();
-  state.accounts = [{ ...account("a"), lastErrorCode: "connection_failed" }, account("b")];
-  rerender(<PaneAccountSuggestion thread={thread} account={null} onContinue={onContinue} />);
-  expect(screen.getByText("A has an account connection error.")).toBeVisible();
+  state.accounts = [account("a"), account("b")];
+  rerender(
+    <PaneAccountSuggestion
+      thread={{ ...thread, status: "failed", error: { code: "provider_billing_error", message: "Billing" } }}
+      account={null}
+      onContinue={onContinue}
+    />,
+  );
+  expect(screen.getByText("A has a provider-reported billing or account hold.")).toBeVisible();
   expect(onContinue).not.toHaveBeenCalled();
 });
 

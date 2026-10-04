@@ -56,6 +56,10 @@ export function limitingWindow(state: AccountUsageState): UsageWindow | null {
   return best;
 }
 
+export function usagePercent(value: number): string {
+  return value > 0 && value < 1 ? "<1" : String(Math.round(value));
+}
+
 export interface UsageSummary {
   /** Compact text for headers/chips: "64% left", "Usage unavailable", "Not checked". */
   short: string;

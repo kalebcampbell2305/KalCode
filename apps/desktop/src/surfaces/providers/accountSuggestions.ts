@@ -1,6 +1,12 @@
 import type { ProviderAccount, ThreadSummary } from "@kalcode/protocol";
 import { accountName } from "./accountIdentity.ts";
-import { type AccountUsageState, LOW_USAGE_PERCENT, notChecked, type UsageWindow } from "./accountUsage.ts";
+import {
+  type AccountUsageState,
+  LOW_USAGE_PERCENT,
+  notChecked,
+  type UsageWindow,
+  usagePercent,
+} from "./accountUsage.ts";
 import { USAGE_STALE_AFTER_MS } from "./accountUsageReader.ts";
 
 /** A mismatched response must never borrow another account's usage or plan. */
@@ -36,7 +42,7 @@ export interface SuggestedAccount {
 }
 
 export interface AccountSuggestion {
-  condition: "missing" | "sign-in" | "connection" | "low" | "provider-limit" | "billing";
+  condition: "missing" | "sign-in" | "low" | "provider-limit" | "billing";
   reason: string;
   alternatives: SuggestedAccount[];
 }
@@ -68,9 +74,6 @@ export function suggestAccounts(
   else if (current.authenticationState === "not_authenticated") {
     condition = "sign-in";
     reason = `${accountName(current)} needs sign-in.`;
-  } else if (current.lastErrorCode || validationErrors.has(current.id)) {
-    condition = "connection";
-    reason = `${accountName(current)} has an account connection error.`;
   } else if (failure === "provider_authentication_failed" || failure === "provider_oauth_org_not_allowed") {
     condition = "sign-in";
     reason = `${accountName(current)} could not authenticate this session.`;
@@ -85,7 +88,7 @@ export function suggestAccounts(
     reason = `${accountName(current)} reached a provider-reported limit.`;
   } else if (window && window.remainingPercent < LOW_USAGE_PERCENT) {
     condition = "low";
-    reason = `${accountName(current)} has ${Math.round(window.remainingPercent)}% left in its ${window.label.toLowerCase()} limit.`;
+    reason = `${accountName(current)} has ${usagePercent(window.remainingPercent)}% left in its ${window.label.toLowerCase()} limit.`;
   } else return null;
 
   const alternatives: SuggestedAccount[] = [];
@@ -94,10 +97,7 @@ export function suggestAccounts(
       account.id === thread.providerAccountId ||
       account.providerId !== thread.providerId ||
       account.archivedAt !== null ||
-      account.authenticationState !== "authenticated" ||
-      account.lastErrorCode ||
-      checking.has(account.id) ||
-      validationErrors.has(account.id)
+      account.authenticationState !== "authenticated"
     )
       continue;
     const available = currentWindow(usageForAccount(usage, account.id), thread.model, now);
@@ -108,8 +108,13 @@ export function suggestAccounts(
       detail: [
         "Signed in",
         available
-          ? `${Math.round(available.remainingPercent)}% ${available.label.toLowerCase()} remaining`
+          ? `${usagePercent(available.remainingPercent)}% ${available.label.toLowerCase()} remaining`
           : "Usage unavailable",
+        checking.has(account.id)
+          ? "Checking account"
+          : validationErrors.has(account.id) || account.lastErrorCode
+            ? "Account check incomplete"
+            : null,
         account.isDefault ? "Your default" : null,
       ]
         .filter(Boolean)

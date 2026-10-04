@@ -84,17 +84,16 @@ it("ignores old, future, reset, malformed and other-model quota data", () => {
   expect(suggest(undefined, [usage("a", 20)])).toBeNull();
 });
 
-it("suggests on known sign-in or connection failures even without exposed usage", () => {
+it("suggests on known sign-in failures but never treats a passive metadata failure as lost authentication", () => {
   expect(suggest([account("a", { authenticationState: "not_authenticated" }), account("b")], [])?.reason).toBe(
     "A needs sign-in.",
   );
   expect(suggest([account("b")], [])?.reason).toContain("no longer available");
-  expect(suggest(undefined, [], thread, new Set(), new Map([["a", "refresh failed"]]))?.reason).toContain(
-    "connection error",
-  );
+  expect(suggest(undefined, [], thread, new Set(), new Map([["a", "refresh failed"]]))).toBeNull();
+  expect(suggest([account("a", { lastErrorCode: "provider_error" }), account("b")], [])).toBeNull();
 });
 
-it("excludes foreign, archived, expired, checking, errored, unknown-auth and low accounts", () => {
+it("excludes foreign, archived, expired, unknown-auth and low accounts while preserving known sign-in", () => {
   const result = suggest(
     [
       account("a"),
@@ -114,7 +113,14 @@ it("excludes foreign, archived, expired, checking, errored, unknown-auth and low
     new Set(["checking"]),
     new Map([["validation", "failed"]]),
   );
-  expect(result?.alternatives.map((item) => item.account.id)).toEqual(["good"]);
+  expect(result?.alternatives.map((item) => item.account.id)).toEqual(["checking", "error", "good", "validation"]);
+  expect(result?.alternatives[0]?.detail).toContain("Checking account");
+  expect(result?.alternatives[1]?.detail).toContain("Account check incomplete");
+});
+
+it("distinguishes tiny positive quota from an actual provider-reported zero", () => {
+  expect(suggest(undefined, [usage("a", 0.1)])?.reason).toContain("<1% left");
+  expect(suggest(undefined, [usage("a", 0)])?.reason).toContain("0% left");
 });
 
 it("never uses another account's quota even when the map key is incorrect", () => {
