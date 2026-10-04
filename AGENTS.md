@@ -449,6 +449,17 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
 - Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
 
+## Permanent Resource Governor rule (owner directive 2026-10-04)
+
+**KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
+
+- **Priority, throttled from the bottom:** 1 KalCode UI, 2 user-requested coding agents, 3 builds/tests the user started, 4 important active services, 5 optional/background work, 6 indexing/maintenance/analytics.
+- **Hard pressure only:** critically low available memory, disk effectively full, the OS cannot create another process, or severe exhaustion likely to crash. Then show the real reason (for example "Memory is critically low.") with actions such as [Run KalTidy] / [Start Anyway] where safe. Never a generic "CPU busy".
+- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies.
+- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started.
+- **Provider-agnostic:** applies equally to Claude Code, Codex, Cursor, Gemini and future providers, and to every launch path (panes, New agent, KalVoice, user-initiated Squads and Handoffs).
+- Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
+
 ## Permanent parallel merge protocol (owner directive 2026-10-02)
 
 **EVERY KALCODE TERMINAL MAY MERGE. THREE TO FIVE MERGES CAN LAND AT ONCE. NO SINGLE MERGER, NO LEAD APPROVAL. COORDINATE SO NOTHING BREAKS.** This applies to every Claude Code and Codex session.
