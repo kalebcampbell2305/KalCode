@@ -203,6 +203,7 @@ test.describe("maximize, collapse, close and reopen never stop a process", () =>
     const running = await memory(page, (m) => m.runningProcessCount());
 
     await page.getByRole("button", { name: "Close pane 2" }).click();
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect(panes(page)).toHaveCount(1);
     await expect.poll(() => memory(page, (m) => m.runningProcessCount())).toBe(running - 1);
     await expect(page.getByRole("status").filter({ hasText: /keeps running/ })).toHaveCount(0);
@@ -357,6 +358,7 @@ test.describe("content from other surfaces", () => {
     await expect(provider).toBeVisible();
     const threadId = await provider.getAttribute("data-provider-pane");
     await page.keyboard.press("Control+Alt+w");
+    await page.getByRole("button", { name: "Keep Running", exact: true }).click();
     await expect(provider).toHaveCount(0);
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard" }).click();
     const card = page.locator(`article[data-thread-id="${threadId}"]:visible`);

@@ -100,6 +100,8 @@ import { type Organization, useOrganization } from "./organization/useOrganizati
 import { readLaunchMemory } from "./panes/agentLaunch.ts";
 import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
+import { agentAttention, useAgentAttention } from "./useAgentAttention.ts";
+import { SmartCloseDialog, useSmartClose } from "./useSmartClose.tsx";
 import "./paneContents.tsx";
 import {
   BrowserPane,
@@ -240,7 +242,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     activeTerminalId,
     focusRequest,
     createTerminal,
-    closeTerminal,
     restartTerminal,
     selectTerminal,
     refresh: refreshWorkspaces,
@@ -306,19 +307,47 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [terminalById, labels, paneById, accountFor, orgItems],
   );
 
-  // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running,
-  // and a launch still held for resources is cancelled rather than starting later without a pane.
-  const stopAgent = useCallback(
-    async (threadId: string) => {
-      if (!paneById.has(threadId)) return;
-      try {
-        providerPanes.updated(await client.stopThread(threadId));
-      } catch (error) {
-        if (import.meta.env.DEV) console.warn("stop on close failed", error);
+  const smartClose = useSmartClose({
+    inspect: async (content) => {
+      if (content.kind === "terminal") {
+        const terminal = (await client.listTerminals(workspace.id)).find((t) => t.id === content.terminalId);
+        return terminal?.status === "running";
+      }
+      if (content.kind === "agent") {
+        const [thread, pane] = await Promise.all([
+          client.getThread(content.agentId),
+          providerPanes.channel.info(content.agentId),
+        ]);
+        return pane?.running !== false || !["completed", "failed", "interrupted", "offline"].includes(thread.status);
+      }
+      return false;
+    },
+    stop: async (content, confirmed) => {
+      if (content.kind === "terminal") {
+        // Use the throwing API: a failed stop must leave the pane visible.
+        const terminal = (await client.listTerminals(workspace.id)).find((t) => t.id === content.terminalId);
+        if (terminal) await client.closeTerminal(content.terminalId, !confirmed);
+        await refreshWorkspaces();
+      } else if (content.kind === "agent") {
+        const [thread, pane] = await Promise.all([
+          client.getThread(content.agentId),
+          providerPanes.channel.info(content.agentId),
+        ]);
+        if (pane?.running === false && ["completed", "failed", "interrupted", "offline"].includes(thread.status))
+          return;
+        if (!confirmed)
+          throw {
+            category: "terminal",
+            code: "agent_still_running",
+            message: "This agent is running.",
+            retryable: true,
+          };
+        providerPanes.updated(await client.stopThread(content.agentId));
       }
     },
-    [paneById, providerPanes, client],
-  );
+  });
+  const agentThreads = useMemo(() => providerPanes.panes.map((entry) => entry.thread), [providerPanes.panes]);
+  const attention = useAgentAttention(agentThreads);
 
   const initialState = useRef({
     terminals,
@@ -354,10 +383,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         initialState.current.panes,
       ),
     titleOf,
-    onCloseContent: (content) => {
-      if (content.kind === "terminal") void closeTerminal(content.terminalId);
-      if (content.kind === "agent") void stopAgent(content.agentId);
-    },
+    requestClose: smartClose.request,
   });
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
@@ -680,21 +706,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     }
     return handler;
   }, []);
-  // One stable close handler per thread for the ended bar: stops the agent and drops its tab.
-  const closeAgentHandlers = useRef(new Map<string, () => void>());
-  const stopAgentRef = useRef(stopAgent);
-  stopAgentRef.current = stopAgent;
-  const closeAgentFor = useCallback((threadId: string) => {
-    let handler = closeAgentHandlers.current.get(threadId);
-    if (!handler) {
-      handler = () => {
-        void stopAgentRef.current(threadId);
-        controllerRef.current.forget(new Set([contentKey(agentContent(threadId))]));
-      };
-      closeAgentHandlers.current.set(threadId, handler);
-    }
-    return handler;
-  }, []);
+  const requestContentClose = useCallback(
+    (content: PaneContent) => {
+      void smartClose.request([content], () => controllerRef.current.forget(new Set([contentKey(content)])));
+    },
+    [smartClose.request],
+  );
+  const closeAgentFor = useCallback(
+    (threadId: string) => () => requestContentClose(agentContent(threadId)),
+    [requestContentClose],
+  );
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
   // A fresh launcher never shows the previous launch's refusal.
@@ -751,15 +772,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   // ---------- Contents ----------
-  // Closing a terminal's tab ends it (the shell and everything it started, owner decision). The
-  // tab leaves the layout at once; ending the process tree finishes in the background, and a
-  // failure is reported by `closeTerminal` (the terminal then stays listed in the background).
   const closeTerminalTab = useCallback(
-    (terminalId: string) => {
-      controllerRef.current.forget(new Set([contentKey(terminalContent(terminalId))]));
-      void closeTerminal(terminalId);
-    },
-    [closeTerminal],
+    (terminalId: string) => requestContentClose(terminalContent(terminalId)),
+    [requestContentClose],
   );
 
   const restartById = useCallback((terminalId: string) => void restartTerminal(terminalId), [restartTerminal]);
@@ -890,11 +905,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         tone: "danger",
         onSelect: () => {
           if (terminal) closeTerminalTab(terminal.id);
-          else if (entry)
-            runMenuAction(`close:${key}`, "Closing agent", async () => {
-              providerPanes.updated(await client.stopThread(entry.thread.id));
-              controllerRef.current.forget(new Set([key]));
-            });
+          else if (entry) requestContentClose(agentContent(entry.thread.id));
         },
       });
       return items;
@@ -911,6 +922,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       client,
       refreshWorkspaces,
       closeTerminalTab,
+      requestContentClose,
     ],
   );
 
@@ -957,16 +969,20 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             entry.info?.running && entry.info.instanceId ? (
               <TerminalImageButton targetKey={terminalImageTargetKey("agent", entry.thread.id)} />
             ) : undefined,
-          // Closing the tab stops the agent and takes the pane thread out of the layout.
-          onClose: () => {
-            void stopAgent(entry.thread.id);
-            controllerRef.current.forget(new Set([contentKey(agentContent(entry.thread.id))]));
-          },
+          attention: attention.pending.get(entry.thread.id),
+          onAttentionSeen: () => attention.acknowledge(entry.thread.id),
+          stateLabel:
+            agentAttention(entry.thread) === "needs-you"
+              ? "Needs You"
+              : entry.thread.status === "completed"
+                ? "Done"
+                : undefined,
+          onClose: () => requestContentClose(agentContent(entry.thread.id)),
         };
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminalTab, accountFor, stopAgent, orgItems],
+    [terminalById, labels, paneById, closeTerminalTab, accountFor, requestContentClose, orgItems, attention],
   );
 
   const render = useCallback(
@@ -1015,6 +1031,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             theme={theme}
             focusRequest={context.focusRequest}
             visible={context.visible !== false && codeShown}
+            closePending={smartClose.pending !== null}
             throttled={!context.focused || !codeShown}
             onChanged={providerPanes.updated}
             onHandOff={handOffFor(entry.thread.id)}
@@ -1039,6 +1056,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       browserBridge,
       handOffFor,
       closeAgentFor,
+      smartClose.pending,
     ],
   );
 
@@ -1437,6 +1455,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   return (
     <>
+      <SmartCloseDialog close={smartClose} />
       <UtilityDockRegistration />
       <CodeContextOperationsRegistration />
       {children(api, canvas)}

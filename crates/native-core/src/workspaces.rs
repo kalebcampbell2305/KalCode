@@ -1451,11 +1451,28 @@ impl Core {
     /// in it — then forgets the tab. A running shell's end is recorded as `shell.completed`
     /// with `closedByUser`.
     pub fn close_terminal(&self, id: &str) -> Result<()> {
+        self.close_terminal_checked(id, true)
+    }
+
+    /// Automatic Smart Close must not kill a shell restarted after the UI checked its state.
+    pub fn close_terminal_if_ended(&self, id: &str) -> Result<()> {
+        self.close_terminal_checked(id, false)
+    }
+
+    fn close_terminal_checked(&self, id: &str, allow_running: bool) -> Result<()> {
         validate_id(id)?;
         let registry = self.terminal_registry();
         let conn = self.conn();
         let terminal = self.terminal_in(&conn, id)?;
         let session = registry.session(id);
+        // Restart also holds the connection lock: checking and deleting an ended tab is atomic
+        // with respect to replacement. Only an explicit Stop and Close may terminate live work.
+        if !allow_running && session.as_ref().is_some_and(|s| s.exit_info().is_none()) {
+            return Err(KalError::validation(
+                "terminal_still_running",
+                "This terminal is running. Choose Keep Running or Stop and Close.",
+            ));
+        }
         let running = session.as_ref().is_some_and(|s| {
             let mut closing = lock(&registry.closing);
             // Checked under the `closing` lock that the exit recorder also takes, so either
@@ -1495,17 +1512,15 @@ impl Core {
             std::thread::sleep(Duration::from_millis(15));
         }
         if lock(&registry.closing).contains_key(id) {
-            // The shell did not report its exit in time. Forget the tab now, but keep the
-            // session tracked: the recorder still records the event and releases it when the
-            // exit arrives, and shutdown ends it if it never does.
+            // Retain its visible record and attachment until termination is proved. The exit
+            // recorder may still finish later; reporting success now would hide live work.
             tracing::warn!(event = "terminal.close_timeout", terminal_id = %id);
-            let mut conn = self.conn();
-            let tx = conn.transaction()?;
-            delete_terminal_row(&tx, id)?;
-            tx.commit()?;
-            drop(conn);
-            registry.detach_views(id);
-            return Ok(());
+            return Err(KalError::new(
+                ErrorCategory::Terminal,
+                "terminal_close_unproven",
+                "KalCode couldn't confirm that this terminal stopped. Try again.",
+            )
+            .retryable());
         }
         registry.forget(id);
         Ok(())

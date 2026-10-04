@@ -83,6 +83,36 @@
   animation: pane-trace calc(var(--dur-slow) * 1.5) var(--ease-out) forwards;
 }
 
+/* New results trace the relevant pane without moving its active tab or keyboard focus.
+ * The trace plays once; the tab marker remains until the person visits it. */
+.frame[data-attention]:not([data-focused]) {
+  border-color: var(--color-border-lit-soft);
+}
+
+.frame[data-attention]:not([data-focused])::after {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  border-radius: calc(var(--radius-panel) - 1px);
+  box-shadow:
+    inset 0 0 0 1px var(--color-accent),
+    inset 0 0 18px -6px var(--color-glow);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  animation: pane-trace calc(var(--dur-slow) * 1.5) var(--ease-out) forwards;
+}
+
+.tab[data-attention] {
+  border-color: var(--color-border-lit-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame[data-attention]::after {
+    animation: none;
+  }
+}
+
 @keyframes pane-trace {
   0% {
     opacity: 0.85;
@@ -273,6 +303,16 @@
 .tabState[data-tone="paused"] {
   background: var(--status-waiting-soft);
   color: var(--status-waiting-text);
+}
+
+.tabState[data-tone="done"] {
+  background: var(--status-done-soft);
+  color: var(--status-done-text);
+}
+
+.tabState[data-attention-badge] {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent-text);
 }
 
 .dot {

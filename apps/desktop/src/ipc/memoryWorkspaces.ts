@@ -473,6 +473,9 @@ export function createMemoryWorkspaces({
     terminal_close: (args) => {
       requireCore();
       const tab = tabOr404(requireId(args.terminalId));
+      if (args.onlyIfEnded === true && status(tab) === "running") {
+        fail(validation("terminal_still_running", "This terminal is running. Choose Keep Running or Stop and Close."));
+      }
       if (status(tab) === "running") endSession(tab, 1, true);
       tabs.delete(tab.info.id);
       const workspace = workspaces.get(tab.info.workspaceId);
