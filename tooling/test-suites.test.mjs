@@ -14,6 +14,7 @@ import {
   parsePlaywrightReport,
   parseVitestReport,
   playwrightFlakyTitles,
+  reportFailureNames,
   runSuite,
   selectProfile,
   selectSuites,
@@ -149,6 +150,38 @@ function playwrightReport({ expected = 2, unexpected = 0, flaky = 0, skipped = [
     stats: { expected, unexpected, flaky, skipped: skipped.length },
   };
 }
+
+test("a failed Vitest or Playwright run names its failed tests from the report", () => {
+  const vitest = {
+    testResults: [
+      {
+        name: "C:/repo/apps/desktop/src/a.test.tsx",
+        status: "failed",
+        assertionResults: [
+          { status: "passed", fullName: "ok" },
+          { status: "failed", fullName: "pane > restores", failureMessages: ["AssertionError: expected 1\n at x"] },
+        ],
+      },
+      {
+        name: "/repo/apps/desktop/src/b.test.ts",
+        status: "failed",
+        message: "Failed to load url ./missing",
+        assertionResults: [],
+      },
+    ],
+  };
+  assert.deepEqual(reportFailureNames(vitest), [
+    "desktop/src/a.test.tsx › pane > restores — AssertionError: expected 1",
+    "desktop/src/b.test.ts — Failed to load url ./missing",
+  ]);
+  const unexpected = { status: "unexpected", results: [{ error: { message: "Timeout\nmore" } }] };
+  const playwright = {
+    suites: [{ specs: [{ file: "x.spec.ts", title: "drag", tests: [unexpected] }] }],
+    errors: [{ message: "webServer failed" }],
+  };
+  assert.deepEqual(reportFailureNames(playwright), ["x.spec.ts › drag — Timeout", "run error — webServer failed"]);
+  assert.deepEqual(reportFailureNames(null), []);
+});
 
 test("a flaky Playwright gate names its flaky tests", () => {
   const report = {

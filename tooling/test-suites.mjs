@@ -303,6 +303,48 @@ function playwrightTests(suites, found) {
   }
 }
 
+/**
+ * Names of failed tests (and failed test files) in a Vitest or Playwright JSON report, with the
+ * first line of their error, so a failed run on a runner nobody can open is diagnosable.
+ */
+export function reportFailureNames(value) {
+  const names = [];
+  const line = (message) => (typeof message === "string" ? message.split(/\r?\n/u)[0].trim() : "");
+  const add = (name, message) => {
+    const text = `${name}${line(message) ? ` — ${line(message)}` : ""}`.slice(0, 240);
+    if (!names.includes(text)) names.push(text);
+  };
+  // Vitest (`--reporter=json`): file results with assertion results.
+  for (const file of Array.isArray(value?.testResults) ? value.testResults : []) {
+    const short = String(file?.name ?? "?")
+      .replaceAll("\\", "/")
+      .split("/apps/")
+      .at(-1);
+    let failedTests = 0;
+    for (const test of Array.isArray(file?.assertionResults) ? file.assertionResults : []) {
+      if (test?.status !== "failed") continue;
+      failedTests += 1;
+      add(`${short} › ${test.fullName ?? test.title ?? "?"}`, test.failureMessages?.[0]);
+    }
+    if (failedTests === 0 && file?.status === "failed") add(short, file.message);
+  }
+  // Playwright: nested suites of specs whose tests ended unexpectedly.
+  const visit = (suites) => {
+    for (const suite of Array.isArray(suites) ? suites : []) {
+      for (const spec of Array.isArray(suite.specs) ? suite.specs : []) {
+        for (const test of Array.isArray(spec.tests) ? spec.tests : []) {
+          if (test?.status === "unexpected")
+            add(`${spec.file ?? suite.file ?? "?"} › ${spec.title}`, test.results?.at(-1)?.error?.message);
+        }
+      }
+      visit(suite.suites);
+    }
+  };
+  visit(value?.suites);
+  for (const error of Array.isArray(value?.errors) ? value.errors : []) add("run error", error?.message);
+  return names.slice(0, 20);
+}
+
 /** `file › title` of every test Playwright reports as flaky (passed only on retry). */
 export function playwrightFlakyTitles(value) {
   const names = [];
@@ -461,7 +503,16 @@ export function runSuite(
         .map((line) => line.trim().slice(0, 200))
         .filter((line, index, all) => all.indexOf(line) === index)
         .slice(0, 20);
-      const names = failing.length > 0 ? `; failing: ${failing.join(" | ")}` : "";
+      // Vitest and Playwright write results to a JSON report, not stdout: name failures from it.
+      if (suite.runner === "vitest" || suite.runner === "playwright") {
+        try {
+          for (const name of reportFailureNames(JSON.parse(readFileSync(reportPath, "utf8"))))
+            if (!failing.includes(name)) failing.push(name);
+        } catch {
+          /* no readable report: keep the output-based names */
+        }
+      }
+      const names = failing.length > 0 ? `; failing: ${failing.slice(0, 20).join(" | ")}` : "";
       throw new Error(`${suite.id} did not complete successfully (${state}); child output suppressed${names}`);
     }
     let result;
