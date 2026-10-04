@@ -63,13 +63,11 @@ export function ProvidersPage() {
   const request = useProvidersTabRequest();
   // Accounts first: it is where sign-in and usage live, and it opens without a provider check.
   const [tab, setTab] = useState<ProvidersTab>(request?.tab ?? "accounts");
-  const restored = useRef(false);
   useEffect(
     () =>
       registerRestorer?.(async (entry, isCurrent) => {
         if (entry.destination !== "providers" || entry.target?.kind !== "provider") return undefined;
         if (!isCurrent()) return false;
-        restored.current = true;
         setTab(entry.target.tab);
         const id = entry.target.sectionId;
         if (id) {
@@ -91,10 +89,6 @@ export function ProvidersPage() {
     [registerRestorer],
   );
   useEffect(() => {
-    if (restored.current) {
-      restored.current = false;
-      return;
-    }
     recordLocation?.({ destination: "providers", label: `Providers · ${tab}`, target: { kind: "provider", tab } });
   }, [tab, recordLocation]);
   const [signInRequest, setSignInRequest] = useState<ProviderSignInRequest | null>(null);

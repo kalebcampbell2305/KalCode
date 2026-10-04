@@ -51,6 +51,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
             <SidebarButton
               collapsed={collapsed}
               label="Browser"
+              accessibleLabel="Open Browser"
               icon={<Globe />}
               onClick={() => void openBrowser()}
               className={styles.item}

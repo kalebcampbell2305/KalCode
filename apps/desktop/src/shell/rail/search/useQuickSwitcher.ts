@@ -46,6 +46,7 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
     threads: ThreadSummary[];
     providers: ProviderStatus[];
   }>({ client, accounts: [], threads: [], providers: [] });
+  const [availableRelease, setAvailableRelease] = useState<{ client: typeof client; version: string } | null>(null);
   const [recent] = useState(() => new Map<string, number>());
   const [revision, setRevision] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -58,6 +59,9 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
       pending = true;
       setRefreshing(true);
       await Promise.allSettled([
+        client.updaterStatus().then((status) => {
+          if (live) setAvailableRelease(status.availableVersion ? { client, version: status.availableVersion } : null);
+        }),
         client.listProviderAccounts().then((accounts) => {
           if (live)
             setMetadata((old) => ({
@@ -102,9 +106,15 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
   }, [open]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: fileRefresh schedules a throttled refresh on opening.
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId) {
+      setIndexing(false);
+      return;
+    }
     const previous = fileCaches.get(workspaceId);
-    if (previous && previous.refreshedAt > Date.now() - 30000 && previous.eventSeq >= fileEventSeq) return;
+    if (previous && previous.refreshedAt > Date.now() - 30000 && previous.eventSeq >= fileEventSeq) {
+      setIndexing(false);
+      return;
+    }
     let live = true;
     const scan = async () => {
       setIndexing(true);
@@ -143,6 +153,11 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
           // Yield between directory pages, including in-memory/test transports.
           await new Promise((resolve) => setTimeout(resolve, 8));
         } catch {
+          if (!live) return;
+          if (task.dir === null) {
+            setIndexing(false);
+            return;
+          }
           /* A removed or inaccessible directory does not discard other results. */
         }
       }
@@ -247,26 +262,33 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
       keywords: "release notes changelog downloads updates",
       target: { kind: "release", section: "updates" },
     });
+    if (availableRelease?.client === client && availableRelease.version !== info.version) {
+      add({
+        id: "release:available",
+        kind: "Release",
+        label: `KalCode ${availableRelease.version}`,
+        metadata: "Available update",
+        keywords: "release downloads update",
+        target: { kind: "release", section: "updates" },
+      });
+    }
     return next;
-  }, [client, metadata, info, workspaces.workspaces, workspaces.terminals, workspaces.running]);
+  }, [client, metadata, info, availableRelease, workspaces.workspaces, workspaces.terminals, workspaces.running]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision publishes incremental file indexing and recency updates.
   const results = useMemo(() => {
+    const accepts = (item: SearchDocument<QuickTarget>) =>
+      kinds.length === 0 ||
+      kinds.includes((item.target.kind === "account" ? "provider" : item.target.kind) as LocatorEntityKind);
     const combined = new QuickSearchIndex<QuickTarget>();
     for (const document of [
-      ...index.search(query, workspaceId, recent),
+      ...index.search(query, workspaceId, recent, 24, accepts),
       ...(query.trim()
-        ? [...fileCaches.values()].flatMap((cache) => cache.index.search(query, workspaceId, recent))
+        ? [...fileCaches.values()].flatMap((cache) => cache.index.search(query, workspaceId, recent, 24, accepts))
         : []),
     ])
       combined.add(document);
-    return combined
-      .search(query, workspaceId, recent)
-      .filter(
-        (item) =>
-          kinds.length === 0 ||
-          kinds.includes((item.target.kind === "account" ? "provider" : item.target.kind) as LocatorEntityKind),
-      );
+    return combined.search(query, workspaceId, recent);
   }, [index, fileCaches, query, workspaceId, recent, revision, kinds]);
   const remember = (id: string) => {
     recent.delete(id);

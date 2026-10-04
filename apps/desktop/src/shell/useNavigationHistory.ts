@@ -128,8 +128,28 @@ export function useNavigationHistory(initial: Destination, visible: ReadonlySet<
         // Every candidate was closed. Keep the original location instead of stranding the
         // cursor on the last invalid target that was inspected.
         if (isCurrent() && originEntry) {
+          for (const handler of restorers.current.prepare) {
+            try {
+              await handler(originEntry, isCurrent);
+            } catch {
+              /* A removed origin still keeps its surface. */
+            }
+            if (!isCurrent()) return;
+          }
           apply({ ...live.current, index: origin });
           setCurrent(originEntry.destination);
+          await paint();
+          if (!isCurrent()) return;
+          for (const handler of restorers.current.focus) {
+            let handled: boolean | undefined;
+            try {
+              handled = await handler(originEntry, isCurrent);
+            } catch {
+              handled = false;
+            }
+            if (!isCurrent()) return;
+            if (handled !== undefined) break;
+          }
         }
       } finally {
         if (isCurrent()) {

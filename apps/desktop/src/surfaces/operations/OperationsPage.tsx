@@ -257,12 +257,10 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   const [busy, setBusy] = useState<string | null>(null);
   const mutation = useRef<string | null>(null);
   const operationsReady = state.snapshot !== null;
-  const restoredNavigation = useRef(false);
   useEffect(
     () =>
       registerRestorer?.((entry) => {
         if (entry.destination !== "operations" || entry.target?.kind !== "operations") return undefined;
-        restoredNavigation.current = true;
         workspaceInitialized.current = true;
         setWorkspaceId(entry.target.filterWorkspaceId ?? "");
         setTab(entry.target.tab);
@@ -273,10 +271,6 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   );
   useEffect(() => {
     if (!operationsReady) return;
-    if (restoredNavigation.current) {
-      restoredNavigation.current = false;
-      return;
-    }
     const run = state.snapshot?.items.find((item) => item.id === selectedRun);
     recordLocation?.({
       destination: "operations",

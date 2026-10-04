@@ -21,9 +21,9 @@ export function NavigationBridge() {
         const { workspaces, client } = live.current;
         if (entry.workspaceId) {
           if (!workspaces.workspaces.some((workspace) => workspace.id === entry.workspaceId)) return false;
-          if (workspaces.active?.id !== entry.workspaceId) {
-            if (!isCurrent() || !(await workspaces.activate(entry.workspaceId)) || !isCurrent()) return false;
-          }
+          // Even the displayed workspace must supersede an older native activation
+          // still in flight; checking only the rendered id would let that write win.
+          if (!isCurrent() || !(await workspaces.activate(entry.workspaceId)) || !isCurrent()) return false;
         }
         if (entry.target?.kind === "thread") {
           const exists = await client

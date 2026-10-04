@@ -162,4 +162,39 @@ describe("navigation history", () => {
     main.remove();
     button.remove();
   });
+
+  it("keeps the original workspace, surface and pane when every Forward target has closed", async () => {
+    const { result } = renderHook(() => useNavigationHistory("code", visible));
+    let workspace = "one";
+    let closed = false;
+    const focused: string[] = [];
+    act(() => {
+      result.current.registerRestorer((entry) => {
+        workspace = entry.workspaceId ?? workspace;
+        return true;
+      }, "prepare");
+      result.current.registerRestorer((entry) => {
+        if (closed && entry.workspaceId === "two") return false;
+        focused.push(entry.workspaceId ?? "");
+        return true;
+      });
+      result.current.recordLocation({
+        destination: "code",
+        workspaceId: "one",
+        target: { kind: "pane", content: { kind: "terminal", terminalId: "one" } },
+      });
+      result.current.recordLocation({
+        destination: "code",
+        workspaceId: "two",
+        target: { kind: "pane", content: { kind: "terminal", terminalId: "two" } },
+      });
+    });
+    await act(() => result.current.back());
+    closed = true;
+    await act(() => result.current.forward());
+    expect(result.current.historyIndex).toBe(0);
+    expect(result.current.current).toBe("code");
+    expect(workspace).toBe("one");
+    expect(focused).toEqual(["one", "one"]);
+  });
 });

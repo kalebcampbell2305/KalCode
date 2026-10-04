@@ -45,6 +45,7 @@ export class QuickSearchIndex<T> {
     workspaceId: string | null,
     recent: ReadonlyMap<string, number>,
     limit = 24,
+    accepts: (document: SearchDocument<T>) => boolean = () => true,
   ): SearchDocument<T>[] {
     const typed = normalize(query.trim());
     const words = typed.split(/\s+/).filter(Boolean);
@@ -62,7 +63,7 @@ export class QuickSearchIndex<T> {
     const now = Date.now();
     for (const id of candidates) {
       const record = this.records.get(id);
-      if (!record || !words.every((word) => record.text.includes(word))) continue;
+      if (!record || !accepts(record.document) || !words.every((word) => record.text.includes(word))) continue;
       const used = recent.get(id);
       const score =
         (typed && record.label === typed
