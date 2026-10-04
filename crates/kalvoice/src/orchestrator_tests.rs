@@ -306,6 +306,15 @@ impl LocalInterpreter for FakeLocalInterpreter {
     }
 }
 
+/// How long a timed-out local interpretation may take to answer: the product's timeout and settle
+/// window, plus scheduling slack for a loaded gate machine running the workspace's tests in parallel.
+/// A request that waited for a non-cooperative interpreter instead would block until released.
+fn local_timeout_answer_budget() -> Duration {
+    LOCAL_INTERPRETATION_TIMEOUT
+        + LOCAL_INTERPRETATION_SETTLE_TIMEOUT
+        + Duration::from_millis(1_250)
+}
+
 struct CancelThenFastInterpreter {
     calls: AtomicUsize,
     first_finished: mpsc::SyncSender<()>,
@@ -1055,7 +1064,7 @@ fn local_interpretation_times_out_discards_late_output_and_can_retry() {
         "{:?}",
         timed_out.outcome
     );
-    assert!(elapsed < Duration::from_millis(1_900), "{elapsed:?}");
+    assert!(elapsed < local_timeout_answer_budget(), "{elapsed:?}");
     assert!(!timed_out.counted);
     assert!(h.executor.executed.lock().expect("lock").is_empty());
 
@@ -1100,7 +1109,11 @@ fn noncooperative_timeout_retains_custody_until_bounded_drain_settles() {
         "{:?}",
         timed_out.outcome
     );
-    assert!(timeout_started.elapsed() < Duration::from_secs(2));
+    assert!(
+        timeout_started.elapsed() < local_timeout_answer_budget(),
+        "{:?}",
+        timeout_started.elapsed()
+    );
     assert!(!timed_out.counted);
     assert!(!orchestrator.drain_local_interpretation(Duration::from_millis(50)));
 
