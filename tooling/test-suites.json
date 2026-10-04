@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 345,
+          "minimumExecuted": 352,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
