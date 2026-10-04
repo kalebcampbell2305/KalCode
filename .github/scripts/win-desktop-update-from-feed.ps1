@@ -12,10 +12,14 @@ normal close cannot be proven. No test hooks, no seeded data: the public signed 
   5. reopen the candidate, require app.started <candidate> and a healthy updater journal, close it by its window
   6. uninstall and remove this QA account's KalCode data so the next run starts clean
 Writes <OutDir>\desktop-update-receipt.json. Exit 0 = PASS.
+Optional -CandidateTag qa-... -ExpectSchema N downloads a private draft's exact signed package and proves a manual
+/S /UPDATE transition plus actual SQLite preservation. That mode never claims normal updater delivery and is only
+for releases with unchanged application data schema and updater behavior.
 #>
 param(
   [string]$LiveUrl = '', [string]$LiveSha256 = '', [string]$LiveVersion = '',
   [string]$CandidateVersion = '', [string]$CandidateSha256 = '', [string]$CandidateCommit = '',
+  [string]$CandidateTag = '', [int]$ExpectSchema = 0,
   [string]$FeedUrl = 'https://kalcoded.com/releases/updater/stable.json',
   [int]$StageTimeoutSec = 900,
   [Parameter(Mandatory)][string]$OutDir,
@@ -35,6 +39,7 @@ $receipt = [ordered]@{
   candidate = [ordered]@{ version = $CandidateVersion; commit = $CandidateCommit; sha256 = $CandidateSha256 }
   feed = $null; staged = $null; liveClose = $null; applied = $null; reopen = $null; candidateClose = $null
   journal = $null; autoRelaunched = $null; forcedProcessActions = 0; cleanupClean = $null
+  normalUpdaterDeliveryProven = $false
   steps = @(); startedAt = [DateTime]::UtcNow.ToString('o'); finishedAt = $null; error = $null
 }
 function Note([string]$l) { Write-Host $l; $receipt.steps += ('[{0}] {1}' -f [DateTime]::UtcNow.ToString('HH:mm:ss'), $l) }
@@ -111,7 +116,7 @@ function Cleanup {
   foreach ($p in @(KalProcs | Where-Object { $_.Name -eq 'kalcode' })) { $null = Close-Exact $p.Id 30 }
   $left = @(KalProcs); if ($left.Count) { $receipt.forcedProcessActions += $left.Count; $left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
   $d = InstallDir
-  if ($d) { $un = Join-Path $d 'uninstall.exe'; if (Test-Path -LiteralPath $un) { $p = Start-Process -FilePath $un -ArgumentList '/S' -PassThru -Wait; Start-Sleep -Seconds 8; Note "uninstall exit $($p.ExitCode)" } }
+  if ($d) { $un = Join-Path $d 'uninstall.exe'; if (Test-Path -LiteralPath $un) { $p = Start-Process -FilePath $un -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait; Start-Sleep -Seconds 8; Note "uninstall exit $($p.ExitCode)" } }
   foreach ($k in 'HKCU:\Software\KalCode', 'HKCU:\Software\Classes\kalcode', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode') {
     if (Test-Path -LiteralPath $k) { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction SilentlyContinue }
   }
@@ -145,9 +150,15 @@ try {
   foreach ($k in 'LiveVersion', 'CandidateVersion') { if ((Get-Variable $k).Value -notmatch '^[0-9]+\.[0-9]+\.[0-9]+\+[1-9][0-9]*$') { Refuse "$k must be X.Y.Z+N" } }
   if ($LiveUrl -notmatch '^https://kalcoded\.com/releases/updater/stable/[A-Za-z0-9._+%/-]{1,200}\.exe$') { Refuse 'LiveUrl must be an immutable kalcoded.com updater URL' }
   if ($FeedUrl -cne 'https://kalcoded.com/releases/updater/stable.json') { Refuse 'FeedUrl must be the production Stable feed' }
+  if ($CandidateTag -and ($CandidateTag -cnotmatch '^qa-[A-Za-z0-9][A-Za-z0-9._-]{1,100}$' -or $ExpectSchema -lt 1)) { Refuse 'package proof requires a qa- draft tag and expected schema' }
   if ($SelfTest) { $receipt.status = 'SELFTEST'; Save; Write-Host 'SELFTEST PASS'; exit 0 }
+  if (@(KalProcs).Count) { Refuse 'QA session already has KalCode processes; preserve them and retry once idle' }
   $guardsPassed = $true
 
+  if ($CandidateTag) {
+    . (Join-Path $PSScriptRoot 'win-desktop-package-proof.ps1')
+    $candidatePackage = Get-CandidatePackage
+  } else {
   # 0. The feed must already serve the exact candidate; otherwise there is nothing for the updater to deliver.
   $feed = Invoke-RestMethod -UseBasicParsing -Uri ($FeedUrl + '?t=' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
   $receipt.feed = [ordered]@{ version = [string]$feed.version; commit = [string]$feed.kalcode.commit; windowsSha256 = [string]$feed.kalcode.artifacts.'windows-x86_64'.sha256 }
@@ -155,6 +166,8 @@ try {
     Refuse ("Stable feed serves $($receipt.feed.version)@$($receipt.feed.commit) ($($receipt.feed.windowsSha256)), not the candidate")
   }
   Note "Stable feed serves $CandidateVersion@$CandidateCommit"
+  }
+  $env:GH_TOKEN = $null
 
   $pre = Leftovers
   if ($pre.Values -contains $true) {
@@ -167,13 +180,16 @@ try {
   Invoke-WebRequest -UseBasicParsing -Uri $LiveUrl -OutFile $live
   if ((Sha $live) -ne $LiveSha256) { Refuse "downloaded live installer is $(Sha $live), not $LiveSha256" }
   $sig = Get-AuthenticodeSignature -LiteralPath $live; if ($sig.Status -ne 'Valid') { Refuse "live installer Authenticode $($sig.Status)" }
-  $p = Start-Process -FilePath $live -ArgumentList '/S' -PassThru -Wait
+  $p = Start-Process -FilePath $live -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
   if ($p.ExitCode -ne 0) { Refuse "live installer exited $($p.ExitCode)" }
   $sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Installed) -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Seconds 2 }
   $i = Installed; if (-not $i -or $i.productVersion -ne $LiveVersion) { Refuse "live install reports $($i.productVersion), expected $LiveVersion" }
   Note "installed live $LiveVersion ($($i.signature))"
   $liveRun = Launch $LiveVersion
 
+  if ($CandidateTag) {
+    Invoke-PackageProof $candidatePackage $liveRun $sig
+  } else {
   # 2. the live build's own updater stages the exact candidate from the feed for exit
   $sw = [Diagnostics.Stopwatch]::StartNew(); $staged = $null
   while ($sw.Elapsed.TotalSeconds -lt $StageTimeoutSec) {
@@ -230,12 +246,18 @@ try {
   Note "journal healthy: lastSuccessfulVersion $($journal.lastSuccessfulVersion)"
   $receipt.candidateClose = Close-Exact $receipt.reopen.pid
   if (-not $receipt.candidateClose.exited) { Refuse "candidate PID $($receipt.reopen.pid) did not exit after WM_CLOSE" }
+  $receipt.normalUpdaterDeliveryProven = $true
+  }
 
   $receipt.status = 'PASS'
 } catch {
   $receipt.error = "$_"; Note "FAILED: $_"
 } finally {
   if ($guardsPassed) { try { $receipt.cleanupClean = Cleanup } catch { $receipt.cleanupClean = $false; Note "cleanup: $_" } }
+  if ($receipt.status -eq 'PASS' -and ($receipt.cleanupClean -ne $true -or $receipt.forcedProcessActions -ne 0)) {
+    $receipt.status = 'FAILED'; $receipt.error = 'clean natural shutdown required; cleanup was incomplete or forced'
+    $receipt.normalUpdaterDeliveryProven = $false
+  }
   $receipt.finishedAt = [DateTime]::UtcNow.ToString('o'); Save
 }
 Write-Host "DESKTOP UPDATE $($receipt.status)"
