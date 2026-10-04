@@ -463,34 +463,36 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
 - Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
 
-## Permanent parallel merge protocol (owner directive 2026-10-02)
+## Permanent parallel integration rule: the shared merge train (owner directive 2026-10-04)
 
-**EVERY KALCODE TERMINAL MAY MERGE. THREE TO FIVE MERGES CAN LAND AT ONCE. NO SINGLE MERGER, NO LEAD APPROVAL. COORDINATE SO NOTHING BREAKS.** This applies to every Claude Code and Codex session.
+> "KALCODE USES PARALLEL INTEGRATION. Any coding agent may finish and submit work for merge. Ready changes prepare, rebase, validate and form merge groups in parallel. Only the final atomic update to main is serialized. Compatible PRs are batched against the same main snapshot. One conflicting PR must not block unrelated completed work. Claude Code and Codex use the same merge queue. No agent may bypass it. Test the actual merge candidate, land it quickly, then ship immediately."
 
-**1. Merge your own work.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), merge it yourself. Don't wait for, or route through, another session.
+This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` branches and every other direct update of `main`. Every Claude Code and Codex session uses the same tool, `tooling/merge-train/train.mjs`; main changes only through it.
 
-**2. Pre-merge check (fast; takes seconds).**
-- `git fetch origin`.
-- `git merge-tree --write-tree origin/main HEAD` must be conflict-free. If not, rebase or merge main and re-test.
-- If main moved since you tested, compare the files main changed (`git diff --name-only <tested-base> origin/main`) with your touched files and their direct dependents. Re-run the targeted tests only when they overlap.
-- Merge exactly what you tested: `gh pr merge <n> --merge --match-head-commit <sha>`.
+**1. Submit, never merge.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), queue it:
 
-**3. Main stays green, and the breaker fixes it.** Before merging, run `biome ci .` (whole repo, about 1 s) and the tests for every file you touched, including tests that read source text. A format-only commit can break a regex test. If your merge breaks main, fixing it is your top priority. If you notice someone else's break, message that session at once (ListAgents → SendMessage).
+- `node tooling/merge-train/train.mjs submit <pr>` adds the `merge-queue` label. The queue is the open, non-draft, same-repository PRs carrying that label, in the order it was added. Never run `gh pr merge` and never push to `main`.
+- Then drive the train yourself; any agent may, at any time, concurrently with others: `node tooling/merge-train/train.mjs run`. Nobody waits for a designated merger.
 
-**4. The shared runners are the bottleneck** (one Windows gate runner, one Mac gate runner). Run fewer gates and use them better:
-- **Merge train.** With two or more PRs ready, whoever is ready first combines them on one branch (`train/<topic>`), runs ONE gate, and merges them all (see #107). Announce the train so the others don't gate separately.
-- **Cancel waste.** Cancel gate runs for branches that are already merged or superseded.
-- **Docs-only PRs skip the self-hosted gate** (Markdown, `docs/**` except `docs/releases/**`, `marketing/**`). The author still runs the lifecycle tests locally when `AGENTS.md` changes.
-- **Release-critical packaging gets the machines first.** While a release is packaging on the Mac or Windows release machine, the macOS gate job may be skipped for changes whose macOS risk the release itself proves. Windows gate jobs queue.
+**2. What the train does.** `run` repeats build → gate → land until the queue is empty:
 
-**5. Announce shared hot spots.** Before merging changes to these areas, send a one-line SendMessage to the live sessions (ListAgents): KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater. Never force-push, rebase or merge another session's branch without asking that session.
+- **build** fetches main once (the snapshot BASE) and merges every queued PR head onto it with `--no-ff` merge commits (PR commits are kept, so GitHub marks each PR merged when it lands). It pushes the result as `merge-train/<base12>-<id>`. A PR that conflicts is skipped and told why: the files, and whether it conflicts with main (rebase it) or with PRs ahead of it (it retries on the next train). It never blocks the others. Two agents building at once on the same BASE get the same candidate; the branch is created atomically and the loser reuses it.
+- **gate**: `gate.yml` runs "Gate (Windows)" on the exact candidate commit, against the BASE recorded in its `Merge-Train-Base` trailer, with `--keep-going`. A docs-only train still gates, but the gate selects no heavy stages for it.
+- **land** fast-forwards main to the candidate only if Gate (Windows) executed successfully for that exact candidate push on the main Windows PC, every included PR head is unchanged and still queued, and main is still BASE (`--force-with-lease`, held under the short local `target/lanes/main-update.lock`). If main moved or a PR changed, `run` rebuilds on the new main automatically. A failed gate is bisected; a PR that fails alone is removed from the queue with a comment linking the failing gate.
+- `node tooling/merge-train/train.mjs status` shows the queue, the candidates and their gate state. `build` and `land <merge-train/branch>` run single steps.
 
-**6. Release jobs run in parallel; one website deploy at a time** (shared Worker); merges never wait for either.
-- **Release.** Follow the multi-shipper rule. Any session starts a release job for its merged commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
+**3. No PR-specific bypass.** `land --pr` is disabled. Submit every ready PR to the same queue and gate its exact candidate, including compatible queued changes.
+
+**4. After landing, ship.** `land` comments "Landed in main <sha>" on each PR, removes the label, appends `LANDED <sha> SHIP` to `target/lanes/merge-log.md`, and prints `SHIP <sha>` with the release-kit start command (`tooling/merge-train/on-landed.mjs`). Start that release immediately (multi-shipper rule). Main stays green: if a landed change breaks main, fixing it is the lander's top priority.
+
+**5. Gate on the owner's main Windows PC (64 GB).** The train runs one candidate gate for compatible queued PRs. Never route gates or QA to the second Windows PC. The normal main push workflow may run again after landing; it does not replace the candidate's required evidence. Cancel gate runs for superseded branches. Docs-only PRs skip the PR gate (Markdown, `docs/**` except `docs/releases/**`, `marketing/**`).
+
+**6. Announce shared hot spots.** Before submitting changes to KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater, send a one-line SendMessage to the live sessions (ListAgents). Never force-push, rebase or merge another session's branch without asking that session.
+
+**7. Release jobs run in parallel; one website deploy at a time** (shared Worker); landing never waits for either.
+- **Release.** Follow the multi-shipper rule. Any session starts a release job for the landed commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
 - **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
 - **Takeover.** If a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take the lock over. A stalled older release job is superseded by any newer build that ships, never waited on.
-
-**7. Log merges.** Append one line per merge to `target/lanes/merge-log.md`: UTC time, session, PR, merged sha, and the areas touched. Sessions read it to see what just landed.
 
 ## Permanent visual quality rule (owner directive 2026-10-02)
 
