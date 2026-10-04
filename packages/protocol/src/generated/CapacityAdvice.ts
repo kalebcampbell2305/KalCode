@@ -9,19 +9,19 @@ import type { ResourceHoldReason } from "./ResourceHoldReason.ts";
 /**
  * The advisory answer to "how many more agent tasks could start now". Never blocks by itself.
  */
-export type CapacityAdvice = { mode: GovernorMode, 
+export type CapacityAdvice = { mode: GovernorMode,
 /**
  * How many more agent tasks could start now (for the requested provider, when given).
  */
-additional: number, 
+additional: number,
 /**
  * The constraints that bind (they allow exactly `additional`). Never empty.
  */
-holds: Array<ResourceHoldReason>, 
+holds: Array<ResourceHoldReason>,
 /**
  * Every constraint evaluated, in a fixed order.
  */
-constraints: Array<CapacityConstraint>, 
+constraints: Array<CapacityConstraint>,
 /**
  * Remaining room under each configured per-provider limit.
  */

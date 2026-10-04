@@ -5,7 +5,7 @@ import type { SplitAxis } from "./SplitAxis.ts";
 /**
  * A versioned pane tree (validated natively with [`PaneLayout::validate`]).
  */
-export type PaneNode = { "kind": "split", axis: SplitAxis, 
+export type PaneNode = { "kind": "split", axis: SplitAxis,
 /**
  * Per-mille shares of each child; they sum to 1000.
  */

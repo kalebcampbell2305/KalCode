@@ -2,15 +2,15 @@
 import type { AuthState } from "./AuthState.ts";
 import type { ProviderId } from "./ProviderId.ts";
 
-export type ProviderAccount = { id: string, providerId: ProviderId, 
+export type ProviderAccount = { id: string, providerId: ProviderId,
 /**
  * Local owner-chosen label. This is never inferred from provider output.
  */
-displayName: string, 
+displayName: string,
 /**
  * Informational identity returned by an official provider adapter, when available.
  */
-providerReportedIdentity: string | null, authenticationState: AuthState, isDefault: boolean, createdAt: string, lastUsedAt: string | null, lastCheckedAt: string | null, lastErrorCode: string | null, 
+providerReportedIdentity: string | null, authenticationState: AuthState, isDefault: boolean, createdAt: string, lastUsedAt: string | null, lastCheckedAt: string | null, lastErrorCode: string | null,
 /**
  * Set when removed from active account selection. Provider profiles and auth remain intact.
  */

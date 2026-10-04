@@ -5,37 +5,37 @@
  * whether the agent's work is ready to merge. Computed natively on request; paths never cross
  * IPC.
  */
-export type ThreadWorktreeState = { threadId: string, worktreeId: string, 
+export type ThreadWorktreeState = { threadId: string, worktreeId: string,
 /**
  * The worktree's branch (`kal/...`).
  */
-branch: string, 
+branch: string,
 /**
  * The branch checked out in the workspace's main folder, which the worktree branch would
  * merge into; `null` when that folder is on a detached HEAD.
  */
-baseBranch: string | null, 
+baseBranch: string | null,
 /**
  * Commits on the worktree branch that the base branch doesn't have; `null` when unknown.
  */
-ahead: number | null, 
+ahead: number | null,
 /**
  * Commits on the base branch that the worktree branch doesn't have; `null` when unknown.
  */
-behind: number | null, 
+behind: number | null,
 /**
  * Uncommitted changes (modified, staged, deleted, renamed, conflicted) in the worktree.
  */
-changed: number, 
+changed: number,
 /**
  * Untracked (not ignored) files in the worktree.
  */
-untracked: number, 
+untracked: number,
 /**
  * Whether merging the worktree branch into the base branch would conflict. `null` when
  * unknown (no base branch, Git older than 2.38, or a repository-defined merge driver).
  */
-conflicts: boolean | null, 
+conflicts: boolean | null,
 /**
  * When these facts were read (RFC 3339).
  */

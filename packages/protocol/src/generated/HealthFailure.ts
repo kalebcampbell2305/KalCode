@@ -3,7 +3,7 @@
 /**
  * The most recent failure KalCode observed in a session (codes only; never provider output).
  */
-export type HealthFailure = { 
+export type HealthFailure = {
 /**
  * The normalized error code, e.g. `process_exited`, `api_rate_limit`.
  */

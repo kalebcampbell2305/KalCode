@@ -3,15 +3,15 @@
 /**
  * One provider rate-limit window ("5-hour", "Weekly") as the provider last reported it.
  */
-export type ProviderUsageWindow = { 
+export type ProviderUsageWindow = {
 /**
  * Stable id: `five_hour`, `weekly`, `weekly_opus`, `primary`, `secondary`…
  */
-id: string, label: string, 
+id: string, label: string,
 /**
  * 0–100: how much of the window is left (100 − the provider's used percentage).
  */
-remainingPercent: number, 
+remainingPercent: number,
 /**
  * RFC 3339 time the window resets, when the provider reports it.
  */

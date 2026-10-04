@@ -6,19 +6,19 @@ import type { Severity } from "./Severity.ts";
 /**
  * One notification as the center shows it.
  */
-export type Notification = { id: string, kind: NotificationKind, severity: Severity, title: string, body: string, entityKind: NotificationEntityKind | null, entityId: string | null, 
+export type Notification = { id: string, kind: NotificationKind, severity: Severity, title: string, body: string, entityKind: NotificationEntityKind | null, entityId: string | null,
 /**
  * The workspace of the entity, when known (focusing a thread opens its workspace).
  */
-workspaceId: string | null, createdAt: string, 
+workspaceId: string | null, createdAt: string,
 /**
  * Last time it was raised (creation or a coalesced repeat). Lists are ordered by this.
  */
-updatedAt: string, 
+updatedAt: string,
 /**
  * `null` while unread.
  */
-readAt: string | null, 
+readAt: string | null,
 /**
  * How many events were coalesced into this notification (≥ 1).
  */

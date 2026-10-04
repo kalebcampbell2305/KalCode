@@ -4,7 +4,7 @@ import type { FileHandle } from "./FileHandle.ts";
 /**
  * What the UI may display about a handle.
  */
-export type FileRef = { handle: FileHandle, workspaceId: string, 
+export type FileRef = { handle: FileHandle, workspaceId: string,
 /**
  * Workspace-relative, `/`-separated.
  */
