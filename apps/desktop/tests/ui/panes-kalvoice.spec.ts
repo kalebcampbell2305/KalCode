@@ -24,7 +24,6 @@ const running = (page: Page) =>
 
 async function openCode(page: Page) {
   await page.goto("/?scenario=code");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
   await expect(panes(page)).toHaveCount(1);

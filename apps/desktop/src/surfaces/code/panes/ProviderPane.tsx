@@ -60,6 +60,8 @@ export interface ProviderPaneProps {
   theme: "light" | "dark";
   focusRequest: number;
   visible?: boolean;
+  /** The canvas owns the single close confirmation. */
+  closePending?: boolean;
   /** The thread changed (rename, stop, resume); the host refreshes its list. */
   onChanged?: (thread: ThreadSummary) => void;
   /** The pane isn't focused (Z7-W1): terminal output renders in batches. */
@@ -87,6 +89,7 @@ export const ProviderPane = memo(function ProviderPane({
   theme,
   focusRequest,
   visible = true,
+  closePending = false,
   onChanged,
   onClose,
   onMaximize,
@@ -99,6 +102,9 @@ export const ProviderPane = memo(function ProviderPane({
   const { pending, decide } = usePermissions();
   const [showInfo, setShowInfo] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  useEffect(() => {
+    if (closePending) setConfirmStop(false);
+  }, [closePending]);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false);
@@ -209,7 +215,7 @@ export const ProviderPane = memo(function ProviderPane({
         onHandOff={onHandOff}
         onContinue={onContinue}
       />
-      {confirmStop ? (
+      {confirmStop && !closePending ? (
         <div
           className={styles.confirm}
           role="alertdialog"

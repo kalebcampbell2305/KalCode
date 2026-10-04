@@ -119,3 +119,54 @@ it("opens terminal actions from the keyboard and preserves its tab role and labe
   expect(action).toHaveBeenCalledWith("terminal:a");
   expect(tab).toHaveAttribute("role", "tab");
 });
+
+it("highlights a completed inactive agent without changing selection or keyboard focus", () => {
+  const activate = vi.fn();
+  const focus = vi.fn();
+  const seen = vi.fn();
+  const { leaf, show, view } = setup();
+  const input = document.createElement("input");
+  document.body.append(input);
+  input.value = "unfinished prompt";
+  input.focus();
+  input.setSelectionRange(3, 8);
+  show(leaf(0), {
+    focused: false,
+    onActivate: activate,
+    onFocus: focus,
+    tabs: [
+      { title: "Current terminal", glyph: null, terminal: true },
+      { title: "Finished agent", glyph: null, terminal: true, attention: "completed", onAttentionSeen: seen },
+      { title: "Browser", glyph: null },
+    ],
+  });
+  const tab = view.getByRole("tab", { name: "Finished agent Done" });
+  expect(tab).toHaveAttribute("data-attention", "completed");
+  expect(tab).toHaveAttribute("aria-selected", "false");
+  expect(view.container.querySelector("[data-pane-id]")).toHaveAttribute("data-attention", "completed");
+  expect(document.activeElement).toBe(input);
+  expect(input.selectionStart).toBe(3);
+  expect(input.selectionEnd).toBe(8);
+  expect(activate).not.toHaveBeenCalled();
+  expect(focus).not.toHaveBeenCalled();
+  expect(seen).not.toHaveBeenCalled();
+  fireEvent.click(tab);
+  expect(seen).toHaveBeenCalledOnce();
+  expect(activate).toHaveBeenCalledWith(1, true);
+  input.remove();
+});
+
+it("keeps Needs You visible in a collapsed pane without expanding it", () => {
+  const expand = vi.fn();
+  const { leaf, show, view } = setup();
+  show(leaf(0, true), {
+    onCollapse: expand,
+    tabs: [
+      { title: "Current terminal", glyph: null },
+      { title: "Waiting agent", glyph: null, attention: "needs-you" },
+    ],
+  });
+  expect(view.getByText("Needs You")).toHaveAttribute("title", "Waiting agent: Needs You");
+  expect(view.container.querySelector("[data-pane-id]")).toHaveAttribute("data-attention", "needs-you");
+  expect(expand).not.toHaveBeenCalled();
+});
