@@ -119,10 +119,11 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             <div className={styles.headerActions} id="code-actions" tabIndex={-1}>
               <Button
                 icon={<PlugZap />}
+                aria-label="Tools"
                 aria-expanded={integrationsOpen}
                 onClick={() => setIntegrationsOpen((open) => !open)}
               >
-                Tools
+                <span className={styles.collapsibleLabel}>Tools</span>
               </Button>
               {api ? <Toolbar api={api} available={workspace.available} /> : <ToolbarPlaceholder />}
             </div>
@@ -467,8 +468,8 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
       <FocusButton controller={controller} onFocus={() => api.applyTaskLayout("focus")} />
       <span className={styles.groupDivider} aria-hidden="true" />
       <Tooltip content="Arrange panes without stopping work. Undo restores your exact layout.">
-        <Button size="sm" variant="ghost" icon={<LayoutGrid />} onClick={() => controller.tidy()}>
-          Tidy
+        <Button size="sm" variant="ghost" icon={<LayoutGrid />} aria-label="Tidy" onClick={() => controller.tidy()}>
+          <span className={styles.collapsibleLabel}>Tidy</span>
         </Button>
       </Tooltip>
       {controller.undoLayoutLabel ? (

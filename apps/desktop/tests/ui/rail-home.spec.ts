@@ -208,7 +208,11 @@ test.describe("workspace rail", () => {
       if (!header || !heading) throw new Error("The Code workspace header is incomplete");
       const headerBox = header.getBoundingClientRect();
       const actionBox = actions.getBoundingClientRect();
-      const controls = [...actions.querySelectorAll("button")].map((control) => {
+      // Controls folded away on a narrow canvas (display: none) aren't on screen.
+      const shown = [...actions.querySelectorAll("button")].filter(
+        (control) => getComputedStyle(control).display !== "none",
+      );
+      const controls = shown.map((control) => {
         const box = control.getBoundingClientRect();
         return { left: box.left, right: box.right, width: box.width, height: box.height };
       });
