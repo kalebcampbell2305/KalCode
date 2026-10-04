@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const script = fileURLToPath(new URL("../../.github/scripts/win-desktop-package-proof.ps1", import.meta.url));
 const compare = fileURLToPath(new URL("../../.github/scripts/compare-desktop-databases.py", import.meta.url));
 const source = readFileSync(script, "utf8");
+const portableScript = fileURLToPath(new URL("../../.github/scripts/prepare-desktop-python.ps1", import.meta.url));
 test("package proof requires draft exact commit, signed exact bytes and build identity before install", () => {
   for (const check of [
     "meta.isDraft",
@@ -62,11 +65,46 @@ print('PASS')
 test("PowerShell helper parses without executing any QA action", { skip: process.platform !== "win32" }, () => {
   const command =
     "$errors = $null; $tokens = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }";
-  const quoted = script.replaceAll("'", "''");
-  const result = spawnSync(
-    "powershell",
-    ["-NoProfile", "-NonInteractive", "-Command", command.replace("$args[0]", `'${quoted}'`)],
-    { encoding: "utf8", windowsHide: true, timeout: 30_000 },
-  );
-  assert.equal(result.status, 0, result.stderr);
+  for (const path of [script, portableScript]) {
+    const quoted = path.replaceAll("'", "''");
+    const result = spawnSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", command.replace("$args[0]", `'${quoted}'`)],
+      { encoding: "utf8", windowsHide: true, timeout: 30_000 },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
+test("portable Python cleanup removes only the validated current run directory", {
+  skip: process.platform !== "win32",
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), "portable-python-qa-"));
+  const owned = join(root, "kalcode-qa-python-123-1");
+  const other = join(root, "preserve.txt");
+  mkdirSync(owned);
+  writeFileSync(join(owned, "owned.txt"), "owned");
+  writeFileSync(other, "preserve");
+  const invoke = (id) =>
+    spawnSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", portableScript, "-Cleanup"],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 30_000,
+        env: { ...process.env, RUNNER_TEMP: root, GITHUB_RUN_ID: id, GITHUB_RUN_ATTEMPT: "1" },
+      },
+    );
+  try {
+    const refused = invoke("../123");
+    assert.notEqual(refused.status, 0);
+    assert.ok(existsSync(owned));
+    const cleaned = invoke("123");
+    assert.equal(cleaned.status, 0, cleaned.stderr);
+    assert.ok(!existsSync(owned));
+    assert.equal(readFileSync(other, "utf8"), "preserve");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
