@@ -28,6 +28,7 @@ test = false
 doc = false
 
 [dependencies]
+kalcode-secure-store = { path = "../secure-store" }
 kalcode-contracts = { path = "../contracts" }
 kalcode-native-core = { path = "../native-core" }
 kalcode-pty = { path = "../pty" }

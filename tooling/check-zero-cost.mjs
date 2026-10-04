@@ -149,6 +149,13 @@ for (const file of files) {
       line.trim() === 'const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";'
     )
       return;
+    // Owner-authorized external integrations: the only inference endpoint is an explicit
+    // per-user OS-keychain key. No environment/company credentials or automatic fallback.
+    if (
+      file === "crates/integration-openai/src/lib.rs" &&
+      line.trim() === 'const ENDPOINT: &str = "https://api.openai.com/v1/responses";'
+    )
+      return;
     for (const re of FORBIDDEN) if (re.test(line)) findings.push(`${file}:${index + 1}: ${re}`);
   });
 }

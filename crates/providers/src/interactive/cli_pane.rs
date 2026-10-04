@@ -94,6 +94,7 @@ pub struct InteractiveCliProvider {
     env: DetectEnv,
     managed_profiles: Option<ManagedProfiles>,
     codex_cloud_config: Option<Arc<CodexCloudConfigResolver>>,
+    integrations: Option<Arc<super::integrations::IntegrationConnector>>,
     /// Codex `notify` reaches KalCode through the bridge; Gemini CLI panes don't use it.
     bridge: Option<Arc<BridgeServer>>,
     config: InteractiveConfig,
@@ -113,6 +114,7 @@ impl InteractiveCliProvider {
             env,
             managed_profiles: None,
             codex_cloud_config: None,
+            integrations: None,
             bridge,
             config,
             panes,
@@ -138,6 +140,14 @@ impl InteractiveCliProvider {
 
     pub fn sessions_dir(&self) -> PathBuf {
         self.config.sessions_dir.clone()
+    }
+
+    pub fn with_integrations(
+        mut self,
+        connector: Arc<super::integrations::IntegrationConnector>,
+    ) -> Self {
+        self.integrations = Some(connector);
+        self
     }
 
     fn start(
@@ -171,6 +181,7 @@ impl InteractiveCliProvider {
             .map_err(|e| ProviderError::Start(e.to_string()))?;
         let mut codex_overrides = Vec::new();
         let mut gemini_args = None;
+        let mut integration_lifetime = None;
         let mut lease: Option<ProfileLease> = None;
         let (executable, mut env, cwd) = match (self.managed_profiles.as_ref(), account_id) {
             (Some(profiles), Some(account_id)) => match self.cli {
@@ -275,6 +286,17 @@ impl InteractiveCliProvider {
             shared.forget_session_id();
         }
 
+        if matches!(self.cli, PaneCli::Codex)
+            && let Some(connect) = &self.integrations
+        {
+            let connection = connect(&config)?;
+            codex_overrides.extend(super::integrations::codex_config(&connection.url));
+            env.insert(
+                super::integrations::BEARER_ENV.into(),
+                connection.bearer.expose_secret().into(),
+            );
+            integration_lifetime = Some(connection.lifetime);
+        }
         let args: Vec<OsString> = match self.cli {
             PaneCli::Codex => {
                 let bridge = self.bridge.as_ref().ok_or_else(|| {
@@ -345,6 +367,7 @@ impl InteractiveCliProvider {
                 .map_err(|e| ProviderError::Start(e.to_string()))?,
         };
         let on_exit = move |exit: kalcode_pty::ExitInfo| {
+            drop(integration_lifetime);
             if let Some(shared) = weak.upgrade() {
                 shared.on_exit(exit.code, exit.killed);
             }
