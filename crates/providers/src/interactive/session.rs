@@ -188,6 +188,7 @@ struct ClaudeSubmitBoundary {
     clears_input: bool,
     /// A programmatic task or reviewed handoff; enriched text is not a new user claim.
     kalcode_submitted: bool,
+    cursor_fingerprint: Option<String>,
 }
 
 #[derive(Default)]
@@ -209,6 +210,7 @@ struct LifecycleState {
     cursor_tracking_failed: bool,
     cursor_start_seen: bool,
     cursor_model: Option<String>,
+    cursor_input: super::cursor_input::CursorInput,
     handoff_readiness: HandoffReadiness,
     reconfigure_reserved: bool,
 }
@@ -367,6 +369,7 @@ impl Shared {
                 trailing_input,
                 clears_input,
                 kalcode_submitted,
+                cursor_fingerprint: None,
             });
     }
 
@@ -416,11 +419,28 @@ impl Shared {
         }
         lifecycle.input_pending = true;
         lifecycle.input_pending_generation = generation;
+        if self.provider_id == "cursor" {
+            for submission in lifecycle.cursor_input.observe(data) {
+                self.record_claude_submit_boundary_locked(
+                    lifecycle,
+                    generation,
+                    submission.trailing_input,
+                    true,
+                    false,
+                );
+                if !lifecycle.claude_submit_tracking_failed
+                    && let Some(boundary) = lifecycle.claude_submit_boundaries.back_mut()
+                {
+                    boundary.cursor_fingerprint = submission.fingerprint;
+                }
+            }
+            return;
+        }
         let Some(last_submit) = data.iter().rposition(|byte| matches!(byte, b'\r' | b'\n')) else {
             return;
         };
         let trailing_input = last_submit + 1 < data.len();
-        if matches!(self.provider_id.as_str(), "claude-code" | "cursor") {
+        if self.provider_id == "claude-code" {
             // The authenticated UserPromptSubmit that follows consumes this exact boundary.
             // A later write has a higher generation and therefore survives that hook.
             self.record_claude_submit_boundary_locked(
@@ -1271,7 +1291,16 @@ impl Shared {
                 {
                     return events;
                 }
-                if let Some(boundary) = lifecycle.claude_submit_boundaries.pop_front()
+                // /model, native setup and other UI submissions do not emit prompt hooks.
+                // Match exact native text instead of consuming the oldest Enter. Choose the
+                // earliest identical submission, retaining later identical/partial input.
+                let boundary = Self::cursor_submit_index(lifecycle, record).and_then(|index| {
+                    lifecycle
+                        .claude_submit_boundaries
+                        .drain(..=index)
+                        .next_back()
+                });
+                if let Some(boundary) = boundary
                     && boundary.clears_input
                     && !boundary.trailing_input
                     && lifecycle.input_pending_generation <= boundary.generation
@@ -1333,6 +1362,14 @@ impl Shared {
         events
     }
 
+    fn cursor_submit_index(lifecycle: &LifecycleState, record: &HookRecord) -> Option<usize> {
+        let fingerprint = record.cursor.as_ref()?.prompt_fingerprint.as_ref()?;
+        lifecycle
+            .claude_submit_boundaries
+            .iter()
+            .position(|boundary| boundary.cursor_fingerprint.as_ref() == Some(fingerprint))
+    }
+
     pub(crate) fn handle(&self, record: HookRecord) -> HookReply {
         let blocking = record.event.is_some_and(HookEvent::is_blocking);
         if record.validate().is_err() {
@@ -1370,10 +1407,17 @@ impl Shared {
             };
             let cursor_started = lifecycle.cursor_start_seen;
             let cursor_generation = lifecycle.cursor_generation.clone();
-            let kalcode_submitted = lifecycle
-                .claude_submit_boundaries
-                .front()
-                .is_some_and(|boundary| boundary.kalcode_submitted);
+            let kalcode_submitted = Self::cursor_submit_index(&lifecycle, &record)
+                .and_then(|index| lifecycle.claude_submit_boundaries.get(index))
+                .map_or_else(
+                    || {
+                        lifecycle
+                            .claude_submit_boundaries
+                            .iter()
+                            .any(|boundary| boundary.kalcode_submitted)
+                    },
+                    |boundary| boundary.kalcode_submitted,
+                );
             let events = if record.event == Some(HookEvent::Cursor) {
                 self.accept_cursor_locked(&mut lifecycle, &record)
             } else if record.event == Some(HookEvent::CodexNotify) {
@@ -1568,6 +1612,13 @@ impl Shared {
                 false,
                 true,
             );
+            if self.provider_id == "cursor"
+                && !lifecycle.claude_submit_tracking_failed
+                && let Some(boundary) = lifecycle.claude_submit_boundaries.back_mut()
+            {
+                boundary.cursor_fingerprint =
+                    Some(kalcode_hook_bridge::record::cursor_prompt_fingerprint(text));
+            }
             if !lifecycle.claude_submit_tracking_failed {
                 lifecycle.handoff_readiness = HandoffReadiness::Busy;
             }
@@ -2395,6 +2446,109 @@ mod tests {
     }
 
     #[test]
+    fn cursor_native_model_command_does_not_leave_a_phantom_pending_prompt() {
+        let (shared, _) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        shared.forget_session_id();
+        let hook =
+            |event: &str| {
+                kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+            "hook_event_name":event,"conversation_id":"native","generation_id":"task-one",
+            "prompt":"Build the requested feature","status":"completed"
+        }).to_string().as_bytes()).unwrap()
+            };
+        // Native setup input also lacks a model-turn hook.
+        shared.observe_input_write_locked(&mut lock(&shared.lifecycle), b"y\r");
+        shared.handle(hook("sessionStart"));
+        {
+            let mut lifecycle = lock(&shared.lifecycle);
+            shared.observe_input_write_locked(&mut lifecycle, b"/model\r");
+            shared.observe_input_write_locked(&mut lifecycle, b"\x1b[B\r");
+            shared.observe_input_write_locked(&mut lifecycle, b"Build the requested feature\r");
+        }
+        shared.handle(hook("beforeSubmitPrompt"));
+        shared.handle(hook("stop"));
+        assert_eq!(
+            shared.handoff_readiness(),
+            Ok(()),
+            "native /model consumes no model turn and must not offset later prompt acknowledgement"
+        );
+    }
+
+    #[test]
+    fn cursor_prompt_correlation_preserves_later_partial_and_identical_submissions() {
+        for (later, second_submit, same_packet) in [
+            (b"later unfinished".as_slice(), false, false),
+            (b"task\r".as_slice(), true, false),
+            (b"later unfinished".as_slice(), false, true),
+            (b"task\r".as_slice(), true, true),
+        ] {
+            let (shared, _) = shared_for(
+                "cursor",
+                DecisionRouting::ProviderPrompt,
+                SessionLimits::default(),
+            );
+            shared.forget_session_id();
+            let hook = |event: &str, generation: &str| {
+                kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+                "hook_event_name":event,"conversation_id":"native","generation_id":generation,"prompt":"task","status":"completed"
+            }).to_string().as_bytes()).unwrap()
+            };
+            shared.handle(hook("sessionStart", "native"));
+            {
+                let mut lifecycle = lock(&shared.lifecycle);
+                shared.observe_input_write_locked(&mut lifecycle, b"/model\r");
+                if same_packet {
+                    shared.observe_input_write_locked(
+                        &mut lifecycle,
+                        &[b"task\r".as_slice(), later].concat(),
+                    );
+                } else {
+                    shared.observe_input_write_locked(&mut lifecycle, b"task\r");
+                    shared.observe_input_write_locked(&mut lifecycle, later);
+                }
+            }
+            shared.handle(hook("beforeSubmitPrompt", "one"));
+            shared.handle(hook("stop", "one"));
+            assert_eq!(
+                shared.handoff_readiness(),
+                Err(HandoffDeliveryError::InputPending)
+            );
+            if second_submit {
+                shared.handle(hook("beforeSubmitPrompt", "two"));
+                shared.handle(hook("stop", "two"));
+                assert_eq!(shared.handoff_readiness(), Ok(()));
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_unknown_editing_never_clears_pending_input_from_a_native_hook() {
+        let (shared, _) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        shared.forget_session_id();
+        let hook = |event: &str| {
+            kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+            "hook_event_name":event,"conversation_id":"native","generation_id":"one","prompt":"history-selected task","status":"completed"
+        }).to_string().as_bytes()).unwrap()
+        };
+        shared.handle(hook("sessionStart"));
+        shared.observe_input_write_locked(&mut lock(&shared.lifecycle), b"\x1b[A\r");
+        shared.handle(hook("beforeSubmitPrompt"));
+        shared.handle(hook("stop"));
+        assert_eq!(
+            shared.handoff_readiness(),
+            Err(HandoffDeliveryError::InputPending)
+        );
+    }
+
+    #[test]
     fn cursor_unmatched_stop_and_resume_cannot_certify_an_idle_prompt() {
         let (s, rx) = shared_for(
             "cursor",
@@ -2748,6 +2902,7 @@ mod tests {
                 trailing_input: false,
                 clears_input: true,
                 kalcode_submitted: false,
+                cursor_fingerprint: None,
             })
             .collect();
         lifecycle.handoff_readiness = HandoffReadiness::Ready;

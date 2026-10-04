@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 /// Largest hook payload the helper reads from stdin.
 pub const MAX_STDIN_BYTES: usize = 1024 * 1024;
@@ -147,6 +148,14 @@ pub struct CursorHook {
     pub generation_id: Option<String>,
     pub model: Option<String>,
     pub status: Option<String>,
+    /// Exact native prompt correlation, never persisted or emitted as an agent event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_fingerprint: Option<String>,
+}
+
+/// Hash exact UTF-8 bytes without trimming or normalizing the provider's submitted prompt.
+pub fn cursor_prompt_fingerprint(prompt: &str) -> String {
+    hex::encode(Sha256::digest(prompt.as_bytes()))
 }
 
 pub const CURSOR_EVENTS: &[&str] = &[
@@ -271,6 +280,22 @@ mod cursor_tests {
                 .unwrap()
                 .contains("private tail")
         );
+        assert_eq!(
+            record.cursor.as_ref().unwrap().prompt_fingerprint,
+            Some(cursor_prompt_fingerprint(&text))
+        );
+        let mut changed = payload.clone();
+        changed["prompt"] = json!(format!("{text} changed beyond bounded query"));
+        let changed =
+            from_cursor_stdin("beforeSubmitPrompt", changed.to_string().as_bytes()).unwrap();
+        assert_eq!(changed.prompt, record.prompt);
+        assert_ne!(
+            changed.cursor.unwrap().prompt_fingerprint,
+            record.cursor.as_ref().unwrap().prompt_fingerprint
+        );
+        let mut invalid_hash = record.clone();
+        invalid_hash.cursor.as_mut().unwrap().prompt_fingerprint = Some("untrusted hash".into());
+        assert!(invalid_hash.validate().is_err());
         for query in [
             "x".repeat(MAX_PROMPT_CHARS + 1),
             "query\nwith controls".into(),
@@ -325,6 +350,13 @@ impl HookRecord {
                 && valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
                 && valid_id(cursor.generation_id.as_deref(), MAX_ID_CHARS)
                 && valid_model(cursor.model.as_deref())
+                && cursor
+                    .prompt_fingerprint
+                    .as_deref()
+                    .is_none_or(|fingerprint| {
+                        cursor.event == "beforeSubmitPrompt"
+                            && crate::key::is_hex_of_len(fingerprint, 64)
+                    })
                 && self.prompt.as_deref().is_none_or(|prompt| {
                     cursor.event == "beforeSubmitPrompt"
                         && !prompt.trim().is_empty()
@@ -628,6 +660,10 @@ pub fn from_cursor_stdin(event: &str, bytes: &[u8]) -> Result<HookRecord, Record
         },
         cursor: Some(CursorHook {
             event: event.to_owned(),
+            prompt_fingerprint: (event == "beforeSubmitPrompt")
+                .then(|| field("prompt"))
+                .flatten()
+                .map(|prompt| cursor_prompt_fingerprint(&prompt)),
             generation_id: field("generation_id").filter(|value| !value.is_empty()),
             model: field("model")
                 .filter(|value| !value.is_empty())
