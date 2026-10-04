@@ -19,7 +19,7 @@ for releases with unchanged updater behavior. -ChangesData verifies a forward sc
 param(
   [string]$LiveUrl = '', [string]$LiveSha256 = '', [string]$LiveVersion = '',
   [string]$CandidateVersion = '', [string]$CandidateSha256 = '', [string]$CandidateCommit = '',
-  [string]$CandidateTag = '', [int]$ExpectSchema = 0, [switch]$ChangesData,
+  [string]$CandidateTag = '', [int]$ExpectSchema = 0, [int]$LiveSchema = 0, [switch]$ChangesData,
   [string]$CleanPacketSha256 = '', [string]$CleanVerifierSha256 = '',
   [string]$FeedUrl = 'https://kalcoded.com/releases/updater/stable.json',
   [int]$StageTimeoutSec = 900,
@@ -167,7 +167,19 @@ try {
   if ($LiveUrl -notmatch '^https://kalcoded\.com/releases/updater/stable/[A-Za-z0-9._+%/-]{1,200}\.exe$') { Refuse 'LiveUrl must be an immutable kalcoded.com updater URL' }
   if ($FeedUrl -cne 'https://kalcoded.com/releases/updater/stable.json') { Refuse 'FeedUrl must be the production Stable feed' }
   if ($CandidateTag -and ($CandidateTag -cnotmatch '^qa-[A-Za-z0-9][A-Za-z0-9._-]{1,100}$' -or $ExpectSchema -lt 1)) { Refuse 'package proof requires a qa- draft tag and expected schema' }
-  if ($ChangesData -and -not $CandidateTag) { Refuse 'migration proof requires a signed draft package' }
+  if ($ChangesData -and (-not $CandidateTag -or $LiveSchema -lt 1 -or $ExpectSchema -le $LiveSchema)) { Refuse 'migration proof requires a draft and increasing pinned live/candidate schemas' }
+  if ($CandidateTag -and $LiveSchema -gt 0 -and $LiveSchema -ne $ExpectSchema -and -not $ChangesData) { Refuse 'schema changes require the restore guard proof' }
+  if ($CandidateTag) {
+    if ($id.Name -cne 'KALEBSLAPTOP\kalcode-qa' -or $env:COMPUTERNAME -cne 'KALEBSLAPTOP') { Refuse 'package proof requires the exact dedicated laptop QA account' }
+    $profile = Get-CimInstance Win32_UserProfile -Filter ("SID = '" + $id.User.Value + "'")
+    if ($profile.LocalPath -cne 'C:\Users\kalcode-qa' -or $env:USERPROFILE -cne $profile.LocalPath -or $env:APPDATA -cne ($profile.LocalPath + '\AppData\Roaming') -or $env:LOCALAPPDATA -cne ($profile.LocalPath + '\AppData\Local')) { Refuse 'package proof requires canonical SID-bound QA profile paths' }
+    foreach ($path in $env:APPDATA, $env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs')) {
+      for ($node = $path; $node -and $node -ne 'C:\Users'; $node = Split-Path -Parent $node) {
+        if ((Test-Path -LiteralPath $node) -and ((Get-Item -LiteralPath $node -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Refuse 'QA profile contains a reparse point' }
+      }
+    }
+    if ((Leftovers).Values -contains $true) { Refuse 'QA profile is not clean; preserve unknown residue for separately reviewed recovery' }
+  }
   if ($CleanPacketSha256 -or $CleanVerifierSha256) {
     if (-not $CandidateTag -or $CleanPacketSha256 -cnotmatch '^[0-9a-f]{64}$' -or $CleanVerifierSha256 -cnotmatch '^[0-9a-f]{64}$') { Refuse 'clean verification requires a draft package and exact packet/verifier hashes' }
     . (Join-Path $PSScriptRoot 'desktop-clean-packet.ps1')
@@ -281,7 +293,10 @@ try {
 } catch {
   $receipt.error = "$_"; Note "FAILED: $_"
 } finally {
-  if ($script:QaStateOwned) { try { $receipt.cleanupClean = Cleanup } catch { $receipt.cleanupClean = $false; Note "cleanup: $_" } }
+  if ($script:QaStateOwned) {
+    if ($CandidateTag -and $receipt.status -ne 'PASS') { $receipt.cleanupClean = $false; Note 'preserving failed package proof profile for diagnosis' }
+    else { try { $receipt.cleanupClean = Cleanup } catch { $receipt.cleanupClean = $false; Note "cleanup: $_" } }
+  }
   if ($receipt.status -eq 'PASS' -and ($receipt.cleanupClean -ne $true -or $receipt.forcedProcessActions -ne 0)) {
     $receipt.status = 'FAILED'; $receipt.error = 'clean natural shutdown required; cleanup was incomplete or forced'
     $receipt.normalUpdaterDeliveryProven = $false

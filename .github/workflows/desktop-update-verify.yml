@@ -8,7 +8,7 @@ name: Desktop update verify (self-hosted)
 #   gh workflow run desktop-update-verify.yml --ref main -f live_url=... -f live_sha256=... -f live_version=...
 #     -f candidate_version=... -f candidate_sha256=... -f candidate_commit=...
 # Before publication, add candidate_tag=qa-... and expect_schema=N for signed package update/data preservation proof.
-# Package proof does not claim normal updater delivery. Data migrations require changes_data and their rollback floor.
+# Package proof does not claim normal updater delivery. Data migrations require live_schema and changes_data=true.
 
 run-name: Desktop update ${{ inputs.live_version }} -> ${{ inputs.candidate_version }}
 
@@ -23,9 +23,10 @@ on:
       candidate_commit: { description: Commit of the live build, required: true, type: string }
       candidate_tag: { description: Optional private draft QA release tag for prepublication package proof (no feed delivery claim), required: false, type: string }
       expect_schema: { description: Expected candidate SQLite schema for package proof, required: false, default: '0', type: string }
-      changes_data: { description: Require a forward migration and candidate rollback floor, required: false, default: false, type: boolean }
       clean_packet_sha256: { description: Optional SHA-256 of draft windows-clean-packet.zip for canonical clean install proof, required: false, type: string }
       clean_verifier_sha256: { description: Exact candidate verify-windows.mjs SHA-256 inside the clean packet, required: false, type: string }
+      live_schema: { description: Expected live SQLite schema for migration proof, required: false, default: '0', type: string }
+      changes_data: { description: Require forward-only restore guard after schema migration, required: false, default: false, type: boolean }
 
 permissions:
   contents: read
@@ -45,10 +46,10 @@ jobs:
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - name: Prepare isolated portable SQLite reader
         if: inputs.candidate_tag != ''
-        with:
-          python-version: '3.12'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1
       - name: Run the desktop update delivery check
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
@@ -60,16 +61,17 @@ jobs:
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           EXPECT_SCHEMA: ${{ inputs.expect_schema }}
-          CHANGES_DATA: ${{ inputs.changes_data }}
           CLEAN_PACKET_SHA256: ${{ inputs.clean_packet_sha256 }}
           CLEAN_VERIFIER_SHA256: ${{ inputs.clean_verifier_sha256 }}
+          LIVE_SCHEMA: ${{ inputs.live_schema }}
+          CHANGES_DATA: ${{ inputs.changes_data }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP ('desktop-update-out-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
           $packageArgs = @()
-          if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA) }
+          if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA, '-LiveSchema', $env:LIVE_SCHEMA) }
           if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
           if ($env:CLEAN_PACKET_SHA256 -or $env:CLEAN_VERIFIER_SHA256) { $packageArgs += @('-CleanPacketSha256', $env:CLEAN_PACKET_SHA256, '-CleanVerifierSha256', $env:CLEAN_VERIFIER_SHA256) }
           & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
@@ -85,3 +87,7 @@ jobs:
           name: desktop-update-${{ github.run_id }}
           path: ${{ runner.temp }}/desktop-update-out-${{ github.run_id }}-${{ github.run_attempt }}/*.json
           if-no-files-found: warn
+      - name: Remove this run's portable Python
+        if: always() && inputs.candidate_tag != ''
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1 -Cleanup

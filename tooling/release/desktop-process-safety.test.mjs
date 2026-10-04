@@ -85,7 +85,8 @@ test("failed close and occupied state cannot be cleaned or reported as passing",
   const safety = readFileSync(`${scripts}/desktop-process-safety.ps1`, "utf8");
   assert.doesNotMatch(controller + safety, /Stop-Process|taskkill|\.Kill\(/iu);
   assert.match(controller, /QA profile already contains KalCode state; preserving it/u);
-  assert.match(controller, /if \(\$script:QaStateOwned\).*cleanupClean = Cleanup/u);
+  assert.match(controller, /if \(\$script:QaStateOwned\) \{/u);
+  assert.match(controller, /else \{ try \{ \$receipt.cleanupClean = Cleanup/u);
   assert.match(controller, /cleanupClean -ne \$true -or \$receipt\.forcedProcessActions -ne 0/u);
   assert.match(controller, /\$receipt\.status = 'FAILED'; \$receipt\.error = 'clean natural shutdown required/u);
 });

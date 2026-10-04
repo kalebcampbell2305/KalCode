@@ -99,6 +99,38 @@ impl HookReply {
             _ => Rendered::silent(),
         }
     }
+
+    /// Cursor's documented startup context augments the session without submitting a turn.
+    /// All other replies fail open as an observing hook; no permission answer crosses providers.
+    pub fn render_cursor_session_start(&self) -> Rendered {
+        Rendered {
+            exit_code: 0,
+            stdout: match self {
+                Self::ProjectContext { text } if !text.is_empty() && text.len() <= 4096 => {
+                    json!({"additional_context": text}).to_string()
+                }
+                _ => "{}".into(),
+            },
+            stderr: String::new(),
+        }
+    }
+
+    /// Cursor Agent 2026.10.01 consumes additional_context separately from the original
+    /// user message. Always preserve its native submission, including on retrieval failure.
+    pub fn render_cursor_prompt(&self) -> Rendered {
+        let mut output = json!({"continue": true});
+        if let Self::ProjectContext { text } = self
+            && !text.is_empty()
+            && text.len() <= 4096
+        {
+            output["additional_context"] = json!(text);
+        }
+        Rendered {
+            exit_code: 0,
+            stdout: output.to_string(),
+            stderr: String::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -179,5 +211,50 @@ mod tests {
             Rendered::silent()
         );
         assert_eq!(HookReply::Ack.render_user_prompt(), Rendered::silent());
+    }
+
+    #[test]
+    fn cursor_startup_context_has_only_its_native_bounded_schema() {
+        let reply = HookReply::ProjectContext {
+            text: "Saved decision: use SQLite.\nQuoted \"context\".".into(),
+        };
+        let rendered = reply.render_cursor_session_start();
+        assert_eq!(rendered.exit_code, 0);
+        assert!(rendered.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_str(&rendered.stdout).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(
+            value["additional_context"],
+            "Saved decision: use SQLite.\nQuoted \"context\"."
+        );
+        let prompt = reply.render_cursor_prompt();
+        assert_eq!(prompt.exit_code, 0);
+        assert!(prompt.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_str(&prompt.stdout).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 2);
+        assert_eq!(value["continue"], true);
+        assert_eq!(
+            value["additional_context"],
+            "Saved decision: use SQLite.\nQuoted \"context\"."
+        );
+        for rejected in [
+            HookReply::Ack,
+            HookReply::Allow {
+                reason: "allow".into(),
+            },
+            HookReply::ProjectContext { text: "".into() },
+            HookReply::ProjectContext {
+                text: "x".repeat(4097),
+            },
+        ] {
+            let rendered = rejected.render_cursor_session_start();
+            assert_eq!(rendered.exit_code, 0);
+            assert_eq!(rendered.stdout, "{}");
+            assert!(rendered.stderr.is_empty());
+            let prompt = rejected.render_cursor_prompt();
+            assert_eq!(prompt.exit_code, 0);
+            assert_eq!(prompt.stdout, "{\"continue\":true}");
+            assert!(prompt.stderr.is_empty());
+        }
     }
 }

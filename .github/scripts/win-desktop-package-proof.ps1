@@ -27,7 +27,8 @@ function Get-CandidatePackage {
   $receipt.candidate.source = 'private-draft-release'; $receipt.candidate.tag = $CandidateTag
   $receipt.candidate.installerSignature = [string]$sig.Status
   $receipt.candidate.buildRecordSha256 = Sha (Join-Path $packet 'build.json')
-  # The caller clears GH_TOKEN after all draft assets are downloaded, before launching anything.
+  # The token is only for draft download; the application never inherits it.
+  # Caller clears GH_TOKEN after downloading all draft assets, before launch.
   [ordered]@{ exe = $exe; signer = $sig.SignerCertificate.Subject }
 }
 
@@ -48,6 +49,8 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $receipt.liveClose = Close-Exact $liveRun.pid
   if (-not $receipt.liveClose.exited -or -not $receipt.liveClose.accepted) { Refuse 'live application did not exit naturally through its window' }
   $before = Copy-ClosedDatabase 'db-live'
+  $floorPath = Join-Path $Updates 'rollback-floor'
+  $floorBefore = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { $null }
   Run-Installer $package.exe @('/S', '/UPDATE')
   $receipt.applied = Installed
   if (-not $receipt.applied -or $receipt.applied.productVersion -cne $CandidateVersion -or $receipt.applied.fileVersion -cne $CandidateVersion -or $receipt.applied.signature -cne 'Valid') { Refuse 'installed candidate identity/signature mismatch' }
@@ -59,18 +62,17 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $receipt.candidateClose = Close-Exact $receipt.reopen.pid
   if (-not $receipt.candidateClose.exited -or -not $receipt.candidateClose.accepted) { Refuse 'candidate application did not exit naturally through its window' }
   $after = Copy-ClosedDatabase 'db-candidate'
-  $migrationArgs = @(); if ($ChangesData) { $migrationArgs += '--changes-data' }
-  $comparison = (& python -I -B (Join-Path $PSScriptRoot 'compare-desktop-databases.py') $before $after $CandidateVersion $ExpectSchema @migrationArgs | Out-String).Trim()
+  $expectedLive = if ($LiveSchema -gt 0) { $LiveSchema } else { $ExpectSchema }
+  $comparison = (& python -I -B (Join-Path $PSScriptRoot 'compare-desktop-databases.py') $before $after $CandidateVersion $ExpectSchema $expectedLive | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $comparison) { Refuse 'read-only database comparison failed' }
   $receipt.dataCompare = $comparison | ConvertFrom-Json
   [IO.File]::WriteAllText((Join-Path $OutDir 'database-comparison.json'), $comparison)
   if (@($receipt.dataCompare.differences).Count) { Refuse 'candidate changed or lost pre-existing project data; see database-comparison.json' }
   $receipt.checks.dataKept = $true; $receipt.checks.updateFromLive = $true
+  $floorAfter = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { $null }
+  $receipt.floor = [ordered]@{ before = $floorBefore; after = $floorAfter }
   if ($ChangesData) {
-    $floorPath = Join-Path $Updates 'rollback-floor'
-    $floor = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { '' }
-    $receipt.rollbackFloor = $floor
-    if ($floor -cne $CandidateVersion) { Refuse 'migrating candidate did not establish its rollback floor' }
+    if ($floorAfter -cne $CandidateVersion) { Refuse 'migration did not set the forward-only rollback floor to the candidate version' }
     $receipt.checks.restoreGuard = $true
   }
   Note "signed package update passed; $($receipt.dataCompare.rowsKept) existing rows retained"
