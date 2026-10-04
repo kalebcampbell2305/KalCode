@@ -1,9 +1,9 @@
 .page {
-  --doctor-ink: #e9f1f2;
-  --doctor-muted: #9eb0b5;
-  --doctor-line: rgba(177, 222, 225, 0.16);
-  --doctor-panel: rgba(9, 26, 31, 0.82);
-  --doctor-accent: #7be0d3;
+  --doctor-ink: var(--color-text);
+  --doctor-muted: var(--color-text-muted);
+  --doctor-line: var(--color-border);
+  --doctor-panel: color-mix(in srgb, var(--color-surface-1) 82%, transparent);
+  --doctor-accent: var(--color-accent);
   color: var(--doctor-ink);
   display: grid;
   gap: 1.5rem;
@@ -60,7 +60,7 @@
 .primaryButton,
 .secondaryButton,
 .ghostButton {
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   cursor: pointer;
   font: inherit;
   font-size: 0.86rem;
@@ -72,12 +72,12 @@
 .primaryButton {
   background: var(--doctor-accent);
   border: 1px solid var(--doctor-accent);
-  color: #062324;
+  color: var(--color-accent-fg);
 }
 
 .secondaryButton {
-  background: rgba(123, 224, 211, 0.08);
-  border: 1px solid rgba(123, 224, 211, 0.48);
+  background: color-mix(in srgb, var(--doctor-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--doctor-accent) 48%, transparent);
   color: var(--doctor-ink);
 }
 
@@ -90,7 +90,7 @@
 .primaryButton:focus-visible,
 .secondaryButton:focus-visible,
 .ghostButton:focus-visible {
-  outline: 3px solid rgba(123, 224, 211, 0.38);
+  outline: 3px solid color-mix(in srgb, var(--doctor-accent) 38%, transparent);
   outline-offset: 2px;
 }
 
@@ -109,17 +109,21 @@
 }
 
 .error {
-  background: rgba(212, 74, 74, 0.1);
-  border-color: rgba(239, 116, 116, 0.45);
+  background: var(--status-failed-soft);
+  border-color: var(--status-failed-line);
 }
 
 .notice {
-  background: rgba(123, 224, 211, 0.08);
-  border-color: rgba(123, 224, 211, 0.32);
+  background: color-mix(in srgb, var(--doctor-accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--doctor-accent) 32%, transparent);
 }
 
 .summary {
-  background: linear-gradient(115deg, rgba(18, 53, 59, 0.9), rgba(8, 25, 30, 0.94));
+  background: linear-gradient(
+    115deg,
+    color-mix(in srgb, var(--color-surface-3) 90%, transparent),
+    color-mix(in srgb, var(--color-surface-1) 94%, transparent)
+  );
   border: 1px solid var(--doctor-line);
   border-radius: 1rem;
   display: grid;
@@ -178,7 +182,7 @@
 
 .check,
 .finding {
-  background: rgba(255, 255, 255, 0.025);
+  background: rgb(255 255 255 / 0.025);
   border: 1px solid var(--doctor-line);
   border-radius: 0.75rem;
   padding: 1rem;
@@ -207,7 +211,7 @@
 .checkStatus,
 .severity {
   border: 1px solid var(--doctor-line);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--doctor-muted);
   flex: none;
   font-size: 0.67rem;
@@ -218,20 +222,20 @@
 }
 
 .check[data-status="passed"] .checkStatus {
-  border-color: rgba(98, 213, 151, 0.35);
-  color: #83e4ac;
+  border-color: var(--status-working-line);
+  color: var(--status-working-text);
 }
 
 .check[data-status="warning"] .checkStatus,
 .severity[data-severity="warning"] {
-  border-color: rgba(241, 187, 83, 0.42);
-  color: #f5c96f;
+  border-color: var(--status-waiting-line);
+  color: var(--status-waiting-text);
 }
 
 .check[data-status="failed"] .checkStatus,
 .severity[data-severity="error"] {
-  border-color: rgba(239, 116, 116, 0.42);
-  color: #ef8d8d;
+  border-color: var(--status-failed-line);
+  color: var(--status-failed-text);
 }
 
 .findingHeader {
@@ -267,7 +271,7 @@
 
 .backdrop {
   align-items: center;
-  background: rgba(0, 10, 13, 0.76);
+  background: var(--color-scrim);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -277,10 +281,10 @@
 }
 
 .dialog {
-  background: #0b2227;
-  border: 1px solid rgba(123, 224, 211, 0.3);
+  background: var(--color-surface-overlay);
+  border: 1px solid color-mix(in srgb, var(--doctor-accent) 30%, transparent);
   border-radius: 1rem;
-  box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.45);
+  box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 0.45);
   max-height: min(44rem, 90vh);
   max-width: 38rem;
   overflow: auto;
@@ -294,7 +298,7 @@
 }
 
 .changeBox {
-  background: rgba(255, 255, 255, 0.035);
+  background: rgb(255 255 255 / 0.035);
   border: 1px solid var(--doctor-line);
   border-radius: 0.65rem;
   display: grid;
@@ -310,7 +314,7 @@
 }
 
 .dialog pre {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--color-code-bg);
   border-radius: 0.55rem;
   overflow: auto;
   padding: 0.8rem;

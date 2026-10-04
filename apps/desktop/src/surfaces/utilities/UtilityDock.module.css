@@ -1,7 +1,8 @@
 .dock {
-  --dock-cyan: #60e6d4;
-  --dock-amber: #f3b56b;
-  --dock-red: #ff7a85;
+  --dock-accent: var(--color-accent);
+  --dock-ok: var(--status-working);
+  --dock-amber: var(--status-waiting);
+  --dock-red: var(--status-failed);
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -17,7 +18,11 @@
   justify-content: space-between;
   gap: var(--space-8);
   padding: calc(var(--page-py) + var(--space-2)) var(--page-px) var(--space-5);
-  background: radial-gradient(30rem 12rem at 12% 0%, rgb(96 230 212 / 0.09), transparent 72%);
+  background: radial-gradient(
+    30rem 12rem at 12% 0%,
+    color-mix(in srgb, var(--dock-accent) 9%, transparent),
+    transparent 72%
+  );
 }
 
 .hero::after {
@@ -27,7 +32,7 @@
   bottom: 0;
   left: var(--page-px);
   height: 1px;
-  background: linear-gradient(90deg, var(--dock-cyan), var(--color-border) 32%, transparent);
+  background: linear-gradient(90deg, var(--dock-accent), var(--color-border) 32%, transparent);
   opacity: 0.55;
 }
 
@@ -69,24 +74,24 @@
   gap: var(--space-3);
   min-width: 13rem;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid rgb(96 230 212 / 0.18);
+  border: 1px solid color-mix(in srgb, var(--dock-accent) 18%, transparent);
   border-radius: var(--radius-lg);
-  background: rgb(8 11 16 / 0.6);
+  background: color-mix(in srgb, var(--color-bg-sunken) 60%, transparent);
 }
 .truth > i {
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 50%;
-  background: var(--dock-cyan);
-  box-shadow: 0 0 14px rgb(96 230 212 / 0.75);
+  background: var(--dock-ok);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dock-ok) 75%, transparent);
 }
 .truth[data-state="probing"] > i {
   background: var(--dock-amber);
-  box-shadow: 0 0 14px rgb(243 181 107 / 0.65);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dock-amber) 65%, transparent);
 }
 .truth[data-state="unavailable"] > i {
   background: var(--dock-red);
-  box-shadow: 0 0 14px rgb(255 122 133 / 0.65);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dock-red) 65%, transparent);
 }
 .truth div {
   display: flex;
@@ -143,8 +148,12 @@
   color: var(--color-text);
 }
 .tabBlock button[aria-selected="true"] {
-  background: linear-gradient(90deg, rgb(96 230 212 / 0.13), rgb(96 230 212 / 0.025));
-  color: #cffff8;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--dock-accent) 13%, transparent),
+    color-mix(in srgb, var(--dock-accent) 2.5%, transparent)
+  );
+  color: var(--color-text);
 }
 .tabBlock button > i {
   width: 0.25rem;
@@ -153,8 +162,8 @@
   background: transparent;
 }
 .tabBlock button[aria-selected="true"] > i {
-  background: var(--dock-cyan);
-  box-shadow: 0 0 10px rgb(96 230 212 / 0.8);
+  background: var(--dock-accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--dock-accent) 80%, transparent);
 }
 
 .panel {
@@ -172,10 +181,10 @@
 .notice {
   margin-bottom: var(--space-4);
   padding: var(--space-3) var(--space-4);
-  border: 1px solid rgb(243 181 107 / 0.35);
+  border: 1px solid color-mix(in srgb, var(--dock-amber) 35%, transparent);
   border-radius: var(--radius-md);
-  background: rgb(243 181 107 / 0.07);
-  color: #ffd5a2;
+  background: color-mix(in srgb, var(--dock-amber) 7%, transparent);
+  color: var(--status-waiting-text);
 }
 
 .requestLine,
@@ -205,7 +214,7 @@
   width: 100%;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: rgb(8 11 16 / 0.7);
+  background: color-mix(in srgb, var(--color-bg-sunken) 70%, transparent);
   color: var(--color-text);
   font: inherit;
   outline: none;
@@ -226,8 +235,8 @@
 .panel input:focus,
 .panel select:focus,
 .panel textarea:focus {
-  border-color: rgb(96 230 212 / 0.72);
-  box-shadow: 0 0 0 3px rgb(96 230 212 / 0.08);
+  border-color: color-mix(in srgb, var(--dock-accent) 72%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dock-accent) 8%, transparent);
 }
 
 .primary,
@@ -240,9 +249,13 @@
   cursor: pointer;
 }
 .primary {
-  border: 1px solid rgb(96 230 212 / 0.48);
-  background: linear-gradient(180deg, rgb(96 230 212 / 0.2), rgb(96 230 212 / 0.1));
-  color: #d9fffa;
+  border: 1px solid color-mix(in srgb, var(--dock-accent) 48%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--dock-accent) 20%, transparent),
+    color-mix(in srgb, var(--dock-accent) 10%, transparent)
+  );
+  color: var(--color-text);
 }
 .quiet {
   border: 1px solid var(--color-border);
@@ -250,9 +263,9 @@
   color: var(--color-text-muted);
 }
 .danger {
-  border: 1px solid rgb(255 122 133 / 0.52);
-  background: rgb(255 122 133 / 0.12);
-  color: #ffc1c6;
+  border: 1px solid color-mix(in srgb, var(--dock-red) 52%, transparent);
+  background: color-mix(in srgb, var(--dock-red) 12%, transparent);
+  color: var(--status-failed-text);
 }
 .primary:disabled {
   cursor: not-allowed;
@@ -265,7 +278,7 @@
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: rgb(8 11 16 / 0.56);
+  background: color-mix(in srgb, var(--color-bg-sunken) 56%, transparent);
 }
 .resultHead {
   display: flex;
@@ -282,9 +295,9 @@
 }
 .state {
   padding: 0.2rem 0.5rem;
-  border: 1px solid rgb(96 230 212 / 0.25);
+  border: 1px solid color-mix(in srgb, var(--dock-accent) 25%, transparent);
   border-radius: var(--radius-full);
-  color: var(--dock-cyan);
+  color: var(--color-accent-text);
   font-size: var(--type-label);
   text-transform: uppercase;
 }
@@ -294,7 +307,7 @@
   margin: 0;
   padding: var(--space-4);
   overflow: auto;
-  color: #c6d6e8;
+  color: var(--color-text-secondary);
   font-family: var(--font-mono);
   font-size: var(--type-small);
   white-space: pre-wrap;
@@ -332,10 +345,10 @@
   white-space: pre-wrap;
 }
 .diff > div[data-kind="added"] {
-  background: rgb(96 230 212 / 0.07);
+  background: color-mix(in srgb, var(--dock-ok) 7%, transparent);
 }
 .diff > div[data-kind="removed"] {
-  background: rgb(255 122 133 / 0.07);
+  background: color-mix(in srgb, var(--dock-red) 7%, transparent);
 }
 
 .table,
@@ -358,7 +371,7 @@
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
-  background: rgb(17 23 33 / 0.58);
+  background: color-mix(in srgb, var(--color-surface-2) 58%, transparent);
 }
 .processRow > div,
 .processRow > span {
@@ -388,7 +401,7 @@
   background: var(--panel-sheen), var(--color-surface-1);
 }
 .portGrid article strong {
-  color: var(--dock-cyan);
+  color: var(--color-accent-text);
   font-family: var(--font-mono);
   font-size: 1.5rem;
 }
@@ -424,9 +437,9 @@
   gap: var(--space-4);
   margin-top: var(--space-5);
   padding: var(--space-4);
-  border: 1px solid rgb(243 181 107 / 0.3);
+  border: 1px solid color-mix(in srgb, var(--dock-amber) 30%, transparent);
   border-radius: var(--radius-lg);
-  background: rgb(243 181 107 / 0.06);
+  background: color-mix(in srgb, var(--dock-amber) 6%, transparent);
 }
 .secret code {
   flex: 1;
@@ -439,7 +452,7 @@
 }
 .resultLine {
   margin-top: var(--space-4);
-  color: var(--dock-cyan);
+  color: var(--color-accent-text);
 }
 .noteList article p {
   color: var(--color-text-muted);
@@ -450,9 +463,9 @@
   place-items: center;
   width: 3.25rem;
   height: 3.25rem;
-  border: 1px solid rgb(96 230 212 / 0.35);
+  border: 1px solid color-mix(in srgb, var(--dock-accent) 35%, transparent);
   border-radius: var(--radius-md);
-  color: var(--dock-cyan);
+  color: var(--color-accent-text);
   font-family: var(--font-mono);
   font-size: 1.25rem;
 }

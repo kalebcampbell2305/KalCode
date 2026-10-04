@@ -21,7 +21,8 @@
 
 .title {
   margin: 0 0 var(--space-2);
-  font-size: var(--type-h3);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
 }
 .description {
   margin: 0;
