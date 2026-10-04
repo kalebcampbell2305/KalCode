@@ -50,6 +50,7 @@ describe("memory transport providers", () => {
     expect(setting("auto")).toContain("--sandbox workspace-write -c approval_policy='never'");
     expect(setting("bypass")).toContain("--sandbox danger-full-access -c approval_policy='never'");
     for (const mode of ["plan", "approve", "auto", "bypass"]) {
+      expect(setting(mode)).toContain("-c windows.sandbox='unelevated'");
       expect(setting(mode)).toContain("-c features.code_mode_host=true");
       expect(setting(mode)).not.toContain("features.code_mode=false");
       expect(setting(mode)).not.toContain("features.code_mode_host=false");
