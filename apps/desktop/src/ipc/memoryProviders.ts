@@ -10,7 +10,78 @@
  * out, Gemini CLI not installed. `providers-backoff`: the default machine (Provider Health shows a
  * reported rate limit, see ./memory/health.ts).
  */
-import type { PermissionMapping, ProviderDetection, ProviderStatus } from "@kalcode/protocol";
+import type { PermissionMapping, ProviderDetection, ProviderStatus, ToolCapability } from "@kalcode/protocol";
+
+/** Mirrors `claude_tools`, `codex_tools` and `gemini_tools` in `crates/providers/src/catalog.rs`. */
+const native = (kind: ToolCapability["kind"], providerName: string, note: string | null = null): ToolCapability => ({
+  kind,
+  availability: { state: "native" },
+  providerName,
+  note,
+});
+const PLAN_READS = "Plan reads, researches and plans; it makes no edits.";
+const CLAUDE_TOOLS: ToolCapability[] = [
+  native("shell", "Bash / PowerShell"),
+  native("file_read", "Read", "Credential files such as .env and SSH keys stay unreadable."),
+  native(
+    "file_edit",
+    "Edit / Write",
+    "Plan makes no edits. In an Approve thread nobody can answer Claude Code's prompt, so edits are refused there; panes ask in Claude Code.",
+  ),
+  native("repo_search", "Grep / Glob"),
+  native("web_search", "WebSearch", "Available in every mode, Plan included."),
+  native("web_fetch", "WebFetch", "Available in every mode, Plan included."),
+  native(
+    "mcp",
+    "MCP",
+    "Your own MCP servers load as in your terminal. A repository's .mcp.json servers ask for trust in a pane and never start unasked in a headless thread.",
+  ),
+  native("subagents", "Agent"),
+  native("extensions", "Plugins / skills"),
+];
+const CODEX_TOOLS: ToolCapability[] = [
+  native("shell", "exec_command", "Runs in Codex's sandbox for the selected mode."),
+  native("file_read", "exec_command"),
+  native("file_edit", "apply_patch", PLAN_READS),
+  native("repo_search", "exec_command (rg)"),
+  native("web_search", "web_search", "Follows the web_search setting in your Codex config."),
+  {
+    kind: "web_fetch",
+    availability: {
+      state: "unavailable",
+      reason: "Codex has no page-fetch tool; it uses web_search, or the shell where the sandbox allows network access.",
+    },
+    providerName: null,
+    note: null,
+  },
+  native("mcp", "mcp_servers", "The MCP servers in your Codex config.toml load as in your terminal."),
+  {
+    kind: "subagents",
+    availability: { state: "needs_setup", detail: "Turn on Codex's multi-agent feature in your Codex config." },
+    providerName: "multi_agent",
+    note: null,
+  },
+  native("extensions", "plugins / skills"),
+];
+const GEMINI_TOOLS: ToolCapability[] = [
+  native("shell", "run_shell_command"),
+  native("file_read", "read_file"),
+  native("file_edit", "write_file / replace", PLAN_READS),
+  native("repo_search", "glob / search_file_content"),
+  native("web_search", "google_web_search"),
+  native("web_fetch", "web_fetch"),
+  native("mcp", "mcpServers", "The MCP servers in your Gemini settings load as in your terminal."),
+  {
+    kind: "subagents",
+    availability: {
+      state: "needs_setup",
+      detail: "Gemini CLI's subagents are experimental; turn them on in your Gemini settings.",
+    },
+    providerName: "agents",
+    note: null,
+  },
+  native("extensions", "extensions"),
+];
 
 export type ProviderScenario =
   | "default"
@@ -89,6 +160,7 @@ export function providerCatalog(): ProviderStatus[] {
         resume: true,
         hostApprovals: false,
         interactive: null,
+        tools: CLAUDE_TOOLS,
         models: [
           { id: "default", displayName: "Account default", isDefault: true },
           { id: "opus", displayName: "Opus", isDefault: false },
@@ -138,6 +210,7 @@ export function providerCatalog(): ProviderStatus[] {
         resume: true,
         hostApprovals: false,
         interactive: null,
+        tools: CODEX_TOOLS,
         models: [],
         permissionMappings: [
           stricter(
@@ -182,6 +255,7 @@ export function providerCatalog(): ProviderStatus[] {
         resume: true,
         hostApprovals: false,
         interactive: null,
+        tools: GEMINI_TOOLS,
         models: [
           { id: "auto", displayName: "Auto (default)", isDefault: true },
           { id: "pro", displayName: "Pro", isDefault: false },

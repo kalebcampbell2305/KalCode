@@ -33,7 +33,7 @@ use kalcode_contracts::permissions::{
     ActionKind, ActionOrigin, ApprovalDecision, NormalizedAction,
 };
 use kalcode_contracts::threads::ThreadStatus;
-use kalcode_hook_bridge::server::{HookHandler, Registration};
+use kalcode_hook_bridge::server::{HookGate, HookHandler, Registration};
 use kalcode_hook_bridge::{HookEvent, HookRecord, HookReply};
 use kalcode_pty::{AttachId, PtySession, TerminalSize};
 use serde_json::Value;
@@ -685,9 +685,7 @@ impl Shared {
         let (approval, should_drain) = {
             let mut lifecycle = lock(&self.lifecycle);
             if self.is_terminal() {
-                return HookReply::Deny {
-                    reason: "The KalCode session is ending.".into(),
-                };
+                return self.unrecorded("The KalCode session is ending.");
             }
             self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
             lifecycle.handoff_readiness = HandoffReadiness::Busy;
@@ -699,14 +697,13 @@ impl Shared {
                         if state.open_tools.len() >= MAX_OPEN_TOOLS
                             || state.open_tools.contains_key(&tool_call_id)
                         {
+                            // Activity tracking is full (or the id repeats). The provider still
+                            // decides; KalCode only skips recording this call.
                             tracing::warn!(
                                 event = "pane.tools_bounded",
                                 thread_id = %self.ctx.thread_id
                             );
-                            return HookReply::Ask {
-                                reason: "Several tool calls are already active; answer this one in the provider."
-                                    .into(),
-                            };
+                            return HookReply::NoDecision;
                         }
                         state
                             .open_tools
@@ -1171,13 +1168,22 @@ impl Shared {
         (true, event)
     }
 
+    /// The reply to a `PreToolUse` call KalCode can't record. Provider-prompt sessions leave the
+    /// call to the provider's own permission flow; only engine routing refuses it.
+    fn unrecorded(&self, reason: &str) -> HookReply {
+        match self.routing {
+            DecisionRouting::ProviderPrompt => HookReply::NoDecision,
+            DecisionRouting::Engine => HookReply::Deny {
+                reason: reason.into(),
+            },
+        }
+    }
+
     pub(crate) fn handle(&self, record: HookRecord) -> HookReply {
         let blocking = record.event.is_some_and(HookEvent::is_blocking);
         if record.validate().is_err() {
             return if blocking {
-                HookReply::Deny {
-                    reason: "KalCode rejected an invalid hook record.".into(),
-                }
+                self.unrecorded("KalCode rejected an invalid hook record.")
             } else {
                 HookReply::Ack
             };
@@ -1573,14 +1579,37 @@ pub(crate) fn known_gap(tool: &str, input: Option<&Value>) -> Option<&'static st
 }
 
 /// The bridge holds sessions weakly, so a revoked or dropped session is never kept alive by it.
-pub(crate) struct HandlerRef(pub(crate) Weak<Shared>);
+pub(crate) struct HandlerRef {
+    shared: Weak<Shared>,
+    routing: DecisionRouting,
+}
+
+impl HandlerRef {
+    pub(crate) fn new(shared: &Arc<Shared>) -> Self {
+        Self {
+            shared: Arc::downgrade(shared),
+            routing: shared.routing,
+        }
+    }
+
+    /// How the bridge treats this session's `PreToolUse` calls when the handler can't answer.
+    pub(crate) fn gate(&self) -> HookGate {
+        match self.routing {
+            DecisionRouting::ProviderPrompt => HookGate::Observe,
+            DecisionRouting::Engine => HookGate::Decide,
+        }
+    }
+}
 
 impl HookHandler for HandlerRef {
     fn handle(&self, record: HookRecord) -> HookReply {
-        match self.0.upgrade() {
+        match self.shared.upgrade() {
             Some(shared) => shared.handle(record),
-            None if record.event.is_some_and(HookEvent::is_blocking) => HookReply::Deny {
-                reason: "The KalCode session has ended.".into(),
+            None if record.event.is_some_and(HookEvent::is_blocking) => match self.routing {
+                DecisionRouting::ProviderPrompt => HookReply::NoDecision,
+                DecisionRouting::Engine => HookReply::Deny {
+                    reason: "The KalCode session has ended.".into(),
+                },
             },
             None => HookReply::Ack,
         }
@@ -2241,7 +2270,8 @@ mod tests {
         };
         assert_eq!(s.handle(tool()), HookReply::NoDecision);
         drain(&rx);
-        assert!(matches!(s.handle(tool()), HookReply::Ask { .. }));
+        // A repeated id is not recorded twice, and the provider still decides: no forced prompt.
+        assert_eq!(s.handle(tool()), HookReply::NoDecision);
         assert!(drain(&rx).is_empty());
     }
 
@@ -2397,7 +2427,8 @@ mod tests {
                 HookEvent::PreToolUse,
                 json!({"tool_name": "Bash", "tool_use_id": "overflow", "tool_input": {"command": "npm test"}}),
             )),
-            HookReply::Ask { .. }
+            // Activity tracking is full; the tool still runs under the provider's own rules.
+            HookReply::NoDecision
         ));
         assert!(drain(&rx).is_empty());
     }

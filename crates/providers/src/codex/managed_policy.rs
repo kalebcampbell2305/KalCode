@@ -136,7 +136,7 @@ pub fn prepare_auth_with_lease(
     reject_repository_marker(&cwd)?;
     let env = profiles.launch_env(PROVIDER, account_id, source)?;
     let mut args = config_args(
-        crate::codex::argv::POLICY_CONFIG
+        crate::codex::argv::PROBE_CONFIG
             .iter()
             .copied()
             .chain(["approval_policy='never'", "sandbox_mode='read-only'"])
@@ -177,7 +177,7 @@ pub fn prepare_observer_with_lease(
     reject_repository_marker(&cwd)?;
     let env = profiles.launch_env(PROVIDER, account_id, source)?;
     let mut args = config_args(
-        crate::codex::argv::POLICY_CONFIG
+        crate::codex::argv::PROBE_CONFIG
             .iter()
             .copied()
             .chain(["approval_policy='never'", "sandbox_mode='read-only'"])

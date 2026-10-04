@@ -811,7 +811,7 @@ fn one_session_crashing_does_not_affect_another() {
 }
 
 #[test]
-fn resume_passes_the_session_id_and_plan_mode_is_restricted() {
+fn resume_passes_the_session_id_and_plan_mode_keeps_research() {
     let fake = FakeInstall::new("claude", json!({}));
     let resume_id = "5d7a3c0e-8a1b-4c7e-9f00-1234567890ab";
     let (tx, rx) = mpsc::channel();
@@ -831,7 +831,12 @@ fn resume_passes_the_session_id_and_plan_mode_is_restricted() {
     }));
     let args: Vec<String> = serde_json::from_value(fake.read_json("last-args.json")).expect("args");
     assert!(args.windows(2).any(|w| w == ["--resume", resume_id]));
-    assert!(args.iter().any(|a| a == "--restricted"));
+    // Claude Code's own plan mode, which still researches; not `--restricted`.
+    assert!(!args.iter().any(|a| a == "--restricted"));
+    assert!(
+        args.windows(3)
+            .any(|w| w == ["--allowedTools", "WebSearch", "WebFetch"])
+    );
     assert!(args.windows(2).any(|w| w == ["--permission-mode", "plan"]));
 }
 

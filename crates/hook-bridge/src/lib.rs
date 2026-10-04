@@ -8,10 +8,13 @@
 //! ([`wire`]); the key never crosses the wire. KalCode's [`server`] hands each authenticated
 //! record to the session's [`server::HookHandler`] and returns its [`reply::HookReply`].
 //!
-//! Failure policy (docs/campaigns/Z7-W4-THREATS.md §3):
-//! - `PreToolUse` fails **closed**: every error, timeout, bad reply or panic exits 2, the only
-//!   exit code that blocks a tool call.
-//! - Status events fail **open**: they exit 0 with no output whatever happens.
+//! Failure policy (docs/campaigns/Z7-W4-THREATS.md §3, AGENTS.md "Permanent provider tool
+//! capability rule"):
+//! - Ordinary provider sessions **observe**: the provider's own permission system decides, so
+//!   every event, `PreToolUse` included, fails **open** (exit 0, no output) on a KalCode-side
+//!   error. KalCode being slow, busy, restarted or unreachable never costs a tool call.
+//! - Only an enforcing `PreToolUse` (engine routing, [`helper::ENFORCE_ARG`]) fails **closed**:
+//!   every error, timeout, bad reply or panic exits 2, the only exit code that blocks a tool.
 
 pub mod client;
 pub mod endpoint;

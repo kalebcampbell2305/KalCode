@@ -31,6 +31,7 @@ import {
   PaneAccountChip,
   type PaneAccountIdentity,
   PaneStatusChip,
+  PaneToolChip,
   paneAccountLabel,
   samePaneAccount,
 } from "./PaneParts.tsx";
@@ -109,9 +110,9 @@ export const ProviderPane = memo(function ProviderPane({
   const status = paneStatus(thread.status);
   const note = channelNote(info);
   const running = info?.running ?? false;
-  // Only Claude Code panes route tool calls to KalCode; Codex and Gemini CLI are always answered
-  // in their own prompt, so they never show a KalCode approval (or an Approve button) here.
-  const kalcodeDecides = thread.providerId === "claude-code";
+  // Capability, not provider identity: only a session whose adapter reports that KalCode answers
+  // its approvals shows a KalCode approval here. Every other pane answers in the provider's prompt.
+  const kalcodeDecides = info?.kalcodeAnswersApprovals ?? false;
   const request = [...pending]
     .filter((r) => kalcodeDecides && r.action.threadId === thread.id && r.status === "pending")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
@@ -502,6 +503,7 @@ function PaneHeader({
             <span className="visually-hidden">Permission mode </span>
             <span>{MODE_LABELS[thread.permissionMode]}</span>
           </span>
+          <PaneToolChip status={thread.status} activity={thread.currentActivity} />
           <PaneStatusChip status={thread.status} />
           {onHandOff ? (
             <Button

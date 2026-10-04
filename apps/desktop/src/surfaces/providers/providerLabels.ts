@@ -6,6 +6,8 @@ import type {
   ProviderCapabilities,
   ProviderDetection,
   ProviderStatus,
+  ToolCapability,
+  ToolKind,
 } from "@kalcode/protocol";
 import type { StatusTone } from "@kalcode/ui/components";
 
@@ -193,6 +195,48 @@ export function capabilityItems(capabilities: ProviderCapabilities): CapabilityI
     { key: "resume", label: "Resume", supported: capabilities.resume },
     { key: "hostApprovals", label: "Host approvals", supported: capabilities.hostApprovals },
   ];
+}
+
+const TOOL_LABELS: Record<ToolKind, string> = {
+  shell: "Shell",
+  file_read: "Read files",
+  file_edit: "Edit files",
+  repo_search: "Search repo",
+  web_search: "Web search",
+  web_fetch: "Fetch pages",
+  mcp: "MCP servers",
+  subagents: "Subagents",
+  extensions: "Plugins & extensions",
+};
+
+export interface ToolItem {
+  kind: ToolKind;
+  label: string;
+  /** "native": works as in the provider's terminal. */
+  state: ToolCapability["availability"]["state"];
+  /** Short word for the state; the full reason travels in `detail`. */
+  value: string;
+  detail: string | null;
+}
+
+/**
+ * The provider's own tools as its adapter declares them (truthful: never padded to look like
+ * another provider). Unavailable tools say why.
+ */
+export function toolItems(capabilities: ProviderCapabilities): ToolItem[] {
+  return capabilities.tools.map((tool) => {
+    const availability = tool.availability;
+    const name = tool.providerName ? `${tool.providerName}. ` : "";
+    const base = { kind: tool.kind, label: TOOL_LABELS[tool.kind], state: availability.state };
+    if (availability.state === "needs_setup") {
+      return { ...base, value: "Needs setup", detail: `${name}${availability.detail}` };
+    }
+    if (availability.state === "unavailable") {
+      return { ...base, value: "Not offered", detail: availability.reason };
+    }
+    const detail = `${name}${tool.note ?? ""}`.trim();
+    return { ...base, value: "Native", detail: detail || null };
+  });
 }
 
 /** Models as shown to users, or null when the provider can't list them up front. */

@@ -2,7 +2,9 @@
 //! Sources are cited in docs/PROVIDERS.md; every fact here was checked against the provider's
 //! current official documentation and the installed CLI's `--help` (September 2026).
 
-use kalcode_contracts::agent::{ModelInfo, ProviderCapabilities, ProviderId};
+use kalcode_contracts::agent::{
+    ModelInfo, ProviderCapabilities, ProviderId, ToolAvailability, ToolCapability, ToolKind,
+};
 
 use crate::claude::argv as claude_argv;
 use crate::detect::{AuthProbe, AuthSignal, DetectionSpec};
@@ -115,6 +117,7 @@ pub fn claude_capabilities() -> ProviderCapabilities {
         interactive: Some(crate::interactive::claude::interactive_support(
             crate::interactive::DEFAULT_DECISION_ROUTING,
         )),
+        tools: claude_tools(),
     }
 }
 
@@ -130,6 +133,7 @@ pub fn codex_capabilities() -> ProviderCapabilities {
         models: Vec::new(),
         permission_mappings: crate::codex::argv::permission_mappings(),
         interactive: Some(crate::interactive::codex::interactive_support()),
+        tools: codex_tools(),
     }
 }
 
@@ -153,7 +157,136 @@ pub fn gemini_capabilities() -> ProviderCapabilities {
         ],
         permission_mappings: crate::gemini::permission_mappings(),
         interactive: Some(crate::interactive::gemini_interactive_support()),
+        tools: gemini_tools(),
     }
+}
+
+fn tool(kind: ToolKind, name: &str, note: Option<&str>) -> ToolCapability {
+    ToolCapability {
+        kind,
+        availability: ToolAvailability::Native,
+        provider_name: Some(name.to_owned()),
+        note: note.map(str::to_owned),
+    }
+}
+
+fn needs_setup(kind: ToolKind, name: &str, detail: &str) -> ToolCapability {
+    ToolCapability {
+        kind,
+        availability: ToolAvailability::NeedsSetup {
+            detail: detail.to_owned(),
+        },
+        provider_name: Some(name.to_owned()),
+        note: None,
+    }
+}
+
+const PLAN_READS: &str = "Plan reads, researches and plans; it makes no edits.";
+
+/// Claude Code's native tools inside KalCode (AGENTS.md "Permanent provider tool capability
+/// rule"). Credential files stay unreadable in every mode.
+pub fn claude_tools() -> Vec<ToolCapability> {
+    vec![
+        tool(ToolKind::Shell, "Bash / PowerShell", None),
+        tool(
+            ToolKind::FileRead,
+            "Read",
+            Some("Credential files such as .env and SSH keys stay unreadable."),
+        ),
+        tool(
+            ToolKind::FileEdit,
+            "Edit / Write",
+            Some(
+                "Plan makes no edits. In an Approve thread nobody can answer Claude Code's \
+                 prompt, so edits are refused there; panes ask in Claude Code.",
+            ),
+        ),
+        tool(ToolKind::RepoSearch, "Grep / Glob", None),
+        tool(
+            ToolKind::WebSearch,
+            "WebSearch",
+            Some("Available in every mode, Plan included."),
+        ),
+        tool(
+            ToolKind::WebFetch,
+            "WebFetch",
+            Some("Available in every mode, Plan included."),
+        ),
+        tool(
+            ToolKind::Mcp,
+            "MCP",
+            Some(
+                "Your own MCP servers load as in your terminal. A repository's .mcp.json \
+                 servers ask for trust in a pane and never start unasked in a headless thread.",
+            ),
+        ),
+        tool(ToolKind::Subagents, "Agent", None),
+        tool(ToolKind::Extensions, "Plugins / skills", None),
+    ]
+}
+
+/// Codex's native tools inside KalCode: the person's own Codex config decides MCP servers, web
+/// search, plugins and features, as in their terminal.
+pub fn codex_tools() -> Vec<ToolCapability> {
+    vec![
+        tool(
+            ToolKind::Shell,
+            "exec_command",
+            Some("Runs in Codex's sandbox for the selected mode."),
+        ),
+        tool(ToolKind::FileRead, "exec_command", None),
+        tool(ToolKind::FileEdit, "apply_patch", Some(PLAN_READS)),
+        tool(ToolKind::RepoSearch, "exec_command (rg)", None),
+        tool(
+            ToolKind::WebSearch,
+            "web_search",
+            Some("Follows the web_search setting in your Codex config."),
+        ),
+        ToolCapability {
+            kind: ToolKind::WebFetch,
+            availability: ToolAvailability::Unavailable {
+                reason: "Codex has no page-fetch tool; it uses web_search, or the shell where \
+                         the sandbox allows network access."
+                    .into(),
+            },
+            provider_name: None,
+            note: None,
+        },
+        tool(
+            ToolKind::Mcp,
+            "mcp_servers",
+            Some("The MCP servers in your Codex config.toml load as in your terminal."),
+        ),
+        needs_setup(
+            ToolKind::Subagents,
+            "multi_agent",
+            "Turn on Codex's multi-agent feature in your Codex config.",
+        ),
+        tool(ToolKind::Extensions, "plugins / skills", None),
+    ]
+}
+
+/// Gemini CLI's native tools inside KalCode.
+pub fn gemini_tools() -> Vec<ToolCapability> {
+    vec![
+        tool(ToolKind::Shell, "run_shell_command", None),
+        tool(ToolKind::FileRead, "read_file", None),
+        tool(ToolKind::FileEdit, "write_file / replace", Some(PLAN_READS)),
+        tool(ToolKind::RepoSearch, "glob / search_file_content", None),
+        tool(ToolKind::WebSearch, "google_web_search", None),
+        tool(ToolKind::WebFetch, "web_fetch", None),
+        tool(
+            ToolKind::Mcp,
+            "mcpServers",
+            Some("The MCP servers in your Gemini settings load as in your terminal."),
+        ),
+        needs_setup(
+            ToolKind::Subagents,
+            "agents",
+            "Gemini CLI's subagents are experimental; turn them on in your Gemini settings.",
+        ),
+        tool(ToolKind::Extensions, "extensions", None),
+    ]
 }
 
 fn install_claude() -> &'static str {

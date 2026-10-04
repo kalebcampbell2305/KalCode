@@ -118,6 +118,61 @@ pub struct ProviderCapabilities {
     /// `None` until the adapter declares it. Adopted in CA-1.
     #[serde(default)]
     pub interactive: Option<InteractiveSupport>,
+    /// The tools a session of this provider can use inside KalCode, declared truthfully by the
+    /// adapter (AGENTS.md "Permanent provider tool capability rule"). Empty until declared.
+    #[serde(default)]
+    pub tools: Vec<ToolCapability>,
+}
+
+/// A family of tools a coding provider's session can call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ToolKind {
+    /// Runs commands in the workspace (Bash, PowerShell, `exec_command`, `run_shell_command`).
+    Shell,
+    /// Reads files.
+    FileRead,
+    /// Creates and edits files.
+    FileEdit,
+    /// Searches the repository (grep, glob).
+    RepoSearch,
+    /// Searches the web.
+    WebSearch,
+    /// Fetches web pages.
+    WebFetch,
+    /// Calls tools on MCP servers the person configured.
+    Mcp,
+    /// Starts subagents.
+    Subagents,
+    /// Provider-native plugins, extensions or skills.
+    Extensions,
+}
+
+/// Whether one tool family works in a KalCode session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+#[ts(export)]
+pub enum ToolAvailability {
+    /// Works as it does in the provider's own terminal.
+    Native,
+    /// Works once the person configures it in the provider (for example, adds an MCP server).
+    NeedsSetup { detail: String },
+    /// The provider doesn't offer it. `reason` is shown as is.
+    Unavailable { reason: String },
+}
+
+/// One tool family a provider declares.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToolCapability {
+    pub kind: ToolKind,
+    pub availability: ToolAvailability,
+    /// What the provider calls it (`WebSearch`, `web_search`, `google_web_search`).
+    pub provider_name: Option<String>,
+    /// Mode-dependent behavior worth knowing (Plan reads only; Approve asks first).
+    pub note: Option<String>,
 }
 
 /// A structured channel an interactive provider reports status through. Model prose is never

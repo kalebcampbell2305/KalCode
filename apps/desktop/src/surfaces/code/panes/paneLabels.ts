@@ -171,3 +171,37 @@ export function approvalAnnouncement(providerName: string, paneName: string): st
 export function paneLabel(thread: ThreadSummary): string {
   return `${thread.name}, ${providerIdentity(thread.providerId, thread.providerName).name} agent`;
 }
+
+/** What the pane header's tool indicator shows for the tool the agent is running. */
+export interface PaneToolView {
+  /** Short tool family: "Search web", "Shell", "MCP · github". */
+  label: string;
+  /** The provider's own summary of the call, for the tooltip. */
+  detail: string;
+}
+
+const TOOL_STATUSES: ReadonlySet<ThreadStatus> = new Set(["running_tool", "running_command", "editing", "testing"]);
+
+/**
+ * The running tool, from the thread's structured status and activity summary (never terminal
+ * text). Provider-independent: the summaries come from the shared action classifier.
+ */
+export function paneToolActivity(status: ThreadStatus, activity: string | null): PaneToolView | null {
+  const detail = activity?.trim();
+  if (!detail || !TOOL_STATUSES.has(status)) return null;
+  const rules: [RegExp, string | ((m: RegExpMatchArray) => string)][] = [
+    [/^Search the web\b/i, "Search web"],
+    [/^Fetch\b/i, "Fetch page"],
+    [/^Search files\b/i, "Search repo"],
+    [/^Read\b/i, "Read file"],
+    [/^(Edit|Write)\b/i, "Edit file"],
+    [/^Run\b/i, "Shell"],
+    [/^Use mcp__([^_]+(?:_[^_]+)*?)__/i, (m) => `MCP · ${m[1]}`],
+    [/^Use (\S+)/i, (m) => m[1] ?? "Tool"],
+  ];
+  for (const [pattern, label] of rules) {
+    const match = detail.match(pattern);
+    if (match) return { label: typeof label === "string" ? label : label(match), detail };
+  }
+  return { label: status === "running_command" ? "Shell" : "Tool", detail };
+}

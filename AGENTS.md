@@ -63,6 +63,48 @@ KalCode agents must never spam the Windows desktop with external terminal window
 
 For Codex tool execution on Windows, use the existing PTY execution mode (`exec_command` with `tty: true`) so commands stay contained. Any explicitly launched background helper must use the platform's no-window creation mechanism (`windowsHide`, `CREATE_NO_WINDOW`, or `Start-Process -WindowStyle Hidden` as applicable). Test the actual owning spawn path and observe window/focus events; reduced popup frequency is not completion.
 
+## Permanent provider tool capability rule (owner directive 2026-10-04)
+
+"KALCODE MUST NOT BREAK OR STRIP AWAY A CODING PROVIDER'S LEGITIMATE TOOL CAPABILITIES.
+
+PROVIDER SESSIONS INSIDE KALCODE SHOULD RETAIN THEIR NATIVE FILE, SHELL, SEARCH, MCP, BROWSER/RESEARCH, AND OTHER TOOL CAPABILITIES WHERE THE PROVIDER SUPPORTS THEM.
+
+TOOL CALLING MUST FLOW CORRECTLY THROUGH THE PROVIDER ADAPTER, EXECUTION HOST, AND RESULT PATH.
+
+DO NOT APPLY PROVIDER-SPECIFIC HACKS WHEN THE BUG BELONGS TO THE SHARED TOOL/ADAPTER ARCHITECTURE.
+
+NORMAL SAFE DEVELOPMENT TOOL USE SHOULD NOT BE BLOCKED BY KALCODE-INTERNAL PERMISSION FRICTION."
+
+- KalCode's hook channel (`kalcode-hook`, `crates/hook-bridge`) **observes** ordinary provider sessions. A KalCode-side failure (slow, busy, restarting, updating, unreachable, stale session, oversized input) must never block or prompt for a tool call: the provider's own permission system decides. Only engine routing passes `enforce` and fails closed.
+- Launch flags must not remove native tools. No blanket `--strict-mcp-config`, `mcp_servers={}`, `web_search='disabled'`, MCP sentinels, `--extensions none`, or feature switches that turn off provider-native tools. Plan mode keeps the provider's own read-only research tools (web search/fetch, read-only shell).
+- Repository-supplied configuration that would run with no trust prompt (for example `.mcp.json` servers in Claude's `-p` mode) stays out; the user's own configured servers and tools are passed through.
+- Each adapter declares its tools truthfully in `ProviderCapabilities.tools` (native, needs configuration, or unavailable with the real reason). Never fake a tool, and never tell a provider the whole tool system is unusable when one capability is missing.
+- When a tool genuinely fails, surface the real reason (MCP server unavailable, provider session expired, not supported by this provider, execution host failed), never a generic harness refusal.
+
+## Permanent provider-agnostic rule (owner directive 2026-10-04)
+
+"KALCODE IS PROVIDER-AGNOSTIC BY DEFAULT.
+
+EVERY CORE FEATURE, WORKFLOW, FIX, AND UX IMPROVEMENT SHOULD WORK ACROSS ALL CURRENT AND FUTURE CODING PROVIDERS THROUGH SHARED KALCODE SYSTEMS.
+
+PROVIDER-SPECIFIC DIFFERENCES BELONG INSIDE CLEAN ADAPTER/CAPABILITY LAYERS.
+
+DO NOT HARD-CODE KALCODE AROUND CLAUDE CODE, CODEX, CURSOR, GEMINI, OR ANY ONE PROVIDER.
+
+IF A FEATURE CAN BE SHARED, BUILD IT ONCE.
+
+IF PROVIDER CAPABILITIES DIFFER, HANDLE THE DIFFERENCE TRUTHFULLY AND GRACEFULLY."
+
+- Applies to Code, coding agents, terminals, Agent Fleet, Accounts, Usage, Models, KalVoice, Runs, Queue, Squads, Handoffs, Launch Recipes, Stuck Agent Detection, Agent File Ownership, KalTidy, Unified Memory, Live Browser, tool calling, external APIs, provider session persistence, permissions, navigation, orchestration, automatic routing, status, model selection and account switching. Assume each works with Claude Code, Codex, Cursor, Gemini and future providers unless a real technical reason prevents it.
+- Core features talk to one shared provider interface (KalCode core → shared provider capability layer → per-provider adapters). Do not scatter `if Claude … else if Codex …` through the product; keep provider-specific behavior inside the adapter/capability layer.
+- Ask "does this provider support this capability?" (multiple accounts, model selection, reasoning/effort, usage reporting, session resume, MCP, web/search, subagents, tool calling, file editing, terminal execution, native plugins/extensions), never "is this Claude Code?".
+- No fake parity. Use a capability when the provider has it; otherwise show a truthful fallback ("Usage unavailable", "Model selection controlled by provider", "Session resume unsupported"). Never invent provider features to make the UI look consistent.
+- For every provider, an agent is a real coding terminal/session (four Cursor agents = four Cursor coding terminals). Never turn one provider's agent into a Thread while another gets a terminal.
+- Every provider account joins the same canonical account system (nickname, identity, plan, auth state, health, usage, reset time, models, default where supported) with consistent UI and behavior.
+- KalVoice is provider-independent and routes through the same provider/orchestration layer ("launch four agents" uses context/default; "launch two Codex agents using Codex B" uses Codex B; "open the agent that just finished" opens whichever provider owns it).
+- Unified Memory belongs to KalCode and the workspace, not to any provider; every provider consumes relevant project memory through the same KalCode memory system.
+- The Code tab treats providers consistently; the + launcher offers each provider, Terminal, Live Browser and Widget. New providers plug into the existing Agent Fleet, Runs, Queue, Accounts, KalVoice, Usage UI, KalTidy, Handoffs, Squads, Unified Memory, terminal lifecycle and navigation without rebuilding them.
+
 
 ## Permanent multi-shipper / parallel release rule (owner directive 2026-10-03)
 

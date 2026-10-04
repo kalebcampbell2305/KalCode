@@ -10,8 +10,9 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use kalcode_hook_bridge::client::{self, Stream};
+use kalcode_hook_bridge::helper::ENFORCE_ARG;
 use kalcode_hook_bridge::key::{SessionKey, random_id};
-use kalcode_hook_bridge::server::{BridgeServer, HookChannel, HookHandler, ServerConfig};
+use kalcode_hook_bridge::server::{BridgeServer, HookChannel, HookGate, HookHandler, ServerConfig};
 use kalcode_hook_bridge::wire::{self, Hello, PROTOCOL_VERSION, Request, Response};
 use kalcode_hook_bridge::{DEADLINE_ENV, Endpoint, HookEvent, HookRecord, HookReply, KEY_ENV};
 
@@ -153,13 +154,36 @@ fn hide_test_process(_command: &mut Command) {}
 const BASH_LS: &[u8] =
     br#"{"session_id":"abc","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"ls"}}"#;
 
+/// An enforcing `PreToolUse` (engine routing): KalCode is the decision point and fails closed.
 fn pre_tool_use(server: &BridgeServer, session: &str, key: Option<&str>) -> Run {
+    helper(
+        &[
+            "claude",
+            "PreToolUse",
+            server.endpoint().as_str(),
+            session,
+            ENFORCE_ARG,
+        ],
+        key,
+        BASH_LS,
+        None,
+    )
+}
+
+/// An observing `PreToolUse` (every ordinary provider session).
+fn observe_pre_tool_use(server: &BridgeServer, session: &str, key: Option<&str>) -> Run {
     helper(
         &["claude", "PreToolUse", server.endpoint().as_str(), session],
         key,
         BASH_LS,
         None,
     )
+}
+
+fn assert_left_to_the_provider(run: &Run) {
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    assert!(run.stderr.is_empty(), "{}", run.stderr);
 }
 
 #[test]
@@ -609,13 +633,29 @@ fn unreachable_endpoint_blocks_pre_tool_use_and_is_silent_for_status() {
     let session = random_id().expect("id");
     let key = SessionKey::generate().expect("key").to_hex();
     let run = helper(
-        &["claude", "PreToolUse", endpoint.as_str(), &session],
+        &[
+            "claude",
+            "PreToolUse",
+            endpoint.as_str(),
+            &session,
+            ENFORCE_ARG,
+        ],
         Some(&key),
         BASH_LS,
         None,
     );
     assert_eq!(run.code, 2);
     assert!(run.stderr.contains("not reachable"), "{}", run.stderr);
+    assert!(run.took < Duration::from_secs(10), "{:?}", run.took);
+
+    // KalCode closed, restarting or updating: an ordinary session's tool still runs, quickly.
+    let run = helper(
+        &["claude", "PreToolUse", endpoint.as_str(), &session],
+        Some(&key),
+        BASH_LS,
+        None,
+    );
+    assert_left_to_the_provider(&run);
     assert!(run.took < Duration::from_secs(10), "{:?}", run.took);
 
     for event in [
@@ -666,6 +706,7 @@ fn a_stalled_server_blocks_before_the_deadline() {
             "PreToolUse",
             server.endpoint().as_str(),
             reg.session_id(),
+            ENFORCE_ARG,
         ],
         Some(&reg.key_hex()),
         BASH_LS,
@@ -744,6 +785,7 @@ fn oversized_or_garbled_stdin_blocks_pre_tool_use() {
         "PreToolUse",
         server.endpoint().as_str(),
         reg.session_id(),
+        ENFORCE_ARG,
     ];
     let big = vec![b' '; 1024 * 1024 + 10];
     assert_eq!(helper(&args, Some(&reg.key_hex()), &big, None).code, 2);
@@ -751,7 +793,105 @@ fn oversized_or_garbled_stdin_blocks_pre_tool_use() {
         helper(&args, Some(&reg.key_hex()), b"garbage", None).code,
         2
     );
+    // Observing: a huge Write or an unexpected payload never costs the person the tool call.
+    let observing = &args[..4];
+    assert_left_to_the_provider(&helper(observing, Some(&reg.key_hex()), &big, None));
+    assert_left_to_the_provider(&helper(observing, Some(&reg.key_hex()), b"garbage", None));
     assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+}
+
+/// The reported bug: every tool (shell, file, search, MCP, web research) failed inside KalCode
+/// whenever its hook channel hiccupped. An observing session never loses a tool call to a
+/// KalCode-side failure; explicit KalCode decisions still pass through.
+#[test]
+fn observing_sessions_never_lose_tool_calls_to_kalcode_failures() {
+    let (_dir, server) = server();
+    let handler = Fixed::new(HookReply::NoDecision);
+    let reg = server
+        .register_channel_with(handler.clone(), HookChannel::Claude, HookGate::Observe)
+        .expect("register");
+    let key = reg.key_hex();
+    // Healthy: recorded, no decision.
+    assert_left_to_the_provider(&observe_pre_tool_use(&server, reg.session_id(), Some(&key)));
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    // Missing or wrong key, unknown or revoked session (KalCode restarted, pane restored).
+    assert_left_to_the_provider(&observe_pre_tool_use(&server, reg.session_id(), None));
+    let wrong = SessionKey::generate().expect("key").to_hex();
+    assert_left_to_the_provider(&observe_pre_tool_use(
+        &server,
+        reg.session_id(),
+        Some(&wrong),
+    ));
+    let unknown = random_id().expect("id");
+    assert_left_to_the_provider(&observe_pre_tool_use(&server, &unknown, Some(&key)));
+    let session = reg.session_id().to_owned();
+    drop(reg);
+    assert_left_to_the_provider(&observe_pre_tool_use(&server, &session, Some(&key)));
+
+    // A stalled KalCode costs at most the short status deadline, never a blocked tool.
+    let slow = Fixed::slow(HookReply::NoDecision, Duration::from_secs(8));
+    let reg = server
+        .register_channel_with(slow, HookChannel::Claude, HookGate::Observe)
+        .expect("register");
+    let run = observe_pre_tool_use(&server, reg.session_id(), Some(&reg.key_hex()));
+    assert_left_to_the_provider(&run);
+    assert!(run.took < Duration::from_secs(6), "{:?}", run.took);
+
+    // An explicit decision still renders.
+    let deny = Fixed::new(HookReply::Deny {
+        reason: "Refused by KalCode policy".into(),
+    });
+    let reg = server
+        .register_channel_with(deny, HookChannel::Claude, HookGate::Observe)
+        .expect("register");
+    let run = observe_pre_tool_use(&server, reg.session_id(), Some(&reg.key_hex()));
+    assert_eq!(run.code, 2);
+}
+
+/// Parallel tool calls (research fans out) beyond the per-session handler limit get no decision
+/// in an observing session, never a KalCode-forced prompt.
+#[test]
+fn a_busy_observing_session_forces_no_prompt() {
+    let dir = tempfile::tempdir().expect("dir");
+    let endpoint = Endpoint::generate(Some(dir.path())).expect("endpoint");
+    let mut config = ServerConfig::new(endpoint);
+    config.max_handlers_per_session = 1;
+    let server = BridgeServer::start(config).expect("server");
+    let handler = Arc::new(Gated::default());
+    let reg = server
+        .register_channel_with(handler.clone(), HookChannel::Claude, HookGate::Observe)
+        .expect("register");
+    let key = SessionKey::from_hex(&reg.key_hex()).expect("key");
+    let record = HookRecord {
+        event: Some(HookEvent::PreToolUse),
+        tool_name: Some("WebSearch".into()),
+        ..HookRecord::default()
+    };
+    let first_endpoint = server.endpoint().clone();
+    let first_session = reg.session_id().to_owned();
+    let first_key = key.clone();
+    let first_record = record.clone();
+    let first = std::thread::spawn(move || {
+        client::exchange(
+            &first_endpoint,
+            &first_session,
+            &first_key,
+            &first_record,
+            Instant::now() + Duration::from_secs(3),
+        )
+    });
+    handler.wait_started(1);
+    let second = client::exchange(
+        server.endpoint(),
+        reg.session_id(),
+        &key,
+        &record,
+        Instant::now() + Duration::from_secs(3),
+    )
+    .expect("second exchange");
+    assert_eq!(second, HookReply::NoDecision);
+    handler.release();
+    let _ = first.join();
 }
 
 #[test]

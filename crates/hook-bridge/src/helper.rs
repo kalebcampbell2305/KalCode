@@ -3,14 +3,21 @@
 //! Invocations (exec form, set up by KalCode's session settings; never a shell):
 //!
 //! ```text
-//! kalcode-hook claude <HookEvent> <endpoint> <session>     # hook JSON on stdin
-//! kalcode-hook codex-notify <endpoint> <session> <json>    # Codex appends its JSON payload
+//! kalcode-hook claude <HookEvent> <endpoint> <session> [enforce]   # hook JSON on stdin
+//! kalcode-hook codex-notify <endpoint> <session> <json>              # Codex appends its JSON
 //! ```
 //!
 //! The session key comes from [`crate::KEY_ENV`] in the environment the provider passes to its
-//! hooks. `PreToolUse` fails closed (exit 2) on every error and on its own deadline, which is
-//! shorter than the hook timeout KalCode configures (a timed-out hook would not block). Every
-//! other event fails open (exit 0, no output).
+//! hooks.
+//!
+//! Ordinary provider sessions only observe: the provider's own permission system decides every
+//! tool call, so KalCode being slow, busy, restarted or unreachable must never stop a tool. Every
+//! event, `PreToolUse` included, fails open (exit 0, no output) within the short status deadline.
+//!
+//! Only a session whose settings pass the trailing [`ENFORCE_ARG`] (engine routing, where KalCode
+//! itself is the decision point) fails `PreToolUse` closed (exit 2) on every error and on its own
+//! deadline, which is shorter than the hook timeout KalCode configures (a timed-out hook would
+//! not block).
 
 use std::io::Read;
 use std::sync::mpsc;
@@ -33,6 +40,10 @@ pub const ASK_WINDOW: Duration = Duration::from_secs(PRE_TOOL_USE_HOOK_TIMEOUT_S
 const PRE_TOOL_USE_CONNECT: Duration = Duration::from_secs(3);
 const STATUS_DEADLINE: Duration = Duration::from_secs(4);
 const STATUS_CONNECT: Duration = Duration::from_secs(1);
+
+/// Trailing `claude` argument that makes `PreToolUse` a KalCode decision point that fails closed.
+/// Without it the hook only observes and never blocks a tool on a KalCode-side failure.
+pub const ENFORCE_ARG: &str = "enforce";
 
 const BLOCK_HINT: &str = "Check that KalCode is running, then try again from the KalCode pane.";
 
@@ -62,14 +73,16 @@ impl HelperEnv {
     }
 }
 
-/// Whether this invocation must fail closed. Decided from the arguments alone, before anything
-/// else can fail, so the panic hook in the binary knows which exit code to use.
+/// Whether this invocation must fail closed: an enforcing `PreToolUse`. Decided from the
+/// arguments alone, before anything else can fail, so the panic hook in the binary knows which
+/// exit code to use.
 pub fn is_blocking_invocation(args: &[String]) -> bool {
     args.first().map(String::as_str) == Some("claude")
         && args
             .get(1)
             .and_then(|e| HookEvent::parse(e))
             .is_some_and(HookEvent::is_blocking)
+        && args.get(4).map(String::as_str) == Some(ENFORCE_ARG)
 }
 
 /// Runs the helper and returns what to print and the exit code.
@@ -90,7 +103,8 @@ pub fn run(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
 
 fn run_claude(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
     let event = args.get(1).and_then(|e| HookEvent::parse(e));
-    let blocking = event.is_some_and(HookEvent::is_blocking);
+    let pre_tool_use = event.is_some_and(HookEvent::is_blocking);
+    let blocking = is_blocking_invocation(args);
     let fail = |why: &str| {
         if blocking {
             Rendered::block(&format!(
@@ -140,6 +154,13 @@ fn run_claude(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendere
         env.cap(connect),
     ) {
         Ok(reply) if blocking => reply.render_pre_tool_use(),
+        // An observing PreToolUse still passes an explicit KalCode decision through; no decision
+        // (or anything unexpected) leaves the provider's own permission flow in charge.
+        Ok(reply @ (HookReply::Allow { .. } | HookReply::Ask { .. } | HookReply::Deny { .. }))
+            if pre_tool_use =>
+        {
+            reply.render_pre_tool_use()
+        }
         Ok(_) => Rendered::silent(),
         Err(BridgeError::TimedOut) => fail("KalCode did not answer in time"),
         Err(BridgeError::BadReply) => fail("KalCode's answer could not be verified"),
@@ -233,8 +254,28 @@ mod tests {
     }
 
     #[test]
-    fn only_pre_tool_use_invocations_are_blocking() {
-        assert!(is_blocking_invocation(&args(&["claude", "PreToolUse"])));
+    fn only_enforcing_pre_tool_use_invocations_are_blocking() {
+        assert!(is_blocking_invocation(&args(&[
+            "claude",
+            "PreToolUse",
+            "e",
+            "s",
+            ENFORCE_ARG
+        ])));
+        assert!(!is_blocking_invocation(&args(&["claude", "PreToolUse"])));
+        assert!(!is_blocking_invocation(&args(&[
+            "claude",
+            "PreToolUse",
+            "e",
+            "s"
+        ])));
+        assert!(!is_blocking_invocation(&args(&[
+            "claude",
+            "Stop",
+            "e",
+            "s",
+            ENFORCE_ARG
+        ])));
         assert!(!is_blocking_invocation(&args(&["claude", "Stop"])));
         assert!(!is_blocking_invocation(&args(&["codex-notify"])));
         assert!(!is_blocking_invocation(&args(&[])));
@@ -249,8 +290,14 @@ mod tests {
         };
         let stdin = br#"{"session_id":"s","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
         for bad in [
-            args(&["claude", "PreToolUse"]),
-            args(&["claude", "PreToolUse", "not-an-endpoint", "0123"]),
+            args(&["claude", "PreToolUse", "", "", ENFORCE_ARG]),
+            args(&[
+                "claude",
+                "PreToolUse",
+                "not-an-endpoint",
+                "0123",
+                ENFORCE_ARG,
+            ]),
         ] {
             let out = run(&bad, &mut stdin.as_slice(), &env);
             assert_eq!(out.exit_code, 2, "{bad:?}");
@@ -260,12 +307,55 @@ mod tests {
         assert_eq!(out, Rendered::silent());
     }
 
+    /// An observing session (every ordinary provider pane) never loses a tool to a KalCode-side
+    /// failure: misconfiguration, a missing key, oversized input or an unreachable KalCode all
+    /// leave the provider's own permission flow in charge, quickly.
     #[test]
-    fn missing_key_blocks_pre_tool_use() {
+    fn observing_pre_tool_use_never_blocks_on_kalcode_failures() {
+        let key = SessionKey::generate().expect("key").to_hex();
+        let endpoint = Endpoint::generate(Some(&std::env::temp_dir())).expect("endpoint");
+        let session = crate::key::random_id().expect("id");
+        let with_key = HelperEnv {
+            key_hex: Some(key),
+            deadline_ms: None,
+        };
+        let no_key = HelperEnv::default();
+        let small: &[u8] =
+            br#"{"session_id":"s","tool_name":"WebSearch","tool_input":{"query":"x"}}"#;
+        let huge = vec![b' '; MAX_STDIN_BYTES + 10];
+        let live = || args(&["claude", "PreToolUse", endpoint.as_str(), &session]);
+        let cases: Vec<(Vec<String>, &[u8], &HelperEnv)> = vec![
+            (args(&["claude", "PreToolUse"]), small, &with_key),
+            (
+                args(&["claude", "PreToolUse", "not-an-endpoint", "0123"]),
+                small,
+                &with_key,
+            ),
+            // Nothing listens on the endpoint: KalCode closed, restarting or updating.
+            (live(), small, &with_key),
+            (live(), small, &no_key),
+            (live(), &huge, &with_key),
+        ];
+        for (argv, mut stdin, env) in cases {
+            let started = Instant::now();
+            let out = run(&argv, &mut stdin, env);
+            assert_eq!(out, Rendered::silent(), "{argv:?}");
+            assert!(started.elapsed() < STATUS_DEADLINE + Duration::from_secs(1));
+        }
+    }
+
+    #[test]
+    fn missing_key_blocks_enforcing_pre_tool_use() {
         let endpoint = Endpoint::generate(Some(&std::env::temp_dir())).expect("endpoint");
         let session = crate::key::random_id().expect("id");
         let out = run(
-            &args(&["claude", "PreToolUse", endpoint.as_str(), &session]),
+            &args(&[
+                "claude",
+                "PreToolUse",
+                endpoint.as_str(),
+                &session,
+                ENFORCE_ARG,
+            ]),
             &mut br#"{}"#.as_slice(),
             &HelperEnv::default(),
         );

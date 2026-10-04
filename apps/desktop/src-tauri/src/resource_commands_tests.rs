@@ -805,6 +805,7 @@ impl AgentProvider for FakeProvider {
             models: Vec::new(),
             permission_mappings: Vec::new(),
             interactive: None,
+            tools: Vec::new(),
         }
     }
 

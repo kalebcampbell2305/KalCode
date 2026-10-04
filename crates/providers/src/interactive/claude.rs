@@ -1,6 +1,11 @@
 //! Claude Code in a pane: the real, unmodified `claude` TUI, launched with KalCode's settings
-//! file (hooks that run `kalcode-hook`), the Z2 deny floor, and a permission mode never broader
-//! than the thread's KalCode mode (docs/PROVIDER_PANES.md §3–4).
+//! file (hooks that run `kalcode-hook`), the credential deny floor, and a permission mode never
+//! broader than the thread's KalCode mode (docs/PROVIDER_PANES.md §3–4).
+//!
+//! The pane keeps Claude Code's native tools (AGENTS.md "Permanent provider tool capability
+//! rule"): the user's MCP servers load as they do in a native terminal (repository `.mcp.json`
+//! servers go through Claude Code's own trust prompt), web search/fetch stay available in every
+//! mode, and Plan is Claude Code's own read-only plan mode, not `--restricted`.
 //!
 //! Verified on 2026-10-03 against the installed `claude --help` (2.1.288) and
 //! https://code.claude.com/docs/en/cli-reference, /hooks, /permissions and /settings:
@@ -23,7 +28,9 @@ use kalcode_contracts::agent::{
 };
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_hook_bridge::HookEvent;
-use kalcode_hook_bridge::helper::{PRE_TOOL_USE_HOOK_TIMEOUT_SECS, STATUS_HOOK_TIMEOUT_SECS};
+use kalcode_hook_bridge::helper::{
+    ENFORCE_ARG, PRE_TOOL_USE_HOOK_TIMEOUT_SECS, STATUS_HOOK_TIMEOUT_SECS,
+};
 use serde_json::{Value, json};
 
 use super::DecisionRouting;
@@ -59,29 +66,20 @@ pub const FORBIDDEN_FLAGS: &[&str] = &[
     "--permission-prompt-tool",
 ];
 
-/// Tools KalCode's deny floor keeps removed in Plan (Plan never edits or fetches).
-const PLAN_ONLY_DENIES: &[&str] = &["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
-
-/// The interactive deny floor for a mode: the Z2 credential-file and remote-action rules in every
-/// mode, plus the edit and web tools in Plan. Unlike headless sessions, the edit and web tools
-/// stay available in Approve/Auto/Custom: a person answers for them (KalCode's approval, or the
-/// provider's own prompt in the pane).
+/// The interactive deny floor for a mode: the Z2 credential-file and remote-action rules. No
+/// native tool is removed: a person answers Claude Code's own prompt in the pane, and Plan's
+/// read-only guarantee is Claude Code's plan mode (which still researches with web search/fetch).
 pub fn interactive_deny_rules(mode: PermissionMode) -> Vec<String> {
-    const ASK_FIRST: &[&str] = &["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
-    let mut rules: Vec<String> = deny_rules(mode)
+    deny_rules(mode)
         .into_iter()
-        .filter(|rule| !ASK_FIRST.contains(&rule.as_str()))
-        .collect();
-    if mode == PermissionMode::Plan {
-        rules.splice(0..0, PLAN_ONLY_DENIES.iter().map(|t| (*t).to_owned()));
-    }
-    rules
+        .filter(|rule| rule.contains('('))
+        .collect()
 }
 
 /// Provider-native mode flags for an interactive session.
 pub fn permission_args(mode: PermissionMode) -> Vec<&'static str> {
     match mode {
-        PermissionMode::Plan => vec!["--restricted", "--permission-mode", "plan"],
+        PermissionMode::Plan => vec!["--setting-sources", "user", "--permission-mode", "plan"],
         PermissionMode::Approve | PermissionMode::Custom => {
             vec!["--setting-sources", "user", "--permission-mode", "manual"]
         }
@@ -108,6 +106,9 @@ pub struct InteractiveArgs<'a> {
     pub effort: Option<&'a str>,
     /// Display name passed with `-n`.
     pub title: Option<&'a str>,
+    /// The person's native MCP servers the account profile doesn't define
+    /// ([`crate::claude::mcp`]), added with `--mcp-config`.
+    pub mcp_config: Option<&'a Path>,
 }
 
 /// Titles passed with `-n`: printable, bounded, and never read as a flag.
@@ -126,10 +127,14 @@ pub fn interactive_args(args: &InteractiveArgs<'_>) -> Result<Vec<OsString>, Arg
         .into_iter()
         .map(OsString::from)
         .collect();
-    // No repository MCP servers (K4).
-    out.push("--strict-mcp-config".into());
+    // MCP servers load natively: the user's own servers, and repository `.mcp.json` servers only
+    // after Claude Code's own trust prompt in the pane. No `--strict-mcp-config`.
     out.push("--settings".into());
     out.push(args.settings_path.as_os_str().to_owned());
+    if let Some(config) = args.mcp_config {
+        out.push("--mcp-config".into());
+        out.push(config.as_os_str().to_owned());
+    }
     out.push("--disallowedTools".into());
     out.extend(
         interactive_deny_rules(args.mode)
@@ -175,6 +180,9 @@ pub struct HookCommand<'a> {
     pub prefix_args: &'a [String],
     pub endpoint: &'a str,
     pub session: &'a str,
+    /// KalCode decides `PreToolUse` (engine routing): the helper fails closed. Otherwise the
+    /// hook only observes and can never block or delay a tool on a KalCode-side failure.
+    pub enforce: bool,
 }
 
 fn hook_entry(hook: &HookCommand<'_>, event: HookEvent) -> Value {
@@ -185,7 +193,11 @@ fn hook_entry(hook: &HookCommand<'_>, event: HookEvent) -> Value {
         hook.endpoint.to_owned(),
         hook.session.to_owned(),
     ]);
-    let timeout = if event.is_blocking() {
+    let enforcing = event.is_blocking() && hook.enforce;
+    if enforcing {
+        args.push(ENFORCE_ARG.to_owned());
+    }
+    let timeout = if enforcing {
         PRE_TOOL_USE_HOOK_TIMEOUT_SECS
     } else {
         STATUS_HOOK_TIMEOUT_SECS
@@ -226,7 +238,10 @@ pub fn interactive_mappings(routing: DecisionRouting) -> Vec<PermissionMapping> 
         }
     };
     [
-        (PermissionMode::Plan, "Reads and plans only."),
+        (
+            PermissionMode::Plan,
+            "Reads, researches and plans; Claude Code's plan mode blocks edits.",
+        ),
         (
             PermissionMode::Approve,
             "Claude Code asks before edits and commands.",
@@ -293,6 +308,7 @@ mod tests {
             model: Some("sonnet"),
             effort: Some("high"),
             title: Some("Fix the build"),
+            mcp_config: None,
         })
         .expect("args")
         .into_iter()
@@ -361,16 +377,14 @@ mod tests {
             for flag in FORBIDDEN_FLAGS {
                 assert!(!args.iter().any(|a| a == flag), "{mode:?} uses {flag}");
             }
-            assert!(args.iter().any(|a| a == "--strict-mcp-config"), "{mode:?}");
+            // Native tools stay: no MCP lockout, no restricted mode.
+            assert!(!args.iter().any(|a| a == "--strict-mcp-config"), "{mode:?}");
+            assert!(!args.iter().any(|a| a == "--restricted"), "{mode:?}");
             assert!(value_after(&args, "--settings").is_some(), "{mode:?}");
-            if mode == PermissionMode::Plan {
-                assert!(args.iter().any(|a| a == "--restricted"));
-            } else {
-                assert_eq!(
-                    value_after(&args, "--setting-sources").as_deref(),
-                    Some("user")
-                );
-            }
+            assert_eq!(
+                value_after(&args, "--setting-sources").as_deref(),
+                Some("user")
+            );
         }
     }
 
@@ -401,8 +415,10 @@ mod tests {
                     "{mode:?}: {rule}"
                 );
             }
-            let removes_edits = rules.iter().any(|r| r == "Edit");
-            assert_eq!(removes_edits, mode == PermissionMode::Plan, "{mode:?}");
+            // No native tool is removed in any mode: research works in Plan too.
+            for tool in ["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"] {
+                assert!(!rules.iter().any(|r| r == tool), "{mode:?} removes {tool}");
+            }
         }
     }
 
@@ -415,6 +431,7 @@ mod tests {
             model: None,
             effort: None,
             title,
+            mcp_config: None,
         };
         let new = || SessionStart::New {
             session_id: "0192f3c4-0000-7000-8000-000000000000".into(),
@@ -462,6 +479,7 @@ mod tests {
             prefix_args: &prefix,
             endpoint: r"\\.\pipe\kalcode-hook-0123",
             session: "abcd",
+            enforce: false,
         });
         let hooks = settings["hooks"].as_object().expect("hooks");
         assert_eq!(hooks.len(), HookEvent::CLAUDE.len());
@@ -488,12 +506,9 @@ mod tests {
                     "abcd"
                 ]
             );
+            // An observing session never holds a tool call longer than a status event.
             let timeout = handler["timeout"].as_u64().expect("timeout");
-            if event == HookEvent::PreToolUse {
-                assert_eq!(timeout, PRE_TOOL_USE_HOOK_TIMEOUT_SECS);
-            } else {
-                assert_eq!(timeout, STATUS_HOOK_TIMEOUT_SECS);
-            }
+            assert_eq!(timeout, STATUS_HOOK_TIMEOUT_SECS, "{event:?}");
             assert_eq!(
                 group.get("matcher").is_some(),
                 event.has_tool_matcher(),
@@ -510,6 +525,30 @@ mod tests {
             "disableAllHooks",
         ] {
             assert!(!text.contains(word), "{word}");
+        }
+    }
+
+    #[test]
+    fn only_engine_routing_makes_pre_tool_use_enforce() {
+        let prefix: Vec<String> = Vec::new();
+        let settings = settings_json(&HookCommand {
+            program: Path::new("/opt/kalcode/kalcode-hook"),
+            prefix_args: &prefix,
+            endpoint: "/run/kalcode/hook.sock",
+            session: "abcd",
+            enforce: true,
+        });
+        for event in HookEvent::CLAUDE {
+            let handler = &settings["hooks"][event.as_str()][0]["hooks"][0];
+            let args = handler["args"].as_array().expect("args");
+            let enforcing = args.last().and_then(Value::as_str) == Some(ENFORCE_ARG);
+            assert_eq!(enforcing, event == HookEvent::PreToolUse, "{event:?}");
+            let timeout = handler["timeout"].as_u64().expect("timeout");
+            if enforcing {
+                assert_eq!(timeout, PRE_TOOL_USE_HOOK_TIMEOUT_SECS);
+            } else {
+                assert_eq!(timeout, STATUS_HOOK_TIMEOUT_SECS);
+            }
         }
     }
 

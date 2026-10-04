@@ -374,6 +374,7 @@ impl AgentProvider for FakeProvider {
             models: self.models.clone(),
             permission_mappings: Vec::new(),
             interactive: None,
+            tools: Vec::new(),
         }
     }
 

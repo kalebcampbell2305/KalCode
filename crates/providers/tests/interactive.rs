@@ -440,7 +440,10 @@ fn unanswered_approval_hands_over_to_the_provider_prompt() {
 }
 
 #[test]
-fn kalcode_unreachable_blocks_tool_calls_but_not_the_session() {
+fn kalcode_unreachable_never_costs_the_provider_its_tools() {
+    // The reported bug: with KalCode's hook channel down (KalCode restarting, updating, or the
+    // bridge gone), every tool call in a provider pane was blocked with "KalCode couldn't check
+    // this tool call". The provider's own permission flow must stay in charge instead.
     let rig = Rig::new(
         DecisionRouting::ProviderPrompt,
         json!({}),
@@ -457,10 +460,12 @@ fn kalcode_unreachable_blocks_tool_calls_but_not_the_session() {
         )
     });
     rig.bridge.shutdown();
-    pane.type_line("run rm -rf build");
-    pane.wait_for_text("BLOCKED BY HOOK: KalCode couldn't check this tool call");
-    assert!(!pane.text().contains("RAN Bash"));
-    // Status hooks fail open: the session keeps working.
+    pane.type_line("run cargo test");
+    // Approve: Claude Code's own prompt asks, exactly as in a native terminal.
+    pane.wait_for_text("[fake prompt] Allow Bash?");
+    pane.type_line("y");
+    pane.wait_for_text("RAN Bash");
+    assert!(!pane.text().contains("BLOCKED BY HOOK"));
     pane.type_line("say still here");
     pane.wait_for_text("still here");
 }
@@ -501,7 +506,8 @@ fn launch_uses_kalcode_settings_the_deny_floor_and_a_clean_environment() {
     };
     assert_eq!(value_after("--permission-mode").as_deref(), Some("manual"));
     assert_eq!(value_after("--setting-sources").as_deref(), Some("user"));
-    assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+    // Native MCP loading: no lockout of the person's servers.
+    assert!(!args.iter().any(|a| a == "--strict-mcp-config"));
     assert!(args.iter().any(|a| a == "Bash(git push *)"));
     for forbidden in [
         "-p",
@@ -517,8 +523,8 @@ fn launch_uses_kalcode_settings_the_deny_floor_and_a_clean_environment() {
         serde_json::from_str(&std::fs::read_to_string(&settings_path).expect("read"))
             .expect("json");
     assert_eq!(
-        settings["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"],
-        600
+        settings["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 10,
+        "an observing hook never holds a tool call for long"
     );
     assert!(!settings.to_string().contains("KALCODE_HOOK_KEY"));
 
