@@ -55,6 +55,74 @@ Agents may open a separate KalCode instance for testing, using isolated applicat
   - signing certificates;
   - genuinely irreversible production authorization.
 
+## Permanent native provider parity rule (owner directive 2026-10-04)
+
+> "A PROVIDER INSIDE KALCODE MUST RETAIN THE CAPABILITIES IT HAS IN ITS NORMAL NATIVE TERMINAL ENVIRONMENT.
+>
+> KALCODE ADDS UI, ORCHESTRATION, VOICE, ACCOUNT MANAGEMENT, BROWSER, OPERATIONS, AND WORKSPACE MANAGEMENT AROUND PROVIDERS — IT MUST NOT TAKE PROVIDER FUNCTIONALITY AWAY.
+>
+> IF SOMETHING WORKS IN THE PROVIDER'S NORMAL TERMINAL BUT DOES NOT WORK INSIDE KALCODE, THAT IS A KALCODE COMPATIBILITY BUG AND SHOULD BE FIXED.
+>
+> THIS RULE APPLIES TO CLAUDE CODE, CODEX, CURSOR, GEMINI, AND EVERY FUTURE PROVIDER."
+
+KalCode is a transparent terminal/PTY host plus an orchestration layer. A provider launched by KalCode must be able to do everything it does when the user starts it in PowerShell or Terminal: read, edit, create and delete files; search; run shell commands, Git, builds and tests; use its native tools, web/research, MCP servers, plugins/extensions/skills and subagents; use provider-native commands; stream output, ask questions and take keyboard input; use its normal authentication, configuration, PATH and environment; handle long-running commands, interrupts, ANSI/colour/progress output and session resume.
+
+- **Transparent launch.** The provider sees the correct executable, arguments, working directory, environment variables, PATH, HOME/user directories, provider config, authentication, terminal capabilities, stdin/stdout/stderr, dimensions, resize events, signals, exit codes, filesystem and Git environment. Never launch a provider in an artificially incomplete environment. A provider's environment is the user's own environment minus KalCode-internal variables (`KALCODE_*`, `WEBVIEW2_*`, `WEBKIT_INSPECTOR*`), with the launch hardening in `crates/providers/src/env.rs`.
+- **Real capability over stubs.** If the provider has a native capability, use it. Replace it with a KalCode stub only for a genuine technical reason, recorded in the capability matrix. KalCode additions (panes, Agent Fleet, account routing, usage, KalVoice, Browser, Runs, Queue, Needs You, orchestration, workspace restoration) sit around the provider and never reduce what it can do.
+- **Configuration parity.** Launching through KalCode discovers the same legitimate configuration a native launch does: settings, MCP configuration, plugins, skills/extensions, agents, global and project instructions (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`), permission configuration and project configuration. Per-account profiles may isolate credentials and session state, but they must not hide the user's configuration unless the user explicitly chose a separate KalCode profile.
+- **Interactive fidelity.** Real PTY/TTY behaviour: stdin forwarding, raw mode, keyboard shortcuts, Ctrl+C, resize, ANSI and cursor control, progress rendering, prompts and interactive selections, subprocesses, long-running processes, exit and restart. A provider must never fail because KalCode's terminal emulation is incomplete.
+- **No KalCode capability ceiling.** KalCode must never be the reason a provider says "I cannot do that here." Reproduce NATIVE PROVIDER TERMINAL vs KALCODE PROVIDER TERMINAL, compare, and fix the difference.
+- **Capability matrix.** Keep `docs/providers/native-parity.md` truthful: for each provider and capability, the native support and KalCode parity status. If the provider doesn't support something, don't fake it. If it does and KalCode doesn't, fix KalCode.
+- **Security is not a limitation to remove.** Parity never bypasses provider authentication, OS security boundaries, credential protection (including the credential-file read deny floor), genuine destructive-action safeguards or provider-enforced restrictions. The goal is NO EXTRA KALCODE LIMITATION, not BYPASS REAL SECURITY.
+
+## Permanent high-standard quality rule (owner directive 2026-10-04)
+
+> "KALCODE IS HELD TO AN EXTREMELY HIGH STANDARD.
+>
+> FUNCTIONAL IS NOT ENOUGH.
+>
+> EVERY USER-FACING FEATURE, WORKFLOW, INTERACTION, AND VISUAL SURFACE MUST BE BEAUTIFUL, SIMPLE, FAST, POLISHED, RELIABLE, AND PRODUCTION-READY.
+>
+> NOTHING USER-FACING SHIPS BLAND.
+>
+> REVIEW THE ACTUAL RENDERED PRODUCT BEFORE SHIPPING.
+>
+> REMOVE FRICTION.
+> PRESERVE RESPONSIVENESS.
+> FIX WEAK DETAILS.
+> KEEP KALCODE COMPETITIVE WITH THE BEST PRODUCTS ON THE MARKET.
+>
+> IF IT WORKS BUT DOES NOT FEEL FINISHED, IT IS NOT DONE."
+
+This applies automatically to all KalCode work by Claude Code, Codex and future agents. It extends the visual quality, simplicity and responsiveness rules below.
+
+- **The target is SIMPLE + BEAUTIFUL + FAST + POWERFUL.** Don't sacrifice one for another. Beautiful does not mean over-designed; powerful does not mean complicated; simple does not mean bland.
+- **Not done** if it feels bland, unfinished, generic, clunky, slow, confusing, visually weak, poorly integrated or half-polished, or if it looks like prototype or placeholder UI, default framework components, generic developer tooling, cheap AI-generated design or a cluttered dashboard.
+- **Every detail matters:** typography, spacing, alignment, hierarchy, icons, motion, hover/focus/loading/empty/error states, menus, buttons, terminal headers, panes, widgets, account selectors, agent cards, Browser, navigation, onboarding, Settings, responsive layouts, accessibility and performance.
+- **Rendered review is required.** Look at the real rendered product before calling user-facing work complete. Ask: Does it look beautiful and premium? Is anything bland, confusing or unnecessary? Can a step be removed? Does it feel fast and native to KalCode? Would it stand beside the best products on the market? If not, polish it before shipping. Tests and code review alone are not enough for visual work.
+- **UX.** Use the fewest safe steps. Infer what can be inferred safely. Act where the user already is instead of sending them to Settings. If the user must hunt, fix the UX. If three clicks can become one, make it one.
+- **Performance.** Every click gets immediate feedback. Network calls, provider refresh, Git scans, usage checks, browser initialization and background processes run asynchronously. Animation makes KalCode feel better, never slower.
+- **Reliability.** Beautiful UI on broken behaviour is unacceptable. Require correct behaviour, preserved state, graceful recovery, truthful status, clean errors, no fake provider state, no stale data and no hidden background failures (see the zero-known-issues rule).
+- **Design language.** A deep graphite/near-black foundation, subtle space/depth atmosphere where appropriate, the electric-blue accent, premium typography, excellent spacing, restrained glow, strong hierarchy, smooth motion and state transitions, information-rich without clutter. Provider branding stays secondary; KalCode owns the hierarchy.
+- **Competitive standard.** Study elite products (BridgeMind, T3 Code, Apple and other top developer/AI products) for interaction quality, density, motion, layout, clarity, responsiveness and polish. Never copy them; build an original KalCode implementation.
+
+## Permanent zero-known-issues reliability rule (owner directive 2026-10-04)
+
+> "KALCODE SHOULD STRIVE FOR ZERO KNOWN USER-FACING ISSUES.
+>
+> IF WE KNOW ABOUT A BUG OR BROKEN EXPERIENCE, IT IS NOT 'GOOD ENOUGH.'
+>
+> FIX KNOWN ISSUES QUICKLY, FIX ROOT CAUSES, VERIFY THE REAL USER FLOW, AND SHIP THE FIX.
+>
+> HIGH QUALITY INCLUDES RELIABILITY."
+
+Bugs, crashes, broken workflows, stale state, failed provider integrations, updater failures, inconsistent UI state, hidden errors, orphan processes, broken navigation and regressions are never accepted as normal. This applies automatically to all KalCode work by Claude Code, Codex and future agents.
+
+- **Loop:** REPRODUCE → FIND ROOT CAUSE → FIX IT → TEST THE ACTUAL FAILURE → AUTO-MERGE → AUTO-SHIP → VERIFY USERS RECEIVE THE FIX.
+- Don't leave known bugs in the product unnecessarily. Don't hide broken behaviour behind a UI patch; fix the underlying behaviour.
+- Prevent issues with focused regression tests, truthful state handling, safe recovery, provider/session isolation, good error handling, restart/reconnect testing, update-path verification and real production checks.
+- A bug found during other work is fixed, or reported to the owner as open with its reproduction. It is never silently ignored.
+
 ## Permanent terminal containment and agent identity rule (owner directive 2026-10-03)
 
 An agent is always a real provider coding terminal/session in Code. Agent commands never create chat Threads. Opening four Claude Code agents creates four fresh Claude Code terminals in the current workspace; opening six Codex agents creates six fresh Codex terminals. Each binds its provider account, exact model, effort and working directory. Agent Fleet focuses that same terminal. Threads remain a separate product concept. Preserve terminal identity through resource waits, retry, restoration and runtime errors; never fall back to chat execution or Threads navigation.
