@@ -86,14 +86,14 @@ function buildSigner(root, { spawn = spawnSync } = {}) {
   );
   if (result.error || result.status !== 0) {
     // Compiler output carries no key material (the signer has not run), so name the cause.
-    const cause =
-      result.error?.code ??
-      String(result.stderr ?? "")
-        .split(/\r?\n/)
-        .find((line) => /^error/u.test(line.trim()))
-        ?.trim()
-        .slice(0, 300) ??
-      `exit ${result.status}`;
+    const tail = String(result.stderr ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-3)
+      .join(" / ")
+      .slice(0, 600);
+    const cause = result.error?.code ?? `exit ${result.status}${tail ? `: ${tail}` : ""}`;
     throw new Error(`component signer could not be built: ${cause}`);
   }
 }
