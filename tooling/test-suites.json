@@ -266,9 +266,9 @@
             "KALCODE_CHECKOUT_ENABLED_GATE": "absent",
             "PUBLIC_CHECKOUT_ENABLED": "absent"
           },
-          "minimumExecuted": 145,
-          "skippedMinimum": 8,
-          "skippedMaximum": 8,
+          "minimumExecuted": 164,
+          "skippedMinimum": 33,
+          "skippedMaximum": 33,
           "allowedSkipReasons": [
             "^no published release, so there are no release notes to link$",
             "^No stage components on .+$",

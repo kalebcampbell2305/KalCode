@@ -429,7 +429,20 @@ test("tooling profiles account exactly for Windows-only signer and workflow exec
 test("website skip profiles require reviewed counts and runtime reasons", () => {
   const website = inventory.suites.find(({ id }) => id === "website-e2e");
   const defaultProfile = selectProfile(website, "win32", {});
-  assert.equal(defaultProfile.skippedMinimum, 8);
+  assert.equal(defaultProfile.minimumExecuted, 164);
+  assert.equal(defaultProfile.skippedMinimum, 33);
+  assert.equal(defaultProfile.skippedMaximum, 33);
+  assert.throws(
+    () =>
+      validateSuiteResult(website, defaultProfile, {
+        executed: 163,
+        failed: 0,
+        skipped: 33,
+        flaky: 0,
+        skipReasons: ["TryKalCode is not on /"],
+      }),
+    /executed/,
+  );
   const configuredProfile = selectProfile(website, "win32", { STAGE_URL: "/product" });
   assert.equal(configuredProfile.skippedMaximum, 16);
   assert.doesNotThrow(() =>
