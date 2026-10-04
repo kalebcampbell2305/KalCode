@@ -73,6 +73,19 @@ test("every signed artifact and clean-machine verification enforce the durable p
   assert.match(verifierSource, /sameAuthenticodeSigner/);
 });
 
+test("clean-machine verification proves the installed uninstaller signature before cleanup", () => {
+  assert.match(verifierSource, /const installedUninstaller = join\(installDir, "uninstall\.exe"\)/);
+  assert.match(
+    verifierSource,
+    /installedUninstallerSignature = authenticodeStatus\(installedUninstaller, powershellJson\)/,
+  );
+  assert.match(verifierSource, /installed uninstaller signature has a trusted timestamp/);
+  assert.match(
+    verifierSource,
+    /installedUninstallerSignerMatchesInstaller = sameAuthenticodeSigner\([\s\S]*?installer,[\s\S]*?installedUninstaller/,
+  );
+});
+
 test("publishing verifies content-addressed objects before atomically advancing D1", () => {
   const immutableReadback = publishSource.indexOf('upload.name === "immutable updater version descriptor"');
   const versionClaim = publishSource.indexOf("buildVersionClaimStatement(pointerCandidate)");
