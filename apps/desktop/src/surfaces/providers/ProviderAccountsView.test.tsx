@@ -140,7 +140,7 @@ describe("Gemini account row", () => {
   it("explains that Gemini sign-in stays with the provider and the account", async () => {
     mount();
     await screen.findByRole("region", { name: "Gemini CLI · Personal" });
-    expect(screen.getByText(/Gemini CLI opens Google sign-in in your browser/)).toBeTruthy();
+    expect(screen.getByText(/Claude Code, Codex and Gemini use managed account profiles/)).toBeTruthy();
     expect(screen.queryByText(/\/auth/)).toBeNull();
   });
 });

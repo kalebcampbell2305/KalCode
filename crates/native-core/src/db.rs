@@ -75,14 +75,19 @@ pub const MIGRATIONS: &[Migration] = &[
     OPERATIONS_MIGRATION,
     THREADS_EFFORT_MIGRATION,
     HANDOFFS_MIGRATION,
+    Migration {
+        version: 23,
+        name: "cursor_accounts",
+        sql: include_str!("../migrations/0023_cursor_accounts.sql"),
+    },
     UNIFIED_MEMORY_MIGRATION,
 ];
 
 /// Shared, provider-independent project memory and its incremental full-text index.
 pub const UNIFIED_MEMORY_MIGRATION: Migration = Migration {
-    version: 23,
+    version: 24,
     name: "unified_memory",
-    sql: include_str!("../migrations/0023_unified_memory.sql"),
+    sql: include_str!("../migrations/0024_unified_memory.sql"),
 };
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -521,6 +526,74 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_migration_preserves_accounts_bindings_and_terminal_history() {
+        let mut conn = open_in_memory().expect("database");
+        migrate(&mut conn, &MIGRATIONS[..22], None).expect("existing database");
+        conn.execute_batch(
+            "INSERT INTO provider_accounts (id,provider_id,display_name,provider_reported_identity,authentication_state,is_default,created_at)
+             VALUES ('a','claude-code','Personal','native@example.test','authenticated',1,'2026-10-04'),
+                    ('b','codex','Work',NULL,'unknown',1,'2026-10-04');
+             INSERT INTO threads (id,name,provider_id,provider_name,workspace_id,workspace_name,cwd,permission_mode,status,created_at,last_activity_at,provider_account_id)
+             VALUES ('t','Coding terminal','claude-code','Claude Code','w','Project','/project','bypass','idle','2026-10-04','2026-10-04','a');
+             INSERT INTO provider_account_bindings VALUES ('claude-code','thread','t','a');"
+        ).expect("existing identity and binding");
+        let accounts_before: Vec<(String, String, String, String, i64)> = {
+            let mut stmt = conn.prepare("SELECT id,provider_id,display_name,authentication_state,is_default FROM provider_accounts ORDER BY id").expect("query");
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .expect("rows")
+            .collect::<std::result::Result<_, _>>()
+            .expect("accounts")
+        };
+        migrate(&mut conn, MIGRATIONS, None).expect("Cursor upgrade");
+        let accounts_after: Vec<(String, String, String, String, i64)> = {
+            let mut stmt = conn.prepare("SELECT id,provider_id,display_name,authentication_state,is_default FROM provider_accounts ORDER BY id").expect("query");
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .expect("rows")
+            .collect::<std::result::Result<_, _>>()
+            .expect("accounts")
+        };
+        assert_eq!(accounts_before, accounts_after);
+        assert_eq!(
+            conn.query_row(
+                "SELECT provider_account_id FROM threads WHERE id='t'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .expect("thread identity"),
+            "a"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT account_id FROM provider_account_bindings WHERE scope_id='t'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .expect("binding"),
+            "a"
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .expect("integrity"),
+            0
+        );
+        conn.execute_batch("INSERT INTO provider_accounts (id,provider_id,display_name,authentication_state,is_default,created_at) VALUES ('c','cursor','Cursor','unknown',1,'2026-10-04'); INSERT INTO provider_account_bindings VALUES ('cursor','workspace','w','c');").expect("Cursor identity");
+        assert!(conn.execute("INSERT INTO provider_accounts (id,provider_id,display_name,authentication_state,is_default,created_at) VALUES ('d','cursor','Other','unknown',0,'2026-10-04')", []).is_err(), "one native Cursor identity");
+        // Idempotent reopen neither loses bindings nor repeats the table rebuild.
+        assert!(
+            !migrate(&mut conn, MIGRATIONS, None)
+                .expect("reopen")
+                .applied_any()
+        );
+    }
 
     #[test]
     fn fresh_database_migrates_to_latest() {

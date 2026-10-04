@@ -549,3 +549,121 @@ function dialog(props: Partial<Parameters<typeof NewAgentDialog>[0]>) {
     />
   );
 }
+
+describe("Cursor native runtime models", () => {
+  const cursor = makeAccount("cursor-native", "Cursor A", true, "cursor");
+  const mountCursor = (discovery: () => Promise<unknown>, initial = cursor, shared = false) => {
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [initial]),
+      listProviderAccountBindings: vi.fn(async () => []),
+      threadOptions: vi.fn(async () => ({ providers: [] })),
+      refreshCursorAccount: vi.fn(discovery),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi.fn(async () => true);
+    const launcher = (
+      <NewAgentDialog
+        workspace={{ id: "ws", name: "Project" } as Workspace}
+        offered={[]}
+        initialProvider="cursor"
+        busy={false}
+        error={null}
+        onLaunch={onLaunch}
+        onClose={vi.fn()}
+      />
+    );
+    render(shared ? <ProviderAccountSessionsProvider>{launcher}</ProviderAccountSessionsProvider> : launcher);
+    return onLaunch;
+  };
+
+  it.each([false, true])(
+    "restores native sign-in in the launcher without repeating discovery (shared=%s)",
+    async (shared) => {
+      const pending = deferred<unknown>();
+      const stale = { ...cursor, authenticationState: "not_authenticated" as const };
+      const onLaunch = mountCursor(() => pending.promise, stale, shared);
+      const launch = await screen.findByRole("button", { name: "Launch Cursor agent" });
+      expect(launch).toBeDisabled();
+      pending.resolve({ account: { ...cursor }, models: [], modelsError: null });
+      await waitFor(() => expect(launch).toBeEnabled());
+      await userEvent.setup().click(launch);
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ providerAccountId: cursor.id, providerId: "cursor" }),
+      );
+      expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("disables launch when native discovery confirms the saved sign-in expired", async () => {
+    mountCursor(async () => ({
+      account: { ...cursor, authenticationState: "not_authenticated" },
+      models: [],
+      modelsError: "Cursor session expired. Reconnect.",
+    }));
+    await waitFor(() => expect(screen.getByRole("option", { name: /Cursor A/ })).toHaveTextContent("Signed out"));
+    expect(screen.getByRole("button", { name: "Launch Cursor agent" })).toBeDisabled();
+    expect(runtime.client.refreshCursorAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("launches a real Cursor pane request with the exact runtime model id and account", async () => {
+    const exact = "custom/deepseek-v9?reasoning=high";
+    const onLaunch = mountCursor(async () => ({
+      account: cursor,
+      models: [{ id: exact, displayName: exact, isDefault: false }],
+      modelsError: null,
+    }));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("radio", { name: exact }));
+    expect(screen.queryByRole("radiogroup", { name: "Effort" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Launch Cursor agent" }));
+    expect(onLaunch).toHaveBeenCalledWith({
+      providerId: "cursor",
+      providerAccountId: cursor.id,
+      model: exact,
+      effort: null,
+      count: 1,
+    });
+  });
+
+  it("does not invent models when discovery fails and keeps native default launch available", async () => {
+    const onLaunch = mountCursor(async () => {
+      throw {
+        code: "cursor_models_unavailable",
+        category: "provider",
+        message: "Cursor model discovery unavailable.",
+        retryable: true,
+      };
+    });
+    expect(await screen.findByText(/Cursor model discovery unavailable/)).toBeVisible();
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Launch Cursor agent" }));
+    expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ providerId: "cursor", model: null }));
+  });
+
+  it("refuses a remembered model that the runtime no longer offers instead of changing it silently", async () => {
+    const entry = {
+      providerId: "cursor",
+      accountId: cursor.id,
+      model: "retired-model-7",
+      modelName: "retired-model-7",
+      effort: null,
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+      at: "2026-10-04T00:00:00Z",
+    };
+    window.localStorage.setItem(
+      "kalcode.agentLauncher.v1",
+      JSON.stringify({ last: entry, byProvider: { cursor: entry } }),
+    );
+    const onLaunch = mountCursor(async () => ({
+      account: cursor,
+      models: [{ id: "current-model-8", displayName: "current-model-8", isDefault: false }],
+      modelsError: null,
+    }));
+    expect(await screen.findByText(/Model unavailable for this account: retired-model-7/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Launch Cursor agent" })).toBeDisabled();
+    expect(onLaunch).not.toHaveBeenCalled();
+    await userEvent.setup().click(screen.getByRole("radio", { name: "current-model-8" }));
+    expect(screen.getByRole("button", { name: "Launch Cursor agent" })).toBeEnabled();
+  });
+});

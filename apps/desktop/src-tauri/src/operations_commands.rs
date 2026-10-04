@@ -1795,7 +1795,9 @@ fn operation_thread_matches(
         && thread.workspace_id == spec.workspace_id
         && spec.provider_id.as_deref() == Some(thread.provider_id.as_str())
         && spec.provider_account_id.as_deref() == thread.provider_account_id.as_deref()
-        && spec.model.as_deref() == thread.model.as_deref()
+        && (spec.model.as_deref() == thread.model.as_deref()
+            || (thread.provider_id.as_str() == kalcode_contracts::agent::ProviderId::CURSOR
+                && spec.model.is_none()))
         && thread.permission_mode.is_confirm_free_start()
 }
 
@@ -3169,6 +3171,21 @@ mod tests {
             .get(&operation.id)
             .expect("operation thread");
         assert_eq!(current.permission_mode, PermissionMode::Auto);
+        let mut cursor_thread = current.clone();
+        cursor_thread.provider_id = kalcode_contracts::agent::ProviderId::new("cursor");
+        cursor_thread.model = Some("provider-reported-model-42".into());
+        let mut cursor_spec = operation.spec.clone();
+        cursor_spec.provider_id = Some("cursor".into());
+        cursor_spec.model = None;
+        assert!(
+            operation_thread_matches(&cursor_thread, &cursor_spec, &operation.id),
+            "Cursor may report the exact model chosen for a native-default launch"
+        );
+        cursor_spec.model = Some("explicit-model-43".into());
+        assert!(
+            !operation_thread_matches(&cursor_thread, &cursor_spec, &operation.id),
+            "an explicit model must never silently change"
+        );
         assert!(operation_thread_matches(
             &current,
             &operation.spec,

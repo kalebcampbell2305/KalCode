@@ -86,11 +86,12 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
     client
       .threadOptions()
       .then((next) => {
-        setOptions(next);
+        const chatOptions = { ...next, providers: next.providers.filter((provider) => provider.id !== "cursor") };
+        setOptions(chatOptions);
         void client
           .listProviders()
           .then((statuses: ProviderStatus[]) => {
-            setUnavailable(unavailableProviders(statuses, new Set(next.providers.map((p) => p.id))));
+            setUnavailable(unavailableProviders(statuses, new Set(chatOptions.providers.map((p) => p.id))));
           })
           .catch(() => undefined);
       })
@@ -121,7 +122,7 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
             setEarlyAccount("");
           }}
         >
-          {PANE_PROVIDERS.map((providerId) => (
+          {PANE_PROVIDERS.filter((id) => id !== "cursor").map((providerId) => (
             <option key={providerId} value={providerId}>
               {providerIdentity(providerId).name}
             </option>

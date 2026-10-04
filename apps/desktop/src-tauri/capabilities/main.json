@@ -41,6 +41,8 @@
     "allow-handoff-complete",
     "allow-handoff-return",
     "allow-provider-claude-account-refresh",
+    "allow-provider-cursor-account-refresh",
+    "allow-provider-cursor-login",
     "allow-provider-claude-login-start",
     "allow-provider-claude-login-wait",
     "allow-provider-claude-login-cancel",

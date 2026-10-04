@@ -39,6 +39,7 @@ const PRODUCT_VOCABULARY: &[&str] = &[
     "Settings",
     "Claude Code",
     "Codex",
+    "Cursor",
     "Gemini CLI",
     "Opus",
     "Sonnet",

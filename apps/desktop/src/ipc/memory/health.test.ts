@@ -15,6 +15,7 @@ describe("in-memory provider health", () => {
       ["claude-code", "unknown", "not_checked"],
       ["codex", "unknown", "not_checked"],
       ["gemini-cli", "unknown", "not_checked"],
+      ["cursor", "unknown", "not_checked"],
     ]);
     expect(before.every((h) => h.activeSessions === 0 && h.capacity === "unknown")).toBe(true);
 
@@ -51,15 +52,17 @@ describe("in-memory provider health", () => {
       ["claude-code", { providerId: "claude-code", from: "unknown", to: "healthy", reason: "auth_unknown" }],
       ["codex", { providerId: "codex", from: "unknown", to: "degraded", reason: "recent_failures" }],
       ["gemini-cli", { providerId: "gemini-cli", from: "unknown", to: "healthy", reason: "auth_unknown" }],
+      ["cursor", { providerId: "cursor", from: "unknown", to: "healthy", reason: "healthy" }],
     ]);
     const capacity = (await client.recentEvents(100)).filter((e) => e.type === "provider.capacity_changed");
-    expect(capacity).toHaveLength(3);
+    expect(capacity).toHaveLength(4);
   });
 
   it("keeps health consistent with detection in every provider scenario", async () => {
     const none = setup("providers-none").client;
     await none.detectProviders();
     expect((await none.listProviderHealth()).map((h) => [h.state, h.recoverability, h.activeSessions])).toEqual([
+      ["unavailable", "install", 0],
       ["unavailable", "install", 0],
       ["unavailable", "install", 0],
       ["unavailable", "install", 0],
@@ -116,7 +119,7 @@ describe("in-memory provider health", () => {
     const { client, transport } = setup();
     transport.health.configure({ failing: true });
     await expect(client.listProviderHealth()).rejects.toMatchObject({ code: "health_unavailable" });
-    expect(await client.detectProviders()).toHaveLength(3);
+    expect(await client.detectProviders()).toHaveLength(4);
   });
 
   it("records a transition when an observation changes", async () => {

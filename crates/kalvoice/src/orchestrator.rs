@@ -576,6 +576,7 @@ pub fn provider_display_name(id: &ProviderId) -> String {
     match id.as_str() {
         ProviderId::CLAUDE_CODE => "Claude".into(),
         ProviderId::CODEX => "Codex".into(),
+        ProviderId::CURSOR => "Cursor".into(),
         ProviderId::GEMINI_CLI => "Gemini".into(),
         other => other.to_owned(),
     }

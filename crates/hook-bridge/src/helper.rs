@@ -77,6 +77,7 @@ pub fn run(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
     match args.first().map(String::as_str) {
         Some("claude") => run_claude(args, stdin, env),
         Some("codex-notify") => run_codex_notify(args, env),
+        Some("cursor") => run_cursor(args, stdin, env),
         _ => {
             // Not an invocation KalCode configures. If it looks like a PreToolUse call, block.
             if is_blocking_invocation(args) {
@@ -173,6 +174,49 @@ fn run_codex_notify(args: &[String], env: &HelperEnv) -> Rendered {
     Rendered::silent()
 }
 
+fn run_cursor(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
+    // These are observing hooks. Always return schema-valid no-op output, including when the
+    // bridge is unavailable; never modify Cursor's native tool permission decisions.
+    let response = Rendered {
+        exit_code: 0,
+        stdout: if args
+            .get(1)
+            .is_some_and(|event| event == "beforeSubmitPrompt")
+        {
+            "{\"continue\":true}".into()
+        } else {
+            "{}".into()
+        },
+        stderr: String::new(),
+    };
+    let (Some(event), Some(endpoint), Some(session), Some(key)) = (
+        args.get(1),
+        args.get(2).and_then(|value| Endpoint::parse(value)),
+        args.get(3)
+            .filter(|value| crate::key::is_hex_of_len(value, 32)),
+        env.key_hex.as_deref().and_then(SessionKey::from_hex),
+    ) else {
+        return response;
+    };
+    let mut bytes = Vec::new();
+    if stdin
+        .take(MAX_STDIN_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .is_ok()
+        && let Ok(record) = record::from_cursor_stdin(event, &bytes)
+    {
+        let _ = exchange_within(
+            endpoint,
+            session.clone(),
+            key,
+            record,
+            env.cap(STATUS_DEADLINE),
+            env.cap(STATUS_CONNECT),
+        );
+    }
+    response
+}
+
 /// Runs the exchange on a worker thread so a stalled server can't hold the helper past
 /// `deadline` (blocking pipe reads have no timeout of their own).
 fn exchange_within(
@@ -239,6 +283,21 @@ mod tests {
         assert!(!is_blocking_invocation(&args(&["claude", "Stop"])));
         assert!(!is_blocking_invocation(&args(&["codex-notify"])));
         assert!(!is_blocking_invocation(&args(&[])));
+    }
+
+    #[test]
+    fn cursor_observation_never_blocks_or_synthesizes_tool_approval() {
+        for event in crate::record::CURSOR_EVENTS {
+            let invocation = args(&["cursor", event, "missing", "missing"]);
+            assert!(!is_blocking_invocation(&invocation));
+            let rendered = run(&invocation, &mut &b"not json"[..], &HelperEnv::default());
+            assert_eq!(rendered.exit_code, 0);
+            let output: serde_json::Value = serde_json::from_str(&rendered.stdout).unwrap();
+            assert!(output.get("permission").is_none());
+            if *event == "beforeSubmitPrompt" {
+                assert_eq!(output["continue"], true);
+            }
+        }
     }
 
     #[test]

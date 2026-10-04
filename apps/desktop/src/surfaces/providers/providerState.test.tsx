@@ -207,7 +207,7 @@ describe("provider snapshot lifetimes", () => {
     });
     const { result } = renderHook(useProviders, { wrapper });
     await waitFor(() => expect(result.current.detectError?.message).toBe("current detection failed"));
-    expect(result.current.statuses).toHaveLength(3);
+    expect(result.current.statuses).toHaveLength(4);
     expect(result.current.detecting).toBe(false);
     expect(runtime.client.detectProviders).toHaveBeenCalledTimes(1);
   });
@@ -218,7 +218,7 @@ describe("provider snapshot lifetimes", () => {
     await waitFor(() => expect(result.current.listError).not.toBeNull());
     runtime.client.listProviders.mockResolvedValue(detected());
     act(() => result.current.retryList());
-    await waitFor(() => expect(result.current.statuses).toHaveLength(3));
+    await waitFor(() => expect(result.current.statuses).toHaveLength(4));
     expect(result.current.listError).toBeNull();
     expect(runtime.client.detectProviders).not.toHaveBeenCalled();
   });

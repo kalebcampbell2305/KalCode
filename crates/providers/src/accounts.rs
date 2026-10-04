@@ -96,6 +96,19 @@ impl AccountStore {
         let id = kalcode_contracts::ids::new_id();
         let created_at = now_rfc3339();
         let (account, _) = self.core.transact(|tx| {
+            if provider.as_str() == ProviderId::CURSOR {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM provider_accounts WHERE provider_id = 'cursor' AND archived_at IS NULL)",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if exists {
+                    return Err(KalError::validation(
+                        "cursor_native_account_exists",
+                        "Cursor uses its current native sign-in. Reconnect the existing Cursor account to switch accounts.",
+                    ));
+                }
+            }
             if let Some(limit) = limit {
                 let connected: i64 = tx.query_row(
                     "SELECT COUNT(*) FROM provider_accounts WHERE archived_at IS NULL",
@@ -605,9 +618,10 @@ impl AccountStore {
 
 fn checked_provider(provider: &str) -> Result<ProviderId> {
     match provider {
-        ProviderId::CLAUDE_CODE | ProviderId::CODEX | ProviderId::GEMINI_CLI => {
-            Ok(ProviderId::new(provider))
-        }
+        ProviderId::CLAUDE_CODE
+        | ProviderId::CODEX
+        | ProviderId::GEMINI_CLI
+        | ProviderId::CURSOR => Ok(ProviderId::new(provider)),
         _ => Err(KalError::validation(
             "provider_account_provider_invalid",
             "That provider doesn't support account metadata.",
@@ -937,9 +951,10 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<ProviderAccount> {
     let authentication_state: String = row.get(4)?;
     let is_default: i64 = row.get(5)?;
     let provider_id = match provider_id.as_str() {
-        ProviderId::CLAUDE_CODE | ProviderId::CODEX | ProviderId::GEMINI_CLI => {
-            ProviderId::new(provider_id)
-        }
+        ProviderId::CLAUDE_CODE
+        | ProviderId::CODEX
+        | ProviderId::GEMINI_CLI
+        | ProviderId::CURSOR => ProviderId::new(provider_id),
         _ => return Err(corrupt_column(1, "provider_id")),
     };
     let authentication_state = match authentication_state.as_str() {
@@ -990,6 +1005,70 @@ mod tests {
     use kalcode_contracts::provider_accounts::ProviderAccountBindingKind as Kind;
     use kalcode_core::flags::BuildChannel;
     use kalcode_core::{CoreConfig, Paths};
+
+    #[test]
+    fn cursor_native_account_is_singleton_and_survives_store_reopen() {
+        let fixture = Fixture::new();
+        let account = fixture.store.create("cursor", "Cursor A").expect("account");
+        let duplicate = fixture
+            .store
+            .create("cursor", "Cursor B")
+            .expect_err("no invented isolation");
+        assert_eq!(duplicate.code, "cursor_native_account_exists");
+        let reopened = AccountStore::new(fixture.core.clone());
+        assert_eq!(
+            reopened
+                .default_for("cursor")
+                .expect("default")
+                .expect("account")
+                .id,
+            account.id
+        );
+        let source = crate::DetectEnv {
+            vars: vec![
+                ("HOME".into(), "native-home".into()),
+                ("CUSTOM_TOOL_CONFIG".into(), "tool-value".into()),
+                ("KALCODE_PRIVATE".into(), "hidden".into()),
+            ],
+            ..Default::default()
+        };
+        let environment = fixture
+            .profiles
+            .launch_env("cursor", &account.id, &source)
+            .expect("native environment");
+        assert_eq!(
+            environment
+                .get(std::ffi::OsStr::new("HOME"))
+                .expect("native home"),
+            "native-home"
+        );
+        assert_eq!(
+            environment
+                .get(std::ffi::OsStr::new("CUSTOM_TOOL_CONFIG"))
+                .expect("tool config"),
+            "tool-value"
+        );
+        assert!(!environment.contains_key(std::ffi::OsStr::new("KALCODE_PRIVATE")));
+        let first = fixture
+            .profiles
+            .acquire_session_lease("cursor", &account.id)
+            .expect("first terminal");
+        let second = fixture
+            .profiles
+            .acquire_session_lease("cursor", &account.id)
+            .expect("independent terminal");
+        assert!(
+            fixture
+                .profiles
+                .acquire_sign_in_lease("cursor", &account.id)
+                .is_err()
+        );
+        drop((first, second));
+        let _sign_in = fixture
+            .profiles
+            .acquire_sign_in_lease("cursor", &account.id)
+            .expect("sign in after terminals end");
+    }
 
     struct Fixture {
         _temp: tempfile::TempDir,

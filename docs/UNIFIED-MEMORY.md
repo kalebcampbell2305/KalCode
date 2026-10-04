@@ -28,8 +28,8 @@ Capture recognizes explicit durable labels such as `Decision:`, `Architecture:`,
 `Release rule:`, `Known issue:`, `Constraint:`, `Project:`, `Product decision:`, and `Remember:`.
 Examples and fenced code are ignored. Automatic records retain their source. Supported inputs:
 
-- completed structured agent replies and Claude/Codex completion hooks;
-- explicit user decisions submitted through Claude's prompt hook or KalCode's prompt path;
+- completed structured agent replies and Claude/Codex/Cursor completion hooks;
+- explicit user decisions submitted through Claude/Cursor prompt hooks or KalCode's prompt path;
 - bounded, workspace-contained `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` instructions;
 - explicit handoff outcomes and labelled Run outcomes.
 - labelled merge-commit subjects observed by Operations, with the source commit hash.
@@ -40,12 +40,14 @@ not hold up terminal output. A failed optional memory lookup never prevents agen
 An agent without a named task receives at most two foundational project notes plus pins,
 within 2 KB, so it can orient itself without receiving the entire memory store.
 
-Claude receives native appended context and task-specific `UserPromptSubmit` context. Codex and
-Gemini receive a native initial context message when matching notes or pins exist; their native
-system instructions and tools remain intact. KalCode-submitted subsequent prompts retrieve
+Claude receives native appended context and task-specific `UserPromptSubmit` context. Codex,
+Gemini and Cursor receive a native initial context message when matching notes or pins exist;
+their native system instructions and tools remain intact. KalCode-submitted subsequent prompts retrieve
 task-specific memory. Directly typed Codex/Gemini terminal input is not intercepted or rewritten.
-Provider-neutral session and event-sink interfaces support future adapters, including Cursor
-when its coding-agent adapter is implemented.
+Cursor's authenticated prompt and response hooks capture explicit durable knowledge, but its
+documented prompt hook has no context-injection field. Directly typed Cursor follow-up prompts
+therefore retain startup memory rather than retrieving new context for each prompt.
+Provider-neutral session and event-sink interfaces also support future adapters.
 
 Handoff previews include relevant target-workspace memory inside their existing context privacy
 filter. Provider launches used by Fleet, Queue, and Runs use the same provider wrapper. KalVoice
@@ -73,7 +75,7 @@ not infer which claim is correct from arbitrary prose.
 ## Integration
 
 - `crates/context/src/memory.rs`: storage, FTS, capture, secret checks, retrieval, and staleness.
-- `crates/native-core/migrations/0023_unified_memory.sql`: atomic local schema and indexes.
+- `crates/native-core/migrations/0024_unified_memory.sql`: atomic local schema and indexes.
 - `apps/desktop/src-tauri/src/unified_memory_commands.rs`: authenticated account-bound service,
   background ingestion, IPC, and provider-neutral session integration.
 - `apps/desktop/src/surfaces/memory`: workspace view and controls.

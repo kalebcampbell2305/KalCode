@@ -941,6 +941,13 @@ mod tests {
                 Ok(())
             })
             .expect("login");
+        // Exercise cancellation after the child starts. Immediate cancellation can
+        // correctly terminate it before its fixture log is written under load.
+        let started_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while operations(&fixture).is_empty() && std::time::Instant::now() < started_deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(operations(&fixture), ["login"], "login child started");
         pending.cancel().expect("cancel");
         let _lease = fixture
             .profiles

@@ -186,6 +186,18 @@
   text-overflow: ellipsis;
 }
 
+/* Runtime model IDs may include version and reasoning parameters. Keep the complete identity
+   visible even when several Cursor terminals share a narrow workspace. */
+.exactModel {
+  flex: 1 0 100%;
+  min-width: 0;
+  padding-bottom: var(--space-1);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+}
+
 .effort {
   flex: none;
 }

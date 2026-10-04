@@ -63,6 +63,66 @@ fn create(provider: &str, count: u8) -> KalVoiceIntent {
 }
 
 #[test]
+fn cursor_launches_are_real_provider_panes_with_runtime_model_queries() {
+    for (spoken, count, account, model) in [
+        ("Launch a Cursor agent", 1, None, None),
+        ("Launch four Cursor agents", 4, None, None),
+        ("Launch Cursor using Cursor B", 1, Some("cursor b"), None),
+        (
+            "Launch Cursor with deepseek-v99",
+            1,
+            None,
+            Some("deepseek-v99"),
+        ),
+        (
+            "Launch Cursor using Cursor B with model gpt-9.2",
+            1,
+            Some("cursor b"),
+            Some("gpt-9-2"),
+        ),
+        (
+            "Launch Cursor with model custom-42 using Cursor B",
+            1,
+            Some("cursor b"),
+            Some("custom-42"),
+        ),
+    ] {
+        let KalVoiceIntent::CreateProviderPanes {
+            groups,
+            workspace_id,
+        } = intent(spoken)
+        else {
+            panic!(
+                "Expected actual coding panes: {spoken}: {:?}",
+                intent(spoken)
+            );
+        };
+        assert!(
+            workspace_id.is_none(),
+            "current workspace is resolved by the executor"
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].provider_id,
+            Some(ProviderId::new(ProviderId::CURSOR))
+        );
+        assert_eq!(groups[0].count, count);
+        assert_eq!(groups[0].account_query.as_deref(), account);
+        assert_eq!(groups[0].model.as_deref(), model);
+    }
+    assert_eq!(
+        intent("Open the Cursor agent that just finished"),
+        KalVoiceIntent::Focus {
+            query: "cursor agent that just finished".into(),
+        }
+    );
+    assert!(is_reasoning("Do not launch four Cursor agents"));
+    assert!(is_reasoning(
+        "Launch Cursor with model custom-42 and delete files"
+    ));
+}
+
+#[test]
 fn provider_pane_requests_use_the_local_command_path() {
     for text in [
         "open 4 Codex terminals",

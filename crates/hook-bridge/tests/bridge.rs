@@ -375,6 +375,32 @@ fn registrations_reject_records_from_the_other_provider_channel() {
 }
 
 #[test]
+fn cursor_channel_authenticates_only_its_bounded_lifecycle_records() {
+    let (_dir, server) = server();
+    let handler = Fixed::new(HookReply::Ack);
+    let cursor = server
+        .register_channel(handler.clone(), HookChannel::Cursor)
+        .unwrap();
+    let claude = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .unwrap();
+    let record = serde_json::json!({
+        "event":"Cursor", "providerSessionId":"native-conversation",
+        "cursor":{"event":"stop","generationId":"turn-1","model":"future-9","status":"completed"}
+    })
+    .to_string();
+    send_raw(&server, &claude, &record);
+    send_raw(
+        &server,
+        &cursor,
+        &serde_json::json!({"event":"Stop"}).to_string(),
+    );
+    send_raw(&server, &cursor, &record);
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.stats().rejected_malformed, 2);
+}
+
+#[test]
 fn codex_notify_requires_a_canonical_thread_id_and_supported_type() {
     let (_dir, server) = server();
     let handler = Fixed::new(HookReply::Ack);

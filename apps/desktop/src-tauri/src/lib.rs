@@ -716,6 +716,8 @@ pub fn run(removed_overrides: Vec<String>) {
                 account_commands::account_usage,
                 account_commands::account_set_display_name,
                 provider_auth_commands::provider_claude_account_refresh,
+                provider_auth_commands::provider_cursor_account_refresh,
+                provider_auth_commands::provider_cursor_login,
                 provider_auth_commands::provider_claude_login_start,
                 provider_auth_commands::provider_claude_login_wait,
                 provider_auth_commands::provider_claude_login_cancel,

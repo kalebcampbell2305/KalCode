@@ -11,7 +11,7 @@ const WRITE_CHUNK = 8 * 1024;
 export const PANE_CREATE_MODES: readonly PermissionMode[] = ["plan", "approve", "auto", "bypass"];
 
 /** Providers that can run in a pane (mirrors `provider_pane_create`). */
-export const PANE_PROVIDERS = ["claude-code", "codex", "gemini-cli"] as const;
+export const PANE_PROVIDERS = ["claude-code", "codex", "cursor", "gemini-cli"] as const;
 export type PaneProviderId = (typeof PANE_PROVIDERS)[number];
 
 export function isPaneProvider(providerId: string): providerId is PaneProviderId {

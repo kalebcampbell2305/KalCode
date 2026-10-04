@@ -88,6 +88,9 @@ pub fn resolve(executable: &Path, env: &BTreeMap<OsString, OsString>) -> Launch 
     if !is_script_launcher(executable) {
         return direct(LaunchKind::Direct);
     }
+    if let Some(launch) = cursor_powershell_launcher(executable, env) {
+        return launch;
+    }
     let Some(target) = shim_target(executable) else {
         tracing::warn!(
             event = "provider.shim_unresolved",
@@ -121,6 +124,51 @@ pub fn resolve(executable: &Path, env: &BTreeMap<OsString, OsString>) -> Launch 
     } else {
         direct(LaunchKind::ShimUnresolved)
     }
+}
+
+/// Cursor's official native Windows installer ships a small .cmd -> adjacent .ps1
+/// launcher. Invoke the same script with argv directly, preserving the provider's
+/// version selection/update behavior without passing user arguments through cmd.exe.
+fn cursor_powershell_launcher(
+    executable: &Path,
+    env: &BTreeMap<OsString, OsString>,
+) -> Option<Launch> {
+    let name = executable.file_name()?.to_str()?;
+    if !["agent.cmd", "cursor-agent.cmd"]
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+    {
+        return None;
+    }
+    let mut content = String::new();
+    std::fs::File::open(executable)
+        .ok()?
+        .take(MAX_SHIM_BYTES + 1)
+        .read_to_string(&mut content)
+        .ok()?;
+    if content.len() as u64 > MAX_SHIM_BYTES
+        || !content.contains("%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+        || !content.contains("-File \"%SCRIPT_DIR%\\cursor-agent.ps1\" %*")
+    {
+        return None;
+    }
+    let script = executable.parent()?.join("cursor-agent.ps1");
+    let program = Path::new(lookup(env, "SystemRoot")?)
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    if !program.is_absolute() || !program.is_file() || !script.is_file() {
+        return None;
+    }
+    Some(Launch {
+        program,
+        prefix_args: vec![
+            "-NoProfile".into(),
+            "-ExecutionPolicy".into(),
+            "Bypass".into(),
+            "-File".into(),
+            script.into_os_string(),
+        ],
+        kind: LaunchKind::ShimNative,
+    })
 }
 
 fn has_ext(path: &Path, exts: &[&str]) -> bool {
@@ -250,6 +298,29 @@ fn plain(path: &Path) -> PathBuf {
 #[cfg(windows)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_native_launcher_preserves_provider_script_and_argument_boundary() {
+        let dir = tempfile::tempdir().expect("dir");
+        let system = dir.path().join("Windows/System32/WindowsPowerShell/v1.0");
+        std::fs::create_dir_all(&system).expect("system");
+        std::fs::write(system.join("powershell.exe"), "").expect("powershell");
+        let shim = dir.path().join("cursor-agent.cmd");
+        std::fs::write(&shim, "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%SCRIPT_DIR%\\cursor-agent.ps1\" %*").expect("shim");
+        std::fs::write(dir.path().join("cursor-agent.ps1"), "# provider owned").expect("script");
+        let variables = BTreeMap::from([(
+            OsString::from("SystemRoot"),
+            dir.path().join("Windows").into_os_string(),
+        )]);
+        let launch = resolve(&shim, &variables);
+        assert_eq!(launch.kind, LaunchKind::ShimNative);
+        assert_eq!(launch.program, system.join("powershell.exe"));
+        assert_eq!(
+            launch.prefix_args.last(),
+            Some(&dir.path().join("cursor-agent.ps1").into_os_string())
+        );
+        assert!(!launch.prefix_args.iter().any(|arg| arg == "-Command"));
+    }
 
     /// The shim npm (cmd-shim) writes for a package whose bin is a Node.js script.
     const NPM_NODE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n";

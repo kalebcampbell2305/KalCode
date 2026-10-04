@@ -11,6 +11,16 @@ smallest useful context, retain provenance, withhold stale claims, and never bli
 terminal logs, conversations, secrets, or credentials. See `docs/UNIFIED-MEMORY.md` for the
 implemented paths and current provider/workflow limits.
 
+## Permanent Cursor provider rule (owner directive 2026-10-04)
+
+**CURSOR IS A FIRST-CLASS KALCODE CODING PROVIDER. CURSOR AGENTS ARE REAL CODING TERMINALS, NEVER CHAT THREADS.**
+
+Use the shared provider, account, model, PTY/session, agent, workspace, KalVoice, Runs/Queue, orchestration and context systems. Preserve native Cursor file access, edits, shell, Git, search, tools, configuration, environment, authentication, integrations and interactive input/output. A capability that works in Cursor's supported native terminal but fails only in KalCode is a KalCode compatibility bug.
+
+Discover Cursor's models from the actual account/runtime; never maintain or invent a fixed availability list. Preserve exact model IDs/numbers and supported reasoning parameters, including models from any upstream vendor or custom model actually exposed. Never imply an unavailable model or effort is supported. Use native persistent sign-in; support multiple accounts only through a verified isolation mechanism. Do not manufacture multiple identities for one native account. Show real provider usage only; otherwise show **Usage unavailable**.
+
+Keep account and exact model identity consistent across Code, Agent Fleet, Account Hub, Providers, Runs, Queue, orchestration and KalVoice. Workspace context belongs to KalCode/the workspace and remains provider-neutral. Cursor uses the existing KalCode visual hierarchy and lifecycle; no disconnected Cursor subsystem. See `docs/providers/cursor.md` for the supported integration and its verified limits.
+
 ## Permanent workspace execution rule (owner directive 2026-10-03)
 
 **KALCODE CODE MODE / WORKSPACE EXECUTION MUST BE AVAILABLE BY DEFAULT. THE USER SHOULD NEVER BE BLOCKED BY "CODE-MODE HOST IS DISABLED" DURING NORMAL USE.** This policy applies to Claude Code, Codex, Windows and macOS, Stable and Dev.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-cursor-login"
+description = "Enables the provider_cursor_login command without any pre-configured scope."
+commands.allow = ["provider_cursor_login"]
+
+[[permission]]
+identifier = "deny-provider-cursor-login"
+description = "Denies the provider_cursor_login command without any pre-configured scope."
+commands.deny = ["provider_cursor_login"]

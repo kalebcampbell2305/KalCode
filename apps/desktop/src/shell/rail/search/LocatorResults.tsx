@@ -115,6 +115,7 @@ const RECENCY_WORDS: Record<string, string> = {
 const PROVIDER_WORDS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   "gemini-cli": "Gemini CLI",
 };
 

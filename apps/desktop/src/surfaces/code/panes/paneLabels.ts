@@ -20,6 +20,7 @@ export interface ProviderIdentity {
 const IDENTITIES: Record<string, ProviderIdentity> = {
   "claude-code": { name: "Claude Code", initial: "C", shape: "square" },
   codex: { name: "Codex", initial: "X", shape: "hexagon" },
+  cursor: { name: "Cursor", initial: "C", shape: "circle" },
   "gemini-cli": { name: "Gemini CLI", initial: "G", shape: "circle" },
 };
 
@@ -66,8 +67,13 @@ export function channelNote(info: PaneInfo | null): { text: string; tone: "neutr
       : { text: "Limited status — approvals in Codex", tone: "limited" };
   }
   // Gemini CLI: process state only.
+  if (info.providerId === "cursor") {
+    return info.hookChannel === "active"
+      ? { text: "Connected to Cursor", tone: "neutral" }
+      : { text: "Cursor lifecycle hooks unavailable", tone: "limited" };
+  }
   if (info.providerId === "gemini-cli") {
-    return { text: "Process state only — approvals in Gemini CLI", tone: "limited" };
+    return { text: `Process state only — approvals in ${name}`, tone: "limited" };
   }
   if (info.hookChannel === "limited") return { text: `Limited status — approvals in ${name}`, tone: "limited" };
   if (info.hookChannel === "waiting") return { text: `Connecting to ${name}…`, tone: "neutral" };
@@ -86,6 +92,20 @@ export interface PaneInfoCopy {
 
 export function paneInfoCopy(providerId: string, info: PaneInfo | null, providerName?: string): PaneInfoCopy {
   const name = providerIdentity(providerId, providerName).name;
+  if (providerId === "cursor") {
+    return {
+      summary:
+        info?.hookChannel === "active"
+          ? "Cursor runs in its native interactive terminal. Native lifecycle hooks report session readiness and completed turns to KalCode."
+          : "Cursor lifecycle hooks are unavailable for this session. Work in the terminal; automatic handoffs wait for verified readiness.",
+      limitsTitle: "Session visibility:",
+      limits: [
+        "Cursor handles its own tools, model changes, settings and interactive prompts.",
+        "Use Cursor's native commands to inspect or change the running session.",
+      ],
+      footer: "Your native Cursor authentication and configuration are preserved.",
+    };
+  }
   if (providerId === "codex" || providerId === "gemini-cli") {
     const codex = providerId === "codex";
     return {

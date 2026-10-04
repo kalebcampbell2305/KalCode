@@ -29,6 +29,7 @@ import type {
 import type { PromptReview, PromptWarning } from "../context.ts";
 import { providerCatalog } from "../memoryProviders.ts";
 import type { CommandName } from "../transport.ts";
+import { cursorModelFixture } from "./providerAccounts.ts";
 
 export type ThreadsScenario = "default" | "threads" | "no-providers";
 
@@ -114,6 +115,16 @@ const PROVIDERS: ProviderOption[] = [
     supportsInterrupt: true,
     hostApprovals: false,
     permissionMappings: mappingsOf("gemini-cli"),
+  },
+  {
+    id: "cursor",
+    displayName: "Cursor",
+    accountLabel: null,
+    models: cursorModelFixture,
+    supportsResume: true,
+    supportsInterrupt: true,
+    hostApprovals: false,
+    permissionMappings: [],
   },
 ];
 
