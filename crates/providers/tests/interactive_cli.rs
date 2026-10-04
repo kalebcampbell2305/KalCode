@@ -469,11 +469,91 @@ fn managed_cli_panes_fail_closed_without_a_native_guardian() {
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn managed_codex_requires_authoritative_cloud_eligibility_before_any_provider_process() {
+fn managed_codex_launches_without_a_plan_metadata_resolver() {
     let rig = Rig::new_managed(PaneCli::Codex, None);
-    let error = rejected_start(&rig, Some(new_id()));
-    assert!(error.to_string().contains("eligibility"), "{error}");
-    rig.assert_no_provider_process_started();
+    let pane = rig
+        .start_with_account(PermissionMode::Plan, Some(new_id()))
+        .expect("missing plan metadata does not block native Codex");
+    pane._session.terminate().expect("terminate");
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn three_managed_codex_agents_keep_account_model_effort_workspace_and_distinct_sessions() {
+    let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Unknown));
+    let account = new_id();
+    let workspace = new_id();
+    let mut panes = Vec::new();
+    for _ in 0..3 {
+        let mut config = rig.config(PermissionMode::Bypass, Some(account.clone()));
+        config.workspace_id = workspace.clone();
+        config.model = Some("gpt-5.3-codex".into());
+        config.effort = Some("high".into());
+        assert!(config.resume_session_id.is_none());
+        let id = config.thread_id.clone();
+        let (tx, rx) = mpsc::channel();
+        let session = rig
+            .provider
+            .start_session(
+                config,
+                Box::new(move |event| {
+                    let _ = tx.send(event);
+                }),
+            )
+            .expect("native managed session");
+        panes.push(rig.attach_started(id, session, rx).expect("real PTY pane"));
+        let args = rig.args();
+        assert_eq!(after(&args, "-m"), Some("gpt-5.3-codex"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "model_reasoning_effort='high'"),
+            "{args:?}"
+        );
+        assert_eq!(rig.launch_cwd(), rig.work.path());
+    }
+    assert_eq!(
+        &*rig.resolved_accounts.lock().unwrap(),
+        &[account.clone(), account.clone(), account]
+    );
+    let instances: HashSet<_> = panes
+        .iter()
+        .map(|pane| {
+            let info = rig.panes.info(&pane.thread_id).expect("pane info");
+            assert!(info.running);
+            info.instance_id.expect("native process identity")
+        })
+        .collect();
+    assert_eq!(
+        instances.len(),
+        3,
+        "each agent owns an independent live PTY process"
+    );
+    let mut provider_sessions = HashSet::new();
+    for (index, pane) in panes.iter().enumerate() {
+        pane.type_line(&format!("agent {index}"));
+        let events = pane.events_until(|event| matches!(event, AgentEvent::TurnCompleted { .. }));
+        let session = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::SessionStarted {
+                    provider_session_id,
+                    ..
+                } => Some(provider_session_id.clone()),
+                _ => None,
+            })
+            .or_else(|| pane._session.provider_session_id())
+            .expect("provider session identity");
+        assert!(
+            provider_sessions.insert(session),
+            "each agent has a fresh provider session"
+        );
+    }
+    for pane in panes {
+        pane._session
+            .terminate()
+            .expect("terminate owned test agent");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]

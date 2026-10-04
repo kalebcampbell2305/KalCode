@@ -254,7 +254,7 @@ impl ProfileLeaseError {
             Self::InUse => ProviderError::Refused {
                 code: kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY.to_owned(),
                 message: "This account is busy with a sign-in or account change in KalCode. \
-                          Finish it, then resume this thread."
+                          Finish it, then try launching the agent again."
                     .to_owned(),
             },
             Self::Unavailable(error) => error,

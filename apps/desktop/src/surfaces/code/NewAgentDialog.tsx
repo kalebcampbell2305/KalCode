@@ -55,8 +55,8 @@ export interface NewAgentDialogProps {
   /** Handoff launches create exactly one recipient while keeping the prepared draft in Code. */
   fixedCount?: number;
   purpose?: "standard" | "handoff";
-  /** Starts the agents; resolves true when at least one started (the dialog then closes). */
-  onLaunch: (spec: AgentLaunchSpec) => Promise<boolean>;
+  /** Number started. A partial batch retains only its unfinished agents for reconnect/retry. */
+  onLaunch: (spec: AgentLaunchSpec) => Promise<boolean | number>;
   onClose: () => void;
   /** Optional secondary actions ("Other"): shown only when the host wires them. */
   onNewTerminal?: () => void;
@@ -92,14 +92,10 @@ interface Choice {
 type RowTone = "ok" | "low" | "waiting" | "danger" | "muted" | "accent";
 
 /** The one status word a row shows, from what KalCode actually knows. */
-function rowStatus(
-  session: ReturnType<typeof accountSessionState>,
-  usage: AccountUsageState,
-): { label: string; tone: RowTone } {
+function rowStatus(session: ReturnType<typeof accountSessionState>): { label: string; tone: RowTone } {
   if (session.state === "expired") return { label: "Signed out", tone: "waiting" };
   if (session.state === "checking") return { label: "Checking", tone: "muted" };
   if (session.state === "error") return { label: "Needs attention", tone: "danger" };
-  if (usageSummary(usage).low) return { label: "Low", tone: "low" };
   if (session.state === "connected") return { label: "Ready", tone: "ok" };
   return { label: "Not checked", tone: "muted" };
 }
@@ -127,7 +123,9 @@ export function NewAgentDialog({
 }: NewAgentDialogProps) {
   const { client } = useRuntime();
   const sessions = useOptionalProviderAccountSessions();
-  const replaceAccount = sessions?.replace;
+  const discoverModels = sessions?.discoverModels;
+  const refreshUsage = sessions?.refreshUsage;
+  useEffect(() => refreshUsage?.(), [refreshUsage]);
   const sharedSessions = sessions !== null;
   const usages = useAccountUsages();
   const id = useId();
@@ -154,6 +152,7 @@ export function NewAgentDialog({
   const [signingIn, setSigningIn] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const submitting = useRef(false);
   const [cursorModels, setCursorModels] = useState<{
     accountId: string;
     models: readonly ModelInfo[];
@@ -252,24 +251,28 @@ export function NewAgentDialog({
         ? resolveLaunchAccount(restoredAccounts, bindings, providerId, workspace.id, remembered)
         : "";
   const account = candidates.find((a) => a.id === selectedAccountId);
-  const sessionOf = (a: ProviderAccount) =>
-    accountSessionState(a, sessions?.checking.has(a.id), sessions?.validationErrors.get(a.id) ?? null);
-  const usageOf = (accountId: string) => usages.get(accountId) ?? notChecked(accountId);
+  const sessionOf = (a: ProviderAccount) => sessions?.states.get(a.id)?.health ?? accountSessionState(a);
+  const usageOf = (accountId: string) =>
+    sessions?.states.get(accountId)?.usage ?? usages.get(accountId) ?? notChecked(accountId);
   const selectedSession = account ? sessionOf(account) : null;
   const activeChoice: Choice | null = providerPending ? null : { providerId, accountId: account?.id ?? "" };
 
   // Cursor models belong to the real account/runtime, never the static catalog or launch memory.
   const cursorAccountId = providerId === "cursor" ? account?.id : undefined;
+  const authenticationState = account?.authenticationState;
+  const reportedIdentity = account?.providerReportedIdentity;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnecting to a different reported identity invalidates account model discovery.
   useEffect(() => {
-    if (!cursorAccountId) return;
+    if (selectedAccountId && authenticationState !== "not_authenticated") void discoverModels?.(selectedAccountId);
+  }, [discoverModels, selectedAccountId, authenticationState, reportedIdentity]);
+  useEffect(() => {
+    if (!cursorAccountId || discoverModels || authenticationState === "not_authenticated") return;
     let cancelled = false;
     setCursorModels(null);
     client.refreshCursorAccount(cursorAccountId).then(
       (state) => {
         if (cancelled) return;
-        if (replaceAccount) replaceAccount(state.account);
-        else
-          setLocalAccounts((current) => current?.map((a) => (a.id === state.account.id ? state.account : a)) ?? null);
+        setLocalAccounts((current) => current?.map((a) => (a.id === state.account.id ? state.account : a)) ?? null);
         setCursorModels({ accountId: cursorAccountId, models: state.models, error: state.modelsError });
       },
       (failure) => {
@@ -280,19 +283,34 @@ export function NewAgentDialog({
     return () => {
       cancelled = true;
     };
-  }, [client, cursorAccountId, replaceAccount]);
-  const currentCursorModels = cursorModels?.accountId === selectedAccountId ? cursorModels : null;
+  }, [client, cursorAccountId, discoverModels, authenticationState]);
+  const canonicalModels = sessions?.states.get(selectedAccountId)?.models;
+  const currentCursorModels = sharedSessions
+    ? canonicalModels && canonicalModels.status !== "checking"
+      ? { models: canonicalModels.items, error: canonicalModels.reason }
+      : null
+    : cursorModels?.accountId === selectedAccountId
+      ? cursorModels
+      : null;
 
   // Model: provider/account default first, then the exact models this provider reports.
   const providerModels =
-    providerId === "cursor" ? (currentCursorModels?.models ?? null) : (models?.get(providerId) ?? null);
+    providerId === "cursor"
+      ? currentCursorModels?.error
+        ? null
+        : (currentCursorModels?.models ?? null)
+      : canonicalModels?.status === "available"
+        ? canonicalModels.items
+        : canonicalModels?.status === "unavailable"
+          ? null
+          : (models?.get(providerId) ?? null);
   const defaultModel = providerModels?.find((m) => m.isDefault) ?? null;
   const rawModel =
     config.providerId === providerId && config.model !== undefined ? config.model : (remembered?.model ?? "");
   const model =
     !rawModel || rawModel === defaultModel?.id
       ? ""
-      : providerModels && !providerModels.some((m) => m.id === rawModel)
+      : providerId !== "cursor" && providerModels && !providerModels.some((m) => m.id === rawModel)
         ? ""
         : rawModel;
   const modelOptions: { value: string; label: string }[] = [
@@ -307,7 +325,7 @@ export function NewAgentDialog({
                 ? `${m.displayName} (${m.id})`
                 : m.displayName,
           }))
-      : model && providerId !== "cursor"
+      : model
         ? [{ value: model, label: remembered?.modelName ?? model }]
         : []),
   ];
@@ -321,6 +339,7 @@ export function NewAgentDialog({
   const count = fixedCount ?? clampAgentCount(Number(countText));
 
   const choose = (choice: Choice) => {
+    if (busy || signingIn) return;
     if (choice.providerId !== providerId) {
       setConfig({ providerId: choice.providerId });
       if (!countTouched && fixedCount === undefined) {
@@ -331,6 +350,7 @@ export function NewAgentDialog({
     setPicked(choice);
   };
   const setCount = (next: number) => {
+    if (busy || signingIn) return;
     setCountTouched(true);
     setCountText(String(clampAgentCount(next)));
   };
@@ -344,12 +364,25 @@ export function NewAgentDialog({
     !!selectedAccountId &&
     !!selectedSession?.usable &&
     !accountLoadError &&
-    !unavailableCursorModel &&
-    !(providerId === "cursor" && !!rawModel && !providerModels);
+    !unavailableCursorModel;
 
   const launch = async (spec: AgentLaunchSpec, launchedModelName: string | null) => {
-    const ok = await onLaunch(spec);
-    if (!ok) return;
+    if (submitting.current) return;
+    submitting.current = true;
+    let started: number;
+    try {
+      const result = await onLaunch(spec);
+      started = typeof result === "number" ? result : result ? spec.count : 0;
+      if (started < spec.count) {
+        if (fixedCount === undefined) setCountText(String(spec.count - started));
+        // A real provider rejection persists expiry for this exact account. Restore that fact
+        // inline, preserving model, effort and unfinished count for the reconnect action.
+        await reloadAccounts();
+        return;
+      }
+    } finally {
+      submitting.current = false;
+    }
     const rememberedCount = fixedCount === undefined ? spec.count : (memory.byProvider[spec.providerId]?.count ?? 1);
     setMemory(
       rememberLaunch({
@@ -505,7 +538,7 @@ export function NewAgentDialog({
     !accountLoadError &&
     !providerPending &&
     isBrowserAuthProvider(providerId) &&
-    (candidates.length === 0 || account?.authenticationState === "not_authenticated");
+    (signingIn || candidates.length === 0 || account?.authenticationState === "not_authenticated");
   const others: { label: string; icon: ReactNode; run: () => void }[] = [];
   if (onNewTerminal) others.push({ label: "Terminal", icon: <SquareTerminal />, run: onNewTerminal });
   if (onOpenBrowser) others.push({ label: "Live Browser", icon: <Globe />, run: onOpenBrowser });
@@ -669,13 +702,16 @@ export function NewAgentDialog({
                                   meta={
                                     same
                                       ? `Same sign-in as ${same}`
-                                      : [usage.plan, a.providerReportedIdentity ?? (a.isDefault ? "Default" : null)]
+                                      : [
+                                          usage.plan ?? "Plan unavailable",
+                                          a.providerReportedIdentity ?? (a.isDefault ? "Default" : null),
+                                        ]
                                           .filter(Boolean)
                                           .join(" · ")
                                   }
                                   metaTone={same ? "notice" : undefined}
                                   usage={usage}
-                                  status={rowStatus(sessionOf(a), usage)}
+                                  status={rowStatus(sessionOf(a))}
                                   onPick={() => choose({ providerId: group.providerId, accountId: a.id })}
                                   onLaunch={submitNow}
                                 />
@@ -716,11 +752,11 @@ export function NewAgentDialog({
                   <div className={styles.signIn}>
                     <p className={styles.signInText}>
                       {account
-                        ? `${accountName(account)} is signed out. Sign in once and it launches from here.`
+                        ? `${accountName(account)} needs to reconnect.`
                         : `Add a ${providerName} account to launch ${providerName} agents.`}
                     </p>
                     <LaunchSignIn
-                      key={`${providerId}:${account?.id ?? "new"}`}
+                      key={providerId}
                       providerId={providerId}
                       providerName={providerName}
                       account={account}
@@ -728,6 +764,20 @@ export function NewAgentDialog({
                       disabled={busy}
                       onReload={reloadAccounts}
                       onBusyChange={setSigningIn}
+                      reconnect={!!account}
+                      onConnected={async (connected) => {
+                        setPicked({ providerId, accountId: connected.id });
+                        await launch(
+                          {
+                            providerId,
+                            providerAccountId: connected.id,
+                            count,
+                            model: model || null,
+                            effort: effort || null,
+                          },
+                          modelName,
+                        );
+                      }}
                     />
                   </div>
                 ) : null}
@@ -738,7 +788,7 @@ export function NewAgentDialog({
                   label="Model"
                   value={model}
                   options={modelOptions}
-                  disabled={busy || providerPending}
+                  disabled={busy || signingIn || providerPending}
                   pending={providerModels === null}
                   onChange={(next) => setConfig((c) => ({ ...c, providerId, model: next }))}
                 />
@@ -763,7 +813,7 @@ export function NewAgentDialog({
                       { value: "", label: "Default" },
                       ...efforts.map((level) => ({ value: level, label: effortLabel(level) })),
                     ]}
-                    disabled={busy || providerPending}
+                    disabled={busy || signingIn || providerPending}
                     onChange={(next) => setConfig((c) => ({ ...c, providerId, effort: next }))}
                   />
                 ) : null}
@@ -778,7 +828,7 @@ export function NewAgentDialog({
                           size="sm"
                           label="One fewer agent"
                           icon={<Minus />}
-                          disabled={busy || count <= 1}
+                          disabled={busy || signingIn || count <= 1}
                           onClick={() => setCount(count - 1)}
                         />
                         <input
@@ -789,7 +839,7 @@ export function NewAgentDialog({
                           min={1}
                           max={MAX_AGENTS_PER_LAUNCH}
                           value={countText}
-                          disabled={busy}
+                          disabled={busy || signingIn}
                           aria-describedby={`${id}-count-hint`}
                           onChange={(e) => {
                             setCountTouched(true);
@@ -808,7 +858,7 @@ export function NewAgentDialog({
                           size="sm"
                           label="One more agent"
                           icon={<Plus />}
-                          disabled={busy || count >= MAX_AGENTS_PER_LAUNCH}
+                          disabled={busy || signingIn || count >= MAX_AGENTS_PER_LAUNCH}
                           onClick={() => setCount(count + 1)}
                         />
                       </div>

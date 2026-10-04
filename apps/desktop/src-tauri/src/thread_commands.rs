@@ -309,9 +309,13 @@ fn adapter(
         runtime: runtime.clone(),
         test_fixture,
     });
-    let guard = |provider: Arc<dyn AgentProvider>| -> Arc<dyn AgentProvider> {
+    let guard = |provider: Arc<dyn AgentProvider>, interactive: bool| -> Arc<dyn AgentProvider> {
         let observed = ObservedProvider::wrap(provider, health);
-        let governed = ResourceAdmissionProvider::wrap(observed, resources.clone());
+        let governed = if interactive {
+            ResourceAdmissionProvider::wrap_interactive(observed, resources.clone())
+        } else {
+            ResourceAdmissionProvider::wrap(observed, resources.clone())
+        };
         Arc::new(AccountBoundProvider::managed(
             governed,
             runtime.clone(),

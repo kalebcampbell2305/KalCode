@@ -712,6 +712,57 @@ impl ResourceGovernorState {
         })
     }
 
+    /// Real coding terminals are foreground work. CPU saturation and an unfinished sampler
+    /// cannot hold them behind background work; measured hard pressure still can. Retain the
+    /// same atomic reservation accounting so concurrent starts share one memory budget.
+    pub(super) fn reserve_interactive_provider_task(
+        self: &Arc<Self>,
+        provider: kalcode_contracts::agent::ProviderId,
+    ) -> Result<ProviderTaskReservation, AdmissionDecision> {
+        let mut runtime = self.lock();
+        let latest = runtime.handle.as_ref().and_then(GovernorHandle::latest);
+        let limits = runtime
+            .handle
+            .as_ref()
+            .map(GovernorHandle::limits)
+            .unwrap_or_else(ModeLimits::balanced);
+        let now = unix_ms();
+        let pending = runtime.activity.unmeasured_budget(
+            latest
+                .as_deref()
+                .map(|snapshot| snapshot.sampled_at_unix_ms),
+        );
+        let budget = provider_budget(latest.as_deref(), &limits).unwrap_or(ReservationBudget {
+            cpu_millicores: 0,
+            memory_mib: limits.agent_estimate.memory_mb,
+            disk_mib: 0,
+        });
+        let decision = interactive_provider_admission(
+            latest.as_deref(),
+            &limits,
+            &runtime.activity.running(),
+            &CapacityRequest {
+                provider: Some(provider.clone()),
+            },
+            pending,
+            budget,
+            now,
+        );
+        let reservation_id = reserve_claim(
+            &mut runtime,
+            ReservationKind::Provider(provider),
+            budget,
+            decision,
+            now,
+        )?;
+        publish_activity(&runtime);
+        Ok(ProviderTaskReservation {
+            governor: Arc::downgrade(self),
+            reservation_id,
+            released: AtomicBool::new(false),
+        })
+    }
+
     /// Test seam for the existing count-only provider contract. Production always uses the
     /// workload-projected path above.
     #[cfg(test)]
@@ -1197,6 +1248,80 @@ fn projected_admission(
         }
     }
     decision
+}
+
+/// Informational CPU pressure never postpones an explicit coding-terminal request. Only
+/// current measured hard memory/disk pressure may hold it; unavailable telemetry is unknown.
+#[allow(clippy::too_many_arguments)]
+fn interactive_provider_admission(
+    snapshot: Option<&ResourceSnapshot>,
+    limits: &ModeLimits,
+    running: &RunningWork,
+    request: &CapacityRequest,
+    pending: ReservationBudget,
+    requested: ReservationBudget,
+    now_unix_ms: i64,
+) -> AdmissionDecision {
+    let current = snapshot.filter(|snapshot| {
+        snapshot.seq > 0
+            && snapshot.mode == limits.kind
+            && now_unix_ms
+                .checked_sub(snapshot.sampled_at_unix_ms)
+                .is_some_and(|age| {
+                    age >= 0 && age as u128 <= admission_max_age(snapshot).as_millis()
+                })
+    });
+    let unknown = ResourceSnapshot::unknown("no current resource sample", limits.kind);
+    let holds: Vec<_> = projected_capacity(
+        current.unwrap_or(&unknown),
+        limits,
+        running,
+        request,
+        pending,
+        requested,
+    )
+    .constraints
+    .into_iter()
+    .filter(|constraint| {
+        constraint.allows == 0
+            && matches!(
+                &constraint.reason,
+                HoldReason::MemoryHeadroom { .. }
+                    | HoldReason::UserLimit { .. }
+                    | HoldReason::ProviderLimit { .. }
+                    | HoldReason::Pressure {
+                        resource: kalcode_resources::ResourceKind::Memory
+                            | kalcode_resources::ResourceKind::DiskSpace,
+                        level: kalcode_resources::PressureLevel::Critical,
+                        signal: kalcode_resources::Signal::MemoryAvailableMb
+                            | kalcode_resources::Signal::CommitPercent
+                            | kalcode_resources::Signal::DiskFreeMb { .. },
+                        ..
+                    }
+            )
+            || constraint.allows == 0
+                && limits.kind == kalcode_resources::ModeKind::Custom
+                && matches!(constraint.reason, HoldReason::KalCodeMemoryCap { .. })
+    })
+    .map(|constraint| constraint.reason)
+    .collect();
+    let allowed = holds.is_empty();
+    AdmissionDecision {
+        state: if allowed {
+            AdmissionState::Allowed
+        } else {
+            AdmissionState::Held
+        },
+        mode: Some(limits.kind),
+        additional: u32::from(allowed),
+        reasons: if allowed {
+            Vec::new()
+        } else {
+            vec![AdmissionReason::Capacity { holds }]
+        },
+        snapshot_seq: current.map(|snapshot| snapshot.seq),
+        sampled_at_unix_ms: current.map(|snapshot| snapshot.sampled_at_unix_ms),
+    }
 }
 
 fn projected_capacity(

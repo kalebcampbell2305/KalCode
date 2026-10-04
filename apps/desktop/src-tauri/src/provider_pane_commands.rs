@@ -80,7 +80,7 @@ impl PaneRoutes {
     pub fn route_claude(
         &self,
         headless: Arc<dyn AgentProvider>,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Arc<dyn AgentProvider> {
         let router = match self.claude.as_ref() {
             Some(interactive) => RuntimeRouter::new(headless, interactive.clone()),
@@ -95,7 +95,7 @@ impl PaneRoutes {
         &self,
         id: &str,
         headless: Arc<dyn AgentProvider>,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Arc<dyn AgentProvider> {
         let interactive = match id {
             ProviderId::CODEX => self.codex.as_ref(),

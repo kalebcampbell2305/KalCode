@@ -1,5 +1,19 @@
 # KalCode agent policy
 
+## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
+
+**UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
+
+- Authentication, plan metadata, usage/reset timing and model discovery are distinct facts in the shared provider account authority. Every surface uses the same account ID, nickname, identity and default; informational failures never revoke a valid session.
+- Display a percentage only from a valid provider-reported measurement. Missing, malformed, unsupported, failed or stale usage is **Usage unavailable** (or **Checking usage…** while fetching), never fake 0%, Low or Exhausted. Preserve legitimate zero and distinguish positive fractions below 1% from zero.
+- Restore persisted identities and provider-native authentication immediately; validate safely and refresh metadata asynchronously. Require reconnection only when the provider actually reports expired/revoked or missing authentication, never because plan, usage, reset or model metadata could not be read.
+- A valid provider session that can start must launch regardless of unknown plan/usage. Provider adapters preserve native authentication, configuration and account isolation. Provider-enforced restrictions remain authoritative.
+- **Agent means a real coding terminal, never a Thread.** Agent creation never routes to Threads or says “resume this thread.” Launch N creates N independent provider sessions in the current workspace using the explicitly selected account, model and effort.
+- Genuine expiry offers inline **Reconnect**, preserves the pending launch, and automatically creates only its unfinished agents after successful authentication. Never make the user navigate away and reconstruct the request.
+- Apply this to Claude Code, Codex, Cursor, Gemini and every future provider. Validate available/unavailable metadata, genuine expiry/reconnect, multi-agent creation and restart persistence through the shared paths.
+
+This file is the authority imported by `CLAUDE.md`; Claude Code and Codex follow the same rule.
+
 ## Permanent Unified Memory definition (owner directive 2026-10-04)
 
 **UNIFIED MEMORY IS KALCODE'S SHARED, PROVIDER-INDEPENDENT PROJECT MEMORY.** It preserves useful

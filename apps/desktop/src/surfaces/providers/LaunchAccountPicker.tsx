@@ -143,6 +143,8 @@ export function LaunchSignIn({
   disabled,
   onReload,
   onBusyChange,
+  onConnected,
+  reconnect = false,
 }: {
   providerId: string;
   providerName: string;
@@ -151,11 +153,20 @@ export function LaunchSignIn({
   disabled: boolean;
   onReload: () => Promise<unknown>;
   onBusyChange: (busy: boolean) => void;
+  onConnected?: (account: ProviderAccount) => Promise<void>;
+  reconnect?: boolean;
 }) {
   const auth = useProviderAccounts(false);
   const [name, setName] = useState("");
   const [starting, setStarting] = useState(false);
   const [reloadError, setReloadError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const reload = useRef(onReload);
   reload.current = onReload;
   const id = useId();
@@ -170,8 +181,18 @@ export function LaunchSignIn({
     setReloadError(null);
     try {
       const target = account ?? (await auth.create(providerId, name.trim() || "Personal"));
-      if (target) await auth.signInAuth(target);
+      if (!mounted.current) return;
+      const connected = target ? await auth.signInAuth(target) : null;
+      if (!mounted.current) return;
       await reload.current();
+      if (!mounted.current) return;
+      if (connected?.authenticationState === "authenticated") {
+        if (connected.id !== target?.id || connected.providerId !== providerId) {
+          setReloadError("The connected account did not match this launch. Choose the account again.");
+          return;
+        }
+        await onConnected?.(connected);
+      }
     } catch (error) {
       setReloadError(toKalCodeError(error).message);
     } finally {
@@ -195,7 +216,7 @@ export function LaunchSignIn({
       ) : null}
       <div className={styles.actions}>
         <Button type="button" size="sm" icon={<LogIn />} busy={busy} disabled={disabled} onClick={() => void signIn()}>
-          {account ? `Sign in to ${accountName(account)}` : `Add ${providerName} account`}
+          {account ? (reconnect ? "Reconnect" : `Sign in to ${accountName(account)}`) : `Add ${providerName} account`}
         </Button>
         {auth.activeLogin ? (
           <Button type="button" size="sm" variant="ghost" onClick={() => void auth.cancelLogin()}>
