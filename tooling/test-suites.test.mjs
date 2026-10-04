@@ -27,16 +27,16 @@ test("the registered Rust release gate includes the production speech engine and
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
   // The retired standalone Manual Claude status probe was one intentional ignore on every platform.
   for (const [platform, expected] of [
-    ["win32", 23],
-    ["darwin", 23],
+    ["win32", 27],
+    ["darwin", 27],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 20],
+    ["linux", 24],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 23);
+  assert.equal(inventory.rustIntentionalIgnores.length, 27);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
@@ -282,8 +282,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 352);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 352);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 355);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 355);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -291,9 +291,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 352);
+  assert.equal(functional.size, 355);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 408);
+  assert.equal(established.size, 411);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

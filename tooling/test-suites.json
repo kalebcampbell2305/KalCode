@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 23,
-          "skippedMaximum": 23,
+          "skippedMinimum": 27,
+          "skippedMaximum": 27,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 20,
-          "skippedMaximum": 20,
+          "skippedMinimum": 24,
+          "skippedMaximum": 24,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 352,
+          "minimumExecuted": 355,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
