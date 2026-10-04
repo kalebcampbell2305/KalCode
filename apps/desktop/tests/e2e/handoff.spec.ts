@@ -260,7 +260,7 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
 
     await killForcibly(app);
     const restarted = await launch(dataDir, env);
-    await expect(restarted.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(restarted.page.getByRole("heading", { level: 1, name: "handoff-project" })).toBeVisible();
     const recovered = await findHandoff(restarted.page, pendingRestart.id);
     expect(recovered?.status).toBe("interrupted");
     expect(recovered?.blocker).toBe("KalCode restarted before this handoff was explicitly finished.");

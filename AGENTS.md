@@ -635,6 +635,8 @@ Some steps only a human can do: OAuth sign-in, 2FA, passwords, OS consent prompt
 
 The owner operates only the `Kaleb` Windows account and the `kalebcampbell` Mac account. Never ask them to switch to QA or test accounts. Automate clean-profile testing instead (disposable data roots, CI, VMs).
 
+**All agent work on the owner's Mac must run inside the `kalebcampbell` macOS account (owner directive 2026-10-03).** This includes SSH, builds, signing, packaging, installation, app automation, testing and update verification. Do not create, sign in to or use another macOS QA/test account, and do not ask the owner to do so. Use task-owned workspaces and isolated data directories within `kalebcampbell` when isolation is needed, preserving the owner's live work and session data. This is an OS-login rule, not merely an account signed into KalCode. Existing authorization to complete the task covers routine work in this account; an alternate Mac account is never a prerequisite.
+
 ## Reporting
 
 "Complete" means production has been verified, not merely that the code compiles or a PR is open. The final report states what shipped, where it is live (version, URL, commit), what was verified, and any known issues that remain.

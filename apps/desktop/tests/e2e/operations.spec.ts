@@ -178,7 +178,7 @@ test("native Operations executes dependencies, controls a local service, and rec
     app = null;
 
     app = await launch(dataDir, { ...commonEnvironment, KALCODE_E2E_NATIVE_CONFIRM: "accept" });
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "operations-fixture" })).toBeVisible();
     const activeWorkspace = await invoke<Workspace | null>(app.page, "workspace_active");
     expect(activeWorkspace?.id).toBe(workspace.id);
 
@@ -310,7 +310,7 @@ test("native Operations executes dependencies, controls a local service, and rec
     app = null;
 
     app = await launch(dataDir, { ...commonEnvironment, KALCODE_E2E_NATIVE_CONFIRM: "accept" });
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "operations-fixture" })).toBeVisible();
     const recovered = await invoke<OperationsSnapshot>(app.page, "operations_snapshot");
     expect(recovered.paused).toBe(true);
     for (const id of [first.id, dependent.id, serviceRun.id, successorRunId]) {

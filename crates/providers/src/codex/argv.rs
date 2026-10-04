@@ -45,6 +45,11 @@ pub(crate) const POLICY_CONFIG: &[&str] = &[
     "shell_environment_policy.inherit='core'",
     "sandbox_workspace_write.network_access=false",
     "sandbox_workspace_write.writable_roots=[]",
+    // --ignore-user-config also removes the Windows backend selection. Without one,
+    // Codex downgrades workspace-write to read-only. Use its restricted-token
+    // backend without elevation; the selected sandbox/approval mode still applies.
+    #[cfg(target_os = "windows")]
+    "windows.sandbox='unelevated'",
     "features.apps=false",
     "features.plugins=false",
     "features.remote_plugin=false",
@@ -280,6 +285,21 @@ mod tests {
                 );
                 assert!(!configs.contains(&"features.code_mode_host=false"));
                 assert!(!configs.contains(&"features.code_mode=false"));
+            }
+        }
+    }
+
+    #[test]
+    fn windows_sandbox_backend_is_available_for_new_and_resumed_turns() {
+        for mode in ALL {
+            for resume in [None, Some("0192f3c4-0000-7000-8000-000000000000")] {
+                let argv = args(mode, resume);
+                let configs = after(&argv, "-c");
+                assert_eq!(
+                    configs.contains(&"windows.sandbox='unelevated'"),
+                    cfg!(target_os = "windows"),
+                    "{mode:?} must select the Windows sandbox without changing its permission mode"
+                );
             }
         }
     }

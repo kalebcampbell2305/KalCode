@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -231,6 +232,68 @@ test("signing target validation is absolute, existing, regular, and executable",
   assert.throws(() => validateSigningTarget("relative.exe", { exists: () => true }), /absolute/);
   assert.throws(() => validateSigningTarget(fixturePath("build", "notes.txt"), { exists: () => true }), /file type/);
   assert.throws(() => validateSigningTarget(target, { exists: () => false }), /does not exist/);
+});
+
+test("signing target validation accepts only the NSIS generated temporary PE uninstaller", () => {
+  const target = join(tmpdir(), "nst4808.tmp");
+  const portableExecutable = Buffer.alloc(256);
+  portableExecutable.write("MZ", 0, "ascii");
+  portableExecutable.writeUInt32LE(128, 0x3c);
+  portableExecutable.write("PE\0\0", 128, "binary");
+  let closed = false;
+
+  assert.equal(
+    validateSigningTarget(target, {
+      exists: () => true,
+      lstat: () => ({ isFile: () => true, isSymbolicLink: () => false }),
+      open: () => 17,
+      fstat: () => ({ isFile: () => true, size: portableExecutable.length }),
+      read: (_fd, destination, offset, length, position) =>
+        portableExecutable.copy(destination, offset, position, position + length),
+      close: () => {
+        closed = true;
+      },
+    }),
+    target,
+  );
+  assert.equal(closed, true);
+});
+
+test("signing target validation rejects untrusted temporary-file lookalikes", () => {
+  const pe = Buffer.alloc(256);
+  pe.write("MZ", 0, "ascii");
+  pe.writeUInt32LE(128, 0x3c);
+  pe.write("PE\0\0", 128, "binary");
+  const dependencies = ({ bytes = pe, fileSize = bytes.length, symbolicLink = false } = {}) => ({
+    exists: () => true,
+    lstat: () => ({ isFile: () => true, isSymbolicLink: () => symbolicLink }),
+    open: () => 19,
+    fstat: () => ({ isFile: () => true, size: fileSize }),
+    read: (_fd, destination, offset, length, position) => bytes.copy(destination, offset, position, position + length),
+    close: () => {},
+  });
+
+  assert.throws(() => validateSigningTarget(join(tmpdir(), "arbitrary.tmp"), dependencies()), /unsupported/);
+  assert.throws(() => validateSigningTarget(fixturePath("outside-temp", "nst4808.tmp"), dependencies()), /unsupported/);
+  assert.throws(
+    () => validateSigningTarget(join(tmpdir(), "nst4808.tmp"), dependencies({ symbolicLink: true })),
+    /non-link/,
+  );
+  assert.throws(
+    () => validateSigningTarget(join(tmpdir(), "nst4808.tmp"), dependencies({ fileSize: 16 * 1024 * 1024 + 1 })),
+    /invalid size/,
+  );
+  assert.throws(
+    () => validateSigningTarget(join(tmpdir(), "nst4808.tmp"), dependencies({ fileSize: 67 })),
+    /invalid size/,
+  );
+  let malformedClosed = false;
+  const malformedDependencies = dependencies({ bytes: Buffer.alloc(256) });
+  malformedDependencies.close = () => {
+    malformedClosed = true;
+  };
+  assert.throws(() => validateSigningTarget(join(tmpdir(), "nst4808.tmp"), malformedDependencies), /valid PE/);
+  assert.equal(malformedClosed, true);
 });
 
 test("unsigned builds are limited to explicit local dev simulation", () => {
@@ -502,6 +565,8 @@ test("public verification requires the exact build plus clean, shortcut, and upd
         name: "no-shortcuts",
         installedAppSignature: { status: "Valid", timestamped: true },
         installedAppSignerMatchesInstaller: true,
+        installedUninstallerSignature: { status: "Valid", timestamped: true },
+        installedUninstallerSignerMatchesInstaller: true,
         installedGuardian: {
           file: guardianEvidence.file,
           sha256: guardianEvidence.sha256,
@@ -527,6 +592,8 @@ test("public verification requires the exact build plus clean, shortcut, and upd
         name: "default",
         installedAppSignature: { status: "Valid", timestamped: true },
         installedAppSignerMatchesInstaller: true,
+        installedUninstallerSignature: { status: "Valid", timestamped: true },
+        installedUninstallerSignerMatchesInstaller: true,
         installedGuardian: {
           file: guardianEvidence.file,
           sha256: guardianEvidence.sha256,
@@ -552,6 +619,8 @@ test("public verification requires the exact build plus clean, shortcut, and upd
         name: "upgrade",
         installedAppSignature: { status: "Valid", timestamped: true },
         installedAppSignerMatchesInstaller: true,
+        installedUninstallerSignature: { status: "Valid", timestamped: true },
+        installedUninstallerSignerMatchesInstaller: true,
         installedGuardian: {
           file: guardianEvidence.file,
           sha256: guardianEvidence.sha256,
@@ -666,6 +735,33 @@ test("public verification requires the exact build plus clean, shortcut, and upd
       ),
     }).join("\n"),
     /same signing identity/,
+  );
+  assert.match(
+    publicVerificationProblems(build, {
+      ...verify,
+      passes: verify.passes.map((pass, index) =>
+        index === 1 ? { ...pass, installedUninstallerSignature: { status: "NotSigned", timestamped: false } } : pass,
+      ),
+    }).join("\n"),
+    /installed uninstaller signature/,
+  );
+  assert.match(
+    publicVerificationProblems(build, {
+      ...verify,
+      passes: verify.passes.map((pass, index) =>
+        index === 1 ? { ...pass, installedUninstallerSignature: undefined } : pass,
+      ),
+    }).join("\n"),
+    /installed uninstaller signature/,
+  );
+  assert.match(
+    publicVerificationProblems(build, {
+      ...verify,
+      passes: verify.passes.map((pass, index) =>
+        index === 1 ? { ...pass, installedUninstallerSignerMatchesInstaller: false } : pass,
+      ),
+    }).join("\n"),
+    /uninstaller must use the same signing identity/,
   );
   assert.match(
     publicVerificationProblems(build, {

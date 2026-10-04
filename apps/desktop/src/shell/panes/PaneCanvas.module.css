@@ -743,7 +743,13 @@
 .divider::before {
   content: "";
   position: absolute;
-  inset: -3px;
+}
+/* Widen the hit target across the divider without overflowing the canvas ends. */
+.divider[data-axis="horizontal"]::before {
+  inset: 0 -3px;
+}
+.divider[data-axis="vertical"]::before {
+  inset: -3px 0;
 }
 .divider::after {
   content: "";

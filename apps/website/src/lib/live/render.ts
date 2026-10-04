@@ -3,11 +3,13 @@
  * at build time, the client re-renders after every action and morphs the DOM (scripts/live/app.ts).
  *
  * Layout and words follow the shipped desktop app: the Command Deck top bar, the stable sidebar
- * (Dashboard, Operations, KalVoice, Code, Threads, Providers), tabbed Code panes, the New agent
+ * (Code, Dashboard, Operations, KalVoice, Threads, Providers), tabbed Code panes, the New agent
  * launcher, the Agents rail. Every interactive element carries `data-do="<action>[:arg]"`.
  * No inline styles (the site's CSP forbids them): dynamic sizes are classes or data attributes.
  */
+
 import { formatKalVoiceAllowance, getPlan, PLANS } from "@kalcode/protocol/plans";
+import { renderAdaptiveCanvas, renderCanvasTools } from "./canvas";
 import type { LiveIcon } from "./icons";
 import {
   type Account,
@@ -199,6 +201,7 @@ function tabTone(state: State, tab: Tab): string {
 
 function tabGlyph(state: State, tab: Tab): string {
   if (tab.kind === "agent" && tab.agent) return glyph(state.agents[tab.agent]?.provider ?? "claude");
+  if (tab.widget === "operations") return icon("operations", "lk-glyph-i");
   return glyph(tab.kind === "agent" ? "claude" : tab.kind);
 }
 
@@ -271,6 +274,7 @@ function browserPane(state: State, tab: Tab): string {
 }
 
 function widgetPane(state: State, tab: Tab): string {
+  if (tab.widget === "operations") return contextOperations(state);
   const list = tab.widget === "approvals" ? agentsList(state).filter(needsYou) : agentsList(state).filter(isWorking);
   return `<div class="lk-widget"><p class="lk-label">${esc(tab.title)} · ${list.length}</p>${
     list.length
@@ -328,75 +332,40 @@ function plusMenu(frameId: string): string {
 }
 
 function codeSurface(state: State): string {
-  const frames = state.maximized ? state.frames.filter((f) => f.id === state.focus) : state.frames;
-  const n = frames.length;
-  const cols = state.layout === "auto" ? n : Number(state.layout);
   const focusedFrame = state.frames.find((f) => f.id === state.focus);
   const focusedTab = focusedFrame ? state.tabs[focusedFrame.active] : undefined;
   const running = Object.values(state.tabs).filter(
     (t) => (t.agent && isWorking(state.agents[t.agent] as Agent)) || (t.kind === "terminal" && !t.idle),
   ).length;
-  const canvas = state.mobile
-    ? mobileCode(state)
-    : `<div class="lk-canvas" data-n="${n}" data-cols="${Math.min(cols, n)}">${frames.map((f, i) => frame(state, f, i)).join("")}${n === 0 ? emptyCode() : ""}</div>`;
+  const canvas = renderAdaptiveCanvas(state, frame);
   return `<div class="lk-code">
   <div class="lk-code__head">
     <span class="lk-code__ws"><strong>${WORKSPACE.name}</strong>${icon("chevron", "lk-caret")}<span class="lk-mono">${WORKSPACE.path}</span></span>
     <span class="lk-code__tools">
       <button type="button" class="lk-btn" data-do="terminal" aria-label="New terminal"${hint("A real shell in your project folder.")}>${icon("terminal")}<span>Terminal</span></button>
       <span class="lk-split"><button type="button" class="lk-btn" data-do="tidy" data-tour="tidy" aria-label="KalTidy: stop idle terminals"${hint("KalTidy: stop idle terminals in one click.")}>${icon("tidy")}<span>KalTidy</span></button><button type="button" class="lk-btn lk-btn--caret" data-do="menu:tidy" aria-expanded="${state.menu === "tidy"}" aria-label="More KalTidy actions">${icon("chevron")}</button>${state.menu === "tidy" ? tidyMenu() : ""}</span>
-      <span class="lk-split"><button type="button" class="lk-btn" data-do="menu:layout" aria-label="Layout" aria-expanded="${state.menu === "layout"}">${icon("layout")}<span>Layout</span>${icon("chevron", "lk-caret")}</button>${state.menu === "layout" ? layoutMenu() : ""}</span>
+      <span class="lk-context-control"><button type="button" class="lk-btn" data-do="menu:context" aria-expanded="${state.menu === "context"}" aria-label="Context"${hint("Open Browser, runs, services and tests beside your terminals.")}>${icon("operations")}<span>Context</span>${icon("chevron", "lk-caret")}</button>${state.menu === "context" ? contextMenu() : ""}</span>
       <button type="button" class="lk-btn lk-btn--primary" data-do="launcher" data-tour="new-agent"${hint("Choose a provider, account, model and effort: a real coding agent in its own terminal.")}>${icon("bot")}<span>New agent</span></button>
     </span>
   </div>
+  ${renderCanvasTools(state)}
   ${canvas}
-  <div class="lk-statusbar"><span>${focusedTab ? `${tabGlyph(state, focusedTab)} ${esc(tabTitle(state, focusedTab))}` : "No pane"}</span><span>${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys"><kbd>Ctrl Alt ←↑→↓</kbd> move <kbd>Ctrl Alt D</kbd> split</span></div>
+  <div class="lk-statusbar"><span>${focusedTab ? `${tabGlyph(state, focusedTab)} ${esc(tabTitle(state, focusedTab))}` : "No pane"}</span><span>${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys"><kbd>Ctrl Alt ←↑→↓</kbd> focus <kbd>Ctrl Alt Shift H/J/K/L</kbd> move</span></div>
 </div>`;
-}
-
-function emptyCode(): string {
-  return `<div class="lk-empty lk-empty--big"><p>Every pane is closed.</p><button type="button" class="lk-btn lk-btn--primary" data-do="launcher">${icon("bot")}New agent</button><button type="button" class="lk-btn" data-do="reset">Reset the demo</button></div>`;
-}
-
-/** Phones: one pane at a time, a strip of every pane above it, swipe to move between them. */
-function mobileCode(state: State): string {
-  const all = state.frames.flatMap((f) => f.tabs);
-  const focusedFrame = state.frames.find((f) => f.id === state.focus);
-  const current = focusedFrame?.active ?? all[0];
-  const tab = current ? state.tabs[current] : undefined;
-  const strip = all
-    .map((tid) => state.tabs[tid])
-    .filter((t): t is Tab => Boolean(t))
-    .map(
-      (t) =>
-        `<button type="button" class="lk-mtab" data-key="m-${t.id}" data-do="tab:${t.id}" aria-pressed="${t.id === current}">${tabGlyph(state, t)}<span>${esc(t.kind === "agent" ? (state.agents[t.agent ?? ""]?.sign ?? t.title) : t.title)}</span><span class="lk-dot" data-tone="${tabTone(state, t)}"></span></button>`,
-    )
-    .join("");
-  let body = emptyCode();
-  if (tab?.kind === "agent" && tab.agent && state.agents[tab.agent])
-    body = agentPane(state, state.agents[tab.agent] as Agent);
-  else if (tab?.kind === "terminal") body = terminalPane(tab);
-  else if (tab?.kind === "browser") body = browserPane(state, tab);
-  else if (tab?.kind === "widget") body = widgetPane(state, tab);
-  return `<div class="lk-mcode"><div class="lk-mstrip" role="group" aria-label="Panes">${strip}<button type="button" class="lk-mtab lk-mtab--add" data-do="launcher" aria-label="New agent">${icon("plus")}</button></div><section class="lk-frame lk-frame--mobile" data-swipe data-kind="${tab?.kind ?? "empty"}" data-focused="true" aria-label="${esc(tab ? tabTitle(state, tab) : "No pane")}"${tab?.kind === "browser" ? ` data-tour="browser"` : ""}>${body}</section><p class="lk-mhint">Swipe to switch panes</p></div>`;
 }
 
 function tidyMenu(): string {
   return `<div class="lk-menu" role="menu" aria-label="KalTidy"><button type="button" role="menuitem" class="lk-menu__item" data-do="tidy">${icon("tidy")}<span>Stop idle terminals</span></button><button type="button" role="menuitem" class="lk-menu__item" data-do="tidy-finished">${icon("check")}<span>Clear finished agents</span></button></div>`;
 }
 
-function layoutMenu(): string {
-  return `<div class="lk-menu" role="menu" aria-label="Layout">${[
-    ["2", "2 panes"],
-    ["3", "3 panes"],
-    ["4", "4 panes (2 × 2)"],
-    ["auto", "Even out sizes"],
-  ]
-    .map(
-      ([v, l]) =>
-        `<button type="button" role="menuitem" class="lk-menu__item" data-do="layout:${v}">${icon("layout")}<span>${l}</span></button>`,
-    )
-    .join("")}</div>`;
+function contextMenu(): string {
+  const item = (action: string, glyph: string, label: string, description: string) =>
+    `<button type="button" role="menuitem" class="lk-menu__item" data-do="${action}">${glyph}<span>${label}<small>${description}</small></span></button>`;
+  return `<div class="lk-menu lk-menu--context" role="menu" aria-label="Beside your code">
+  <p class="lk-label">Beside your code</p>
+  ${item("browser", icon("globe"), "Browser", "Preview the detected dev server")}
+  ${item("context-operations", icon("operations"), "Runs, services &amp; tests", "Live context for this workspace")}
+</div>`;
 }
 
 // ── Dashboard: the Agent Fleet ──────────────────────────────────────────────────────────────
@@ -476,6 +445,58 @@ const RUN_TONE: Record<Run["status"], string> = {
   Queued: "muted",
   Failed: "failed",
 };
+
+function contextOperations(state: State): string {
+  const all = runs(state);
+  const tests = all.filter((run) => run.name === "Tests");
+  const services = all.filter((run) => run.kind === "service");
+  const running = all.filter((run) => run.status === "Running").length;
+  const failed = all.filter((run) => run.status === "Failed").length;
+  const tabs: readonly [typeof state.contextTab, string, number][] = [
+    ["runs", "Runs", all.length],
+    ["services", "Services", services.length],
+    ["tests", "Tests", tests.length],
+  ];
+  const panel =
+    state.contextTab === "services"
+      ? contextServices()
+      : contextRuns(state, state.contextTab === "tests" ? tests : all, state.contextTab === "tests");
+  return `<div class="lk-context">
+  <header class="lk-context__head"><div><small>Live workspace context</small><strong>${esc(WORKSPACE.name)}</strong></div><span class="lk-context__observed"><span class="lk-dot" data-tone="working"></span>Observed now</span></header>
+  <div class="lk-context__signal" aria-label="Workspace execution summary"><span><strong>${running}</strong> running</span><span><strong>${services.length}</strong> services</span><span data-tone="${failed ? "failed" : "muted"}"><strong>${failed}</strong> failed</span></div>
+  <div class="lk-tabs lk-context__tabs" role="tablist" aria-label="Workspace context views">${tabs
+    .map(
+      ([id, label, count]) =>
+        `<button type="button" id="lk-context-tab-${id}" role="tab" class="lk-tabs__tab" data-do="context-tab:${id}" aria-selected="${state.contextTab === id}" aria-controls="lk-context-panel">${label}<span>${count}</span></button>`,
+    )
+    .join("")}</div>
+  <section id="lk-context-panel" class="lk-context__panel" role="tabpanel" aria-labelledby="lk-context-tab-${state.contextTab}">${panel}</section>
+  <footer class="lk-context__foot"><button type="button" class="lk-btn lk-btn--ghost" data-do="ops:${state.contextTab === "tests" ? "runs" : state.contextTab}">Open full Operations</button></footer>
+</div>`;
+}
+
+function contextRuns(state: State, list: readonly Run[], tests = false): string {
+  if (!list.length) return `<p class="lk-context__empty">No ${tests ? "test " : ""}runs in this workspace.</p>`;
+  return `<ol class="lk-context__list" aria-label="${tests ? "Test runs" : "Workspace runs"}">${list
+    .map(
+      (run) =>
+        `<li><button type="button" class="lk-context-run" data-do="run:${run.id}" aria-pressed="${state.run === run.id}"><span class="lk-context-run__icon">${runIcon(run)}</span><span class="lk-context-run__copy"><strong>${esc(run.name)}</strong><small>${esc(run.action)}</small></span><span class="lk-context-run__state" data-tone="${RUN_TONE[run.status]}"><span class="lk-dot"></span>${run.status}</span></button>${
+          state.run === run.id
+            ? `<div class="lk-context-run__evidence" role="region" aria-label="${esc(run.name)} evidence"><span>${esc(run.where)}</span><strong>${esc(run.status)} · ${esc(run.duration)}</strong></div>`
+            : ""
+        }</li>`,
+    )
+    .join("")}</ol>`;
+}
+
+function contextServices(): string {
+  return `<article class="lk-context-service">
+  <header><span class="lk-context-run__icon">${icon("server")}</span><span><strong>Frontend</strong><small>pnpm dev · PowerShell</small></span><span class="lk-context-run__state" data-tone="working"><span class="lk-dot"></span>Running</span></header>
+  <p><span>Local URL</span><code>http://${DEV_URL}/</code></p>
+  <p><span>Workspace</span><strong>${esc(WORKSPACE.name)}</strong></p>
+  <button type="button" class="lk-btn lk-btn--primary" data-do="browser">${icon("globe")}Open in Browser</button>
+</article>`;
+}
 
 function operations(state: State): string {
   const all = runs(state);

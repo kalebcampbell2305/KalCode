@@ -133,7 +133,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     );
     configure(10_000);
     app = await launch(dataDir, env);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "project" })).toBeVisible();
     const restored = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
     expect(
       restored.map(({ id, displayName, providerId, isDefault }) => ({ id, displayName, providerId, isDefault })),
@@ -159,10 +159,6 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     });
     await expect.poll(() => existsSync(codexAReadMarker), { timeout: 30_000 }).toBe(true);
     await waitForProviderAdmission(app.page);
-    await app.page
-      .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Code", exact: true })
-      .click();
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
     // The launcher lists each provider's accounts as options; the restored default is marked.
@@ -276,7 +272,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     app = null;
     configure(0);
     app = await launch(dataDir, env);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "project" })).toBeVisible();
     await app.page.getByRole("button", { name: "Providers", exact: true }).click();
     await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
     const codexARegion = app.page.getByRole("region", { name: /Codex A/ });

@@ -28,6 +28,7 @@ export type AgentStatus =
   | "idle"
   | "done";
 export type OpsTab = "runs" | "queue" | "services" | "environments" | "activity";
+export type ContextTab = "runs" | "services" | "tests";
 export type FleetFilter = "all" | "needs" | "working" | "done" | "idle";
 export type LineKind = "in" | "out" | "ok" | "tool" | "dim" | "warn" | "err" | "accent" | "head";
 
@@ -102,7 +103,7 @@ export interface Tab {
   /** A terminal that is not running anything (KalTidy stops these). */
   idle?: boolean;
   url?: string;
-  widget?: "approvals" | "agents";
+  widget?: "approvals" | "agents" | "operations";
 }
 
 export interface Frame {
@@ -119,7 +120,16 @@ export interface Launcher {
   count: number;
 }
 
-export type Menu = null | "accounts" | "layout" | "tidy" | "palette" | "mode" | "environment" | `plus:${string}`;
+export type Menu =
+  | null
+  | "accounts"
+  | "context"
+  | "layout"
+  | "tidy"
+  | "palette"
+  | "mode"
+  | "environment"
+  | `plus:${string}`;
 
 export interface Nudge {
   id: "first-agent" | "big-workspace" | "voice" | "accounts";
@@ -149,6 +159,7 @@ export interface State {
   layout: "auto" | "2" | "3" | "4";
   menu: Menu;
   launcher: Launcher | null;
+  contextTab: ContextTab;
   opsTab: OpsTab;
   run: string | null;
   environment: Environment;
@@ -189,6 +200,12 @@ export const WORKSPACE = { name: "sample-app", path: "~/Projects/sample-app", br
 export const DEV_URL = "localhost:3000";
 
 export const SURFACES: readonly { id: Surface; label: string; icon: string; hint: string }[] = [
+  {
+    id: "code",
+    label: "Code",
+    icon: "code",
+    hint: "Where your Claude Code and Codex agents run, each in its own terminal.",
+  },
   { id: "dashboard", label: "Dashboard", icon: "dashboard", hint: "Agent Fleet: see every coding agent in one place." },
   {
     id: "operations",
@@ -197,12 +214,6 @@ export const SURFACES: readonly { id: Surface; label: string; icon: string; hint
     hint: "Runs, Queue, Services, Environments and Activity.",
   },
   { id: "kalvoice", label: "KalVoice", icon: "kalvoice", hint: "Control KalCode by voice." },
-  {
-    id: "code",
-    label: "Code",
-    icon: "code",
-    hint: "Where your Claude Code and Codex agents run, each in its own terminal.",
-  },
   { id: "threads", label: "Threads", icon: "threads", hint: "Chat-style conversations. Agents live in Code." },
   { id: "providers", label: "Providers", icon: "providers", hint: "Connect multiple Claude Code and Codex accounts." },
 ];
@@ -507,6 +518,7 @@ export function initialState(): State {
     layout: "auto",
     menu: null,
     launcher: null,
+    contextTab: "runs",
     opsTab: "runs",
     run: null,
     environment: "Local",
@@ -780,6 +792,24 @@ export function openBrowser(state: State, url = DEV_URL) {
   }
   state.surface = "code";
   state.maximized = false;
+}
+
+/** Opens the current workspace's canonical run and service context beside its coding terminals. */
+export function openOperationsContext(state: State) {
+  state.menu = null;
+  const existing = Object.values(state.tabs).find((tab) => tab.widget === "operations");
+  if (existing) {
+    focusTab(state, existing.id);
+    state.maximized = false;
+    return;
+  }
+  state.contextTab = "runs";
+  placeTab(state, {
+    id: id(state, "t"),
+    kind: "widget",
+    widget: "operations",
+    title: "Runs & services",
+  });
 }
 
 export function openWidget(state: State, widget: "approvals" | "agents") {

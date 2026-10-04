@@ -995,6 +995,10 @@
   align-items: center;
   gap: 0.375rem;
 }
+.lk-context-control {
+  position: relative;
+  display: inline-flex;
+}
 .lk-split {
   position: relative;
   display: inline-flex;
@@ -1541,6 +1545,246 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lk-context {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: radial-gradient(circle at 18% -12%, rgb(76 141 255 / 0.14), transparent 42%), var(--color-code-bg);
+}
+.lk-context__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.lk-context__head > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+.lk-context__head small {
+  color: var(--color-accent-icy);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.lk-context__head strong {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-context__observed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+.lk-context__signal {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem;
+}
+.lk-context__signal > span {
+  display: grid;
+  gap: 0.0625rem;
+  min-width: 0;
+  padding: 0.4375rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgb(16 27 47 / 0.72);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+}
+.lk-context__signal strong {
+  color: var(--color-text);
+  font-size: 1rem;
+  line-height: 1;
+}
+.lk-context__tabs {
+  flex: none;
+  gap: 0;
+  margin: 0;
+  padding: 0 0.5rem;
+}
+.lk-context__tabs .lk-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 0.375rem;
+  font-size: 0.75rem;
+}
+.lk-context__tabs .lk-tabs__tab span {
+  min-width: 1.125rem;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-3);
+  color: var(--color-text-faint);
+  font-size: 0.625rem;
+}
+.lk-context__panel {
+  flex: 1;
+  min-height: 0;
+  padding: 0.625rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.lk-context__list {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lk-context__list > li {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgb(16 27 47 / 0.72);
+}
+.lk-context-run {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 3.375rem;
+  padding: 0.5rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.lk-context-run:hover,
+.lk-context-run[aria-pressed="true"] {
+  background: var(--color-surface-hover);
+}
+.lk-context-run[aria-pressed="true"] {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+.lk-context-run__icon {
+  display: grid;
+  place-items: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  flex: none;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-icy);
+}
+.lk-context-run__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+.lk-context-run__copy strong,
+.lk-context-run__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-context-run__copy small {
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+}
+.lk-context-run__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  color: var(--lk-tone-text);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+.lk-context-run__state .lk-dot {
+  background: var(--lk-tone);
+}
+.lk-context-run__evidence {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem 0.625rem 2.875rem;
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  animation: lk-enter 220ms var(--ease-emphasized);
+}
+.lk-context-run__evidence span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-context-run__evidence strong {
+  color: var(--color-text-secondary);
+}
+.lk-context-service {
+  display: grid;
+  gap: 0.625rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-lg);
+  background: rgb(16 27 47 / 0.78);
+  box-shadow: var(--shadow-panel);
+}
+.lk-context-service header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+.lk-context-service header > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+.lk-context-service header small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-context-service p {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+}
+.lk-context-service code,
+.lk-context-service p strong {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-context-service .lk-btn {
+  justify-self: start;
+}
+.lk-context__empty {
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.lk-context__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.4375rem 0.625rem;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* ── Pages: Dashboard, Operations, KalVoice, Threads, Providers, Settings ───────────────── */
@@ -2599,6 +2843,9 @@
   left: 0.25rem;
   right: auto;
   width: min(21rem, 90cqw);
+}
+.lk-menu--context {
+  width: 17rem;
 }
 .lk-menu .lk-label {
   padding: 0.5rem 0.5rem 0.25rem;

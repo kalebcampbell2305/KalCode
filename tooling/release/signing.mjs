@@ -1,6 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { extname, isAbsolute, join } from "node:path";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import { guardianPublicSigningProblems, guardianPublicVerificationProblems } from "./guardian-packaging.mjs";
 import { hookPublicSigningProblems, hookPublicVerificationProblems } from "./hook-packaging.mjs";
@@ -15,6 +26,9 @@ export const ARTIFACT_SIGNING = Object.freeze({
 });
 
 const SIGNABLE_EXTENSIONS = new Set([".exe", ".dll", ".msi", ".msix", ".appx"]);
+const NSIS_TEMP_UNINSTALLER = /^nst[0-9a-f]{4}\.tmp$/i;
+const MIN_PORTABLE_EXECUTABLE_BYTES = 68;
+const MAX_NSIS_UNINSTALLER_BYTES = 16 * 1024 * 1024;
 const AZURE_CLI_DIR = "C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin";
 const ARTIFACT_SIGNING_EKU_PREFIX = "1.3.6.1.4.1.311.97.";
 const ARTIFACT_SIGNING_GENERIC_PUBLIC_TRUST_EKU = "1.3.6.1.4.1.311.97.1.0";
@@ -275,9 +289,85 @@ export function findArtifactSigningTools({
   );
 }
 
-export function validateSigningTarget(targetPath, { exists = existsSync, stat = statSync } = {}) {
+function samePath(left, right) {
+  const normalizedLeft = resolve(left);
+  const normalizedRight = resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function readExactly(read, fd, destination, position) {
+  let offset = 0;
+  while (offset < destination.length) {
+    const count = read(fd, destination, offset, destination.length - offset, position + offset);
+    if (!Number.isInteger(count) || count <= 0) return false;
+    offset += count;
+  }
+  return true;
+}
+
+function validateNsisTempUninstaller(
+  targetPath,
+  { exists, lstat = lstatSync, open = openSync, fstat = fstatSync, read = readSync, close = closeSync },
+) {
+  if (!NSIS_TEMP_UNINSTALLER.test(basename(targetPath)) || !samePath(dirname(targetPath), tmpdir())) {
+    throw new Error("signing target has an unsupported file type");
+  }
+  if (!exists(targetPath)) throw new Error("signing target does not exist");
+  const pathStatus = lstat(targetPath);
+  if (!pathStatus.isFile() || pathStatus.isSymbolicLink()) {
+    throw new Error("signing target must be a regular non-link file");
+  }
+
+  const fd = open(targetPath, constants.O_RDONLY);
+  try {
+    const fileStatus = fstat(fd);
+    if (!fileStatus.isFile()) throw new Error("signing target must be a regular file");
+    if (
+      !Number.isSafeInteger(fileStatus.size) ||
+      fileStatus.size < MIN_PORTABLE_EXECUTABLE_BYTES ||
+      fileStatus.size > MAX_NSIS_UNINSTALLER_BYTES
+    ) {
+      throw new Error("NSIS temporary uninstaller has an invalid size");
+    }
+
+    const dosHeader = Buffer.alloc(64);
+    if (!readExactly(read, fd, dosHeader, 0) || dosHeader.subarray(0, 2).toString("ascii") !== "MZ") {
+      throw new Error("NSIS temporary uninstaller is not a valid PE file");
+    }
+    const peOffset = dosHeader.readUInt32LE(0x3c);
+    if (peOffset < dosHeader.length || peOffset > fileStatus.size - 4) {
+      throw new Error("NSIS temporary uninstaller is not a valid PE file");
+    }
+    const peSignature = Buffer.alloc(4);
+    if (!readExactly(read, fd, peSignature, peOffset) || !peSignature.equals(Buffer.from("PE\0\0", "binary"))) {
+      throw new Error("NSIS temporary uninstaller is not a valid PE file");
+    }
+  } finally {
+    close(fd);
+  }
+}
+
+export function validateSigningTarget(
+  targetPath,
+  {
+    exists = existsSync,
+    stat = statSync,
+    lstat = lstatSync,
+    open = openSync,
+    fstat = fstatSync,
+    read = readSync,
+    close = closeSync,
+  } = {},
+) {
   if (!isAbsolute(targetPath)) throw new Error("signing target must be an absolute path");
-  if (!SIGNABLE_EXTENSIONS.has(extname(targetPath).toLowerCase())) {
+  const extension = extname(targetPath).toLowerCase();
+  if (extension === ".tmp") {
+    validateNsisTempUninstaller(targetPath, { exists, lstat, open, fstat, read, close });
+    return targetPath;
+  }
+  if (!SIGNABLE_EXTENSIONS.has(extension)) {
     throw new Error("signing target has an unsupported file type");
   }
   if (!exists(targetPath)) throw new Error("signing target does not exist");
@@ -444,6 +534,24 @@ export function publicVerificationProblems(build, verify) {
     verify.passes.some((pass) => pass?.installedAppSignerMatchesInstaller !== true)
   ) {
     problems.push("every installed application must use the same signing identity as the installer");
+  }
+  if (
+    Array.isArray(verify.passes) &&
+    requiredPasses.every((name) => verify.passes.some((pass) => pass?.name === name)) &&
+    verify.passes.some(
+      (pass) =>
+        pass?.installedUninstallerSignature?.status !== "Valid" ||
+        pass?.installedUninstallerSignature?.timestamped !== true,
+    )
+  ) {
+    problems.push("every installed uninstaller signature must be valid and timestamped");
+  }
+  if (
+    Array.isArray(verify.passes) &&
+    requiredPasses.every((name) => verify.passes.some((pass) => pass?.name === name)) &&
+    verify.passes.some((pass) => pass?.installedUninstallerSignerMatchesInstaller !== true)
+  ) {
+    problems.push("every installed uninstaller must use the same signing identity as the installer");
   }
   if (
     Array.isArray(verify.passes) &&

@@ -367,6 +367,12 @@ mod tests {
                 );
                 assert!(!argv.iter().any(|a| a == "features.code_mode_host=false"));
                 assert!(!argv.iter().any(|a| a == "features.code_mode=false"));
+                assert_eq!(
+                    argv.windows(2)
+                        .any(|p| p == ["-c", "windows.sandbox='unelevated'"]),
+                    cfg!(target_os = "windows"),
+                    "{mode:?} must use the same Windows sandbox backend as headless turns"
+                );
             }
         }
     }

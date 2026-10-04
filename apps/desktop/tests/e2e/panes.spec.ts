@@ -157,11 +157,10 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     const stored = storedLayout(dataDir);
     expect(stored).toEqual({ rows: 1, version: 1, panes: 2 });
 
-    // Relaunch: the same layout, with ended shells offering Restart and the provider pane ended.
+    // Relaunch opens the restored workspace directly in Code, with the same layout, ended shells
+    // offering Restart and the provider pane ended.
     app = await launch(dataDir, env);
     page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await codeNav(page).click();
     await expect(page.getByRole("heading", { level: 1, name: "w1-panes" })).toBeVisible();
     await expect(panes(page)).toHaveCount(2);
     await expect(divider(page)).toHaveAttribute("aria-valuenow", remainingRatio ?? "");
@@ -188,8 +187,6 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
 
     app = await launch(dataDir, env);
     page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await codeNav(page).click();
     await expect(page.getByRole("heading", { level: 1, name: "w1-panes" })).toBeVisible();
     await expect(panes(page)).toHaveCount(2);
     await shot(page, "w1-e2e-restored-after-kill");

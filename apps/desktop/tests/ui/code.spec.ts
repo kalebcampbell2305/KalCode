@@ -10,6 +10,11 @@ const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 async function open(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
+  // These scenarios exercise Dashboard entry points; returning workspaces open Code.
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "Dashboard", exact: true })
+    .click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 
