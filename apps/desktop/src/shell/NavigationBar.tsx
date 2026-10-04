@@ -85,14 +85,7 @@ export function NavigationBar() {
             <ChevronRight aria-hidden="true" />
           </>
         ) : null}
-        <button
-          type="button"
-          aria-label={`Go to ${meta.label}`}
-          aria-current={!entry?.target ? "page" : undefined}
-          onClick={() => navigate(current)}
-        >
-          {meta.label}
-        </button>
+        <span aria-current={!entry?.target ? "page" : undefined}>{meta.label}</span>
         {entry?.target && entry.label ? (
           <>
             <ChevronRight aria-hidden="true" />

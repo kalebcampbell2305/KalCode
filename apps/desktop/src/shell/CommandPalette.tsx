@@ -148,6 +148,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   useEffect(() => {
     if (!open || navigatedQuery.current !== typed) navigatedQuery.current = null;
   }, [open, typed]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: async registrations can reorder cmdk even when the best result is unchanged.
   useEffect(() => {
     if (!open || !typed) return;
     // cmdk fuzzy-ranks commands and registers async locator items in layout effects. Select after
@@ -161,7 +162,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       if (preferred) setSelected(preferred.dataset.value ?? "");
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [firstValue, open, typed]);
+  }, [firstValue, open, typed, quick.results, locator.response]);
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);

@@ -23,7 +23,7 @@ async function goToCode(page: Page) {
 }
 
 /** Text of the terminal in front. */
-const visibleTerminal = (page: Page) => page.locator('[role="tabpanel"]:not([hidden]) .xterm-rows');
+const visibleTerminal = (page: Page) => page.locator('[role="tabpanel"]:visible .xterm-rows:visible');
 
 async function queueFolders(page: Page, ...folders: (string | null)[]) {
   await page.evaluate((list) => {
@@ -240,9 +240,10 @@ test.describe("keyboard", () => {
     await open(page);
     await openFolderAndTerminal(page);
     await page.keyboard.press(`${MOD}+k`);
-    await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+    await page.keyboard.press("Escape");
     await page.keyboard.press(`${MOD}+b`);
-    await expect(page.getByRole("button", { name: "Collapse sidebar" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
   });
 
   test("the command palette opens folders, switches workspaces and starts terminals", async ({ page }) => {
