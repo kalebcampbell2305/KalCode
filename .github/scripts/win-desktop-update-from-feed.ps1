@@ -23,6 +23,8 @@ param(
   [string]$CleanPacketSha256 = '', [string]$CleanVerifierSha256 = '',
   [string]$FeedUrl = 'https://kalcoded.com/releases/updater/stable.json',
   [int]$StageTimeoutSec = 900,
+  # Removes a KalCode profile an earlier failed package proof preserved, before this run's proof.
+  [switch]$RecoverPreservedProfile,
   [Parameter(Mandatory)][string]$OutDir,
   [switch]$SelfTest
 )
@@ -178,7 +180,8 @@ try {
         if ((Test-Path -LiteralPath $node) -and ((Get-Item -LiteralPath $node -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Refuse 'QA profile contains a reparse point' }
       }
     }
-    if ((Leftovers).Values -contains $true) { Refuse 'QA profile is not clean; preserve unknown residue for separately reviewed recovery' }
+    # A preserved profile is removed only by an explicit recovery run (-RecoverPreservedProfile) below.
+    if (-not $RecoverPreservedProfile -and (Leftovers).Values -contains $true) { Refuse 'QA profile is not clean; preserve unknown residue for separately reviewed recovery' }
   }
   if ($CleanPacketSha256 -or $CleanVerifierSha256) {
     if (-not $CandidateTag -or $CleanPacketSha256 -cnotmatch '^[0-9a-f]{64}$' -or $CleanVerifierSha256 -cnotmatch '^[0-9a-f]{64}$') { Refuse 'clean verification requires a draft package and exact packet/verifier hashes' }
@@ -203,7 +206,8 @@ try {
   $env:GH_TOKEN = $null
 
   $pre = Leftovers
-  if ($pre.Values -contains $true) { Refuse ('QA profile already contains KalCode state; preserving it: ' + ($pre | ConvertTo-Json -Compress)) }
+  $recover = $pre.Values -contains $true
+  if ($recover -and -not $RecoverPreservedProfile) { Refuse ('QA profile already contains KalCode state; preserving it: ' + ($pre | ConvertTo-Json -Compress)) }
 
   # 1. live build
   $live = Join-Path $OutDir ([IO.Path]::GetFileName(([Uri]$LiveUrl).AbsolutePath))
@@ -211,7 +215,18 @@ try {
   if ((Sha $live) -ne $LiveSha256) { Refuse "downloaded live installer is $(Sha $live), not $LiveSha256" }
   $sig = Get-AuthenticodeSignature -LiteralPath $live; if ($sig.Status -ne 'Valid') { Refuse "live installer Authenticode $($sig.Status)" }
   $script:InstallerPublisher = $sig.SignerCertificate.Subject
-  if ((Leftovers).Values -contains $true) { Refuse 'QA state appeared during download; preserving it' }
+  if (-not $recover -and (Leftovers).Values -contains $true) { Refuse 'QA state appeared during download; preserving it' }
+  if ($recover) {
+    # An explicit recovery run removes the profile a failed package proof preserved: nothing may be running,
+    # the installed uninstaller must carry the live installer's publisher, and only this profile's KalCode
+    # paths are removed by the shared cleanup. The recovered state is recorded in the receipt.
+    $receipt.recoveredLeftovers = $pre
+    $script:QaStateOwned = $true
+    if (-not (Cleanup)) { Refuse 'could not recover the preserved QA profile' }
+    $script:QaStateOwned = $false
+    Note 'recovered the QA profile an earlier failed proof preserved'
+  }
+  if ($recover -and (Leftovers).Values -contains $true) { Refuse 'the recovered QA profile still holds KalCode state' }
   $script:QaStateOwned = $true
   Run-Installer $live @('/S')
   $sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Installed) -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Seconds 2 }
