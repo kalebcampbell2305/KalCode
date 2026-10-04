@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { MODE_LABELS } from "../permissions/labels.ts";
 import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
@@ -176,6 +177,10 @@ export const AgentCard = memo(function AgentCard({
   // The menu returns focus to its trigger on close; Stop… moves it to the confirmation instead.
   const confirmFromMenu = useRef(false);
   const nameId = `agent-${thread.id}-name`;
+  const favoriteItems = useFavoriteMenuItems(
+    { kind: "agent", id: thread.id, workspaceId: thread.workspaceId },
+    thread.name,
+  );
   const detailsId = useId();
   const Heading = `h${headingLevel}` as const;
 
@@ -242,6 +247,10 @@ export const AgentCard = memo(function AgentCard({
       onClick={onCardClick}
     >
       <header className={styles.top}>
+        <FavoriteButton
+          target={{ kind: "agent", id: thread.id, workspaceId: thread.workspaceId }}
+          title={thread.name}
+        />
         <span className={styles.signal} data-tone={archived ? "muted" : tone} aria-hidden="true" />
         {accountLabel ? (
           <span className={styles.who} title={`Account: ${accountLabel}`}>
@@ -547,6 +556,13 @@ export const AgentCard = memo(function AgentCard({
                   }}
                 >
                   <DropdownMenuItem onSelect={() => onFocus(thread)}>Open</DropdownMenuItem>
+                  {favoriteItems.map((item) =>
+                    "separator" in item ? null : (
+                      <DropdownMenuItem key={item.id} icon={item.icon} onSelect={item.onSelect}>
+                        {item.label}
+                      </DropdownMenuItem>
+                    ),
+                  )}
                   {actions.map((action) =>
                     action === "stop" ? (
                       <DropdownMenuItem

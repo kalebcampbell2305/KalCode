@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import { FavoriteButton, FavoriteToggle } from "../../shell/favorites/FavoriteActions.tsx";
 import type { PaneRenderContext } from "../../shell/panes/contentRegistry.ts";
 import { BrowserAsk } from "./BrowserAsk.tsx";
 import styles from "./BrowserPane.module.css";
@@ -682,6 +683,14 @@ export function BrowserPane({
           />
           <span className={styles.progress} aria-hidden="true" />
         </form>
+        <FavoriteToggle target={{ kind: "browser", id: currentUrl, workspaceId }} title={state?.title || currentUrl}>
+          <span>
+            <FavoriteButton
+              target={{ kind: "browser", id: currentUrl, workspaceId }}
+              title={state?.title || currentUrl}
+            />
+          </span>
+        </FavoriteToggle>
         <fieldset className={styles.targets}>
           <legend className={styles.srOnly}>Environment</legend>
           {LIVE_BROWSER_TARGETS.map((target) => {

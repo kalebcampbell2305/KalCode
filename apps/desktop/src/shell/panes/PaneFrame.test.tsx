@@ -2,12 +2,35 @@ import type { PaneContent } from "@kalcode/protocol";
 import { TooltipProvider } from "@kalcode/ui/components";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
+import { FAVORITES_STORAGE_KEY } from "../favorites/store.ts";
 import type { TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, makeLeaf } from "./model.ts";
 import { PaneFrame, type PaneFrameProps } from "./PaneFrame.tsx";
 
 const terminal = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const browser: PaneContent = { kind: "browser", browserId: "web", url: null };
+
+it("pins a terminal tab using its canvas workspace without activating or closing it", async () => {
+  localStorage.removeItem(FAVORITES_STORAGE_KEY);
+  const activate = vi.fn();
+  const close = vi.fn();
+  const drag = vi.fn();
+  setup({ workspaceId: "canvas-workspace", onActivate: activate, onCloseTab: close, onTabPointerDown: drag });
+  const favorite = screen.getByRole("button", { name: "Pin globally: terminal:a" });
+  expect(favorite.closest('[role="tab"]')).toBeNull();
+  fireEvent.pointerDown(favorite);
+  fireEvent.mouseDown(favorite, { button: 1 });
+  fireEvent.keyDown(favorite, { key: "Delete" });
+  fireEvent.click(favorite);
+  expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([
+    expect.objectContaining({ target: { kind: "terminal", id: "a", workspaceId: "canvas-workspace" }, scopeId: null }),
+  ]);
+  expect(activate).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+  expect(drag).not.toHaveBeenCalled();
+  fireEvent.keyDown(favorite, { key: "F10", shiftKey: true });
+  expect(await screen.findByRole("menuitem", { name: "Unpin globally" })).toBeInTheDocument();
+});
 
 function setup(initial: Partial<PaneFrameProps> = {}) {
   const describe = (content: PaneContent): TabInfo => ({

@@ -613,3 +613,11 @@
     display: none;
   }
 }
+.favoriteRow {
+  display: flex;
+  align-items: center;
+}
+.favoriteRow > button:first-child {
+  flex: 1;
+  min-width: 0;
+}

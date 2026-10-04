@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FAVORITES_STORAGE_KEY } from "../../shell/favorites/store.ts";
 import { FileTree } from "./FileTree.tsx";
 
 const mocks = vi.hoisted(() => ({ listFiles: vi.fn(), readWorkspaceFile: vi.fn(), toast: vi.fn() }));
@@ -28,6 +29,22 @@ beforeEach(() => {
 });
 
 describe("file context menu", () => {
+  it("saves a stable file path without reading the file or storing its handle", async () => {
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
+    render(<FileTree workspaceId="workspace" />);
+    const row = await screen.findByRole("treeitem", { name: "one.ts" });
+    fireEvent.click(screen.getByRole("button", { name: "Pin globally: one.ts" }));
+    expect(row).toHaveAttribute("aria-selected", "false");
+    expect(mocks.readWorkspaceFile).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([
+      expect.objectContaining({ target: { kind: "file", id: "one.ts", workspaceId: "workspace" }, scopeId: null }),
+    ]);
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin globally" }));
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([]);
+    expect(mocks.readWorkspaceFile).not.toHaveBeenCalled();
+  });
+
   it("opens the exact right-clicked file through its opaque handle, without changing selection first", async () => {
     render(<FileTree workspaceId="workspace" />);
     fireEvent.click(await screen.findByRole("treeitem", { name: "one.ts" }));

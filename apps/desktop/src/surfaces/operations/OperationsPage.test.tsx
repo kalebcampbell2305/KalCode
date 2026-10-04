@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountPhase, AccountTier } from "../../ipc/account.ts";
 import type { OperationsApi } from "../../ipc/operations.ts";
 import { focusOperationsTarget } from "../../kalvoice/sceneOperations.ts";
+import { FAVORITES_STORAGE_KEY } from "../../shell/favorites/store.ts";
 import { OperationsPage } from "./OperationsPage.tsx";
 
 const seams = vi.hoisted(() => ({
@@ -36,6 +37,7 @@ vi.mock("./useOperations.ts", () => ({
   }),
 }));
 vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
+  useOptionalWorkspaces: () => ({ active: { id: "workspace-1" } }),
   useWorkspaces: () => ({
     state: "ready",
     active: { id: "workspace-1", name: "KalCode" },
@@ -169,6 +171,30 @@ function page(client: OperationsApi) {
 }
 
 describe("OperationsPage", () => {
+  it("favorites a run from its row and context menu without opening or running it", async () => {
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
+    const client = operations();
+    const run = { ...queued("favorite", 1), status: "succeeded" as const };
+    seams.snapshot = { ...baseSnapshot(), items: [run] };
+    const user = userEvent.setup();
+    renderPage(client);
+    await user.click(screen.getByRole("tab", { name: "Runs" }));
+    const favorite = screen.getByRole("button", { name: "Add Favorite: Task favorite" });
+    await user.click(favorite);
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([
+      expect.objectContaining({
+        target: { kind: "run", id: "favorite", workspaceId: "workspace-1" },
+        scopeId: "workspace-1",
+      }),
+    ]);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Task favorite.*No current action/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Remove Favorite" }));
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([]);
+    expect(client.detail).not.toHaveBeenCalled();
+    expect(client.runNow).not.toHaveBeenCalled();
+    expect(client.cancel).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     seams.snapshot = baseSnapshot();
     seams.account = null;
@@ -250,7 +276,7 @@ describe("OperationsPage", () => {
     const focused = await pending;
     expect(focused).toBe(true);
     expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveValue("workspace-2");
-    const row = screen.getByRole("button", { name: /Task cross-workspace/ });
+    const row = screen.getByRole("button", { name: /^Task cross-workspace/ });
     expect(row).toHaveAttribute("data-kalvoice-focused", "true");
     expect(row).toHaveFocus();
   });
@@ -376,7 +402,7 @@ describe("OperationsPage", () => {
     const user = userEvent.setup();
     const view = renderPage(client);
     await user.selectOptions(screen.getByLabelText("Workspace"), "");
-    await user.click(screen.getByRole("button", { name: /Task connected/ }));
+    await user.click(screen.getByRole("button", { name: /^Task connected/ }));
     const detail = await screen.findByRole("complementary", { name: "Run details" });
     expect(await within(detail).findByText("Linked server")).toBeInTheDocument();
     expect(within(detail).queryByText("Unrelated server")).not.toBeInTheDocument();
@@ -471,7 +497,7 @@ describe("OperationsPage", () => {
     });
     const user = userEvent.setup();
     renderPage(client);
-    await user.click(screen.getByRole("button", { name: /Task old-deployment/ }));
+    await user.click(screen.getByRole("button", { name: /^Task old-deployment/ }));
     const detail = await screen.findByRole("complementary", { name: "Run details" });
     expect(
       await within(detail).findByText("Recorded deployment outcome · not current environment state"),
@@ -500,7 +526,7 @@ describe("OperationsPage", () => {
     });
     const user = userEvent.setup();
     renderPage(client);
-    await user.click(screen.getByRole("button", { name: /Task active-cancel/ }));
+    await user.click(screen.getByRole("button", { name: /^Task active-cancel/ }));
     await user.click(await screen.findByRole("button", { name: "Cancel run" }));
     await waitFor(() => expect(client.cancel).toHaveBeenCalledWith(run.id));
     expect(seams.refresh).toHaveBeenCalled();
@@ -525,7 +551,7 @@ describe("OperationsPage", () => {
     });
     const user = userEvent.setup();
     renderPage(client);
-    await user.click(screen.getByRole("button", { name: /Task workspace-active/ }));
+    await user.click(screen.getByRole("button", { name: /^Task workspace-active/ }));
     await screen.findByRole("button", { name: "Cancel run" });
     await user.selectOptions(screen.getByLabelText("Workspace"), "workspace-2");
     expect(screen.queryByRole("complementary", { name: "Run details" })).not.toBeInTheDocument();
@@ -552,7 +578,7 @@ describe("OperationsPage", () => {
     });
     const user = userEvent.setup();
     renderPage(client);
-    await user.click(screen.getByRole("button", { name: /Task observed-active/ }));
+    await user.click(screen.getByRole("button", { name: /^Task observed-active/ }));
     await screen.findByRole("heading", { name: "Task observed-active" });
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
     expect(client.cancel).not.toHaveBeenCalled();
@@ -573,7 +599,7 @@ describe("OperationsPage", () => {
     renderPage(client);
     expect(screen.getByText("No runs recorded")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    expect(await screen.findByRole("button", { name: /Task older-workspace-run/ })).toBeVisible();
+    expect(await screen.findByRole("button", { name: /^Task older-workspace-run/ })).toBeVisible();
     expect(client.history).toHaveBeenCalledWith(null);
   });
 
@@ -807,7 +833,7 @@ describe("OperationsPage", () => {
       });
     const user = userEvent.setup();
     const view = renderPage(client);
-    await user.click(screen.getByRole("button", { name: /Task active/i }));
+    await user.click(screen.getByRole("button", { name: /^Task active/i }));
     await waitFor(() => expect(client.detail).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole("tab", { name: "Logs" }));
     expect(screen.getByText("first log frame")).toBeVisible();
@@ -843,7 +869,7 @@ describe("OperationsPage", () => {
     });
     const user = userEvent.setup();
     render(<StrictMode>{page(client)}</StrictMode>);
-    await user.click(screen.getByRole("button", { name: /Task strict-active/i }));
+    await user.click(screen.getByRole("button", { name: /^Task strict-active/i }));
 
     expect(await screen.findByRole("heading", { name: "Task strict-active" })).toBeVisible();
     expect(client.detail).toHaveBeenCalledTimes(1);
@@ -875,7 +901,7 @@ describe("OperationsPage", () => {
       });
     const user = userEvent.setup();
     const view = renderPage(client);
-    await user.click(screen.getByRole("button", { name: /Task active/i }));
+    await user.click(screen.getByRole("button", { name: /^Task active/i }));
     await waitFor(() => expect(client.detail).toHaveBeenCalledTimes(1));
 
     seams.snapshot = { ...baseSnapshot(), items: [active], observedAt: "2026-09-30T12:00:03Z" };
@@ -918,7 +944,7 @@ describe("OperationsPage", () => {
     const user = userEvent.setup();
     renderPage(client);
 
-    expect(screen.getByRole("button", { name: /Paused provider turn/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Paused provider turn/i })).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Queue" }));
     const now = screen.getByRole("heading", { name: "Now" }).closest("section");
     expect(now).not.toBeNull();
@@ -994,7 +1020,7 @@ describe("OperationsPage", () => {
     renderPage(client);
 
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    const historical = await screen.findByRole("button", { name: /Historical agent turn/ });
+    const historical = await screen.findByRole("button", { name: /^Historical agent turn/ });
     expect(historical).toHaveTextContent("Unknown");
     expect(historical).toHaveTextContent("Unavailable");
     await user.click(historical);
@@ -1128,7 +1154,7 @@ describe("OperationsPage", () => {
     const user = userEvent.setup();
     renderPage(client);
 
-    expect(screen.getByRole("button", { name: /Bound run/ })).toHaveTextContent("KalCode · main · Codex · Codex 2");
+    expect(screen.getByRole("button", { name: /^Bound run/ })).toHaveTextContent("KalCode · main · Codex · Codex 2");
     await user.click(screen.getByRole("tab", { name: "Queue" }));
     const pendingList = screen.getByRole("list", { name: "Pending tasks" });
     expect(within(pendingList).getByText("Agent · KalCode · Claude Code · Work · Priority 0")).toBeVisible();

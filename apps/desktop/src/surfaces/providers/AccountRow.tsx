@@ -14,6 +14,7 @@ import {
 import { ChevronDown, Info, LogIn, LogOut, MoreHorizontal, PenLine, RefreshCw, Star, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { agentsAndThreadsLabel } from "../dashboard/data/agents.ts";
 import { UsageMeter } from "./AccountUsageBadge.tsx";
 import { accountFullLabel, accountName, accountSessionState, accountSignIn } from "./accountIdentity.ts";
@@ -86,6 +87,8 @@ export function AccountRow({
   const keepMenuFocus = useRef(false);
 
   const label = accountName(account);
+  const favoriteTarget = { kind: "account" as const, id: account.id, workspaceId: null };
+  const favoriteItems = useFavoriteMenuItems(favoriteTarget, label);
   const busy = busyKey?.endsWith(account.id) ?? false;
   const browserAuth = isBrowserAuthProvider(account.providerId);
   const canRefreshAuth = canRefreshProviderAuth(account.providerId);
@@ -188,6 +191,7 @@ export function AccountRow({
         </div>
 
         <div className={styles.cellActions}>
+          <FavoriteButton target={favoriteTarget} title={label} />
           {activeLogin ? (
             <Button
               size="sm"
@@ -247,6 +251,13 @@ export function AccountRow({
                 event.preventDefault();
               }}
             >
+              {favoriteItems.map((item) =>
+                "separator" in item ? null : (
+                  <DropdownMenuItem key={item.id} icon={item.icon} onSelect={item.onSelect}>
+                    {item.label}
+                  </DropdownMenuItem>
+                ),
+              )}
               {canRefreshAuth ? (
                 <DropdownMenuItem
                   icon={<RefreshCw />}
