@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unified-memory-review"
+description = "Enables the unified_memory_review command without any pre-configured scope."
+commands.allow = ["unified_memory_review"]
+
+[[permission]]
+identifier = "deny-unified-memory-review"
+description = "Denies the unified_memory_review command without any pre-configured scope."
+commands.deny = ["unified_memory_review"]

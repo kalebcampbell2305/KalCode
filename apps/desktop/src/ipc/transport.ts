@@ -6,6 +6,13 @@ import type { UtilityCommandName } from "./utilities";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
+  | "unified_memory_list"
+  | "unified_memory_save"
+  | "unified_memory_delete"
+  | "unified_memory_review"
+  | "unified_memory_preferences"
+  | "unified_memory_set_preferences"
+  | "unified_memory_retrieve"
   | "integration_dispatch"
   | HandoffsCommandName
   | OperationsCommandName

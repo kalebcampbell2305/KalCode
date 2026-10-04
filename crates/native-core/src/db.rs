@@ -80,7 +80,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "cursor_accounts",
         sql: include_str!("../migrations/0023_cursor_accounts.sql"),
     },
+    UNIFIED_MEMORY_MIGRATION,
 ];
+
+/// Shared, provider-independent project memory and its incremental full-text index.
+pub const UNIFIED_MEMORY_MIGRATION: Migration = Migration {
+    version: 24,
+    name: "unified_memory",
+    sql: include_str!("../migrations/0024_unified_memory.sql"),
+};
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
 /// re-exports it as `kalcode_git::store::GIT_MIGRATION`; the SQL lives here because native-core

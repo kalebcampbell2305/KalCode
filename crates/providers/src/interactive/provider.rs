@@ -409,6 +409,7 @@ impl InteractiveClaudeProvider {
                 session_id.clone()
             }
         };
+        let project_context = sink.project_context();
         let shared = Shared::new(SessionParts {
             ctx: ActionContext {
                 thread_id: config.thread_id.clone(),
@@ -450,6 +451,10 @@ impl InteractiveClaudeProvider {
             title: None,
         })
         .map_err(|e| ProviderError::Start(e.to_string()))?;
+        if let Some(context) = project_context {
+            args.push("--append-system-prompt".into());
+            args.push(context.into());
+        }
         let integration_lifetime = if let Some(connect) = &self.integrations {
             let connection = connect(&config)?;
             args.extend(super::integrations::claude_config(&connection.url));

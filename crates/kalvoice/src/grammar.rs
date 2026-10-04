@@ -212,6 +212,7 @@ fn is_read_only(intent: &KalVoiceIntent) -> bool {
             | KalVoiceIntent::FilterDashboard { .. }
             | KalVoiceIntent::WhichSessions { .. }
             | KalVoiceIntent::Search { .. }
+            | KalVoiceIntent::ReadMemory { .. }
     )
 }
 
@@ -226,6 +227,10 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
     let core = strip_filler(tokens);
     if core.is_empty() {
         return Understood::reasoning(trimmed);
+    }
+    if !compound && let Some(intent) = memory_question(core) {
+        *confidence = Confidence::High;
+        return Understood::intent(intent);
     }
     if core.iter().any(|word| word == "cursor") {
         if let Some(understood) = pane_request(core) {
@@ -292,6 +297,32 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
         return understood;
     }
     Understood::reasoning(trimmed)
+}
+
+/// Read-only questions with a clear project-knowledge subject. Generic questions remain on
+/// the normal reasoning route; memory never pretends to be a general-purpose assistant.
+fn memory_question(tokens: &[String]) -> Option<KalVoiceIntent> {
+    let words = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    let query = match words.as_slice() {
+        [
+            "search" | "read",
+            "project" | "unified",
+            "memory",
+            rest @ ..,
+        ]
+        | ["search" | "read", "memory", rest @ ..] => rest.join(" "),
+        ["what", "did", "we", "decide", rest @ ..] if !rest.is_empty() => rest.join(" "),
+        ["why", "did", "we", "use" | "choose", rest @ ..] if !rest.is_empty() => rest.join(" "),
+        [
+            "which" | "what",
+            "file" | "module",
+            "owns" | "handles",
+            rest @ ..,
+        ] if !rest.is_empty() => rest.join(" "),
+        ["what", "do", "you", "remember", "about", rest @ ..] if !rest.is_empty() => rest.join(" "),
+        _ => return None,
+    };
+    Some(KalVoiceIntent::ReadMemory { query })
 }
 
 const MAX_BROWSER_URL_CHARS: usize = 2_048;
