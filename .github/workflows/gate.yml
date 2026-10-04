@@ -6,10 +6,10 @@ name: Gate (self-hosted)
 
 on:
   push:
-    branches: [main]
+    # Gate the exact immutable candidate before the train updates main.
+    branches: [main, "merge-train/**"]
   pull_request:
-    # Docs-only PRs skip the self-hosted gate (AGENTS.md parallel merge protocol): the two gate
-    # runners are the merge bottleneck. Later patterns win; release notes still gate.
+    # Docs-only PRs skip the self-hosted gate. Later patterns win; release notes still gate.
     paths:
       - "**"
       - "!**/*.md"
@@ -69,13 +69,33 @@ jobs:
       - name: Gate
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
-          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
           # API tests spawn Wrangler/workerd children; bound their fan-out on the shared PC.
           VITEST_MAX_WORKERS: "4"
         # Release tooling expects Cargo's default target/ (checkout-local; the runner keeps it).
         run: |
           Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
-          node tooling/release/ship.mjs gate --base $env:BASE
+          if ($env:RUNNER_NAME -ne 'kalcode-win-gate') { throw "Gate must run on the owner's main Windows PC" }
+          $head = (git rev-parse HEAD | Out-String).Trim()
+          if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
+          $base = $env:BASE
+          $extra = @()
+          if ($env:GITHUB_REF -like 'refs/heads/merge-train/*') {
+            if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -notmatch '^refs/heads/merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') {
+              throw "Merge-train evidence requires an exact candidate branch push"
+            }
+            # New branches have no meaningful event.before. Gate every change since the main
+            # snapshot recorded in the candidate, never a moving origin/main reference.
+            $base = (git log -1 --format='%(trailers:key=Merge-Train-Base,valueonly)' HEAD | Out-String).Trim()
+            if ($LASTEXITCODE -or $base -notmatch '^[0-9a-f]{40}$' -or $base -eq $head) {
+              throw "Merge-train candidate has no distinct immutable Merge-Train-Base trailer"
+            }
+            git merge-base --is-ancestor $base HEAD
+            if ($LASTEXITCODE) { throw "Merge-Train-Base $base is not an ancestor of the candidate" }
+            $extra = @('--keep-going')
+          }
+          node tooling/release/ship.mjs gate --base $base @extra
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Remove this run's portable Python
         if: always()
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
