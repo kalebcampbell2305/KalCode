@@ -2,6 +2,12 @@ import { expect, type Page, test } from "@playwright/test";
 
 async function openPalette(page: Page) {
   await page.goto("/?scenario=rail");
+  // A returning user with an active workspace is sent to Code once restore finishes; choose
+  // Dashboard explicitly so the check never races that redirect.
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "Dashboard", exact: true })
+    .click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.keyboard.press("Control+k");
   return page.getByRole("dialog", { name: "Command palette" });
