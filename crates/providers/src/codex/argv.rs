@@ -445,9 +445,10 @@ mod tests {
             .into_iter()
             .map(|arg| arg.into_string().expect("utf8"))
             .collect();
-        assert!(args
-            .windows(2)
-            .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] }));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["-c", "model_reasoning_effort='high'"] })
+        );
         for effort in EFFORT_LEVELS {
             assert!(exec_args(PermissionMode::Approve, None, Some(effort), None).is_ok());
         }
