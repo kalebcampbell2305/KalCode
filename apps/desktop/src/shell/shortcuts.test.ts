@@ -16,6 +16,15 @@ function key(
 }
 
 describe("global shortcuts", () => {
+  it("retraces navigation with native platform chords and opens settings consistently", () => {
+    expect(globalShortcut(key("ArrowLeft", { altKey: true }), "windows")).toBe("back");
+    expect(globalShortcut(key("ArrowRight", { altKey: true }), "windows")).toBe("forward");
+    expect(globalShortcut(key("[", { metaKey: true }), "macos")).toBe("back");
+    expect(globalShortcut(key("]", { metaKey: true }), "macos")).toBe("forward");
+    expect(globalShortcut(key(",", { ctrlKey: true }), "windows")).toBe("open-settings");
+    expect(globalShortcut(key(",", { metaKey: true }), "macos")).toBe("open-settings");
+    expect(globalShortcut(key("ArrowLeft", { altKey: true, ctrlKey: true }), "windows")).toBeNull();
+  });
   it("uses Command on macOS and Control on Windows", () => {
     expect(globalShortcut(key("k", { metaKey: true }), "macos")).toBe("open-palette");
     expect(globalShortcut(key("K", { ctrlKey: true }), "windows")).toBe("open-palette");

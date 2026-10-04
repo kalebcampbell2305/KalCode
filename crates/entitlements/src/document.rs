@@ -42,7 +42,7 @@ impl Tier {
             Tier::Free => feature.placement().included_in(0),
             Tier::Pro => feature.placement().included_in(1),
             Tier::Max => feature.placement().included_in(2),
-            Tier::Max2x => feature.placement().included_in(2),
+            Tier::Max2x => feature.placement().included_in(3),
         }
     }
 }
@@ -75,10 +75,15 @@ impl Grants {
             features: Vec::new(),
             limits: BTreeMap::from([
                 (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(25)),
-                (limits::OPEN_TERMINALS.to_owned(), Some(4)),
-                (limits::PARALLEL_AGENTS.to_owned(), Some(1)),
+                (limits::OPEN_TERMINALS.to_owned(), None),
+                (limits::PARALLEL_AGENTS.to_owned(), None),
                 (limits::WORKSPACES.to_owned(), Some(2)),
                 (limits::PROVIDER_ACCOUNTS.to_owned(), Some(2)),
+                ("brainstormsPerMonth".to_owned(), Some(3)),
+                ("launchRecipes".to_owned(), Some(1)),
+                ("externalIntegrations".to_owned(), Some(1)),
+                ("operationsHistoryDays".to_owned(), None),
+                ("queuedTasks".to_owned(), Some(3)),
             ]),
         }
     }
@@ -124,7 +129,8 @@ fn evaluate_limit(
     limits: &BTreeMap<String, Option<u64>>,
     limit: &str,
 ) -> Limit {
-    if unrestricted {
+    // Local sessions are unlimited on every plan, including old signed grants.
+    if unrestricted || matches!(limit, limits::OPEN_TERMINALS | limits::PARALLEL_AGENTS) {
         return Limit::Unlimited;
     }
     match limits.get(limit) {
@@ -262,7 +268,7 @@ mod tests {
         assert!(pro.has_feature(features::PERSISTENT_AGENTS));
         assert!(!pro.has_feature(features::ADVANCED_MISSIONS));
         assert!(!pro.has_feature("featureAddedInTheFuture"));
-        assert_eq!(pro.limit(limits::PARALLEL_AGENTS), Limit::AtMost(8));
+        assert_eq!(pro.limit(limits::PARALLEL_AGENTS), Limit::Unlimited);
         assert_eq!(pro.limit("limitAddedInTheFuture"), Limit::AtMost(0));
         let open = Grants {
             unrestricted: false,
@@ -277,8 +283,8 @@ mod tests {
         let free = Grants::free();
         assert!(!free.unrestricted);
         assert!(!free.has_feature(features::PERSISTENT_AGENTS));
-        assert_eq!(free.limit(limits::PARALLEL_AGENTS), Limit::AtMost(1));
-        assert_eq!(free.limit(limits::OPEN_TERMINALS), Limit::AtMost(4));
+        assert_eq!(free.limit(limits::PARALLEL_AGENTS), Limit::Unlimited);
+        assert_eq!(free.limit(limits::OPEN_TERMINALS), Limit::Unlimited);
         assert_eq!(free.limit(limits::WORKSPACES), Limit::AtMost(2));
         assert_eq!(free.limit(limits::PROVIDER_ACCOUNTS), Limit::AtMost(2));
         assert_eq!(

@@ -90,7 +90,7 @@ describe("palette workspace switching (Stable)", () => {
     const palette = within(await screen.findByRole("dialog", { name: "Command palette" }));
     await user.type(palette.getByRole("combobox"), "switch to api");
 
-    const options = await palette.findAllByRole("option", { name: /^Switch to api-server/ });
+    const options = await palette.findAllByRole("option", { name: /^api-server.*Workspace/ });
     expect(options).toHaveLength(2);
     // Same names are told apart by where each project lives.
     expect(new Set(options.map((o) => o.textContent)).size).toBe(2);

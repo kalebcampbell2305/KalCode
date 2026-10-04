@@ -64,6 +64,7 @@ function ready(tier: AccountTier = "free", email = ACCOUNT_EMAIL, displayName: s
     phase: "ready",
     account: { id: ACCOUNT_ID, email, activatedAt: ACTIVATED_AT, displayName },
     tier,
+    billingInterval: tier === "free" || tier === "owner" ? null : "month",
     sessionExpiresAt: SESSION_EXPIRY,
     entitlementExpiresAt: ENTITLEMENT_EXPIRY,
   };
@@ -129,6 +130,7 @@ function requiredTier(args: Record<string, unknown> | undefined): PurchasableTie
 
 export function createAccountMemory(scenario: AccountMemoryScenario) {
   let snapshot = initialSnapshot(scenario);
+  let confirmingInterval: "month" | "year" = "month";
   let pendingEmail: string | null = null;
   let confirmingTier: PurchasableTier | null = null;
   const effects = { emails: 0, checkouts: 0, browserOpens: 0 };
@@ -178,6 +180,7 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
     async account_checkout(args) {
       if (snapshot.phase === "authenticated_unactivated") {
         confirmingTier = requiredTier(args);
+        confirmingInterval = args?.interval === "year" ? "year" : "month";
         snapshot = confirming(snapshot.account?.email);
       }
       return snapshot;
@@ -187,7 +190,7 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
     },
     async account_refresh() {
       if (snapshot.phase === "confirming_plan" && confirmingTier !== null) {
-        snapshot = ready(confirmingTier, snapshot.account?.email);
+        snapshot = { ...ready(confirmingTier, snapshot.account?.email), billingInterval: confirmingInterval };
         confirmingTier = null;
       }
       return snapshot;

@@ -464,7 +464,7 @@ describe("assistant state", () => {
     requestId,
     intent: "navigate",
     outcome,
-    usage: { used: 3, allowance: 75, periodStart: "2026-09-01T00:00:00.000Z", resetsAt: "2026-10-01T00:00:00.000Z" },
+    usage: { used: 3, allowance: 25, periodStart: "2026-09-01T00:00:00.000Z", resetsAt: "2026-10-01T00:00:00.000Z" },
     counted: true,
     directive: null,
   });
@@ -533,11 +533,11 @@ describe("assistant state", () => {
   });
 
   it("formats usage and sizes", () => {
-    expect(usageLine({ used: 482, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "1,018 remaining · 482 / 1,500 used · resets Oct 1",
+    expect(usageLine({ used: 48, allowance: 150, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
+      "102 remaining · 48 / 150 used · resets Oct 1",
     );
-    expect(usageLine({ used: 1501, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "0 remaining · 1,501 / 1,500 used · resets Oct 1",
+    expect(usageLine({ used: 151, allowance: 150, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
+      "0 remaining · 151 / 150 used · resets Oct 1",
     );
     expect(usageLine({ used: 9, allowance: null, periodStart: "", resetsAt: "" })).toBe(
       "Unlimited · 9 used this month",

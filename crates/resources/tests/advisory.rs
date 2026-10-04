@@ -242,12 +242,12 @@ fn calm_machine_every_mode_exact_numbers() {
     let expected = [
         // (additional, binding, cpu allows, memory allows, cap allows)
         // Conservative: target 60 → (60−20)/3.125 = 12; (20 480−4 096)/512 = 32;
-        // cap 25 % of 32 GiB = 8 192 − 1 024 → 14; agents 2.
-        (2, vec!["user"], 12, 32, 14),
-        // Balanced: 17; (20 480−2 048)/512 = 36; cap 16 384 − 1 024 → 30; agents 4.
-        (4, vec!["user"], 17, 36, 30),
-        // Performance: 22; 38; cap 24 576 − 1 024 → 46; agents 8.
-        (8, vec!["user"], 22, 38, 46),
+        // cap 25 % of 32 GiB = 8 192 − 1 024 → 14; no agent count ceiling.
+        (12, vec!["cpu"], 12, 32, 14),
+        // Balanced: 17; (20 480−2 048)/512 = 36; cap 16 384 − 1 024 → 30; no agent count ceiling.
+        (17, vec!["cpu"], 17, 36, 30),
+        // Performance: 22; 38; cap 24 576 − 1 024 → 46; no agent count ceiling.
+        (22, vec!["cpu"], 22, 38, 46),
         // Custom: target 50 → 9; reserve 4 096 → 32; cap 2 048 − 1 024 → 2; agents 10.
         (2, vec!["cap"], 9, 32, 2),
     ];
@@ -286,7 +286,7 @@ fn running_agents_consume_the_user_limit() {
     };
     assert_eq!(
         advise(&ResourceMode::Balanced, &machine, &three, None).additional,
-        1
+        17
     );
     let over = RunningWork {
         agents: 12,
@@ -294,13 +294,23 @@ fn running_agents_consume_the_user_limit() {
     };
     for mode in all_modes() {
         let advice = advise(&mode, &machine, &over, None);
-        assert_eq!(advice.additional, 0, "{mode:?}");
-        assert!(
-            advice
-                .holds
-                .iter()
-                .any(|h| matches!(h, HoldReason::UserLimit { running: 12, .. }))
-        );
+        if matches!(mode, ResourceMode::Custom(_)) {
+            assert_eq!(advice.additional, 0);
+            assert!(
+                advice
+                    .holds
+                    .iter()
+                    .any(|h| matches!(h, HoldReason::UserLimit { running: 12, .. }))
+            );
+        } else {
+            assert!(advice.additional > 0, "presets never count-cap {mode:?}");
+            assert!(
+                !advice
+                    .constraints
+                    .iter()
+                    .any(|c| matches!(c.reason, HoldReason::UserLimit { .. }))
+            );
+        }
     }
 }
 
@@ -358,7 +368,7 @@ fn elevated_pressure_uses_each_modes_allowance() {
         vec![
             (ModeKind::Conservative, 0),
             (ModeKind::Balanced, 1),
-            (ModeKind::Performance, 8), // no elevated allowance: headroom and agents decide
+            (ModeKind::Performance, 22), // real headroom decides
             (ModeKind::Custom, 1),
         ]
     );
@@ -477,10 +487,21 @@ fn unknown_data_falls_back_to_count_limits_only() {
         };
         let advice = capacity(&snapshot, &limits, &running, &CapacityRequest::default());
         assert_eq!(advice.data, DataQuality::NoData, "{mode:?}");
-        assert_eq!(advice.additional, limits.max_agents - 1);
+        assert_eq!(
+            advice.additional,
+            if limits.max_agents == u32::MAX {
+                u32::MAX
+            } else {
+                limits.max_agents - 1
+            }
+        );
         assert_eq!(
             advice.holds.iter().map(kind_of).collect::<Vec<_>>(),
-            vec!["user"]
+            if limits.max_agents == u32::MAX {
+                vec![]
+            } else {
+                vec!["user"]
+            }
         );
         let unknown: Vec<_> = advice
             .notes

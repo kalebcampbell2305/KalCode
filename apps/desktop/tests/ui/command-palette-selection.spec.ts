@@ -2,8 +2,9 @@ import { expect, type Page, test } from "@playwright/test";
 
 async function openPalette(page: Page) {
   await page.goto("/?scenario=rail");
-  // A returning user with an active workspace is sent to Code once restore finishes; choose
-  // Dashboard explicitly so the check never races that redirect.
+  // A returning user with an active workspace is sent to Code once restore finishes; wait for
+  // that redirect, then choose Dashboard explicitly so the check never races it.
+  await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   await page
     .getByRole("navigation", { name: "Primary" })
     .getByRole("button", { name: "Dashboard", exact: true })
@@ -34,7 +35,7 @@ async function expectAccessibleSelection(page: Page) {
 test("async locator selection keeps both ARIA owners bound to the current option", async ({ page }) => {
   const dialog = await openPalette(page);
   const input = dialog.getByRole("combobox");
-  await input.fill("auth");
+  await input.fill("Authentication Refactor");
   await expect(dialog.getByRole("option").first()).toContainText("Authentication Refactor");
   await expect(dialog.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
   await expectAccessibleSelection(page);
@@ -54,10 +55,12 @@ test("arrow navigation survives the preferred-result correction", async ({ page 
   const dialog = await openPalette(page);
   const input = dialog.getByRole("combobox");
   await input.fill("auth");
-  await expect(dialog.getByRole("option").first()).toContainText("Authentication Refactor");
+  // Files now participate in the universal ranking. Wait for local indexing, then
+  // follow the selected entity's identity instead of assuming a fixed thread-first order.
+  await expect(dialog.locator("footer")).toContainText("Search across your workspace");
   await expect(dialog.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
-  const second = dialog.getByRole("option").nth(1);
-  const id = (await second.getAttribute("id")) ?? "";
+  const id = (await dialog.getByRole("option").nth(1).getAttribute("id")) ?? "";
+  const second = dialog.locator(`[id="${id}"]`);
   expect(id).not.toBe("");
   await input.press("ArrowDown");
   // Cross the frame where the old effect reselected the preferred first result.

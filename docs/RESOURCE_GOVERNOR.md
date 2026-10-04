@@ -82,7 +82,7 @@ evaluates, in a fixed order, and returns `additional` = the minimum over:
 
 | Constraint | Allows | Mode values (C / B / P) |
 | --- | --- | --- |
-| `UserLimit` — max simultaneous agents | `max_agents − running` | 2 / 4 / 8; Custom 1–64 |
+| `UserLimit` — max simultaneous agents | `max_agents − running` | No preset count ceiling; explicit Custom 1–64 |
 | `ProviderLimit` — per provider (Custom) | `limit − running(provider)` | Custom only, 0–64 |
 | `Pressure` — any governed resource at High/Critical | 0 | all modes |
 | `Pressure` — at Elevated | the elevated allowance | 0 / 1 / no extra limit; Custom 1 |

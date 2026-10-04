@@ -66,6 +66,7 @@ impl IntegrationState {
         state: &AppState,
         account_id: &str,
         valid: Arc<dyn Fn() -> bool + Send + Sync>,
+        account: Arc<crate::account::runtime::AccountRuntime>,
     ) -> Result<Self, IpcError> {
         let digest = Sha256::digest(account_id.as_bytes());
         let namespace = format!("{digest:x}");
@@ -79,7 +80,12 @@ impl IntegrationState {
         let broker = Arc::new(
             IntegrationBroker::open(dir.join("integrations.sqlite"), secrets.clone())
                 .map_err(|e| failure(e.to_string()))?
-                .with_authority(valid.clone()),
+                .with_authority(valid.clone())
+                .with_connection_limit(Arc::new(move || {
+                    account
+                        .snapshot()
+                        .plan_limit(kalcode_core::plans::Limited::ExternalIntegrations)
+                })),
         );
         let model_path = dir.join("model.txt");
         let model = std::fs::read_to_string(&model_path)

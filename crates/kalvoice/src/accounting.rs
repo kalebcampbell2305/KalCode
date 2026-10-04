@@ -9,7 +9,8 @@ pub trait RequestAccounting: Send + Sync {
     /// Identity captured from verified native account authority, never renderer input.
     fn account_id(&self) -> &str;
     fn usage(&self) -> Result<KalVoiceUsage>;
-    /// Called once, after durable execution ownership, before an executor effect.
+    /// Cloud-backed requests only. Local commands, dictation, and on-device inference must
+    /// never call this meter.
     fn authorize(&self, request_id: &str) -> Result<MeterDecision>;
 }
 
@@ -50,6 +51,14 @@ pub fn usage(
     let mut value = base.clone();
     value.used = value.used.saturating_add(count);
     Ok(value)
+}
+
+/// Before cloud-only pricing, every device reservation represented local execution. Retire
+/// unacknowledged legacy requests without deleting their durable execution/idempotency rows.
+/// New cloud-backed workflows must establish explicit cloud provenance before reusing this outbox.
+pub fn retire_local_pending(conn: &Connection, account: &str) -> Result<()> {
+    conn.execute("UPDATE kalvoice_account_usage SET status='denied' WHERE account_id=?1 AND status IN ('pending','unconfirmed')", [account])?;
+    Ok(())
 }
 
 /// Must run in the same write transaction as the allowance decision. Reusing an outbox id
@@ -101,12 +110,37 @@ mod tests {
     }
     fn base() -> KalVoiceUsage {
         KalVoiceUsage {
-            used: 74,
-            allowance: Some(75),
+            used: 24,
+            allowance: Some(25),
             period_start: "2026-09-20T12:34:56.000Z".into(),
             resets_at: "2026-10-20T12:34:56.000Z".into(),
         }
     }
+    #[test]
+    fn legacy_local_pending_requests_are_retired_without_removing_idempotency() {
+        let conn = db();
+        let id = kalcode_contracts::ids::new_id();
+        reserve(&conn, "account", &id, 110, true).expect("legacy local request");
+        retire_local_pending(&conn, "other").expect("other account");
+        assert!(next_pending(&conn, "account").expect("pending").is_some());
+        retire_local_pending(&conn, "account").expect("retire");
+        assert!(
+            next_pending(&conn, "account")
+                .expect("no cloud replay")
+                .is_none()
+        );
+        assert!(
+            reserve(&conn, "account", &id, 110, true).is_err(),
+            "request identity remains fenced"
+        );
+        assert_eq!(
+            usage(&conn, "account", &base(), 100, 200, true)
+                .expect("usage")
+                .used,
+            base().used
+        );
+    }
+
     #[test]
     fn exact_cycle_and_account_isolation_survive_replay() {
         let conn = db();
@@ -121,13 +155,13 @@ mod tests {
             usage(&conn, "b", &base(), 100, 200, true)
                 .expect("other account")
                 .used,
-            74
+            24
         );
         assert_eq!(
             usage(&conn, "a", &base(), 200, 300, true)
                 .expect("next cycle")
                 .used,
-            74
+            24
         );
         assert!(reserve(&conn, "a", &id, 110, true).is_err());
         assert_eq!(
@@ -141,13 +175,13 @@ mod tests {
             usage(&conn, "a", &base(), 100, 200, true)
                 .expect("receipt")
                 .used,
-            74
+            24
         );
         assert_eq!(
             usage(&conn, "a", &base(), 100, 200, false)
                 .expect("provisional")
                 .used,
-            75
+            25
         );
     }
     #[test]
@@ -169,7 +203,7 @@ mod tests {
             usage(&conn, "a", &base(), 100, 200, false)
                 .expect("usage")
                 .used,
-            74
+            24
         );
     }
     #[test]

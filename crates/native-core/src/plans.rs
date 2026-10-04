@@ -33,6 +33,11 @@ pub struct PlanLimits {
     pub provider_accounts: Option<u32>,
     /// Waiting Operations tasks (the `operations-queue` roadmap row: Free "Up to 3").
     pub queued_tasks: Option<u32>,
+    pub brainstorms_per_month: Option<u32>,
+    pub launch_recipes: Option<u32>,
+    pub external_integrations: Option<u32>,
+    pub operations_history_days: Option<u32>,
+    pub run_history: Option<u32>,
 }
 
 const UNLIMITED: PlanLimits = PlanLimits {
@@ -42,6 +47,11 @@ const UNLIMITED: PlanLimits = PlanLimits {
     workspaces: None,
     provider_accounts: None,
     queued_tasks: None,
+    brainstorms_per_month: None,
+    launch_recipes: None,
+    external_integrations: None,
+    operations_history_days: None,
+    run_history: None,
 };
 
 /// The public plans in upgrade order.
@@ -68,27 +78,37 @@ impl PlanTier {
         match self {
             Self::Free => PlanLimits {
                 kalvoice_requests_per_month: Some(25),
-                open_terminals: Some(4),
-                parallel_agents: Some(1),
+                open_terminals: None,
+                parallel_agents: None,
                 workspaces: Some(2),
                 provider_accounts: Some(2),
                 queued_tasks: Some(3),
+                brainstorms_per_month: Some(3),
+                launch_recipes: Some(1),
+                external_integrations: Some(1),
+                run_history: Some(10),
+                ..UNLIMITED
             },
             Self::Pro => PlanLimits {
                 kalvoice_requests_per_month: Some(150),
-                open_terminals: Some(12),
-                parallel_agents: Some(4),
+                open_terminals: None,
+                parallel_agents: None,
                 workspaces: Some(10),
                 provider_accounts: Some(6),
-                queued_tasks: None,
+                launch_recipes: Some(10),
+                external_integrations: Some(5),
+                operations_history_days: Some(30),
+                ..UNLIMITED
             },
             Self::Max => PlanLimits {
                 kalvoice_requests_per_month: Some(500),
-                open_terminals: Some(18),
-                parallel_agents: Some(10),
+                open_terminals: None,
+                parallel_agents: None,
                 workspaces: None,
-                provider_accounts: Some(8),
-                queued_tasks: None,
+                provider_accounts: Some(12),
+                external_integrations: Some(25),
+                operations_history_days: Some(365),
+                ..UNLIMITED
             },
             Self::Max2x => PlanLimits {
                 kalvoice_requests_per_month: Some(1_000),
@@ -126,6 +146,9 @@ pub enum Limited {
     Workspaces,
     ProviderAccounts,
     QueuedTasks,
+    BrainstormsPerMonth,
+    LaunchRecipes,
+    ExternalIntegrations,
 }
 
 impl Limited {
@@ -136,6 +159,9 @@ impl Limited {
             Self::Workspaces => limits.workspaces,
             Self::ProviderAccounts => limits.provider_accounts,
             Self::QueuedTasks => limits.queued_tasks,
+            Self::BrainstormsPerMonth => limits.brainstorms_per_month,
+            Self::LaunchRecipes => limits.launch_recipes,
+            Self::ExternalIntegrations => limits.external_integrations,
         }
     }
 
@@ -147,6 +173,9 @@ impl Limited {
             Self::Workspaces => "too_many_workspaces",
             Self::ProviderAccounts => "too_many_provider_accounts",
             Self::QueuedTasks => "too_many_queued_tasks",
+            Self::BrainstormsPerMonth => "too_many_brainstorms",
+            Self::LaunchRecipes => "too_many_launch_recipes",
+            Self::ExternalIntegrations => "too_many_external_integrations",
         }
     }
 
@@ -169,6 +198,21 @@ impl Limited {
                 "connected provider accounts",
                 "Remove one to connect another",
             ),
+            Self::BrainstormsPerMonth => (
+                "Brainstorm this month",
+                "Brainstorms this month",
+                "Wait for the monthly reset",
+            ),
+            Self::LaunchRecipes => (
+                "Launch Recipe",
+                "Launch Recipes",
+                "Remove one to save another",
+            ),
+            Self::ExternalIntegrations => (
+                "external integration",
+                "external integrations",
+                "Disconnect one to connect another",
+            ),
             Self::QueuedTasks => (
                 "queued task",
                 "queued tasks",
@@ -189,6 +233,10 @@ pub struct PlanLimit {
 impl PlanLimit {
     /// Refuses creating one more item when `current` items already exist.
     pub fn admit(&self, current: i64) -> Result<(), KalError> {
+        // Legacy callers and cached documents cannot restore obsolete local session caps.
+        if matches!(self.kind, Limited::OpenTerminals | Limited::ParallelAgents) {
+            return Ok(());
+        }
         if current >= i64::from(self.max) {
             Err(self.refusal())
         } else {
@@ -197,8 +245,7 @@ impl PlanLimit {
     }
 
     /// The user-facing refusal: what the plan allows, how to free a slot, and the next plan's
-    /// capacity ("The Free plan allows 4 open terminals. Close one to open another, or upgrade
-    /// to Pro for 12.").
+    /// capacity, for example the workspace or provider-account allowance.
     pub fn refusal(&self) -> KalError {
         let (one, many, free_one) = self.kind.copy();
         let noun = if self.max == 1 { one } else { many };
@@ -287,6 +334,35 @@ mod tests {
             catalog_values(&source, "providerAccounts"),
             mirror(|l| l.provider_accounts)
         );
+        for (key, field) in [
+            (
+                "queuedTasks",
+                (|l: PlanLimits| l.queued_tasks) as fn(PlanLimits) -> Option<u32>,
+            ),
+            ("brainstormsPerMonth", |l: PlanLimits| {
+                l.brainstorms_per_month
+            }),
+            ("launchRecipes", |l: PlanLimits| l.launch_recipes),
+            ("externalIntegrations", |l: PlanLimits| {
+                l.external_integrations
+            }),
+            ("operationsHistoryDays", |l: PlanLimits| {
+                l.operations_history_days
+            }),
+            ("runHistory", |l: PlanLimits| l.run_history),
+        ] {
+            assert_eq!(catalog_values(&source, key), mirror(field), "{key}");
+        }
+    }
+
+    #[test]
+    fn all_tiers_ignore_even_legacy_local_session_caps() {
+        for tier in ALL {
+            for kind in [Limited::OpenTerminals, Limited::ParallelAgents] {
+                assert_eq!(tier.limit(kind), None);
+                assert!(PlanLimit { tier, kind, max: 0 }.admit(i64::MAX).is_ok());
+            }
+        }
     }
 
     #[test]
@@ -324,14 +400,6 @@ mod tests {
     fn refusals_name_the_plan_and_the_next_capacity() {
         let message = |tier: PlanTier, kind| tier.limit(kind).expect("capped").refusal().message;
         assert_eq!(
-            message(PlanTier::Free, Limited::OpenTerminals),
-            "The Free plan allows 4 open terminals. Close one to open another, or upgrade to Pro for 12."
-        );
-        assert_eq!(
-            message(PlanTier::Free, Limited::ParallelAgents),
-            "The Free plan allows 1 coding agent at a time. Stop an agent to start another, or upgrade to Pro for 4."
-        );
-        assert_eq!(
             message(PlanTier::Free, Limited::Workspaces),
             "The Free plan allows 2 workspaces. Remove one to add another, or upgrade to Pro for 10."
         );
@@ -347,10 +415,6 @@ mod tests {
             message(PlanTier::Pro, Limited::Workspaces),
             "The Pro plan allows 10 workspaces. Remove one to add another, or upgrade to MAX for unlimited."
         );
-        assert_eq!(
-            message(PlanTier::Max, Limited::OpenTerminals),
-            "The MAX plan allows 18 open terminals. Close one to open another, or upgrade to MAX 2X for unlimited."
-        );
         let refusal = PlanTier::Max
             .limit(Limited::ProviderAccounts)
             .expect("capped")
@@ -361,11 +425,9 @@ mod tests {
 
     #[test]
     fn admit_refuses_only_at_the_cap() {
-        let limit = PlanTier::Free
-            .limit(Limited::OpenTerminals)
-            .expect("capped");
-        assert!(limit.admit(3).is_ok());
-        assert_eq!(limit.admit(4).unwrap_err().code, "too_many_terminals");
+        let limit = PlanTier::Free.limit(Limited::Workspaces).expect("capped");
+        assert!(limit.admit(1).is_ok());
+        assert_eq!(limit.admit(2).unwrap_err().code, "too_many_workspaces");
         assert!(limit.admit(9).is_err());
         for kind in [
             Limited::OpenTerminals,

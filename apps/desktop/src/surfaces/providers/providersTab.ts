@@ -49,6 +49,7 @@ export function useProvidersTabRequest(): { tab: ProvidersTab; nonce: number } |
 export interface ProviderAccountsRequest {
   /** The provider whose section to bring into view, e.g. "gemini-cli". */
   providerId: string;
+  accountId?: string;
   /**
    * Also open that provider's "Connect another account" form (name field focused). Nothing is
    * created and no sign-in starts until the person names the account and chooses "Add and sign in".
@@ -64,8 +65,16 @@ let accountsRequested: ProviderAccountsRequest | null = null;
  * provider's existing connect-another-account flow. Store only: the caller navigates to
  * "providers" (or uses {@link useOpenProviderAccounts}, which does both).
  */
-export function openProviderAccounts({ providerId, connect = false }: { providerId: string; connect?: boolean }): void {
-  accountsRequested = { providerId, connect, nonce: nextNonce++ };
+export function openProviderAccounts({
+  providerId,
+  accountId,
+  connect = false,
+}: {
+  providerId: string;
+  accountId?: string;
+  connect?: boolean;
+}): void {
+  accountsRequested = { providerId, accountId, connect, nonce: nextNonce++ };
   requestProvidersTab("accounts");
 }
 

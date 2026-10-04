@@ -8,4 +8,4 @@
  * Mirrored by `FEATURE_PLACEMENT` in `packages/protocol/src/features.ts`, the single source of
  * truth for plan placement; a test here keeps the two identical.
  */
-export type FeaturePlacement = "safety" | "free" | "pro" | "max";
+export type FeaturePlacement = "safety" | "free" | "pro" | "max" | "max2x";

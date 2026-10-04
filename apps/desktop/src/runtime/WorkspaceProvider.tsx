@@ -45,6 +45,40 @@ export interface WorkspaceValue {
 }
 
 const WorkspaceContext = createContext<WorkspaceValue | null>(null);
+const WorkspaceVisibleContext = createContext(true);
+
+export function useWorkspaceVisible(): boolean {
+  return useContext(WorkspaceVisibleContext);
+}
+
+/** Keep each visited workspace's canvas attached to its own terminals while it is hidden. */
+export function WorkspaceScope({ workspace, children }: { workspace: Workspace; children: ReactNode }) {
+  const value = useWorkspaces();
+  const visible = value.active?.id === workspace.id;
+  const saved = useRef<{ terminals: readonly TerminalInfo[]; activeTerminalId: string | null }>({
+    terminals: value.terminals.filter((terminal) => terminal.workspaceId === workspace.id),
+    activeTerminalId: visible ? value.activeTerminalId : null,
+  });
+  if (visible) saved.current = { terminals: value.terminals, activeTerminalId: value.activeTerminalId };
+  const scoped = useMemo<WorkspaceValue>(
+    () => ({
+      ...value,
+      active: workspace,
+      terminals: visible ? value.terminals : saved.current.terminals,
+      activeTerminalId: visible ? value.activeTerminalId : saved.current.activeTerminalId,
+      focusRequest: visible ? value.focusRequest : { terminalId: "", n: 0 },
+      createTerminal: (shellId, workspaceId) => value.createTerminal(shellId, workspaceId ?? workspace.id),
+      selectTerminal: (terminalId, focus, workspaceId) =>
+        value.selectTerminal(terminalId, visible && focus, workspaceId ?? workspace.id),
+    }),
+    [value, visible, workspace],
+  );
+  return (
+    <WorkspaceVisibleContext.Provider value={visible}>
+      <WorkspaceContext.Provider value={scoped}>{children}</WorkspaceContext.Provider>
+    </WorkspaceVisibleContext.Provider>
+  );
+}
 
 interface Snapshot {
   workspaces: Workspace[];

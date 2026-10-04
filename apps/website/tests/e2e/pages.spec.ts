@@ -113,9 +113,17 @@ test.describe("every page", () => {
 
     const robots = await request.get("/robots.txt");
     expect(robots.status()).toBe(200);
-    expect(await robots.text()).toContain("Sitemap: https://kalcoded.com/sitemap-index.xml");
-    const sitemap = await request.get("/sitemap-0.xml");
+    expect(await robots.text()).toContain("Sitemap: https://kalcoded.com/sitemap.xml");
+    await expect(page.locator('link[rel="sitemap"]')).toHaveAttribute("href", "/sitemap.xml");
+    const sitemap = await request.get("/sitemap.xml");
+    expect(sitemap.status()).toBe(200);
+    expect(sitemap.headers()["content-type"]).toContain("application/xml");
     const xml = await sitemap.text();
+    // Previous submissions stay valid and contain the same public URLs.
+    const legacy = await request.get("/sitemap-0.xml");
+    expect(legacy.status()).toBe(200);
+    const locations = (body: string) => [...body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]).sort();
+    expect(locations(await legacy.text())).toEqual(locations(xml));
     for (const entry of PAGES) {
       expect(xml).toContain(`<loc>${new URL(entry.path, SITE_ORIGIN).href}</loc>`);
     }

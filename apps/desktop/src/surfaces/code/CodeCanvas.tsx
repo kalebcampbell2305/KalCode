@@ -47,7 +47,7 @@ import {
 } from "../../kalvoice/useVoiceScene.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
-import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useWorkspaces, useWorkspaceVisible } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
 import { useNavigation, viewVisible } from "../../shell/navigation.tsx";
 import { suggestTask, type TaskLayout } from "../../shell/panes/adaptiveCanvas.ts";
@@ -222,7 +222,8 @@ function CanvasSkeleton({ label }: { label: string }) {
  * layout of a workspace can include them.
  */
 export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
-  const providerPanes = useProviderPanes(workspace, { active: useNavigation().current === "code" });
+  const workspaceVisible = useWorkspaceVisible();
+  const providerPanes = useProviderPanes(workspace, { active: useNavigation().current === "code" && workspaceVisible });
   if (!providerPanes.loaded) return <>{children(null, <CanvasSkeleton label="Loading panes" />)}</>;
   return (
     <LoadedCanvas workspace={workspace} providerPanes={providerPanes}>
@@ -238,7 +239,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const toast = useToast();
   const accountSessions = useOptionalProviderAccountSessions();
   const hasSharedAccountSessions = accountSessions !== null;
-  const { current, navigate } = useNavigation();
+  const { current, navigate, recordLocation, registerRestorer } = useNavigation();
+  const workspaceVisible = useWorkspaceVisible();
+  const codeShown = current === "code" && workspaceVisible;
   const threadsIntent = useThreadsIntent();
   const theme = useResolvedTheme();
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccount[] | null>(null);
@@ -261,7 +264,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     terminals,
     shells,
     panes: providerPanes.panes,
-    active: current === "code",
+    active: codeShown,
   });
   const orgItems = organization.byKey;
   useEffect(() => {
@@ -430,7 +433,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     workspaceName: workspace.name,
   };
   // Code stays mounted (hidden) while other pages are shown; KalVoice sees its panes only when shown.
-  const codeShown = current === "code";
   useEffect(() => {
     if (!codeShown) return;
     const registration: VoicePaneSceneRegistration = {
@@ -621,17 +623,47 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const handledFocus = useRef(-1);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs per focus request.
   useEffect(() => {
-    if (!controller.ready || focusRequest.n === handledFocus.current) return;
+    if (!codeShown || !controller.ready || focusRequest.n === handledFocus.current) return;
     // A new terminal's request can arrive before the terminal list has it; wait for it.
     if (!terminalById.has(focusRequest.terminalId)) return;
     handledFocus.current = focusRequest.n;
     seenTerminals.current.add(focusRequest.terminalId);
     controller.show(terminalContent(focusRequest.terminalId), { focus: true });
-  }, [focusRequest, controller.ready, terminalById]);
+  }, [focusRequest, controller.ready, terminalById, codeShown]);
 
   // The terminal in the focused pane is the workspace's active terminal (palette, Dashboard).
   const focusedLeaf = leaves(controller.layout.root).find((l) => l.paneId === controller.focusedPaneId);
   const focusedContent = focusedLeaf?.tabs[focusedLeaf.activeTab];
+  // Pane focus (including Browser and Runs widgets) is application navigation. Replaying
+  // selects the current content by identity without replacing its live state or URL.
+  useEffect(() => {
+    if (!codeShown || !controller.ready) return;
+    recordLocation({
+      destination: "code",
+      workspaceId: workspace.id,
+      label: focusedContent ? titleOf(focusedContent) : workspace.name,
+      ...(focusedContent ? { target: { kind: "pane" as const, content: focusedContent } } : {}),
+    });
+  }, [codeShown, controller.ready, workspace.id, workspace.name, focusedContent, titleOf, recordLocation]);
+  useEffect(
+    () =>
+      registerRestorer((entry, isCurrent) => {
+        if (entry.destination !== "code" || entry.workspaceId !== workspace.id || entry.target?.kind !== "pane")
+          return undefined;
+        const current = controllerRef.current;
+        if (!current.ready) return undefined;
+        const key = contentKey(entry.target.content);
+        const leaf = leaves(current.layout.root).find((pane) =>
+          pane.tabs.some((content) => contentKey(content) === key),
+        );
+        if (!leaf) return false;
+        const content = leaf.tabs.find((content) => contentKey(content) === key);
+        if (!content || !isCurrent()) return false;
+        current.show(content, { focus: true });
+        return true;
+      }),
+    [registerRestorer, workspace.id],
+  );
   const focusedTerminalId = focusedContent?.kind === "terminal" ? focusedContent.terminalId : null;
   const focusedAgentId = focusedContent?.kind === "agent" ? focusedContent.agentId : null;
   // The shell reads only the visible pane's identity; it resolves account metadata from the
@@ -649,10 +681,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   }, [codeShown, controller.ready, workspace.id, focusedAgentId, focusedTerminalId]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: follow the focused pane only.
   useEffect(() => {
-    if (focusedTerminalId && focusedTerminalId !== activeTerminalId && terminalById.has(focusedTerminalId)) {
+    if (
+      codeShown &&
+      focusedTerminalId &&
+      focusedTerminalId !== activeTerminalId &&
+      terminalById.has(focusedTerminalId)
+    ) {
       selectTerminal(focusedTerminalId, false);
     }
-  }, [focusedTerminalId]);
+  }, [focusedTerminalId, codeShown]);
 
   // Agent tabs whose threads no longer exist leave the layout once a list read succeeded (else
   // they'd wait on "Connecting" forever). Ids just announced by a command are kept until the
@@ -670,7 +707,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
 
   // Z7-W3: a Dashboard card, a notification or KalVoice asked to focus a provider pane's thread.
   usePaneFocusRequests((threadId) => {
-    if (!controller.ready || !paneById.has(threadId)) return false;
+    if (!codeShown || !controller.ready || !paneById.has(threadId)) return false;
     controller.replace(migrateAgentContents(controller.layout, new Set([threadId])));
     controller.show(agentContent(threadId), { focus: true });
     return true;
@@ -1042,7 +1079,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             workspaceId={workspace.id}
             context={context}
             controllerRef={controllerRef}
-            visible={current === "code" && context.visible !== false}
+            visible={codeShown && context.visible !== false}
             initialUrl={initialBrowserUrls.current.get(content.browserId)}
           />
         );
@@ -1098,7 +1135,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       restartById,
       closeTerminalTab,
       providerPanes,
-      current,
       codeShown,
       accountFor,
       browserBridge,

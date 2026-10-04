@@ -91,11 +91,10 @@ fn e2e_provider_sample_uses_canonical_capacity_and_still_enforces_limits() {
     assert_eq!(admitted.state, AdmissionState::Allowed);
     assert!(admitted.additional > 0);
 
-    state.set_active_tasks(ModeLimits::balanced().max_agents);
+    state.set_active_tasks(32);
     let held = state.report().admission;
-    assert_eq!(held.state, AdmissionState::Held);
-    assert_eq!(held.additional, 0);
-    assert!(!held.reasons.is_empty());
+    assert_eq!(held.state, AdmissionState::Allowed);
+    assert!(held.additional > 0);
 
     state.set_active_tasks(0);
     let provider = ProviderId::new("codex");
@@ -1253,13 +1252,23 @@ fn idle_sessions_and_an_idle_resident_reasoner_leave_room_for_a_new_thread() {
     governor.shutdown();
 }
 
-/// (F)(G) Four running turns fill Balanced mode; the fifth is held with the concurrency reason
+/// An explicit Custom ceiling of four running turns holds the fifth with the concurrency reason
 /// and the counts, and proceeds as soon as one turn finishes.
 #[test]
-fn a_fifth_running_turn_waits_for_a_slot_and_proceeds_when_one_frees() {
+fn an_explicit_custom_agent_ceiling_waits_for_a_slot_and_resumes() {
     let governor = healthy_governor();
     let codex = governed_codex(&governor);
-    let limit = ModeLimits::balanced().max_agents;
+    let limit = 4;
+    governor
+        .set_mode(ResourceMode::Custom(
+            kalcode_resources::CustomLimits::default(),
+        ))
+        .expect("explicit custom ceiling");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while governor.report().snapshot.mode != ModeKind::Custom {
+        assert!(Instant::now() < deadline, "custom mode sample");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let running: Vec<_> = (0..limit)
         .map(|_| {
             let session = codex
@@ -1551,4 +1560,24 @@ fn an_m1_with_a_resident_reasoner_admits_codex() {
         AdmissionState::Held,
         "the regression this guards"
     );
+}
+
+#[test]
+fn balanced_mode_runs_twelve_provider_turns_when_hardware_has_headroom() {
+    let governor = healthy_governor();
+    let provider = governed_codex(&governor);
+    let sessions: Vec<_> = (0..12)
+        .map(|_| {
+            let session = provider
+                .provider
+                .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+                .expect("no preset count cap");
+            session.send(text("work")).expect("hardware admits turn");
+            session
+        })
+        .collect();
+    assert_eq!(governor.running_work_for_test().agents, 12);
+    drop(sessions);
+    assert_eq!(governor.running_work_for_test().agents, 0);
+    governor.shutdown();
 }

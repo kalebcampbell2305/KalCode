@@ -8,8 +8,8 @@ function receipt(overrides: Record<string, unknown> = {}): Record<string, unknow
     version: 1,
     accountId: "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11",
     tier: "pro",
-    used: 412,
-    allowance: 1500,
+    used: 41,
+    allowance: 150,
     periodStart: "2026-09-10T08:00:00.000Z",
     resetsAt: "2026-10-10T08:00:00.000Z",
     issuedAt: T0,
@@ -22,7 +22,7 @@ function receipt(overrides: Record<string, unknown> = {}): Record<string, unknow
 describe("parseUsageReceipt", () => {
   it("accepts receipts for restricted tiers and unlimited OWNER receipts", () => {
     expect(parseUsageReceipt(receipt()).ok).toBe(true);
-    expect(parseUsageReceipt(receipt({ tier: "max2x", allowance: 10_000 })).ok).toBe(true);
+    expect(parseUsageReceipt(receipt({ tier: "max2x", allowance: 1_000 })).ok).toBe(true);
     expect(parseUsageReceipt(receipt({ tier: "owner", allowance: null, used: 99_999 })).ok).toBe(true);
     expect(parseUsageReceipt({ ...receipt(), addedLater: 1 }).ok).toBe(true);
   });

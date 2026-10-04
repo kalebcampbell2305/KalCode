@@ -38,7 +38,7 @@ export type EntitlementFeatureId = (typeof FEATURES)[number];
 
 /**
  * Numeric limits gated by plan, signed into every entitlement document. `kalvoiceRequestsPerMonth`
- * counts executed KalVoice commands per cycle — never provider model tokens; dictation is never
+ * counts cloud-backed KalVoice requests per cycle — never provider model tokens; local commands and dictation are never
  * metered. The others are the core plan limits in `plans.ts` (`null` = no KalCode-side limit).
  */
 export const LIMITS = [
@@ -47,6 +47,11 @@ export const LIMITS = [
   "parallelAgents",
   "workspaces",
   "providerAccounts",
+  "brainstormsPerMonth",
+  "launchRecipes",
+  "externalIntegrations",
+  "operationsHistoryDays",
+  "queuedTasks",
 ] as const;
 export type LimitId = (typeof LIMITS)[number];
 
@@ -117,6 +122,11 @@ export function tierGrants(tier: EntitlementTier): TierGrants {
     parallelAgents: plan.parallelAgents,
     workspaces: plan.workspaces,
     providerAccounts: plan.providerAccounts,
+    brainstormsPerMonth: plan.brainstormsPerMonth,
+    launchRecipes: plan.launchRecipes,
+    externalIntegrations: plan.externalIntegrations,
+    operationsHistoryDays: plan.operationsHistoryDays,
+    queuedTasks: plan.queuedTasks,
   };
   return { unrestricted: false, features: FEATURES.filter((feature) => flags[feature]), limits };
 }
@@ -134,7 +144,7 @@ export function hasFeature(entitlement: TierGrants, feature: EntitlementFeatureI
  * A limit a restricted document does not mention is `0` (fail closed).
  */
 export function limitFor(entitlement: TierGrants, limit: LimitId | (string & {})): number | null {
-  if (entitlement.unrestricted) {
+  if (entitlement.unrestricted || limit === "openTerminals" || limit === "parallelAgents") {
     return null;
   }
   if (!Object.hasOwn(entitlement.limits, limit)) {

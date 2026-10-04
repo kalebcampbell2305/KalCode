@@ -76,6 +76,7 @@ export const ACCOUNT_ACTIVATE_FREE_PATH = "/v1/account/activate-free";
 export const ACCOUNT_DELETE_START_PATH = "/v1/account/delete/start";
 export const BILLING_CHECKOUT_PATH = "/v1/billing/checkout";
 export const BILLING_PORTAL_PATH = "/v1/billing/portal";
+export const BILLING_STATUS_PATH = "/v1/billing/status";
 export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
 export const INSIGHTS_DISTRIBUTION_PATH = "/v1/insights/distribution";
 export const INSIGHTS_REVENUE_PATH = "/v1/insights/revenue";
@@ -234,6 +235,12 @@ const billingPortal: Handler = async (request, deps) => {
   const account = await authenticatedAccount(request, deps);
   if (!account) return unauthenticated();
   return deps.billing?.portal(request, account.id) ?? unavailable();
+};
+
+const billingStatus: Handler = async (request, deps) => {
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  return deps.billing?.status(account.id) ?? unavailable();
 };
 
 /**
@@ -399,6 +406,7 @@ export const ROUTES: readonly Route[] = [
   { method: "POST", path: ACCOUNT_DELETE_START_PATH, access: "account", handler: startAccountDelete },
   { method: "POST", path: BILLING_CHECKOUT_PATH, access: "account", handler: billingCheckout },
   { method: "POST", path: BILLING_PORTAL_PATH, access: "account", handler: billingPortal },
+  { method: "GET", path: BILLING_STATUS_PATH, access: "account", handler: billingStatus },
   { method: "POST", path: BILLING_WEBHOOK_PATH, access: "public", handler: billingWebhook },
   { method: "GET", path: ENTITLEMENT_PATH, access: "account", handler: getEntitlement },
   { method: "GET", path: KEYS_PATH, access: "public", handler: getKeys },

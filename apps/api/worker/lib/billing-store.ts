@@ -87,6 +87,19 @@ export function d1BillingStore(db: D1Database) {
       return row?.stripe_customer_id ?? null;
     },
 
+    /** Only the caller's current subscription; never expose another customer's Stripe identity. */
+    async subscriptionForAccount(accountId: string): Promise<{ id: string; customerId: string } | null> {
+      const row = await db
+        .prepare(
+          `SELECT stripe_subscription_id, stripe_customer_id FROM billing_subscriptions
+           WHERE account_id = ?1 AND status NOT IN ('canceled', 'incomplete_expired')
+           ORDER BY reconciled_at DESC LIMIT 1`,
+        )
+        .bind(accountId)
+        .first<{ stripe_subscription_id: string; stripe_customer_id: string }>();
+      return row ? { id: row.stripe_subscription_id, customerId: row.stripe_customer_id } : null;
+    },
+
     async reserveCheckout(input: {
       accountId: string;
       tier: BillableTier;

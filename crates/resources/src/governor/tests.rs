@@ -167,8 +167,9 @@ fn callers_never_wait_for_a_slow_probe() {
         let advice = handle.capacity(&RunningWork::default(), &CapacityRequest::default());
         assert_eq!(advice.data, DataQuality::NoData);
         assert_eq!(
-            advice.additional, 4,
-            "Balanced allows 4 agents; count limits still apply"
+            advice.additional,
+            u32::MAX,
+            "Presets impose no count ceiling; admission still requires real telemetry"
         );
         let _ = handle.latest();
         let _ = handle.status();
@@ -328,7 +329,10 @@ fn a_panicking_probe_degrades_then_stops_without_affecting_callers() {
         },
         &CapacityRequest::default(),
     );
-    assert_eq!((advice.data, advice.additional), (DataQuality::NoData, 3));
+    assert_eq!(
+        (advice.data, advice.additional),
+        (DataQuality::NoData, u32::MAX)
+    );
     // Commands after the thread stopped are accepted and ignored; nothing panics or blocks.
     handle.set_activity(Activity {
         active_tasks: 3,
