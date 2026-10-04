@@ -65,9 +65,15 @@ test("desktop update script cleans up only after every guard passed", () => {
   // Recovery of a preserved profile is opt-in, after every guard and download, and must leave nothing behind.
   const recovery = script.indexOf("if ($recover) {");
   assert.ok(script.indexOf("if ($recover -and -not $RecoverPreservedProfile) { Refuse") > 0, "recovery is opt-in");
-  assert.ok(recovery > script.indexOf("$script:InstallerPublisher = $sig.SignerCertificate.Subject"), "publisher known first");
+  assert.ok(
+    recovery > script.indexOf("$script:InstallerPublisher = $sig.SignerCertificate.Subject"),
+    "publisher known first",
+  );
   assert.ok(recovery < script.indexOf("Run-Installer $live"), "recovery precedes the proof");
-  assert.ok(script.includes("if ($recover -and (Leftovers).Values -contains $true) { Refuse"), "recovery leaves no state");
+  assert.ok(
+    script.includes("if ($recover -and (Leftovers).Values -contains $true) { Refuse"),
+    "recovery leaves no state",
+  );
 });
 
 test("desktop update script does not open kalcode.exe while the update is being applied", () => {
