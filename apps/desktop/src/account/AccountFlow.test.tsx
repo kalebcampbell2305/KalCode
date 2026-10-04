@@ -219,7 +219,7 @@ describe("account onboarding integration", () => {
           runtimeReads += 1;
           return runtime(runtimeReads === 1 ? "starting" : "ready");
         case "account_usage":
-          return { used: 0, allowance: 1_500, periodStart: "2026-09-01T00:00:00Z", resetsAt: "2026-10-01T00:00:00Z" };
+          return { used: 0, allowance: 150, periodStart: "2026-09-01T00:00:00Z", resetsAt: "2026-10-01T00:00:00Z" };
         default:
           throw new Error(`Unexpected account IPC command: ${command}`);
       }

@@ -1,5 +1,4 @@
 import type { DevelopmentService, OperationRecord, OperationStatus, PaneContent, SurfaceFlag } from "@kalcode/protocol";
-import { limitsFor } from "@kalcode/protocol";
 import {
   Button,
   EmptyState,
@@ -38,6 +37,7 @@ import {
   isActiveRun,
   operationDurationLabel,
   operationStatusLabel,
+  planRunHistory,
   timeLabel,
 } from "../operations/model.ts";
 import {
@@ -239,9 +239,10 @@ export function CodeContextOperations({ client, visible = true }: { client: Oper
   }
   if (!snapshot) return null;
 
-  const historyLimit = limitsFor(tier).runHistory;
-  const runs = visibleRuns(snapshot.items, historyLimit);
-  const tests = visibleRuns(snapshot.items, historyLimit, true).filter((run) => run.spec.kind === "test");
+  const runs = planRunHistory(visibleRuns(snapshot.items), tier, snapshot.observedAt);
+  const tests = planRunHistory(visibleRuns(snapshot.items, true), tier, snapshot.observedAt).filter(
+    (run) => run.spec.kind === "test",
+  );
   const services = snapshot.services.toSorted((left, right) => {
     const status = Number(right.status === "running") - Number(left.status === "running");
     return status || left.name.localeCompare(right.name);
@@ -360,24 +361,13 @@ export function CodeContextOperations({ client, visible = true }: { client: Oper
   );
 }
 
-function visibleRuns(
-  items: readonly OperationRecord[],
-  historyLimit: number | null,
-  includePending = false,
-): OperationRecord[] {
+function visibleRuns(items: readonly OperationRecord[], includePending = false): OperationRecord[] {
   const sorted = items
     .filter((item) => includePending || item.startedAt !== null || isActiveRun(item))
     .toSorted(
       (left, right) => Date.parse(right.startedAt ?? right.createdAt) - Date.parse(left.startedAt ?? left.createdAt),
     );
-  if (historyLimit === null) return sorted;
-  let finished = 0;
-  return sorted.filter((run) => {
-    if (run.endedAt === null) return true;
-    if (finished >= historyLimit) return false;
-    finished += 1;
-    return true;
-  });
+  return sorted;
 }
 
 function RunList({

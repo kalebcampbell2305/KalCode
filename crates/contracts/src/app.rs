@@ -94,6 +94,7 @@ pub enum FeaturePlacement {
     Free,
     Pro,
     Max,
+    Max2x,
 }
 
 impl FeatureId {
@@ -159,24 +160,21 @@ impl FeatureId {
             | Self::PaneSystem
             | Self::ProviderPanes
             | Self::NotificationCenter
-            | Self::AccountSignIn => Free,
-            // Pro.
-            Self::AgentOrganization
-            | Self::ProviderProfiles
+            | Self::AccountSignIn
+            | Self::AgentOrganization
             | Self::Blueprints
-            | Self::TimeMachine
-            | Self::ProviderHandoff
-            | Self::RemoteWorkspaces
-            | Self::Automations
-            | Self::Memory
-            | Self::Missions
-            | Self::Verification => Pro,
+            | Self::Memory => Free,
+            // Pro.
+            Self::ProviderProfiles | Self::TimeMachine | Self::Verification => Pro,
             // MAX.
             Self::CommandCenter
-            | Self::Scheduler
             | Self::BenchmarkLab
             | Self::FailureAutopsy
-            | Self::DiffIntelligence => Max,
+            | Self::DiffIntelligence
+            | Self::ProviderHandoff
+            | Self::RemoteWorkspaces
+            | Self::Missions => Max,
+            Self::Scheduler | Self::Automations => Max2x,
         }
     }
 
@@ -223,12 +221,13 @@ impl FeatureId {
 
 impl FeaturePlacement {
     /// Whether a restricted plan includes a feature with this placement. `plan_rank`: Free = 0,
-    /// Pro = 1, MAX = 2. (OWNER is unrestricted and never asks.)
+    /// Pro = 1, MAX = 2, MAX 2X = 3. (OWNER is unrestricted and never asks.)
     pub fn included_in(self, plan_rank: u8) -> bool {
         match self {
             Self::Safety | Self::Free => true,
             Self::Pro => plan_rank >= 1,
             Self::Max => plan_rank >= 2,
+            Self::Max2x => plan_rank >= 3,
         }
     }
 }

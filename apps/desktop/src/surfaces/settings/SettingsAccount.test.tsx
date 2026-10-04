@@ -65,7 +65,7 @@ describe("SettingsAccountView", () => {
     render(
       <SettingsAccountView
         account={{ ...account, tier: "free" }}
-        usage={{ ...usage, allowance: 75 }}
+        usage={{ ...usage, allowance: 25 }}
         busy={false}
         error={null}
         onManage={vi.fn()}
@@ -74,7 +74,7 @@ describe("SettingsAccountView", () => {
     );
     expect(screen.getByText("Free")).toBeInTheDocument();
     // Plan names come from the canonical catalog (packages/protocol/src/plans.ts), never hand-typed.
-    expect(screen.getByText(/No subscription\. Pro, MAX and MAX 2X add more/)).toHaveTextContent(
+    expect(screen.getByText(/No subscription\. Pro, MAX and MAX 2X add workspace/)).toHaveTextContent(
       "kalcoded.com/pricing",
     );
     expect(screen.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
@@ -128,5 +128,25 @@ describe("SettingsAccount", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open settings" }));
     expect(await screen.findByText("105 remaining · 45 / 150 used · resets Oct 1")).toBeInTheDocument();
     expect(usageCall).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("plan entitlements", () => {
+  it("shows the canonical Max scale, annual billing and unlimited local coding", () => {
+    render(
+      <SettingsAccountView
+        account={{ ...account, tier: "max", billingInterval: "month" }}
+        usage={{ ...usage, allowance: 500, billingInterval: "year" }}
+        busy={false}
+        error={null}
+        onManage={vi.fn()}
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Unlimited local terminals and coding agents")).toBeVisible();
+    expect(screen.getByText("12", { exact: false })).toHaveTextContent("All supported providers");
+    expect(screen.getByText("25", { exact: true })).toBeVisible();
+    expect(screen.getByText("365-day history")).toBeVisible();
+    expect(screen.getByText("Yearly")).toBeVisible();
   });
 });

@@ -50,14 +50,14 @@ export const ALL_PERMISSION_MODES = [
  * system, provider, account, API and upstream service limits may still apply (`UNLIMITED_NOTE`).
  */
 export interface PlanLimits {
-  /** KalVoice Requests per monthly cycle: each executed KalVoice command counts once. */
+  /** KalVoice Requests per monthly cycle: each cloud-backed request counts once; local commands never count. */
   kalvoiceRequestsPerMonth: number | null;
   /** Local, on-device KalVoice dictation (including voice into terminals) is never metered. */
   kalvoiceDictation: "unlimited";
   /** Terminals open at the same time across all of KalCode (shells, agents and Operations). */
-  openTerminals: number | null;
+  openTerminals: null;
   /** Coding agents (Claude Code, Codex) running at the same time. */
-  parallelAgents: number | null;
+  parallelAgents: null;
   /** Workspaces (project folders) added to KalCode. */
   workspaces: number | null;
   /** Connected provider accounts (sign-ins) across every provider. */
@@ -68,6 +68,17 @@ export interface PlanLimits {
    * are always shown.
    */
   runHistory: number | null;
+  /** Monthly cloud Brainstorms; null means unlimited. */
+  brainstormsPerMonth: number | null;
+  launchRecipes: number | null;
+  externalIntegrations: number | null;
+  /** Local history display window; null means no age cutoff. Never deletes user data. */
+  operationsHistoryDays: number | null;
+  queuedTasks: number | null;
+  remote: "none" | "standard" | "full";
+  orchestration: "basic" | "everyday" | "advanced";
+  autonomy: "manual" | "maximum";
+  memory: "basic" | "project" | "advanced" | "maximum";
   permissionModes: typeof ALL_PERMISSION_MODES;
   /** Legacy signed-entitlement flags kept for document compatibility (`entitlements.ts`). */
   persistentAgents: boolean;
@@ -108,64 +119,91 @@ export const PLANS: readonly Plan[] = [
     limits: {
       kalvoiceRequestsPerMonth: 25,
       kalvoiceDictation: "unlimited",
-      openTerminals: 4,
-      parallelAgents: 1,
+      openTerminals: null,
+      parallelAgents: null,
       workspaces: 2,
       providerAccounts: 2,
       runHistory: 10,
+      brainstormsPerMonth: 3,
+      launchRecipes: 1,
+      externalIntegrations: 1,
+      operationsHistoryDays: null,
+      queuedTasks: 3,
+      remote: "none",
+      orchestration: "basic",
+      autonomy: "manual",
+      memory: "basic",
       permissionModes: ALL_PERMISSION_MODES,
       persistentAgents: false,
       multiAgentWorkflows: false,
       automations: "none",
       advancedMissions: false,
     },
-    cardFeatures: ["core-code", "core-threads", "core-browser", "operations", "brainstorm"],
+    cardFeatures: ["core-code", "agent-fleet", "unified-memory"],
   },
   {
     id: "pro",
     name: "Pro",
     stage: "BUILD",
-    tagline: "For developers using AI every day.",
+    tagline: "Your everyday AI engineering workspace.",
     popular: false,
     price: { monthlyUsd: 10, yearlyUsd: 100 },
     limits: {
       kalvoiceRequestsPerMonth: 150,
       kalvoiceDictation: "unlimited",
-      openTerminals: 12,
-      parallelAgents: 4,
+      openTerminals: null,
+      parallelAgents: null,
       workspaces: 10,
       providerAccounts: 6,
       runHistory: null,
+      brainstormsPerMonth: null,
+      launchRecipes: 10,
+      externalIntegrations: 5,
+      operationsHistoryDays: 30,
+      queuedTasks: null,
+      remote: "none",
+      orchestration: "everyday",
+      autonomy: "manual",
+      memory: "project",
       permissionModes: ALL_PERMISSION_MODES,
-      persistentAgents: true,
-      multiAgentWorkflows: true,
-      automations: "scheduled",
+      persistentAgents: false,
+      multiAgentWorkflows: false,
+      automations: "none",
       advancedMissions: false,
     },
-    cardFeatures: ["operations-full", "brainstorm", "agent-fleet", "launch-recipes", "browser-studio", "advanced-code"],
+    cardFeatures: ["operations-history", "brainstorm", "browser-studio"],
   },
   {
     id: "max",
     name: "MAX",
     stage: "ORCHESTRATE",
-    tagline: "Serious multi-agent development.",
+    tagline: "Run serious multi-agent engineering workflows.",
     popular: true,
     price: { monthlyUsd: 25, yearlyUsd: 250 },
     limits: {
       kalvoiceRequestsPerMonth: 500,
       kalvoiceDictation: "unlimited",
-      openTerminals: 18,
-      parallelAgents: 10,
+      openTerminals: null,
+      parallelAgents: null,
       workspaces: null,
-      providerAccounts: 8,
+      providerAccounts: 12,
       runHistory: null,
+      brainstormsPerMonth: null,
+      launchRecipes: null,
+      externalIntegrations: 25,
+      operationsHistoryDays: 365,
+      queuedTasks: null,
+      remote: "standard",
+      orchestration: "advanced",
+      autonomy: "manual",
+      memory: "advanced",
       permissionModes: ALL_PERMISSION_MODES,
-      persistentAgents: true,
+      persistentAgents: false,
       multiAgentWorkflows: true,
-      automations: "scheduled_and_event",
+      automations: "none",
       advancedMissions: true,
     },
-    cardFeatures: ["squads", "handoff-chains", "agent-files", "stuck-agents", "mission-control", "deploy", "remote"],
+    cardFeatures: ["squads", "handoff-chains", "deploy"],
   },
   {
     id: "max2x",
@@ -182,13 +220,22 @@ export const PLANS: readonly Plan[] = [
       workspaces: null,
       providerAccounts: null,
       runHistory: null,
+      brainstormsPerMonth: null,
+      launchRecipes: null,
+      externalIntegrations: null,
+      operationsHistoryDays: null,
+      queuedTasks: null,
+      remote: "full",
+      orchestration: "advanced",
+      autonomy: "maximum",
+      memory: "maximum",
       permissionModes: ALL_PERMISSION_MODES,
       persistentAgents: true,
       multiAgentWorkflows: true,
       automations: "scheduled_and_event",
       advancedMissions: true,
     },
-    cardFeatures: ["keep-working", "auto-routing", "remote", "kalvoice-live", "cloud-capacity", "early-access"],
+    cardFeatures: ["keep-working", "auto-routing", "remote"],
   },
 ] as const;
 
@@ -205,6 +252,15 @@ export const OWNER_LIMITS: PlanLimits = {
   workspaces: null,
   providerAccounts: null,
   runHistory: null,
+  brainstormsPerMonth: null,
+  launchRecipes: null,
+  externalIntegrations: null,
+  operationsHistoryDays: null,
+  queuedTasks: null,
+  remote: "full",
+  orchestration: "advanced",
+  autonomy: "maximum",
+  memory: "maximum",
   permissionModes: ALL_PERMISSION_MODES,
   persistentAgents: true,
   multiAgentWorkflows: true,
@@ -256,14 +312,14 @@ export function formatKalVoiceAllowance(limits: PlanLimits): string {
 
 /** The five core limits every plan card and comparison leads with, in display order. */
 export const CORE_LIMITS = [
-  { key: "parallelAgents", one: "agent", many: "agents", label: "Parallel coding agents" },
-  { key: "openTerminals", one: "terminal", many: "terminals", label: "Open terminals" },
+  { key: "parallelAgents", one: "local agent", many: "local agents", label: "Local coding agents" },
+  { key: "openTerminals", one: "local terminal", many: "local terminals", label: "Local terminals" },
   { key: "workspaces", one: "workspace", many: "workspaces", label: "Workspaces" },
   { key: "providerAccounts", one: "account", many: "accounts", label: "Connected provider accounts" },
   { key: "kalvoiceRequestsPerMonth", one: "KalVoice", many: "KalVoice", label: "KalVoice Requests a month" },
 ] as const satisfies readonly { key: keyof PlanLimits; one: string; many: string; label: string }[];
 
-/** "1 agent", "12 terminals", "Unlimited workspaces", "1,000 KalVoice". */
+/** Catalog-derived plan card display, including unlimited local agents and terminals. */
 export function formatCoreLimit(limits: PlanLimits, limit: (typeof CORE_LIMITS)[number]): string {
   const value = limits[limit.key] as number | null;
   return `${formatLimit(value)} ${value === 1 ? limit.one : limit.many}`;
@@ -308,14 +364,19 @@ const V019 = "0.1.9+1106";
 /** The Stable 0.1.9 build that shipped the New agent launcher, provider agent panes and Account Hub. */
 const V019_STABLE = "0.1.9+1340";
 
+/** Comparison quotas are formatted from the same limits signed by the API. */
+function quotaValues(key: "brainstormsPerMonth" | "launchRecipes" | "externalIntegrations" | "queuedTasks") {
+  return Object.fromEntries(PLANS.map((plan) => [plan.id, formatLimit(plan.limits[key])])) as Record<PlanId, string>;
+}
+
 export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
   {
     id: "core",
-    title: "Core KalCode — every plan",
+    title: "Core KalCode and workspace tools",
     features: [
       {
         id: "core-code",
-        label: "Claude Code and Codex on your own provider accounts",
+        label: "All supported coding providers on your own accounts",
         from: "free",
         status: "available",
         verifiedIn: LIVE,
@@ -331,15 +392,17 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       { id: "core-browser", label: "Integrated Browser", from: "free", status: "available", verifiedIn: LIVE },
       {
         id: "external-integrations",
-        label: "External integrations with your own credentials",
+        label: "External API / MCP integrations",
         from: "free",
         status: "available",
         verifiedIn: "0.1.9+1467",
+        values: quotaValues("externalIntegrations"),
+        detail: "Use your own credentials with supported providers, APIs and MCP servers.",
       },
       {
         id: "adaptive-canvas",
         label: "Adaptive Canvas: task layouts, snap and reversible Tidy",
-        from: "free",
+        from: "pro",
         status: "coming_soon",
       },
       {
@@ -464,11 +527,11 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       {
         id: "operations-history",
-        label: "Run history",
+        label: "Operations history",
         from: "free",
         status: "available",
         verifiedIn: LIVE,
-        values: { free: "Recent 10", pro: "Full", max: "Full", max2x: "Full" },
+        values: { free: "Recent 10", pro: "30 days", max: "1 year", max2x: "Maximum" },
       },
       {
         id: "operations-queue",
@@ -476,7 +539,7 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         from: "free",
         status: "available",
         verifiedIn: LIVE,
-        values: { free: "Up to 3", pro: "Unlimited", max: "Unlimited", max2x: "Unlimited" },
+        values: quotaValues("queuedTasks"),
       },
       {
         id: "operations-full",
@@ -500,10 +563,10 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
     features: [
       {
         id: "brainstorm",
-        label: "AI Brainstorm to implementation brief",
+        label: "Brainstorms per month: idea to implementation brief",
         from: "free",
         status: "coming_soon",
-        values: { free: "3 a month", pro: "Unlimited", max: "Unlimited", max2x: "Unlimited" },
+        values: quotaValues("brainstormsPerMonth"),
       },
       {
         id: "brainstorm-actions",
@@ -513,21 +576,41 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       {
         id: "unified-memory",
-        label: "Unified Memory: shared project context across providers",
+        label: "Unified Memory: project memory",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1502",
+        values: {
+          free: "Basic project memory",
+          pro: "Project and cross-provider context",
+          max: "Project and cross-provider context",
+          max2x: "Project and cross-provider context",
+        },
+      },
+      {
+        id: "cross-provider-memory",
+        label: "Automatic project memory and cross-provider context",
         from: "pro",
         status: "available",
         verifiedIn: "0.1.9+1502",
       },
       {
+        id: "orchestration-memory",
+        label: "Advanced cross-provider memory integrated into orchestration",
+        from: "max",
+        status: "coming_soon",
+      },
+      {
         id: "launch-recipes",
         label: "Launch Recipes",
-        from: "pro",
+        from: "free",
         status: "coming_soon",
-        values: { pro: "Up to 10", max: "Unlimited", max2x: "Unlimited" },
+        values: quotaValues("launchRecipes"),
       },
       {
         id: "advanced-code",
-        label: "Advanced Code: quick-send output, mini diffs, duplicate terminal and Code quick bar",
+        label: "Advanced Code widgets and contextual actions",
+        detail: "Fix This, Debug This, Ask Agent, Quick Send and Send to Agent.",
         from: "pro",
         status: "coming_soon",
       },
@@ -536,7 +619,7 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         label: "Live Browser Studio",
         from: "pro",
         status: "coming_soon",
-        values: { pro: "Preview", max: "Full", max2x: "Full" },
+        values: { pro: "Full", max: "Advanced", max2x: "Advanced" },
       },
     ],
   },
@@ -547,16 +630,41 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       {
         id: "agent-fleet",
         label: "Agent Fleet",
-        from: "pro",
+        from: "free",
         status: "available",
         verifiedIn: V019,
-        values: { pro: "Up to 4 agents", max: "Up to 10 agents", max2x: "Unlimited" },
+        values: {
+          free: "Unlimited local agents",
+          pro: "Unlimited local agents",
+          max: "Unlimited local agents",
+          max2x: "Unlimited local agents",
+        },
+      },
+      {
+        id: "unified-orchestration",
+        label: "Unified orchestration and advanced multi-agent workflows",
+        from: "max",
+        status: "coming_soon",
+      },
+      { id: "routing-suggestions", label: "Advanced account routing suggestions", from: "max", status: "coming_soon" },
+      { id: "custom-integrations", label: "Custom integrations", from: "max", status: "coming_soon" },
+      {
+        id: "deploy-environments",
+        label: "Advanced Git, environment and deployment workflows",
+        from: "max",
+        status: "coming_soon",
       },
       { id: "squads", label: "Squads: reusable agent teams", from: "max", status: "coming_soon" },
       { id: "handoff-chains", label: "Agent Handoff Chains", from: "max", status: "coming_soon" },
       { id: "agent-files", label: "Agent File Ownership and collision warnings", from: "max", status: "coming_soon" },
       { id: "stuck-agents", label: "Stuck Agent Detector", from: "max", status: "coming_soon" },
-      { id: "mission-control", label: "Mission Control", from: "max", status: "coming_soon" },
+      {
+        id: "mission-control",
+        label: "Mission Control",
+        from: "pro",
+        status: "coming_soon",
+        values: { pro: "Richer", max: "Full", max2x: "Full" },
+      },
       { id: "deploy", label: "KalCode Deploy", from: "max", status: "coming_soon" },
       {
         id: "remote",
@@ -571,16 +679,37 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
     id: "automate",
     title: "Autonomous engineering",
     features: [
+      {
+        id: "auto-context",
+        label: "Automatic context, worktrees, tests and environments",
+        from: "max2x",
+        status: "coming_soon",
+      },
+      { id: "proactive-needs-you", label: "Proactive Needs You detection", from: "max2x", status: "coming_soon" },
+      {
+        id: "cloud-memory",
+        label: "Highest Unified Memory and cloud-sync capacity",
+        from: "max2x",
+        status: "coming_soon",
+      },
+      {
+        id: "full-integrations",
+        label: "Full OpenAI-supported external API / MCP capacity",
+        from: "max2x",
+        status: "coming_soon",
+      },
       { id: "keep-working", label: "Keep Working: automatic next steps", from: "max2x", status: "coming_soon" },
       {
         id: "auto-routing",
-        label: "Automatic routing, agent selection, handoffs and recovery",
+        label: "Automatic task, provider, account and agent routing",
+        detail: "Automatic selection, handoffs, retries and interrupted-work recovery.",
         from: "max2x",
         status: "coming_soon",
       },
       {
         id: "auto-release",
-        label: "Automatic reviews, previews and release preparation",
+        label: "Automatic reviews, Browser previews and release preparation",
+        detail: "Review loops, preview creation and advanced deployment automation.",
         from: "max2x",
         status: "coming_soon",
       },

@@ -169,14 +169,14 @@ describe("KalVoice usage", () => {
     expect(screen.queryByText(/Monthly limit reached/)).not.toBeInTheDocument();
   });
 
-  it("says the monthly limit is reached, when it renews, and that dictation keeps working", () => {
+  it("says the monthly limit is reached, when it renews, and that local commands and dictation keep working", () => {
     usage(25, 25);
     render(<KalVoicePage />);
     const month = screen.getByText("This month").closest("li");
     if (!month) throw new Error("This month card missing");
     expect(within(month).getByText("Limit reached")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Monthly limit reached. KalVoice Requests renew Oct 1. Dictation keeps working.",
+      "Monthly limit reached. KalVoice cloud requests renew Oct 1. Local commands and dictation keep working.",
     );
   });
 

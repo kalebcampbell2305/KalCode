@@ -113,7 +113,7 @@ export function ResourceGovernorContent({
 
           <Panel
             title="Mode"
-            description="Changes thresholds and concurrency targets, never permissions. Resets to Balanced after restart."
+            description="Uses CPU and memory headroom with no preset agent count cap. Resets to Balanced after restart."
           >
             <label className={styles.modeField} htmlFor="resource-mode">
               <span>Resource mode</span>

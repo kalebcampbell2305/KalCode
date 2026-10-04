@@ -7,7 +7,11 @@ Runs, and orchestration. Memory is relevant, inspectable, editable, fast, safe, 
 Open **Unified Memory** in the workspace navigation. Search project knowledge, add or edit a
 note, pin essential guidance, keep a note permanently, or remove an outdated claim. Categories
 cover Project, Decisions, Architecture, Conventions, Product, Recent important context, and
-Known issues. Memory follows the existing Pro feature placement.
+Known issues. Every plan includes this basic local project memory, including search, edits,
+pins, review, deletion, instruction imports, and local recall. Pro adds automatic capture from
+agent/workflow outcomes and automatic project context across providers. Max adds deeper memory
+use through its orchestration features as those workflows ship; Max 2X cloud-backed memory
+capacity remains a roadmap capability. No arbitrary note-count allowance differentiates plans.
 
 ## Local ownership and controls
 
@@ -33,6 +37,12 @@ Examples and fenced code are ignored. Automatic records retain their source. Sup
 - bounded, workspace-contained `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` instructions;
 - explicit handoff outcomes and labelled Run outcomes.
 - labelled merge-commit subjects observed by Operations, with the source commit hash.
+
+Free imports project instruction files; automatic agent and workflow capture requires Pro or
+higher. The provider integrations below require Pro or higher and recheck the current verified
+plan for every lookup and capture, including after a downgrade. A provider's own native project
+instructions remain available on all plans. Downgrading never deletes saved memory or disables
+local browsing, edits, privacy controls, or KalVoice recall.
 
 Full-text indexing updates transactionally. Retrieval is limited to relevant notes and a few
 explicit pins, with a 4 KB context budget. Background capture uses a bounded queue and does

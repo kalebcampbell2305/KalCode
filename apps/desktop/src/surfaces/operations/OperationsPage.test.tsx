@@ -1172,7 +1172,7 @@ describe("OperationsPage Run history plan limit", () => {
     renderPage(operations());
     expect(shownRunIds()).toEqual([...allFinished.slice(0, 10), "still-running"]);
     expect(
-      screen.getByText("Free shows your 10 most recent runs. Upgrade to Pro for your full run history."),
+      screen.getByText("Free shows your 10 most recent runs. Upgrade for longer Operations history."),
     ).toBeVisible();
     expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "View plans" }));

@@ -241,7 +241,7 @@ fn effective_entitlement_applies_owner_only_for_the_signed_in_account() {
         effective.status,
         EntitlementStatus::Rejected(VerifyError::Expired)
     );
-    assert_eq!(effective.limit("parallelAgents"), Limit::AtMost(1));
+    assert_eq!(effective.limit("parallelAgents"), Limit::Unlimited);
 
     // Production builds do not trust the test key.
     let production = kalcode_entitlements::effective_entitlement(Some(&mine), at(owner.now));

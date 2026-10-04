@@ -227,6 +227,7 @@ pub struct ModeLimits {
     /// Physical memory capacity keeps free, MiB.
     pub memory_reserve_mb: u64,
     pub kalcode_memory_cap: MemoryCap,
+    /// Explicit user count ceiling; u32::MAX means none. Presets never impose one.
     pub max_agents: u32,
     pub per_provider: BTreeMap<ProviderId, u32>,
     /// How many more tasks may start while the worst level is `Elevated` (`None` = no extra
@@ -254,7 +255,7 @@ impl ModeLimits {
             cpu_target_percent: 60.0,
             memory_reserve_mb: 4096,
             kalcode_memory_cap: MemoryCap::ShareOfPhysical(0.25),
-            max_agents: 2,
+            max_agents: u32::MAX,
             per_provider: BTreeMap::new(),
             elevated_allowance: Some(0),
             gpu: GpuLimits::default(),
@@ -274,7 +275,7 @@ impl ModeLimits {
             cpu_target_percent: 75.0,
             memory_reserve_mb: 2048,
             kalcode_memory_cap: MemoryCap::ShareOfPhysical(0.5),
-            max_agents: 4,
+            max_agents: u32::MAX,
             per_provider: BTreeMap::new(),
             elevated_allowance: Some(1),
             gpu: GpuLimits::default(),
@@ -294,7 +295,7 @@ impl ModeLimits {
             cpu_target_percent: 90.0,
             memory_reserve_mb: 1024,
             kalcode_memory_cap: MemoryCap::ShareOfPhysical(0.75),
-            max_agents: 8,
+            max_agents: u32::MAX,
             per_provider: BTreeMap::new(),
             elevated_allowance: None,
             gpu: GpuLimits::default(),
@@ -366,7 +367,11 @@ mod tests {
         assert!(b.cpu_target_percent < p.cpu_target_percent);
         assert!(c.memory_reserve_mb > b.memory_reserve_mb);
         assert!(b.memory_reserve_mb > p.memory_reserve_mb);
-        assert!(c.max_agents < b.max_agents && b.max_agents < p.max_agents);
+        assert!(
+            [&c, &b, &p]
+                .iter()
+                .all(|limits| limits.max_agents == u32::MAX)
+        );
         assert!(c.disk_free_mb.elevated > b.disk_free_mb.elevated);
         for limits in [c, b, p] {
             for t in [

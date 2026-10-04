@@ -1081,10 +1081,27 @@ impl AccountRuntime {
             return Err(authentication_required());
         }
         let token = self.session_token()?;
-        match self.retry(generation, RetryClass::Read, || self.api.usage(&token)) {
+        let mut usage = match self.retry(generation, RetryClass::Read, || self.api.usage(&token)) {
             Ok(response) => self.accept_usage(response),
             Err(error) => self.cached_usage().ok_or(error),
+        }?;
+        drop(_lane);
+        let paid = matches!(
+            self.snapshot().tier,
+            Some(AccountTier::Pro | AccountTier::Max | AccountTier::Max2x)
+        );
+        let interval = if paid {
+            self.api.billing_interval(&token).ok().flatten()
+        } else {
+            None
+        };
+        let mut state = self.lock_state();
+        if !self.is_current(generation) || state.snapshot.authority() != AccountAuthority::Active {
+            return Err(authentication_required());
         }
+        state.snapshot.billing_interval = interval;
+        usage.billing_interval = interval;
+        Ok(usage)
     }
 
     /// Sets (`Some`) or clears (`None`) the KalCode account's cosmetic display name.
@@ -1403,6 +1420,7 @@ impl AccountRuntime {
             phase: AccountPhase::Ready,
             account: Some(account),
             tier: Some(tier),
+            billing_interval: None,
             session_expires_at: self.session_expiry_iso(),
             entitlement_expires_at: Some(entitlement.expires_at),
             offline_grace_until: None,
@@ -1443,6 +1461,7 @@ impl AccountRuntime {
             phase: AccountPhase::OfflineGrace,
             account: Some(cached.account().clone()),
             tier: Some(account_tier(entitlement.tier)),
+            billing_interval: state.snapshot.billing_interval,
             session_expires_at: state
                 .session
                 .as_ref()
@@ -1483,6 +1502,7 @@ impl AccountRuntime {
         let signed =
             SignedUsageReceipt::new(response.receipt).map_err(|_| invalid_entitlement())?;
         let usage = AccountUsageSnapshot {
+            billing_interval: None,
             used: receipt.used,
             allowance: receipt.allowance,
             period_start: receipt.period_start,
@@ -1520,6 +1540,7 @@ impl AccountRuntime {
             return None;
         }
         Some(AccountUsageSnapshot {
+            billing_interval: None,
             used: verified.used,
             allowance: verified.allowance,
             period_start: verified.period_start,
@@ -1799,6 +1820,7 @@ fn authenticated_snapshot(
         phase,
         account: Some(account),
         tier: None,
+        billing_interval: None,
         session_expires_at: session.and_then(|value| epoch_iso(value.expires_at())),
         entitlement_expires_at: None,
         offline_grace_until: None,

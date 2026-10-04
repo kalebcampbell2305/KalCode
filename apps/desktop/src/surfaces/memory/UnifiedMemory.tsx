@@ -1,4 +1,10 @@
-import type { MemoryCategory, MemoryInput, MemoryRecord, MemorySettings } from "@kalcode/protocol";
+import {
+  limitsFor,
+  type MemoryCategory,
+  type MemoryInput,
+  type MemoryRecord,
+  type MemorySettings,
+} from "@kalcode/protocol";
 import { Button, IconButton } from "@kalcode/ui/components";
 import {
   ArrowLeft,
@@ -14,6 +20,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useOptionalAccount } from "../../account/AccountProvider.tsx";
+import { planTier } from "../../ipc/account.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
@@ -60,7 +68,7 @@ export function UnifiedMemory() {
           <BrainCircuit size={25} aria-hidden="true" />
           <div>
             <h1>Unified Memory</h1>
-            <p>Your project, remembered. Across every agent and session.</p>
+            <p>Your project knowledge, remembered across sessions.</p>
           </div>
         </div>
         {active && (
@@ -98,6 +106,7 @@ export function UnifiedMemory() {
 
 function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: string }) {
   const { client } = useRuntime();
+  const automaticMemory = limitsFor(planTier(useOptionalAccount()?.snapshot)).memory !== "basic";
   const { navigate } = useNavigation();
   const [records, setRecords] = useState<MemoryRecord[]>([]);
   const [settings, setSettings] = useState<MemorySettings | null>(null);
@@ -592,14 +601,16 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
                 <br />
                 Shared understanding.
               </h2>
-              <p>Useful knowledge travels with your workspace, so each new agent has somewhere to start.</p>
+              <p>Keep useful project knowledge, decisions and instructions together in your workspace.</p>
               <div className={styles.sharedWith}>
                 Coding agents <span>·</span> KalVoice
               </div>
               <p className={styles.hint}>
                 {records.length
                   ? "Select a memory to inspect its source, update it or make it permanent."
-                  : "Add your first memory, or let KalCode capture explicit decisions and project instructions as you work."}
+                  : automaticMemory
+                    ? "Add your first memory, or let KalCode capture explicit decisions and project instructions as you work."
+                    : "Add your first memory to keep important project knowledge at hand."}
               </p>
               {staleCount > 0 && (
                 <p className={styles.warning}>
@@ -614,7 +625,7 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
         <span>
           <ShieldCheck size={15} />
           Saved on this device
-          {settings
+          {settings && automaticMemory
             ? settings.sharingEnabled
               ? " · Relevant context shared with your agents"
               : " · Agent sharing paused"
@@ -631,6 +642,12 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
       </footer>
       {showPreferences && settings && (
         <div className={styles.preferences}>
+          {!automaticMemory && (
+            <p>
+              Automatic agent capture and cross-provider context are included with Pro. Your preferences are saved for
+              when you upgrade.
+            </p>
+          )}
           <label>
             <input
               type="checkbox"

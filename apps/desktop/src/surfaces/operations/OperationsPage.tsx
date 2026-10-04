@@ -93,6 +93,8 @@ import {
   operationDurationLabel,
   operationStatusLabel,
   orderedQueue,
+  planActivityHistory,
+  planRunHistory,
   queueSections,
   timeLabel,
 } from "./model.ts";
@@ -559,7 +561,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           />
         </TabsContent>
         <TabsContent value="activity">
-          <ActivityView snapshot={snapshot} onRun={showRun} />
+          <ActivityView snapshot={snapshot} tier={tier} onRun={showRun} />
         </TabsContent>
       </Tabs>
 
@@ -644,20 +646,9 @@ function RunsView({
   // The plan's Run history is a display limit over finished runs only: work that hasn't ended
   // and the run being inspected always stay listed. The snapshot itself is never truncated.
   const historyLimit = limitsFor(tier).runHistory;
-  let finishedShown = 0;
-  let hiddenRuns = 0;
-  const shownRuns =
-    historyLimit === null
-      ? runs
-      : runs.filter((run) => {
-          if (run.endedAt === null || run.id === selected) return true;
-          if (finishedShown < historyLimit) {
-            finishedShown += 1;
-            return true;
-          }
-          hiddenRuns += 1;
-          return false;
-        });
+  const shownRuns = planRunHistory(runs, tier, snapshot.observedAt, selected);
+  const hiddenRuns = runs.length - shownRuns.length;
+  const historyDays = limitsFor(tier).operationsHistoryDays;
 
   const loadOlder = async () => {
     if (loadingHistory || (historyStarted && cursor === null)) return;
@@ -741,11 +732,12 @@ function RunsView({
             </button>
           ))}
         </div>
-        {hiddenRuns > 0 && historyLimit !== null ? (
+        {hiddenRuns > 0 ? (
           <p className={styles.runHistoryNote}>
             <span>
-              {tierName(tier)} shows your {historyLimit} most recent runs. Upgrade to {tierName("pro")} for your full
-              run history.
+              {historyLimit !== null
+                ? `${tierName(tier)} shows your ${historyLimit} most recent runs. Upgrade for longer Operations history.`
+                : `${tierName(tier)} includes ${historyDays}-day Operations history. View plans for longer history.`}
             </span>
             <Button size="sm" variant="ghost" onClick={onShowPlans}>
               View plans
@@ -1773,12 +1765,25 @@ function EnvironmentHealth({ environment }: { environment?: OperationEnvironment
   return <StatusIndicator tone={tone}>{titleCase(environment.health || "unknown")}</StatusIndicator>;
 }
 
-function ActivityView({ snapshot, onRun }: { snapshot: OperationsSnapshot; onRun: (id: string) => void }) {
+function ActivityView({
+  snapshot,
+  tier,
+  onRun,
+}: {
+  snapshot: OperationsSnapshot;
+  tier: AccountTier;
+  onRun: (id: string) => void;
+}) {
   const [range, setRange] = useState<ActivityRange>("today");
   const [selection, setSelection] = useState<{ area?: string; bin?: number } | null>(null);
   const heatmap = useMemo(
-    () => buildActivityHeatmap(snapshot.activity, snapshot.items, range),
-    [range, snapshot.activity, snapshot.items],
+    () =>
+      buildActivityHeatmap(
+        planActivityHistory(snapshot.activity, tier, snapshot.observedAt),
+        planRunHistory(snapshot.items, tier, snapshot.observedAt),
+        range,
+      ),
+    [range, snapshot.activity, snapshot.items, snapshot.observedAt, tier],
   );
   const selectedEvents = heatmap.events
     .filter((event) => !selection?.area || (event.area.trim() || "Project") === selection.area)

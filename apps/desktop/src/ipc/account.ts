@@ -35,6 +35,8 @@ export interface AccountSnapshot {
   phase: AccountPhase;
   account: PublicAccount | null;
   tier: AccountTier | null;
+  /** Actual subscription interval; absent on older native builds. */
+  billingInterval?: BillingInterval | null;
   sessionExpiresAt: string | null;
   entitlementExpiresAt: number | null;
   offlineGraceUntil: number | null;
@@ -56,6 +58,8 @@ export interface RuntimeStatus {
 }
 
 export interface AccountUsageSnapshot {
+  /** Subscription metadata fetched with usage, outside account bootstrap. */
+  billingInterval?: BillingInterval | null;
   used: number;
   allowance: number | null;
   periodStart: string;
@@ -226,10 +230,19 @@ export function parseAccountSnapshot(value: unknown): AccountSnapshot {
         ? (item.tier as AccountTier)
         : undefined;
   if (tier === undefined) throw new Error("Invalid native account tier.");
+  if (
+    item.billingInterval !== undefined &&
+    item.billingInterval !== null &&
+    item.billingInterval !== "month" &&
+    item.billingInterval !== "year"
+  ) {
+    throw new Error("Invalid native billing interval.");
+  }
   const snapshot: AccountSnapshot = {
     phase,
     account,
     tier,
+    ...(item.billingInterval !== undefined ? { billingInterval: item.billingInterval as BillingInterval | null } : {}),
     sessionExpiresAt: nullableIso(item.sessionExpiresAt, "session expiry"),
     entitlementExpiresAt: nullableEpoch(item.entitlementExpiresAt, "entitlement expiry"),
     offlineGraceUntil: nullableEpoch(item.offlineGraceUntil, "offline grace"),
@@ -301,7 +314,21 @@ export function parseAccountUsage(value: unknown): AccountUsageSnapshot {
   const periodStart = nullableIso(item.periodStart, "usage period start");
   const resetsAt = nullableIso(item.resetsAt, "usage reset time");
   if (!periodStart || !resetsAt) throw new Error("Invalid native usage period.");
-  return { used: item.used as number, allowance: allowance as number | null, periodStart, resetsAt };
+  if (
+    item.billingInterval !== undefined &&
+    item.billingInterval !== null &&
+    item.billingInterval !== "month" &&
+    item.billingInterval !== "year"
+  ) {
+    throw new Error("Invalid native billing interval.");
+  }
+  return {
+    used: item.used as number,
+    allowance: allowance as number | null,
+    periodStart,
+    resetsAt,
+    ...(item.billingInterval !== undefined ? { billingInterval: item.billingInterval as BillingInterval | null } : {}),
+  };
 }
 
 export class AccountClient {

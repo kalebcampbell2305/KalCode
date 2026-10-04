@@ -25,19 +25,19 @@ export const FEATURE_PLACEMENT = {
   process_continuity: "free",
   git_core: "free",
   trust_kernel_explain: "safety",
-  agent_organization: "pro",
-  missions: "pro",
+  agent_organization: "free",
+  missions: "max",
   verification: "pro",
   time_machine: "pro",
-  remote_workspaces: "pro",
-  scheduler: "max",
+  remote_workspaces: "max",
+  scheduler: "max2x",
   diff_intelligence: "max",
-  automations: "pro",
-  memory: "pro",
+  automations: "max2x",
+  memory: "free",
   environment_doctor: "safety",
-  blueprints: "pro",
+  blueprints: "free",
   command_center: "max",
-  provider_handoff: "pro",
+  provider_handoff: "max",
   benchmark_lab: "max",
   failure_autopsy: "max",
   workspace_home: "free",
@@ -59,7 +59,7 @@ export const SAFETY_FEATURES: readonly FeatureId[] = PRODUCT_FEATURES.filter(
   (feature) => FEATURE_PLACEMENT[feature] === "safety",
 );
 
-const PLAN_RANK: Record<Exclude<EntitlementTier, "owner">, number> = { free: 0, pro: 1, max: 2, max2x: 2 };
+const PLAN_RANK: Record<Exclude<EntitlementTier, "owner">, number> = { free: 0, pro: 1, max: 2, max2x: 3 };
 
 /** Whether `tier` includes `feature`. OWNER is unrestricted; safety and free features are on every plan. */
 export function featureIncluded(tier: EntitlementTier, feature: FeatureId): boolean {
@@ -73,6 +73,8 @@ export function featureIncluded(tier: EntitlementTier, feature: FeatureId): bool
       return true;
     case "pro":
       return PLAN_RANK[tier] >= 1;
+    case "max2x":
+      return PLAN_RANK[tier] >= 3;
     case "max":
       return PLAN_RANK[tier] >= 2;
   }

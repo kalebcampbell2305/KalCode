@@ -84,7 +84,7 @@ function fromResponse(state: AssistantState, response: KalVoiceResponse): Assist
       return {
         ...base,
         phase: "error",
-        message: `You've used this month's KalVoice Requests. They reset ${formatDay(outcome.resetsAt)}. Dictation keeps working.`,
+        message: `You've used this month's KalVoice cloud requests. They reset ${formatDay(outcome.resetsAt)}. Local commands and dictation keep working.`,
         code: "limit_reached",
       };
     case "failed":
