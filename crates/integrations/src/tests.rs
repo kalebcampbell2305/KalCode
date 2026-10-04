@@ -21,7 +21,8 @@ fn setup() -> (tempfile::TempDir, IntegrationBroker, Integration) {
         dir.path().join("integrations.db"),
         Arc::new(MemorySecretStore::new()),
     )
-    .unwrap();
+    .unwrap()
+    .with_connection_limit(Arc::new(|| None));
     let integration=broker.save(IntegrationInput {id:None,name:"Deployments".into(),kind:IntegrationKind::CustomApi,endpoint:"https://example.com".into(),tools:vec![CustomTool {name:"deploy".into(),description:"Deploy preview".into(),input_schema:json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"],"additionalProperties":false}),method:"POST".into(),path:"/deploy".into(),risk:Risk::Sensitive}],trusted_read_tools:vec![]},Some(SecretString::new("test-credential-value"))).unwrap();
     (dir, broker, integration)
 }
@@ -449,4 +450,67 @@ fn discovered_mcp_hints_do_not_establish_trust_and_changed_schema_revokes() {
             .grants
             .is_empty()
     );
+}
+
+#[test]
+fn integration_limits_are_atomic_and_reconnections_obey_current_plan() {
+    use kalcode_core::plans::{Limited, PlanTier};
+    let (_dir, broker, existing) = setup();
+    let plan = Arc::new(Mutex::new(PlanTier::Free));
+    let source = plan.clone();
+    let broker = broker.with_connection_limit(Arc::new(move || {
+        source.lock().unwrap().limit(Limited::ExternalIntegrations)
+    }));
+    let mut input = broker.configuration(&existing.id).unwrap();
+    broker
+        .save(input.clone(), None)
+        .expect("editing an existing connection consumes no slot");
+    input.id = None;
+    assert!(
+        broker
+            .save(input.clone(), None)
+            .unwrap_err()
+            .to_string()
+            .contains("Free plan allows 1 external integration")
+    );
+    broker.disconnect(&existing.id).unwrap();
+    let replacement = broker
+        .save(input.clone(), None)
+        .expect("disconnect frees a slot");
+    let old = broker.configuration(&existing.id).unwrap();
+    assert!(
+        broker.save(old.clone(), None).is_err(),
+        "reconnecting cannot bypass capacity"
+    );
+    assert!(
+        broker
+            .begin_oauth(
+                &existing.id,
+                oauth_config(),
+                "http://127.0.0.1:12345/callback"
+            )
+            .is_err(),
+        "OAuth reconnect cannot bypass capacity"
+    );
+    *plan.lock().unwrap() = PlanTier::Max;
+    broker.save(old, None).expect("upgrade expands capacity");
+    assert!(
+        broker
+            .list()
+            .unwrap()
+            .iter()
+            .any(|i| i.id == replacement.id && i.connected)
+    );
+    *plan.lock().unwrap() = PlanTier::Free;
+    assert_eq!(
+        broker
+            .list()
+            .unwrap()
+            .iter()
+            .filter(|i| i.connected)
+            .count(),
+        2,
+        "downgrade never deletes connections"
+    );
+    assert!(broker.save(input, None).is_err());
 }

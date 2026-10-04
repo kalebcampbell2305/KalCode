@@ -25,8 +25,13 @@ use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretStrin
 
 const NOW: i64 = 1_790_000_060;
 const ACCOUNT_ID: &str = "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11";
-const TEST_KEY: &str = "tKkvjavy0V_KqYw2EKs0tgb8eKU0PZGL9Mt8tcmnz8U";
-const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVucmVzdHJpY3RlZCI6ZmFsc2UsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7ImthbHZvaWNlUmVxdWVzdHNQZXJNb250aCI6MjUsIm9wZW5UZXJtaW5hbHMiOjQsInBhcmFsbGVsQWdlbnRzIjoxLCJ3b3Jrc3BhY2VzIjoyLCJwcm92aWRlckFjY291bnRzIjoyfSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.VgCLvAbISk34hIwd_bp7GehEM6SykB_SHtE1WV9Rcroo_7-Ux_ZijCUt59TX95VtlgJwKLSOeZJn2VQSBTCrDA";
+fn test_key() -> String {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../../crates/entitlements/testdata/vectors.json"
+    ))
+    .expect("vectors");
+    vectors["keys"][0]["x"].as_str().expect("key").into()
+}
 
 #[derive(Default)]
 struct TestStore {
@@ -108,6 +113,7 @@ impl Clock for MutableClock {
 
 #[derive(Default)]
 struct FakeApi {
+    billing_intervals: Mutex<VecDeque<Result<Option<BillingInterval>, ApiError>>>,
     usage_reads: Mutex<VecDeque<Result<UsageResponse, ApiError>>>,
     request_usage: Mutex<VecDeque<Result<account::api::RequestUsageResponse, ApiError>>>,
     request_calls: Mutex<Vec<(String, bool)>>,
@@ -245,6 +251,14 @@ impl AccountApi for FakeApi {
     fn account(&self, _: &str) -> Result<ApiAccount, ApiError> {
         self.account_calls.fetch_add(1, Ordering::SeqCst);
         pop(&self.accounts)
+    }
+
+    fn billing_interval(&self, _: &str) -> Result<Option<BillingInterval>, ApiError> {
+        self.billing_intervals
+            .lock()
+            .expect("billing")
+            .pop_front()
+            .unwrap_or(Ok(None))
     }
 
     fn set_display_name(
@@ -395,7 +409,7 @@ fn metering_core() -> (tempfile::TempDir, Arc<kalcode_core::Core>) {
 
 fn request_receipt(name: &str, allowed: bool) -> account::api::RequestUsageResponse {
     let token = vector_token("receiptCases", name);
-    let receipt = Verifier::from_keys([("test-vectors-1", TEST_KEY)])
+    let receipt = Verifier::from_keys([("test-vectors-1", test_key().as_str())])
         .expect("verifier")
         .verify_usage_receipt(&token, NOW)
         .expect("verified");
@@ -404,6 +418,7 @@ fn request_receipt(name: &str, allowed: bool) -> account::api::RequestUsageRespo
         usage: UsageResponse {
             receipt: token,
             usage: account::model::AccountUsageSnapshot {
+                billing_interval: None,
                 used: receipt.used,
                 allowance: receipt.allowance,
                 period_start: receipt.period_start,
@@ -576,7 +591,7 @@ fn kalvoice_invalid_receipt_never_admits_execution_and_unknown_claim_stays_onlin
         .lock()
         .expect("queue")
         .push_back(Ok(EntitlementResponse {
-            token: FREE_TOKEN.into(),
+            token: vector_token("cases", "free"),
         }));
     account.activate_free().expect("reactivate");
     assert_eq!(
@@ -632,6 +647,8 @@ fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
     let api = Arc::new(FakeApi::default());
     let account = metering_account(api.clone(), "free", None, true);
     let (_directory, core) = metering_core();
+    let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
+        .expect("meter");
     core.transact(|conn| {
         kalcode_kalvoice::ledger::consume(
             conn,
@@ -659,8 +676,7 @@ fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
         Ok(((), Vec::new()))
     })
     .expect("seed");
-    let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
-        .expect("meter");
+
     assert_eq!(meter.usage().expect("legacy count excluded").used, 24);
     let other =
         crate::kalvoice_accounting::AccountKalVoice::new(core, account).expect("independent lane");
@@ -791,7 +807,8 @@ fn signed_in() -> SignedInResponse {
 }
 
 fn runtime(api: Arc<FakeApi>, store: Arc<TestStore>) -> AccountRuntime {
-    let verifier = Verifier::from_keys([("test-vectors-1", TEST_KEY)]).expect("test verifier");
+    let verifier =
+        Verifier::from_keys([("test-vectors-1", test_key().as_str())]).expect("test verifier");
     AccountRuntime::with_dependencies(api, store, verifier, Arc::new(FixedClock))
 }
 
@@ -838,7 +855,7 @@ fn free_activation_uses_server_entitlement_and_never_checkout() {
         .lock()
         .expect("queue")
         .push_back(Ok(EntitlementResponse {
-            token: FREE_TOKEN.into(),
+            token: vector_token("cases", "free"),
         }));
 
     let snapshot = runtime.activate_free().expect("activate");
@@ -927,7 +944,7 @@ fn first_launch_offline_stays_gated_but_matching_signed_cache_gets_bounded_grace
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -1720,7 +1737,7 @@ fn signed_entitlement_for_another_account_never_unlocks() {
         .lock()
         .expect("queue")
         .push_back(Ok(EntitlementResponse {
-            token: FREE_TOKEN.into(),
+            token: vector_token("cases", "free"),
         }));
 
     let error = runtime
@@ -1769,7 +1786,7 @@ fn active_lease_rechecks_signed_expiry_and_refresh_never_transiently_stops_valid
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -1788,7 +1805,8 @@ fn active_lease_rechecks_signed_expiry_and_refresh_never_transiently_stops_valid
         .expect("queue")
         .push_back(Err(ApiError::Transport));
     let clock = Arc::new(MutableClock(AtomicI64::new(NOW)));
-    let verifier = Verifier::from_keys([("test-vectors-1", TEST_KEY)]).expect("test verifier");
+    let verifier =
+        Verifier::from_keys([("test-vectors-1", test_key().as_str())]).expect("test verifier");
     let runtime = AccountRuntime::with_dependencies(api.clone(), store, verifier, clock.clone());
     assert_eq!(
         runtime.bootstrap().expect("bootstrap").phase,
@@ -1830,7 +1848,7 @@ fn unpublished_logout_generation_invalidates_admission_before_observer_snapshot_
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -1877,7 +1895,7 @@ fn active_lease_exposes_only_its_generation_and_cancel_without_auth_work_preserv
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -1954,7 +1972,7 @@ fn duplicate_bootstrap_is_idempotent_and_does_not_repeat_remote_verification() {
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -1987,7 +2005,7 @@ fn logout_revokes_first_and_waits_for_an_inflight_account_operation() {
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -2069,7 +2087,7 @@ fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exi
     let session =
         SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
     let cached = CachedAccountSecret::new(
-        FREE_TOKEN.into(),
+        vector_token("cases", "free"),
         PublicAccount {
             id: ACCOUNT_ID.into(),
             email: "owner@example.com".into(),
@@ -2302,7 +2320,7 @@ fn sign_in_free(runtime: &AccountRuntime, api: &FakeApi) {
         .lock()
         .expect("queue")
         .push_back(Ok(EntitlementResponse {
-            token: FREE_TOKEN.into(),
+            token: vector_token("cases", "free"),
         }));
     let snapshot = runtime.activate_free().expect("activate");
     assert_eq!(snapshot.phase, AccountPhase::Ready);
@@ -2471,4 +2489,198 @@ fn display_name_unauthorized_returns_the_sign_in_gate() {
     assert_eq!(error.code, "authentication_required");
     assert_eq!(runtime.authority(), AccountAuthority::SignedOut);
     assert!(!stored_session_present(&store));
+}
+
+#[test]
+fn billing_metadata_does_not_block_ready_and_usage_shows_real_interval() {
+    for interval in [BillingInterval::Month, BillingInterval::Year] {
+        let api = Arc::new(FakeApi::default());
+        api.billing_intervals
+            .lock()
+            .expect("billing")
+            .push_back(Ok(Some(interval)));
+        let runtime = metering_account(api.clone(), "pro", Some("pro-receipt"), false);
+        assert_eq!(
+            runtime.snapshot().billing_interval,
+            None,
+            "Ready never waits for Stripe"
+        );
+        assert_eq!(api.billing_intervals.lock().expect("billing").len(), 1);
+        // The cached signed receipt supplies usage if its optional refresh is offline.
+        api.usage_reads.lock().expect("usage").extend([
+            Err(ApiError::Transport),
+            Err(ApiError::Transport),
+            Err(ApiError::Transport),
+        ]);
+        let usage = runtime.usage().expect("cached usage");
+        assert_eq!(usage.billing_interval, Some(interval));
+        assert_eq!(runtime.snapshot().tier, Some(AccountTier::Pro));
+    }
+}
+
+#[test]
+fn legacy_local_outbox_is_retired_once_and_never_replayed_as_cloud() {
+    use kalcode_kalvoice::accounting;
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", Some("pro-receipt"), false);
+    let (_directory, core) = metering_core();
+    let id = kalcode_contracts::ids::new_id();
+    core.transact(|conn| {
+        accounting::reserve(conn, ACCOUNT_ID, &id, NOW, true)?;
+        Ok(((), vec![]))
+    })
+    .expect("legacy local claim");
+    let meter =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account).expect("upgrade");
+    meter.synchronize();
+    assert!(api.request_calls.lock().expect("calls").is_empty());
+    assert!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("outbox")
+            .is_none()
+    );
+    assert!(
+        core.transact(|conn| {
+            accounting::reserve(conn, ACCOUNT_ID, &id, NOW, true)?;
+            Ok(((), vec![]))
+        })
+        .is_err(),
+        "identity fence remains"
+    );
+}
+
+#[test]
+fn free_memory_keeps_local_notes_and_instructions_without_provider_enrichment() {
+    use kalcode_contracts::unified_memory::MemorySourceKind;
+
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api, "free", None, false);
+    let (_directory, core) = metering_core();
+    let project = tempfile::tempdir().expect("project");
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let memory = crate::unified_memory_commands::MemoryService::start(core.clone(), &account)
+        .expect("basic memory");
+    assert!(
+        memory
+            .capture_now(
+                &workspace.id,
+                MemorySourceKind::Instructions,
+                Some("AGENTS.md"),
+                "Architecture: SQLite stores project knowledge.",
+            )
+            .expect("instructions")
+            > 0
+    );
+    assert!(
+        memory
+            .recall(&workspace.id, "SQLite")
+            .expect("local recall")
+            .contains("SQLite")
+    );
+    assert!(
+        memory
+            .provider_context(&workspace.id, "SQLite")
+            .expect("provider context")
+            .is_empty()
+    );
+    for source in [
+        MemorySourceKind::User,
+        MemorySourceKind::Agent,
+        MemorySourceKind::Run,
+        MemorySourceKind::Merge,
+    ] {
+        assert_eq!(
+            memory
+                .capture_now(
+                    &workspace.id,
+                    source,
+                    Some("session"),
+                    "Decision: Automatically captured provider outcome."
+                )
+                .expect("optional capture"),
+            0
+        );
+    }
+    let notes = kalcode_context::memory::list(&core.reader(), ACCOUNT_ID, &workspace.id, "")
+        .expect("basic local notes");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].source_kind, MemorySourceKind::Instructions);
+}
+
+#[test]
+fn existing_memory_service_stops_provider_context_after_verified_downgrade() {
+    use kalcode_contracts::unified_memory::MemorySourceKind;
+
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", None, false);
+    let (_directory, core) = metering_core();
+    let project = tempfile::tempdir().expect("project");
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let memory = crate::unified_memory_commands::MemoryService::start(core.clone(), &account)
+        .expect("project memory");
+    assert!(
+        memory
+            .capture_now(
+                &workspace.id,
+                MemorySourceKind::Agent,
+                Some("session"),
+                "Architecture: SQLite stores project knowledge."
+            )
+            .expect("automatic capture")
+            > 0
+    );
+    assert!(
+        memory
+            .provider_context(&workspace.id, "SQLite")
+            .expect("shared context")
+            .contains("SQLite")
+    );
+
+    api.refreshes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(signed_in()));
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "free"),
+        }));
+    assert_eq!(
+        account.refresh().expect("downgrade").tier,
+        Some(AccountTier::Free)
+    );
+    assert!(
+        memory
+            .provider_context(&workspace.id, "SQLite")
+            .expect("same service")
+            .is_empty()
+    );
+    assert_eq!(
+        memory
+            .capture_now(
+                &workspace.id,
+                MemorySourceKind::Agent,
+                Some("later-session"),
+                "Decision: A later automatic outcome."
+            )
+            .expect("capture after downgrade"),
+        0
+    );
+    assert!(
+        memory
+            .recall(&workspace.id, "SQLite")
+            .expect("saved memory retained")
+            .contains("SQLite")
+    );
+    assert_eq!(
+        kalcode_context::memory::list(&core.reader(), ACCOUNT_ID, &workspace.id, "")
+            .expect("existing note survives")
+            .len(),
+        1
+    );
 }

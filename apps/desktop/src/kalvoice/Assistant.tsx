@@ -110,8 +110,8 @@ export function LimitNotice() {
     <p className={styles.limit} role="status">
       <CircleAlert className={styles.limitIcon} aria-hidden="true" />
       <span>
-        <strong>Monthly limit reached.</strong> KalVoice Requests renew {formatDay(status.usage.resetsAt)}. Dictation
-        keeps working.
+        <strong>Monthly limit reached.</strong> KalVoice cloud requests renew {formatDay(status.usage.resetsAt)}. Local
+        commands and dictation keep working.
       </span>
     </p>
   );

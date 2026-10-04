@@ -1,14 +1,9 @@
 //! KalVoice request orchestration (docs/KALVOICE.md, "Command pipeline").
 //!
-//! ```text
-//! request ─▶ allowance check ─▶ grammar ─▶ deterministic intent ─▶ runtime check ─▶ count ─▶ execute
-//!                                   └▶ local interpreter ─▶ validated intent ────────┘
-//! ```
+//! Local commands and on-device interpretation consume no KalVoice cloud quota. Each
+//! native execution keeps a durable claim so retrying the same request cannot run it twice.
+//! The account meter remains authoritative for actual cloud-backed requests.
 //!
-//! - One top-level request counts once, when KalVoice executes a validated command. Requests
-//!   refused up front — limit reached, missing local runtime, uncertain/invalid interpretation, a
-//!   workspace that doesn't exist, a command this build can't run — are not counted. Retrying a
-//!   client request id never counts twice or runs twice.
 //! - Deterministic app-control commands run immediately through the same workspace/runtime APIs
 //!   as direct UI gestures. Provider sessions retain their own native permission prompts for
 //!   consequential work; KalVoice does not create a second approval in front of app control.
@@ -836,7 +831,12 @@ impl Orchestrator {
         }
         let (allowance, anchor) = self.allowance();
         let now = (self.clock)();
-        self.core.read(|c| ledger::usage(c, now, anchor, allowance))
+        self.core.read(|c| {
+            let mut usage = ledger::usage(c, now, anchor, allowance)?;
+            // This local ledger is an execution fence, not cloud usage.
+            usage.used = 0;
+            Ok(usage)
+        })
     }
 
     pub fn preferences(&self) -> Result<KalVoicePreferences> {
@@ -945,7 +945,11 @@ impl Orchestrator {
         let mut run = Run {
             o: self,
             req,
-            usage: account_usage.unwrap_or(usage),
+            usage: account_usage.unwrap_or_else(|| {
+                let mut usage = usage;
+                usage.used = 0;
+                usage
+            }),
             intent: None,
             counted: false,
             on_stage,
@@ -960,7 +964,7 @@ impl Orchestrator {
         Ok(Ok(run))
     }
 
-    /// Claims and meters one KalVoice Request for a command the renderer runs itself (KalTidy,
+    /// Claims one local request without consuming cloud quota (KalTidy,
     /// Operations, scene commands), exactly as a native command is claimed before execution.
     /// `completed` means the UI may run it; `limit_reached` or `failed` means it must not.
     pub fn meter_ui_command(&self, request: UiCommandRequest) -> Result<KalVoiceResponse> {
@@ -994,12 +998,6 @@ impl Orchestrator {
         };
         let kind = request.command.kind_name();
         run.intent = Some(kind.to_owned());
-        if run.usage.exhausted() {
-            self.emit(vec![run.limit_event()]);
-            return Ok(run.respond(KalVoiceOutcome::LimitReached {
-                resets_at: run.usage.resets_at.clone(),
-            }));
-        }
         self.emit(vec![
             run.event(EventPayload::KalVoiceRequestStarted {
                 request_id: req.request_id.clone(),
@@ -1081,19 +1079,8 @@ impl Orchestrator {
             Err(replayed) => return Ok(replayed),
         };
         let understood = grammar::understand(&req.text);
-        // "Send that" and "clear that" are free (the voice form of pressing Send or clearing a
-        // text box), so they work even when the allowance is used up.
-        let free = matches!(
-            &understood,
-            Understood::Intent { intent, .. } if !intent.counts_against_allowance()
-        );
-        // The allowance is checked before any work.
-        if run.usage.exhausted() && !free {
-            self.emit(vec![run.limit_event()]);
-            return Ok(run.respond(KalVoiceOutcome::LimitReached {
-                resets_at: run.usage.resets_at.clone(),
-            }));
-        }
+        // All current paths run locally/on-device. An exhausted cloud allowance never
+        // prevents local commands, local interpretation, or provider-native launching.
         self.emit(vec![run.event(EventPayload::KalVoiceRequestStarted {
             request_id: req.request_id.clone(),
             input: req.input,
@@ -1382,32 +1369,9 @@ impl Orchestrator {
                 "KalVoice received an invalid request id.",
             ));
         }
-        // The authoritative API has no refund operation. Never remove a durable account claim
-        // or tell the renderer that a server-counted request was refunded.
-        if self.accounting.is_some() {
-            return Ok(false);
-        }
-        let now = (self.clock)();
-        let request = request_id.to_owned();
-        let (refunded, _) = self.core.transact(|tx| {
-            let refunded = ledger::refund(tx, &request, now, time::Duration::minutes(2))?;
-            let events = if refunded {
-                vec![event(
-                    EventPayload::KalVoiceRequestFailed {
-                        request_id: request.clone(),
-                        code: "typed_instead".into(),
-                    },
-                    Correlation {
-                        request_id: Some(request.clone()),
-                        ..Correlation::default()
-                    },
-                )]
-            } else {
-                Vec::new()
-            };
-            Ok((refunded, events))
-        })?;
-        Ok(refunded)
+        // Local commands consume no cloud allowance. Keep the execution fence: deleting it
+        // would allow a retried request to repeat an already completed effect.
+        Ok(false)
     }
 
     /// Records spoken-reply lifecycle events.
@@ -1726,13 +1690,6 @@ impl Run<'_> {
         event(payload, self.correlation())
     }
 
-    fn limit_event(&self) -> NewEvent {
-        self.event(EventPayload::KalVoiceLimitReached {
-            allowance: self.usage.allowance.unwrap_or(0),
-            resets_at: self.usage.resets_at.clone(),
-        })
-    }
-
     fn respond(&self, outcome: KalVoiceOutcome) -> KalVoiceResponse {
         self.respond_with(outcome, None)
     }
@@ -1787,7 +1744,7 @@ impl Run<'_> {
 
     /// Atomically owns the durable usage/execution claim before any executor effect.
     fn claim(&mut self) -> Result<ClaimDecision> {
-        let (allowance, anchor) = self.o.allowance();
+        let (_, anchor) = self.o.allowance();
         let now = (self.o.clock)();
         let intent = self.intent.clone().unwrap_or_else(|| "reasoning".into());
         let req = self.req;
@@ -1806,7 +1763,7 @@ impl Run<'_> {
                 ledger::ConsumptionContext {
                     now,
                     anchor_day: anchor,
-                    allowance,
+                    allowance: None,
                 },
             )?;
             let events = match &consumption {
@@ -1836,13 +1793,10 @@ impl Run<'_> {
             };
             Ok((consumption, events))
         })?;
-        if self.o.accounting.is_none() {
-            self.usage = consumption.usage().clone();
-        }
         match consumption {
             Consumption::LimitReached(_) => Ok(ClaimDecision::LimitReached),
             Consumption::Recorded(_) => {
-                self.counted = self.o.accounting.is_none();
+                self.counted = false;
                 active.insert(execution_id.clone());
                 drop(active);
                 Ok(ClaimDecision::Execute(ActiveClaim {
@@ -1869,7 +1823,7 @@ impl Run<'_> {
         if let Err(e) = self.o.executor.check_with_context(&intent, &ctx) {
             return Ok(self.fail_with(e));
         }
-        if !intent.counts_against_allowance() {
+        if !intent.requires_execution_claim() {
             return Ok(self.execute_free(&intent, &ctx));
         }
         // Claim immediately before execution. The claim and allowance check are atomic, so a
@@ -1912,42 +1866,12 @@ impl Run<'_> {
         }
     }
 
-    /// Meters an owned claim with the account before any effect. A refusal finishes the claim
-    /// and returns the response to send instead of executing.
+    /// Local execution keeps its durable claim without contacting the cloud meter.
     fn authorize(
         &mut self,
         claim: ActiveClaim,
     ) -> Result<std::result::Result<ActiveClaim, KalVoiceResponse>> {
-        let Some(accounting) = &self.o.accounting else {
-            return Ok(Ok(claim));
-        };
-        match accounting.authorize(&self.req.request_id) {
-            Ok(decision) => {
-                self.usage = decision.usage;
-                if !decision.allowed {
-                    claim.finish(
-                        self.o,
-                        ExecutionResult::Failed {
-                            code: "limit_reached",
-                        },
-                        vec![self.limit_event()],
-                    )?;
-                    return Ok(Err(self.respond(KalVoiceOutcome::LimitReached {
-                        resets_at: self.usage.resets_at.clone(),
-                    })));
-                }
-                self.counted = true;
-                Ok(Ok(claim))
-            }
-            Err(error) => {
-                claim.finish(
-                    self.o,
-                    ExecutionResult::Failed { code: error.code },
-                    Vec::new(),
-                )?;
-                Ok(Err(self.fail(error.code, error.message)))
-            }
-        }
+        Ok(Ok(claim))
     }
 
     fn execute(

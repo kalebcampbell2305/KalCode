@@ -227,7 +227,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "kalvoice.request_failed": { type: "kalvoice.request_failed", payload: { requestId, code: "needs_provider" } },
     "kalvoice.limit_reached": {
       type: "kalvoice.limit_reached",
-      payload: { allowance: 75, resetsAt: fx.clock.offset(86_400_000) },
+      payload: { allowance: 25, resetsAt: fx.clock.offset(86_400_000) },
     },
     "kalvoice.provider_selected": {
       type: "kalvoice.provider_selected",

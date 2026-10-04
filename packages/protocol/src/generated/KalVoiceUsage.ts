@@ -3,7 +3,7 @@
 /**
  * Monthly KalVoice Request usage. The server ledger is authoritative.
  */
-export type KalVoiceUsage = { used: number,
+export type KalVoiceUsage = { used: number, 
 /**
  * `None` means unlimited (OWNER).
  */

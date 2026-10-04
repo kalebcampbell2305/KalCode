@@ -96,11 +96,11 @@ fn account_claims_do_not_adopt_legacy_or_other_account_request_ids() {
     let req = request("open dashboard");
     h.orchestrator.handle(req.clone()).expect("legacy");
     for account in ["account-a", "account-b"] {
-        let meter = account_meter(&h, account, 1500, false);
+        let meter = account_meter(&h, account, 150, false);
         let orchestrator =
             Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
         assert!(
-            orchestrator
+            !orchestrator
                 .handle(req.clone())
                 .expect("account execute")
                 .counted
@@ -111,7 +111,7 @@ fn account_claims_do_not_adopt_legacy_or_other_account_request_ids() {
                 .expect("account retry")
                 .counted
         );
-        assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
         assert!(
             !orchestrator
                 .type_instead(&req.request_id)
@@ -122,7 +122,7 @@ fn account_claims_do_not_adopt_legacy_or_other_account_request_ids() {
 }
 
 #[test]
-fn exhausted_account_does_not_charge_or_execute_but_dictation_is_unlimited() {
+fn exhausted_cloud_allowance_does_not_block_local_commands_or_dictation() {
     let h = harness();
     let meter = account_meter(&h, "account-a", 0, false);
     let orchestrator =
@@ -132,7 +132,7 @@ fn exhausted_account_does_not_charge_or_execute_but_dictation_is_unlimited() {
             .handle(request("open dashboard"))
             .expect("limit")
             .outcome,
-        KalVoiceOutcome::LimitReached { .. }
+        KalVoiceOutcome::Completed { .. }
     ));
     for target in [
         TalkTarget::Field,
@@ -157,25 +157,30 @@ fn exhausted_account_does_not_charge_or_execute_but_dictation_is_unlimited() {
         assert!(talked.response.is_none());
     }
     assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
-    assert!(h.executor.executed.lock().expect("effects").is_empty());
+    assert_eq!(h.executor.executed.lock().expect("effects").len(), 1);
 }
 
 #[test]
-fn metering_crash_cannot_reexecute_a_durable_account_claim() {
+fn unavailable_cloud_meter_cannot_block_or_duplicate_a_local_command() {
     let h = harness();
-    let meter = account_meter(&h, "account-a", 75, true);
+    let meter = account_meter(&h, "account-a", 25, true);
     let req = request("open dashboard");
     let orchestrator =
         Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
-    assert!(
-        std::panic::catch_unwind(AssertUnwindSafe(|| orchestrator.handle(req.clone()))).is_err()
-    );
+    assert!(matches!(
+        orchestrator
+            .handle(req.clone())
+            .expect("local execute")
+            .outcome,
+        KalVoiceOutcome::Completed { .. }
+    ));
     let restarted = Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
-    assert!(
-        matches!(restarted.handle(req).expect("recovery").outcome,KalVoiceOutcome::Failed { ref code,.. } if code=="request_indeterminate")
-    );
-    assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
-    assert!(h.executor.executed.lock().expect("effects").is_empty());
+    assert!(matches!(
+        restarted.handle(req).expect("replay").outcome,
+        KalVoiceOutcome::Completed { .. }
+    ));
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(h.executor.executed.lock().expect("effects").len(), 1);
 }
 
 #[derive(Default)]
@@ -488,8 +493,8 @@ fn typed_navigation_runs_counts_once_and_records_facts_only() {
             surface: SurfaceId::Settings
         })
     );
-    assert!(response.counted);
-    assert_eq!(response.usage.used, 1);
+    assert!(!response.counted);
+    assert_eq!(response.usage.used, 0);
     assert_eq!(response.usage.allowance, Some(25));
     assert_eq!(response.usage.resets_at, "2026-10-01T00:00:00.000Z");
     assert_eq!(response.intent.as_deref(), Some("navigate"));
@@ -596,7 +601,7 @@ fn talk_dictation_is_never_counted_and_records_only_facts() {
 }
 
 #[test]
-fn talk_commands_count_and_type_instead_refunds_reversible_ones() {
+fn local_talk_commands_are_unmetered_and_keep_execution_fences() {
     let h = harness();
     let r = h
         .orchestrator
@@ -604,10 +609,10 @@ fn talk_commands_count_and_type_instead_refunds_reversible_ones() {
         .expect("talk");
     assert_eq!(r.route, TalkRoute::Command);
     let response = r.response.expect("response");
-    assert!(response.counted);
-    assert_eq!(h.orchestrator.usage().expect("usage").used, 1);
+    assert!(!response.counted);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 0);
     assert!(
-        h.orchestrator
+        !h.orchestrator
             .type_instead(&response.request_id)
             .expect("undo")
     );
@@ -618,7 +623,7 @@ fn talk_commands_count_and_type_instead_refunds_reversible_ones() {
             .expect("again")
     );
     let last = kalvoice_events(&h.core).pop().expect("event");
-    assert_eq!(last["payload"]["code"], "typed_instead");
+    assert_ne!(last["payload"]["code"], "typed_instead");
 
     let request = h
         .orchestrator
@@ -703,7 +708,7 @@ fn a_retried_request_id_is_neither_counted_nor_run_twice() {
         }
     );
     assert!(!again.counted);
-    assert_eq!(h.orchestrator.usage().expect("usage").used, 1);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 0);
     assert_eq!(h.executor.executed.lock().expect("lock").len(), 1);
 }
 
@@ -722,7 +727,7 @@ fn a_failed_request_replays_its_stable_failure_without_running_again() {
     assert!(
         matches!(first.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "executor_failed")
     );
-    assert!(first.counted);
+    assert!(!first.counted);
 
     let replay = h.orchestrator.handle(request).expect("replay");
     assert!(
@@ -749,7 +754,7 @@ fn a_claim_left_by_another_process_is_indeterminate_and_never_rerun() {
                 ledger::ConsumptionContext {
                     now: NOW,
                     anchor_day: 1,
-                    allowance: Some(75),
+                    allowance: Some(25),
                 },
             )?;
             Ok(())
@@ -878,12 +883,12 @@ fn concurrent_retries_claim_once_before_any_executor_effect() {
         completed.outcome,
         KalVoiceOutcome::Completed { .. }
     ));
-    assert!(completed.counted);
+    assert!(!completed.counted);
     assert_eq!(executor.executions.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn limit_reached_is_returned_before_any_work() {
+fn legacy_local_usage_cannot_block_new_local_work() {
     let h = harness();
     h.core
         .read(|c| {
@@ -910,17 +915,18 @@ fn limit_reached_is_returned_before_any_work() {
         .orchestrator
         .handle(request("open four codex threads"))
         .expect("handle");
-    assert_eq!(
+    assert!(matches!(
         response.outcome,
-        KalVoiceOutcome::LimitReached {
-            resets_at: "2026-10-01T00:00:00.000Z".into()
-        }
-    );
+        KalVoiceOutcome::Completed { .. }
+    ));
     assert!(!response.counted);
-    assert_eq!(response.usage.used, 25);
-    assert!(h.executor.executed.lock().expect("lock").is_empty());
-    assert_eq!(types(&kalvoice_events(&h.core)), ["kalvoice.limit_reached"]);
-    assert_eq!(kalvoice_events(&h.core)[0]["payload"]["allowance"], 25);
+    assert_eq!(response.usage.used, 0);
+    assert_eq!(h.executor.executed.lock().expect("lock").len(), 1);
+    assert!(
+        !types(&kalvoice_events(&h.core))
+            .iter()
+            .any(|kind| kind == "kalvoice.limit_reached")
+    );
 }
 
 #[test]
@@ -955,7 +961,7 @@ fn owner_is_unlimited() {
         response.outcome,
         KalVoiceOutcome::Completed { .. }
     ));
-    assert_eq!(response.usage.used, 301);
+    assert_eq!(response.usage.used, 0);
     assert_eq!(response.usage.allowance, None);
 }
 
@@ -1058,7 +1064,7 @@ fn local_interpretation_times_out_discards_late_output_and_can_retry() {
 
     let retry = h.orchestrator.handle(request).expect("retry");
     assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
-    assert!(retry.counted);
+    assert!(!retry.counted);
     assert_eq!(interpreter.calls.load(Ordering::SeqCst), 2);
     assert_eq!(h.executor.executed.lock().expect("lock").len(), 1);
 }
@@ -1121,7 +1127,7 @@ fn noncooperative_timeout_retains_custody_until_bounded_drain_settles() {
         .handle(request("plan the retry"))
         .expect("retry");
     assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
-    assert!(retry.counted);
+    assert!(!retry.counted);
     assert_eq!(interpreter.calls.load(Ordering::SeqCst), 2);
     assert_eq!(h.executor.executed.lock().expect("lock").len(), 1);
 }
@@ -1244,7 +1250,7 @@ fn noncooperative_timeout_does_not_renew_settle_budget_after_a_late_wake() {
     assert!(no_execution_before_release);
     assert!(drained);
     assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
-    assert!(retry.counted);
+    assert!(!retry.counted);
     assert_eq!(interpreter.calls.load(Ordering::SeqCst), 2);
     assert_eq!(h.executor.executed.lock().expect("lock").len(), 1);
 }
@@ -1410,7 +1416,7 @@ fn legacy_provider_preference_cannot_trigger_a_provider_call() {
         response.outcome,
         KalVoiceOutcome::Completed { .. }
     ));
-    assert!(response.counted);
+    assert!(!response.counted);
     assert_eq!(interpreter.calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         interpreter.requests.lock().expect("lock").as_slice(),
@@ -1697,7 +1703,7 @@ fn local_browser_action_accepts_a_bounded_http_navigation() {
         response.outcome,
         KalVoiceOutcome::Completed { .. }
     ));
-    assert!(response.counted);
+    assert!(!response.counted);
     assert_eq!(*h.executor.executed.lock().expect("lock"), vec![action]);
 }
 
@@ -1840,7 +1846,7 @@ fn app_control_commands_execute_immediately_without_a_kalvoice_approval() {
         response.outcome,
         KalVoiceOutcome::Completed { .. }
     ));
-    assert!(response.counted);
+    assert!(!response.counted);
     assert_eq!(
         *h.executor.executed.lock().expect("lock"),
         vec![KalVoiceIntent::ResumeThreads {
@@ -1849,8 +1855,8 @@ fn app_control_commands_execute_immediately_without_a_kalvoice_approval() {
     );
     assert_eq!(
         h.orchestrator.usage().expect("usage").used,
-        1,
-        "one app-control request counts once"
+        0,
+        "local app control consumes no cloud requests"
     );
 }
 
@@ -1890,7 +1896,7 @@ fn app_control_does_not_file_kalvoice_origin_approvals_in_the_permission_engine(
         response.outcome,
         KalVoiceOutcome::Completed { .. }
     ));
-    assert!(response.counted);
+    assert!(!response.counted);
     assert_eq!(executor.executed.lock().expect("lock").len(), 1);
 
     let kalvoice_approvals: i64 = core
@@ -1909,7 +1915,7 @@ fn app_control_does_not_file_kalvoice_origin_approvals_in_the_permission_engine(
             .expect("list")
             .is_empty()
     );
-    assert_eq!(orchestrator.usage().expect("usage").used, 1);
+    assert_eq!(orchestrator.usage().expect("usage").used, 0);
 }
 
 #[test]
@@ -2508,14 +2514,14 @@ fn send_that_and_clear_that_are_free_and_work_with_the_allowance_used_up() {
         .expect("clear that");
     assert!(matches!(cleared.outcome, KalVoiceOutcome::Completed { .. }));
     assert!(!cleared.counted);
-    // Neither was metered; a counted command is still refused at the limit.
+    // Local commands also remain available when the cloud allowance is exhausted.
     assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
     assert!(matches!(
         orchestrator
             .handle(request("open settings"))
             .expect("limit")
             .outcome,
-        KalVoiceOutcome::LimitReached { .. }
+        KalVoiceOutcome::Completed { .. }
     ));
     // "Send that" with no thread in front is refused, still uncounted.
     let nothing = orchestrator.handle(request("send it")).expect("refused");
@@ -2603,8 +2609,8 @@ fn a_clarification_is_answered_before_anything_is_counted_and_carries_the_choice
             submit: true,
         })
     );
-    assert!(sent.counted);
-    assert_eq!(h.orchestrator.usage().expect("usage").used, before + 1);
+    assert!(!sent.counted);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, before);
 }
 
 #[test]
@@ -2853,12 +2859,12 @@ fn ui_commands_take_one_request_each_and_never_twice_for_a_retry() {
         let req = ui_command(command);
         let first = h.orchestrator.meter_ui_command(req.clone()).expect("meter");
         assert!(matches!(first.outcome, KalVoiceOutcome::Completed { .. }));
-        assert!(first.counted);
+        assert!(!first.counted);
         let retry = h.orchestrator.meter_ui_command(req).expect("retry");
         assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
         assert!(!retry.counted);
     }
-    assert_eq!(h.orchestrator.usage().expect("usage").used, 3);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 0);
     // The renderer runs the command; native executes nothing for it.
     assert!(h.executor.executed.lock().expect("effects").is_empty());
     let events = kalvoice_events(&h.core);
@@ -2868,7 +2874,7 @@ fn ui_commands_take_one_request_each_and_never_twice_for_a_retry() {
 }
 
 #[test]
-fn ui_commands_stop_at_the_monthly_limit() {
+fn local_ui_commands_ignore_legacy_monthly_usage() {
     let h = harness();
     h.core
         .read(|c| {
@@ -2897,27 +2903,27 @@ fn ui_commands_stop_at_the_monthly_limit() {
         .expect("meter");
     assert!(matches!(
         response.outcome,
-        KalVoiceOutcome::LimitReached { .. }
+        KalVoiceOutcome::Completed { .. }
     ));
     assert!(!response.counted);
-    assert_eq!(response.usage.used, 25);
+    assert_eq!(response.usage.used, 0);
 }
 
 #[test]
-fn account_ui_commands_are_metered_by_the_account_once() {
+fn account_ui_commands_preserve_idempotence_without_cloud_metering() {
     let h = harness();
-    let meter = account_meter(&h, "account-a", 75, false);
+    let meter = account_meter(&h, "account-a", 25, false);
     let orchestrator =
         Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
     let req = ui_command(UiCommand::Scene);
     assert!(
-        orchestrator
+        !orchestrator
             .meter_ui_command(req.clone())
             .expect("meter")
             .counted
     );
     assert!(!orchestrator.meter_ui_command(req).expect("retry").counted);
-    assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
 
     let exhausted = account_meter(&h, "account-b", 0, false);
     let orchestrator =
@@ -2927,7 +2933,7 @@ fn account_ui_commands_are_metered_by_the_account_once() {
             .meter_ui_command(ui_command(UiCommand::Operations))
             .expect("limit")
             .outcome,
-        KalVoiceOutcome::LimitReached { .. }
+        KalVoiceOutcome::Completed { .. }
     ));
     assert_eq!(exhausted.calls.load(Ordering::SeqCst), 0);
 }

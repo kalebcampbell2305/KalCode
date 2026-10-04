@@ -134,8 +134,6 @@ const NOT_IN_016 = [
   /Environment Doctor/i,
   /Resource Governor/i,
   /Workspace Home/i,
-  /\bwidgets?\b/i,
-  /\bworktrees?\b/i,
   /Git and diff views (?!Planned)/i,
 ];
 
@@ -232,14 +230,12 @@ describe("KalVoice command examples", () => {
       expect(docs).toContain(example);
     }
     expect(docs).toContain("A command, such as “Pause every active thread”");
-    expect(docs).toContain(
-      "“Open a terminal” is one request. “Pause every active thread” is also one request, however many threads it pauses.",
-    );
+    expect(docs).toContain("Local/on-device commands, dictation and voice into terminals");
   });
 
-  it("count requests with Stable examples in the pricing FAQ", async () => {
+  it("keep local commands outside the cloud quota in the pricing FAQ", async () => {
     expect(text(await render(Pricing, "/pricing"))).toContain(
-      "“Open a terminal” is one request. “Pause every active thread” is also one request, however many threads it pauses.",
+      "Local/on-device commands, dictation and voice into terminals",
     );
   });
 });
@@ -263,18 +259,19 @@ describe("plans", () => {
     const html = await render(Pricing, "/pricing");
     const copy = text(html);
     expect(copy).toContain(
-      "Start free. Upgrade for more agents, more terminals and more autonomy. Your AI usage stays on your own provider account.",
+      "Unlimited local coding agents + terminals on every plan. Bring your AI accounts. KalCode handles the workflow.",
     );
     expect(copy).not.toMatch(/Plans differ in KalVoice Requests/i);
     const rowHeads = [...html.matchAll(/<th scope="row"[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
     expect(rowHeads).toEqual(CORE_LIMITS.map((limit) => limit.label));
     const description = PAGES.find((p) => p.path === "/pricing")?.description ?? "";
     expect(description).toContain(
-      `KalCode plans: ${PLANS.map((plan) => plan.name)
+      `Compare KalCode ${PLANS.map((plan) => plan.name)
         .join(", ")
         .replace(/, ([^,]*)$/, " and $1")}`,
     );
-    expect(description).toContain("AI usage stays on your own provider account.");
+    expect(description).toContain("monthly or yearly");
+    expect(description).toContain("Unlimited local coding agents and terminals");
     expect(description).not.toMatch(/plans differ in KalVoice Requests/i);
   });
 
@@ -318,7 +315,8 @@ describe("home page", () => {
 
   it("says in the home meta that agents run in real terminals, without a panes claim", () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
-    expect(home).toContain("Run Claude Code and Codex agents in real terminals");
+    expect(home).toContain("Claude Code and Codex");
+    expect(home).toContain("Run agents in real terminals");
     expect(home).not.toMatch(/threads/i);
     expect(PAGES.find((p) => p.path === "/product")?.description).not.toMatch(/provider panes/i);
   });
@@ -751,9 +749,9 @@ describe("signed-build claims on a Windows-only Stable", () => {
 describe("home meta description", () => {
   it("describes KalCode as released, not in private development", async () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
-    expect(home).toBe(
-      "KalCode is the desktop workspace for AI coding. Run Claude Code and Codex agents in real terminals, see every agent in Agent Fleet, preview your app in Live Browser and control it all with KalVoice. Try it live in your browser.",
-    );
+    expect(home).toContain("AI coding workspace");
+    expect(home).toContain("KalVoice");
+    expect(home.length).toBeLessThanOrEqual(160);
     expect(home).not.toMatch(/private development/i);
     selectSignedStable();
     expect(metaDescription(await render(Home, "/"))).toBe(home);

@@ -4,8 +4,9 @@ use crate::account::runtime::{
     AccountRuntime, AccountRuntimeError, KalVoiceAuthority, KalVoiceRecord,
 };
 use kalcode_contracts::kalvoice::KalVoiceUsage;
+use kalcode_core::plans::PlanTier;
 use kalcode_core::{Core, KalError, Result};
-use kalcode_entitlements::{Limit, limits};
+use kalcode_entitlements::Tier;
 use kalcode_kalvoice::accounting::{self, MeterDecision, RequestAccounting};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,14 +44,16 @@ fn cycle(authority: &KalVoiceAuthority) -> Result<Cycle> {
             "KalVoice could not read the current time.",
         )
     })?;
-    let limit = match authority
-        .entitlement
-        .grants()
-        .limit(limits::KALVOICE_REQUESTS_PER_MONTH)
-    {
-        Limit::Unlimited => None,
-        Limit::AtMost(value) => Some(u32::try_from(value).unwrap_or(u32::MAX)),
-    };
+    // Trust the verified tier, applying today's canonical quota even to a cached older grant.
+    let limit = match authority.entitlement.tier {
+        Tier::Free => PlanTier::Free,
+        Tier::Pro => PlanTier::Pro,
+        Tier::Max => PlanTier::Max,
+        Tier::Max2x => PlanTier::Max2x,
+        Tier::Owner => PlanTier::Owner,
+    }
+    .limits()
+    .kalvoice_requests_per_month;
     if let Some(receipt) = &authority.receipt {
         let start = OffsetDateTime::parse(&receipt.period_start, &Rfc3339).ok();
         let end = OffsetDateTime::parse(&receipt.resets_at, &Rfc3339).ok();
@@ -114,6 +117,19 @@ impl AccountKalVoice {
                 "Sign in to use KalVoice Requests.",
             ));
         }
+        core.transact(|conn| {
+            // Apply once per account, atomically with the durable policy marker. Requests
+            // explicitly authorized as cloud work after migration retain their crash budget.
+            let key = format!("kalvoice.cloud-only.v1:{account_id}");
+            let inserted = conn.execute(
+                "INSERT OR IGNORE INTO app_meta(key,value,updated_at) VALUES(?1,'applied',?2)",
+                [key, kalcode_core::time::now_rfc3339()],
+            )?;
+            if inserted == 1 {
+                accounting::retire_local_pending(conn, &account_id)?;
+            }
+            Ok(((), Vec::new()))
+        })?;
         Ok(Arc::new(Self {
             core,
             account,

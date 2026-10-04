@@ -82,13 +82,24 @@ describe("restricted tiers", () => {
     expect(limitFor(tierGrants("pro"), "kalvoiceRequestsPerMonth")).toBe(150);
     expect(limitFor(tierGrants("max"), "kalvoiceRequestsPerMonth")).toBe(500);
     expect(limitFor(tierGrants("max2x"), "kalvoiceRequestsPerMonth")).toBe(1000);
-    expect(limitFor(tierGrants("free"), "openTerminals")).toBe(4);
+    expect(limitFor(tierGrants("free"), "openTerminals")).toBeNull();
     expect(limitFor(tierGrants("max"), "workspaces")).toBeNull();
     expect(limitFor(tierGrants("max2x"), "parallelAgents")).toBeNull();
     expect(tierGrants("free").features).toEqual([]);
-    expect(tierGrants("pro").features).toEqual(["persistentAgents", "multiAgentWorkflows", "scheduledAutomations"]);
-    expect(tierGrants("max").features).toEqual([...FEATURES]);
+    expect(tierGrants("pro").features).toEqual([]);
+    expect(tierGrants("max").features).toEqual(["multiAgentWorkflows", "advancedMissions"]);
     expect(tierGrants("max2x").features).toEqual([...FEATURES]);
+  });
+
+  it("ignores obsolete cached local terminal and coding-agent caps", () => {
+    const legacy = {
+      unrestricted: false,
+      features: [],
+      limits: { openTerminals: 4, parallelAgents: 1, workspaces: 2 },
+    };
+    expect(limitFor(legacy, "openTerminals")).toBeNull();
+    expect(limitFor(legacy, "parallelAgents")).toBeNull();
+    expect(limitFor(legacy, "workspaces")).toBe(2);
   });
 
   it("fail closed for unknown features and missing limits", () => {

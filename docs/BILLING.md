@@ -1,10 +1,7 @@
 # KalCode Billing, Entitlements and KalVoice Requests
 
-Status: entitlement foundation built (branch `z13/owner-entitlement`); **local only**. Sign-in,
-Passwordless email sign-in, optional GitHub OAuth, and Stripe billing are implemented in the local
-API for campaign Z13. A production D1 resource exists, but no account or billing migrations,
-Worker deployment, public API route, or live billing resource is active yet.
-
+Status: production account API and live monthly/yearly Stripe billing are active.
+The owner directive dated 2026-10-04 in `AGENTS.md` supersedes historical pricing and metering rules.
 This document is the reference for what an account may use, who decides it, and how that decision
 reaches the desktop app. Prices and plan limits live in one place:
 `packages/protocol/src/plans.ts`.
@@ -20,15 +17,20 @@ reaches the desktop app. Prices and plan limits live in one place:
 | **OWNER** | $0, forever | — | unlimited | **no** — private, never listed, never purchasable |
 
 Signed plan limits (`LIMITS` in `packages/protocol/src/entitlements.ts`; `null` = no KalCode-side
-limit). Every entitlement document carries all five for a restricted tier:
+limit). Every entitlement document carries the canonical numeric limits for a restricted tier:
 
 | Limit | Free | Pro | MAX | MAX 2X | OWNER |
 | --- | --- | --- | --- | --- | --- |
 | `kalvoiceRequestsPerMonth` | 25 | 150 | 500 | 1,000 | unlimited |
-| `openTerminals` | 4 | 12 | 18 | unlimited | unlimited |
-| `parallelAgents` | 1 | 4 | 10 | unlimited | unlimited |
+| `openTerminals` | unlimited | unlimited | unlimited | unlimited | unlimited |
+| `parallelAgents` | unlimited | unlimited | unlimited | unlimited | unlimited |
 | `workspaces` | 2 | 10 | unlimited | unlimited | unlimited |
-| `providerAccounts` | 2 | 6 | 8 | unlimited | unlimited |
+| `providerAccounts` | 2 | 6 | 12 | unlimited | unlimited |
+| `brainstormsPerMonth` | 3 | unlimited | unlimited | unlimited | unlimited |
+| `launchRecipes` | 1 | 10 | unlimited | unlimited | unlimited |
+| `externalIntegrations` | 1 | 5 | 25 | unlimited | unlimited |
+| `operationsHistoryDays` | recent 10 Runs | 30 | 365 | maximum | maximum |
+| `queuedTasks` | 3 | unlimited | unlimited | unlimited | unlimited |
 
 The billing interval changes only how often Stripe charges. Monthly and yearly Prices for a plan
 resolve to the same tier and the same limits; KalVoice Request allowances reset monthly on both

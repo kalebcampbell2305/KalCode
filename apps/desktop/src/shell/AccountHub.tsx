@@ -1,4 +1,4 @@
-import type { SurfaceId } from "@kalcode/protocol";
+import { formatLimit, limitsFor, type SurfaceId } from "@kalcode/protocol";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,6 +82,8 @@ export function AccountHub({ collapsed, onOpenPalette }: AccountHubProps) {
   // names existed still shows until one is set.
   const { name, initials } = kalcodeIdentity(user.displayName ?? settings.displayName, user.email);
   const plan = planLabel(snapshot.tier, snapshot.phase);
+  const limits = limitsFor(snapshot.tier ?? "free");
+  const billingInterval = usage?.billingInterval ?? snapshot.billingInterval;
   const paid = snapshot.tier !== null && PAID.has(snapshot.tier);
   const premium = paid || snapshot.tier === "owner";
 
@@ -157,6 +159,16 @@ export function AccountHub({ collapsed, onOpenPalette }: AccountHubProps) {
           ) : null}
         </div>
         {usage ? <UsageMeter usage={usage} /> : null}
+        <div className={styles.entitlements}>
+          <span>Unlimited local agents + terminals</span>
+          <span>
+            {formatLimit(limits.workspaces)} workspaces · {formatLimit(limits.providerAccounts)} provider accounts
+          </span>
+          <span>
+            {formatLimit(limits.externalIntegrations)} integrations
+            {billingInterval ? ` · ${billingInterval === "year" ? "Yearly" : "Monthly"} billing` : ""}
+          </span>
+        </div>
 
         <DropdownMenuSeparator />
         <DropdownMenuGroup>

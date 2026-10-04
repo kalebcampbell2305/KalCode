@@ -1,4 +1,11 @@
-import type { OperationActivity, OperationRecord, OperationStatus, OperationsSnapshot } from "@kalcode/protocol";
+import {
+  type EntitlementTier,
+  limitsFor,
+  type OperationActivity,
+  type OperationRecord,
+  type OperationStatus,
+  type OperationsSnapshot,
+} from "@kalcode/protocol";
 
 export type OperationsTab = "runs" | "queue" | "services" | "environments" | "activity";
 export type ActivityRange = "1h" | "today" | "7d" | "release";
@@ -202,4 +209,39 @@ export function activityLevel(value: number, max: number): 0 | 1 | 2 | 3 | 4 {
 
 export function activityRun(events: readonly OperationActivity[], itemId: string): string | null {
   return events.find((event) => event.id === itemId)?.runId ?? null;
+}
+
+/** Apply plan history to sorted finished runs. Active work and the inspected run remain visible. */
+export function planRunHistory(
+  runs: readonly OperationRecord[],
+  tier: EntitlementTier,
+  observedAt: string,
+  selected: string | null = null,
+): OperationRecord[] {
+  const limits = limitsFor(tier);
+  const cutoff =
+    limits.operationsHistoryDays === null ? null : Date.parse(observedAt) - limits.operationsHistoryDays * 86_400_000;
+  let finished = 0;
+  return runs.filter((run) => {
+    if (run.endedAt === null || run.id === selected) return true;
+    if (cutoff !== null && Date.parse(run.endedAt) < cutoff) return false;
+    if (limits.runHistory !== null && finished >= limits.runHistory) return false;
+    finished += 1;
+    return true;
+  });
+}
+
+/** Starter shows recent activity; paid history uses the same retention window as Runs. */
+export function planActivityHistory(
+  events: readonly OperationActivity[],
+  tier: EntitlementTier,
+  observedAt: string,
+): OperationActivity[] {
+  const limits = limitsFor(tier);
+  const cutoff =
+    limits.operationsHistoryDays === null ? null : Date.parse(observedAt) - limits.operationsHistoryDays * 86_400_000;
+  const recent = events
+    .filter((event) => cutoff === null || Date.parse(event.at) >= cutoff)
+    .toSorted((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return limits.runHistory === null ? recent : recent.slice(0, limits.runHistory);
 }
