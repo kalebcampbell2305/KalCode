@@ -996,6 +996,26 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [terminalById, labels, paneById, closeTerminalTab, accountFor, stopAgent, orgItems],
   );
 
+  const continueWithAccount = useCallback(
+    async (threadId: string, accountId: string) => {
+      const source = paneById.get(threadId)?.thread;
+      const input = source ? duplicatePaneInput(source) : null;
+      if (!input) throw new Error("This coding session cannot be continued with its current settings.");
+      const created = await providerPanes.channel.create({ ...input, switchAccountId: accountId });
+      pendingAgents.current.add(created.id);
+      const content = agentContent(created.id);
+      const current = controllerRef.current;
+      const pane = leaves(current.layout.root).find((leaf) =>
+        leaf.tabs.some((tab) => contentKey(tab) === contentKey(agentContent(threadId))),
+      );
+      current.forget(new Set([contentKey(content)]));
+      current.show(content, { paneId: pane?.paneId, focus: true, placement: "tab" });
+      // Creation succeeded. A failed list refresh must not invite a duplicate launch on retry.
+      void Promise.all([refreshWorkspaces(), providerPanes.refresh()]).catch(() => undefined);
+    },
+    [paneById, providerPanes, refreshWorkspaces],
+  );
+
   const render = useCallback(
     (content: PaneContent, context: PaneRenderContext): ReactNode | null => {
       if (content.kind === "browser")
@@ -1044,6 +1064,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             visible={context.visible !== false && codeShown}
             throttled={!context.focused || !codeShown}
             onChanged={providerPanes.updated}
+            onContinue={continueWithAccount}
             onHandOff={handOffFor(entry.thread.id)}
             onClose={closeAgentFor(entry.thread.id)}
           />
@@ -1066,6 +1087,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       browserBridge,
       handOffFor,
       closeAgentFor,
+      continueWithAccount,
     ],
   );
 

@@ -21,6 +21,8 @@ export function isPaneProvider(providerId: string): providerId is PaneProviderId
 export interface CreatePaneInput {
   /** Native resolves the durable configuration when duplicating a coding agent. */
   sourceThreadId?: string;
+  /** Explicitly confirmed account for a fresh continuation; requires a source thread. */
+  switchAccountId?: string;
   /** Defaults to Claude Code. */
   providerId?: PaneProviderId;
   providerAccountId?: string | null;
@@ -89,6 +91,7 @@ export class PaneChannel {
   create(input: CreatePaneInput): Promise<ThreadSummary> {
     return this.call("provider_pane_create", {
       ...(input.sourceThreadId ? { sourceThreadId: input.sourceThreadId } : {}),
+      ...(input.switchAccountId ? { switchAccountId: input.switchAccountId } : {}),
       providerId: input.providerId ?? "claude-code",
       providerAccountId: input.providerAccountId ?? null,
       workspaceId: input.workspaceId,
