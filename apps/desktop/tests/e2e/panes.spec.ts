@@ -23,7 +23,7 @@ import {
  * restored from the layout store (`workspace_layouts`, schema v9): pane count, divider position,
  * a collapsed pane and every tab, with ended shells offering Restart and the provider pane shown
  * as ended in an earlier run. Then a change followed by a forced kill is restored too. Closing a
- * pane ends its terminals and agents, so a pane containing only ended content is not reopened.
+ * pane ends its terminals and agents; reopening restores only its pane slot.
  *
  * The provider is `kalcode-fake-provider` copied as `claude.exe` first on PATH; no AI service is
  * contacted. Build first: pnpm --filter @kalcode/desktop build:e2e (KALCODE_E2E_CDP_PORT=9451).
@@ -134,8 +134,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await shot(page, "w1-e2e-arranged");
 
     // Closing a pane ends what it runs (owner decision): the shell in pane 1 and the program it
-    // started stop; nothing keeps running in the background. A terminal-only pane is not reopened,
-    // because reopening it would restore only ended content.
+    // started stop; nothing keeps running in the background. Reopen brings back only the pane.
     await page.keyboard.press("Control+Alt+ArrowLeft");
     await pane(page, 0).locator(".xterm-screen").click();
     await page.keyboard.type("ping -n 97 127.0.0.1");
@@ -146,36 +145,37 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await expect.poll(() => processesMatching("-n 97 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
     await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
     await page.keyboard.press("Control+Alt+r");
-    await expect(panes(page)).toHaveCount(2);
+    await expect(panes(page)).toHaveCount(3);
+    await expect(divider(page)).toHaveAttribute("aria-valuenow", arrangedRatio ?? "");
 
-    // The two remaining panes, including the collapsed shell, are the graceful-restart layout.
-    const remainingRatio = await divider(page).getAttribute("aria-valuenow");
-    expect(remainingRatio).not.toBeNull();
+    // The reopened slot, provider pane and collapsed shell are the graceful-restart layout.
     await page.waitForTimeout(1200); // debounced save
     await closeGracefully(app);
 
     const stored = storedLayout(dataDir);
-    expect(stored).toEqual({ rows: 1, version: 1, panes: 2 });
+    expect(stored).toEqual({ rows: 1, version: 1, panes: 3 });
 
     // Relaunch opens the restored workspace directly in Code, with the same layout, ended shells
     // offering Restart and the provider pane ended.
     app = await launch(dataDir, env);
     page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "w1-panes" })).toBeVisible();
-    await expect(panes(page)).toHaveCount(2);
-    await expect(divider(page)).toHaveAttribute("aria-valuenow", remainingRatio ?? "");
+    await expect(panes(page)).toHaveCount(3);
+    await expect(divider(page)).toHaveAttribute("aria-valuenow", arrangedRatio ?? "");
     await expect(page.locator("[data-pane-id][data-collapsed]")).toHaveCount(1);
     await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
     await expect(page.locator("[data-provider-pane] [data-pane-terminal] .xterm-rows")).toContainText(
       "ended in an earlier run",
       { timeout: 20_000 },
     );
-    // The collapsed pane's shell ended with KalCode and offers Restart.
+    // Pane 1's shell ended when its pane closed, so its restored slot is empty. The collapsed
+    // pane's shell ended with KalCode and offers Restart.
+    await expect(pane(page, 0).getByRole("heading", { name: "Empty pane" })).toBeVisible();
     await page
       .locator("[data-pane-id][data-collapsed]")
       .getByRole("button", { name: /^Expand / })
       .click();
-    await expect(pane(page, 1).getByRole("heading", { name: "This terminal ended when KalCode closed" })).toBeVisible();
+    await expect(pane(page, 2).getByRole("heading", { name: "This terminal ended when KalCode closed" })).toBeVisible();
     await shot(page, "w1-e2e-restored");
 
     // A change, then a forced kill: the layout saved after the change is what comes back.

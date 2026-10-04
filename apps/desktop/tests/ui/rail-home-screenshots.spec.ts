@@ -124,7 +124,7 @@ test.describe("@w2-shots", () => {
         for (const size of SIZES) {
           await page.setViewportSize({ width: size.width, height: size.height });
           await page.goto(scene.scenario ? `/?scenario=${scene.scenario}` : "/");
-          await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+          await expect(page.locator("#main")).toHaveAttribute("data-surface", scene.scenario ? "code" : "dashboard");
           await setTheme(page, theme);
           // Under 1400 px the rail starts as a strip; rail scenes show it open.
           const strip = page.getByRole("navigation", { name: "Workspaces (collapsed rail)" });
