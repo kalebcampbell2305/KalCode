@@ -160,8 +160,8 @@ describe("palette account commands (Stable)", () => {
     // An account named exactly like another workspace.
     await client.createProviderAccount("gemini-cli", "api-server");
     const palette = await typeInPalette(user, "switch to api-server");
-    expect(await palette.findByRole("option", { name: "Switch to api-server" })).toBeInTheDocument();
-    expect(palette.getByText("Code")).toBeInTheDocument();
+    expect(await palette.findByRole("option", { name: /^api-server.*Workspace/ })).toBeInTheDocument();
+    expect(palette.getByText("Best matches")).toBeInTheDocument();
     expect(await palette.findByText("Accounts")).toBeInTheDocument();
     expect(
       palette.getByRole("option", { name: /Use api-server \(Gemini CLI\) in this workspace/ }),

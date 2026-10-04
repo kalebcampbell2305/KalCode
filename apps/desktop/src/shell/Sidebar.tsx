@@ -1,6 +1,6 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
-import { Bell, BellDot, PanelLeftClose, PanelLeftOpen, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Bell, BellDot, Globe, PanelLeftClose, PanelLeftOpen, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useId } from "react";
 import { publicVersion } from "../platform/version.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
@@ -13,6 +13,7 @@ import { useNotifications } from "./notifications/NotificationsProvider.tsx";
 import { useRail } from "./rail/RailProvider.tsx";
 import styles from "./Sidebar.module.css";
 import { MOD_LABEL } from "./shortcuts.ts";
+import { useOpenBrowser } from "./useOpenBrowser.ts";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -20,6 +21,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
+  const openBrowser = useOpenBrowser();
   const { info, updateSettings } = useRuntime();
   const rail = useRail();
   const flags = new Map(info.flags.surfaces.map((flag) => [flag.id, flag]));
@@ -44,6 +46,17 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
             <NavItem key={id} id={id} collapsed={collapsed} />
           ),
         )}
+        {available.includes("code") ? (
+          <li>
+            <SidebarButton
+              collapsed={collapsed}
+              label="Browser"
+              icon={<Globe />}
+              onClick={() => void openBrowser()}
+              className={styles.item}
+            />
+          </li>
+        ) : null}
       </ul>
 
       {inDevelopment.length > 0 ? (

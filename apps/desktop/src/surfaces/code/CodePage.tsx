@@ -43,7 +43,7 @@ import { type FormEvent, memo, type ReactNode, useEffect, useId, useRef, useStat
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatShortcut } from "../../platform/keyboard.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useWorkspaces, useWorkspaceVisible, WorkspaceScope } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { TASK_DESCRIPTIONS, TASK_LABELS, TASK_LAYOUTS } from "../../shell/panes/adaptiveCanvas.ts";
 import {
@@ -68,7 +68,9 @@ import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 
 /** The Code surface: the active workspace as one flexible pane canvas (Z7-W1). */
 export function CodePage() {
-  const { state, error, active, retry, refresh } = useWorkspaces();
+  const { state, error, active, retry, refresh, workspaces } = useWorkspaces();
+  const visited = useRef(new Set<string>());
+  if (active) visited.current.add(active.id);
   // Code stays mounted while other pages are shown (Shell). Folder availability can change
   // outside KalCode; re-read it in the background whenever Code is shown.
   const shown = useNavigation().current === "code";
@@ -99,7 +101,20 @@ export function CodePage() {
       </div>
     );
   }
-  return active ? <WorkspaceView key={active.id} workspace={active} /> : <CodeEmpty />;
+  return (
+    <>
+      {!active ? <CodeEmpty /> : null}
+      {workspaces
+        .filter((workspace) => visited.current.has(workspace.id))
+        .map((workspace) => (
+          <div key={workspace.id} hidden={workspace.id !== active?.id} style={{ height: "100%" }}>
+            <WorkspaceScope workspace={workspace}>
+              <WorkspaceView workspace={workspace} />
+            </WorkspaceScope>
+          </div>
+        ))}
+    </>
+  );
 }
 
 /**
@@ -207,7 +222,8 @@ function CodeShortcuts({ api }: { api: CodeCanvasApi }) {
   latest.current = api;
   // Code stays mounted (hidden) on other pages; its shortcuts act only while it is shown.
   const shown = useRef(true);
-  shown.current = useNavigation().current === "code";
+  const workspaceVisible = useWorkspaceVisible();
+  shown.current = useNavigation().current === "code" && workspaceVisible;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !shown.current) return;

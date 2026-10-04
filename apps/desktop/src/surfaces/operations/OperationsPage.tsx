@@ -240,7 +240,7 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   const toast = useToast();
   const workspaces = useWorkspaces();
   const openInPane = useOpenInPane();
-  const { navigate } = useNavigation();
+  const { navigate, recordLocation, registerRestorer } = useNavigation();
   const tier = planTier(useOptionalAccount()?.snapshot);
   const [workspaceId, setWorkspaceId] = useState("");
   const workspaceInitialized = useRef(false);
@@ -257,6 +257,33 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
   const [busy, setBusy] = useState<string | null>(null);
   const mutation = useRef<string | null>(null);
   const operationsReady = state.snapshot !== null;
+  const restoredNavigation = useRef(false);
+  useEffect(
+    () =>
+      registerRestorer?.((entry) => {
+        if (entry.destination !== "operations" || entry.target?.kind !== "operations") return undefined;
+        restoredNavigation.current = true;
+        workspaceInitialized.current = true;
+        setWorkspaceId(entry.target.filterWorkspaceId ?? "");
+        setTab(entry.target.tab);
+        setSelectedRun(entry.target.runId ?? null);
+        return true;
+      }),
+    [registerRestorer],
+  );
+  useEffect(() => {
+    if (!operationsReady) return;
+    if (restoredNavigation.current) {
+      restoredNavigation.current = false;
+      return;
+    }
+    const run = state.snapshot?.items.find((item) => item.id === selectedRun);
+    recordLocation?.({
+      destination: "operations",
+      label: run?.spec.name ?? titleCase(tab),
+      target: { kind: "operations", tab, runId: selectedRun ?? undefined, filterWorkspaceId: workspaceId },
+    });
+  }, [operationsReady, recordLocation, selectedRun, tab, workspaceId, state.snapshot]);
 
   useEffect(() => {
     if (workspaceInitialized.current || workspaces.state === "loading") return;

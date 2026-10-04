@@ -5,6 +5,7 @@ import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { PushToTalkActivity } from "../kalvoice/PushToTalkActivity.tsx";
 import { SessionChoicePanel } from "../kalvoice/SessionChoicePanel.tsx";
+import { NavigationBridge } from "../runtime/NavigationBridge.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { UiIntentsProvider } from "../runtime/uiIntents.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
@@ -32,6 +33,7 @@ import { AgentRail } from "./deck/AgentRail.tsx";
 import { CommandBar } from "./deck/CommandBar.tsx";
 import { DeckDataProvider } from "./deck/DeckData.tsx";
 import { DeckUiProvider } from "./deck/DeckUi.tsx";
+import { NavigationBar } from "./NavigationBar.tsx";
 import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
 import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
@@ -92,7 +94,7 @@ export function Shell() {
 
 function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings, client } = useRuntime();
-  const { current, navigate } = useNavigation();
+  const { current, navigate, back, forward } = useNavigation();
   const operationsClient = useMemo(
     () => new OperationsClient((command, args) => client.transport.invoke(command, args)),
     [client],
@@ -144,6 +146,9 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   useShortcuts({
     openPalette: () => setPaletteOpen(true),
     toggleSidebar: () => void updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed }),
+    back: () => void back(),
+    forward: () => void forward(),
+    openSettings: () => navigate("settings"),
   });
   useNewTerminalShortcut();
   useRailShortcut();
@@ -159,11 +164,13 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       <DeckUiProvider>
         <DeckDataProvider>
           <div className={styles.frame}>
+            <NavigationBridge />
             <a className={styles.skipLink} href="#main">
               Skip to content
             </a>
             {/* Command Deck: top bar · (projects · page · agents). */}
             <CommandBar onOpenPalette={() => setPaletteOpen(true)} sidebarCollapsed={settings.sidebarCollapsed} />
+            <NavigationBar />
             <div
               ref={deckRef}
               className={styles.shell}

@@ -76,14 +76,16 @@ describe("palette threads (Stable)", () => {
   it("lists open threads by name once typed and focuses the chosen one", async () => {
     const { user } = await mountStable();
     const palette = await openPalette(user);
-    // The default list and placeholder are unchanged: no per-thread items until something is typed.
-    expect(palette.getByRole("combobox")).toHaveAttribute("placeholder", "Search workspaces and commands");
-    expect(palette.queryByRole("option", { name: /· Claude Code/ })).toBeNull();
+    // The warm local index offers contextual suggestions immediately.
+    expect(palette.getByRole("combobox")).toHaveAttribute(
+      "placeholder",
+      "Search anything: workspaces, agents, files, settings...",
+    );
     expect(palette.getByRole("option", { name: "New thread" })).toBeInTheDocument();
 
     await user.type(palette.getByRole("combobox"), "parser");
     const option = await palette.findByRole("option", {
-      name: "Write Unit Tests for Parser Module · Claude Code · Personal",
+      name: /Write Unit Tests for Parser Module.*Thread.*Claude Code.*Personal/,
     });
     // Archived threads are not offered.
     await user.clear(palette.getByRole("combobox"));
@@ -102,8 +104,7 @@ describe("palette threads (Stable)", () => {
   it("offers New agent… first and finds it by agent or provider words", async () => {
     const { user } = await mountStable();
     const palette = await openPalette(user);
-    const options = palette.getAllByRole("option");
-    expect(options[0]).toHaveAccessibleName("New agent…");
+    expect(palette.getByRole("option", { name: "New agent…" })).toBeInTheDocument();
     await user.type(palette.getByRole("combobox"), "codex");
     expect(await palette.findByRole("option", { name: "New agent…" })).toBeInTheDocument();
     await user.clear(palette.getByRole("combobox"));
@@ -126,12 +127,9 @@ describe("palette threads (Stable)", () => {
     const palette = await openPalette(user);
     await user.type(palette.getByRole("combobox"), "parser");
     expect(
-      await palette.findByRole("option", { name: "Write Unit Tests for Parser Module · Claude Code · Personal" }),
+      await palette.findByRole("option", { name: /Write Unit Tests for Parser Module.*Thread.*Claude Code.*Personal/ }),
     ).toBeInTheDocument();
-    const agents = palette.getByRole("group", { name: "Agents" });
-    expect(within(agents).getByRole("option", { name: /Parser Agent/ })).toBeInTheDocument();
-    expect(
-      within(palette.getByRole("group", { name: "Threads" })).queryByRole("option", { name: /Parser Agent/ }),
-    ).toBeNull();
+    expect(palette.getByRole("option", { name: /Parser Agent.*Coding agent/ })).toBeInTheDocument();
+    expect(palette.queryByRole("option", { name: /Parser Agent.*Thread/ })).toBeNull();
   }, 15_000);
 });

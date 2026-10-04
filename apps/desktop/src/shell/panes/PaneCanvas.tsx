@@ -280,18 +280,17 @@ function PaneCanvasSurface({
   latestHost.current = host;
   const activeRef = useRef(active);
   activeRef.current = active;
-  useEffect(
-    () =>
-      listenForPaneCommands((command) => {
-        const handled = latestHost.current.onCommand?.(command);
-        if (handled) return handled;
-        return runCommand(latestController.current, command, (content) => {
-          const owned = latestHost.current.describe(content);
-          return owned ?? registeredRenderer(content)?.describe(content) ?? describeBuiltin(content);
-        });
-      }, scope ?? null),
-    [scope],
-  );
+  useEffect(() => {
+    if (!active) return;
+    return listenForPaneCommands((command) => {
+      const handled = latestHost.current.onCommand?.(command);
+      if (handled) return handled;
+      return runCommand(latestController.current, command, (content) => {
+        const owned = latestHost.current.describe(content);
+        return owned ?? registeredRenderer(content)?.describe(content) ?? describeBuiltin(content);
+      });
+    }, scope ?? null);
+  }, [scope, active]);
 
   // ---------- Keyboard shortcuts ----------
   // Anywhere on the surface hosting the canvas, including inside terminals (they let pane

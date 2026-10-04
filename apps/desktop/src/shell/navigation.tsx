@@ -17,7 +17,8 @@ import {
   Settings as SettingsIcon,
   Workflow,
 } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, type ReactNode, useContext, useMemo } from "react";
+import { useNavigationHistory } from "./useNavigationHistory.ts";
 
 export interface SurfaceMeta {
   id: SurfaceId;
@@ -184,12 +185,7 @@ export const PRIMARY_ORDER: readonly SurfaceId[] = [
   "providers",
 ];
 
-interface NavigationValue {
-  current: Destination;
-  navigate: (id: Destination) => void;
-  /** Accepted navigation intents since this provider mounted, including same-destination intents. */
-  getIntentRevision: () => number;
-}
+type NavigationValue = ReturnType<typeof useNavigationHistory>;
 
 const NavigationContext = createContext<NavigationValue | null>(null);
 
@@ -205,26 +201,15 @@ export function NavigationProvider({
 }) {
   // Home is the provisional start when its feature is available (not merely visible in a
   // development build). CodeStartup resolves returning users with a restored workspace to Code.
-  const [current, setCurrent] = useState<Destination>(() =>
-    features?.some((f) => f.id === "workspace_home" && f.state === "available" && f.visible) ? "home" : "dashboard",
-  );
-  const intentRevision = useRef(0);
+  const initial = features?.some((f) => f.id === "workspace_home" && f.state === "available" && f.visible)
+    ? "home"
+    : "dashboard";
   const visible = useMemo(() => {
     const ids = new Set<Destination>(flags.filter((f) => f.visible).map((f) => f.id));
     for (const view of ["home", "folder"] as const) if (viewVisible(view, features)) ids.add(view);
     return ids;
   }, [flags, features]);
-  const navigate = useCallback(
-    (id: Destination) => {
-      if (visible.has(id)) {
-        intentRevision.current += 1;
-        setCurrent(id);
-      }
-    },
-    [visible],
-  );
-  const getIntentRevision = useCallback(() => intentRevision.current, []);
-  const value = useMemo(() => ({ current, navigate, getIntentRevision }), [current, navigate, getIntentRevision]);
+  const value = useNavigationHistory(initial, visible);
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }
 

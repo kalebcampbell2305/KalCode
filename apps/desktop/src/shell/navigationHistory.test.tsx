@@ -1,0 +1,165 @@
+import { act, renderHook } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { Destination } from "./navigation.tsx";
+import { initialHistory, visitLocation } from "./navigationHistory.ts";
+import { useNavigationHistory } from "./useNavigationHistory.ts";
+
+const visible = new Set<Destination>(["code", "dashboard", "settings", "providers", "threads"]);
+
+describe("navigation history", () => {
+  it("enriches a surface with pane identity, deduplicates URL changes and bounds long sessions", () => {
+    let state = initialHistory("code");
+    state = visitLocation(state, {
+      destination: "code",
+      workspaceId: "w1",
+      target: { kind: "pane", content: { kind: "browser", browserId: "b1", url: "https://example.com" } },
+    });
+    expect(state.entries).toHaveLength(1);
+    const same = visitLocation(state, {
+      destination: "code",
+      workspaceId: "w1",
+      target: { kind: "pane", content: { kind: "browser", browserId: "b1", url: "https://example.com/next" } },
+    });
+    expect(same).toBe(state);
+    for (let i = 0; i < 250; i += 1) state = visitLocation(state, { destination: "code", workspaceId: `w${i}` });
+    expect(state.entries).toHaveLength(200);
+    expect(state.index).toBe(199);
+  });
+
+  it("replays Back and Forward and replaces the forward branch with a new visit", async () => {
+    const { result } = renderHook(() => useNavigationHistory("dashboard", visible));
+    act(() => {
+      result.current.navigate("code");
+      result.current.navigate("settings");
+    });
+    await act(() => result.current.back());
+    expect(result.current.current).toBe("code");
+    expect(result.current.canGoForward).toBe(true);
+    await act(() => result.current.forward());
+    expect(result.current.current).toBe("settings");
+    await act(() => result.current.back());
+    act(() => result.current.navigate("providers"));
+    expect(result.current.history.map((entry) => entry.destination)).toEqual(["dashboard", "code", "providers"]);
+    expect(result.current.canGoForward).toBe(false);
+  });
+
+  it("replays workspace and live pane identity without duplicating observed visits", async () => {
+    const { result } = renderHook(() => useNavigationHistory("code", visible));
+    const selected: string[] = [];
+    act(() => {
+      result.current.registerRestorer((entry) => {
+        if (entry.target?.kind !== "pane") return undefined;
+        selected.push(entry.workspaceId ?? "");
+        result.current.recordLocation(entry);
+        return true;
+      });
+      result.current.recordLocation({
+        destination: "code",
+        workspaceId: "one",
+        target: { kind: "pane", content: { kind: "terminal", terminalId: "t1" } },
+      });
+      result.current.recordLocation({
+        destination: "code",
+        workspaceId: "two",
+        target: { kind: "pane", content: { kind: "browser", browserId: "b1", url: "about:blank" } },
+      });
+    });
+    await act(() => result.current.back());
+    expect(selected).toEqual(["one"]);
+    expect(result.current.history).toHaveLength(2);
+    await act(() => result.current.forward());
+    expect(selected).toEqual(["one", "two"]);
+  });
+
+  it("skips closed targets without opening them or clearing forward history", async () => {
+    const { result } = renderHook(() => useNavigationHistory("dashboard", visible));
+    const restore = vi.fn((entry) => (entry.destination === "code" ? false : undefined));
+    act(() => {
+      result.current.registerRestorer(restore, "prepare");
+      result.current.navigate("code");
+      result.current.navigate("settings");
+    });
+    await act(() => result.current.back());
+    expect(result.current.current).toBe("dashboard");
+    expect(result.current.history).toHaveLength(3);
+    await act(() => result.current.forward());
+    expect(result.current.current).toBe("settings");
+  });
+
+  it("a newer navigation cancels an asynchronous replay before it can steal focus", async () => {
+    const { result } = renderHook(() => useNavigationHistory("dashboard", visible));
+    let resolve!: () => void;
+    const waiting = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const focus = vi.fn(() => true);
+    act(() => {
+      result.current.navigate("code");
+      result.current.navigate("settings");
+      result.current.registerRestorer(async () => {
+        await waiting;
+        return true;
+      }, "prepare");
+      result.current.registerRestorer(focus);
+    });
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.back();
+    });
+    act(() => result.current.navigate("providers"));
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+    expect(result.current.current).toBe("providers");
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("rapid Back requests advance the pending cursor and only restore the latest target", async () => {
+    const { result } = renderHook(() => useNavigationHistory("dashboard", visible));
+    let resolve!: () => void;
+    const waiting = new Promise<void>((done) => {
+      resolve = done;
+    });
+    act(() => {
+      result.current.navigate("code");
+      result.current.navigate("settings");
+      result.current.registerRestorer(async (entry) => {
+        if (entry.destination === "code") await waiting;
+        return true;
+      }, "prepare");
+    });
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.back();
+    });
+    await act(() => result.current.back());
+    expect(result.current.current).toBe("dashboard");
+    await act(async () => {
+      resolve();
+      await first;
+    });
+    expect(result.current.current).toBe("dashboard");
+    expect(result.current.historyIndex).toBe(0);
+  });
+
+  it("restores content focus after navigation controls took focus", async () => {
+    const main = document.createElement("main");
+    main.id = "main";
+    const input = document.createElement("input");
+    main.append(input);
+    const button = document.createElement("button");
+    document.body.append(main, button);
+    const { result, unmount } = renderHook(() => useNavigationHistory("settings", visible));
+    act(() => {
+      input.focus();
+      button.focus();
+      result.current.navigate("providers");
+    });
+    await act(() => result.current.back());
+    expect(document.activeElement).toBe(input);
+    unmount();
+    main.remove();
+    button.remove();
+  });
+});

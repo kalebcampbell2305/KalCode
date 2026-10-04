@@ -1,19 +1,21 @@
-import type { ProviderAccount, SettingsPatch, SurfaceId, ThreadSummary } from "@kalcode/protocol";
+import type { FileRef, ProviderAccount, SettingsPatch, SurfaceId, ThreadSummary } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { Command } from "cmdk";
 import {
-  ArrowRightLeft,
   AudioLines,
+  Bot,
   BroomSparkles,
   ChevronsDownUp,
   ClipboardCopy,
   Columns2,
   Equal,
+  FileText,
   FolderGit2,
   FolderOpen,
   FolderPlus,
   FolderTree,
   GitCommitHorizontal,
+  Globe,
   House,
   KeyRound,
   LayoutGrid,
@@ -25,9 +27,11 @@ import {
   Moon,
   PanelLeft,
   PanelsLeftBottom,
+  PlugZap,
   Rows2,
   Rows3,
   Search,
+  Settings as SettingsIcon,
   SquareTerminal,
   Sun,
   Undo2,
@@ -44,14 +48,15 @@ import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
 import { useLaunchAgent } from "../surfaces/code/useLaunchAgent.ts";
-import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { accountInlineLabel, accountName, accountSignIn, sortAccounts } from "../surfaces/providers/accountIdentity.ts";
-import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
+import { openProviderAccounts, requestProvidersTab } from "../surfaces/providers/providersTab.ts";
+import { requestSettingsSection } from "../surfaces/settings/settingsIntent.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
 import { requestRebind, useSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { accountKeywords, accountProviderName, matchAccounts, parseAccountCommand } from "./accountCommands.ts";
 import styles from "./CommandPalette.module.css";
+import { FilePreview } from "./context/FilePreview.tsx";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand } from "./panes/paneCommands.ts";
 import { PANE_SHORTCUT_LABELS } from "./panes/paneShortcuts.ts";
@@ -62,8 +67,10 @@ import { LocatorFilterBar, LocatorResultItems } from "./rail/search/LocatorResul
 import { useSearch } from "./rail/search/SearchProvider.tsx";
 import { useLocatorSearch } from "./rail/search/useLocatorSearch.ts";
 import { useOpenLocated } from "./rail/search/useOpenLocated.ts";
+import { type QuickTarget, useQuickSwitcher } from "./rail/search/useQuickSwitcher.ts";
 import { RAIL_SHORTCUT } from "./rail/WorkspaceRail.tsx";
 import { MOD_LABEL } from "./shortcuts.ts";
+import { useOpenBrowser } from "./useOpenBrowser.ts";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -73,30 +80,19 @@ interface CommandPaletteProps {
 /** What people type when they want KalTidy. */
 const KALTIDY_KEYWORDS = ["tidy", "clean", "cleanup", "idle", "close terminals", "stop terminals", "kill terminals"];
 
-/** How many open threads the palette lists by name. */
-const PALETTE_THREADS = 50;
-
 /** "Name · Provider · Account" (the account part only when the thread has one). */
 export function paletteThreadLabel(thread: Pick<ThreadSummary, "name" | "providerName" | "accountLabel">): string {
   const account = thread.accountLabel?.trim();
   return account ? `${thread.name} · ${thread.providerName} · ${account}` : `${thread.name} · ${thread.providerName}`;
 }
 
-/** Unique cmdk values for the listed threads (two threads may share a label). */
-function threadItems(threads: readonly ThreadSummary[]): { thread: ThreadSummary; label: string; value: string }[] {
-  const seen = new Map<string, number>();
-  return threads.map((thread) => {
-    const label = paletteThreadLabel(thread);
-    const count = (seen.get(label) ?? 0) + 1;
-    seen.set(label, count);
-    return { thread, label, value: count === 1 ? label : `${label} · ${thread.workspaceName} · ${count}` };
-  });
-}
-
 function namedCommand(root: HTMLElement, typed: string): HTMLElement | undefined {
   // Search results (locator matches, threads by name) are ranked by cmdk; only commands are "named".
   const commandItems = [...root.querySelectorAll<HTMLElement>("[cmdk-item]")].filter(
-    (el) => !el.dataset.value?.startsWith("locator:") && el.dataset.paletteThread === undefined,
+    (el) =>
+      !el.dataset.value?.startsWith("locator:") &&
+      el.dataset.paletteThread === undefined &&
+      el.dataset.paletteEntity === undefined,
   );
   const normalized = (item: HTMLElement) => item.dataset.value?.toLowerCase() ?? "";
   return (
@@ -121,6 +117,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const featureVisible = (id: string) => info.flags.features?.some((f) => f.id === id && f.visible) ?? false;
   const locatorVisible = featureVisible("session_locator");
   const search = useSearch();
+  const openBrowser = useOpenBrowser();
+  const quick = useQuickSwitcher(open, search.query, search.kinds);
+  const [preview, setPreview] = useState<FileRef | null>(null);
   const rail = useOptionalRail();
   const locator = useLocatorSearch(search.query, {
     kinds: search.kinds,
@@ -140,7 +139,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const commandRoot = useRef<HTMLDivElement>(null);
   const navigatedQuery = useRef<string | null>(null);
   const first = current ? locator.response?.results.items[0] : undefined;
-  const firstValue = first ? `locator:${first.kind}:${first.entityId}` : "";
+  const firstValue = quick.results[0]
+    ? `quick:${quick.results[0].id}`
+    : first
+      ? `locator:${first.kind}:${first.entityId}`
+      : "";
   const typed = search.query.trim().toLowerCase();
   useEffect(() => {
     if (!open || navigatedQuery.current !== typed) navigatedQuery.current = null;
@@ -177,20 +180,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // 0.1.5 account commands ("switch gemini b", "use codex work"). Accounts are read when the
   // palette opens; a thread rebind only asks the Rebind dialog, a workspace default is confirmed.
   const selectedThread = useSelectedThread();
-  const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
-  useEffect(() => {
-    if (!open) return;
-    let live = true;
-    client
-      .listProviderAccounts()
-      .then((listed) => live && setAccounts(listed))
-      .catch(() => live && setAccounts([]));
-    return () => {
-      live = false;
-    };
-  }, [client, open]);
+  const accounts = quick.accounts;
   const accountPhrase = parseAccountCommand(search.query);
-  const accountMatches = accountPhrase ? sortAccounts(matchAccounts(accounts, accountPhrase)) : [];
+  const accountMatches = accountPhrase ? sortAccounts(matchAccounts(accounts, accountPhrase)).slice(0, 40) : [];
   const activeWorkspace = workspaces.active?.available ? workspaces.active : null;
   const signInFirst = (account: ProviderAccount) => {
     toast.show({
@@ -227,461 +219,483 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         });
       }
     });
-  // Open threads by name when the Session Locator (which lists them itself) isn't in this build,
-  // as on Stable. Read when the palette opens and listed once the person types, so the default
-  // list is unchanged.
   const uiIntents = useOptionalUiIntents();
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [agents, setAgents] = useState<ThreadSummary[]>([]);
-  const threadsVisible = visible.has("threads");
-  useEffect(() => {
-    if (!open || !threadsVisible || locatorVisible) return;
-    let live = true;
-    client
-      .listThreads({ includeArchived: false })
-      .then((listed) => {
-        if (!live) return;
-        // Coding agents are not threads (AGENTS.md): they get their own group and open in Code.
-        const open = listed.filter((t) => t.archivedAt === null);
-        setThreads(open.filter((t) => !isCodingAgent(t)).slice(0, PALETTE_THREADS));
-        setAgents(open.filter(isCodingAgent).slice(0, PALETTE_THREADS));
-      })
-      .catch(() => {
-        if (!live) return;
-        setThreads([]);
-        setAgents([]);
-      });
-    return () => {
-      live = false;
-    };
-  }, [client, open, threadsVisible, locatorVisible]);
-  const focusThread = (thread: ThreadSummary) =>
-    run(() => {
-      if (uiIntents) return uiIntents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
-      navigate("threads");
-      threadsIntent.request("open", thread.id);
-    });
-  const switchTargets = workspaces.workspaces.filter((w) => w.id !== workspaces.active?.id && w.available);
-  // Two clones may share a folder name; cmdk selects by label, so those labels carry the path.
-  const sharedNames = new Set(
-    switchTargets.map((w) => w.name).filter((name, index, names) => names.indexOf(name) !== index),
-  );
+  const openQuickTarget = async (target: QuickTarget) => {
+    switch (target.kind) {
+      case "thread":
+      case "agent":
+        if (uiIntents)
+          return uiIntents.focus({
+            kind: "thread",
+            threadId: target.thread.id,
+            workspaceId: target.thread.workspaceId,
+          });
+        navigate("threads");
+        threadsIntent.request("open", target.thread.id);
+        return;
+      case "workspace":
+        if (await workspaces.activate(target.workspaceId)) navigate("code");
+        return;
+      case "terminal":
+        await openInPane({ kind: "terminal", terminalId: target.terminalId }, { workspaceId: target.workspaceId });
+        return;
+      case "provider":
+        if (uiIntents) return uiIntents.focus({ kind: "provider", providerId: target.providerId });
+        navigate("providers");
+        return;
+      case "account":
+        openProviderAccounts({ providerId: target.account.providerId, accountId: target.account.id });
+        navigate("providers");
+        return;
+      case "setting":
+      case "release":
+        requestSettingsSection(target.section);
+        navigate("settings");
+        return;
+      case "file":
+        setPreview(target.file);
+    }
+  };
   const destinations = [...PRIMARY_ORDER, "settings" as const].filter((id): id is SurfaceId => visible.has(id));
   const views = (["home", "folder"] as const).filter((view) => viewVisible(view, info.flags.features));
 
   return (
-    <Command.Dialog
-      ref={commandRoot}
-      open={open}
-      onOpenChange={onOpenChange}
-      label="Command palette"
-      overlayClassName={styles.overlay}
-      contentClassName={styles.content}
-      className={styles.command}
-      loop
-      value={selected}
-      onValueChange={setSelected}
-      onPointerMove={(event) => {
-        if (event.isTrusted && event.target instanceof Element && event.target.closest("[cmdk-item]"))
-          navigatedQuery.current = typed;
-      }}
-      onKeyDown={(event) => {
-        if (
-          ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) ||
-          (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key))
-        )
-          navigatedQuery.current = typed;
-        if (event.key !== "Enter" || event.nativeEvent.isComposing || !typed || navigatedQuery.current === typed)
-          return;
-        const preferred = commandRoot.current ? namedCommand(commandRoot.current, typed) : undefined;
-        if (!preferred || preferred.dataset.value === selected) return;
-        // A quick Enter can precede the animation-frame selection correction above. Run the
-        // explicitly named command now and stop cmdk from dispatching to its weaker fuzzy choice.
-        event.preventDefault();
-        preferred.click();
-      }}
-    >
-      <Command.Input
-        className={styles.input}
-        placeholder={locatorVisible ? "Search threads, workspaces and commands" : "Search workspaces and commands"}
-        value={search.query}
-        onValueChange={search.setQuery}
-        maxLength={256}
-      />
-      {searching ? <LocatorFilterBar state={locator} kinds={search.kinds} onKinds={search.setKinds} /> : null}
-      <Command.List className={styles.list}>
-        {searching ? (
-          <LocatorResultItems
-            state={current ? locator : { ...locator, response: null, loading: true }}
-            onOpen={(item) => run(() => openLocated(item.kind, item.entityId, "palette"))()}
-          />
-        ) : null}
-        {located > 0 ? null : <Command.Empty className={styles.empty}>No matching commands.</Command.Empty>}
-
-        {/* Agents are coding terminals in Code, never Threads (AGENTS.md). Launching one comes first. */}
-        <Command.Group heading="Agents" className={styles.group}>
-          <Item
-            icon={<SquareTerminal />}
-            onSelect={run(launchAgent)}
-            keywords={["agent", "launch", "start", "claude", "codex", "cursor", "gemini", "coding agent"]}
-          >
-            New agent…
-          </Item>
-          {visible.has("threads") && typed && !locatorVisible
-            ? threadItems(agents).map(({ thread, label, value }) => (
+    <>
+      <Command.Dialog
+        ref={commandRoot}
+        open={open}
+        onOpenChange={onOpenChange}
+        label="Command palette"
+        overlayClassName={styles.overlay}
+        contentClassName={styles.content}
+        className={styles.command}
+        loop
+        value={selected}
+        onValueChange={setSelected}
+        onPointerMove={(event) => {
+          if (event.isTrusted && event.target instanceof Element && event.target.closest("[cmdk-item]"))
+            navigatedQuery.current = typed;
+        }}
+        onKeyDown={(event) => {
+          if (
+            ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) ||
+            (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key))
+          )
+            navigatedQuery.current = typed;
+          if (event.key !== "Enter" || event.nativeEvent.isComposing || !typed || navigatedQuery.current === typed)
+            return;
+          const preferred = commandRoot.current ? namedCommand(commandRoot.current, typed) : undefined;
+          if (!preferred || preferred.dataset.value === selected) return;
+          // A quick Enter can precede the animation-frame selection correction above. Run the
+          // explicitly named command now and stop cmdk from dispatching to its weaker fuzzy choice.
+          event.preventDefault();
+          preferred.click();
+        }}
+      >
+        <Command.Input
+          className={styles.input}
+          placeholder="Search anything: workspaces, agents, files, settings..."
+          value={search.query}
+          onValueChange={search.setQuery}
+          maxLength={256}
+        />
+        {searching ? <LocatorFilterBar state={locator} kinds={search.kinds} onKinds={search.setKinds} /> : null}
+        <Command.List className={styles.list}>
+          {quick.results.length > 0 ? (
+            <Command.Group
+              heading={typed ? "Best matches" : "Recent and suggested"}
+              className={styles.group}
+              forceMount
+            >
+              {quick.results.map((result) => (
                 <Item
-                  key={thread.id}
-                  icon={<SquareTerminal />}
-                  value={`${value} · agent`}
-                  thread
-                  onSelect={focusThread(thread)}
-                  keywords={[
-                    "agent",
-                    "go to",
-                    thread.name,
-                    thread.providerName,
-                    thread.accountLabel ?? "",
-                    thread.workspaceName,
-                  ].filter(Boolean)}
+                  key={result.id}
+                  value={`quick:${result.id}`}
+                  icon={
+                    result.target.kind === "thread" ? (
+                      <MessageSquare />
+                    ) : result.target.kind === "agent" ? (
+                      <Bot />
+                    ) : result.target.kind === "file" ? (
+                      <FileText />
+                    ) : result.target.kind === "workspace" ? (
+                      <FolderOpen />
+                    ) : result.target.kind === "terminal" ? (
+                      <SquareTerminal />
+                    ) : result.target.kind === "provider" ? (
+                      <PlugZap />
+                    ) : result.target.kind === "account" ? (
+                      <UserRoundCog />
+                    ) : (
+                      <SettingsIcon />
+                    )
+                  }
+                  entity
+                  metadata={`${result.kind} \u00b7 ${result.metadata}`}
+                  onSelect={run(() => {
+                    quick.remember(result.id);
+                    return openQuickTarget(result.target);
+                  })}
+                >
+                  {result.label}
+                </Item>
+              ))}
+            </Command.Group>
+          ) : null}
+          {searching ? (
+            <LocatorResultItems
+              state={
+                current && locator.response
+                  ? {
+                      ...locator,
+                      response: {
+                        ...locator.response,
+                        results: {
+                          ...locator.response.results,
+                          items: locator.response.results.items.filter(
+                            (item) =>
+                              !quick.results.some(
+                                (result) =>
+                                  result.id === `${item.kind}:${item.entityId}` ||
+                                  ((result.target.kind === "agent" || result.target.kind === "thread") &&
+                                    result.target.thread.id === item.entityId),
+                              ),
+                          ),
+                        },
+                      },
+                    }
+                  : { ...locator, response: null, loading: true }
+              }
+              onOpen={(item) => run(() => openLocated(item.kind, item.entityId, "palette"))()}
+            />
+          ) : null}
+          {located > 0 || quick.results.length > 0 ? null : (
+            <Command.Empty className={styles.empty}>No matches. Try a name, file path, or setting.</Command.Empty>
+          )}
+
+          {/* Agents are coding terminals in Code, never Threads (AGENTS.md). Launching one comes first. */}
+          <Command.Group heading="Agents" className={styles.group}>
+            <Item
+              icon={<SquareTerminal />}
+              onSelect={run(launchAgent)}
+              keywords={["agent", "launch", "start", "claude", "codex", "cursor", "gemini", "coding agent"]}
+            >
+              New agent…
+            </Item>
+          </Command.Group>
+
+          {visible.has("threads") ? (
+            <Command.Group heading="Threads" className={styles.group}>
+              <Item
+                icon={<MessageSquarePlus />}
+                onSelect={run(() => {
+                  navigate("threads");
+                  threadsIntent.request("new");
+                })}
+              >
+                New thread
+              </Item>
+              <Item
+                icon={<Search />}
+                onSelect={run(() => {
+                  navigate("threads");
+                  threadsIntent.request("search");
+                })}
+              >
+                Search threads
+              </Item>
+            </Command.Group>
+          ) : null}
+          <Command.Group heading="Go to" className={styles.group}>
+            <Item
+              icon={<Globe />}
+              onSelect={run(openBrowser)}
+              keywords={["browser", "web", "preview", "website", "localhost"]}
+            >
+              Browser
+            </Item>
+            {views.map((id) => {
+              const meta = VIEWS[id];
+              const Icon = meta.icon;
+              return (
+                <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
+                  {meta.label}
+                </Item>
+              );
+            })}
+            {destinations.map((id) => {
+              const meta = SURFACES[id];
+              const Icon = meta.icon;
+              return (
+                <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
+                  {meta.label}
+                </Item>
+              );
+            })}
+          </Command.Group>
+
+          <Command.Group heading="Code" className={styles.group}>
+            {workspaces.active?.available ? (
+              <Item
+                icon={<SquareTerminal />}
+                onSelect={run(() => {
+                  navigate("code");
+                  return workspaces.createTerminal(null);
+                })}
+                shortcut={CODE_SHORTCUT_LABELS["new-terminal"]}
+                keywords={["shell", "console", "command line", workspaces.active.name]}
+              >
+                New terminal
+              </Item>
+            ) : null}
+            {kalTidy ? (
+              <>
+                <Item icon={<BroomSparkles />} onSelect={run(kalTidy.stopIdle)} keywords={KALTIDY_KEYWORDS}>
+                  KalTidy: Stop idle terminals
+                </Item>
+                <Item icon={<ListChecks />} onSelect={run(kalTidy.openReview)} keywords={KALTIDY_KEYWORDS}>
+                  KalTidy: Review terminals before stopping
+                </Item>
+              </>
+            ) : null}
+            <Item
+              icon={<FolderPlus />}
+              onSelect={run(async () => {
+                const opened = await workspaces.openFolder();
+                if (opened) navigate("code");
+              })}
+              keywords={["workspace", "project", "folder"]}
+            >
+              Open folder…
+            </Item>
+          </Command.Group>
+
+          {accountMatches.length > 0 && (selectedThread || activeWorkspace) ? (
+            <Command.Group heading="Accounts" className={styles.group}>
+              {accountMatches.flatMap((account) => {
+                const name = accountInlineLabel(account);
+                const keywords = [...accountKeywords(account), search.query.trim()];
+                // The default marker, then any sign-in caveat ("Default · Signed out").
+                const state = [
+                  account.isDefault ? "Default" : null,
+                  account.authenticationState === "authenticated" ? null : accountSignIn(account).label,
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                const badge = state || undefined;
+                const items = [];
+                if (selectedThread && selectedThread.providerId === account.providerId) {
+                  const current = selectedThread.providerAccountId === account.id;
+                  items.push(
+                    <Item
+                      key={`thread:${account.id}`}
+                      icon={<UserRoundCheck />}
+                      onSelect={
+                        current
+                          ? run(() => toast.show({ tone: "info", title: `This thread already uses ${name}` }))
+                          : rebindThread(account, selectedThread.threadId)
+                      }
+                      keywords={keywords}
+                      current={current}
+                      badge={badge}
+                    >
+                      {`Use ${name} for this thread`}
+                    </Item>,
+                  );
+                }
+                if (activeWorkspace) {
+                  items.push(
+                    <Item
+                      key={`workspace:${account.id}`}
+                      icon={<UserRoundCog />}
+                      onSelect={setWorkspaceDefault(account, activeWorkspace)}
+                      keywords={keywords}
+                      badge={badge}
+                    >
+                      {`Use ${name} in this workspace`}
+                    </Item>,
+                  );
+                }
+                return items;
+              })}
+            </Command.Group>
+          ) : null}
+
+          {visible.has("code") && workspaces.active?.available ? (
+            <Command.Group heading="Panes" className={styles.group}>
+              <Item
+                icon={<Columns2 />}
+                onSelect={pane({ kind: "split", axis: "horizontal" })}
+                shortcut={PANE_SHORTCUT_LABELS.splitRight}
+                keywords={["side by side", "layout"]}
+              >
+                Split pane right
+              </Item>
+              <Item
+                icon={<Rows2 />}
+                onSelect={pane({ kind: "split", axis: "vertical" })}
+                shortcut={PANE_SHORTCUT_LABELS.splitDown}
+                keywords={["stack", "layout"]}
+              >
+                Split pane down
+              </Item>
+              <Item icon={<Maximize2 />} onSelect={pane({ kind: "maximize" })} shortcut={PANE_SHORTCUT_LABELS.maximize}>
+                Maximize pane
+              </Item>
+              <Item icon={<ChevronsDownUp />} onSelect={pane({ kind: "restore" })} keywords={["unmaximize", "layout"]}>
+                Restore pane layout
+              </Item>
+              <Item icon={<Equal />} onSelect={pane({ kind: "even" })} shortcut={PANE_SHORTCUT_LABELS.even}>
+                Even out pane sizes
+              </Item>
+              <Item icon={<Undo2 />} onSelect={pane({ kind: "reopen" })} shortcut={PANE_SHORTCUT_LABELS.reopen}>
+                Reopen closed pane
+              </Item>
+              <Item
+                icon={<X />}
+                onSelect={pane({ kind: "close" })}
+                shortcut={PANE_SHORTCUT_LABELS.close}
+                keywords={["keeps running"]}
+              >
+                Close pane
+              </Item>
+              {(
+                [
+                  ["two", "Arrange 2 panes"],
+                  ["three", "Arrange 3 panes"],
+                  ["four", "Arrange 4 panes (2 × 2)"],
+                  ["six", "Arrange 6 panes (3 × 2)"],
+                ] as const
+              ).map(([preset, label]) => (
+                <Item
+                  key={preset}
+                  icon={<LayoutGrid />}
+                  onSelect={pane({ kind: "preset", preset })}
+                  keywords={["layout", "preset", "grid"]}
                 >
                   {label}
                 </Item>
-              ))
-            : null}
-        </Command.Group>
-
-        {visible.has("threads") ? (
-          <Command.Group heading="Threads" className={styles.group}>
-            <Item
-              icon={<MessageSquarePlus />}
-              onSelect={run(() => {
-                navigate("threads");
-                threadsIntent.request("new");
-              })}
-            >
-              New thread
-            </Item>
-            <Item
-              icon={<Search />}
-              onSelect={run(() => {
-                navigate("threads");
-                threadsIntent.request("search");
-              })}
-            >
-              Search threads
-            </Item>
-            {typed && !locatorVisible
-              ? threadItems(threads).map(({ thread, label, value }) => (
-                  <Item
-                    key={thread.id}
-                    icon={<MessageSquare />}
-                    value={value}
-                    thread
-                    onSelect={focusThread(thread)}
-                    keywords={[
-                      "thread",
-                      "go to",
-                      thread.name,
-                      thread.providerName,
-                      thread.accountLabel ?? "",
-                      thread.workspaceName,
-                    ].filter(Boolean)}
-                  >
-                    {label}
-                  </Item>
-                ))
-              : null}
-          </Command.Group>
-        ) : null}
-        <Command.Group heading="Go to" className={styles.group}>
-          {views.map((id) => {
-            const meta = VIEWS[id];
-            const Icon = meta.icon;
-            return (
-              <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
-                {meta.label}
-              </Item>
-            );
-          })}
-          {destinations.map((id) => {
-            const meta = SURFACES[id];
-            const Icon = meta.icon;
-            return (
-              <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
-                {meta.label}
-              </Item>
-            );
-          })}
-        </Command.Group>
-
-        <Command.Group heading="Code" className={styles.group}>
-          {workspaces.active?.available ? (
-            <Item
-              icon={<SquareTerminal />}
-              onSelect={run(() => {
-                navigate("code");
-                return workspaces.createTerminal(null);
-              })}
-              shortcut={CODE_SHORTCUT_LABELS["new-terminal"]}
-              keywords={["shell", "console", "command line", workspaces.active.name]}
-            >
-              New terminal
-            </Item>
+              ))}
+            </Command.Group>
           ) : null}
-          {kalTidy ? (
-            <>
-              <Item icon={<BroomSparkles />} onSelect={run(kalTidy.stopIdle)} keywords={KALTIDY_KEYWORDS}>
-                KalTidy: Stop idle terminals
-              </Item>
-              <Item icon={<ListChecks />} onSelect={run(kalTidy.openReview)} keywords={KALTIDY_KEYWORDS}>
-                KalTidy: Review terminals before stopping
-              </Item>
-            </>
+
+          {/* Z7-W2 surfaces as pane contents (Z7-W1 pane system), beside the focused pane. */}
+          {visible.has("code") && workspaces.active?.available ? (
+            <Command.Group heading="Show in a pane" className={styles.group}>
+              {viewVisible("home", info.flags.features) ? (
+                <Item
+                  icon={<House />}
+                  onSelect={run(() => openInPane({ kind: "widget", widgetId: HOME_WIDGET }, { placement: "split" }))}
+                  keywords={["pane", "widget", "today"]}
+                >
+                  Show Home in a pane
+                </Item>
+              ) : null}
+              {viewVisible("folder", info.flags.features) ? (
+                <Item
+                  icon={<FolderGit2 />}
+                  onSelect={run(() => openInPane({ kind: "widget", widgetId: PROJECT_WIDGET }, { placement: "split" }))}
+                  keywords={["pane", "widget", "files", workspaces.active.name]}
+                >
+                  Show the project page in a pane
+                </Item>
+              ) : null}
+              {rail?.enabled ? (
+                <Item
+                  icon={<FolderTree />}
+                  onSelect={run(() =>
+                    openInPane({ kind: "widget", widgetId: WORKSPACES_WIDGET }, { placement: "split" }),
+                  )}
+                  keywords={["pane", "widget", "rail"]}
+                >
+                  Show workspaces in a pane
+                </Item>
+              ) : null}
+              {featureVisible("git_core") ? (
+                <Item
+                  icon={<GitCommitHorizontal />}
+                  onSelect={run(() => {
+                    const workspaceId = workspaces.active?.id;
+                    return workspaceId
+                      ? openInPane({ kind: "git", workspaceId }, { workspaceId, placement: "split" })
+                      : null;
+                  })}
+                  keywords={["pane", "changes", "status", workspaces.active.name]}
+                >
+                  Show Git status in a pane
+                </Item>
+              ) : null}
+            </Command.Group>
           ) : null}
-          <Item
-            icon={<FolderPlus />}
-            onSelect={run(async () => {
-              const opened = await workspaces.openFolder();
-              if (opened) navigate("code");
-            })}
-            keywords={["workspace", "project", "folder"]}
-          >
-            Open folder…
-          </Item>
-          {switchTargets.map((workspace) => (
-            <Item
-              key={workspace.id}
-              icon={<ArrowRightLeft />}
-              onSelect={run(async () => {
-                if (await workspaces.activate(workspace.id)) navigate("code");
-              })}
-              keywords={["switch workspace", workspace.displayPath]}
-            >
-              {sharedNames.has(workspace.name)
-                ? `Switch to ${workspace.name} · ${workspace.displayPath}`
-                : `Switch to ${workspace.name}`}
-            </Item>
-          ))}
-        </Command.Group>
 
-        {accountMatches.length > 0 && (selectedThread || activeWorkspace) ? (
-          <Command.Group heading="Accounts" className={styles.group}>
-            {accountMatches.flatMap((account) => {
-              const name = accountInlineLabel(account);
-              const keywords = [...accountKeywords(account), search.query.trim()];
-              // The default marker, then any sign-in caveat ("Default · Signed out").
-              const state = [
-                account.isDefault ? "Default" : null,
-                account.authenticationState === "authenticated" ? null : accountSignIn(account).label,
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              const badge = state || undefined;
-              const items = [];
-              if (selectedThread && selectedThread.providerId === account.providerId) {
-                const current = selectedThread.providerAccountId === account.id;
-                items.push(
-                  <Item
-                    key={`thread:${account.id}`}
-                    icon={<UserRoundCheck />}
-                    onSelect={
-                      current
-                        ? run(() => toast.show({ tone: "info", title: `This thread already uses ${name}` }))
-                        : rebindThread(account, selectedThread.threadId)
-                    }
-                    keywords={keywords}
-                    current={current}
-                    badge={badge}
-                  >
-                    {`Use ${name} for this thread`}
-                  </Item>,
-                );
-              }
-              if (activeWorkspace) {
-                items.push(
-                  <Item
-                    key={`workspace:${account.id}`}
-                    icon={<UserRoundCog />}
-                    onSelect={setWorkspaceDefault(account, activeWorkspace)}
-                    keywords={keywords}
-                    badge={badge}
-                  >
-                    {`Use ${name} in this workspace`}
-                  </Item>,
-                );
-              }
-              return items;
-            })}
-          </Command.Group>
-        ) : null}
-
-        {visible.has("code") && workspaces.active?.available ? (
-          <Command.Group heading="Panes" className={styles.group}>
-            <Item
-              icon={<Columns2 />}
-              onSelect={pane({ kind: "split", axis: "horizontal" })}
-              shortcut={PANE_SHORTCUT_LABELS.splitRight}
-              keywords={["side by side", "layout"]}
-            >
-              Split pane right
+          <Command.Group heading="Appearance" className={styles.group}>
+            <Item icon={<Monitor />} onSelect={set({ theme: "system" })} current={settings.theme === "system"}>
+              Use system theme
+            </Item>
+            <Item icon={<Sun />} onSelect={set({ theme: "light" })} current={settings.theme === "light"}>
+              Use light theme
+            </Item>
+            <Item icon={<Moon />} onSelect={set({ theme: "dark" })} current={settings.theme === "dark"}>
+              Use dark theme
             </Item>
             <Item
-              icon={<Rows2 />}
-              onSelect={pane({ kind: "split", axis: "vertical" })}
-              shortcut={PANE_SHORTCUT_LABELS.splitDown}
-              keywords={["stack", "layout"]}
+              icon={<Rows3 />}
+              onSelect={set({ density: settings.density === "compact" ? "comfortable" : "compact" })}
             >
-              Split pane down
-            </Item>
-            <Item icon={<Maximize2 />} onSelect={pane({ kind: "maximize" })} shortcut={PANE_SHORTCUT_LABELS.maximize}>
-              Maximize pane
-            </Item>
-            <Item icon={<ChevronsDownUp />} onSelect={pane({ kind: "restore" })} keywords={["unmaximize", "layout"]}>
-              Restore pane layout
-            </Item>
-            <Item icon={<Equal />} onSelect={pane({ kind: "even" })} shortcut={PANE_SHORTCUT_LABELS.even}>
-              Even out pane sizes
-            </Item>
-            <Item icon={<Undo2 />} onSelect={pane({ kind: "reopen" })} shortcut={PANE_SHORTCUT_LABELS.reopen}>
-              Reopen closed pane
+              {settings.density === "compact" ? "Use comfortable density" : "Use compact density"}
             </Item>
             <Item
-              icon={<X />}
-              onSelect={pane({ kind: "close" })}
-              shortcut={PANE_SHORTCUT_LABELS.close}
-              keywords={["keeps running"]}
+              icon={<PanelLeft />}
+              onSelect={set({ sidebarCollapsed: !settings.sidebarCollapsed })}
+              shortcut={`${MOD_LABEL} B`}
             >
-              Close pane
+              {settings.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             </Item>
-            {(
-              [
-                ["two", "Arrange 2 panes"],
-                ["three", "Arrange 3 panes"],
-                ["four", "Arrange 4 panes (2 × 2)"],
-                ["six", "Arrange 6 panes (3 × 2)"],
-              ] as const
-            ).map(([preset, label]) => (
-              <Item
-                key={preset}
-                icon={<LayoutGrid />}
-                onSelect={pane({ kind: "preset", preset })}
-                keywords={["layout", "preset", "grid"]}
-              >
-                {label}
-              </Item>
-            ))}
-          </Command.Group>
-        ) : null}
-
-        {/* Z7-W2 surfaces as pane contents (Z7-W1 pane system), beside the focused pane. */}
-        {visible.has("code") && workspaces.active?.available ? (
-          <Command.Group heading="Show in a pane" className={styles.group}>
-            {viewVisible("home", info.flags.features) ? (
-              <Item
-                icon={<House />}
-                onSelect={run(() => openInPane({ kind: "widget", widgetId: HOME_WIDGET }, { placement: "split" }))}
-                keywords={["pane", "widget", "today"]}
-              >
-                Show Home in a pane
-              </Item>
-            ) : null}
-            {viewVisible("folder", info.flags.features) ? (
-              <Item
-                icon={<FolderGit2 />}
-                onSelect={run(() => openInPane({ kind: "widget", widgetId: PROJECT_WIDGET }, { placement: "split" }))}
-                keywords={["pane", "widget", "files", workspaces.active.name]}
-              >
-                Show the project page in a pane
-              </Item>
-            ) : null}
             {rail?.enabled ? (
               <Item
-                icon={<FolderTree />}
-                onSelect={run(() =>
-                  openInPane({ kind: "widget", widgetId: WORKSPACES_WIDGET }, { placement: "split" }),
-                )}
-                keywords={["pane", "widget", "rail"]}
+                icon={<PanelsLeftBottom />}
+                onSelect={run(rail.toggleHidden)}
+                shortcut={RAIL_SHORTCUT}
+                keywords={["workspaces", "rail", "projects"]}
               >
-                Show workspaces in a pane
+                {rail.hidden ? "Show the workspace rail" : "Hide the workspace rail"}
               </Item>
             ) : null}
-            {featureVisible("git_core") ? (
+          </Command.Group>
+
+          {kalvoice?.status ? (
+            <Command.Group heading="KalVoice" className={styles.group}>
               <Item
-                icon={<GitCommitHorizontal />}
-                onSelect={run(() => {
-                  const workspaceId = workspaces.active?.id;
-                  return workspaceId
-                    ? openInPane({ kind: "git", workspaceId }, { workspaceId, placement: "split" })
-                    : null;
-                })}
-                keywords={["pane", "changes", "status", workspaces.active.name]}
+                icon={<AudioLines />}
+                onSelect={run(() => kalvoice.setPanelVisible(!kalvoice.panel.visible))}
+                keywords={["voice", "push to talk", "orb"]}
               >
-                Show Git status in a pane
+                {kalvoice.panel.visible ? "Hide the KalVoice widget" : "Show the KalVoice widget"}
               </Item>
-            ) : null}
-          </Command.Group>
-        ) : null}
-
-        <Command.Group heading="Appearance" className={styles.group}>
-          <Item icon={<Monitor />} onSelect={set({ theme: "system" })} current={settings.theme === "system"}>
-            Use system theme
-          </Item>
-          <Item icon={<Sun />} onSelect={set({ theme: "light" })} current={settings.theme === "light"}>
-            Use light theme
-          </Item>
-          <Item icon={<Moon />} onSelect={set({ theme: "dark" })} current={settings.theme === "dark"}>
-            Use dark theme
-          </Item>
-          <Item
-            icon={<Rows3 />}
-            onSelect={set({ density: settings.density === "compact" ? "comfortable" : "compact" })}
-          >
-            {settings.density === "compact" ? "Use comfortable density" : "Use compact density"}
-          </Item>
-          <Item
-            icon={<PanelLeft />}
-            onSelect={set({ sidebarCollapsed: !settings.sidebarCollapsed })}
-            shortcut={`${MOD_LABEL} B`}
-          >
-            {settings.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          </Item>
-          {rail?.enabled ? (
-            <Item
-              icon={<PanelsLeftBottom />}
-              onSelect={run(rail.toggleHidden)}
-              shortcut={RAIL_SHORTCUT}
-              keywords={["workspaces", "rail", "projects"]}
-            >
-              {rail.hidden ? "Show the workspace rail" : "Hide the workspace rail"}
-            </Item>
+            </Command.Group>
           ) : null}
-        </Command.Group>
 
-        {kalvoice?.status ? (
-          <Command.Group heading="KalVoice" className={styles.group}>
-            <Item
-              icon={<AudioLines />}
-              onSelect={run(() => kalvoice.setPanelVisible(!kalvoice.panel.visible))}
-              keywords={["voice", "push to talk", "orb"]}
-            >
-              {kalvoice.panel.visible ? "Hide the KalVoice widget" : "Show the KalVoice widget"}
+          <Command.Group heading="Diagnostics" className={styles.group}>
+            <Item icon={<ClipboardCopy />} onSelect={run(diagnostics.copyReport)}>
+              Copy diagnostic report
+            </Item>
+            <Item icon={<FolderOpen />} onSelect={run(diagnostics.openLogs)}>
+              Open logs folder
+            </Item>
+            <Item icon={<KeyRound />} onSelect={run(diagnostics.checkSecureStore)}>
+              Check credential store
             </Item>
           </Command.Group>
-        ) : null}
-
-        <Command.Group heading="Diagnostics" className={styles.group}>
-          <Item icon={<ClipboardCopy />} onSelect={run(diagnostics.copyReport)}>
-            Copy diagnostic report
-          </Item>
-          <Item icon={<FolderOpen />} onSelect={run(diagnostics.openLogs)}>
-            Open logs folder
-          </Item>
-          <Item icon={<KeyRound />} onSelect={run(diagnostics.checkSecureStore)}>
-            Check credential store
-          </Item>
-        </Command.Group>
-      </Command.List>
-    </Command.Dialog>
+        </Command.List>
+        <footer className={styles.footer}>
+          <span>{quick.refreshing ? "Refreshing local results..." : "Search across your workspace"}</span>
+          <span>
+            <kbd>Up / Down</kbd> navigate <kbd>Enter</kbd> open <kbd>Esc</kbd> close
+          </span>
+        </footer>
+      </Command.Dialog>
+      {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}
+    </>
   );
 }
 
@@ -698,12 +712,28 @@ interface ItemProps {
   value?: string;
   /** A thread by name: a search result, never preferred as a named command. */
   thread?: boolean;
+  entity?: boolean;
+  metadata?: string;
 }
 
-function Item({ icon, children, onSelect, keywords, shortcut, current, badge, value, thread }: ItemProps) {
+function Item({
+  icon,
+  children,
+  onSelect,
+  keywords,
+  shortcut,
+  current,
+  badge,
+  value,
+  thread,
+  entity,
+  metadata,
+}: ItemProps) {
   return (
     <Command.Item
       className={styles.item}
+      forceMount={entity}
+      data-palette-entity={entity ? "" : undefined}
       onSelect={onSelect}
       value={value ?? children}
       {...(thread ? { "data-palette-thread": "" } : {})}
@@ -712,7 +742,10 @@ function Item({ icon, children, onSelect, keywords, shortcut, current, badge, va
       <span className={styles.itemIcon} aria-hidden="true">
         {icon}
       </span>
-      <span className={styles.itemLabel}>{children}</span>
+      <span className={styles.itemLabel}>
+        <span>{children}</span>
+        {metadata ? <span className={styles.itemMetadata}>{metadata}</span> : null}
+      </span>
       {current ? <span className={styles.current}>Current</span> : null}
       {badge ? <span className={styles.current}>{badge}</span> : null}
       {shortcut ? <kbd>{shortcut}</kbd> : null}
