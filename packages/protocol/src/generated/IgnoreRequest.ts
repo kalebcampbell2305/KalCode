@@ -4,7 +4,7 @@ import type { IgnoreScope } from "./IgnoreScope.ts";
 /**
  * `doctor_ignore` input.
  */
-export type IgnoreRequest = { findingCode: string, scope: IgnoreScope, 
+export type IgnoreRequest = { findingCode: string, scope: IgnoreScope,
 /**
  * `false` = un-ignore.
  */
