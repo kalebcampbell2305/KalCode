@@ -1,0 +1,27 @@
+# Account suggestions in Code
+
+Code shows a compact suggestion when the bound account needs sign-in, reports an account
+connection error, has been removed, or has less than 20% remaining in a current provider
+usage window. It reads the shared account registry and usage state. Unknown, stale, expired,
+malformed, or mismatched account readings never imply a limit. Model-specific Claude windows
+apply only to the agent's selected model.
+
+Alternatives must be active, signed-in accounts of the same provider, without a reported
+connection error or an in-progress check. Accounts with known low quota are excluded. Known
+headroom ranks before unavailable usage; the user's explicit default follows, then account
+name. **Why this account?** explains this ordering. Unexposed usage is labelled unavailable.
+The provider remains authoritative for actual model access and launch eligibility.
+
+**Continue with…?** previews the existing account confirmation. Only **Start with…** creates
+a fresh account-isolated coding session with the original workspace, directory, model,
+effort, and permissions. The original agent stays open under its original account; provider
+conversation history and credentials are not transferred. Account and permission checks run
+again through the canonical creation path. Dismissal and cancellation launch nothing.
+
+**Make … default** is a separate explicit action in Code's account picker. Suggestions and
+launch confirmations never write the default themselves. Failed preference writes remain
+visible and do not create a session.
+
+The React implementation is shared by Windows and macOS. Targeted coverage includes the
+pure ranking model, account isolation, changing account availability during confirmation,
+preference writes, and the Code browser flow with accessibility and compact-layout checks.

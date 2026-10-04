@@ -28,6 +28,7 @@ import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import { AccountUsageBadge } from "../../providers/AccountUsageBadge.tsx";
 import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPicker.tsx";
+import { PaneAccountSuggestion } from "./PaneAccountSuggestion.tsx";
 import {
   PaneAccountChip,
   type PaneAccountIdentity,
@@ -215,6 +216,7 @@ export const ProviderPane = memo(function ProviderPane({
         onHandOff={onHandOff}
         onContinue={onContinue}
       />
+      {onContinue ? <PaneAccountSuggestion thread={thread} account={account} onContinue={onContinue} /> : null}
       {confirmStop && !closePending ? (
         <div
           className={styles.confirm}
