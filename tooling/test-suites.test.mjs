@@ -25,7 +25,8 @@ const inventory = loadTestSuiteInventory();
 test("the registered Rust release gate includes the production speech engine and exact target ignore counts", () => {
   const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
-  // The retired standalone Manual Claude status probe was one intentional ignore on every platform.
+  // The official Cursor installation probe and the three real Claude Code tool-call checks are
+  // intentionally ignored on every platform.
   for (const [platform, expected] of [
     ["win32", 27],
     ["darwin", 27],
