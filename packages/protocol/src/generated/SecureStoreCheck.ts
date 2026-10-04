@@ -3,7 +3,7 @@
 /**
  * Result of an end-to-end check of the OS credential store.
  */
-export type SecureStoreCheck = { ok: boolean, backend: string, checkedAt: string, 
+export type SecureStoreCheck = { ok: boolean, backend: string, checkedAt: string,
 /**
  * User-safe explanation when the check failed.
  */

@@ -3,7 +3,7 @@ import type { Density } from "./Density.ts";
 import type { MotionPreference } from "./MotionPreference.ts";
 import type { ThemePreference } from "./ThemePreference.ts";
 
-export type Settings = { theme: ThemePreference, motion: MotionPreference, density: Density, sidebarCollapsed: boolean, 
+export type Settings = { theme: ThemePreference, motion: MotionPreference, density: Density, sidebarCollapsed: boolean,
 /**
  * The name the returning-user home greets (`profile.displayName`, Z7-W2). Set only by the
  * user in Settings; KalCode never reads the operating system's account name. `None` when
