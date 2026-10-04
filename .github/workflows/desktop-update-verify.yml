@@ -23,6 +23,8 @@ on:
       candidate_commit: { description: Commit of the live build, required: true, type: string }
       candidate_tag: { description: Optional private draft QA release tag for prepublication package proof (no feed delivery claim), required: false, type: string }
       expect_schema: { description: Expected candidate SQLite schema for package proof, required: false, default: '0', type: string }
+      clean_packet_sha256: { description: Optional SHA-256 of draft windows-clean-packet.zip for canonical clean install proof, required: false, type: string }
+      clean_verifier_sha256: { description: Exact candidate verify-windows.mjs SHA-256 inside the clean packet, required: false, type: string }
       live_schema: { description: Expected live SQLite schema for migration proof, required: false, default: '0', type: string }
       changes_data: { description: Require forward-only restore guard after schema migration, required: false, default: false, type: boolean }
 
@@ -64,6 +66,8 @@ jobs:
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           EXPECT_SCHEMA: ${{ inputs.expect_schema }}
+          CLEAN_PACKET_SHA256: ${{ inputs.clean_packet_sha256 }}
+          CLEAN_VERIFIER_SHA256: ${{ inputs.clean_verifier_sha256 }}
           LIVE_SCHEMA: ${{ inputs.live_schema }}
           CHANGES_DATA: ${{ inputs.changes_data }}
           GH_TOKEN: ${{ github.token }}
@@ -74,6 +78,7 @@ jobs:
           $packageArgs = @()
           if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA, '-LiveSchema', $env:LIVE_SCHEMA) }
           if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
+          if ($env:CLEAN_PACKET_SHA256 -or $env:CLEAN_VERIFIER_SHA256) { $packageArgs += @('-CleanPacketSha256', $env:CLEAN_PACKET_SHA256, '-CleanVerifierSha256', $env:CLEAN_VERIFIER_SHA256) }
           & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
             -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
             -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `

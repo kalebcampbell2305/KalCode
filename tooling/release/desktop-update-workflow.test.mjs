@@ -10,6 +10,7 @@ const workflowPath = fileURLToPath(new URL("../../.github/workflows/desktop-upda
 const scriptPath = fileURLToPath(new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url));
 const workflow = readFileSync(workflowPath, "utf8").replaceAll("\r", "");
 const script = readFileSync(scriptPath, "utf8").replaceAll("\r", "");
+const safety = readFileSync(new URL("../../.github/scripts/desktop-process-safety.ps1", import.meta.url), "utf8");
 
 test("desktop update workflow runs only on the dedicated desktop QA runner from main", () => {
   assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-desktop-qa\]/u);
@@ -42,16 +43,24 @@ test("desktop update script checks account, session and owner PC before any acti
 });
 
 test("desktop update script cleans up only after every guard passed", () => {
-  const passed = script.indexOf("$guardsPassed = $true");
+  const passed = script.indexOf("$script:QaStateOwned = $true");
   assert.ok(passed > script.indexOf("if ($SelfTest)"), "self-test never reaches cleanup");
   assert.ok(passed > script.indexOf("if ($env:COMPUTERNAME -eq 'DESKTOP-KOOB7VV')"), "guards run first");
-  assert.ok(passed < script.indexOf("Invoke-RestMethod"), "set before the first action");
-  assert.match(script, /if \(\$guardsPassed\) \{ try \{ \$receipt\.cleanupClean = Cleanup \}/u);
+  assert.ok(
+    passed > script.indexOf("QA state appeared during download"),
+    "profile must still be empty after all downloads",
+  );
+  assert.ok(
+    passed < script.indexOf("Run-Installer $live"),
+    "ownership is armed immediately before the first installer",
+  );
+  assert.match(script, /if \(\$script:QaStateOwned\) \{/u);
+  assert.match(script, /else \{ try \{ \$receipt\.cleanupClean = Cleanup \}/u);
   const cleanupCalls = script.match(/= Cleanup\b|\(Cleanup\)/gu) ?? [];
   assert.equal(
     cleanupCalls.length,
     2,
-    "cleanup runs only from the guarded finally block and the post-guard leftover check",
+    "cleanup runs only from the guarded finally block and successful update-to-clean-verifier transition",
   );
 });
 
@@ -65,11 +74,9 @@ test("desktop update script does not open kalcode.exe while the update is being 
 });
 
 test("desktop update script closes KalCode by its window, never by name", () => {
-  assert.match(script, /\$p\.CloseMainWindow\(\)/u);
-  assert.doesNotMatch(script, /taskkill/iu);
-  const forced = script.match(/Stop-Process -Force/gu) ?? [];
-  assert.equal(forced.length, 1, "the only forced stop is the counted QA-account cleanup");
-  assert.match(script, /forcedProcessActions \+= \$left\.Count; \$left \| Stop-Process -Force/u);
+  assert.match(safety, /\$p\.CloseMainWindow\(\)/u);
+  assert.match(safety, /\$p = Assert-OwnedApp \$procId/u);
+  assert.doesNotMatch(script + safety, /taskkill|Stop-Process|\.Kill\(/iu);
 });
 
 test("desktop update script refuses any account other than kalcode-qa", { skip: process.platform !== "win32" }, () => {

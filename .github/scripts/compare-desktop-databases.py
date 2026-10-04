@@ -64,6 +64,8 @@ def compare(live, candidate, version, schema, live_expected=None):
             live_expected = schema
         if live_schema != live_expected or candidate_schema != schema:
             differences.append("database schema does not match pinned live/candidate schemas")
+        if after.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            differences.append("candidate database has a foreign key violation")
         return dict(liveSchema=live_schema, candidateSchema=candidate_schema,
                     rowsKept=kept, tablesGrew=grew, differences=differences)
 

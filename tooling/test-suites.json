@@ -149,8 +149,8 @@
           "platforms": ["darwin", "linux"],
           "environment": {},
           "minimumExecuted": 171,
-          "skippedMinimum": 2,
-          "skippedMaximum": 2,
+          "skippedMinimum": 11,
+          "skippedMaximum": 11,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }

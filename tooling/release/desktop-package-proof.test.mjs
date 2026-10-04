@@ -23,7 +23,10 @@ test("package proof requires draft exact commit, signed exact bytes and build id
   }
   assert.match(source, /normal|production updater delivery/u);
   assert.doesNotMatch(source, /normalUpdaterDeliveryProven = \$true|Stop-Process|Invoke-RestMethod/u);
-  assert.match(source, /\$env:GH_TOKEN = \$null/u);
+  assert.match(
+    readFileSync(new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url), "utf8"),
+    /\$env:GH_TOKEN = \$null/u,
+  );
   assert.match(source, /candidateClose\.accepted/u);
   assert.match(source, /liveClose\.accepted/u);
 });
@@ -81,11 +84,10 @@ test("migration proof requires exact schemas, rollback floor and preserves unsuc
   assert.match(entry, /\$id\.Name -ine 'KALEBSLAPTOP\\kalcode-qa'/u);
   assert.match(source, /finally \{ \$env:GH_TOKEN = \$workflowToken \}/u);
   assert.match(entry, /canonical SID-bound QA profile paths/u);
-  assert.ok(entry.indexOf("QA profile is not clean") < entry.indexOf("$guardsPassed = $true"));
-  assert.match(entry, /if \(\$CandidateTag -and \(\$receipt\.status -ne 'PASS' -or @\(KalProcs\)\.Count\)\)/u);
-  const cleanup = entry.slice(entry.indexOf("function Cleanup"), entry.indexOf("# Cleanup closes"));
-  assert.ok(cleanup.indexOf("if (-not $CandidateTag)") < cleanup.indexOf("Stop-Process -Force"));
-  assert.match(entry, /normal close target is not the exact task-launched QA process/u);
+  assert.ok(entry.indexOf("QA profile is not clean") < entry.indexOf("$script:QaStateOwned = $true"));
+  assert.match(entry, /if \(\$CandidateTag -and \$receipt\.status -ne 'PASS'\)/u);
+  assert.doesNotMatch(entry, /Stop-Process|taskkill/u);
+  assert.match(entry, /Bind-App \$p \$i\.exe \$t/u);
 });
 
 test("PowerShell helper parses without executing any QA action", { skip: process.platform !== "win32" }, () => {

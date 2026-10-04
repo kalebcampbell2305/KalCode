@@ -41,7 +41,7 @@ function Get-CandidatePackage {
   $receipt.candidate.installerSignature = [string]$sig.Status
   $receipt.candidate.buildRecordSha256 = Sha (Join-Path $packet 'build.json')
   # The token is only for draft download; the application never inherits it.
-  $env:GH_TOKEN = $null
+  # Caller clears GH_TOKEN after downloading all draft assets, before launch.
   [ordered]@{ exe = $exe; signer = $sig.SignerCertificate.Subject }
 }
 
@@ -64,9 +64,7 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $before = Copy-ClosedDatabase 'db-live'
   $floorPath = Join-Path $Updates 'rollback-floor'
   $floorBefore = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { $null }
-  $installer = Start-Process -FilePath $package.exe -ArgumentList '/S', '/UPDATE' -WindowStyle Hidden -PassThru
-  if (-not $installer.WaitForExit(300000)) { Refuse 'candidate installer exceeded 300s; leaving owned process for diagnosis' }
-  if ($installer.ExitCode -ne 0) { Refuse "candidate installer failed: $($installer.ExitCode)" }
+  Run-Installer $package.exe @('/S', '/UPDATE')
   $receipt.applied = Installed
   if (-not $receipt.applied -or $receipt.applied.productVersion -cne $CandidateVersion -or $receipt.applied.fileVersion -cne $CandidateVersion -or $receipt.applied.signature -cne 'Valid') { Refuse 'installed candidate identity/signature mismatch' }
   $receipt.checks.install = $true
