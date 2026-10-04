@@ -3186,7 +3186,7 @@
 
 .lk-tabbar {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   flex: none;
   border-top: 1px solid var(--color-border);
   background: rgb(6 10 18 / 0.96);

@@ -11,6 +11,7 @@
 import { formatKalVoiceAllowance, getPlan, PLANS } from "@kalcode/protocol/plans";
 import { renderAdaptiveCanvas, renderCanvasTools } from "./canvas";
 import type { LiveIcon } from "./icons";
+import { renderMemory } from "./memory";
 import {
   type Account,
   type Agent,
@@ -139,7 +140,7 @@ function tabBar(state: State): string {
   const c = counts(state);
   return `<nav class="lk-tabbar" aria-label="KalCode">${SURFACES.map(
     (s) =>
-      `<button type="button" class="lk-tabbar__item" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-current="${state.surface === s.id ? "page" : "false"}">${icon(s.icon as LiveIcon)}<span>${s.id === "operations" ? "Ops" : s.label}</span>${s.id === "dashboard" && c.needs ? `<span class="lk-badge">${c.needs}</span>` : ""}</button>`,
+      `<button type="button" class="lk-tabbar__item" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-label="${s.label}" aria-current="${state.surface === s.id ? "page" : "false"}">${icon(s.icon as LiveIcon)}<span>${s.id === "operations" ? "Ops" : s.id === "memory" ? "Memory" : s.label}</span>${s.id === "dashboard" && c.needs ? `<span class="lk-badge">${c.needs}</span>` : ""}</button>`,
   ).join("")}</nav>`;
 }
 
@@ -809,6 +810,8 @@ function surface(state: State, cfg: RenderConfig): string {
       return threads();
     case "providers":
       return providers(state);
+    case "memory":
+      return renderMemory(state.memory, esc, isAvailable("unified-memory"));
     case "settings":
       return settings(cfg);
     default:

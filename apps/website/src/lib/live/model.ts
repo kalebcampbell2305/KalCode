@@ -14,9 +14,18 @@
  */
 import { DISPLAY_STATUS_LABEL, DISPLAY_STATUS_TONE } from "@kalcode/protocol/display-status";
 import { getPlanFeature } from "@kalcode/protocol/plans";
+import { type DemoMemory, initialMemory } from "./memory";
 
 export type ProviderId = "claude" | "codex";
-export type Surface = "dashboard" | "operations" | "kalvoice" | "code" | "threads" | "providers" | "settings";
+export type Surface =
+  | "dashboard"
+  | "operations"
+  | "kalvoice"
+  | "code"
+  | "threads"
+  | "providers"
+  | "memory"
+  | "settings";
 /** The display statuses the demo uses (a subset of the protocol's twelve). */
 export type AgentStatus =
   | "starting"
@@ -148,6 +157,7 @@ export interface Toast {
 export type VoiceState = "ready" | "listening" | "processing" | "executing" | "done";
 
 export interface State {
+  memory: DemoMemory;
   surface: Surface;
   frames: Frame[];
   tabs: Record<string, Tab>;
@@ -215,6 +225,12 @@ export const SURFACES: readonly { id: Surface; label: string; icon: string; hint
   },
   { id: "kalvoice", label: "KalVoice", icon: "kalvoice", hint: "Control KalCode by voice." },
   { id: "threads", label: "Threads", icon: "threads", hint: "Chat-style conversations. Agents live in Code." },
+  {
+    id: "memory",
+    label: "Unified Memory",
+    icon: "memory",
+    hint: "Useful project knowledge, shared across agents and sessions.",
+  },
   { id: "providers", label: "Providers", icon: "providers", hint: "Connect multiple Claude Code and Codex accounts." },
 ];
 
@@ -535,6 +551,7 @@ export function initialState(): State {
     seq: 10,
     tour: null,
     launches: 0,
+    memory: initialMemory(),
   };
   return state;
 }
