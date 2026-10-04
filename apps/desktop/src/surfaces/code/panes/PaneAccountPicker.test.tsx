@@ -12,9 +12,15 @@ const state = vi.hoisted(() => ({
   validationErrors: new Map<string, string>(),
   reload: vi.fn(() => new Promise(() => {})),
   refreshUsage: vi.fn(),
+  supersede: vi.fn(),
+  replace: vi.fn(),
+  setDefault: vi.fn(),
   loadError: null,
 }));
 vi.mock("../../providers/ProviderAccountSessions.tsx", () => ({ useOptionalProviderAccountSessions: () => state }));
+vi.mock("../../../runtime/RuntimeProvider.tsx", () => ({
+  useRuntime: () => ({ client: { setDefaultProviderAccount: state.setDefault } }),
+}));
 const thread = {
   id: "original",
   providerId: "codex",
@@ -118,4 +124,35 @@ it("keeps the original bound identity and shows launch failures without claiming
   expect(screen.getByText("Current")).toBeVisible();
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("heading", { name: "Account & usage" })).not.toBeInTheDocument();
+});
+
+it("remembers a default only after a separate explicit choice, without launching or rebinding", async () => {
+  state.setDefault.mockResolvedValue(account("work", { isDefault: true }));
+  const { user, onContinue } = await open();
+  expect(state.setDefault).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Make work default" }));
+  expect(state.setDefault).toHaveBeenCalledExactlyOnceWith("work");
+  expect(state.replace).toHaveBeenCalledWith(expect.objectContaining({ id: "work", isDefault: true }));
+  expect(screen.getByRole("status")).toHaveTextContent("work is now your default");
+  expect(onContinue).not.toHaveBeenCalled();
+});
+
+it("never displays a mismatched account's usage or plan in the picker", async () => {
+  const work = state.usage.get("work");
+  if (!work) throw new Error("Missing usage fixture");
+  state.usage.set("personal", { ...work, plan: "Other account plan" });
+  const { user } = await open();
+  const personal = screen.getByRole("button", { name: /personal.*Codex/ });
+  expect(within(personal).queryByText("42% left")).not.toBeInTheDocument();
+  await user.click(personal);
+  expect(screen.queryByText(/Other account plan/)).not.toBeInTheDocument();
+});
+
+it("reports a failed default write without claiming success or starting a session", async () => {
+  state.setDefault.mockRejectedValue(new Error("Account no longer available"));
+  const { user, onContinue } = await open();
+  await user.click(screen.getByRole("button", { name: "Make work default" }));
+  expect(screen.getByRole("status")).toHaveTextContent("Default was not changed");
+  expect(state.replace).not.toHaveBeenCalled();
+  expect(onContinue).not.toHaveBeenCalled();
 });

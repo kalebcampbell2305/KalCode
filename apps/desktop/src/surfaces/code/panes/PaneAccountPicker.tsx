@@ -4,10 +4,12 @@ import { ChevronDown } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useId, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
+import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { accountProviderName } from "../../../shell/accountCommands.ts";
 import { AccountUsageDetails, UsageMeter } from "../../providers/AccountUsageBadge.tsx";
 import { accountName, accountSessionState, sortAccounts } from "../../providers/accountIdentity.ts";
-import { limitingWindow, notChecked, resetsIn } from "../../providers/accountUsage.ts";
+import { usageForAccount } from "../../providers/accountSuggestions.ts";
+import { limitingWindow, resetsIn } from "../../providers/accountUsage.ts";
 import { useOptionalProviderAccountSessions } from "../../providers/ProviderAccountSessions.tsx";
 import styles from "./PaneAccountPicker.module.css";
 import { type PaneAccountIdentity, paneAccountLabel } from "./PaneParts.tsx";
@@ -16,10 +18,12 @@ export interface PaneAccountPickerProps {
   thread: ThreadSummary;
   account: PaneAccountIdentity | null;
   onContinue: (threadId: string, accountId: string) => Promise<void>;
+  suggestion?: { accountId: string | null; label: string };
 }
 
 /** Selection is only a preview. A confirmed launch creates a new account-isolated runtime. */
-export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPickerProps) {
+export function PaneAccountPicker({ thread, account, onContinue, suggestion }: PaneAccountPickerProps) {
+  const { client } = useRuntime();
   const sessions = useOptionalProviderAccountSessions();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -27,6 +31,8 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
   const [error, setError] = useState<string | null>(null);
   const submitting = useRef(false);
   const heading = useId();
+  const [defaultBusy, setDefaultBusy] = useState(false);
+  const [defaultMessage, setDefaultMessage] = useState<string | null>(null);
   const label = account ? paneAccountLabel(account) : "Unmanaged account";
   const accounts = sortAccounts(
     (sessions?.accounts ?? []).filter((item) => item.providerId === thread.providerId && item.archivedAt === null),
@@ -36,6 +42,25 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
   const canContinue =
     target && target.id !== thread.providerAccountId && target.authenticationState !== "not_authenticated";
   const blocked = thread.archivedAt !== null || thread.permissionMode === "custom";
+  const usageFor = (id: string) => usageForAccount(sessions?.usage ?? new Map(), id);
+
+  const makeDefault = async () => {
+    if (!details || submitting.current) return;
+    submitting.current = true;
+    setDefaultBusy(true);
+    setDefaultMessage(null);
+    try {
+      sessions?.supersede(details.id);
+      const saved = await client.setDefaultProviderAccount(details.id);
+      sessions?.replace(saved);
+      setDefaultMessage(`${accountName(saved)} is now your default for new ${thread.providerName} sessions.`);
+    } catch (cause) {
+      setDefaultMessage(`Default was not changed: ${toKalCodeError(cause).message}`);
+    } finally {
+      submitting.current = false;
+      setDefaultBusy(false);
+    }
+  };
 
   const confirm = async () => {
     if (!canContinue || blocked || submitting.current) return;
@@ -60,8 +85,9 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
         if (submitting.current) return;
         setOpen(next);
         if (next) {
-          setSelected(null);
+          setSelected(suggestion?.accountId ?? null);
           setError(null);
+          setDefaultMessage(null);
           void sessions?.reload();
           sessions?.refreshUsage();
         }
@@ -70,12 +96,12 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
       <Popover.Trigger asChild>
         <button
           type="button"
-          className={styles.trigger}
+          className={suggestion ? styles.suggestionTrigger : styles.trigger}
           data-pane-account
-          aria-label={`${label}. Switch ${thread.providerName} account`}
+          aria-label={suggestion?.label ?? `${label}. Switch ${thread.providerName} account`}
           title="Switch account for a new session"
         >
-          <span>{label}</span>
+          <span>{suggestion?.label ?? label}</span>
           <ChevronDown aria-hidden="true" />
         </button>
       </Popover.Trigger>
@@ -114,7 +140,7 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
                 sessions?.checking.has(item.id),
                 sessions?.validationErrors.get(item.id),
               );
-              const usage = sessions?.usage.get(item.id) ?? notChecked(item.id);
+              const usage = usageFor(item.id);
               const window = usage.status === "fresh" || usage.status === "stale" ? limitingWindow(usage) : null;
               return (
                 <button
@@ -123,7 +149,7 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
                   className={styles.row}
                   data-current={current || undefined}
                   aria-pressed={(selected ?? thread.providerAccountId) === item.id}
-                  disabled={busy || !health.usable}
+                  disabled={busy || defaultBusy || !health.usable}
                   onClick={() => {
                     setSelected(item.id);
                     setError(null);
@@ -134,6 +160,7 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
                     <span className={styles.name}>
                       {accountName(item)}
                       {current ? <span className={styles.current}>Current</span> : null}
+                      {item.isDefault ? <span className={styles.current}>Default</span> : null}
                     </span>
                     <span className={styles.secondary}>
                       {accountProviderName(item.providerId)} · {health.label}
@@ -153,10 +180,17 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
           </fieldset>
           {details ? (
             <div className={styles.details}>
-              <AccountUsageDetails
-                account={details}
-                usage={sessions?.usage.get(details.id) ?? notChecked(details.id)}
-              />
+              <AccountUsageDetails account={details} usage={usageFor(details.id)} />
+              {!details.isDefault && details.authenticationState === "authenticated" ? (
+                <Button size="sm" variant="ghost" busy={defaultBusy} disabled={busy} onClick={() => void makeDefault()}>
+                  Make {accountName(details)} default
+                </Button>
+              ) : null}
+              {defaultMessage ? (
+                <p role="status" className={styles.note}>
+                  {defaultMessage}
+                </p>
+              ) : null}
             </div>
           ) : null}
           {canContinue ? (
@@ -169,10 +203,10 @@ export function PaneAccountPicker({ thread, account, onContinue }: PaneAccountPi
               {blocked ? <p role="status">This session cannot be continued with its current settings.</p> : null}
               {error ? <p role="alert">{error}</p> : null}
               <div className={styles.actions}>
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setSelected(null)}>
+                <Button size="sm" variant="ghost" disabled={busy || defaultBusy} onClick={() => setSelected(null)}>
                   Cancel
                 </Button>
-                <Button size="sm" busy={busy} disabled={blocked} onClick={() => void confirm()}>
+                <Button size="sm" busy={busy} disabled={blocked || defaultBusy} onClick={() => void confirm()}>
                   Start with {accountName(target)}
                 </Button>
               </div>
