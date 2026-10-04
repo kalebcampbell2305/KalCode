@@ -62,6 +62,11 @@ jobs:
       - name: Prepare portable Python
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-desktop-python.ps1
+      # build:e2e compiles kalvoice-whisper: whisper-rs-sys needs CMake and libclang (bindgen),
+      # which the gate machine lacks. Pinned, hash-checked official archives, scoped to this run.
+      - name: Prepare portable CMake and libclang
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-portable-cmake.ps1
       - name: Gate
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
@@ -76,6 +81,10 @@ jobs:
         if: always()
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-desktop-python.ps1 -Cleanup
+      - name: Remove this run's portable CMake and libclang
+        if: always()
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-portable-cmake.ps1 -Cleanup
 
   macos:
     name: Gate (macOS, Rust)
