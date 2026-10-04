@@ -14,12 +14,12 @@ normal close cannot be proven. No test hooks, no seeded data: the public signed 
 Writes <OutDir>\desktop-update-receipt.json. Exit 0 = PASS.
 Optional -CandidateTag qa-... -ExpectSchema N downloads a private draft's exact signed package and proves a manual
 /S /UPDATE transition plus actual SQLite preservation. That mode never claims normal updater delivery and is only
-for releases with unchanged application data schema and updater behavior.
+for unchanged updater behavior. Migrations additionally require -ChangesData -LiveSchema N.
 #>
 param(
   [string]$LiveUrl = '', [string]$LiveSha256 = '', [string]$LiveVersion = '',
   [string]$CandidateVersion = '', [string]$CandidateSha256 = '', [string]$CandidateCommit = '',
-  [string]$CandidateTag = '', [int]$ExpectSchema = 0,
+  [string]$CandidateTag = '', [int]$ExpectSchema = 0, [int]$LiveSchema = 0, [switch]$ChangesData,
   [string]$FeedUrl = 'https://kalcoded.com/releases/updater/stable.json',
   [int]$StageTimeoutSec = 900,
   [Parameter(Mandatory)][string]$OutDir,
@@ -55,7 +55,10 @@ function Read-Json([string]$p) { if (Test-Path -LiteralPath $p) { try { (Read-Sh
 function KalProcs { @(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) }
 function InstallDir {
   $u = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode' -ErrorAction SilentlyContinue
-  if (-not $u) { return $null }; $d = ([string]$u.InstallLocation).Trim('"'); if (-not $d) { $d = Split-Path -Parent ([string]$u.UninstallString).Trim('"') }; $d
+  if (-not $u) { return $null }; $d = ([string]$u.InstallLocation).Trim('"'); if (-not $d) { $d = Split-Path -Parent ([string]$u.UninstallString).Trim('"') }
+  if ($CandidateTag -and [IO.Path]::GetFullPath($d) -notin @((Join-Path $env:LOCALAPPDATA 'KalCode'), (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'))) { Refuse 'package install path escapes the dedicated QA profile' }
+  if ($CandidateTag -and (Test-Path -LiteralPath $d) -and ((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Refuse 'package install path is a reparse point' }
+  $d
 }
 function Installed {
   $d = InstallDir; if (-not $d) { return $null }
@@ -87,11 +90,13 @@ function Launch([string]$version) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while ($sw.Elapsed.TotalSeconds -lt 60) { $p.Refresh(); if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }; Start-Sleep -Seconds 1 }
   if ($p.MainWindowHandle -eq [IntPtr]::Zero) { Refuse "PID $($p.Id) has no main window after 60s" }
+  if ($CandidateTag) { $script:PackageProcess = @{ pid = $p.Id; startedAt = $p.StartTime.ToUniversalTime().ToString('o'); exe = $i.exe } }
   [ordered]@{ pid = $p.Id; startedAt = $p.StartTime.ToUniversalTime().ToString('o'); window = [int64]$p.MainWindowHandle; appStarted = $line }
 }
 function Close-Exact([int]$procId, [int]$sec = 120) {
   $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
   if (-not $p) { return [ordered]@{ pid = $procId; method = 'already-exited'; exited = $true; seconds = 0 } }
+  if ($CandidateTag -and (-not $script:PackageProcess -or $script:PackageProcess.pid -ne $procId -or $p.SessionId -ne $me -or $p.StartTime.ToUniversalTime().ToString('o') -cne $script:PackageProcess.startedAt -or $p.Path -cne $script:PackageProcess.exe)) { Refuse 'normal close target is not the exact task-launched QA process' }
   $requested = [DateTime]::UtcNow; $accepted = $p.CloseMainWindow()
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while ($sw.Elapsed.TotalSeconds -lt $sec -and (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 500 }
@@ -111,11 +116,18 @@ function Leftovers {
   }
 }
 function Cleanup {
+  if ($CandidateTag -and ($receipt.status -ne 'PASS' -or @(KalProcs).Count)) { Refuse 'preserve unsuccessful package proof and any running QA process; no forced cleanup' }
   # This is the dedicated QA account: after normal closes, any remaining KalCode process of this session is stopped so the
   # next run starts clean. Each forced action is counted in the receipt.
-  foreach ($p in @(KalProcs | Where-Object { $_.Name -eq 'kalcode' })) { $null = Close-Exact $p.Id 30 }
-  $left = @(KalProcs); if ($left.Count) { $receipt.forcedProcessActions += $left.Count; $left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
+  if (-not $CandidateTag) {
+    foreach ($p in @(KalProcs | Where-Object { $_.Name -eq 'kalcode' })) { $null = Close-Exact $p.Id 30 }
+    $left = @(KalProcs); if ($left.Count) { $receipt.forcedProcessActions += $left.Count; $left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
+  }
   $d = InstallDir
+  if ($CandidateTag -and $d) {
+    $uninstallerSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $d 'uninstall.exe')
+    if ($uninstallerSignature.Status -ne 'Valid' -or $uninstallerSignature.SignerCertificate.Subject -cne $candidatePackage.signer) { Refuse 'QA cleanup uninstaller signature/publisher mismatch' }
+  }
   if ($d) { $un = Join-Path $d 'uninstall.exe'; if (Test-Path -LiteralPath $un) { $p = Start-Process -FilePath $un -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait; Start-Sleep -Seconds 8; Note "uninstall exit $($p.ExitCode)" } }
   foreach ($k in 'HKCU:\Software\KalCode', 'HKCU:\Software\Classes\kalcode', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode') {
     if (Test-Path -LiteralPath $k) { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction SilentlyContinue }
@@ -126,6 +138,14 @@ function Cleanup {
   $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   # WebView2 and the uninstaller can hold files for a few seconds after exit, so retry the data removal briefly.
   $paths = @($AppData, $LocalData, (Join-Path $env:LOCALAPPDATA 'KalCode'), (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk'), (Join-Path $programs 'KalCode.lnk'), (Join-Path $programs 'KalCode'))
+  if ($CandidateTag) {
+    foreach ($path in $paths) {
+      if (-not [IO.Path]::GetFullPath($path).StartsWith($env:USERPROFILE + '\', [StringComparison]::OrdinalIgnoreCase)) { Refuse 'cleanup path escapes the QA profile' }
+      for ($node = $path; $node -and $node -ne $env:USERPROFILE; $node = Split-Path -Parent $node) {
+        if ((Test-Path -LiteralPath $node) -and ((Get-Item -LiteralPath $node -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Refuse 'cleanup path contains a reparse point' }
+      }
+    }
+  }
   for ($attempt = 0; $attempt -lt 10; $attempt++) {
     foreach ($p in $paths) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue } }
     if (-not @($paths | Where-Object { Test-Path -LiteralPath $_ }).Count) { break }
@@ -151,6 +171,19 @@ try {
   if ($LiveUrl -notmatch '^https://kalcoded\.com/releases/updater/stable/[A-Za-z0-9._+%/-]{1,200}\.exe$') { Refuse 'LiveUrl must be an immutable kalcoded.com updater URL' }
   if ($FeedUrl -cne 'https://kalcoded.com/releases/updater/stable.json') { Refuse 'FeedUrl must be the production Stable feed' }
   if ($CandidateTag -and ($CandidateTag -cnotmatch '^qa-[A-Za-z0-9][A-Za-z0-9._-]{1,100}$' -or $ExpectSchema -lt 1)) { Refuse 'package proof requires a qa- draft tag and expected schema' }
+  if ($ChangesData -and (-not $CandidateTag -or $LiveSchema -lt 1 -or $ExpectSchema -le $LiveSchema)) { Refuse 'migration proof requires a draft and increasing pinned live/candidate schemas' }
+  if ($CandidateTag -and $LiveSchema -gt 0 -and $LiveSchema -ne $ExpectSchema -and -not $ChangesData) { Refuse 'schema changes require the restore guard proof' }
+  if ($CandidateTag) {
+    if ($id.Name -cne 'KALEBSLAPTOP\kalcode-qa' -or $env:COMPUTERNAME -cne 'KALEBSLAPTOP') { Refuse 'package proof requires the exact dedicated laptop QA account' }
+    $profile = Get-CimInstance Win32_UserProfile -Filter ("SID = '" + $id.User.Value + "'")
+    if ($profile.LocalPath -cne 'C:\Users\kalcode-qa' -or $env:USERPROFILE -cne $profile.LocalPath -or $env:APPDATA -cne ($profile.LocalPath + '\AppData\Roaming') -or $env:LOCALAPPDATA -cne ($profile.LocalPath + '\AppData\Local')) { Refuse 'package proof requires canonical SID-bound QA profile paths' }
+    foreach ($path in $env:APPDATA, $env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs')) {
+      for ($node = $path; $node -and $node -ne 'C:\Users'; $node = Split-Path -Parent $node) {
+        if ((Test-Path -LiteralPath $node) -and ((Get-Item -LiteralPath $node -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Refuse 'QA profile contains a reparse point' }
+      }
+    }
+    if ((Leftovers).Values -contains $true) { Refuse 'QA profile is not clean; preserve unknown residue for separately reviewed recovery' }
+  }
   if ($SelfTest) { $receipt.status = 'SELFTEST'; Save; Write-Host 'SELFTEST PASS'; exit 0 }
   if (@(KalProcs).Count) { Refuse 'QA session already has KalCode processes; preserve them and retry once idle' }
   $guardsPassed = $true
