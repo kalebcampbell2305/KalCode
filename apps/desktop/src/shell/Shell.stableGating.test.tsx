@@ -99,7 +99,9 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
     const palette = await openPalette(user);
     expect(palette.getByRole("combobox")).toHaveAttribute(
       "placeholder",
-      stable ? "Search workspaces and commands" : "Search threads, workspaces and commands",
+      stable
+        ? "Search anything: workspaces, agents, files, settings..."
+        : "Search anything: workspaces, agents, files, settings...",
     );
     await user.type(palette.getByRole("combobox"), "theme");
     if (stable) {

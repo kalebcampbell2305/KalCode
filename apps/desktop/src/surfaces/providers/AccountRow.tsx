@@ -114,7 +114,13 @@ export function AccountRow({
   };
 
   return (
-    <section className={styles.row} aria-label={accountFullLabel(account)} data-expanded={expanded || undefined}>
+    <section
+      id={`provider-account-${account.id}`}
+      tabIndex={-1}
+      className={styles.row}
+      aria-label={accountFullLabel(account)}
+      data-expanded={expanded || undefined}
+    >
       <div className={styles.rowMain}>
         <div className={styles.cellName}>
           <span className={styles.nameLine}>

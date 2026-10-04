@@ -87,14 +87,25 @@ export function ProviderAccountsView({
   // `connect`, open its add form. Handled once the accounts (and so the sections) are on screen.
   useEffect(() => {
     if (!request || !loaded) return;
-    consumeProviderAccountsRequest(request.nonce);
     setFilter("");
     if (
       request.connect &&
       !(request.providerId === "cursor" && accounts?.some((account) => account.providerId === "cursor"))
     )
       setConnecting(request.providerId);
-    document.getElementById(sectionId(request.providerId))?.scrollIntoView?.({ block: "start" });
+    // Wait for clearing an existing filter to render the exact requested account.
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(
+        request.accountId ? `provider-account-${request.accountId}` : sectionId(request.providerId),
+      );
+      target?.scrollIntoView?.({ block: "start" });
+      if (target && !request.connect) {
+        target.tabIndex = -1;
+        target.focus({ preventScroll: true });
+      }
+      consumeProviderAccountsRequest(request.nonce);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [request, loaded, accounts]);
 
   // Setup's Sign in: this view owns the browser sign-in (its row shows progress and Cancel), so it
