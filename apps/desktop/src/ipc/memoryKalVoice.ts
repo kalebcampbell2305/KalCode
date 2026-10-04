@@ -249,11 +249,17 @@ const PROVIDER_IDS: Record<string, string> = {
   claude: "claude-code",
   "claude code": "claude-code",
   codex: "codex",
+  cursor: "cursor",
   gemini: "gemini-cli",
   "gemini cli": "gemini-cli",
 };
-const PROVIDER_NAMES: Record<string, string> = { "claude-code": "Claude", codex: "Codex", "gemini-cli": "Gemini" };
-const PROVIDER = "(claude code|claude|codex|gemini cli|gemini)";
+const PROVIDER_NAMES: Record<string, string> = {
+  "claude-code": "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+  "gemini-cli": "Gemini",
+};
+const PROVIDER = "(claude code|claude|codex|cursor|gemini cli|gemini)";
 const PANE = "(?: (?:the|this|my|current))?(?: (?:pane|panes|screen|view|window))?";
 
 /** Pane layout commands (Z7-W1), mirroring the native pane rules. Layout only. */
@@ -443,7 +449,7 @@ function understand(text: string): Parsed | null {
   const bare = SURFACE_WORDS[t];
   if (bare) return navigate(bare, false);
   if (
-    /^(open|start|create|launch|new) (\w+ )?(\w+ )?(codex|codecs|claude|gemini)( code| cli)? (threads?|sessions?|agents?)$/.test(
+    /^(open|start|create|launch|new) (\w+ )?(\w+ )?(codex|codecs|cursor|claude|gemini)( code| cli)? (threads?|sessions?|agents?)$/.test(
       t,
     )
   ) {

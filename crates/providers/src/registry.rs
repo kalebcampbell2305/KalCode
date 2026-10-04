@@ -321,7 +321,8 @@ mod tests {
             [
                 ("claude-code".to_owned(), None),
                 ("codex".to_owned(), None),
-                ("gemini-cli".to_owned(), None)
+                ("gemini-cli".to_owned(), None),
+                ("cursor".to_owned(), None)
             ]
         );
     }

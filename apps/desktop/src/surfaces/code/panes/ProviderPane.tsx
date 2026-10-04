@@ -468,7 +468,7 @@ function PaneHeader({
           <span className={styles.identity} title={identityTitle} data-pane-identity>
             <span className="visually-hidden">{providerName}</span>
             {account ? <PaneAccountChip account={account} /> : null}
-            {model ? (
+            {model && thread.providerId !== "cursor" ? (
               <span className={`${styles.seg} ${styles.model}`} data-pane-model>
                 {model}
               </span>
@@ -567,6 +567,11 @@ function PaneHeader({
             </Button>
           ) : null}
         </div>
+        {model && thread.providerId === "cursor" ? (
+          <span className={styles.exactModel} data-pane-model title={model}>
+            {model}
+          </span>
+        ) : null}
       </header>
       {editing && error ? (
         <div id={`${inputId}-error`} className={styles.titleError} role="alert">

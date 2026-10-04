@@ -9,5 +9,6 @@ import type { ProviderId } from "./generated/index.ts";
 export const KNOWN_PROVIDERS = {
   claudeCode: "claude-code",
   codex: "codex",
+  cursor: "cursor",
   geminiCli: "gemini-cli",
 } as const satisfies Record<string, ProviderId>;

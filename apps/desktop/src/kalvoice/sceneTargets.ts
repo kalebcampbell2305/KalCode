@@ -157,6 +157,7 @@ function namedScore(query: string, target: VoiceSceneTarget): number {
 function readableProvider(providerId: string | null | undefined): string | null {
   if (!providerId) return null;
   if (providerId === "claude-code") return "Claude Code";
+  if (providerId === "cursor") return "Cursor";
   if (providerId === "gemini-cli") return "Gemini CLI";
   return providerId
     .split(/[-_\s]+/)

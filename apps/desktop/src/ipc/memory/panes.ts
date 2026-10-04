@@ -78,18 +78,20 @@ function invalid(code: string, message: string): never {
   return fail({ category: "validation", code, message, retryable: false });
 }
 
-type PaneKind = "claude-code" | "codex" | "gemini-cli";
+type PaneKind = "claude-code" | "codex" | "gemini-cli" | "cursor";
 
-const PANE_PROVIDERS: readonly PaneKind[] = ["claude-code", "codex", "gemini-cli"];
+const PANE_PROVIDERS: readonly PaneKind[] = ["claude-code", "codex", "gemini-cli", "cursor"];
 /** Provider-native efforts a pane accepts (mirrors native `pane_effort`; Gemini CLI has none). */
 const PANE_EFFORTS: Record<PaneKind, readonly string[]> = {
   "claude-code": ["low", "medium", "high", "xhigh", "max"],
   codex: ["minimal", "low", "medium", "high", "xhigh"],
   "gemini-cli": [],
+  cursor: [],
 };
 const PROVIDER_NAMES: Record<PaneKind, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   "gemini-cli": "Gemini CLI",
 };
 
@@ -325,7 +327,8 @@ export function createPanesMemory(options: {
       };
       created = p;
       panes.set(thread.id, p);
-      const limited = kind === "gemini-cli" || (kind === "claude-code" && config.hookChannel === "limited");
+      const limited =
+        kind === "gemini-cli" || kind === "cursor" || (kind === "claude-code" && config.hookChannel === "limited");
       later(p, 40, () => {
         print(p, `${MEMORY_PANE_BANNER}\r\n> `);
         if (kind === "codex") {

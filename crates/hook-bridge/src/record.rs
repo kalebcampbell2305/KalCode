@@ -35,6 +35,7 @@ pub enum HookEvent {
     SubagentStop,
     SessionEnd,
     CodexNotify,
+    Cursor,
 }
 
 impl HookEvent {
@@ -69,13 +70,14 @@ impl HookEvent {
             Self::SubagentStop => "SubagentStop",
             Self::SessionEnd => "SessionEnd",
             Self::CodexNotify => "codex-notify",
+            Self::Cursor => "cursor",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
         Self::CLAUDE
             .into_iter()
-            .chain([Self::CodexNotify])
+            .chain([Self::CodexNotify, Self::Cursor])
             .find(|e| e.as_str() == name)
     }
 
@@ -128,6 +130,89 @@ pub struct HookRecord {
     pub codex_type: Option<String>,
     /// Opaque Codex root-turn id used only to correlate and deduplicate completion status.
     pub codex_turn_id: Option<String>,
+    /// Filtered Cursor lifecycle metadata; no transcripts, tool arguments, or credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CursorHook>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CursorHook {
+    pub event: String,
+    pub generation_id: Option<String>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+}
+
+pub const CURSOR_EVENTS: &[&str] = &[
+    "sessionStart",
+    "sessionEnd",
+    "beforeSubmitPrompt",
+    "postToolUse",
+    "postToolUseFailure",
+    "stop",
+];
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cursor_records_filter_content_and_bind_event_session_and_generation() {
+        let value = json!({
+            "hook_event_name":"stop", "conversation_id":"session-1", "session_id":"session-1",
+            "generation_id":"turn-1", "model":"future-v9-thinking", "status":"completed",
+            "transcript_path":"private-path", "tool_input":{"secret":"never forwarded"},
+            "user_email":"private@example.test", "text":"private response"
+        });
+        let record = from_cursor_stdin("stop", value.to_string().as_bytes()).unwrap();
+        let wire = serde_json::to_string(&record).unwrap();
+        assert!(!wire.contains("private"));
+        assert!(!wire.contains("never forwarded"));
+        assert_eq!(
+            record.cursor.as_ref().unwrap().model.as_deref(),
+            Some("future-v9-thinking")
+        );
+        for (key, bad) in [
+            ("hook_event_name", json!("sessionStart")),
+            ("session_id", json!("other-session")),
+            ("generation_id", json!(null)),
+            ("status", json!("probably done")),
+            ("parent_conversation_id", json!("parent")),
+            ("is_background_agent", json!(true)),
+        ] {
+            let mut invalid = value.clone();
+            invalid[key] = bad;
+            assert!(
+                from_cursor_stdin("stop", invalid.to_string().as_bytes()).is_err(),
+                "{key}"
+            );
+        }
+        let mut injected = record.clone();
+        injected.prompt = Some("should not cross wire".into());
+        assert!(injected.validate().is_err());
+        injected = record;
+        injected.event = Some(HookEvent::Stop);
+        assert!(injected.validate().is_err());
+    }
+
+    #[test]
+    fn cursor_model_metadata_preserves_runtime_parameters_without_relaxing_session_ids() {
+        for model in [
+            "claude-opus-4-8[effort=high]",
+            "custom/deepseek-v9?reasoning=high",
+            "vendor/model:42,param=x",
+        ] {
+            let value = json!({"hook_event_name":"sessionStart", "conversation_id":"native-session", "model":model});
+            let record = from_cursor_stdin("sessionStart", value.to_string().as_bytes()).unwrap();
+            assert_eq!(record.cursor.unwrap().model.as_deref(), Some(model));
+        }
+        assert!(!valid_model(Some("bad\nmodel")));
+        assert!(!valid_model(Some("-model")));
+        assert!(!valid_model(Some("model with spaces")));
+        assert!(!valid_id(Some("session[effort=high]"), MAX_ID_CHARS));
+    }
 }
 
 impl HookRecord {
@@ -145,6 +230,38 @@ impl HookRecord {
         let Some(event) = self.event else {
             return Err(RecordError::Invalid);
         };
+        if event == HookEvent::Cursor {
+            let cursor = self.cursor.as_ref().ok_or(RecordError::Invalid)?;
+            let valid = CURSOR_EVENTS.contains(&cursor.event.as_str())
+                && self.provider_session_id.is_some()
+                && valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
+                && valid_id(cursor.generation_id.as_deref(), MAX_ID_CHARS)
+                && valid_model(cursor.model.as_deref())
+                && matches!(
+                    cursor.status.as_deref(),
+                    None | Some("completed" | "aborted" | "error")
+                )
+                && (cursor.event == "stop" || cursor.status.is_none())
+                && (cursor.event != "stop"
+                    || (cursor.status.is_some() && cursor.generation_id.is_some()))
+                && (cursor.event != "beforeSubmitPrompt" || cursor.generation_id.is_some());
+            let mut only_cursor = HookRecord {
+                event: Some(HookEvent::Cursor),
+                provider_session_id: self.provider_session_id.clone(),
+                cursor: self.cursor.clone(),
+                ..HookRecord::default()
+            };
+            // Cursor subagent records cannot affect the parent terminal lifecycle.
+            only_cursor.in_subagent = false;
+            return if valid && *self == only_cursor {
+                Ok(())
+            } else {
+                Err(RecordError::Invalid)
+            };
+        }
+        if self.cursor.is_some() {
+            return Err(RecordError::Invalid);
+        }
         if !valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
             || !valid_id(self.tool_name.as_deref(), MAX_ID_CHARS)
             || !valid_id(self.tool_use_id.as_deref(), MAX_ID_CHARS)
@@ -255,6 +372,7 @@ impl HookRecord {
                     || self.end_reason.is_some()
                     || self.prompt.is_some()
             }
+            HookEvent::Cursor => true,
             HookEvent::PreToolUse
             | HookEvent::PermissionRequest
             | HookEvent::PostToolUse
@@ -329,6 +447,17 @@ fn valid_id(value: Option<&str>, max: usize) -> bool {
     })
 }
 
+fn valid_model(value: Option<&str>) -> bool {
+    // Cursor's runtime model slugs may encode parameters (for example [effort=high]).
+    // This value is metadata, never a shell command or session identity.
+    value.is_none_or(|model| {
+        !model.is_empty()
+            && model.len() <= 128
+            && !model.starts_with('-')
+            && model.bytes().all(|byte| byte.is_ascii_graphic())
+    })
+}
+
 fn valid_provider_id(id: &str) -> bool {
     if id.len() != 36 {
         return false;
@@ -363,6 +492,47 @@ fn path_fields_only(input: &Value) -> Option<Value> {
         }
     }
     Some(Value::Object(kept))
+}
+
+/// Builds the record for a Claude Code hook from its stdin bytes.
+pub fn from_cursor_stdin(event: &str, bytes: &[u8]) -> Result<HookRecord, RecordError> {
+    if bytes.len() > MAX_STDIN_BYTES {
+        return Err(RecordError::TooLarge);
+    }
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::NotAnObject)?;
+    let object = value.as_object().ok_or(RecordError::NotAnObject)?;
+    let field = |key: &str| object.get(key).and_then(Value::as_str).map(str::to_owned);
+    if field("hook_event_name").as_deref() != Some(event)
+        || object.get("is_background_agent") == Some(&Value::Bool(true))
+        || object
+            .get("parent_conversation_id")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(RecordError::Invalid);
+    }
+    let conversation = field("conversation_id").ok_or(RecordError::Invalid)?;
+    if field("session_id").is_some_and(|id| id != conversation) {
+        return Err(RecordError::Invalid);
+    }
+    let record = HookRecord {
+        event: Some(HookEvent::Cursor),
+        provider_session_id: Some(conversation),
+        cursor: Some(CursorHook {
+            event: event.to_owned(),
+            generation_id: field("generation_id").filter(|value| !value.is_empty()),
+            model: field("model")
+                .filter(|value| !value.is_empty())
+                .or_else(|| field("model_id").filter(|value| !value.is_empty())),
+            status: if event == "stop" {
+                field("status")
+            } else {
+                None
+            },
+        }),
+        ..HookRecord::default()
+    };
+    record.validate()?;
+    Ok(record)
 }
 
 /// Builds the record for a Claude Code hook from its stdin bytes.

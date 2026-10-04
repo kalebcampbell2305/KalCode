@@ -695,6 +695,7 @@ impl HandoffState {
             target.provider_id.as_str(),
             kalcode_contracts::agent::ProviderId::CLAUDE_CODE
                 | kalcode_contracts::agent::ProviderId::CODEX
+                | kalcode_contracts::agent::ProviderId::CURSOR
         ) {
             return Err(KalError::validation(
                 "handoff_provider_unverified",

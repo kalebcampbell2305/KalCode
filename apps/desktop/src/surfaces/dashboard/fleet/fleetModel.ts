@@ -11,6 +11,7 @@ import { isLive, needsAttention } from "../data/status.ts";
 const SHORT_PROVIDER: Record<string, string> = {
   "claude-code": "Claude",
   codex: "Codex",
+  cursor: "Cursor",
   "gemini-cli": "Gemini",
 };
 

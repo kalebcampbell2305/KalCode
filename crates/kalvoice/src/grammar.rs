@@ -227,6 +227,30 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
     if core.is_empty() {
         return Understood::reasoning(trimmed);
     }
+    if core.iter().any(|word| word == "cursor") {
+        if let Some(understood) = pane_request(core) {
+            *confidence = Confidence::High;
+            return understood;
+        }
+        let query = core.iter().map(String::as_str).collect::<Vec<_>>();
+        if matches!(
+            query.as_slice(),
+            [
+                "open" | "focus" | "show",
+                "the",
+                "cursor",
+                "agent",
+                "that",
+                "just",
+                "finished"
+            ]
+        ) {
+            *confidence = Confidence::High;
+            return Understood::intent(KalVoiceIntent::Focus {
+                query: "cursor agent that just finished".into(),
+            });
+        }
+    }
     if let Some(rejected) = standalone_launch_modifier(core) {
         *confidence = Confidence::High;
         return rejected;
@@ -778,9 +802,45 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
         if noun {
             rest = &rest[1..];
         }
-        if rest.len() >= 3 && matches!(rest[0].as_str(), "using" | "with") && rest[1] == "model" {
-            model = Some(rest[2..].join("-"));
-            rest = &[];
+        // Keep model and account clauses distinct. Cursor's catalog is discovered at runtime;
+        // these words are only a lookup query, never a static assertion of model availability.
+        let model_at = rest
+            .windows(2)
+            .position(|pair| matches!(pair[0].as_str(), "using" | "with") && pair[1] == "model")
+            .or_else(|| {
+                (provider
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == ProviderId::CURSOR))
+                .then(|| rest.iter().position(|word| word == "with"))
+                .flatten()
+                .filter(|at| {
+                    rest.get(at + 1)
+                        .is_some_and(|word| !matches!(word.as_str(), "cursor" | "my" | "the"))
+                        && !rest.last().is_some_and(|word| word == "account")
+                })
+            });
+        if let Some(at) = model_at {
+            let start = at
+                + if rest.get(at + 1).is_some_and(|word| word == "model") {
+                    2
+                } else {
+                    1
+                };
+            let end = rest[start..]
+                .iter()
+                .position(|word| matches!(word.as_str(), "using" | "on"))
+                .map_or(rest.len(), |offset| start + offset);
+            if start == end || rest[start..end].iter().any(|word| is_conjunction(word)) {
+                return None;
+            }
+            model = Some(rest[start..end].join("-"));
+            if at == 0 {
+                rest = &rest[end..];
+            } else if end == rest.len() {
+                rest = &rest[..at];
+            } else {
+                return None;
+            }
         }
         if provider.is_none() && !default_agents && previous_provider.is_none() {
             return None;
@@ -895,6 +955,7 @@ fn retry_launch(tokens: &[String]) -> Option<Understood> {
     let provider_id = ProviderId::new(match tokens[3].as_str() {
         "claude" => ProviderId::CLAUDE_CODE,
         "codex" => ProviderId::CODEX,
+        "cursor" => ProviderId::CURSOR,
         "gemini" => ProviderId::GEMINI_CLI,
         _ => return None,
     });
@@ -1699,6 +1760,7 @@ fn provider_words(words: &[String]) -> Option<&'static str> {
         "claude code" | "claude" => ProviderId::CLAUDE_CODE,
         // "codecs" and "code x": how speech recognition often hears "Codex".
         "codex" | "codecs" | "code x" => ProviderId::CODEX,
+        "cursor" | "cursor cli" => ProviderId::CURSOR,
         "gemini cli" | "gemini" => ProviderId::GEMINI_CLI,
         _ => return None,
     })
@@ -2092,7 +2154,7 @@ fn build_rules() -> Vec<Rule> {
             Err(rejected) => *rejected,
             Ok(_) => Understood::Rejected {
                 code: "provider_not_specified",
-                message: "Say which provider to use: Claude Code, Codex or Gemini CLI. For example, \u{201c}open two Codex threads\u{201d}.".into(),
+                message: "Say which provider to use: Claude Code, Codex, Cursor or Gemini CLI. For example, \u{201c}open two Codex threads\u{201d}.".into(),
             },
         }
         }),

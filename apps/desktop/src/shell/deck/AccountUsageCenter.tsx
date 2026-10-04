@@ -308,6 +308,7 @@ export function AccountUsageCenter() {
             )}
             {adding ? (
               <AddAccount
+                cursorConnected={accounts.some((account) => account.providerId === "cursor")}
                 disabled={disabled}
                 onCancel={() => setAdding(false)}
                 onAdd={(provider, name) =>
@@ -586,7 +587,7 @@ function AccountEntry({
                   Check sign-in
                 </button>
               )}
-              {isBrowserAuthProvider(account.providerId) && signedIn && (
+              {isBrowserAuthProvider(account.providerId) && account.providerId !== "cursor" && signedIn && (
                 <button
                   type="button"
                   disabled={disabled}
@@ -608,11 +609,13 @@ function AccountEntry({
 }
 
 function AddAccount({
+  cursorConnected,
   disabled,
   onAdd,
   onCancel,
 }: {
   disabled: boolean;
+  cursorConnected: boolean;
   onAdd: (provider: string, name: string) => void;
   onCancel: () => void;
 }) {
@@ -629,11 +632,13 @@ function AddAccount({
     >
       <label htmlFor={`${id}-provider`}>Provider</label>
       <select id={`${id}-provider`} value={provider} onChange={(e) => setProvider(e.target.value)} disabled={disabled}>
-        {Object.entries(ACCOUNT_PROVIDER_NAMES).map(([value, label]) => (
-          <option key={value} value={value}>
-            {label}
-          </option>
-        ))}
+        {Object.entries(ACCOUNT_PROVIDER_NAMES)
+          .filter(([value]) => value !== "cursor" || !cursorConnected)
+          .map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
       </select>
       <label htmlFor={`${id}-name`}>Account nickname</label>
       <input

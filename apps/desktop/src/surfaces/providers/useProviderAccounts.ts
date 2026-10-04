@@ -10,25 +10,28 @@ import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.ts
 import { signInFailureTitle } from "./providerLabels.ts";
 
 /** Providers whose own official sign-in KalCode runs natively for one managed account. */
-export type BrowserAuthProvider = "claude-code" | "codex" | "gemini-cli";
+export type BrowserAuthProvider = "claude-code" | "codex" | "gemini-cli" | "cursor";
 
 export function isBrowserAuthProvider(providerId: string): providerId is BrowserAuthProvider {
-  return providerId === "claude-code" || providerId === "codex" || providerId === "gemini-cli";
+  return (
+    providerId === "claude-code" || providerId === "codex" || providerId === "gemini-cli" || providerId === "cursor"
+  );
 }
 
-/** Providers whose read-only status command is safe to run outside a real provider launch. */
-export function canRefreshProviderAuth(providerId: string): providerId is "codex" | "gemini-cli" {
-  return providerId === "codex" || providerId === "gemini-cli";
+/** Explicit native connection checks. Cursor may refresh provider-owned credentials. */
+export function canRefreshProviderAuth(providerId: string): providerId is "codex" | "gemini-cli" | "cursor" {
+  return providerId === "codex" || providerId === "gemini-cli" || providerId === "cursor";
 }
 
 const AUTH_PROVIDER_NAMES: Record<BrowserAuthProvider, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   "gemini-cli": "Gemini",
 };
 
 /** The native account-auth commands for one provider. Every call is Rust-owned and opaque. */
-function authCommands(client: KalCodeClient, providerId: BrowserAuthProvider) {
+function authCommands(client: KalCodeClient, providerId: Exclude<BrowserAuthProvider, "cursor">) {
   switch (providerId) {
     case "codex":
       return {
@@ -54,14 +57,15 @@ function authCommands(client: KalCodeClient, providerId: BrowserAuthProvider) {
   }
 }
 
-function refreshProviderAuth(client: KalCodeClient, providerId: "codex" | "gemini-cli", accountId: string) {
+function refreshProviderAuth(client: KalCodeClient, providerId: "codex" | "gemini-cli" | "cursor", accountId: string) {
+  if (providerId === "cursor") return client.refreshCursorAccount(accountId).then((state) => state.account);
   return providerId === "codex" ? client.refreshCodexAccount(accountId) : client.refreshGeminiAccount(accountId);
 }
 
 interface ActiveLogin {
   accountId: string;
   handle: string;
-  providerId: BrowserAuthProvider;
+  providerId: Exclude<BrowserAuthProvider, "cursor">;
 }
 
 /** What uses one account right now. Derived from public thread and binding metadata only. */
@@ -271,16 +275,19 @@ export function useProviderAccounts(enabled: boolean) {
       return run(
         `refresh:${account.id}`,
         `${AUTH_PROVIDER_NAMES[providerId]} status couldn't be refreshed`,
-        () => (sessions ? sessions.validate(account) : refreshProviderAuth(client, providerId, account.id)),
+        () =>
+          sessions && providerId !== "cursor"
+            ? sessions.validate(account)
+            : refreshProviderAuth(client, providerId, account.id),
         undefined,
-        sessions === null,
+        sessions === null || providerId === "cursor",
       );
     },
     [client, run, sessions],
   );
   const logoutAuth = useCallback(
     async (account: ProviderAccount) => {
-      if (!isBrowserAuthProvider(account.providerId)) return null;
+      if (!isBrowserAuthProvider(account.providerId) || account.providerId === "cursor") return null;
       const providerId = account.providerId;
       return run(
         `logout:${account.id}`,
@@ -296,6 +303,15 @@ export function useProviderAccounts(enabled: boolean) {
     async (account: ProviderAccount) => {
       if (!isBrowserAuthProvider(account.providerId)) return;
       const providerId = account.providerId;
+      if (providerId === "cursor") {
+        await run(
+          `login:${account.id}`,
+          "Cursor sign-in failed",
+          async () => (await client.loginCursorAccount(account.id)).account,
+          account.id,
+        );
+        return;
+      }
       const commands = authCommands(client, providerId);
       const key = `login:${account.id}`;
       sessions?.supersede(account.id);
@@ -321,7 +337,7 @@ export function useProviderAccounts(enabled: boolean) {
         setActiveLogin((current) => (current?.handle === handle ? null : current));
       }
     },
-    [client, replace, sessions, toast],
+    [client, replace, sessions, toast, run],
   );
 
   const cancelLogin = useCallback(async () => {

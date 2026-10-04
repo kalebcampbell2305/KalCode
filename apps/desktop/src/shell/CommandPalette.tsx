@@ -323,7 +323,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Item
             icon={<SquareTerminal />}
             onSelect={run(launchAgent)}
-            keywords={["agent", "launch", "start", "claude", "codex", "gemini", "coding agent"]}
+            keywords={["agent", "launch", "start", "claude", "codex", "cursor", "gemini", "coding agent"]}
           >
             New agent…
           </Item>

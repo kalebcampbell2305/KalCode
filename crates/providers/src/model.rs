@@ -11,6 +11,8 @@ use ts_rs::TS;
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ModelSource {
+    /// Discovered from the authenticated provider's supported runtime command.
+    Runtime,
     /// Aliases published in the provider's documentation; the provider resolves them.
     DocumentedAliases,
     /// The provider can't list models without starting a session; none are shown.

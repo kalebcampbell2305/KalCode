@@ -65,6 +65,7 @@ impl Rig {
         let base = match cli {
             PaneCli::Codex => "codex",
             PaneCli::Gemini => "gemini",
+            PaneCli::Cursor => "cursor-agent",
         };
         let name = if cfg!(windows) {
             format!("{base}.exe")
@@ -850,6 +851,139 @@ fn codex_bypass_panes_use_native_full_access_without_approval_prompts() {
     );
     pane.type_line("exit");
     pane.events_until(|e| matches!(e, AgentEvent::Exited { .. }));
+}
+
+#[test]
+fn cursor_connect_reuses_valid_native_sign_in_and_only_reauthenticates_real_expiry() {
+    for (failure, expected, succeeds) in [
+        (None, vec!["status", "models"], true),
+        (
+            Some("Authentication failed: token expired"),
+            vec!["status", "models", "login", "status"],
+            true,
+        ),
+        (
+            Some("Network temporarily unreachable"),
+            vec!["status", "models"],
+            false,
+        ),
+    ] {
+        let rig = Rig::new(PaneCli::Cursor);
+        std::fs::write(
+            rig.dir.path().join("fake-provider.json"),
+            serde_json::json!({"cursorModelFailure": failure}).to_string(),
+        )
+        .expect("native auth scenario");
+        let mut env = DetectEnv::from_process();
+        env.vars.retain(|(name, _)| {
+            ["SystemRoot", "TEMP", "TMP", "TMPDIR"]
+                .iter()
+                .any(|allowed| name.to_string_lossy().eq_ignore_ascii_case(allowed))
+        });
+        env.vars.push(("PATH".into(), rig.dir.path().into()));
+        env.probe_timeout = Some(Duration::from_secs(5));
+        let result = kalcode_providers::cursor::login(&env);
+        if succeeds {
+            assert_eq!(
+                result.expect("native sign-in").auth,
+                kalcode_contracts::agent::AuthState::Authenticated
+            );
+        } else {
+            assert!(
+                matches!(result, Err(ProviderError::Refused { code, .. }) if code == "cursor_runtime_unavailable")
+            );
+        }
+        let calls: Vec<String> = std::fs::read_to_string(rig.dir.path().join("runs.log"))
+            .expect("native calls")
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<Value>(line).expect("call record")["args"][0]
+                    .as_str()
+                    .expect("native command")
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(calls, expected);
+    }
+}
+
+#[test]
+fn cursor_native_environment_auth_does_not_force_browser_oauth() {
+    let rig = Rig::new(PaneCli::Cursor);
+    let mut env = DetectEnv::from_process();
+    env.vars.retain(|(name, _)| {
+        ["SystemRoot", "TEMP", "TMP", "TMPDIR"]
+            .iter()
+            .any(|allowed| name.to_string_lossy().eq_ignore_ascii_case(allowed))
+    });
+    env.vars.push(("PATH".into(), rig.dir.path().into()));
+    env.vars
+        .push(("CURSOR_API_KEY".into(), "fixture-native-key".into()));
+    env.probe_timeout = Some(Duration::from_secs(5));
+    let status = kalcode_providers::cursor::login(&env).expect("native environment authentication");
+    assert_eq!(
+        status.auth,
+        kalcode_contracts::agent::AuthState::Authenticated
+    );
+    assert_eq!(status.identity.as_deref(), Some("cursor@example.test"));
+}
+
+#[test]
+fn cursor_validates_selected_model_against_the_actual_runtime_before_spawning() {
+    let rig = Rig::new(PaneCli::Cursor);
+    let mut config = rig.config(PermissionMode::Plan, None);
+    config.model = Some("invented-unavailable-v99".into());
+    let thread_id = config.thread_id.clone();
+    let refused = rig
+        .provider
+        .start_session(config, Box::new(|_: AgentEvent| {}));
+    assert!(
+        matches!(refused, Err(ProviderError::Refused { code, .. }) if code == "cursor_model_unavailable")
+    );
+    assert!(rig.panes.info(&thread_id).is_none());
+
+    let mut config = rig.config(PermissionMode::Plan, None);
+    config.model = Some("custom-runtime-v9".into());
+    let thread_id = config.thread_id.clone();
+    let (sender, receiver) = mpsc::channel();
+    let session = rig
+        .provider
+        .start_session(
+            config,
+            Box::new(move |event: AgentEvent| {
+                let _ = sender.send(event);
+            }),
+        )
+        .expect("runtime model starts");
+    let pane = rig
+        .attach_started(thread_id, session, receiver)
+        .expect("real pane");
+    assert_eq!(after(&rig.args(), "--model"), Some("custom-runtime-v9"));
+    pane.type_line("exit");
+    pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+}
+
+#[test]
+fn cursor_native_pane_preserves_tools_environment_and_real_terminal_identity() {
+    let rig = Rig::new(PaneCli::Cursor);
+    let pane = rig.start(PermissionMode::Bypass);
+    let args = rig.args();
+    assert!(args.iter().any(|arg| arg == "--force"));
+    assert_eq!(after(&args, "--workspace"), rig.work.path().to_str());
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg == "--print" || arg == "--output-format")
+    );
+    let info = rig.panes.info(&pane.thread_id).expect("real pane");
+    assert!(!info.kalcode_answers_approvals);
+    let names = rig.env_names();
+    assert!(names.iter().any(|name| name == "OPENAI_API_KEY"));
+    assert!(!names.iter().any(|name| name == "KALCODE_DATA_DIR"));
+    pane.type_line("say Cursor terminal input");
+    pane.wait_for_text("(fake) say Cursor terminal input");
+    pane.type_line("exit");
+    pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
 }
 
 #[test]

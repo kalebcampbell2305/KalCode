@@ -237,6 +237,8 @@ fn main() {
         "codex"
     } else if named("gemini") {
         "gemini"
+    } else if named("cursor-agent") {
+        "cursor"
     } else {
         "claude"
     };
@@ -246,10 +248,33 @@ fn main() {
         let default = match kind {
             "codex" => "codex-cli 0.160.0",
             "gemini" => "0.21.0",
+            "cursor" => "2026.10.01-e373342",
             _ => "2.1.300 (Claude Code)",
         };
         println!("{}", provider_version(&config, kind, default));
         exit(get_i64(&config, "versionExit", 0));
+    }
+    if kind == "cursor" && args.first().is_some_and(|arg| arg == "status") {
+        println!(
+            "{{\"status\":\"authenticated\",\"isAuthenticated\":true,\"userInfo\":{{\"email\":\"cursor@example.test\"}}}}"
+        );
+        exit(0);
+    }
+    if kind == "cursor" && args.first().is_some_and(|arg| arg == "models") {
+        if !exe_dir().join("cursor-login-completed").exists()
+            && let Some(failure) = config.get("cursorModelFailure").and_then(Value::as_str)
+        {
+            eprintln!("{failure}");
+            exit(1);
+        }
+        println!(
+            "Available models\n\ncustom-runtime-v9 - Custom Runtime 9 (default)\nTip: use --model <id>"
+        );
+        exit(0);
+    }
+    if kind == "cursor" && args.first().is_some_and(|arg| arg == "login") {
+        let _ = std::fs::write(exe_dir().join("cursor-login-completed"), "signed in");
+        exit(0);
     }
     if kind == "codex" && args.iter().any(|arg| arg == "app-server") {
         codex_app_server(&config);

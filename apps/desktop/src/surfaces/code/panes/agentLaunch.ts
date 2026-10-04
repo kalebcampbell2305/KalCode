@@ -10,6 +10,7 @@ import type { PaneProviderId } from "./paneChannel.ts";
 export const AGENT_EFFORTS: Record<PaneProviderId, readonly string[]> = {
   "claude-code": ["low", "medium", "high", "xhigh", "max"],
   codex: ["minimal", "low", "medium", "high", "xhigh"],
+  cursor: [],
   "gemini-cli": [],
 };
 
@@ -95,7 +96,7 @@ export interface LaunchMemory {
 
 export const LAUNCH_MEMORY_KEY = "kalcode.agentLauncher.v1";
 const EMPTY_MEMORY: LaunchMemory = { last: null, byProvider: {} };
-const PROVIDER_IDS: readonly string[] = ["claude-code", "codex", "gemini-cli"];
+const PROVIDER_IDS: readonly string[] = ["claude-code", "codex", "cursor", "gemini-cli"];
 
 function storage(): Storage | null {
   try {

@@ -54,6 +54,8 @@ export type CommandName =
   | "provider_account_bindings_list"
   | "provider_account_usage"
   | "provider_codex_account_refresh"
+  | "provider_cursor_account_refresh"
+  | "provider_cursor_login"
   | "provider_codex_login_start"
   | "provider_codex_login_wait"
   | "provider_codex_login_cancel"

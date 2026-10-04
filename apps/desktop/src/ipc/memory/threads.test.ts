@@ -276,6 +276,7 @@ describe("memory thread runtime", () => {
       ["claude-code", "Claude Code", true],
       ["codex", "Codex", false],
       ["gemini-cli", "Gemini CLI", false],
+      ["cursor", "Cursor", false],
     ]);
     const [, codex, gemini] = options.providers;
     expect(codex?.models).toEqual([]);

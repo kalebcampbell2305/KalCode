@@ -19,6 +19,7 @@ impl ProviderId {
     pub const CLAUDE_CODE: &'static str = "claude-code";
     pub const CODEX: &'static str = "codex";
     pub const GEMINI_CLI: &'static str = "gemini-cli";
+    pub const CURSOR: &'static str = "cursor";
 
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())

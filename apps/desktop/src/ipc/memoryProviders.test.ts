@@ -13,14 +13,16 @@ describe("memory transport providers", () => {
       ["claude-code", null],
       ["codex", null],
       ["gemini-cli", null],
+      ["cursor", null],
     ]);
     const detected = await c.detectProviders();
     expect(detected.map((s) => [s.id, s.detection?.state, s.detection?.version, s.detection?.auth])).toEqual([
       ["claude-code", "installed", "2.1.282", "unknown"],
       ["codex", "installed", "0.155.1", "authenticated"],
       ["gemini-cli", "installed", "0.12.0", "unknown"],
+      ["cursor", "installed", "test-fixture", "authenticated"],
     ]);
-    expect(detected.map((s) => s.adapter)).toEqual(["implemented", "implemented", "implemented"]);
+    expect(detected.map((s) => s.adapter)).toEqual(["implemented", "implemented", "implemented", "implemented"]);
     expect(await c.listProviders()).toEqual(detected);
   });
 
@@ -30,6 +32,7 @@ describe("memory transport providers", () => {
     await c.detectProviders();
     const events = (await c.recentEvents(50)).filter((e) => e.type === "provider.detected");
     expect(events.map((e) => [e.correlation.providerId, e.payload])).toEqual([
+      ["cursor", { providerId: "cursor", installed: true, version: "test-fixture" }],
       ["gemini-cli", { providerId: "gemini-cli", installed: true, version: "0.12.0" }],
       ["codex", { providerId: "codex", installed: true, version: "0.155.1" }],
       ["claude-code", { providerId: "claude-code", installed: true, version: "2.1.282" }],
@@ -106,6 +109,7 @@ describe("memory transport providers", () => {
       ["claude-code", "installed", "unknown"],
       ["codex", "installed", "not_authenticated"],
       ["gemini-cli", "not_installed", "unknown"],
+      ["cursor", "installed", "authenticated"],
     ]);
   });
 });

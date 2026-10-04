@@ -214,6 +214,28 @@ export function providerCatalog(): ProviderStatus[] {
       installCommand: "npm install -g @google/gemini-cli@0.61.0",
       docsUrl: "https://geminicli.com/docs/",
     },
+    {
+      id: "cursor",
+      displayName: "Cursor",
+      detection: null,
+      detectionErrorCode: null,
+      authCheck: "cursor-agent status --format json",
+      capabilities: {
+        streaming: true,
+        interrupt: true,
+        resume: true,
+        hostApprovals: false,
+        interactive: null,
+        models: [],
+        permissionMappings: [],
+      },
+      adapter: "implemented",
+      modelSource: "runtime",
+      integration: "Native Cursor Agent CLI in an interactive terminal",
+      signInCommand: "agent login",
+      installCommand: "irm 'https://cursor.com/install?win32=true' | iex",
+      docsUrl: "https://cursor.com/docs/cli/installation",
+    },
   ];
 }
 
@@ -251,6 +273,13 @@ function fakeMachine(scenario: ProviderScenario): Record<string, Fake> {
   const signedOut = scenario === "providers-signed-out";
   return {
     "claude-code": claude,
+    cursor: {
+      state: "installed",
+      displayPath: "~/.local/bin/cursor-agent",
+      version: "test-fixture",
+      auth: "authenticated",
+      message: null,
+    },
     codex: {
       state: "installed",
       displayPath: "~\\AppData\\Roaming\\npm\\codex.cmd",
