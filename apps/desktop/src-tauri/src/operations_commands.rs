@@ -625,6 +625,17 @@ impl OperationsState {
     }
 
     fn announce_finished(&self, id: &str) {
+        if let Some(memory) = self.threads.memory()
+            && let Ok(run) = self.store.get(id)
+            && let Some(outcome) = &run.outcome
+        {
+            memory.capture(
+                &run.spec.workspace_id,
+                kalcode_contracts::unified_memory::MemorySourceKind::Run,
+                id,
+                outcome,
+            );
+        }
         let Some(announce) = &self.voice_callback else {
             return;
         };
@@ -1167,6 +1178,17 @@ impl OperationsState {
                 };
                 if let Ok(commits) = self.git.log(&root, 50, None) {
                     for commit in commits.items {
+                        if commit.parents.len() > 1
+                            && commit.subject.contains(':')
+                            && let Some(memory) = self.threads.memory()
+                        {
+                            memory.capture(
+                                &workspace.id,
+                                kalcode_contracts::unified_memory::MemorySourceKind::Merge,
+                                &commit.oid,
+                                &commit.subject,
+                            );
+                        }
                         observed_commits.push(OperationActivity {
                             id: format!("commit:{}:{}", workspace.id, commit.oid),
                             at: commit.committed_at,

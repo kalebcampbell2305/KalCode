@@ -155,6 +155,7 @@ fn run_claude(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendere
         env.cap(connect),
     ) {
         Ok(reply) if blocking => reply.render_pre_tool_use(),
+        Ok(reply) if event == HookEvent::UserPromptSubmit => reply.render_user_prompt(),
         // An observing PreToolUse still passes an explicit KalCode decision through; no decision
         // (or anything unexpected) leaves the provider's own permission flow in charge.
         Ok(reply @ (HookReply::Allow { .. } | HookReply::Ask { .. } | HookReply::Deny { .. }))

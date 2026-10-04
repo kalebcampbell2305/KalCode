@@ -1374,7 +1374,31 @@ impl Shared {
         if let (Some(titles), Some(prompt)) = (&self.titles, first_prompt.as_deref()) {
             titles.first_prompt(&self.ctx.thread_id, prompt);
         }
+        let memory_session = !record.in_subagent
+            && record
+                .provider_session_id
+                .as_ref()
+                .is_some_and(|id| lock(&self.provider_session_id).as_ref() == Some(id));
+        if memory_session && let Some(text) = record.memory_candidate.as_deref() {
+            if record.event == Some(HookEvent::UserPromptSubmit)
+                || record
+                    .cursor
+                    .as_ref()
+                    .is_some_and(|cursor| cursor.event == "beforeSubmitPrompt")
+            {
+                self.sink.remember_user(text);
+            } else {
+                self.sink.remember(text);
+            }
+        }
         self.drain_events(should_drain);
+        if memory_session
+            && record.event == Some(HookEvent::UserPromptSubmit)
+            && let Some(query) = record.prompt.as_deref()
+            && let Some(text) = self.sink.project_context_for(query)
+        {
+            return HookReply::ProjectContext { text };
+        }
         HookReply::Ack
     }
 
@@ -2050,6 +2074,55 @@ mod tests {
 
     fn drain(rx: &mpsc::Receiver<AgentEvent>) -> Vec<AgentEvent> {
         rx.try_iter().collect()
+    }
+
+    #[test]
+    fn cursor_memory_preserves_user_provenance_and_rejects_other_sessions() {
+        struct MemorySink(Arc<Mutex<Vec<(bool, String)>>>);
+        impl AgentEventSink for MemorySink {
+            fn emit(&self, _: AgentEvent) {}
+            fn remember(&self, text: &str) {
+                lock(&self.0).push((false, text.into()));
+            }
+            fn remember_user(&self, text: &str) {
+                lock(&self.0).push((true, text.into()));
+            }
+        }
+        let claims = Arc::new(Mutex::new(Vec::new()));
+        let shared = Shared::new(SessionParts {
+            ctx: ActionContext {
+                thread_id: new_id(),
+                workspace_id: new_id(),
+                working_directory: "/work".into(),
+            },
+            provider_id: "cursor".into(),
+            routing: DecisionRouting::ProviderPrompt,
+            sink: Box::new(MemorySink(claims.clone())),
+            provider_session_id: "cursor-session".into(),
+            limits: SessionLimits::default(),
+            expiry: None,
+            titles: None,
+        });
+        let make = |event: &str, session: &str| {
+            kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+                "hook_event_name":event,"conversation_id":session,"generation_id":"generation-one",
+                "prompt":"Decision: SQLite holds durable project knowledge.",
+                "text":"Architecture: Dashboard.tsx owns the main dashboard shell."
+            }).to_string().as_bytes()).unwrap()
+        };
+        // Cursor's prompt hook remains observing; it never receives a fabricated context schema.
+        assert_eq!(
+            shared.handle(make("beforeSubmitPrompt", "cursor-session")),
+            HookReply::Ack
+        );
+        shared.handle(make("afterAgentResponse", "cursor-session"));
+        shared.handle(make("afterAgentResponse", "another-session"));
+        let claims = lock(&claims);
+        assert_eq!(claims.len(), 2);
+        assert!(claims[0].0);
+        assert!(!claims[1].0);
+        assert!(claims[0].1.starts_with("Decision:"));
+        assert!(claims[1].1.starts_with("Architecture:"));
     }
 
     #[test]

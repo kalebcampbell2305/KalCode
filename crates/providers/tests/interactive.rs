@@ -157,6 +157,10 @@ impl Rig {
     }
 
     fn start(&self, mode: PermissionMode) -> Pane {
+        self.start_with_memory(mode, None)
+    }
+
+    fn start_with_memory(&self, mode: PermissionMode, context: Option<String>) -> Pane {
         let config = self.config(mode);
         let thread_id = config.thread_id.clone();
         let (tx, rx) = mpsc::channel();
@@ -164,8 +168,9 @@ impl Rig {
             .provider
             .start_session(
                 config,
-                Box::new(move |e: AgentEvent| {
-                    let _ = tx.send(e);
+                Box::new(UnifiedMemorySink {
+                    events: tx,
+                    context,
                 }),
             )
             .expect("start pane");
@@ -267,6 +272,46 @@ impl Pane {
 
 fn turn_done(e: &AgentEvent) -> bool {
     matches!(e, AgentEvent::TurnCompleted { .. })
+}
+
+struct UnifiedMemorySink {
+    events: mpsc::Sender<AgentEvent>,
+    context: Option<String>,
+}
+
+impl kalcode_contracts::agent::AgentEventSink for UnifiedMemorySink {
+    fn emit(&self, event: AgentEvent) {
+        let _ = self.events.send(event);
+    }
+    fn project_context(&self) -> Option<String> {
+        self.context.clone()
+    }
+}
+
+#[test]
+fn unified_memory_claude_launch_appends_context_and_preserves_native_permissions() {
+    let rig = Rig::new(
+        DecisionRouting::ProviderPrompt,
+        json!({}),
+        SessionLimits::default(),
+    );
+    let context = "[KalCode Unified Memory]\nArchitecture: Dashboard.tsx owns the shell.";
+    let pane = rig.start_with_memory(PermissionMode::Bypass, Some(context.into()));
+    let args: Vec<String> = serde_json::from_value(rig.read_json("last-args.json")).unwrap();
+    let value_after = |flag: &str| {
+        args.iter()
+            .position(|arg| arg == flag)
+            .and_then(|index| args.get(index + 1))
+            .map(String::as_str)
+    };
+    assert_eq!(value_after("--append-system-prompt"), Some(context));
+    assert_eq!(value_after("--permission-mode"), Some("bypassPermissions"));
+    assert!(value_after("--settings").is_some());
+    assert!(value_after("--session-id").is_some());
+    assert!(!args.iter().any(|arg| arg == "--system-prompt"));
+    assert_eq!(args.iter().filter(|arg| arg.as_str() == context).count(), 1);
+    pane.type_line("exit");
+    pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
 }
 
 #[test]

@@ -2098,3 +2098,50 @@ fn pronoun_panes_and_name_particles_do_not_become_names() {
         );
     }
 }
+
+#[test]
+fn unified_memory_questions_retrieve_project_topics_without_reasoning() {
+    for (text, query) in [
+        ("Why did we use this architecture?", "this architecture"),
+        ("What did we decide about the Browser?", "about the browser"),
+        ("Which file owns provider usage?", "provider usage"),
+        ("Search project memory release process", "release process"),
+        ("Read unified memory", ""),
+        ("What do you remember about the dashboard?", "the dashboard"),
+    ] {
+        let (parsed, confidence) = understand_with_confidence(text);
+        assert_eq!(
+            parsed,
+            Understood::intent(KalVoiceIntent::ReadMemory {
+                query: query.into()
+            }),
+            "{text}"
+        );
+        assert_eq!(confidence, Confidence::High);
+    }
+    for text in [
+        "Don't search memory",
+        "Search memory and delete it",
+        "Why is the sky blue?",
+    ] {
+        assert!(is_reasoning(text), "{text}");
+    }
+}
+
+#[test]
+fn unified_memory_rule_forwarding_preserves_target_and_original_words() {
+    assert_eq!(
+        intent("Tell Claude the rule we use for releases."),
+        KalVoiceIntent::DirectPrompt {
+            target: "Claude".into(),
+            prompt: "the rule we use for releases.".into(),
+        }
+    );
+    assert_eq!(
+        intent("Tell Codex to use our project memory for this review."),
+        KalVoiceIntent::DirectPrompt {
+            target: "Codex".into(),
+            prompt: "use our project memory for this review.".into(),
+        }
+    );
+}

@@ -161,6 +161,18 @@ struct AdmissionSink {
 }
 
 impl AgentEventSink for AdmissionSink {
+    fn project_context(&self) -> Option<String> {
+        self.inner.project_context()
+    }
+    fn project_context_for(&self, query: &str) -> Option<String> {
+        self.inner.project_context_for(query)
+    }
+    fn remember(&self, text: &str) {
+        self.inner.remember(text);
+    }
+    fn remember_user(&self, text: &str) {
+        self.inner.remember_user(text);
+    }
     fn emit(&self, event: AgentEvent) {
         if ends_turn(&event) {
             // Provider adapters report a turn's end only after its process work is done, and

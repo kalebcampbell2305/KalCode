@@ -33,6 +33,7 @@ fn embed_windows_manifest() -> tauri_build::WindowsAttributes {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/command_registry.rs");
     // Fail closed for direct Cargo/CLI invocations that omit the Dev overlay. This also
     // prevents a release binary (and its credential service) using a Dev bundle identity.
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");

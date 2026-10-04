@@ -91,6 +91,18 @@ struct ObservedSink {
 }
 
 impl AgentEventSink for ObservedSink {
+    fn project_context(&self) -> Option<String> {
+        self.inner.project_context()
+    }
+    fn project_context_for(&self, query: &str) -> Option<String> {
+        self.inner.project_context_for(query)
+    }
+    fn remember(&self, text: &str) {
+        self.inner.remember(text);
+    }
+    fn remember_user(&self, text: &str) {
+        self.inner.remember_user(text);
+    }
     fn emit(&self, event: AgentEvent) {
         // Observe a cheap summary first only where needed, then forward the event itself.
         let observed = matches!(

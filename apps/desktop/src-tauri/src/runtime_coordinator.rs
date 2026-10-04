@@ -155,6 +155,11 @@ impl RuntimeBundle {
             health.monitor(),
             resources.clone(),
         ));
+        if let Some(memory) =
+            crate::unified_memory_commands::MemoryService::start(core.clone(), &account)
+        {
+            threads.bind_memory(memory);
+        }
         if let Ok(runtime) = threads.runtime() {
             // The plan's cap on agents running at once, read from the verified account at every
             // start. Weak: the thread runtime must not keep the account runtime alive.
@@ -205,6 +210,7 @@ impl RuntimeBundle {
                 state.core.clone(),
                 &state.info,
                 crate::kalvoice_commands::KalVoiceServices {
+                    memory: threads.memory().cloned(),
                     registry: providers.registry(),
                     provider_runtime: runtime_authority.clone(),
                     threads: threads.runtime_handle(),
