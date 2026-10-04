@@ -231,7 +231,7 @@ export function toolItems(capabilities: ProviderCapabilities): ToolItem[] {
     const name = tool.providerName ? `${tool.providerName}. ` : "";
     const base = { kind: tool.kind, label: TOOL_LABELS[tool.kind], state: availability.state };
     if (availability.state === "needs_setup") {
-      return { ...base, value: "Needs setup", detail: `${name}${availability.detail}` };
+      return { ...base, value: "Needs setup", detail: availability.detail };
     }
     if (availability.state === "unavailable") {
       return { ...base, value: "Not offered", detail: availability.reason };
