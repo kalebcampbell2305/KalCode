@@ -38,6 +38,7 @@ pub mod firewall;
 pub mod folder;
 pub mod ignore_rules;
 pub mod log;
+pub mod memory;
 pub mod model;
 pub mod never_share;
 pub mod package;

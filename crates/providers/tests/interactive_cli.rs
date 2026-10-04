@@ -316,6 +316,70 @@ fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+struct UnifiedMemorySink {
+    events: mpsc::Sender<AgentEvent>,
+    context: String,
+}
+
+impl kalcode_contracts::agent::AgentEventSink for UnifiedMemorySink {
+    fn emit(&self, event: AgentEvent) {
+        let _ = self.events.send(event);
+    }
+    fn project_context(&self) -> Option<String> {
+        Some(self.context.clone())
+    }
+}
+
+#[test]
+fn unified_memory_launch_reaches_codex_and_gemini_without_changing_native_modes() {
+    for cli in [PaneCli::Codex, PaneCli::Gemini] {
+        let rig = Rig::new(cli);
+        let mut config = rig.config(PermissionMode::Bypass, None);
+        config.model = Some("memory-test-model".into());
+        let thread = config.thread_id.clone();
+        let (tx, rx) = mpsc::channel();
+        let context = "[KalCode Unified Memory]\nArchitecture: Dashboard.tsx owns the shell.";
+        let session = rig
+            .provider
+            .start_session(
+                config,
+                Box::new(UnifiedMemorySink {
+                    events: tx,
+                    context: context.into(),
+                }),
+            )
+            .expect("memory launch");
+        let pane = rig
+            .attach_started(thread, session, rx)
+            .expect("attach memory pane");
+        let args = rig.args();
+        let memory = args.last().expect("initial memory prompt");
+        assert!(memory.starts_with(context), "{args:?}");
+        assert!(memory.contains("Wait for the user's next request before taking action."));
+        assert_eq!(args.iter().filter(|arg| arg.contains(context)).count(), 1);
+        let model_flag = if cli == PaneCli::Codex {
+            "-m"
+        } else {
+            "--model"
+        };
+        assert_eq!(after(&args, model_flag), Some("memory-test-model"));
+        match cli {
+            PaneCli::Codex => {
+                assert_eq!(after(&args, "-a"), Some("never"));
+                assert_eq!(after(&args, "-s"), Some("danger-full-access"));
+                assert!(args.iter().any(|arg| arg.starts_with("notify=")));
+                assert!(!args.iter().any(|arg| arg == "--prompt-interactive"));
+            }
+            PaneCli::Gemini => {
+                assert_eq!(after(&args, "--approval-mode"), Some("yolo"));
+                assert_eq!(after(&args, "--prompt-interactive"), Some(memory.as_str()));
+            }
+        }
+        pane.type_line("exit");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
+}
+
 fn rejected_start(rig: &Rig, account_id: Option<String>) -> ProviderError {
     match rig.provider.start_session(
         rig.config(PermissionMode::Plan, account_id),

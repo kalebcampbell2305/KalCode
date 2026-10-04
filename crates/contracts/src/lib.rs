@@ -32,5 +32,6 @@ pub mod sessions;
 pub mod threads;
 pub mod timeline;
 pub mod trust;
+pub mod unified_memory;
 pub mod utility;
 pub mod workspace_ui;

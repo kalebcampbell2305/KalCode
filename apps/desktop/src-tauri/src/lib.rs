@@ -21,6 +21,7 @@ mod commands;
 mod context_commands;
 pub mod environment;
 mod files_commands;
+mod unified_memory_commands;
 // Z6a: only the read-only `git_status`, `git_log` and `git_branches` are registered (Z7-W2's
 // folder surface), plus Agent Fleet's read-only `thread_worktree_states`; the general worktree
 // and checkpoint commands wait for the lead's wiring (thread worktrees are created natively by
@@ -735,6 +736,13 @@ pub fn run(removed_overrides: Vec<String>) {
                 context_commands::context_item_confirm,
                 context_commands::context_discard,
                 context_commands::context_send,
+                unified_memory_commands::unified_memory_list,
+                unified_memory_commands::unified_memory_save,
+                unified_memory_commands::unified_memory_review,
+                unified_memory_commands::unified_memory_delete,
+                unified_memory_commands::unified_memory_preferences,
+                unified_memory_commands::unified_memory_set_preferences,
+                unified_memory_commands::unified_memory_retrieve,
                 handoff_commands::handoff_preview,
                 handoff_commands::handoff_send,
                 handoff_commands::handoff_list,

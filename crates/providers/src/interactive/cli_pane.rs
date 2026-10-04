@@ -256,6 +256,7 @@ impl InteractiveCliProvider {
         #[cfg(unix)]
         crate::launch::apply_launch_env(&launch, &mut env);
 
+        let project_context = sink.project_context();
         let shared = Shared::new(SessionParts {
             ctx: ActionContext {
                 thread_id: config.thread_id.clone(),
@@ -275,7 +276,7 @@ impl InteractiveCliProvider {
             shared.forget_session_id();
         }
 
-        let args: Vec<OsString> = match self.cli {
+        let mut args: Vec<OsString> = match self.cli {
             PaneCli::Codex => {
                 let bridge = self.bridge.as_ref().ok_or_else(|| {
                     ProviderError::Start("KalCode's hook channel isn't available.".into())
@@ -327,6 +328,17 @@ impl InteractiveCliProvider {
             }
         };
 
+        // Use native initial input, preserving the provider's own system instructions,
+        // tools and user configuration. No keystrokes race the terminal's startup.
+        if let Some(context) = project_context {
+            let context = format!(
+                "{context}\n\nThis is saved project context only. Wait for the user's next request before taking action."
+            );
+            if matches!(self.cli, PaneCli::Gemini) {
+                args.push("--prompt-interactive".into());
+            }
+            args.push(context.into());
+        }
         let shared_lease = lease.map(share_profile_lease);
         let guardian_job = shared_lease
             .as_ref()

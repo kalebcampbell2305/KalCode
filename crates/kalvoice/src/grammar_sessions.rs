@@ -227,7 +227,16 @@ fn direct_prompt(original: &str) -> Option<Understood> {
     for j in target_start + 1..limit {
         let w = &found[j];
         let gap = &original[found[j - 1].end..w.start];
-        let prompt_start = if gap.contains([',', ':', ';']) {
+        let memory_reference = [
+            "the rule we use",
+            "our release rule",
+            "the saved rule",
+            "the project memory",
+            "the unified memory",
+        ]
+        .iter()
+        .any(|phrase| original[w.start..].to_lowercase().starts_with(phrase));
+        let prompt_start = if gap.contains([',', ':', ';']) || memory_reference {
             Some(w.start)
         } else {
             match question_word(&w.lower) {

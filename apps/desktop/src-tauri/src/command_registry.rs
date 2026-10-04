@@ -1,5 +1,12 @@
 // Canonical native command inventory, shared by build-time capabilities and runtime admission.
 pub(crate) const COMMANDS: &[&str] = &[
+    "unified_memory_list",
+    "unified_memory_save",
+    "unified_memory_review",
+    "unified_memory_delete",
+    "unified_memory_preferences",
+    "unified_memory_set_preferences",
+    "unified_memory_retrieve",
     "account_bootstrap",
     "account_status",
     "account_email_start",

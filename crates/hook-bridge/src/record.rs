@@ -128,6 +128,10 @@ pub struct HookRecord {
     pub codex_type: Option<String>,
     /// Opaque Codex root-turn id used only to correlate and deduplicate completion status.
     pub codex_turn_id: Option<String>,
+    /// Only explicitly labelled durable facts, bounded; never a transcript or terminal stream.
+    /// Native memory rejects secrets before persistence. This is not an activity event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_candidate: Option<String>,
 }
 
 impl HookRecord {
@@ -145,6 +149,14 @@ impl HookRecord {
         let Some(event) = self.event else {
             return Err(RecordError::Invalid);
         };
+        if self.memory_candidate.as_ref().is_some_and(|text| {
+            !matches!(
+                event,
+                HookEvent::Stop | HookEvent::CodexNotify | HookEvent::UserPromptSubmit
+            ) || durable_lines(text).as_ref() != Some(text)
+        }) {
+            return Err(RecordError::Invalid);
+        }
         if !valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
             || !valid_id(self.tool_name.as_deref(), MAX_ID_CHARS)
             || !valid_id(self.tool_use_id.as_deref(), MAX_ID_CHARS)
@@ -418,6 +430,15 @@ pub fn from_claude_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecord, R
                 .and_then(Value::as_str)
                 .map(|p| clean_text(p, MAX_PROMPT_CHARS))
                 .filter(|p| !p.trim().is_empty());
+            record.memory_candidate = get("prompt")
+                .or_else(|| get("user_prompt"))
+                .and_then(Value::as_str)
+                .and_then(durable_lines);
+        }
+        HookEvent::Stop => {
+            record.memory_candidate = get("last_assistant_message")
+                .and_then(Value::as_str)
+                .and_then(durable_lines);
         }
         _ => {}
     }
@@ -435,6 +456,10 @@ pub fn from_codex_notify(json_arg: &str) -> Result<HookRecord, RecordError> {
     let object = value.as_object().ok_or(RecordError::NotAnObject)?;
     Ok(HookRecord {
         event: Some(HookEvent::CodexNotify),
+        memory_candidate: object
+            .get("last-assistant-message")
+            .and_then(Value::as_str)
+            .and_then(durable_lines),
         provider_session_id: clean_id(
             object.get("thread-id").or_else(|| object.get("thread_id")),
             MAX_ID_CHARS,
@@ -446,6 +471,53 @@ pub fn from_codex_notify(json_arg: &str) -> Result<HookRecord, RecordError> {
         ),
         ..HookRecord::default()
     })
+}
+
+/// Deliberately conservative: ordinary prose, logs and unlabeled conclusions never leave the
+/// helper. Do not clip a claim into a different meaning or retain a partial oversized line.
+fn durable_lines(text: &str) -> Option<String> {
+    let mut selected = Vec::new();
+    let mut bytes = 0;
+    let mut fenced = false;
+    for line in text.lines().take(256) {
+        let line = line.trim().trim_start_matches("- ");
+        if line.starts_with("```") || line.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        if line.len() > 1024
+            || line.chars().any(char::is_control)
+            || ![
+                "decision:",
+                "technical decision:",
+                "architecture:",
+                "convention:",
+                "release rule:",
+                "known issue:",
+                "constraint:",
+                "project:",
+                "product:",
+                "product decision:",
+                "implementation decision:",
+                "handoff context:",
+                "remember:",
+            ]
+            .iter()
+            .any(|label| lower.starts_with(label))
+        {
+            continue;
+        }
+        if selected.len() == 8 || bytes + line.len() + 1 > 4096 {
+            break;
+        }
+        bytes += line.len() + 1;
+        selected.push(line);
+    }
+    (!selected.is_empty()).then(|| selected.join("\n"))
 }
 
 #[cfg(test)]
@@ -633,5 +705,62 @@ mod tests {
                 .expect("json")
                 .contains("secret prose")
         );
+    }
+
+    #[test]
+    fn memory_candidate_keeps_only_complete_labelled_unfenced_claims() {
+        let text = format!(
+            "Compiled successfully\n```rust\nDecision: An example must not be captured.\n```\n~~~\nArchitecture: Another fenced example.\n~~~\nDecision: {}\n- Decision: SQLite holds project knowledge.\nKnown issue: Retry fails after a network timeout.\n",
+            "x".repeat(1024)
+        );
+        let r = record(HookEvent::Stop, json!({"last_assistant_message": text}));
+        assert_eq!(
+            r.memory_candidate.as_deref(),
+            Some(
+                "Decision: SQLite holds project knowledge.\nKnown issue: Retry fails after a network timeout."
+            )
+        );
+        assert!(r.validate().is_ok());
+        let many = (0..20)
+            .map(|index| format!("Decision: Preserve durable project claim {index}.\n"))
+            .collect::<String>();
+        let selected = durable_lines(&many).unwrap();
+        assert_eq!(selected.lines().count(), 8);
+        assert!(selected.len() <= 4096);
+    }
+
+    #[test]
+    fn memory_candidate_rejects_wrong_event_unlabelled_or_oversized_wire_values() {
+        let text = "Decision: SQLite holds project knowledge.";
+        for event in [
+            HookEvent::PostToolUse,
+            HookEvent::PreToolUse,
+            HookEvent::SessionStart,
+            HookEvent::StopFailure,
+        ] {
+            let r = record(event, json!({"last_assistant_message": text}));
+            assert_eq!(r.memory_candidate, None);
+            let mut forged = r;
+            forged.memory_candidate = Some(text.into());
+            assert_eq!(forged.validate(), Err(RecordError::Invalid));
+        }
+        for candidate in [
+            "unlabelled noise".to_owned(),
+            format!("Decision: {}", "x".repeat(1025)),
+            "Decision: text\u{0007}".to_owned(),
+            "```\nDecision: fenced example\n```".to_owned(),
+        ] {
+            let mut forged = record(HookEvent::Stop, json!({}));
+            forged.memory_candidate = Some(candidate);
+            assert_eq!(forged.validate(), Err(RecordError::Invalid));
+        }
+        let r = record(HookEvent::UserPromptSubmit, json!({"prompt": text}));
+        assert_eq!(r.memory_candidate.as_deref(), Some(text));
+        let codex = from_codex_notify(
+            &json!({"type":"agent-turn-complete", "thread-id":"12345678-1234-1234-1234-123456789abc", "turn-id":"turn-one", "last-assistant-message":text}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(codex.memory_candidate.as_deref(), Some(text));
+        assert!(codex.validate().is_ok());
     }
 }

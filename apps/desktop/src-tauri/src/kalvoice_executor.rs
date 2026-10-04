@@ -64,6 +64,59 @@ use kalcode_threads::{
 
 use crate::session_resolver::{self, ResolveContext};
 
+/// Only explicit references to saved project knowledge enrich dictated agent messages.
+/// Ordinary prompts retain their exact words and existing provider approval behavior.
+fn refers_to_saved_memory(prompt: &str) -> bool {
+    let words = prompt.to_lowercase();
+    [
+        "project memory",
+        "unified memory",
+        "saved rule",
+        "the rule we use",
+        "our release rule",
+        "what we decided",
+    ]
+    .iter()
+    .any(|phrase| words.contains(phrase))
+}
+
+fn forwarded_memory_query(prompt: &str) -> String {
+    prompt
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| {
+            !word.is_empty()
+                && !matches!(
+                    *word,
+                    "the"
+                        | "rule"
+                        | "we"
+                        | "use"
+                        | "for"
+                        | "our"
+                        | "saved"
+                        | "project"
+                        | "memory"
+                        | "unified"
+                        | "what"
+                        | "decided"
+                        | "about"
+                        | "this"
+                        | "please"
+                        | "to"
+                )
+        })
+        .map(|word| {
+            if word.len() > 4 && !word.ends_with("ss") {
+                word.strip_suffix('s').unwrap_or(word)
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Size a terminal opened by voice starts at; the Code view resizes it when it attaches.
 const VOICE_TERMINAL_SIZE: (u16, u16) = (120, 30);
 
@@ -80,6 +133,7 @@ pub struct DesktopExecutor {
     /// off (Stable), voice Search is refused and the locator is never read.
     pub session_locator_enabled: bool,
     pub core: Arc<Core>,
+    pub memory: Option<Arc<crate::unified_memory_commands::MemoryService>>,
     /// The signed-in account, whose verified plan caps open terminals. `None` (tests only)
     /// applies the Free cap.
     pub account: Option<Arc<crate::account::runtime::AccountRuntime>>,
@@ -1536,6 +1590,20 @@ impl DesktopExecutor {
         Ok(thread)
     }
 
+    /// Retrieve current topic matches from the same scoped store as the Memory view.
+    fn project_memory(&self, workspace_id: &str, query: &str) -> Result<String, ExecError> {
+        self.memory
+            .as_ref()
+            .ok_or_else(|| {
+                ExecError::new(
+                    "memory_unavailable",
+                    "Project memory is unavailable right now.",
+                )
+            })?
+            .recall(workspace_id, query)
+            .map_err(|error| from_core(&error))
+    }
+
     /// "Tell <target> <prompt>": the thread, and whether its composer may press Send (never for
     /// a stopped thread: KalVoice doesn't resume by voice).
     fn prepare_direct_prompt(
@@ -2265,6 +2333,10 @@ impl Executor for DesktopExecutor {
                 }
                 Ok(())
             }
+            KalVoiceIntent::ReadMemory { .. } if self.memory.is_none() => Err(ExecError::new(
+                "memory_unavailable",
+                "Project memory is unavailable right now.",
+            )),
             KalVoiceIntent::Search { .. } if !self.session_locator_enabled => {
                 Err(search_not_in_this_build())
             }
@@ -2331,8 +2403,35 @@ impl Executor for DesktopExecutor {
                     }),
                 })
             }
+            KalVoiceIntent::ReadMemory { query } => {
+                let workspace = self.target_workspace(ctx.workspace_id.as_deref())?;
+                let memory = self.project_memory(&workspace.id, query)?;
+                Ok(Executed {
+                    summary: if memory.trim().is_empty() {
+                        "I don't have current saved project memory about that. Open Unified Memory to add or review it.".into()
+                    } else {
+                        format!("From this project's saved memory:\n{memory}")
+                    },
+                    directive: None,
+                })
+            }
             KalVoiceIntent::DirectPrompt { target, prompt } => {
                 let (thread, submit) = self.prepare_direct_prompt(target, prompt, ctx)?;
+                let text = if refers_to_saved_memory(prompt) {
+                    let query = forwarded_memory_query(prompt);
+                    let memory = self.project_memory(&thread.workspace_id, &query)?;
+                    if memory.trim().is_empty() {
+                        return Err(ExecError::new(
+                            "memory_not_found",
+                            "I couldn't find a current saved rule for that in this agent's project. Add it to Unified Memory first.",
+                        ));
+                    }
+                    format!(
+                        "{prompt}\n\nRelevant saved project context (verify against current code):\n{memory}"
+                    )
+                } else {
+                    prompt.clone()
+                };
                 Ok(Executed {
                     summary: if submit {
                         format!("Sending to \u{201c}{}\u{201d}.", thread.name)
@@ -2344,7 +2443,7 @@ impl Executor for DesktopExecutor {
                     },
                     directive: Some(UiDirective::ComposeInThread {
                         thread_id: thread.id,
-                        text: prompt.clone(),
+                        text,
                         submit,
                     }),
                 })
@@ -2830,6 +2929,117 @@ mod tests {
         assert!(!PermissionMode::Custom.is_confirm_free_start());
     }
 
+    #[test]
+    fn unified_memory_is_explicit_in_forwarded_prompts() {
+        for prompt in [
+            "the rule we use for releases",
+            "Use our PROJECT MEMORY",
+            "what we decided about Browser",
+        ] {
+            assert!(refers_to_saved_memory(prompt), "{prompt}");
+        }
+        assert_eq!(
+            forwarded_memory_query("the rule we use for releases"),
+            "release"
+        );
+        assert_eq!(
+            forwarded_memory_query("what we decided about the Browser"),
+            "browser"
+        );
+        for prompt in ["run the tests", "fix a memory leak", "release the project"] {
+            assert!(!refers_to_saved_memory(prompt), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn unified_memory_voice_question_reads_real_scoped_current_records() {
+        use kalcode_context::memory::{self, MemoryCategory, MemoryInput, MemorySourceKind};
+        use kalcode_kalvoice::grammar::{self, Understood};
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let exec = executor(data.path());
+        let workspace = exec.core.open_workspace(project.path()).expect("workspace");
+        let mut input = MemoryInput {
+            category: MemoryCategory::Architecture,
+            title: "Provider usage ownership".into(),
+            content: "ProviderUsage.ts owns provider usage calculations.".into(),
+            pinned: false,
+            permanent: false,
+            source_kind: MemorySourceKind::User,
+            source_id: None,
+            file_path: Some("ProviderUsage.ts".into()),
+            commit_id: None,
+        };
+        std::fs::write(project.path().join("ProviderUsage.ts"), "version one").unwrap();
+        exec.core
+            .transact(|tx| {
+                memory::save(
+                    tx,
+                    "voice-account",
+                    &workspace.id,
+                    None,
+                    &input,
+                    project.path(),
+                )?;
+                input.title = "Release rule".into();
+                input.content = "Ship signed builds from main.".into();
+                input.file_path = None;
+                input.pinned = true;
+                memory::save(
+                    tx,
+                    "voice-account",
+                    &workspace.id,
+                    None,
+                    &input,
+                    project.path(),
+                )?;
+                Ok(((), vec![]))
+            })
+            .expect("save");
+        let Understood::Intent {
+            intent: KalVoiceIntent::ReadMemory { query },
+            ..
+        } = grammar::understand("Which file owns provider usage?")
+        else {
+            panic!("memory intent");
+        };
+        let recall = |account: &str| {
+            memory::retrieve_relevant(
+                &exec.core.reader(),
+                account,
+                &workspace.id,
+                &query,
+                4096,
+                project.path(),
+            )
+            .expect("recall")
+        };
+        let answer = recall("voice-account");
+        assert!(answer.contains("ProviderUsage.ts owns"));
+        assert!(
+            !answer.contains("Ship signed builds"),
+            "unrelated pins aren't answers"
+        );
+        assert!(recall("another-account").is_empty());
+        std::fs::write(project.path().join("ProviderUsage.ts"), "version two").unwrap();
+        assert!(
+            recall("voice-account").is_empty(),
+            "changed files aren't current truth"
+        );
+    }
+
+    #[test]
+    fn unified_memory_unavailable_is_truthful_before_execution() {
+        let temp = tempfile::tempdir().expect("temp");
+        let exec = executor(temp.path());
+        let error = exec
+            .check(&KalVoiceIntent::ReadMemory {
+                query: "architecture".into(),
+            })
+            .expect_err("unavailable");
+        assert_eq!(error.code, "memory_unavailable");
+    }
+
     fn executor(dir: &std::path::Path) -> DesktopExecutor {
         let core = Core::open(kalcode_core::CoreConfig {
             paths: kalcode_core::Paths::new(dir),
@@ -2842,6 +3052,7 @@ mod tests {
             session_locator_enabled: true,
             core: Arc::new(core),
             account: None,
+            memory: None,
             threads: None,
             ensure_providers: None,
             permissions: None,

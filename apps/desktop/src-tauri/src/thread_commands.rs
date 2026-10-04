@@ -98,6 +98,7 @@ impl ThreadModeStore for ThreadModes {
 /// Thread runtime state for the shell. `runtime` is `None` when the core or the permission
 /// engine failed to start: threads never run without the engine deciding their actions.
 pub struct ThreadsState {
+    memory: Arc<OnceLock<Arc<crate::unified_memory_commands::MemoryService>>>,
     resources: Arc<crate::resource_commands::ResourceGovernorState>,
     routes: crate::provider_pane_commands::PaneRoutes,
     health: Option<Arc<kalcode_providers::HealthMonitor>>,
@@ -394,6 +395,7 @@ impl ThreadsState {
             modes.bind(runtime);
         }
         let state = Self {
+            memory: Arc::new(OnceLock::new()),
             resources,
             routes,
             health,
@@ -427,7 +429,12 @@ impl ThreadsState {
                         self.resources.clone(),
                     )
                 {
-                    self.providers.register(provider);
+                    self.providers.register(Arc::new(
+                        crate::unified_memory_commands::MemoryProvider {
+                            inner: provider,
+                            memory: self.memory.clone(),
+                        },
+                    ));
                     tracing::info!(
                         event = "threads.provider_registered",
                         provider_id = status.id.as_str()
@@ -544,6 +551,14 @@ impl ThreadsState {
     /// The running thread runtime, for KalVoice's thread commands (Z12).
     pub fn runtime_handle(&self) -> Option<Arc<ThreadRuntime>> {
         self.runtime.clone()
+    }
+
+    pub fn bind_memory(&self, memory: Arc<crate::unified_memory_commands::MemoryService>) {
+        let _ = self.memory.set(memory);
+    }
+
+    pub fn memory(&self) -> Option<&Arc<crate::unified_memory_commands::MemoryService>> {
+        self.memory.get()
     }
 
     pub(crate) fn runtime(&self) -> Result<&Arc<ThreadRuntime>, IpcError> {

@@ -285,7 +285,7 @@ impl HandoffState {
             .take(40)
             .map(|file| kalcode_context::package::sanitize_label(&file.path))
             .collect();
-        let generated = edited_text.as_deref().map_or_else(
+        let mut generated = edited_text.as_deref().map_or_else(
             || {
                 capsule_text(
                     &source,
@@ -301,6 +301,13 @@ impl HandoffState {
             },
             str::to_owned,
         );
+        if let Some(memory) = self.threads.memory()
+            && let Ok(context) = memory.retrieve(&target.workspace_id, &instructions)
+            && !context.is_empty()
+        {
+            generated.push_str("\n\n");
+            generated.push_str(&context);
+        }
         let mut options = PackageOptions::new(ContextPurpose::Handoff);
         options.workspace_id = Some(source.workspace_id.clone());
         options.target_thread_id = Some(target.id.clone());
@@ -602,14 +609,23 @@ impl HandoffState {
             kalcode_core::redact::PlaceholderStyle::Labelled,
         )
         .text;
-        self.store.complete(
+        let completed = self.store.complete(
             id,
             match outcome {
                 HandoffCompletion::Completed => HandoffStatus::Completed,
                 HandoffCompletion::Failed => HandoffStatus::Failed,
             },
             &redacted,
-        )
+        )?;
+        if let Some(memory) = self.threads.memory() {
+            memory.capture(
+                &completed.target_workspace_id,
+                kalcode_contracts::unified_memory::MemorySourceKind::Handoff,
+                &completed.id,
+                &result,
+            );
+        }
+        Ok(completed)
     }
 
     fn returned_preview(&self, id: &str) -> Result<HandoffPreview> {

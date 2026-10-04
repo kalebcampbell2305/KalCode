@@ -400,6 +400,7 @@ impl InteractiveClaudeProvider {
                 session_id.clone()
             }
         };
+        let project_context = sink.project_context();
         let shared = Shared::new(SessionParts {
             ctx: ActionContext {
                 thread_id: config.thread_id.clone(),
@@ -432,7 +433,7 @@ impl InteractiveClaudeProvider {
             tracing::warn!(event = "pane.settings_write_failed", error = %e);
             ProviderError::Start("KalCode couldn't write the session settings.".into())
         })?;
-        let args = interactive_args(&InteractiveArgs {
+        let mut args = interactive_args(&InteractiveArgs {
             mode: config.permission_mode,
             start,
             settings_path: &settings_path,
@@ -441,6 +442,10 @@ impl InteractiveClaudeProvider {
             title: None,
         })
         .map_err(|e| ProviderError::Start(e.to_string()))?;
+        if let Some(context) = project_context {
+            args.push("--append-system-prompt".into());
+            args.push(context.into());
+        }
         env.insert(KEY_ENV.into(), registration.key_hex().into());
         shared.set_registration(registration);
 

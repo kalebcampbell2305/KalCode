@@ -1216,7 +1216,26 @@ impl Shared {
         if let (Some(titles), Some(prompt)) = (&self.titles, first_prompt.as_deref()) {
             titles.first_prompt(&self.ctx.thread_id, prompt);
         }
+        let memory_session = !record.in_subagent
+            && record
+                .provider_session_id
+                .as_ref()
+                .is_some_and(|id| lock(&self.provider_session_id).as_ref() == Some(id));
+        if memory_session && let Some(text) = record.memory_candidate.as_deref() {
+            if record.event == Some(HookEvent::UserPromptSubmit) {
+                self.sink.remember_user(text);
+            } else {
+                self.sink.remember(text);
+            }
+        }
         self.drain_events(should_drain);
+        if memory_session
+            && record.event == Some(HookEvent::UserPromptSubmit)
+            && let Some(query) = record.prompt.as_deref()
+            && let Some(text) = self.sink.project_context_for(query)
+        {
+            return HookReply::ProjectContext { text };
+        }
         HookReply::Ack
     }
 

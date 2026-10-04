@@ -80,7 +80,6 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::Scheduler
         | FeatureId::DiffIntelligence
         | FeatureId::Automations
-        | FeatureId::Memory
         | FeatureId::EnvironmentDoctor
         | FeatureId::Blueprints
         | FeatureId::CommandCenter
@@ -99,6 +98,7 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         // 0.1.5 zero-setup (E1-E3, E7): these ship unconditionally on Stable (Providers › Health
         // and Accounts, the Notifications panel, the sign-in gate); nothing gates on the flag.
         FeatureId::ProviderHealth
+        | FeatureId::Memory
         | FeatureId::ProviderProfiles
         | FeatureId::NotificationCenter
         | FeatureId::AccountSignIn => SurfaceState::Available,
@@ -121,7 +121,7 @@ impl FeatureFlags {
             (Automations, Gated),
             (Skills, Gated),
             (Plugins, Gated),
-            (Memory, Gated),
+            (Memory, Available),
             (Providers, Available),
             (Settings, Available),
             (CommandCenter, Gated),
@@ -225,7 +225,8 @@ mod tests {
         // Shipped in every channel: the pane system and provider terminals (Z7-W1), plus the
         // 0.1.5 features whose UI is unconditional (provider health/accounts, notifications,
         // KalCode sign-in).
-        const AVAILABLE: [FeatureId; 7] = [
+        const AVAILABLE: [FeatureId; 8] = [
+            FeatureId::Memory,
             FeatureId::PaneSystem,
             FeatureId::ProviderPanes,
             FeatureId::ProviderHandoff,

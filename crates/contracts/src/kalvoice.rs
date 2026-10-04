@@ -272,6 +272,10 @@ pub enum KalVoiceIntent {
     ShowApprovals,
     /// "What are my threads doing?" — answered from runtime state, no model needed.
     StatusReport,
+    /// Read relevant saved knowledge in the active workspace. Never invents an answer.
+    ReadMemory {
+        query: String,
+    },
     /// Anything that needs understanding beyond the command grammar (planning, delegation).
     Reasoning {
         request: String,
@@ -342,7 +346,8 @@ pub enum KalVoiceIntent {
     ClearFocused,
     /// "Tell <target> [to] <prompt>" / "ask <target> <prompt>": resolves `target` with the
     /// session resolver (clarifying when it is ambiguous) and submits `prompt` verbatim through
-    /// that thread's composer. `prompt` is transient: never stored, logged or spoken.
+    /// that thread's composer. Explicit references to saved project rules add retrieved memory.
+    /// `prompt` is transient: never stored, logged or spoken.
     DirectPrompt {
         target: String,
         prompt: String,
@@ -377,6 +382,7 @@ impl KalVoiceIntent {
             Self::StopThreads { .. } => "stop_threads",
             Self::ShowApprovals => "show_approvals",
             Self::StatusReport => "status_report",
+            Self::ReadMemory { .. } => "read_memory",
             Self::Reasoning { .. } => "reasoning",
             Self::Split { .. } => "split",
             Self::Resize { .. } => "resize",

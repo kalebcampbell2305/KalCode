@@ -166,6 +166,7 @@ fn valid_local_grounding(intent: &KalVoiceIntent) -> bool {
             | KalVoiceIntent::OpenThread { .. }
             | KalVoiceIntent::Focus { .. }
             | KalVoiceIntent::Search { .. }
+            | KalVoiceIntent::ReadMemory { .. }
             | KalVoiceIntent::ShowApprovals
             | KalVoiceIntent::StatusReport
             | KalVoiceIntent::FilterDashboard { .. }
@@ -292,6 +293,7 @@ pub(crate) fn validate_action(
         KalVoiceIntent::OpenThread { query }
         | KalVoiceIntent::Focus { query }
         | KalVoiceIntent::Search { query } => valid_text(query),
+        KalVoiceIntent::ReadMemory { query } => query.is_empty() || valid_text(query),
         KalVoiceIntent::CreateTerminal { workspace_id } => {
             valid_workspace_id(workspace_id, workspaces)
         }

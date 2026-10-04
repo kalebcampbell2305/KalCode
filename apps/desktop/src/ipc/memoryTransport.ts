@@ -68,6 +68,7 @@ import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
 import { createRailMemory } from "./memory/rail.ts";
 import { sessionResolveHandler } from "./memory/sessionResolve.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
+import { createUnifiedMemory } from "./memory/unifiedMemory.ts";
 import { createUpdaterMemory } from "./memory/updater.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
@@ -107,6 +108,7 @@ const PROVIDER_SCENARIOS: readonly string[] = [
 
 /** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
 const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
+  "memory",
   "dashboard",
   "operations",
   "kalvoice",
@@ -528,6 +530,7 @@ export function createMemoryTransport(
     ...code.handlers,
     ...threads.handlers,
     ...context.handlers,
+    ...createUnifiedMemory().handlers,
     ...permissions.handlers,
     ...panes.handlers,
     ...handoffs,

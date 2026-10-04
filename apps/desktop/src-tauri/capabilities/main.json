@@ -4,6 +4,13 @@
   "description": "Least-privilege capability for the KalCode main webview: KalCode's own commands, event plumbing, and theme sync. No filesystem, shell, HTTP, or opener access from the WebView.",
   "webviews": ["main"],
   "permissions": [
+    "allow-unified-memory-list",
+    "allow-unified-memory-save",
+    "allow-unified-memory-review",
+    "allow-unified-memory-delete",
+    "allow-unified-memory-preferences",
+    "allow-unified-memory-set-preferences",
+    "allow-unified-memory-retrieve",
     "allow-account-bootstrap",
     "allow-account-status",
     "allow-account-email-start",

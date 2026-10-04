@@ -31,6 +31,9 @@ import type {
   LocatorQuery,
   LocatorResponse,
   LocatorVia,
+  MemoryInput,
+  MemoryRecord,
+  MemorySettings,
   NotificationMark,
   NotificationPage,
   Page,
@@ -165,6 +168,34 @@ export class KalCodeClient {
 
   windowReady(): Promise<void> {
     return this.call("window_ready");
+  }
+
+  listUnifiedMemory(workspaceId: string, query = ""): Promise<MemoryRecord[]> {
+    return this.call("unified_memory_list", { workspaceId, query });
+  }
+
+  saveUnifiedMemory(workspaceId: string, id: string | null, input: MemoryInput): Promise<MemoryRecord> {
+    return this.call("unified_memory_save", { workspaceId, id, input });
+  }
+
+  deleteUnifiedMemory(workspaceId: string, id: string): Promise<void> {
+    return this.call("unified_memory_delete", { workspaceId, id });
+  }
+
+  reviewUnifiedMemory(workspaceId: string, id: string): Promise<MemoryRecord> {
+    return this.call("unified_memory_review", { workspaceId, id });
+  }
+
+  unifiedMemoryPreferences(workspaceId: string): Promise<MemorySettings> {
+    return this.call("unified_memory_preferences", { workspaceId });
+  }
+
+  retrieveUnifiedMemory(workspaceId: string, query: string): Promise<string> {
+    return this.call("unified_memory_retrieve", { workspaceId, query });
+  }
+
+  setUnifiedMemoryPreferences(workspaceId: string, settings: MemorySettings): Promise<MemorySettings> {
+    return this.call("unified_memory_set_preferences", { workspaceId, settings });
   }
 
   getSettings(): Promise<Settings> {
