@@ -345,13 +345,12 @@ function codeSurface(state: State): string {
       <button type="button" class="lk-btn" data-do="terminal" aria-label="New terminal"${hint("A real shell in your project folder.")}>${icon("terminal")}<span>Terminal</span></button>
       <span class="lk-split"><button type="button" class="lk-btn" data-do="tidy" data-tour="tidy" aria-label="KalTidy: stop idle terminals"${hint("KalTidy: stop idle terminals in one click.")}>${icon("tidy")}<span>KalTidy</span></button><button type="button" class="lk-btn lk-btn--caret" data-do="menu:tidy" aria-expanded="${state.menu === "tidy"}" aria-label="More KalTidy actions">${icon("chevron")}</button>${state.menu === "tidy" ? tidyMenu() : ""}</span>
       <span class="lk-context-control"><button type="button" class="lk-btn" data-do="menu:context" aria-expanded="${state.menu === "context"}" aria-label="Context"${hint("Open Browser, runs, services and tests beside your terminals.")}>${icon("operations")}<span>Context</span>${icon("chevron", "lk-caret")}</button>${state.menu === "context" ? contextMenu() : ""}</span>
-      <span class="lk-split"><button type="button" class="lk-btn" data-do="menu:layout" aria-label="Layout" aria-expanded="${state.menu === "layout"}">${icon("layout")}<span>Layout</span>${icon("chevron", "lk-caret")}</button>${state.menu === "layout" ? layoutMenu() : ""}</span>
       <button type="button" class="lk-btn lk-btn--primary" data-do="launcher" data-tour="new-agent"${hint("Choose a provider, account, model and effort: a real coding agent in its own terminal.")}>${icon("bot")}<span>New agent</span></button>
     </span>
   </div>
   ${renderCanvasTools(state)}
   ${canvas}
-  <div class="lk-statusbar"><span>${focusedTab ? `${tabGlyph(state, focusedTab)} ${esc(tabTitle(state, focusedTab))}` : "No pane"}</span><span>${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys"><kbd>Ctrl Alt ←↑→↓</kbd> move <kbd>Ctrl Alt D</kbd> split</span></div>
+  <div class="lk-statusbar"><span>${focusedTab ? `${tabGlyph(state, focusedTab)} ${esc(tabTitle(state, focusedTab))}` : "No pane"}</span><span>${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys"><kbd>Ctrl Alt ←↑→↓</kbd> focus <kbd>Ctrl Alt Shift H/J/K/L</kbd> move</span></div>
 </div>`;
 }
 
@@ -367,20 +366,6 @@ function contextMenu(): string {
   ${item("browser", icon("globe"), "Browser", "Preview the detected dev server")}
   ${item("context-operations", icon("operations"), "Runs, services &amp; tests", "Live context for this workspace")}
 </div>`;
-}
-
-function layoutMenu(): string {
-  return `<div class="lk-menu" role="menu" aria-label="Layout">${[
-    ["2", "2 panes"],
-    ["3", "3 panes"],
-    ["4", "4 panes (2 × 2)"],
-    ["auto", "Even out sizes"],
-  ]
-    .map(
-      ([v, l]) =>
-        `<button type="button" role="menuitem" class="lk-menu__item" data-do="layout:${v}">${icon("layout")}<span>${l}</span></button>`,
-    )
-    .join("")}</div>`;
 }
 
 // ── Dashboard: the Agent Fleet ──────────────────────────────────────────────────────────────

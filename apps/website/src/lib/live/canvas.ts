@@ -219,7 +219,7 @@ export function renderAdaptiveCanvas(
       const hidden = canvas.minimized.has(frame.id) || (focusOnly && state.focus !== frame.id);
       const attrs = `data-canvas-frame="${escapeHtml(frame.id)}" data-canvas-hidden="${hidden}" data-keep="data-canvas-snap"${hidden ? " hidden" : ""} tabindex="-1"${state.mobile ? " data-swipe" : ""}`;
       let rendered = renderFrame(state, frame, index).replace("<section ", `<section ${attrs} `);
-      const controls = `<button type="button" class="lk-icon-btn lk-canvas-grip" data-canvas-grip="${escapeHtml(frame.id)}" aria-label="Move pane ${index + 1}" title="Drag to move. Ctrl Alt Shift arrows move with the keyboard."><svg class="lk-i" aria-hidden="true"><use href="#lk-layout"/></svg></button><button type="button" class="lk-icon-btn" data-do="canvas:minimize:${escapeHtml(frame.id)}" aria-label="Minimize pane ${index + 1}" title="Minimize; keep this session running">-</button>`;
+      const controls = `<button type="button" class="lk-icon-btn lk-canvas-grip" data-canvas-grip="${escapeHtml(frame.id)}" aria-label="Move pane ${index + 1}" title="Drag to move. Ctrl Alt Shift H/J/K/L moves with the keyboard."><svg class="lk-i" aria-hidden="true"><use href="#lk-layout"/></svg></button><button type="button" class="lk-icon-btn" data-do="canvas:minimize:${escapeHtml(frame.id)}" aria-label="Minimize pane ${index + 1}" title="Minimize; keep this session running">-</button>`;
       rendered = rendered.replace(/(<(?:span|div) class="lk-frame__end">)/, `$1${controls}`);
       return rendered;
     })

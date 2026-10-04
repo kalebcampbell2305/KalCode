@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canvasAction, canvasState, renderAdaptiveCanvas, renderCanvasTools } from "../../src/lib/live/canvas";
-import { closeTab, initialState, openTerminal, tick } from "../../src/lib/live/model";
+import { closeTab, initialState, isAvailable, openTerminal, tick } from "../../src/lib/live/model";
 
 describe("Adaptive Canvas sample layouts", () => {
   it.each(["build", "debug", "review", "ship", "focus"])(
@@ -58,7 +58,7 @@ describe("Adaptive Canvas sample layouts", () => {
     expect(html).toContain("Adaptive Canvas");
     expect(html).toContain("data-canvas-frame");
     expect(html).not.toContain("style=");
-    expect(html).toContain("Coming soon");
+    expect(html.includes("Coming soon")).toBe(!isAvailable("adaptive-canvas"));
   });
 });
 

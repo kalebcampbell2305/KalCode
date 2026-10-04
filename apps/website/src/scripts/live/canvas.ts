@@ -1,4 +1,4 @@
-/** Scoped pointer/keyboard controls for the temporary Adaptive Canvas sample. */
+﻿/** Scoped pointer/keyboard controls for the temporary Adaptive Canvas sample. */
 import { canvasAction, canvasState, visibleCanvasFrames } from "../../lib/live/canvas";
 import type { State } from "../../lib/live/model";
 
@@ -92,24 +92,60 @@ export function mountAdaptiveCanvas(host: HTMLElement, hooks: Hooks) {
         cancel();
         return;
       }
-      if (!(event.ctrlKey || event.metaKey) || !event.altKey) return;
+      if (!event.ctrlKey || !event.altKey || event.metaKey) return;
       const state = hooks.getState();
       if (state.surface !== "code") return;
       const visible = visibleCanvasFrames(state);
-      const current = visible.findIndex((frame) => frame.id === state.focus);
-      const delta = ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 } as Record<string, number>)[event.key];
+      const directions: Record<string, "left" | "right" | "up" | "down"> = {
+        ArrowLeft: "left",
+        ArrowRight: "right",
+        ArrowUp: "up",
+        ArrowDown: "down",
+      };
+      const arrow = directions[event.key];
+      // Option changes the produced letter on macOS; Windows AltGr characters must remain typing.
+      const key =
+        /Mac/.test(navigator.platform) && /^Key[A-Z]$/.test(event.code)
+          ? event.code.slice(3).toLowerCase()
+          : event.key.toLowerCase();
+      const movement = event.shiftKey
+        ? ({ h: "left", l: "right", k: "up", j: "down" } as const)[key as "h" | "l" | "k" | "j"]
+        : undefined;
       let action: string | null = null;
-      if (delta !== undefined) {
-        const offset = state.mobile && Math.abs(delta) === 2 ? Math.sign(delta) : delta;
-        const next = visible[current + offset];
+      if (arrow !== undefined && event.shiftKey) {
+        const sign = arrow === "right" || arrow === "down" ? 1 : -1;
+        action = `canvas:resize:${canvasState(state).share + sign * 10}`;
+      } else if (arrow !== undefined || movement !== undefined) {
+        const direction = arrow ?? movement;
+        const forward = direction === "right" || direction === "down";
+        const source = host.querySelector<HTMLElement>(selector(state.focus))?.getBoundingClientRect();
+        const next = state.mobile
+          ? visible[visible.findIndex((frame) => frame.id === state.focus) + (forward ? 1 : -1)]
+          : visible
+              .filter((frame) => frame.id !== state.focus)
+              .map((frame) => {
+                const rect = host.querySelector<HTMLElement>(selector(frame.id))?.getBoundingClientRect();
+                if (!source || !rect?.width || !rect.height) return null;
+                const dx = rect.x + rect.width / 2 - source.x - source.width / 2;
+                const dy = rect.y + rect.height / 2 - source.y - source.height / 2;
+                const distance = direction === "left" || direction === "right" ? dx : dy;
+                if (forward ? distance <= 1 : distance >= -1) return null;
+                return { frame, distance: Math.hypot(dx, dy) };
+              })
+              .filter((item): item is { frame: (typeof visible)[number]; distance: number } => item !== null)
+              .sort((a, b) => a.distance - b.distance)[0]?.frame;
         if (!next) return;
-        action = event.shiftKey
-          ? `canvas:move:${state.focus}:${offset > 0 ? "after" : "before"}:${next.id}`
-          : `canvas:focus:${next.id}`;
-      } else if (event.key.toLowerCase() === "m") action = `canvas:maximize:${state.focus}`;
-      else if (event.key.toLowerCase() === "d") action = `canvas:split:${state.focus}`;
-      else if (event.key.toLowerCase() === "j") action = `canvas:minimize:${state.focus}`;
-      else if (event.key.toLowerCase() === "z") action = "canvas:undo";
+        action =
+          movement !== undefined
+            ? `canvas:move:${state.focus}:${forward ? "after" : "before"}:${next.id}`
+            : `canvas:focus:${next.id}`;
+      } else if (key === "d") action = `canvas:split:${state.focus}`;
+      else if (!event.shiftKey) {
+        if (key === "enter") action = `canvas:maximize:${state.focus}`;
+        else if (key === "h") action = `canvas:minimize:${state.focus}`;
+        else if (key === "t") action = "canvas:tidy";
+        else if (key === "z") action = "canvas:undo";
+      }
       if (!action) return;
       event.preventDefault();
       event.stopImmediatePropagation();
