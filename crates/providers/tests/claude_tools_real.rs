@@ -33,9 +33,7 @@ fn env() -> BTreeMap<OsString, OsString> {
     std::env::vars_os()
         .filter(|(name, _)| {
             let name = name.to_string_lossy().to_ascii_uppercase();
-            name != "CLAUDECODE"
-                && !name.starts_with("CLAUDE_CODE_")
-                && name != "KALCODE_HOOK_KEY"
+            name != "CLAUDECODE" && !name.starts_with("CLAUDE_CODE_") && name != "KALCODE_HOOK_KEY"
         })
         .collect()
 }
@@ -161,6 +159,11 @@ fn bypass_runs_shell_and_the_users_mcp_tools() {
         turn.tools
     );
     if let Some(tool) = mcp {
-        assert!(ran(&turn, &tool), "{tool} did not run: {:?}; {}", turn.tools, turn.text);
+        assert!(
+            ran(&turn, &tool),
+            "{tool} did not run: {:?}; {}",
+            turn.tools,
+            turn.text
+        );
     }
 }
