@@ -493,11 +493,15 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     const input = event.target as HTMLInputElement;
     if (input.matches("[data-memory-query]")) {
       state.memory.query = input.value;
+      state.memory.selected = null;
+      state.memory.confirmRemove = false;
       render();
       return;
     }
     if (input.matches("[data-memory-category]")) {
       state.memory.category = input.value;
+      state.memory.selected = null;
+      state.memory.confirmRemove = false;
       render();
       return;
     }

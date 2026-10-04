@@ -21,6 +21,8 @@ for (const width of [1440, 390]) {
     const accessibility = await new AxeBuilder({ page }).include(".lk-memory").analyze();
     expect(accessibility.violations).toEqual([]);
     await memory.getByRole("button", { name: "Edit memory", exact: true }).click();
+    await expect(memory.getByRole("searchbox", { name: "Search memory" })).toBeDisabled();
+    await expect(memory.getByRole("combobox", { name: "Filter memory category" })).toBeDisabled();
     await memory
       .getByRole("textbox", { name: "Memory content" })
       .fill("Use shared stat cards. <sample> stays plain text.");
@@ -28,9 +30,9 @@ for (const width of [1440, 390]) {
     await expect(memory.getByRole("article")).toContainText("<sample> stays plain text.");
     await memory.getByRole("button", { name: "Unpin", exact: true }).click();
     await expect(memory.getByRole("button", { name: "Pin", exact: true })).toHaveAttribute("aria-pressed", "false");
-    if (width < 500) await memory.getByRole("button", { name: "Back to memories" }).click();
     await memory.getByRole("searchbox", { name: "Search memory" }).fill("revenue");
     await expect(memory.locator(".lk-memory__note")).toHaveCount(1);
+    await expect(memory.locator(".lk-memory__note")).toBeVisible();
     await memory.getByRole("button", { name: "Chart labels on small screens", exact: true }).click();
     await memory.getByRole("button", { name: "Mark reviewed" }).click();
     await expect(memory.locator(".lk-memory__stale")).toHaveCount(0);
@@ -47,6 +49,8 @@ for (const width of [1440, 390]) {
     await app.locator('[data-do="go:memory"]').click();
     await expect(memory).not.toContainText("Keep releases small");
     await expect(memory.getByRole("article")).toContainText("main dashboard shell");
+    await memory.getByRole("combobox", { name: "Filter memory category" }).selectOption("decisions");
+    await expect(memory.getByRole("button", { name: "Review before release", exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
 }
