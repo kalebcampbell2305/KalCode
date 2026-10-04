@@ -28,7 +28,8 @@ async function openWorkspace(page: Page) {
     .getByRole("button", { name: /^Open folder/ })
     .first()
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "cursor-project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Workspace cursor-project", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New agent", exact: true })).toBeVisible();
 }
 
 for (const [count, width] of [
@@ -75,8 +76,9 @@ for (const [count, width] of [
       .click();
     await expect(page.getByRole("article")).toHaveCount(count);
     await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
-    await expect(page.getByRole("heading", { level: 1, name: "cursor-project" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Workspace cursor-project", exact: true })).toBeVisible();
     await expect(panes).toHaveCount(count);
+    await expect(panes.first()).toBeVisible();
     await expect(page.getByText("Open in Threads", { exact: true })).toHaveCount(0);
   });
 }
