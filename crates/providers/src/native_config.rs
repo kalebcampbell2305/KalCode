@@ -800,8 +800,9 @@ fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use serde_json::json;
 
