@@ -20,7 +20,7 @@ function Get-CandidatePackage {
   $sig = Get-AuthenticodeSignature -LiteralPath $exe
   if ($sig.Status -ne 'Valid') { Refuse 'candidate installer signature is not valid' }
   $receipt.schema = 'kalcode-fast-update-from-live/v1'
-  $receipt.changesData = $false; $receipt.changesUpdater = $false; $receipt.expectSchema = $ExpectSchema
+  $receipt.changesData = [bool]$ChangesData; $receipt.changesUpdater = $false; $receipt.expectSchema = $ExpectSchema
   $receipt.proofMechanism = 'signed /S /UPDATE package transition in isolated interactive desktop'
   $receipt.checks = [ordered]@{ install = $false; launch = $false; updateFromLive = $false; dataKept = $false; restoreGuard = $null }
   $receipt.safeguards = [ordered]@{ authenticationBypassed = $false; cacheSeeded = $false; fixtureOnly = $false; testHooks = $false; tlsBypassed = $false }
@@ -49,6 +49,8 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $receipt.liveClose = Close-Exact $liveRun.pid
   if (-not $receipt.liveClose.exited -or -not $receipt.liveClose.accepted) { Refuse 'live application did not exit naturally through its window' }
   $before = Copy-ClosedDatabase 'db-live'
+  $floorPath = Join-Path $Updates 'rollback-floor'
+  $floorBefore = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { $null }
   $installer = Start-Process -FilePath $package.exe -ArgumentList '/S', '/UPDATE' -WindowStyle Hidden -PassThru
   if (-not $installer.WaitForExit(300000)) { Refuse 'candidate installer exceeded 300s; leaving owned process for diagnosis' }
   if ($installer.ExitCode -ne 0) { Refuse "candidate installer failed: $($installer.ExitCode)" }
@@ -62,11 +64,18 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $receipt.candidateClose = Close-Exact $receipt.reopen.pid
   if (-not $receipt.candidateClose.exited -or -not $receipt.candidateClose.accepted) { Refuse 'candidate application did not exit naturally through its window' }
   $after = Copy-ClosedDatabase 'db-candidate'
-  $comparison = (& python -I -B (Join-Path $PSScriptRoot 'compare-desktop-databases.py') $before $after $CandidateVersion $ExpectSchema | Out-String).Trim()
+  $expectedLive = if ($LiveSchema -gt 0) { $LiveSchema } else { $ExpectSchema }
+  $comparison = (& python -I -B (Join-Path $PSScriptRoot 'compare-desktop-databases.py') $before $after $CandidateVersion $ExpectSchema $expectedLive | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $comparison) { Refuse 'read-only database comparison failed' }
   $receipt.dataCompare = $comparison | ConvertFrom-Json
   [IO.File]::WriteAllText((Join-Path $OutDir 'database-comparison.json'), $comparison)
   if (@($receipt.dataCompare.differences).Count) { Refuse 'candidate changed or lost pre-existing project data; see database-comparison.json' }
   $receipt.checks.dataKept = $true; $receipt.checks.updateFromLive = $true
+  $floorAfter = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { $null }
+  $receipt.floor = [ordered]@{ before = $floorBefore; after = $floorAfter }
+  if ($ChangesData) {
+    if ($floorAfter -cne $CandidateVersion) { Refuse 'migration did not set the forward-only rollback floor to the candidate version' }
+    $receipt.checks.restoreGuard = $true
+  }
   Note "signed package update passed; $($receipt.dataCompare.rowsKept) existing rows retained"
 }

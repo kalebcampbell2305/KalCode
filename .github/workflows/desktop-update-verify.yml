@@ -8,7 +8,7 @@ name: Desktop update verify (self-hosted)
 #   gh workflow run desktop-update-verify.yml --ref main -f live_url=... -f live_sha256=... -f live_version=...
 #     -f candidate_version=... -f candidate_sha256=... -f candidate_commit=...
 # Before publication, add candidate_tag=qa-... and expect_schema=N for signed package update/data preservation proof.
-# Package proof does not claim normal updater delivery and only supports unchanged data schema/updater releases.
+# Package proof does not claim normal updater delivery. Data migrations require live_schema and changes_data=true.
 
 run-name: Desktop update ${{ inputs.live_version }} -> ${{ inputs.candidate_version }}
 
@@ -22,7 +22,9 @@ on:
       candidate_sha256: { description: SHA-256 of the live Windows installer, required: true, type: string }
       candidate_commit: { description: Commit of the live build, required: true, type: string }
       candidate_tag: { description: Optional private draft QA release tag for prepublication package proof (no feed delivery claim), required: false, type: string }
-      expect_schema: { description: Expected SQLite schema for package proof (unchanged data schema only), required: false, default: '0', type: string }
+      expect_schema: { description: Expected candidate SQLite schema for package proof, required: false, default: '0', type: string }
+      live_schema: { description: Expected live SQLite schema for migration proof, required: false, default: '0', type: string }
+      changes_data: { description: Require forward-only restore guard after schema migration, required: false, default: false, type: boolean }
 
 permissions:
   contents: read
@@ -57,13 +59,16 @@ jobs:
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           EXPECT_SCHEMA: ${{ inputs.expect_schema }}
+          LIVE_SCHEMA: ${{ inputs.live_schema }}
+          CHANGES_DATA: ${{ inputs.changes_data }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP ('desktop-update-out-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
           $packageArgs = @()
-          if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA) }
+          if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA, '-LiveSchema', $env:LIVE_SCHEMA) }
+          if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
           & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
             -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
             -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `
