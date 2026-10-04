@@ -51,6 +51,10 @@ test("provider routing preserves terminal identity before identical account and 
   const guard = commands.match(/let guard = \|provider:[^\n]+\{([\s\S]*?)\n {4}\};/)?.[1];
   assert.ok(guard, "the provider branches must share one guard factory");
   assert.match(guard, /ObservedProvider::wrap\(provider, health\)/);
+  assert.match(
+    guard,
+    /if interactive \{\s*ResourceAdmissionProvider::wrap_interactive\(observed, resources\.clone\(\)\)\s*\} else \{\s*ResourceAdmissionProvider::wrap\(observed, resources\.clone\(\)\)/,
+  );
   assert.match(guard, /ResourceAdmissionProvider::wrap\(observed, resources\.clone\(\)\)/);
   assert.match(guard, /AccountBoundProvider::managed\(\s*governed,\s*runtime\.clone\(\),/);
   assert.match(commands, /routes\.route_claude\(headless, guard\)/);
@@ -66,7 +70,7 @@ test("provider routing preserves terminal identity before identical account and 
   const router = readFileSync(new URL("../crates/providers/src/interactive/provider.rs", import.meta.url), "utf8");
   assert.match(
     router,
-    /self\.headless = guard\(self\.headless\);\s*self\.interactive = self\.interactive\.map\(guard\)/,
+    /self\.headless = guard\(self\.headless, false\);\s*self\.interactive = self\.interactive\.map\(\|provider\| guard\(provider, true\)\)/,
   );
   const routing = router.slice(router.indexOf("impl AgentProvider for RuntimeRouter"));
   const persisted = routing.indexOf("self.mark(&config.thread_id)?");
