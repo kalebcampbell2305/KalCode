@@ -779,6 +779,16 @@ The shared policy now explicitly enables the stable `code_mode_host` and leaves 
 `code_mode` selection to Codex. Codex starts its local host automatically; see the
 [official host documentation](https://learn.chatgpt.com/docs/app-server#connect-a-remote-code-mode-host).
 Every new or resumed headless turn and coding pane receives that policy on Windows and macOS.
+
+On Windows, the same launch policy selects `windows.sandbox='unelevated'`, Codex's
+restricted-token backend. Because KalCode ignores user configuration, leaving the backend
+unspecified made Codex 0.160 downgrade `workspace-write` to `read-only`, even in Auto mode.
+The backend selection preserves the requested sandbox and approval policy; it does not grant
+full access, enable network access, elevate the process, or alter authentication. Plan remains
+read-only, and macOS receives no Windows backend setting. An isolated, no-model
+`codex debug prompt-input` regression reproduces the old read-only projection and verifies
+workspace-write with the corrected launch policy. Existing live provider processes retain their
+launch settings; do not terminate active coding work to apply this change.
 The selected native sandbox/approval mode, account binding, credentials, administrator policy,
 managed profile isolation, network restrictions and process supervision remain authoritative.
 Ordinary shells and Claude panes use the existing independent native PTY launch path.
