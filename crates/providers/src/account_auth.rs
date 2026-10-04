@@ -34,17 +34,10 @@ pub struct CodexChatGptAccount {
 }
 
 impl CodexChatGptAccount {
-    /// Whether this plan can currently use KalCode's managed Codex runtime isolation.
-    ///
-    /// Organization-managed and unknown plans can receive cloud-managed configuration. Until
-    /// that configuration path is proven contained, the runtime adapter must refuse to start.
-    pub fn managed_runtime_is_supported(&self) -> bool {
-        self.cloud_config_eligibility() == managed_policy::CloudConfigEligibility::Ineligible
-    }
-
-    /// Maps official plan truth to the managed runtime's cloud-configuration safety contract.
-    /// Known organization plans are identified as eligible and remain blocked by current
-    /// session policy; unfamiliar values stay unknown and fail closed.
+    /// Maps official plan truth to whether Codex may apply an organization's cloud-managed
+    /// configuration. Every plan can launch (native provider parity): an organization's
+    /// configuration applies inside KalCode exactly as it does in a native terminal. Unfamiliar
+    /// values stay unknown.
     pub fn cloud_config_eligibility(&self) -> managed_policy::CloudConfigEligibility {
         use managed_policy::CloudConfigEligibility::{Eligible, Ineligible, Unknown};
         match self.plan_type.as_str() {
@@ -1051,6 +1044,9 @@ fn decode_account_state(value: &Value) -> Result<CodexAccountState, CodexAccount
                 }
                 _ => return Err(CodexAccountAuthError::InvalidResponse),
             };
+            // Plan metadata is optional information, not authentication evidence. Preserve
+            // a valid official account result when that field is absent, malformed or new.
+            // Empty maps to Unknown and never becomes a launch requirement.
             let plan_type = object
                 .get("planType")
                 .and_then(Value::as_str)
@@ -1061,7 +1057,7 @@ fn decode_account_state(value: &Value) -> Result<CodexAccountState, CodexAccount
                             .bytes()
                             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                 })
-                .ok_or(CodexAccountAuthError::InvalidResponse)?
+                .unwrap_or_default()
                 .to_owned();
             Some(CodexChatGptAccount { email, plan_type })
         }
@@ -1586,34 +1582,18 @@ mod tests {
     }
 
     #[test]
-    fn only_verified_consumer_plans_are_supported_by_managed_runtime() {
+    fn plans_map_to_cloud_config_eligibility() {
         for plan in ["free", "go", "plus", "pro", "prolite"] {
-            assert!(
+            assert_eq!(
                 CodexChatGptAccount {
                     email: None,
                     plan_type: plan.into(),
                 }
-                .managed_runtime_is_supported()
+                .cloud_config_eligibility(),
+                managed_policy::CloudConfigEligibility::Ineligible,
+                "{plan}"
             );
         }
-        for plan in [
-            "team",
-            "self_serve_business_prolite",
-            "business",
-            "ent26",
-            "enterprise",
-            "edu",
-            "unknown",
-        ] {
-            assert!(
-                !CodexChatGptAccount {
-                    email: None,
-                    plan_type: plan.into(),
-                }
-                .managed_runtime_is_supported()
-            );
-        }
-
         for plan in [
             "team",
             "self_serve_business_prolite",
@@ -1640,6 +1620,55 @@ mod tests {
             }
             .cloud_config_eligibility(),
             managed_policy::CloudConfigEligibility::Unknown
+        );
+    }
+
+    #[test]
+    fn unavailable_plan_metadata_preserves_the_official_authenticated_account() {
+        for plan in [
+            Value::Null,
+            json!(""),
+            json!(42),
+            json!({}),
+            json!("bad\nplan"),
+        ] {
+            let state = decode_account_state(&json!({
+                "account": {"type": "chatgpt", "email": "work@example.test", "planType": plan},
+                "requiresOpenaiAuth": true
+            }))
+            .expect("account remains valid without readable plan metadata");
+            assert_eq!(
+                state.account.as_ref().unwrap().email.as_deref(),
+                Some("work@example.test")
+            );
+            assert_eq!(
+                state.cloud_config_eligibility(),
+                managed_policy::CloudConfigEligibility::Unknown
+            );
+        }
+        let missing = decode_account_state(&json!({
+            "account": {"type": "chatgpt", "email": "work@example.test"},
+            "requiresOpenaiAuth": true
+        }))
+        .expect("missing plan metadata");
+        assert!(missing.account.is_some());
+        assert_eq!(
+            missing.cloud_config_eligibility(),
+            managed_policy::CloudConfigEligibility::Unknown
+        );
+        assert!(
+            decode_account_state(
+                &json!({"account": {"type": "unexpected"}, "requiresOpenaiAuth": true})
+            )
+            .is_err(),
+            "unknown authentication shapes remain invalid"
+        );
+        assert!(
+            decode_account_state(&json!({"account": null, "requiresOpenaiAuth": true}))
+                .unwrap()
+                .account
+                .is_none(),
+            "official sign-out is still authoritative"
         );
     }
 

@@ -648,7 +648,9 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     };
     automatic.set(model.id, item);
     publishProvisioning();
-    const step = Math.ceil(model.sizeBytes / (slow ? 40 : 8));
+    // First run is paced like kalvoice-slow (about 6 s, not 1.35 s): it starts at boot, so a fast
+    // pace can finish before a test on a loaded machine has opened Settings to observe it.
+    const step = Math.ceil(model.sizeBytes / (slow || firstRun ? 40 : 8));
     const timer = setInterval(() => {
       const current = automatic.get(model.id);
       if (!current) {

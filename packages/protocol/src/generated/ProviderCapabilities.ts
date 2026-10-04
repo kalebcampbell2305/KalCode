@@ -2,6 +2,7 @@
 import type { InteractiveSupport } from "./InteractiveSupport.ts";
 import type { ModelInfo } from "./ModelInfo.ts";
 import type { PermissionMapping } from "./PermissionMapping.ts";
+import type { ToolCapability } from "./ToolCapability.ts";
 
 export type ProviderCapabilities = { streaming: boolean, interrupt: boolean, resume: boolean,
 /**
@@ -12,4 +13,9 @@ hostApprovals: boolean, models: Array<ModelInfo>, permissionMappings: Array<Perm
  * How the provider runs in an interactive PTY pane (`docs/PROVIDER_PANES.md` §3–4).
  * `None` until the adapter declares it. Adopted in CA-1.
  */
-interactive: InteractiveSupport | null, };
+interactive: InteractiveSupport | null,
+/**
+ * The tools a session of this provider can use inside KalCode, declared truthfully by the
+ * adapter (AGENTS.md "Permanent provider tool capability rule"). Empty until declared.
+ */
+tools: Array<ToolCapability>, };

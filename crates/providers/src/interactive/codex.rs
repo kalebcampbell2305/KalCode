@@ -25,7 +25,6 @@ pub const FORBIDDEN: &[&str] = &[
     "--dangerously-bypass-approvals-and-sandbox",
     "--dangerously-bypass-hook-trust",
     "--approve-for-me",
-    "--search",
     "--add-dir",
 ];
 
@@ -454,13 +453,12 @@ mod tests {
                 PermissionMode::Plan | PermissionMode::Bypass => "never",
             };
             assert_eq!(args[approval + 1], expected);
-            for required in [
-                "web_search='disabled'",
-                "sandbox_workspace_write.network_access=false",
-                "sandbox_workspace_write.writable_roots=[]",
-                "shell_environment_policy.inherit='core'",
-            ] {
-                assert!(args.iter().any(|arg| arg == required), "missing {required}");
+            // The pane keeps Codex's native tools and the person's own config.
+            for stripping in crate::codex::argv::TOOL_STRIPPING {
+                assert!(
+                    !args.iter().any(|arg| arg == stripping),
+                    "{mode:?} strips a native tool with {stripping}"
+                );
             }
         }
     }

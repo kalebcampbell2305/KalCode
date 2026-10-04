@@ -74,6 +74,8 @@ struct Shared {
     stopping: AtomicBool,
     ended: AtomicBool,
     timeouts: SessionTimeouts,
+    /// The session's `--mcp-config` file, removed when the process ends.
+    mcp_config: Option<PathBuf>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -306,6 +308,39 @@ fn interrupt_confirmed(
     }
 }
 
+/// Writes the user's own MCP servers for one headless session next to its account profile (or
+/// in the per-user temp directory without one). Headless sessions pass `--strict-mcp-config`, so
+/// these are the only servers they load. Failure only loses the servers, never the session.
+fn headless_mcp_config(
+    env: &BTreeMap<OsString, OsString>,
+    workspace: &std::path::Path,
+    session_id: &str,
+) -> Option<PathBuf> {
+    // The id names the file; anything but a canonical id is refused by `session_args` anyway.
+    if !kalcode_contracts::ids::is_valid_id(session_id) {
+        return None;
+    }
+    let files = super::mcp::ConfigFiles::from_env(env);
+    let servers = super::mcp::UserServers::read(&files, workspace).all();
+    if servers.is_empty() {
+        return None;
+    }
+    let dir = files
+        .profile
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let path = dir.join(format!("kalcode-mcp-{session_id}.json"));
+    match super::mcp::write_config(&path, &servers) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(event = "provider.mcp_config_failed", provider_id = "claude-code", error = %error);
+            None
+        }
+    }
+}
+
 pub struct ClaudeSession {
     shared: Arc<Shared>,
 }
@@ -326,11 +361,13 @@ impl ClaudeSession {
                 session_id.clone()
             }
         };
+        let mcp_config = headless_mcp_config(&spec.env, &cwd, &known_id);
         let args = session_args(&SessionArgs {
             model: spec.model,
             effort: spec.effort,
             mode: spec.mode,
             start,
+            mcp_config: mcp_config.clone(),
         })
         .map_err(|e| ProviderError::Start(e.to_string()))?;
         let process = ProcessSpec {
@@ -363,6 +400,7 @@ impl ClaudeSession {
             stopping: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             timeouts: spec.timeouts,
+            mcp_config,
         });
         shared.sink.emit(AgentEvent::Status {
             status: ThreadStatus::Starting,
@@ -456,6 +494,9 @@ impl Shared {
             }
         };
         self.ended.store(true, Ordering::SeqCst);
+        if let Some(config) = &self.mcp_config {
+            let _ = std::fs::remove_file(config);
+        }
         // Any interrupt still waiting gets its answer now.
         finish_pending_interrupt(&self.pending_interrupt);
         let exit_code = status.and_then(|s| s.code());

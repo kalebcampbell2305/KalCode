@@ -55,8 +55,6 @@ enum RuntimeAuthError {
     Claude(ClaudeAccountAuthError),
     Gemini(GeminiAccountAuthError),
     GeminiUnavailable,
-    OrganizationPlan,
-    PlanUnverified,
 }
 
 impl RuntimeAuthError {
@@ -79,7 +77,7 @@ impl RuntimeAuthError {
             Self::ProviderUnavailable | Self::GeminiUnavailable => ProviderError::NotInstalled,
             Self::Busy => refused(
                 error_codes::PROVIDER_ACCOUNT_BUSY,
-                "This account is busy with a sign-in or account change in KalCode. Finish it, then resume this thread."
+                "This account is busy with a sign-in or account change in KalCode. Finish it, then try launching the agent again."
                     .into(),
             ),
             Self::Provider(CodexAccountAuthError::UnsupportedVersion) => {
@@ -95,29 +93,19 @@ impl RuntimeAuthError {
                 _ => refused(
                     error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
                     format!(
-                        "KalCode couldn't confirm this Claude Code account with Claude Code's official account check (reason: {}). Check your connection, then resume this thread.",
+                        "KalCode couldn't check this Claude Code account (reason: {}). Check your connection, then retry.",
                         error.reason_code()
                     ),
                 ),
             },
             Self::Provider(_) => refused(
                 error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                "KalCode couldn't confirm this Codex account with Codex's official account check. Check your connection, then resume this thread."
+                "KalCode couldn't check this Codex account. Check your connection, then retry."
                     .into(),
             ),
             Self::Gemini(_) => refused(
                 error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
-                "KalCode couldn't confirm this Gemini CLI account with Gemini CLI's official account check. Check your connection, then resume this thread."
-                    .into(),
-            ),
-            Self::OrganizationPlan => refused(
-                error_codes::PROVIDER_ACCOUNT_PLAN_UNSUPPORTED,
-                "KalCode doesn't support Codex organization plans (Business, Enterprise, Edu) yet. Use a personal ChatGPT plan for this Codex account."
-                    .into(),
-            ),
-            Self::PlanUnverified => refused(
-                error_codes::PROVIDER_ACCOUNT_PLAN_UNVERIFIED,
-                "KalCode couldn't verify this Codex account's plan. Sign in to this Codex account again in Providers, then resume this thread."
+                "KalCode couldn't check this Gemini CLI account. Check your connection, then retry."
                     .into(),
             ),
         }
@@ -202,14 +190,6 @@ impl RuntimeAuthError {
             Self::Gemini(_) => (
                 "provider_auth_failed",
                 "The official Gemini CLI account operation did not complete safely.",
-            ),
-            Self::OrganizationPlan => (
-                "provider_account_plan_unsupported",
-                "This Codex organization plan isn't supported by managed profiles yet.",
-            ),
-            Self::PlanUnverified => (
-                "provider_account_plan_unverified",
-                "KalCode couldn't verify a supported Codex consumer plan for this account.",
             ),
         };
         KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command)
@@ -977,24 +957,19 @@ impl ProviderRuntimeAuthority {
         Ok(())
     }
 
-    fn cached_codex_eligibility(
-        &self,
-        account_id: &str,
-    ) -> Result<CloudConfigEligibility, RuntimeAuthError> {
+    fn cached_codex_eligibility(&self, account_id: &str) -> Option<CloudConfigEligibility> {
         let truth = self
             .inner
             .codex_truth
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let Some(entry) = truth.cache.get(account_id) else {
-            return Err(RuntimeAuthError::PlanUnverified);
-        };
+        let entry = truth.cache.get(account_id)?;
         if truth.generations.get(account_id) != Some(&entry.generation)
             || entry.checked_at.elapsed() > CODEX_TRUTH_TTL
         {
-            return Err(RuntimeAuthError::PlanUnverified);
+            return None;
         }
-        Ok(entry.eligibility)
+        Some(entry.eligibility)
     }
 
     fn refresh_codex_account(&self, account_id: &str) -> Result<ProviderAccount, RuntimeAuthError> {
@@ -1141,43 +1116,22 @@ impl ProviderRuntimeAuthority {
         }
     }
 
-    /// Refreshes security-sensitive Codex plan truth before any shared launch lease is acquired.
-    /// A stale cache is never treated as durable authentication.
+    /// Give the real provider launch priority over passive observers for this exact account.
+    /// Authentication is enforced by AccountStore's shared launch lease and the provider itself;
+    /// missing plan/usage metadata never adds a synchronous network check or a launch requirement.
     pub fn prepare_account_launch(
         &self,
         provider: &ProviderId,
         account_id: &str,
     ) -> Result<(), ProviderError> {
-        if provider.as_str() != ProviderId::CODEX {
-            return Ok(());
+        if !self.preempt_account_validation(
+            provider.as_str(),
+            account_id,
+            ACCOUNT_VALIDATION_PREEMPT_TIMEOUT,
+        ) {
+            return Err(RuntimeAuthError::Busy.into_provider_error());
         }
-        if self.cached_codex_eligibility(account_id).is_err() {
-            if !self.preempt_account_validation(
-                ProviderId::CODEX,
-                account_id,
-                ACCOUNT_VALIDATION_PREEMPT_TIMEOUT,
-            ) {
-                return Err(RuntimeAuthError::Busy.into_provider_error());
-            }
-            // The background observer may have completed with a current verdict while it was
-            // being preempted. Avoid a duplicate native account read in that case.
-            if self.cached_codex_eligibility(account_id).is_err() {
-                self.refresh_codex_account(account_id)
-                    .map_err(RuntimeAuthError::into_provider_error)?;
-            }
-        }
-        match self
-            .cached_codex_eligibility(account_id)
-            .map_err(RuntimeAuthError::into_provider_error)?
-        {
-            CloudConfigEligibility::Ineligible => Ok(()),
-            CloudConfigEligibility::Eligible => {
-                Err(RuntimeAuthError::OrganizationPlan.into_provider_error())
-            }
-            CloudConfigEligibility::Unknown => {
-                Err(RuntimeAuthError::PlanUnverified.into_provider_error())
-            }
-        }
+        Ok(())
     }
 
     /// Resolver used by the interactive Codex adapter after `prepare_account_launch` and while
@@ -1186,8 +1140,9 @@ impl ProviderRuntimeAuthority {
         &self,
         account_id: &str,
     ) -> Result<CloudConfigEligibility, ProviderError> {
-        self.cached_codex_eligibility(account_id)
-            .map_err(RuntimeAuthError::into_provider_error)
+        Ok(self
+            .cached_codex_eligibility(account_id)
+            .unwrap_or(CloudConfigEligibility::Unknown))
     }
 
     pub fn managed_headless_provider(
@@ -1355,6 +1310,9 @@ struct SyntheticPendingLogin {
 
 #[cfg(test)]
 impl SyntheticPendingLogin {
+    // `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+    // supported toolchains lack; keep one spelling that builds on both.
+    #[allow(deprecated)]
     fn cancel(&self) -> Result<(), RuntimeAuthError> {
         if self
             .failures_remaining
@@ -2660,7 +2618,7 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn codex_truth_is_generation_bound_fresh_and_fail_closed_for_org_plans() {
+    fn codex_plan_metadata_is_generation_bound_but_never_authorizes_a_session() {
         let fixture = Fixture::new();
         let first = fixture
             .runtime
@@ -2687,7 +2645,7 @@ mod tests {
             fixture
                 .runtime
                 .cached_codex_eligibility(&fixture.account.id)
-                .is_err(),
+                .is_none(),
             "a new provider refresh invalidates the old positive proof immediately"
         );
         fixture
@@ -2699,14 +2657,11 @@ mod tests {
             )
             .expect("observe organization plan");
         drop(second);
-        assert!(matches!(
-            fixture
-                .runtime
-                .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id),
-            Err(ProviderError::Refused { code, message })
-                if code == "provider_account_plan_unsupported"
-                    && message.contains("organization plans")
-        ));
+        // Organization plans launch like any other (native provider parity).
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("organization plan launches");
 
         fixture
             .runtime
@@ -2722,8 +2677,19 @@ mod tests {
             fixture
                 .runtime
                 .cached_codex_eligibility(&fixture.account.id)
-                .is_err(),
-            "expired truth cannot authorize a session"
+                .is_none(),
+            "expired metadata is unknown"
+        );
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("expired plan metadata does not block the provider session");
+        assert_eq!(
+            fixture
+                .runtime
+                .codex_cloud_config(&fixture.account.id)
+                .unwrap(),
+            CloudConfigEligibility::Unknown
         );
     }
 
@@ -2757,7 +2723,7 @@ mod tests {
             fixture
                 .runtime
                 .cached_codex_eligibility(&fixture.account.id)
-                .is_err()
+                .is_none()
         );
         fixture
             .runtime
@@ -2886,10 +2852,9 @@ mod tests {
         fixture
             .runtime
             .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
-            .expect("foreground launch refreshes after preemption");
-        // A preempting launch pays the observer's terminate grace (500 ms) plus one fresh
-        // app-server start (~0.7 s idle, longer under load). Waiting for the observer instead
-        // would take the whole delayed read, so the bound sits far from both.
+            .expect("foreground launch proceeds after preemption");
+        // A preempting launch pays only the observer's termination grace; it never starts
+        // another account check. Waiting for the observer would take the whole delayed read.
         assert!(
             started.elapsed() < DELAYED_OBSERVER_READ / 3,
             "launch must not wait for the observer's delayed account read: {:?}",
@@ -2905,7 +2870,7 @@ mod tests {
         assert_eq!(refreshed.authentication_state, AuthState::Authenticated);
         assert_eq!(
             refreshed.provider_reported_identity.as_deref(),
-            Some("restored@example.test")
+            Some("cached@example.test")
         );
         assert_eq!(refreshed.last_error_code, None);
     }
@@ -3032,7 +2997,7 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn codex_launch_refreshes_plan_truth_while_live_sessions_hold_the_profile() {
+    fn codex_launch_uses_cached_auth_without_refreshing_stale_plan_metadata() {
         let mut fixture = Fixture::new();
         install_read_only_codex_app_server(&mut fixture, "pro", false);
         let store = fixture.runtime.account_store();
@@ -3043,14 +3008,14 @@ mod tests {
         assert_eq!(
             codex_launch_refusal(&fixture),
             None,
-            "a read-only account observer must refresh safely beside a live session"
+            "missing metadata does not block a second independent session"
         );
         assert_eq!(
             fixture
                 .runtime
                 .codex_cloud_config(&fixture.account.id)
-                .expect("the launch resolves its plan under the shared lease"),
-            CloudConfigEligibility::Ineligible
+                .expect("unknown plan metadata is informational"),
+            CloudConfigEligibility::Unknown
         );
         let account = store.get(&fixture.account.id).expect("account");
         assert_eq!(account.authentication_state, AuthState::Authenticated);
@@ -3059,7 +3024,7 @@ mod tests {
             "a busy check is not a failure"
         );
 
-        // Fresh provider truth replaces stale in-memory plan state.
+        // Starting a session does not rewrite identity from an unnecessary provider check.
         observe_codex_plan(&fixture, &connected("business"));
         expire_codex_plan(&fixture);
         assert_eq!(codex_launch_refusal(&fixture), None);
@@ -3069,7 +3034,7 @@ mod tests {
                 .expect("fresh account truth")
                 .provider_reported_identity
                 .as_deref(),
-            Some("restored@example.test")
+            Some("person@example.test")
         );
         drop(session);
     }
@@ -3095,8 +3060,9 @@ mod tests {
             Err(RuntimeAuthError::Busy)
         ));
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
+            codex_launch_refusal(&fixture),
+            None,
+            "a failed passive check cannot invalidate a persisted authenticated session"
         );
         let after = store.get(&fixture.account.id).expect("account");
         assert_eq!(after.authentication_state, AuthState::Authenticated);
@@ -3260,24 +3226,26 @@ done
             ))
         ));
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_VERSION_UNSUPPORTED)
+            codex_launch_refusal(&fixture),
+            None,
+            "the real provider adapter enforces its version window at launch"
         );
         let after = store.get(&fixture.account.id).expect("account");
         assert_eq!(after.authentication_state, before.authentication_state);
         assert_eq!(after.last_error_code, None, "no account check ran");
     }
 
-    /// A Codex CLI that can't report a version is still an account-check failure, not a version
-    /// refusal that would tell the person to install a version they may already have.
+    /// An unavailable account metadata service does not add a launch precondition.
+    /// The real provider launch still reports installation/version failures itself.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn unrunnable_codex_cli_is_not_reported_as_an_unsupported_version() {
+    fn unavailable_codex_metadata_service_does_not_gate_provider_launch() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
+            codex_launch_refusal(&fixture),
+            None,
+            "launch preparation does not require the passive metadata service"
         );
     }
 
@@ -3286,8 +3254,6 @@ done
     fn codex_sign_in_or_sign_out_forgets_the_reusable_plan_verdict() {
         let mut fixture = Fixture::new();
         install_unrunnable_auth_managers(&mut fixture);
-        let check_failed =
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED);
 
         // A completed sign-out observes a signed-out profile, so no earlier verdict survives it.
         observe_codex_plan(&fixture, &connected("pro"));
@@ -3299,7 +3265,22 @@ done
             }),
         );
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
+        assert!(
+            fixture
+                .runtime
+                .cached_codex_eligibility(&fixture.account.id)
+                .is_none()
+        );
+        assert_eq!(
+            fixture.runtime.account_store().launch_with_active_account(
+                &fixture.runtime.managed_profiles(),
+                ProviderId::CODEX,
+                &fixture.account.id,
+                |_| Ok(())
+            ),
+            Err(ProviderError::NotAuthenticated),
+            "the shared account launch guard still rejects confirmed sign-out"
+        );
         drop(session);
 
         // A sign-out or sign-in that took the exclusive lease may have changed the profile, so the
@@ -3307,7 +3288,13 @@ done
         observe_codex_plan(&fixture, &connected("pro"));
         assert!(fixture.runtime.logout_codex(&fixture.account.id).is_err());
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
+        assert!(
+            fixture
+                .runtime
+                .cached_codex_eligibility(&fixture.account.id)
+                .is_none()
+        );
+        assert_eq!(codex_launch_refusal(&fixture), None);
         drop(session);
 
         observe_codex_plan(&fixture, &connected("pro"));
@@ -3318,7 +3305,13 @@ done
                 .is_err()
         );
         let session = codex_session(&fixture);
-        assert_eq!(codex_launch_refusal(&fixture).as_deref(), check_failed);
+        assert!(
+            fixture
+                .runtime
+                .cached_codex_eligibility(&fixture.account.id)
+                .is_none()
+        );
+        assert_eq!(codex_launch_refusal(&fixture), None);
         drop(session);
     }
 
@@ -3375,12 +3368,9 @@ done
         assert_eq!(claude_after.last_error_code, None);
 
         // Beginning a lifecycle operation invalidates the prior plan generation even when the
-        // live session then refuses the writer. A new read-only check is allowed beside the
-        // session; this intentionally unrunnable fake therefore fails as a real check error.
-        assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
-        );
+        // live session then refuses the writer. An unavailable metadata service does not
+        // prevent another native session from using the still-authenticated account.
+        assert_eq!(codex_launch_refusal(&fixture), None);
         drop((codex_session, claude_session));
     }
 
@@ -3436,11 +3426,18 @@ done
             .archive(&fixture.runtime.inner.profiles, &fixture.account.id)
             .expect("archive");
         expire_codex_plan(&fixture);
-        assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
-            "an archived account fails its check instead of reusing its verdict"
-        );
+        assert_eq!(codex_launch_refusal(&fixture), None);
+        let error = store
+            .launch_with_active_account(
+                &fixture.runtime.inner.profiles,
+                ProviderId::CODEX,
+                &fixture.account.id,
+                |_| -> Result<(), ProviderError> {
+                    panic!("an archived account must never reach a provider launch")
+                },
+            )
+            .expect_err("the canonical account launch guard rejects archived accounts");
+        assert!(matches!(error, ProviderError::Start(_)));
 
         let replacement = store
             .create(ProviderId::CODEX, "Personal")
@@ -3448,10 +3445,14 @@ done
         fixture.account = replacement;
         let session = codex_session(&fixture);
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
-            "a new account has no verdict of its own this run"
+            fixture
+                .runtime
+                .codex_cloud_config(&fixture.account.id)
+                .expect("metadata"),
+            CloudConfigEligibility::Unknown,
+            "a replacement account never inherits the prior account's plan"
         );
+        assert_eq!(codex_launch_refusal(&fixture), None);
         drop(session);
     }
 

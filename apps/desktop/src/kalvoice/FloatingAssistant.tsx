@@ -104,6 +104,9 @@ export function FloatingAssistant() {
           : { width: el.offsetWidth, height: el.offsetHeight },
       );
     measure();
+    // jsdom (tests) has no ResizeObserver; an unguarded one threw while the assistant mounted
+    // during other suites and failed the whole run after every test had passed.
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();

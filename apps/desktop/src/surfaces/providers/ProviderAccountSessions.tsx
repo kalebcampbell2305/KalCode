@@ -5,6 +5,7 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import type { AccountUsageState } from "./accountUsage.ts";
 import { useAccountUsageReader } from "./accountUsageReader.ts";
+import { type AccountModels, type ProviderAccountState, providerAccountState } from "./providerAccountState.ts";
 
 function supportsPassiveValidation(providerId: string): providerId is "codex" | "gemini-cli" {
   // Claude's auth-status command can refresh provider-owned OAuth state before exiting. Running it
@@ -16,6 +17,9 @@ function supportsPassiveValidation(providerId: string): providerId is "codex" | 
 }
 
 interface ProviderAccountSessionsValue {
+  /** Shared account snapshots for launchers, provider management and terminal identity. */
+  states: ReadonlyMap<string, ProviderAccountState>;
+  discoverModels: (accountId: string) => Promise<void>;
   /** Persisted account metadata, available as soon as the local native read completes. */
   accounts: ProviderAccount[] | null;
   loadError: string | null;
@@ -92,6 +96,8 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
   const registryVersion = useRef(0);
   const clientEpoch = useRef(0);
   const validations = useRef(new Map<string, Promise<ProviderAccount>>());
+  const [accountModels, setAccountModels] = useState<ReadonlyMap<string, AccountModels>>(() => new Map());
+  const modelRequests = useRef(new Map<string, Promise<void>>());
   const pendingRestoreRetry = useRef<{ timer: ReturnType<typeof setTimeout>; resolve: () => void } | null>(null);
 
   const version = useCallback((accountId: string) => versions.current.get(accountId) ?? 0, []);
@@ -99,6 +105,12 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     registryVersion.current += 1;
     versions.current.set(accountId, (versions.current.get(accountId) ?? 0) + 1);
     validations.current.delete(accountId);
+    modelRequests.current.delete(accountId);
+    setAccountModels((current) => {
+      const next = new Map(current);
+      next.delete(accountId);
+      return next;
+    });
     setChecking((current) => {
       if (!current.has(accountId)) return current;
       const next = new Set(current);
@@ -111,6 +123,27 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     (account: ProviderAccount, expectedVersion?: number): boolean => {
       if (!live.current) return false;
       if (expectedVersion !== undefined && version(account.id) !== expectedVersion) return false;
+      const previous = accountsRef.current?.find((candidate) => candidate.id === account.id);
+      if (expectedVersion !== undefined && previous && !sameSessionFacts(previous, account))
+        registryVersion.current += 1;
+      if (
+        previous &&
+        (previous.providerReportedIdentity !== account.providerReportedIdentity ||
+          previous.authenticationState !== account.authenticationState)
+      ) {
+        versions.current.set(account.id, version(account.id) + 1);
+        modelRequests.current.delete(account.id);
+        setChecking((current) => {
+          const next = new Set(current);
+          next.delete(account.id);
+          return next;
+        });
+        setAccountModels((current) => {
+          const next = new Map(current);
+          next.delete(account.id);
+          return next;
+        });
+      }
       if (expectedVersion === undefined) {
         versions.current.set(account.id, version(account.id) + 1);
         registryVersion.current += 1;
@@ -159,6 +192,78 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
       return account;
     },
     [commit],
+  );
+
+  const discoverModels = useCallback(
+    (accountId: string): Promise<void> => {
+      const account = accountsRef.current?.find(
+        (candidate) => candidate.id === accountId && candidate.archivedAt === null,
+      );
+      if (!account || account.authenticationState === "not_authenticated") return Promise.resolve();
+      const existing = modelRequests.current.get(account.id);
+      if (existing) return existing;
+      let expectedVersion = version(account.id);
+      const expectedEpoch = clientEpoch.current;
+      const current = () =>
+        live.current && clientEpoch.current === expectedEpoch && version(account.id) === expectedVersion;
+      setAccountModels((previous) =>
+        new Map(previous).set(account.id, {
+          status: "checking",
+          items: previous.get(account.id)?.items ?? [],
+          reason: null,
+        }),
+      );
+      let task!: Promise<void>;
+      task = (async () => {
+        await Promise.resolve();
+        try {
+          let result: AccountModels;
+          if (account.providerId === "cursor") {
+            const state = await client.refreshCursorAccount(account.id);
+            if (!current()) return;
+            if (state.account.id !== account.id || state.account.providerId !== account.providerId) {
+              throw new Error("Model response did not match the selected account");
+            }
+            if (!commit(state.account, expectedVersion)) return;
+            expectedVersion = version(account.id);
+            result = {
+              status: state.modelsError ? "unavailable" : "available",
+              items: state.models,
+              reason: state.modelsError,
+            };
+          } else {
+            const options = await client.threadOptions();
+            const provider = options.providers.find((provider) => provider.id === account.providerId);
+            result = { status: provider ? "available" : "unavailable", items: provider?.models ?? [], reason: null };
+          }
+          if (current()) setAccountModels((previous) => new Map(previous).set(account.id, result));
+        } catch (error) {
+          if (current())
+            setAccountModels((previous) =>
+              new Map(previous).set(account.id, {
+                status: "unavailable",
+                items: [],
+                reason: toKalCodeError(error).message,
+              }),
+            );
+        } finally {
+          if (modelRequests.current.get(account.id) === task) {
+            modelRequests.current.delete(account.id);
+            if (!current() && live.current && clientEpoch.current === expectedEpoch)
+              setAccountModels((previous) =>
+                new Map(previous).set(account.id, {
+                  status: "unavailable",
+                  items: [],
+                  reason: "Model availability changed. Choose the account again to refresh.",
+                }),
+              );
+          }
+        }
+      })();
+      modelRequests.current.set(account.id, task);
+      return task;
+    },
+    [client, commit, version],
   );
 
   const validate = useCallback(
@@ -242,6 +347,18 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
         // A list read that began before logout/archive/default changed must not restore its older
         // snapshot over the mutation result.
         if (registryVersion.current !== expectedRegistryVersion) return null;
+        for (const previous of accountsRef.current ?? []) {
+          const next = restored.find((account) => account.id === previous.id);
+          if (
+            !next ||
+            next.archivedAt !== null ||
+            next.providerId !== previous.providerId ||
+            next.providerReportedIdentity !== previous.providerReportedIdentity ||
+            next.authenticationState !== previous.authenticationState
+          )
+            supersede(previous.id);
+        }
+        accountsRef.current = restored;
         setAccounts(restored);
         setLoadError(null);
         return restored;
@@ -252,7 +369,7 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
         return null;
       }
     },
-    [client],
+    [client, supersede],
   );
 
   const reload = useCallback(async (): Promise<ProviderAccount[] | null> => {
@@ -280,6 +397,8 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
     const expectedClientEpoch = clientEpoch.current;
     versions.current.clear();
     validations.current.clear();
+    modelRequests.current.clear();
+    setAccountModels(new Map());
     registryVersion.current += 1;
     setAccounts(null);
     setChecking(new Set());
@@ -375,7 +494,13 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
           for (const accountId of changedIds) {
             versions.current.set(accountId, version(accountId) + 1);
             validations.current.delete(accountId);
+            modelRequests.current.delete(accountId);
           }
+          setAccountModels((previous) => {
+            const next = new Map(previous);
+            for (const accountId of changedIds) next.delete(accountId);
+            return next;
+          });
           setChecking((currentChecking) => {
             if (![...changedIds].some((accountId) => currentChecking.has(accountId))) return currentChecking;
             const next = new Set(currentChecking);
@@ -437,10 +562,34 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
   // never blocks restore, menus or launches; entries update in place when a read lands.
   const [usageRequest, setUsageRequest] = useState(0);
   const refreshUsage = useCallback(() => setUsageRequest((request) => request + 1), []);
-  const usage = useAccountUsageReader(client, accounts, feed, usageRequest);
+  const usage = useAccountUsageReader(client, accounts, feed, usageRequest, versions.current);
+  const states = useMemo(
+    () =>
+      new Map(
+        (accounts ?? []).map((account) => [
+          account.id,
+          providerAccountState(
+            account,
+            usage.get(account.id) ?? {
+              accountId: account.id,
+              status: "not_checked",
+              windows: [],
+              checkedAt: null,
+              reason: null,
+            },
+            checking.has(account.id),
+            validationErrors.get(account.id),
+            accountModels.get(account.id) ?? null,
+          ),
+        ]),
+      ),
+    [accounts, usage, checking, validationErrors, accountModels],
+  );
 
   const value = useMemo<ProviderAccountSessionsValue>(
     () => ({
+      states,
+      discoverModels,
       accounts,
       loadError,
       checking,
@@ -452,7 +601,20 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
       usage,
       refreshUsage,
     }),
-    [accounts, loadError, checking, validationErrors, reload, validate, replace, supersede, usage, refreshUsage],
+    [
+      states,
+      discoverModels,
+      accounts,
+      loadError,
+      checking,
+      validationErrors,
+      reload,
+      validate,
+      replace,
+      supersede,
+      usage,
+      refreshUsage,
+    ],
   );
   return <ProviderAccountSessionsContext.Provider value={value}>{children}</ProviderAccountSessionsContext.Provider>;
 }

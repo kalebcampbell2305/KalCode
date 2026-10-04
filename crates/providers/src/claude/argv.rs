@@ -38,9 +38,15 @@ const COMMON: &[&str] = &[
     "--permission-prompts",
     "none",
     // MCP servers from a repository's .mcp.json would start with no approval in -p mode and
-    // could add tools with authority KalCode can't see; only servers KalCode passes are used.
+    // could add tools with authority KalCode can't see. Only the servers KalCode passes with
+    // `--mcp-config` are used: the user's own user- and local-scope servers ([`user_mcp_config`]).
     "--strict-mcp-config",
 ];
+
+/// Read-only research tools. Nobody can answer a prompt in a headless session, so KalCode
+/// pre-approves these in every mode that would otherwise ask: "research X" works in a thread
+/// exactly as it does in a terminal (AGENTS.md "Permanent provider tool capability rule").
+pub const RESEARCH_TOOLS: &[&str] = &["WebSearch", "WebFetch"];
 
 /// Hooks and allow rules in a repository's `.claude/settings*.json` run without a trust
 /// prompt in `-p` mode; KalCode loads only the user's own settings (managed settings always
@@ -144,11 +150,11 @@ const CREDENTIAL_PATHS: &[&str] = &[
 /// matches case-insensitively (https://code.claude.com/docs/en/permissions#powershell).
 const SHELL_TOOLS: &[&str] = &["Bash", "PowerShell"];
 
-/// Tools that change files or reach the network. In Approve and Custom KalCode would ask before
-/// these (`filesystem.write`, `network.*`); nobody can answer a headless prompt, so they are
-/// removed. Auto leaves them available to Claude Code's background classifier. Plan removes them
-/// too (Plan never edits; `--restricted` already drops `WebFetch`).
-const ASK_FIRST_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
+/// Tools that change files. In Approve and Custom KalCode would ask before these
+/// (`filesystem.write`); nobody can answer a headless prompt, so they are removed with a clear
+/// reason instead of a prompt that hangs. Auto leaves them to Claude Code's background
+/// classifier; Plan never edits. Web research is not here: see [`RESEARCH_TOOLS`].
+const ASK_FIRST_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
 /// KalCode-owned deny rules for a mode, passed with `--disallowedTools`
 /// (https://code.claude.com/docs/en/cli-reference). A deny rule from any source wins over
@@ -193,10 +199,13 @@ pub fn deny_rules(mode: PermissionMode) -> Vec<String> {
 /// Provider-native flags for a KalCode permission mode.
 pub fn permission_args(mode: PermissionMode) -> Vec<&'static str> {
     match mode {
-        // Restricted mode removes every tool that runs commands or code, and WebFetch, confines
-        // file tools to the working directory and loads no user/project settings; plan mode
-        // blocks edits. Reads only.
-        PermissionMode::Plan => vec!["--restricted", "--permission-mode", "plan"],
+        // Claude Code's own plan mode: reads, read-only commands and web research; no edits.
+        // (`--restricted` would also strip shell and web tools a native plan session has.)
+        PermissionMode::Plan => {
+            let mut args = USER_SETTINGS_ONLY.to_vec();
+            args.extend(["--permission-mode", "plan"]);
+            args
+        }
         // Manual mode: reads and Claude Code's built-in read-only commands run; everything that
         // would ask is denied (no host approvals yet).
         PermissionMode::Approve | PermissionMode::Custom => {
@@ -266,9 +275,8 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
             fidelity: MappingFidelity::ApproximateStricter,
             provider_setting: setting(PermissionMode::Plan),
             notes: format!(
-                "Claude Code can read and plan but has no tools that run commands, edit files or \
-                 fetch web pages, and your Claude Code settings are not loaded. \
-                 {ENFORCED_BY_KALCODE}"
+                "Claude Code's own plan mode: it reads, runs read-only commands and researches \
+                 the web, and makes no edits. {ENFORCED_BY_KALCODE}"
             ),
         },
         PermissionMapping {
@@ -276,9 +284,9 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
             fidelity: MappingFidelity::ApproximateStricter,
             provider_setting: setting(PermissionMode::Approve),
             notes: format!(
-                "Reads and Claude Code's read-only commands run. Edits and web access are \
-                 removed, and anything else that would ask is refused, because KalCode doesn't \
-                 answer Claude Code's approval prompts. {ENFORCED_BY_KALCODE} \
+                "Reads, Claude Code's read-only commands and web research run. Edits are \
+                 removed, and anything else that would ask is refused, because nobody can \
+                 answer an approval prompt in a headless thread. {ENFORCED_BY_KALCODE} \
                  {NOT_YET_ENFORCED}"
             ),
         },
@@ -319,6 +327,8 @@ pub struct SessionArgs {
     pub effort: Option<String>,
     pub mode: PermissionMode,
     pub start: SessionStart,
+    /// The user's own MCP servers ([`crate::claude::mcp`]), passed with `--mcp-config`.
+    pub mcp_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -369,6 +379,15 @@ pub fn session_args(args: &SessionArgs) -> Result<Vec<OsString>, ArgsError> {
     // (`--session-id` / `--resume` come last), never by a positional argument.
     out.push("--disallowedTools".into());
     out.extend(deny_rules(args.mode).into_iter().map(OsString::from));
+    // Research needs no prompt nobody could answer. Bypass already runs everything.
+    if args.mode != PermissionMode::Bypass {
+        out.push("--allowedTools".into());
+        out.extend(RESEARCH_TOOLS.iter().map(OsString::from));
+    }
+    if let Some(config) = &args.mcp_config {
+        out.push("--mcp-config".into());
+        out.push(config.as_os_str().to_owned());
+    }
     if let Some(model) = &args.model {
         if !valid_model(model) {
             return Err(ArgsError::InvalidModel);
@@ -425,6 +444,7 @@ mod tests {
             start: SessionStart::New {
                 session_id: "0192f3c4-0000-7000-8000-000000000000".into(),
             },
+            mcp_config: None,
         })
         .expect("args")
         .into_iter()
@@ -472,12 +492,26 @@ mod tests {
             } else {
                 assert!(!args.iter().any(|a| a == "bypassPermissions"), "{mode:?}");
             }
+            // The only pre-approved tools are read-only research, and only where a prompt
+            // would otherwise refuse them.
+            let start = args.iter().position(|a| a == "--allowedTools");
+            match start {
+                Some(start) => {
+                    assert_ne!(mode, PermissionMode::Bypass);
+                    assert_eq!(
+                        &args[start + 1..start + 1 + RESEARCH_TOOLS.len()],
+                        RESEARCH_TOOLS
+                    );
+                    assert!(args[start + 1 + RESEARCH_TOOLS.len()].starts_with('-'));
+                }
+                None => assert_eq!(mode, PermissionMode::Bypass),
+            }
             for forbidden in [
                 "--dangerously-skip-permissions",
                 "--allow-dangerously-skip-permissions",
-                "--allowedTools",
                 "--allowed-tools",
                 "--add-dir",
+                "--restricted",
             ] {
                 assert!(
                     !args.iter().any(|a| a == forbidden),
@@ -500,18 +534,49 @@ mod tests {
     }
 
     #[test]
-    fn plan_removes_command_tools_and_repository_settings() {
+    fn plan_is_claude_codes_own_plan_mode_with_research() {
         let args = args_for(PermissionMode::Plan);
-        assert!(args.iter().any(|a| a == "--restricted"));
+        assert!(!args.iter().any(|a| a == "--restricted"));
         assert_eq!(
             value_after(&args, "--permission-mode").as_deref(),
             Some("plan")
         );
+        let rules = deny_rules(PermissionMode::Plan);
+        for tool in RESEARCH_TOOLS {
+            assert!(!rules.iter().any(|r| r == tool), "{tool}");
+        }
+        assert!(rules.iter().any(|r| r == "Edit"));
     }
 
     #[test]
-    fn non_plan_modes_ignore_repository_settings() {
+    fn the_users_mcp_servers_are_the_only_ones_passed() {
+        let args: Vec<String> = session_args(&SessionArgs {
+            model: None,
+            effort: None,
+            mode: PermissionMode::Bypass,
+            start: SessionStart::New {
+                session_id: "0192f3c4-0000-7000-8000-000000000000".into(),
+            },
+            mcp_config: Some(PathBuf::from("/data/profile/kalcode-mcp-x.json")),
+        })
+        .expect("args")
+        .into_iter()
+        .map(|a| a.into_string().expect("utf8"))
+        .collect();
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+        assert_eq!(
+            value_after(&args, "--mcp-config").as_deref(),
+            Some("/data/profile/kalcode-mcp-x.json")
+        );
+        assert!(
+            args[args.iter().position(|a| a == "--mcp-config").expect("flag") + 2].starts_with('-')
+        );
+    }
+
+    #[test]
+    fn every_mode_ignores_repository_settings() {
         for mode in [
+            PermissionMode::Plan,
             PermissionMode::Approve,
             PermissionMode::Auto,
             PermissionMode::Bypass,
@@ -571,6 +636,7 @@ mod tests {
             start: SessionStart::Resume {
                 session_id: "5d7a3c0e-8a1b-4c7e-9f00-1234567890ab".into(),
             },
+            mcp_config: None,
         })
         .expect("args");
         let args: Vec<_> = args
@@ -595,6 +661,7 @@ mod tests {
             start: SessionStart::New {
                 session_id: "0192f3c4-0000-7000-8000-000000000000".into(),
             },
+            mcp_config: None,
         };
         for model in [
             "--dangerously-skip-permissions",
@@ -756,15 +823,18 @@ mod tests {
     }
 
     #[test]
-    fn manual_modes_remove_edit_and_web_tools_while_auto_keeps_them_classified() {
+    fn manual_modes_remove_edits_but_never_research_while_auto_keeps_them_classified() {
         for mode in [
             PermissionMode::Plan,
             PermissionMode::Approve,
             PermissionMode::Custom,
         ] {
             let rules = deny_rules(mode);
-            for tool in ["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"] {
+            for tool in ["Edit", "Write", "NotebookEdit"] {
                 assert!(rules.iter().any(|r| r == tool), "{mode:?} keeps {tool}");
+            }
+            for tool in RESEARCH_TOOLS {
+                assert!(!rules.iter().any(|r| r == tool), "{mode:?} removes {tool}");
             }
         }
         let auto = deny_rules(PermissionMode::Auto);

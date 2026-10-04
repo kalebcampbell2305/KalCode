@@ -1,3 +1,4 @@
+import { getPlan } from "@kalcode/protocol/plans";
 import { expect, type Page, test } from "@playwright/test";
 
 type Tier = "free" | "owner" | null;
@@ -112,7 +113,7 @@ test.describe("Checkout-enabled account release gate", () => {
     const network = await installAccountNetworkFence(page, "free");
     await page.goto("/account");
 
-    await expect(page.locator("[data-account-plan]")).toHaveText("FREE");
+    await expect(page.locator("[data-account-plan]")).toHaveText(getPlan("free").name);
     await expect(page.locator("[data-checkout-closed]")).toHaveCount(0);
     const purchases = page.locator("[data-checkout-tier]");
     await expect(purchases).toHaveCount(3);

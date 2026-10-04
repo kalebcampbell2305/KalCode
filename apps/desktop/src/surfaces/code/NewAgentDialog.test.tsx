@@ -1,6 +1,6 @@
 import type { ProviderAccount, ThreadOptions, Workspace } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
-import { render as renderView, screen, waitFor, within } from "@testing-library/react";
+import { act, render as renderView, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,10 +52,12 @@ const makeAccount = (
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
     resolve = yes;
+    reject = no;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -408,7 +410,7 @@ describe("restored accounts in the Code launcher", () => {
     runtime.client = clientWith([first, second], async () => threadOptions(["claude-code"]));
     render(dialog({}));
     const options = await screen.findAllByRole("option");
-    expect(within(options[0] as HTMLElement).getByText("owner@kalcode.dev")).toBeVisible();
+    expect(within(options[0] as HTMLElement).getByText(/owner@kalcode.dev/)).toBeVisible();
     expect(within(options[1] as HTMLElement).getByText("Same sign-in as KalCode")).toBeVisible();
   });
 
@@ -424,7 +426,7 @@ describe("restored accounts in the Code launcher", () => {
     const optionA = await screen.findByRole("option", { name: /Claude A/ });
     expect(optionA).toHaveTextContent(/Max/);
     expect(optionA).toHaveTextContent(/8% left/);
-    expect(optionA).toHaveTextContent(/Low/);
+    expect(optionA).toHaveTextContent(/Ready/);
     expect(screen.getByRole("option", { name: /Claude B/ })).toHaveTextContent(/91% left.*Ready/);
     expect(screen.getByText("Claude A is running low. Use Claude B instead?")).toBeVisible();
     expect(optionA).toHaveAttribute("aria-selected", "true");
@@ -436,7 +438,7 @@ describe("restored accounts in the Code launcher", () => {
     const a = makeAccount("claude-a", "Claude A", true);
     runtime.client = clientWith([a], async () => threadOptions(["claude-code"]));
     render(dialog({}));
-    expect(await screen.findByRole("option", { name: /Claude A/ })).toHaveTextContent(/Not checked/);
+    expect(await screen.findByRole("option", { name: /Claude A/ })).toHaveTextContent(/Usage unavailable/);
     expect(screen.queryByText(/% left/)).not.toBeInTheDocument();
   });
 
@@ -550,6 +552,210 @@ function dialog(props: Partial<Parameters<typeof NewAgentDialog>[0]>) {
   );
 }
 
+describe("independent authentication and metadata in agent creation", () => {
+  it.each(["claude-code", "codex", "cursor", "gemini-cli"] as const)(
+    "%s launches its selected account when usage and plan are unavailable",
+    async (providerId) => {
+      const account = makeAccount(`${providerId}-b`, "Coding B", true, providerId);
+      runtime.client = clientWith([account], async () => threadOptions([providerId]));
+      runtime.client.refreshCursorAccount = vi.fn(async () => ({
+        account,
+        models: [],
+        modelsError: "Models unavailable",
+      }));
+      const onLaunch = vi.fn(async () => true);
+      render(dialog({ offered: [providerId], initialProvider: providerId, onLaunch }));
+      const row = await screen.findByRole("option", { name: /Coding B/ });
+      expect(row).toHaveTextContent("Plan unavailable");
+      expect(row).toHaveTextContent("Usage unavailable");
+      expect(row).toHaveTextContent("Ready");
+      expect(row).not.toHaveTextContent(/0%|Low|Exhausted/);
+      expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+      const launch = screen.getByRole("button", { name: /^Launch .* agent$/ });
+      await waitFor(() => expect(launch).toBeEnabled());
+      await userEvent.setup().click(launch);
+      expect(onLaunch).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ providerId, providerAccountId: account.id }),
+      );
+    },
+  );
+
+  it.each(["Pro", null])("Codex shows reported usage independently of plan %s and launches", async (plan) => {
+    const account = makeAccount("codex-b", "Codex B", true, "codex");
+    usage.map.set(account.id, fresh(account.id, 62, plan));
+    runtime.client = clientWith([account], async () => threadOptions(["codex"]));
+    const onLaunch = vi.fn(async () => true);
+    render(dialog({ offered: ["codex"], initialProvider: "codex", onLaunch }));
+    const row = await screen.findByRole("option", { name: /Codex B/ });
+    expect(row).toHaveTextContent("62% left");
+    expect(row).toHaveTextContent(plan ?? "Plan unavailable");
+    expect(row).toHaveTextContent("Ready");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Launch Codex agent" }));
+    expect(onLaunch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ providerAccountId: account.id }));
+  });
+
+  function expiredLauncher(onLaunch = vi.fn(async () => 3), shared = false) {
+    let account = {
+      ...makeAccount("codex-b", "Codex B", true, "codex"),
+      authenticationState: "not_authenticated" as ProviderAccount["authenticationState"],
+    };
+    const login = deferred<ProviderAccount>();
+    runtime.client = {
+      ...clientWith(
+        [],
+        async () =>
+          ({
+            ...threadOptions(["codex"]),
+            providers: [
+              {
+                id: "codex",
+                displayName: "Codex",
+                models: [{ id: "gpt-code", displayName: "GPT Code", isDefault: false }],
+              },
+            ],
+          }) as ThreadOptions,
+      ),
+      listProviderAccounts: vi.fn(async () => [account]),
+      startCodexLogin: vi.fn(async () => ({ loginHandle: "codex-b-login" })),
+      waitForCodexLogin: vi.fn(async () => {
+        const connected = await login.promise;
+        account = connected;
+        return connected;
+      }),
+      cancelCodexLogin: vi.fn(async () => undefined),
+    } as unknown as KalCodeClient;
+    const onClose = vi.fn();
+    const node = dialog({ offered: ["codex"], initialProvider: "codex", onLaunch, onClose });
+    const view = render(shared ? <ProviderAccountSessionsProvider>{node}</ProviderAccountSessionsProvider> : node);
+    return { login, onLaunch, onClose, view, connected: { ...account, authenticationState: "authenticated" as const } };
+  }
+
+  it.each([false, true])(
+    "reconnects inline then automatically launches the exact three-agent request (shared=%s)",
+    async (shared) => {
+      const { login, onLaunch, onClose, connected } = expiredLauncher(undefined, shared);
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole("radio", { name: "GPT Code" }));
+      await user.click(screen.getByRole("radio", { name: "High" }));
+      await user.clear(screen.getByRole("spinbutton", { name: "Agents" }));
+      await user.type(screen.getByRole("spinbutton", { name: "Agents" }), "3");
+      expect(screen.getByText("Codex B needs to reconnect.")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Launch 3 Codex agents" })).toBeDisabled();
+      expect(screen.getByRole("dialog")).not.toHaveTextContent(/thread/i);
+      await user.click(screen.getByRole("button", { name: "Reconnect" }));
+      expect(screen.getByRole("spinbutton", { name: "Agents" })).toBeDisabled();
+      expect(screen.getByRole("radio", { name: "GPT Code" })).toBeDisabled();
+      await act(async () => login.resolve(connected));
+      await waitFor(() =>
+        expect(onLaunch).toHaveBeenCalledExactlyOnceWith({
+          providerId: "codex",
+          providerAccountId: "codex-b",
+          model: "gpt-code",
+          effort: "high",
+          count: 3,
+        }),
+      );
+      expect(onClose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not launch when a cancelled provider wait resolves successfully", async () => {
+    const { login, connected, onLaunch } = expiredLauncher();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Reconnect" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel sign-in" }));
+    await act(async () => login.resolve(connected));
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(runtime.client.cancelCodexLogin).toHaveBeenCalledWith("codex-b-login");
+  });
+
+  it("keeps reconnect available after provider authentication fails", async () => {
+    const { login, onLaunch } = expiredLauncher();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Reconnect" }));
+    await act(async () =>
+      login.reject({
+        category: "authentication",
+        code: "login_failed",
+        message: "Provider rejected this sign-in",
+        retryable: true,
+      }),
+    );
+    expect(onLaunch).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Reconnect" })).toBeEnabled());
+    expect(screen.getByText("Provider rejected this sign-in")).toBeVisible();
+  });
+
+  it("does not launch after the launcher closes during authentication", async () => {
+    const { login, connected, onLaunch, view } = expiredLauncher();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Reconnect" }));
+    await screen.findByRole("button", { name: "Cancel sign-in" });
+    view.unmount();
+    await act(async () => login.resolve(connected));
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(runtime.client.cancelCodexLogin).toHaveBeenCalledWith("codex-b-login");
+  });
+
+  it("does not launch if provider authentication returns a different account", async () => {
+    const { login, connected, onLaunch } = expiredLauncher();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Reconnect" }));
+    await act(async () => login.resolve({ ...connected, id: "codex-a" }));
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(screen.getByText(/The connected account did not match/)).toBeVisible();
+  });
+
+  it("retries only the unfinished agents after a partial batch", async () => {
+    const account = makeAccount("codex-b", "Codex B", true, "codex");
+    runtime.client = clientWith([account], async () => threadOptions(["codex"]));
+    const onLaunch = vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2);
+    const onClose = vi.fn();
+    render(dialog({ offered: ["codex"], initialProvider: "codex", onLaunch, onClose }));
+    const user = userEvent.setup();
+    await screen.findByRole("option", { name: /Codex B/ });
+    await user.clear(screen.getByRole("spinbutton", { name: "Agents" }));
+    await user.type(screen.getByRole("spinbutton", { name: "Agents" }), "3");
+    await user.click(screen.getByRole("button", { name: "Launch 3 Codex agents" }));
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Launch 2 Codex agents" }));
+    expect(onLaunch.mock.calls.map(([spec]) => spec.count)).toEqual([3, 2]);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("reconnects after genuine expiry in a partial batch and creates only its remaining agents", async () => {
+    const connected = makeAccount("codex-b", "Codex B", true, "codex");
+    let current = connected;
+    runtime.client = {
+      ...clientWith([current], async () => threadOptions(["codex"])),
+      listProviderAccounts: vi.fn(async () => [current]),
+      startCodexLogin: vi.fn(async () => ({ loginHandle: "reconnect-b" })),
+      waitForCodexLogin: vi.fn(async () => {
+        current = connected;
+        return connected;
+      }),
+      cancelCodexLogin: vi.fn(async () => undefined),
+    } as unknown as KalCodeClient;
+    const onLaunch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        current = { ...connected, authenticationState: "not_authenticated" };
+        return 1;
+      })
+      .mockResolvedValueOnce(2);
+    const onClose = vi.fn();
+    render(dialog({ offered: ["codex"], initialProvider: "codex", onLaunch, onClose }));
+    const user = userEvent.setup();
+    await screen.findByRole("option", { name: /Codex B/ });
+    await user.clear(screen.getByRole("spinbutton", { name: "Agents" }));
+    await user.type(screen.getByRole("spinbutton", { name: "Agents" }), "3");
+    await user.click(screen.getByRole("button", { name: "Launch 3 Codex agents" }));
+    await user.click(await screen.findByRole("button", { name: "Reconnect" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onLaunch.mock.calls.map(([spec]) => [spec.providerAccountId, spec.count])).toEqual([
+      ["codex-b", 3],
+      ["codex-b", 2],
+    ]);
+  });
+});
+
 describe("Cursor native runtime models", () => {
   const cursor = makeAccount("cursor-native", "Cursor A", true, "cursor");
   const mountCursor = (discovery: () => Promise<unknown>, initial = cursor, shared = false) => {
@@ -576,13 +782,12 @@ describe("Cursor native runtime models", () => {
   };
 
   it.each([false, true])(
-    "restores native sign-in in the launcher without repeating discovery (shared=%s)",
+    "keeps restored native sign-in launchable during model discovery (shared=%s)",
     async (shared) => {
       const pending = deferred<unknown>();
-      const stale = { ...cursor, authenticationState: "not_authenticated" as const };
-      const onLaunch = mountCursor(() => pending.promise, stale, shared);
+      const onLaunch = mountCursor(() => pending.promise, cursor, shared);
       const launch = await screen.findByRole("button", { name: "Launch Cursor agent" });
-      expect(launch).toBeDisabled();
+      await waitFor(() => expect(launch).toBeEnabled());
       pending.resolve({ account: { ...cursor }, models: [], modelsError: null });
       await waitFor(() => expect(launch).toBeEnabled());
       await userEvent.setup().click(launch);
@@ -637,6 +842,28 @@ describe("Cursor native runtime models", () => {
     expect(screen.getAllByRole("radio")).toHaveLength(1);
     await userEvent.setup().click(screen.getByRole("button", { name: "Launch Cursor agent" }));
     expect(onLaunch).toHaveBeenCalledWith(expect.objectContaining({ providerId: "cursor", model: null }));
+  });
+
+  it("preserves the exact remembered Cursor model when model metadata is unavailable", async () => {
+    const entry = {
+      providerId: "cursor",
+      accountId: cursor.id,
+      model: "custom/code-v9",
+      count: 1,
+      workspaceId: "ws",
+      boundAccountId: null,
+    };
+    window.localStorage.setItem(
+      "kalcode.agentLauncher.v1",
+      JSON.stringify({ last: entry, byProvider: { cursor: entry } }),
+    );
+    const onLaunch = mountCursor(async () => ({ account: cursor, models: [], modelsError: "Models unavailable" }));
+    const model = await screen.findByRole("radio", { name: "custom/code-v9" });
+    expect(model).toBeChecked();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Launch Cursor agent" }));
+    expect(onLaunch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerAccountId: cursor.id, model: "custom/code-v9" }),
+    );
   });
 
   it("refuses a remembered model that the runtime no longer offers instead of changing it silently", async () => {

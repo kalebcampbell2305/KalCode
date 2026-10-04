@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use kalcode_contracts::agent::{
     AuthState, InteractiveSupport, MappingFidelity, ModelInfo, PermissionMapping,
-    ProviderCapabilities, ProviderError, StatusChannel,
+    ProviderCapabilities, ProviderError, StatusChannel, ToolAvailability, ToolCapability, ToolKind,
 };
 use kalcode_contracts::permissions::PermissionMode;
 
@@ -366,7 +366,32 @@ pub fn capabilities() -> ProviderCapabilities {
             kalcode_answers_approvals: false,
             resume: Some("agent --resume <chatId>".into()),
         }),
+        tools: tools(),
     }
+}
+
+/// Cursor's native agent tools, as far as Cursor's CLI documentation states them. Tools Cursor
+/// hasn't documented for its CLI are left out rather than claimed.
+pub fn tools() -> Vec<ToolCapability> {
+    let native = |kind, note: Option<&str>| ToolCapability {
+        kind,
+        availability: ToolAvailability::Native,
+        provider_name: None,
+        note: note.map(str::to_owned),
+    };
+    vec![
+        native(
+            ToolKind::Shell,
+            Some("Cursor's own approvals and sandbox decide."),
+        ),
+        native(ToolKind::FileRead, None),
+        native(ToolKind::FileEdit, Some("Plan makes no edits.")),
+        native(ToolKind::RepoSearch, None),
+        native(
+            ToolKind::Mcp,
+            Some("The MCP servers in your Cursor mcp.json load as in your terminal."),
+        ),
+    ]
 }
 
 #[cfg(test)]

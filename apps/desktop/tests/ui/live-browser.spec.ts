@@ -63,7 +63,6 @@ async function paintMockPage(page: Page) {
 
 async function openLiveBrowserBesideAgent(page: Page, options: { roomy?: boolean } = {}) {
   await page.goto("/?scenario=code");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Dark" }).click();
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();

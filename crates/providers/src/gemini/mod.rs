@@ -233,8 +233,8 @@ const INDIVIDUAL_TIER: &str = "Gemini Code Assist for individuals";
 
 /// Gemini CLI's `ExitCodes.FATAL_AUTHENTICATION_ERROR` (packages/cli/src/utils/exitCodes.ts).
 const FATAL_AUTHENTICATION_EXIT: i32 = 41;
-const NOT_SIGNED_IN_MESSAGE: &str = "Gemini CLI isn't signed in for this account. Sign in to this \
-     Gemini account in Providers, then resume this thread.";
+const NOT_SIGNED_IN_MESSAGE: &str =
+    "Gemini session expired. Reconnect this Gemini account to continue.";
 
 impl AgentProvider for GeminiProvider {
     fn id(&self) -> ProviderId {

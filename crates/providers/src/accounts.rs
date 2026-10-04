@@ -1884,6 +1884,78 @@ mod tests {
     }
 
     #[test]
+    fn every_provider_launches_after_metadata_failure_but_rejects_confirmed_expiry() {
+        let fixture = Fixture::new();
+        for provider in ["claude-code", "codex", "cursor", "gemini-cli"] {
+            let account = fixture.store.create(provider, "Work").expect("account");
+            fixture
+                .store
+                .mark_authentication(
+                    &account.id,
+                    AuthState::Authenticated,
+                    Some("work@example.test"),
+                    None,
+                )
+                .expect("provider confirmed authentication");
+            fixture
+                .store
+                .mark_validation_error(&account.id, "metadata_unavailable")
+                .expect("metadata request failed");
+            fixture
+                .store
+                .launch_with_active_account(&fixture.profiles, provider, &account.id, |selected| {
+                    assert_eq!(selected.id, account.id);
+                    assert_eq!(selected.authentication_state, AuthState::Authenticated);
+                    assert_eq!(
+                        selected.provider_reported_identity.as_deref(),
+                        Some("work@example.test")
+                    );
+                    Ok(())
+                })
+                .expect("valid provider session launches without metadata");
+            assert_eq!(
+                fixture.store.launch_with_active_account(
+                    &fixture.profiles,
+                    provider,
+                    &account.id,
+                    |_| Err::<(), _>(ProviderError::NotAuthenticated),
+                ),
+                Err(ProviderError::NotAuthenticated)
+            );
+            let invoked = AtomicBool::new(false);
+            assert_eq!(
+                fixture.store.launch_with_active_account(
+                    &fixture.profiles,
+                    provider,
+                    &account.id,
+                    |_| {
+                        invoked.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                ),
+                Err(ProviderError::NotAuthenticated)
+            );
+            assert!(
+                !invoked.load(Ordering::SeqCst),
+                "confirmed expiry requires reconnect"
+            );
+            fixture
+                .store
+                .mark_authentication(
+                    &account.id,
+                    AuthState::Authenticated,
+                    Some("work@example.test"),
+                    None,
+                )
+                .expect("provider confirmed reconnect");
+            fixture
+                .store
+                .launch_with_active_account(&fixture.profiles, provider, &account.id, |_| Ok(()))
+                .expect("reconnected account launches");
+        }
+    }
+
+    #[test]
     fn launch_rejects_cross_provider_and_archived_accounts_before_callback() {
         let fixture = Fixture::new();
         let gemini = fixture
@@ -2306,6 +2378,11 @@ mod tests {
             let claude_b = connect("claude-code", "Claude B", "claude-b");
             let codex_a = connect("codex", "Codex A", "codex-a");
             let codex_b = connect("codex", "Codex B", "codex-b");
+            let gemini = connect("gemini-cli", "Gemini", "gemini");
+            let cursor = connect("cursor", "Cursor", "cursor");
+            store
+                .mark_validation_error(&codex_b.id, "metadata_unavailable")
+                .expect("transient failure before restart");
             let expired = store
                 .create("gemini-cli", "Expired")
                 .expect("expired account");
@@ -2333,7 +2410,15 @@ mod tests {
                 .bind("codex", Kind::Workspace, &workspace_id, &codex_b.id)
                 .expect("Codex binding");
 
-            let expected_ids = [claude_a.id, claude_b.id, codex_a.id, codex_b.id, expired.id];
+            let expected_ids = [
+                claude_a.id,
+                claude_b.id,
+                codex_a.id,
+                codex_b.id,
+                gemini.id,
+                cursor.id,
+                expired.id,
+            ];
             let accounts = store.list(None).expect("ordered accounts");
             assert!(
                 accounts
@@ -2351,6 +2436,7 @@ mod tests {
 
         let core = Arc::new(Core::open(config()).expect("second core"));
         let store = AccountStore::new(core.clone());
+        let profiles = ManagedProfiles::new(temp.path().join("profiles")).expect("profiles");
         for expected in before {
             let after = store.get(&expected.id).expect("after restart");
             assert_eq!(after.authentication_state, expected.authentication_state);
@@ -2363,6 +2449,17 @@ mod tests {
             assert_eq!(after.created_at, expected.created_at);
             assert_eq!(after.last_checked_at, expected.last_checked_at);
             assert_eq!(after.last_error_code, expected.last_error_code);
+            let launched = store.launch_with_active_account(
+                &profiles,
+                after.provider_id.as_str(),
+                &after.id,
+                |_| Ok(()),
+            );
+            if after.authentication_state == AuthState::Authenticated {
+                launched.expect("persisted session launches immediately after restart");
+            } else {
+                assert_eq!(launched, Err(ProviderError::NotAuthenticated));
+            }
         }
         assert_eq!(
             store

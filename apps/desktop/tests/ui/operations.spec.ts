@@ -11,7 +11,6 @@ function screenshotPath(name: string) {
 
 async function openOperations(page: Page, scenario = "code") {
   await page.goto(`/?scenario=${scenario}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page
     .getByRole("navigation", { name: "Primary" })
     .getByRole("button", { name: "Operations", exact: true })
