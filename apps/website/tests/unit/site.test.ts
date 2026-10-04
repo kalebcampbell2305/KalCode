@@ -211,12 +211,20 @@ describe("content security policy", () => {
     }
   });
 
-  it.runIf(existsSync(dist))("puts valid JSON-LD only on the home page", () => {
+  it.runIf(existsSync(dist))("puts valid page JSON-LD on public pages and excludes noindex pages", () => {
     for (const { file, html } of builtHtml()) {
       const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
-      if (file === "index.html") {
+      if (!/<meta name="robots" content="noindex/.test(html)) {
         expect(blocks).toHaveLength(1);
-        expect(() => JSON.parse(blocks[0]?.[1] ?? "")).not.toThrow();
+        const data = JSON.parse(blocks[0]?.[1] ?? "");
+        expect(data["@context"]).toBe("https://schema.org");
+        const types = data["@graph"].map((entry: Record<string, unknown>) => entry["@type"]);
+        expect(types).toContain("WebPage");
+        if (file === "index.html") {
+          expect(types).toEqual(expect.arrayContaining(["Organization", "WebSite", "SoftwareApplication"]));
+        } else {
+          expect(types).toContain("BreadcrumbList");
+        }
       } else {
         expect(blocks, file).toHaveLength(0);
       }

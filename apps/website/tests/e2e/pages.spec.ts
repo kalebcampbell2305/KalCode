@@ -43,6 +43,20 @@ test.describe("every page", () => {
       await expect(head.locator('meta[property="og:image"]')).toHaveAttribute("content", `${SITE_ORIGIN}/og.png`);
       await expect(head.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
       await expect(head.locator('meta[name="twitter:site"]')).toHaveAttribute("content", SOCIAL.official.handle);
+      await expect(head.locator('meta[name="robots"]')).toHaveAttribute(
+        "content",
+        "index, follow, max-image-preview:large",
+      );
+      const data = JSON.parse((await head.locator('script[type="application/ld+json"]').textContent()) ?? "{}");
+      const canonical = new URL(page.path, SITE_ORIGIN).href;
+      const webpage = data["@graph"].find((entry: Record<string, unknown>) => entry["@type"] === "WebPage");
+      expect(webpage).toMatchObject({ url: canonical, name: page.title, description: renderedDescription(page) });
+      if (page.path !== "/") {
+        const crumbs = data["@graph"].find((entry: Record<string, unknown>) => entry["@type"] === "BreadcrumbList");
+        expect(crumbs.itemListElement.at(-1).item).toBe(canonical);
+        expect(crumbs.itemListElement[0].item).toBe(`${SITE_ORIGIN}/`);
+        expect(crumbs.itemListElement).toHaveLength(page.path.startsWith("/docs/") ? 3 : 2);
+      }
       await expect(head.locator('meta[name="theme-color"]').first()).toHaveAttribute("content", /#/);
       await expect(tab.locator("h1")).toHaveCount(1);
       await expect(tab.locator("main#main")).toBeVisible();
@@ -108,9 +122,14 @@ test.describe("every page", () => {
     expect(xml).toContain(`<loc>${SITE_ORIGIN}/updates</loc>`);
     expect(xml).not.toContain(`${SITE_ORIGIN}/changelog`);
     expect(xml).not.toContain("404");
+    expect(xml).not.toContain("/account");
+    expect(xml).not.toContain("/owner/");
+    expect(xml).not.toContain("/early-access/");
+    expect([...xml.matchAll(/<loc>/g)]).toHaveLength(PAGES.length);
     for (const icon of [
       "/favicon.ico",
       "/favicon-32.png",
+      "/favicon-96.png",
       "/apple-touch-icon.png",
       "/og.png",
       "/assets/brand/kalcode-wordmark.png",
