@@ -403,6 +403,14 @@
       "reason": "consumes AI quota; requires the owner's explicit approval"
     },
     {
+      "path": "crates/providers/tests/cursor_real.rs",
+      "reason": "requires KALCODE_TEST_CURSOR_BIN containing an official Cursor Agent installation"
+    },
+    {
+      "path": "crates/providers/tests/native_parity_real.rs",
+      "reason": "reads the real provider configuration; run with KALCODE_NATIVE_PARITY=1"
+    },
+    {
       "path": "crates/providers/tests/interactive_real.rs",
       "reason": "starts a real Claude Code session: consumes AI quota; requires the owner's explicit approval"
     },
