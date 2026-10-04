@@ -589,7 +589,10 @@ function PaneCanvasSurface({
               contextMenu={host.contextMenu}
               title={describe(content).title}
               onFocus={() => {
-                if (leaf && visible) controller.focusPane(leaf.paneId, false);
+                if (leaf && visible) {
+                  describe(content).onAttentionSeen?.();
+                  controller.focusPane(leaf.paneId, false);
+                }
               }}
             />
           );
@@ -600,7 +603,12 @@ function PaneCanvasSurface({
             items={layout.dock.map((content) => ({ content, info: describe(content) }))}
             style={{ left: paneWidth + DOCK_GAP, top: 0, width: DOCK_PX, height: extent.height }}
             onOpen={(i) => controller.undock(i)}
-            onRemove={(i) => controller.removeFromDock(i)}
+            onRemove={(i) => {
+              const content = layout.dock[i];
+              const close = content && describe(content).onClose;
+              if (close) close();
+              else controller.removeFromDock(i);
+            }}
           />
         ) : null}
       </div>

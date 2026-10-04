@@ -852,8 +852,8 @@ export class KalCodeClient {
     return this.call("utility_file_read", { workspaceId, handle });
   }
 
-  closeTerminal(terminalId: string): Promise<void> {
-    return this.call("terminal_close", { terminalId });
+  closeTerminal(terminalId: string, onlyIfEnded = false): Promise<void> {
+    return this.call("terminal_close", { terminalId, ...(onlyIfEnded ? { onlyIfEnded: true } : {}) });
   }
 
   /** Stages the selected pixels locally; the terminal performs a separate, non-submitting paste. */

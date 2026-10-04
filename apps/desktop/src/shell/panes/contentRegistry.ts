@@ -11,6 +11,8 @@
 import type { PaneContent, StatusTone } from "@kalcode/protocol";
 import type { ReactNode } from "react";
 
+export type PaneAttention = "completed" | "needs-you";
+
 /** How a content item looks in its pane's tab strip. */
 export interface TabInfo {
   /** Visible and accessible name of the tab (for example "PowerShell 7"). */
@@ -21,6 +23,10 @@ export interface TabInfo {
   tone?: StatusTone;
   /** Short state word shown in the tab (for example "Ended"). */
   stateLabel?: string;
+  /** An unseen lifecycle change. Visual emphasis only; never a keyboard or native focus request. */
+  attention?: PaneAttention;
+  /** Called only when the person interacts with this tab or its visible content. */
+  onAttentionSeen?: () => void;
   /** Longer status for the tab's tooltip and the pane's label (for example "Running"). */
   statusText?: string;
   /** The content draws on the terminal background (terminals, provider TUIs). */

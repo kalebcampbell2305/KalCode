@@ -188,6 +188,46 @@ it("keeps every pane readable in dense layouts and maximizes within the viewport
   expect(canvasExtent({ ...layout, maximizedPaneId: "a" }, 640, 480)).toEqual({ width: 640, height: 480 });
 });
 
+it("acknowledges attention through the persistent terminal portal only when the user visits it", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const seen = vi.fn();
+  const initial: PaneLayout = {
+    schemaVersion: 1,
+    root: makeLeaf([{ kind: "agent", agentId: "done" }], "left"),
+    maximizedPaneId: null,
+    dock: [],
+  };
+  const host: PaneHost = {
+    describe: () => ({ title: "Finished agent", glyph: null, attention: "completed", onAttentionSeen: seen }),
+    render: () => <input aria-label="Agent prompt" defaultValue="next task" />,
+    renderEmpty: () => null,
+    addMenu: () => null,
+  };
+  const store = { load: async () => initial, save: vi.fn().mockResolvedValue(undefined) };
+  function Harness() {
+    const controller = usePaneController({ scope: "attention", store, initial: () => initial, titleOf: () => "Agent" });
+    return controller.ready ? <PaneCanvas controller={controller} host={host} label="Test canvas" /> : null;
+  }
+  render(
+    <TooltipProvider>
+      <Harness />
+    </TooltipProvider>,
+  );
+  const input = await screen.findByRole("textbox", { name: "Agent prompt" });
+  expect(seen).not.toHaveBeenCalled();
+  fireEvent.pointerDown(input);
+  expect(seen).toHaveBeenCalledOnce();
+  fireEvent.focus(input);
+  expect(seen).toHaveBeenCalledTimes(2);
+  expect(input).toHaveValue("next task");
+});
+
 it("holds magnetic snap zones through small pointer jitter but releases intentionally", () => {
   const panes = new Map([["a", { x: 0, y: 0, width: 1000, height: 634 }]]);
   const visible = new Set(["a"]);

@@ -556,6 +556,7 @@ pub fn provider_pane_create(
     permission_mode: PermissionMode,
     name: Option<String>,
     source_thread_id: Option<String>,
+    switch_account_id: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     panes.require()?;
@@ -610,11 +611,20 @@ pub fn provider_pane_create(
             Ok(row)
         })
         .transpose()?;
+    if switch_account_id.is_some() && source.is_none() {
+        return Err(KalError::validation(
+            "pane_switch_source_required",
+            "Choose a coding session before switching accounts.",
+        )
+        .to_ipc());
+    }
     let (provider_id, provider_account_id, workspace_id, model, effort, permission_mode, name) =
         if let Some(source) = &source {
             (
                 source.provider_id.to_string(),
-                source.provider_account_id.clone(),
+                switch_account_id
+                    .clone()
+                    .or_else(|| source.provider_account_id.clone()),
                 source.workspace_id.clone(),
                 source.model.clone(),
                 source.effort.clone(),
@@ -643,9 +653,12 @@ pub fn provider_pane_create(
         None,
     )
     .map_err(|e| e.log_and_convert("provider_pane_create_account"))?;
-    if source.as_ref().is_some_and(|source| {
-        source.provider_account_id.as_deref() != account.as_ref().map(|account| account.id.as_str())
-    }) {
+    if switch_account_id.is_none()
+        && source.as_ref().is_some_and(|source| {
+            source.provider_account_id.as_deref()
+                != account.as_ref().map(|account| account.id.as_str())
+        })
+    {
         return Err(KalError::validation(
             "pane_duplicate_account_changed",
             "Choose an account for the original agent before duplicating it.",
