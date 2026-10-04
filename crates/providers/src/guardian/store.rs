@@ -982,6 +982,26 @@ mod tests {
         );
     }
 
+    /// Creating symlinks needs Developer Mode or elevation (error 1314 otherwise, as on the gate
+    /// machine). An NTFS junction needs neither and is still a reparse point at `link`, which is
+    /// what the store must refuse. `cmd` runs hidden, like the git crate's test fixtures.
+    #[cfg(windows)]
+    fn junction(link: &std::path::Path, target: &std::path::Path) {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .expect("mklink /J");
+        assert!(output.status.success(), "junction fixture: {output:?}");
+    }
+
+    #[cfg(windows)]
+    const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+
     #[cfg(windows)]
     #[test]
     fn rejects_reparse_slot_without_mutating_its_target() {
@@ -996,13 +1016,28 @@ mod tests {
 
         let target = temp.path().join("outside-marker.json");
         std::fs::write(&target, b"outside-must-remain-unchanged").expect("outside target");
+        let outside_dir = temp.path().join("outside-dir");
+        std::fs::create_dir(&outside_dir).expect("outside directory");
         let next_slot = root.join(store.slot_name(&profile, 2).expect("next slot name"));
-        symlink_file(&target, &next_slot).expect("slot symlink fixture");
+        match symlink_file(&target, &next_slot) {
+            Ok(()) => {}
+            // Without the symlink privilege, a junction occupies the slot path instead.
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                junction(&next_slot, &outside_dir);
+            }
+            Err(error) => panic!("slot symlink fixture: {error:?}"),
+        }
 
         assert!(store.persist(&marker).is_err());
         assert_eq!(
             std::fs::read(target).expect("outside target read"),
             b"outside-must-remain-unchanged"
+        );
+        assert_eq!(
+            std::fs::read_dir(outside_dir)
+                .expect("outside directory remains readable")
+                .count(),
+            0
         );
     }
 
@@ -1015,7 +1050,13 @@ mod tests {
         let target = temp.path().join("marker-target");
         std::fs::create_dir(&target).expect("target directory");
         let root = temp.path().join("marker-root-link");
-        symlink_dir(&target, &root).expect("root reparse fixture");
+        match symlink_dir(&target, &root) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                junction(&root, &target);
+            }
+            Err(error) => panic!("root reparse fixture: {error:?}"),
+        }
 
         assert!(
             FileMarkerStore::open(root).is_err(),
