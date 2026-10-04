@@ -89,6 +89,7 @@ export type MemoryScenario =
   | "account-unactivated"
   | "account-ready"
   | "account-ready-pro"
+  | "account-ready-max"
   | "account-expired"
   | "account-offline-grace"
   | "approvals"
@@ -429,15 +430,17 @@ export function createMemoryTransport(
   const accountScenario: AccountMemoryScenario =
     scenario === "account-ready-pro"
       ? "ready_pro"
-      : scenario === "account-fresh"
-        ? "fresh"
-        : scenario === "account-unactivated"
-          ? "unactivated"
-          : scenario === "account-expired"
-            ? "expired"
-            : scenario === "account-offline-grace"
-              ? "offline_grace"
-              : "ready";
+      : scenario === "account-ready-max"
+        ? "ready_max"
+        : scenario === "account-fresh"
+          ? "fresh"
+          : scenario === "account-unactivated"
+            ? "unactivated"
+            : scenario === "account-expired"
+              ? "expired"
+              : scenario === "account-offline-grace"
+                ? "offline_grace"
+                : "ready";
   const account = createAccountMemory(accountScenario);
 
   const ensureDetected = async () => {
@@ -839,6 +842,7 @@ export function createMemoryTransport(
       makeUnavailable: code.makeUnavailable,
       runningProcessCount: code.runningProcessCount,
       setTerminalWork: code.setTerminalWork,
+      workspaceTerminals: code.workspaceTerminals,
     },
     permissions,
     panes: panes.controls,
@@ -896,6 +900,7 @@ function readScenario(): MemoryScenario {
     value === "account-unactivated" ||
     value === "account-ready" ||
     value === "account-ready-pro" ||
+    value === "account-ready-max" ||
     value === "account-expired" ||
     value === "account-offline-grace" ||
     value === "approvals" ||
