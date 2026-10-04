@@ -30,6 +30,7 @@ interface ProviderAccountSessionsValue {
   supersede: (accountId: string) => void;
   /** Canonical provider-quota usage per account id (see accountUsage.ts). */
   usage: ReadonlyMap<string, AccountUsageState>;
+  refreshUsage: () => void;
 }
 
 const ProviderAccountSessionsContext = createContext<ProviderAccountSessionsValue | null>(null);
@@ -434,11 +435,24 @@ export function ProviderAccountSessionsProvider({ children }: { children: ReactN
 
   // Real provider quota usage, read passively in the background (accountUsageReader.ts). It
   // never blocks restore, menus or launches; entries update in place when a read lands.
-  const usage = useAccountUsageReader(client, accounts, feed);
+  const [usageRequest, setUsageRequest] = useState(0);
+  const refreshUsage = useCallback(() => setUsageRequest((request) => request + 1), []);
+  const usage = useAccountUsageReader(client, accounts, feed, usageRequest);
 
   const value = useMemo<ProviderAccountSessionsValue>(
-    () => ({ accounts, loadError, checking, validationErrors, reload, validate, replace, supersede, usage }),
-    [accounts, loadError, checking, validationErrors, reload, validate, replace, supersede, usage],
+    () => ({
+      accounts,
+      loadError,
+      checking,
+      validationErrors,
+      reload,
+      validate,
+      replace,
+      supersede,
+      usage,
+      refreshUsage,
+    }),
+    [accounts, loadError, checking, validationErrors, reload, validate, replace, supersede, usage, refreshUsage],
   );
   return <ProviderAccountSessionsContext.Provider value={value}>{children}</ProviderAccountSessionsContext.Provider>;
 }
