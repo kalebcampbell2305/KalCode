@@ -40,13 +40,17 @@ not hold up terminal output. A failed optional memory lookup never prevents agen
 An agent without a named task receives at most two foundational project notes plus pins,
 within 2 KB, so it can orient itself without receiving the entire memory store.
 
-Claude receives native appended context and task-specific `UserPromptSubmit` context. Codex,
-Gemini and Cursor receive a native initial context message when matching notes or pins exist;
+Claude receives native appended context and task-specific `UserPromptSubmit` context. Codex
+and Gemini receive a native initial context message when matching notes or pins exist;
 their native system instructions and tools remain intact. KalCode-submitted subsequent prompts retrieve
 task-specific memory. Directly typed Codex/Gemini terminal input is not intercepted or rewritten.
-Cursor's authenticated prompt and response hooks capture explicit durable knowledge, but its
-documented prompt hook has no context-injection field. Directly typed Cursor follow-up prompts
-therefore retain startup memory rather than retrieving new context for each prompt.
+Cursor receives native `additional_context` through its authenticated `sessionStart` hook,
+without creating a model turn. Accepted direct terminal and voice prompts retrieve relevant
+context through `beforeSubmitPrompt`, including after session resume. These native response
+fields are verified against Cursor CLI 2026.10.01. Programmatic tasks and reviewed handoffs
+already receive context through the shared service and are not enriched or captured twice.
+Cursor's prompt and final-response hooks capture explicit durable knowledge only for the
+bound session and accepted generation; hidden reasoning and raw terminal transcripts are excluded.
 Provider-neutral session and event-sink interfaces also support future adapters.
 
 Handoff previews include relevant target-workspace memory inside their existing context privacy

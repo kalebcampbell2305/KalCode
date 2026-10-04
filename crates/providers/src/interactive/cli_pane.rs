@@ -298,7 +298,11 @@ impl InteractiveCliProvider {
         #[cfg(unix)]
         crate::launch::apply_launch_env(&launch, &mut env);
 
-        let project_context = sink.project_context();
+        // Cursor receives native startup context through sessionStart. A positional prompt
+        // would synthesize a model turn and race the first reviewed Operations/Queue task.
+        let project_context = (self.cli != PaneCli::Cursor)
+            .then(|| sink.project_context())
+            .flatten();
         let shared = Shared::new(SessionParts {
             ctx: ActionContext {
                 thread_id: config.thread_id.clone(),

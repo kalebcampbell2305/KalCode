@@ -320,6 +320,7 @@ fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 struct UnifiedMemorySink {
     events: mpsc::Sender<AgentEvent>,
     context: String,
+    context_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl kalcode_contracts::agent::AgentEventSink for UnifiedMemorySink {
@@ -327,6 +328,8 @@ impl kalcode_contracts::agent::AgentEventSink for UnifiedMemorySink {
         let _ = self.events.send(event);
     }
     fn project_context(&self) -> Option<String> {
+        self.context_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Some(self.context.clone())
     }
 }
@@ -345,6 +348,7 @@ fn unified_memory_launch_reaches_native_providers_without_changing_native_modes(
         let thread = config.thread_id.clone();
         let (tx, rx) = mpsc::channel();
         let context = "[KalCode Unified Memory]\nArchitecture: Dashboard.tsx owns the shell.";
+        let context_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let session = rig
             .provider
             .start_session(
@@ -352,6 +356,7 @@ fn unified_memory_launch_reaches_native_providers_without_changing_native_modes(
                 Box::new(UnifiedMemorySink {
                     events: tx,
                     context: context.into(),
+                    context_reads: context_reads.clone(),
                 }),
             )
             .expect("memory launch");
@@ -360,9 +365,21 @@ fn unified_memory_launch_reaches_native_providers_without_changing_native_modes(
             .expect("attach memory pane");
         let args = rig.args();
         let memory = args.last().expect("initial memory prompt");
-        assert!(memory.starts_with(context), "{args:?}");
-        assert!(memory.contains("Wait for the user's next request before taking action."));
-        assert_eq!(args.iter().filter(|arg| arg.contains(context)).count(), 1);
+        if cli == PaneCli::Cursor {
+            assert_eq!(
+                context_reads.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "Cursor must retrieve context only after its native startup hook"
+            );
+            assert!(
+                args.iter().all(|arg| !arg.contains(context)),
+                "Cursor startup must not submit a memory-only model turn"
+            );
+        } else {
+            assert!(memory.starts_with(context), "{args:?}");
+            assert!(memory.contains("Wait for the user's next request before taking action."));
+            assert_eq!(args.iter().filter(|arg| arg.contains(context)).count(), 1);
+        }
         let model_flag = if cli == PaneCli::Codex {
             "-m"
         } else {

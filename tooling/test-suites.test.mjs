@@ -25,8 +25,7 @@ const inventory = loadTestSuiteInventory();
 test("the registered Rust release gate includes the production speech engine and exact target ignore counts", () => {
   const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
-  // The official Cursor installation probe and the three real Claude Code tool-call checks are
-  // intentionally ignored on every platform.
+  // The retired standalone Manual Claude status probe was one intentional ignore on every platform.
   for (const [platform, expected] of [
     ["win32", 27],
     ["darwin", 27],
@@ -283,8 +282,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 357);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 357);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 365);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 365);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -292,9 +291,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 357);
+  assert.equal(functional.size, 365);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 413);
+  assert.equal(established.size, 421);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

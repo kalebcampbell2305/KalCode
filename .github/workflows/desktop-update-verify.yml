@@ -7,6 +7,8 @@ name: Desktop update verify (self-hosted)
 # signed-in desktop (tooling/runners/README.md), so KalCode's window is real and visible. It never runs on the owner's PC.
 #   gh workflow run desktop-update-verify.yml --ref main -f live_url=... -f live_sha256=... -f live_version=...
 #     -f candidate_version=... -f candidate_sha256=... -f candidate_commit=...
+# Before publication, add candidate_tag=qa-... and expect_schema=N for signed package update/data preservation proof.
+# Package proof does not claim normal updater delivery. Data migrations require live_schema and changes_data=true.
 
 run-name: Desktop update ${{ inputs.live_version }} -> ${{ inputs.candidate_version }}
 
@@ -19,6 +21,12 @@ on:
       candidate_version: { description: Version now live on the Stable feed X.Y.Z+N, required: true, type: string }
       candidate_sha256: { description: SHA-256 of the live Windows installer, required: true, type: string }
       candidate_commit: { description: Commit of the live build, required: true, type: string }
+      candidate_tag: { description: Optional private draft QA release tag for prepublication package proof (no feed delivery claim), required: false, type: string }
+      expect_schema: { description: Expected candidate SQLite schema for package proof, required: false, default: '0', type: string }
+      clean_packet_sha256: { description: Optional SHA-256 of draft windows-clean-packet.zip for canonical clean install proof, required: false, type: string }
+      clean_verifier_sha256: { description: Exact candidate verify-windows.mjs SHA-256 inside the clean packet, required: false, type: string }
+      live_schema: { description: Expected live SQLite schema for migration proof, required: false, default: '0', type: string }
+      changes_data: { description: Require forward-only restore guard after schema migration, required: false, default: false, type: boolean }
 
 permissions:
   contents: read
@@ -31,6 +39,11 @@ jobs:
   verify:
     name: Desktop update (kalcode-qa)
     if: github.ref == 'refs/heads/main'
+    # GitHub exposes draft releases only to tokens with push access, even for reads.
+    # This trusted-main job uses only release metadata/download APIs; checkout never
+    # persists credentials and the script clears GH_TOKEN before launching KalCode.
+    permissions:
+      contents: write
     runs-on: [self-hosted, Windows, kalcode-desktop-qa]
     timeout-minutes: 40
     steps:
@@ -38,6 +51,10 @@ jobs:
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
+      - name: Prepare isolated portable SQLite reader
+        if: inputs.candidate_tag != ''
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1
       - name: Run the desktop update delivery check
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
@@ -47,13 +64,25 @@ jobs:
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          EXPECT_SCHEMA: ${{ inputs.expect_schema }}
+          CLEAN_PACKET_SHA256: ${{ inputs.clean_packet_sha256 }}
+          CLEAN_VERIFIER_SHA256: ${{ inputs.clean_verifier_sha256 }}
+          LIVE_SCHEMA: ${{ inputs.live_schema }}
+          CHANGES_DATA: ${{ inputs.changes_data }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'desktop-update-out'
-          if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
+          $out = Join-Path $env:RUNNER_TEMP ('desktop-update-out-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
+          $packageArgs = @()
+          if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA, '-LiveSchema', $env:LIVE_SCHEMA) }
+          if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
+          if ($env:CLEAN_PACKET_SHA256 -or $env:CLEAN_VERIFIER_SHA256) { $packageArgs += @('-CleanPacketSha256', $env:CLEAN_PACKET_SHA256, '-CleanVerifierSha256', $env:CLEAN_VERIFIER_SHA256) }
           & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
             -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
             -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `
+            @packageArgs `
             -OutDir $out
           if ($LASTEXITCODE -ne 0) { throw "desktop update check failed (exit $LASTEXITCODE)" }
       - name: Upload the receipt
@@ -61,5 +90,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-update-${{ github.run_id }}
-          path: ${{ runner.temp }}/desktop-update-out/desktop-update-receipt.json
+          path: ${{ runner.temp }}/desktop-update-out-${{ github.run_id }}-${{ github.run_attempt }}/*.json
           if-no-files-found: warn
+      - name: Remove this run's portable Python
+        if: always() && inputs.candidate_tag != ''
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/prepare-desktop-python.ps1 -Cleanup

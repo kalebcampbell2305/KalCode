@@ -597,25 +597,25 @@
   font-size: var(--type-label);
 }
 
-@container code (max-width: 62rem) {
+@container code (max-width: 96rem) {
   .statusKeys > [data-key="leave"] {
     display: none;
   }
 }
 
-@container code (max-width: 52rem) {
+@container code (max-width: 86rem) {
   .statusKeys > [data-key="maximize"] {
     display: none;
   }
 }
 
-@container code (max-width: 38rem) {
+@container code (max-width: 76rem) {
   .statusKeys > [data-key="split"] {
     display: none;
   }
 }
 
-@container code (max-width: 28rem) {
+@container code (max-width: 64rem) {
   .statusKeys {
     display: none;
   }
@@ -991,6 +991,18 @@
   }
 
   .recentTime {
+    display: none;
+  }
+}
+
+/* The status bar's pane facts follow What's Happening and give way to it as the canvas narrows. */
+.statusInfo[data-trailing] {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+@container code (max-width: 80rem) {
+  .statusInfo[data-trailing] .statusFocus {
     display: none;
   }
 }

@@ -180,15 +180,19 @@ impl AgentSession for SessionHandle {
 
     fn terminate(&self) -> Result<(), ProviderError> {
         self.0.calls.lock().unwrap().push(Call::Terminate);
-        if self
-            .0
-            .terminate_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
-            return Err(ProviderError::Io("simulated termination failure".into()));
+        let mut remaining = self.0.terminate_failures.load(Ordering::SeqCst);
+        while remaining > 0 {
+            match self.0.terminate_failures.compare_exchange(
+                remaining,
+                remaining - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    return Err(ProviderError::Io("simulated termination failure".into()));
+                }
+                Err(current) => remaining = current,
+            }
         }
         if !self.0.ended.swap(true, Ordering::SeqCst) {
             // A real adapter reports the process exit after killing the tree.
