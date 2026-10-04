@@ -142,6 +142,7 @@ export function useAccountUsageReader(
   client: KalCodeClient,
   accounts: readonly ProviderAccount[] | null,
   feed: EventFeed | null | undefined,
+  refreshRequest = 0,
 ): ReadonlyMap<string, AccountUsageState> {
   const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsageState>>(EMPTY);
   const accountsRef = useRef(accounts);
@@ -208,8 +209,9 @@ export function useAccountUsageReader(
       .sort()
       .join("|") ?? null;
   useEffect(() => {
+    void refreshRequest;
     if (accountsKey !== null) refresh();
-  }, [accountsKey, refresh]);
+  }, [accountsKey, refresh, refreshRequest]);
 
   useEffect(() => {
     const interval = setInterval(() => {
