@@ -3368,12 +3368,9 @@ done
         assert_eq!(claude_after.last_error_code, None);
 
         // Beginning a lifecycle operation invalidates the prior plan generation even when the
-        // live session then refuses the writer. A new read-only check is allowed beside the
-        // session; this intentionally unrunnable fake therefore fails as a real check error.
-        assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED)
-        );
+        // live session then refuses the writer. An unavailable metadata service does not
+        // prevent another native session from using the still-authenticated account.
+        assert_eq!(codex_launch_refusal(&fixture), None);
         drop((codex_session, claude_session));
     }
 
@@ -3429,11 +3426,18 @@ done
             .archive(&fixture.runtime.inner.profiles, &fixture.account.id)
             .expect("archive");
         expire_codex_plan(&fixture);
-        assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
-            "an archived account fails its check instead of reusing its verdict"
-        );
+        assert_eq!(codex_launch_refusal(&fixture), None);
+        let error = store
+            .launch_with_active_account(
+                &fixture.runtime.inner.profiles,
+                ProviderId::CODEX,
+                &fixture.account.id,
+                |_| -> Result<(), ProviderError> {
+                    panic!("an archived account must never reach a provider launch")
+                },
+            )
+            .expect_err("the canonical account launch guard rejects archived accounts");
+        assert!(matches!(error, ProviderError::Start(_)));
 
         let replacement = store
             .create(ProviderId::CODEX, "Personal")
@@ -3441,10 +3445,14 @@ done
         fixture.account = replacement;
         let session = codex_session(&fixture);
         assert_eq!(
-            codex_launch_refusal(&fixture).as_deref(),
-            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
-            "a new account has no verdict of its own this run"
+            fixture
+                .runtime
+                .codex_cloud_config(&fixture.account.id)
+                .expect("metadata"),
+            CloudConfigEligibility::Unknown,
+            "a replacement account never inherits the prior account's plan"
         );
+        assert_eq!(codex_launch_refusal(&fixture), None);
         drop(session);
     }
 
