@@ -1,9 +1,13 @@
 /*
  * The KalVoice artwork keeps its own deep-space ground in both themes: a framed brand band with
  * a fine lit hairline, the orb's glow behind it and a faint star field. The one bold element on
- * the page; everything below is dense, framed panels.
+ * the page; everything below is dense, framed panels. Its colours come from the theme-invariant
+ * --brand-* tokens (never theme surface/text tokens) so they stay right on that ground in both themes.
  */
 .hero {
+  --kv-ink: var(--brand-ink);
+  --kv-blue: var(--brand-blue);
+  --kv-icy: var(--brand-icy);
   position: relative;
   display: flex;
   align-items: center;
@@ -11,20 +15,20 @@
   margin: 0;
   padding: var(--space-5) var(--space-8);
   overflow: hidden;
-  border: 1px solid rgb(92 150 255 / 0.3);
+  border: 1px solid color-mix(in srgb, var(--kv-blue) 30%, transparent);
   border-radius: var(--radius-xl);
   background:
-    radial-gradient(circle at 62% 30%, rgb(169 200 255 / 0.55) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 78% 72%, rgb(169 200 255 / 0.4) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 88% 24%, rgb(169 200 255 / 0.5) 0 1.2px, transparent 1.7px),
-    radial-gradient(circle at 94% 60%, rgb(169 200 255 / 0.3) 0 1px, transparent 1.5px),
-    radial-gradient(22rem 12rem at 10% 50%, rgb(76 141 255 / 0.22), transparent 70%),
-    radial-gradient(40rem 14rem at 100% 0%, rgb(76 141 255 / 0.1), transparent 70%),
-    linear-gradient(180deg, #03060d, #010205);
+    radial-gradient(circle at 62% 30%, color-mix(in srgb, var(--kv-icy) 55%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 78% 72%, color-mix(in srgb, var(--kv-icy) 40%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 88% 24%, color-mix(in srgb, var(--kv-icy) 50%, transparent) 0 1.2px, transparent 1.7px),
+    radial-gradient(circle at 94% 60%, color-mix(in srgb, var(--kv-icy) 30%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(22rem 12rem at 10% 50%, color-mix(in srgb, var(--kv-blue) 22%, transparent), transparent 70%),
+    radial-gradient(40rem 14rem at 100% 0%, color-mix(in srgb, var(--kv-blue) 10%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--brand-blue) 5%, var(--brand-ground)), var(--brand-ground));
   box-shadow:
-    inset 0 1px 0 rgb(200 220 255 / 0.06),
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
     0 18px 40px -26px rgb(0 0 0 / 0.9);
-  color: #eef3fb;
+  color: var(--kv-ink);
 }
 
 /* A lit hairline along the top edge, brightest over the orb. */
@@ -35,7 +39,7 @@
   left: 4%;
   right: 40%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(141 182 255 / 0.8), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--kv-icy) 80%, transparent), transparent);
   pointer-events: none;
 }
 
@@ -52,7 +56,7 @@
 }
 
 .heroLine {
-  color: #b9c6dc;
+  color: color-mix(in srgb, var(--kv-ink) 80%, transparent);
   font-size: var(--type-body);
   line-height: var(--leading-snug);
 }

@@ -58,7 +58,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
 ) {
   return (
     <span className={cx(styles.selectWrap, className)}>
-      <select ref={ref} className={cx(styles.control, styles.select)} {...rest}>
+      <select ref={ref} className={cx(styles.control, styles.select)} data-chevron="icon" {...rest}>
         {children}
       </select>
       <ChevronDown className={styles.chevron} aria-hidden="true" />

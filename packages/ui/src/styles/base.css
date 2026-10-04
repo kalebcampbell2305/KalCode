@@ -78,6 +78,17 @@ button {
   cursor: pointer;
 }
 
+/* Native single selects wear KalCode's chevron, never the platform arrow. The shared Select draws
+   its own icon and opts out with data-chevron. */
+select:not([multiple]):not([size]):not([data-chevron]) {
+  padding-right: 1.75rem;
+  appearance: none;
+  background-image: var(--select-chevron);
+  background-position: right 0.55rem center;
+  background-repeat: no-repeat;
+  background-size: 0.75rem 0.75rem;
+}
+
 button:disabled {
   cursor: not-allowed;
 }
@@ -126,8 +137,8 @@ kbd {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-border-focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
   border-radius: var(--radius-xs);
 }
 
@@ -157,5 +168,30 @@ kbd {
   *::after {
     /* biome-ignore lint/complexity/noImportantStyles: reduced motion must override component styles. */
     scroll-behavior: auto !important;
+  }
+}
+
+/* Windows High Contrast / forced colors: the OS palette wins. Keep focus, selection and surface
+   edges visible with system colours, and drop decorative backgrounds that would be flattened. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  [aria-selected="true"],
+  [aria-current]:not([aria-current="false"]),
+  [data-selected="true"] {
+    outline: 1px solid Highlight;
+  }
+
+  ::selection {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  select:not([multiple]):not([size]):not([data-chevron]) {
+    appearance: auto;
+    background-image: none;
   }
 }

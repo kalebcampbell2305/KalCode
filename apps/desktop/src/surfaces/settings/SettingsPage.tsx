@@ -1,4 +1,4 @@
-import type { Density, MotionPreference, ThemePreference } from "@kalcode/protocol";
+import type { ContrastPreference, Density, MotionPreference, TextSize, ThemePreference } from "@kalcode/protocol";
 import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton } from "@kalcode/ui/components";
 import { Activity, ClipboardCopy, FolderOpen, Info, KeyRound, Monitor, Moon, Palette, Sun } from "lucide-react";
 import type { ReactNode } from "react";
@@ -123,6 +123,40 @@ function Appearance() {
               options={[
                 { value: "comfortable", label: "Comfortable" },
                 { value: "compact", label: "Compact" },
+              ]}
+            />
+          }
+        />
+        <SettingRow
+          id="contrast"
+          label="Contrast"
+          help="High raises text, border and focus contrast and removes background effects. System follows your operating system."
+          control={
+            <SegmentedControl<ContrastPreference>
+              aria-labelledby="contrast-label"
+              value={settings.contrast ?? "system"}
+              onValueChange={(contrast) => void updateSettings({ contrast })}
+              options={[
+                { value: "system", label: "System" },
+                { value: "standard", label: "Standard" },
+                { value: "more", label: "High" },
+              ]}
+            />
+          }
+        />
+        <SettingRow
+          id="text-size"
+          label="Text size"
+          help="Scales text and controls across KalCode, terminals included."
+          control={
+            <SegmentedControl<TextSize>
+              aria-labelledby="text-size-label"
+              value={settings.textSize ?? "default"}
+              onValueChange={(textSize) => void updateSettings({ textSize })}
+              options={[
+                { value: "default", label: "Default" },
+                { value: "large", label: "Large" },
+                { value: "larger", label: "Larger" },
               ]}
             />
           }

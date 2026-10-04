@@ -37,6 +37,30 @@ pub enum Density {
     Compact,
 }
 
+/// Contrast mode. `System` follows the OS (`prefers-contrast: more`); `More` raises text,
+/// hairline and focus contrast and removes decorative atmosphere.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ContrastPreference {
+    #[default]
+    System,
+    Standard,
+    More,
+}
+
+/// Interface text size. The UI is specified in `rem`, so the scale applies to text, controls
+/// and spacing together (and to terminal text), keeping layouts proportional.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TextSize {
+    #[default]
+    Default,
+    Large,
+    Larger,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -44,6 +68,14 @@ pub struct Settings {
     pub theme: ThemePreference,
     pub motion: MotionPreference,
     pub density: Density,
+    /// Optional for consumers written before contrast existed; always sent by native.
+    #[serde(default)]
+    #[ts(as = "Option<ContrastPreference>", optional)]
+    pub contrast: ContrastPreference,
+    /// Optional for consumers written before text size existed; always sent by native.
+    #[serde(default)]
+    #[ts(as = "Option<TextSize>", optional)]
+    pub text_size: TextSize,
     pub sidebar_collapsed: bool,
     /// The name the returning-user home greets (`profile.displayName`, Z7-W2). Set only by the
     /// user in Settings; KalCode never reads the operating system's account name. `None` when
@@ -65,6 +97,10 @@ pub struct SettingsPatch {
     pub motion: Option<MotionPreference>,
     #[ts(optional)]
     pub density: Option<Density>,
+    #[ts(optional)]
+    pub contrast: Option<ContrastPreference>,
+    #[ts(optional)]
+    pub text_size: Option<TextSize>,
     #[ts(optional)]
     pub sidebar_collapsed: Option<bool>,
     /// 1–60 characters without control characters; an empty (or all-space) value clears it.
@@ -108,6 +144,8 @@ pub fn normalize_display_name(raw: &str) -> Result<Option<String>> {
 const KEY_THEME: &str = "appearance.theme";
 const KEY_MOTION: &str = "appearance.motion";
 const KEY_DENSITY: &str = "appearance.density";
+const KEY_CONTRAST: &str = "appearance.contrast";
+const KEY_TEXT_SIZE: &str = "appearance.textSize";
 const KEY_SIDEBAR: &str = "layout.sidebarCollapsed";
 const KEY_DISPLAY_NAME: &str = "profile.displayName";
 
@@ -133,6 +171,12 @@ pub fn load(conn: &Connection) -> Result<Settings> {
                 .is_ok(),
             KEY_DENSITY => serde_json::from_value(value)
                 .map(|v| settings.density = v)
+                .is_ok(),
+            KEY_CONTRAST => serde_json::from_value(value)
+                .map(|v| settings.contrast = v)
+                .is_ok(),
+            KEY_TEXT_SIZE => serde_json::from_value(value)
+                .map(|v| settings.text_size = v)
                 .is_ok(),
             KEY_SIDEBAR => serde_json::from_value(value)
                 .map(|v| settings.sidebar_collapsed = v)
@@ -177,6 +221,14 @@ pub fn apply(tx: &Transaction<'_>, patch: &SettingsPatch) -> Result<(Settings, V
     if let Some(v) = patch.density.filter(|v| *v != current.density) {
         next.density = v;
         changed.push((KEY_DENSITY, serde_json::to_value(v)?));
+    }
+    if let Some(v) = patch.contrast.filter(|v| *v != current.contrast) {
+        next.contrast = v;
+        changed.push((KEY_CONTRAST, serde_json::to_value(v)?));
+    }
+    if let Some(v) = patch.text_size.filter(|v| *v != current.text_size) {
+        next.text_size = v;
+        changed.push((KEY_TEXT_SIZE, serde_json::to_value(v)?));
     }
     if let Some(v) = patch
         .sidebar_collapsed
@@ -361,6 +413,40 @@ mod tests {
         assert_eq!(settings.theme, ThemePreference::Dark);
         assert_eq!(keys, vec![KEY_THEME.to_owned(), KEY_DENSITY.to_owned()]);
         assert_eq!(load(&conn).expect("reload"), settings);
+    }
+
+    #[test]
+    fn contrast_and_text_size_persist_and_fall_back() {
+        let mut conn = conn();
+        let patch = SettingsPatch {
+            contrast: Some(ContrastPreference::More),
+            text_size: Some(TextSize::Larger),
+            ..Default::default()
+        };
+        let (settings, keys) = apply_committed(&mut conn, &patch).expect("apply");
+        assert_eq!(settings.contrast, ContrastPreference::More);
+        assert_eq!(settings.text_size, TextSize::Larger);
+        assert_eq!(
+            keys,
+            vec![KEY_CONTRAST.to_owned(), KEY_TEXT_SIZE.to_owned()]
+        );
+        assert_eq!(load(&conn).expect("reload"), settings);
+
+        conn.execute(
+            "UPDATE settings SET value = '\"huge\"' WHERE key = 'appearance.textSize'",
+            [],
+        )
+        .expect("corrupt");
+        assert_eq!(load(&conn).expect("fallback").text_size, TextSize::Default);
+
+        let json = serde_json::to_value(Settings::default()).expect("json");
+        assert_eq!(json["contrast"], "system");
+        assert_eq!(json["textSize"], "default");
+        let old: Settings = serde_json::from_str(
+            r#"{"theme":"dark","motion":"system","density":"compact","sidebarCollapsed":false}"#,
+        )
+        .expect("settings without the new fields still parse");
+        assert_eq!(old.contrast, ContrastPreference::System);
     }
 
     #[test]

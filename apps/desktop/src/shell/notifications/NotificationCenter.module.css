@@ -131,7 +131,7 @@
   bottom: var(--space-3);
   left: -1px;
   width: 2px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--color-accent);
 }
 

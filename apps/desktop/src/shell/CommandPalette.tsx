@@ -2,12 +2,14 @@ import type { ProviderAccount, SettingsPatch, SurfaceId, ThreadSummary } from "@
 import { useToast } from "@kalcode/ui/components";
 import { Command } from "cmdk";
 import {
+  ALargeSmall,
   ArrowRightLeft,
   AudioLines,
   BroomSparkles,
   ChevronsDownUp,
   ClipboardCopy,
   Columns2,
+  Contrast,
   Equal,
   FolderGit2,
   FolderOpen,
@@ -51,6 +53,7 @@ import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsAction
 import { requestRebind, useSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { accountKeywords, accountProviderName, matchAccounts, parseAccountCommand } from "./accountCommands.ts";
+import { nextTextSize, TEXT_SIZE_COMMAND } from "./appearance.ts";
 import styles from "./CommandPalette.module.css";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand } from "./panes/paneCommands.ts";
@@ -637,6 +640,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             onSelect={set({ density: settings.density === "compact" ? "comfortable" : "compact" })}
           >
             {settings.density === "compact" ? "Use comfortable density" : "Use compact density"}
+          </Item>
+          <Item
+            icon={<Contrast />}
+            onSelect={set({ contrast: settings.contrast === "more" ? "system" : "more" })}
+            keywords={["accessibility", "high contrast", "readability"]}
+          >
+            {settings.contrast === "more" ? "Use standard contrast" : "Use high contrast"}
+          </Item>
+          <Item
+            icon={<ALargeSmall />}
+            onSelect={set({ textSize: nextTextSize(settings.textSize) })}
+            keywords={["accessibility", "font", "zoom", "bigger", "smaller"]}
+          >
+            {TEXT_SIZE_COMMAND[nextTextSize(settings.textSize)]}
           </Item>
           <Item
             icon={<PanelLeft />}

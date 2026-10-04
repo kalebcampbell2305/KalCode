@@ -21,7 +21,7 @@
 .command {
   overflow: hidden;
   border: 1px solid var(--color-border-lit-soft);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-floating);
   background: var(--panel-sheen), var(--color-surface-3);
   box-shadow:
     var(--shadow-xl),

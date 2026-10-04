@@ -158,6 +158,8 @@ const SETTINGS_KEYS: Record<keyof Settings, string> = {
   theme: "appearance.theme",
   motion: "appearance.motion",
   density: "appearance.density",
+  contrast: "appearance.contrast",
+  textSize: "appearance.textSize",
   sidebarCollapsed: "layout.sidebarCollapsed",
   displayName: "profile.displayName",
 };
@@ -166,6 +168,8 @@ const PATCH_VALUES: Record<Exclude<keyof Settings, "displayName">, readonly unkn
   theme: ["system", "light", "dark"],
   motion: ["system", "reduced", "full"],
   density: ["comfortable", "compact"],
+  contrast: ["system", "standard", "more"],
+  textSize: ["default", "large", "larger"],
   sidebarCollapsed: [true, false],
 };
 
@@ -272,6 +276,8 @@ export function createMemoryTransport(
     theme: "dark",
     motion: "system",
     density: "comfortable",
+    contrast: "system",
+    textSize: "default",
     sidebarCollapsed: false,
   };
   const events: EventEnvelope[] = [];
