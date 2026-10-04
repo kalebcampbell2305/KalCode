@@ -70,7 +70,10 @@ print('PASS')
 });
 
 test("migration proof requires exact schemas, rollback floor and preserves unsuccessful QA processes", () => {
-  const entry = readFileSync(new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url), "utf8");
+  const entry = readFileSync(
+    new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url),
+    "utf8",
+  );
   assert.match(source, /floorAfter -cne \$CandidateVersion/u);
   assert.match(source, /checks\.restoreGuard = \$true/u);
   assert.match(source, /\$ExpectSchema \$expectedLive/u);
