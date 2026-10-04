@@ -24,11 +24,12 @@ export default defineConfig({
     // dist/.well-known/kalcode-build.json: the commit production serves (tooling/release/lifecycle).
     kalcodeBuildStamp(),
     sitemap({
-      // The 404 page, the pages opened from email links (noindex) and the private owner dashboard
-      // are not public pages.
+      // Keep every noindex surface out of search discovery.
       filter: (page) =>
         !page.endsWith("/404") &&
         !page.endsWith("/404.html") &&
+        !page.endsWith("/account") &&
+        !page.endsWith("/account.html") &&
         !page.includes("/early-access/") &&
         !page.includes("/owner/"),
     }),
