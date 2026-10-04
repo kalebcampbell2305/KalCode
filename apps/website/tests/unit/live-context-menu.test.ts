@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { canvasAction, canvasState, visibleCanvasFrames } from "../../src/lib/live/canvas";
 import { frameOfTab, initialState, tabOfAgent } from "../../src/lib/live/model";
 import { applyDemoContextAction, demoContextItems } from "../../src/scripts/live/contextMenus";
 
@@ -30,6 +31,29 @@ describe("live demo context actions", () => {
     if (!browser) throw new Error("Missing Browser pane");
     expect(state.frames[1]).toBe(frameOfTab(state, browser.id));
     expect(state.frames[0]?.id).toBe("f1");
+  });
+  it("reveals Browser beside the clicked agent after Focus layout and a minimized source", () => {
+    const state = initialState();
+    canvasAction(state, "canvas:layout:focus");
+    canvasState(state).minimized.add("f2");
+    applyDemoContextAction(state, { kind: "tab", id: "t-a2" }, "browser");
+    const browser = Object.values(state.tabs).find((tab) => tab.kind === "browser");
+    if (!browser) throw new Error("Missing Browser pane");
+    const frames = visibleCanvasFrames(state);
+    expect(frames).toContain(frameOfTab(state, "t-a2"));
+    expect(frames).toContain(frameOfTab(state, browser.id));
+  });
+  it("splits an existing Browser out of the clicked source's tab group", () => {
+    const state = initialState();
+    applyDemoContextAction(state, { kind: "tab", id: "t-a1" }, "browser");
+    const browser = Object.values(state.tabs).find((tab) => tab.kind === "browser");
+    if (!browser) throw new Error("Missing Browser pane");
+    const browserFrame = frameOfTab(state, browser.id);
+    canvasAction(state, `canvas:move:${browserFrame?.id}:tabs:f1`);
+    applyDemoContextAction(state, { kind: "tab", id: "t-a1" }, "browser");
+    expect(state.frames[0]?.active).toBe("t-a1");
+    expect(state.frames[1]?.active).toBe(browser.id);
+    expect(frameOfTab(state, browser.id)).not.toBe(frameOfTab(state, "t-a1"));
   });
   it("stops and closes only the selected object and hides Stop once idle", () => {
     const state = initialState();

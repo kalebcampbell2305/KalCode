@@ -49,10 +49,30 @@ test("keyboard menus stop the selected agent and restore focus on Escape", async
 
 test("workspace context actions open the actual demo launcher", async ({ page }) => {
   const app = await openDemo(page);
-  await app.locator('.lk-ctx__chip[data-do="go:code"]').click({ button: "right" });
+  await app.locator('.lk-ctx__chip[data-do="go:code"] svg').click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: /Deploy/ })).toHaveCount(0);
   await page.getByRole("menuitem", { name: "New coding agent…" }).click();
   await expect(app.getByRole("dialog", { name: /New agent/ })).toBeVisible();
+});
+
+test("context actions preserve adaptive Tidy and Undo while revealing Browser beside Focus layout", async ({
+  page,
+}) => {
+  const app = await openDemo(page);
+  const source = app.locator('[data-canvas-frame="f1"]');
+  await app.getByRole("button", { name: "Focus", exact: true }).click();
+  await source.locator('[data-do="tab:t-a1"]').click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Open Browser beside" }).click();
+  await expect(source).toBeVisible();
+  await expect(source.locator("xpath=following-sibling::*[1]")).toHaveAttribute("data-kind", "browser");
+  await expect(source.locator("xpath=following-sibling::*[1]")).toBeVisible();
+  await app.getByRole("button", { name: "Tidy layout", exact: true }).click();
+  await source.locator('[data-do="tab:t-a1"]').click({ button: "right" });
+  const count = await app.locator(".lk-tab").count();
+  await page.getByRole("menuitem", { name: "Duplicate", exact: true }).click();
+  await app.getByRole("button", { name: "Undo layout", exact: true }).click();
+  await expect(app.locator(".lk-tab")).toHaveCount(count + 1);
+  await expect(source).toBeVisible();
 });
 
 test("terminal output exposes only relevant content actions under production CSP", async ({ page }) => {

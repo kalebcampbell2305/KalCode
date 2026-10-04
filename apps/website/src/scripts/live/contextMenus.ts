@@ -1,9 +1,10 @@
 /** Object actions for the temporary sample, using the same Code/agent distinction as the app. */
+import { PLAN_FEATURES } from "@kalcode/protocol/plans";
+import { canvasAction, canvasState } from "../../lib/live/canvas";
 import {
   closeTab,
   focusTab,
   frameOfTab,
-  isAvailable,
   isWorking,
   launch,
   openBrowser,
@@ -59,7 +60,17 @@ export function applyDemoContextAction(state: State, target: DemoContextTarget, 
     if (tab) focusTab(state, tab.id);
     openBrowser(state);
     const browser = Object.values(state.tabs).find((item) => item.kind === "browser");
-    const frame = browser && frameOfTab(state, browser.id);
+    let frame = browser && frameOfTab(state, browser.id);
+    if (beside && frame === beside && browser) {
+      canvasAction(state, `canvas:split:${beside.id}`);
+      if (tab) beside.active = tab.id;
+      frame = frameOfTab(state, browser.id);
+    }
+    if (beside && frame) {
+      state.maximized = false;
+      canvasState(state).minimized.delete(beside.id);
+      canvasState(state).minimized.delete(frame.id);
+    }
     if (beside && frame && frame !== beside) {
       state.frames = state.frames.filter((item) => item !== frame);
       state.frames.splice(state.frames.indexOf(beside) + 1, 0, frame);
@@ -110,7 +121,7 @@ export function mountContextMenus(host: HTMLElement, getState: () => State, rend
     menu = null;
     if (restore && invoker?.isConnected) invoker.focus({ preventScroll: true });
   }
-  function targetOf(element: HTMLElement): { target: DemoContextTarget; element: HTMLElement } | null {
+  function targetOf(element: Element): { target: DemoContextTarget; element: HTMLElement } | null {
     const state = getState();
     const object = element.closest<HTMLElement>(".lk-tab, .lk-rail__row, .lk-card, .lk-term, .lk-ctx__chip, .lk-mtab");
     if (!object || !host.contains(object)) return null;
@@ -130,7 +141,7 @@ export function mountContextMenus(host: HTMLElement, getState: () => State, rend
     return id ? { target: { kind: object.matches(".lk-term") ? "output" : "tab", id }, element: object } : null;
   }
 
-  function open(element: HTMLElement, x: number, y: number): boolean {
+  function open(element: Element, x: number, y: number): boolean {
     const found = targetOf(element);
     if (!found) return false;
     const items = demoContextItems(getState(), found.target).filter(
@@ -151,7 +162,8 @@ export function mountContextMenus(host: HTMLElement, getState: () => State, rend
     menu.setAttribute("aria-label", title);
     const heading = document.createElement("p");
     heading.className = "lk-object-menu__title";
-    heading.textContent = `${title}${isAvailable("context-menus") ? "" : " · Coming soon"}`;
+    const available = PLAN_FEATURES.some((feature) => feature.id === "context-menus" && feature.status === "available");
+    heading.textContent = `${title}${available ? "" : " · Coming soon"}`;
     menu.append(heading);
     let danger = false;
     for (const item of items) {
@@ -213,7 +225,7 @@ export function mountContextMenus(host: HTMLElement, getState: () => State, rend
     return true;
   }
   host.addEventListener("contextmenu", (event) => {
-    if (event.target instanceof HTMLElement && open(event.target, event.clientX, event.clientY)) event.preventDefault();
+    if (event.target instanceof Element && open(event.target, event.clientX, event.clientY)) event.preventDefault();
   });
   host.addEventListener("keydown", (event) => {
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
