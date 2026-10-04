@@ -123,7 +123,12 @@ test.describe("threads", () => {
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code", "Codex", "Gemini CLI"]);
-    await expect(form.getByRole("list", { name: "Not available for threads" })).toHaveCount(0);
+    // Cursor runs only as a coding terminal in Code, never as a thread.
+    const others = form.getByRole("list", { name: "Not available for threads" });
+    await expect(others.getByRole("listitem")).toHaveCount(1);
+    await expect(others.getByRole("listitem").filter({ hasText: "Cursor" })).toContainText(
+      "Use a Cursor coding terminal in Code",
+    );
 
     // Codex lists no models up front: only the provider's default.
     await form.getByLabel("Provider").selectOption("codex");
@@ -167,11 +172,14 @@ test.describe("threads", () => {
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code"]);
     const others = form.getByRole("list", { name: "Not available for threads" });
-    await expect(others.getByRole("listitem")).toHaveCount(2);
+    await expect(others.getByRole("listitem")).toHaveCount(3);
     await expect(others.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
       "Signed out — run codex login",
     );
     await expect(others.getByRole("listitem").filter({ hasText: "Gemini CLI" })).toContainText("Not installed");
+    await expect(others.getByRole("listitem").filter({ hasText: "Cursor" })).toContainText(
+      "Use a Cursor coding terminal in Code",
+    );
     await expect(others.getByText(/can't run threads with it yet/)).toHaveCount(0);
   });
 
