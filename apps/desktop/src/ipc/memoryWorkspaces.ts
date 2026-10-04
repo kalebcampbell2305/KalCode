@@ -5,6 +5,7 @@
  * prints a prompt and understands a handful of commands, so UI tests exercise real flows.
  */
 import type { EventPayload, IpcError, ShellOption, TerminalInfo, TerminalStatus, Workspace } from "@kalcode/protocol";
+import type { ProcessInfo } from "./utilities.ts";
 
 export type EmitWithWorkspace = (event: EventPayload, workspaceId: string) => void;
 
@@ -29,11 +30,16 @@ export interface MemoryWorkspaces {
   makeUnavailable(name: string): void;
   /** Test hook: the fake processes still running (a closed tab must end its process). */
   runningProcessCount(): number;
+  /** Test hook: commands running under a terminal's shell, as the related-process scan sees them. */
+  setTerminalWork(terminalId: string, names: readonly string[]): void;
+  /** The related-process scan: each live terminal's shell, plus the work set under it. */
+  relatedProcesses(): ProcessInfo[];
 }
 
 // Plan limits (open terminals across every workspace) are enforced natively from the verified plan
 // and tested in Rust (crates/native-core/src/plans.rs). This in-memory dev/test backend sets no cap,
 // so UI tests that open many panes are not limited by the Free plan.
+const FIXTURE_PROCESS_TIME = "2026-09-25T00:00:00.000Z";
 const MAX_WRITE_BYTES = 64 * 1024;
 const SCROLLBACK_BYTES = 512 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -120,6 +126,8 @@ export function createMemoryWorkspaces({
 }: MemoryWorkspacesOptions): MemoryWorkspaces {
   const workspaces = new Map<string, Workspace>();
   const tabs = new Map<string, Tab>();
+  /** Commands a test placed under a terminal's shell (`setTerminalWork`). */
+  const terminalWork = new Map<string, string[]>();
   let activeWorkspaceId: string | null = null;
   const pickQueue: PickedFolder[] = [];
   const defaultPicks = ["kalcode-site", "api-server", "design-notes"];
@@ -592,5 +600,38 @@ export function createMemoryWorkspaces({
       }
     },
     runningProcessCount: () => [...tabs.values()].filter((t) => t.session && !t.session.exited).length,
+    setTerminalWork: (terminalId, names) => {
+      if (names.length === 0) terminalWork.delete(terminalId);
+      else terminalWork.set(terminalId, [...names]);
+    },
+    relatedProcesses: () => {
+      const list: ProcessInfo[] = [];
+      let pid = 4000;
+      for (const tab of tabs.values()) {
+        if (tab.info.status !== "running" || tab.session?.exited) continue;
+        const workspace = workspaces.get(tab.info.workspaceId);
+        const base = {
+          startTime: tab.info.startedAt ?? FIXTURE_PROCESS_TIME,
+          cpuPercent: 0,
+          memoryBytes: 32 * 1024 * 1024,
+          owner: "kal_code_child" as const,
+          role: null,
+          workspaceId: tab.info.workspaceId,
+          workspaceName: workspace?.name ?? null,
+          terminalId: tab.info.id,
+          ports: [],
+          killable: { kind: "confirm" as const },
+          canRestart: false,
+        };
+        const shellPid = pid++;
+        const shell =
+          tab.info.shellId === "cmd" ? "cmd.exe" : tab.info.shellId === "git-bash" ? "bash.exe" : "pwsh.exe";
+        list.push({ ...base, pid: shellPid, parentPid: null, name: shell, label: shell, terminalGeneration: 1 });
+        for (const name of terminalWork.get(tab.info.id) ?? []) {
+          list.push({ ...base, pid: pid++, parentPid: shellPid, name, label: name, terminalGeneration: null });
+        }
+      }
+      return list;
+    },
   };
 }

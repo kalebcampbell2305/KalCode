@@ -95,6 +95,8 @@ import { CodeContextOperationsRegistration } from "./CodeContextOperations.tsx";
 import { HandOffDialog } from "./HandOffDialog.tsx";
 import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
+import { BADGES } from "./organization/model.ts";
+import { type Organization, useOrganization } from "./organization/useOrganization.ts";
 import { readLaunchMemory } from "./panes/agentLaunch.ts";
 import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
@@ -172,6 +174,8 @@ export interface CodeCanvasApi {
   titleOf: (content: PaneContent) => string;
   applyTaskLayout: (task: TaskLayout) => void;
   layoutSuggestion: ReturnType<typeof suggestTask>;
+  /** Terminal Organization: purpose names, status badges, the stack and What's Happening. */
+  organization: Organization;
 }
 
 interface CodeCanvasProps {
@@ -244,6 +248,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const labels = useMemo(() => tabLabels(terminals), [terminals]);
   const terminalById = useMemo(() => new Map(terminals.map((t) => [t.id, t])), [terminals]);
   const paneById = useMemo(() => new Map(providerPanes.panes.map((p) => [p.thread.id, p])), [providerPanes.panes]);
+  const organization = useOrganization({
+    workspaceId: workspace.id,
+    terminals,
+    shells,
+    panes: providerPanes.panes,
+    active: current === "code",
+  });
+  const orgItems = organization.byKey;
   useEffect(() => {
     if (hasSharedAccountSessions) return;
     let cancelled = false;
@@ -275,13 +287,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     (content: PaneContent): string => {
       if (content.kind === "terminal") {
         const terminal = terminalById.get(content.terminalId);
-        return terminal ? (labels.get(terminal.id) ?? terminal.title) : "Terminal";
+        if (!terminal) return "Terminal";
+        return orgItems.get(contentKey(content))?.title ?? labels.get(terminal.id) ?? terminal.title;
       }
       if (content.kind === "agent") {
         const thread = paneById.get(content.agentId)?.thread;
         if (!thread) return "Agent";
+        const name = orgItems.get(contentKey(content))?.title ?? thread.name;
         const account = accountFor(thread);
-        return account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name;
+        return account ? `${name} · ${paneAccountLabel(account)}` : name;
       }
       if (content.kind === "dashboard") return "Dashboard";
       if (content.kind === "thread") return "Thread";
@@ -289,7 +303,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "git") return "Git";
       return "Widget";
     },
-    [terminalById, labels, paneById, accountFor],
+    [terminalById, labels, paneById, accountFor, orgItems],
   );
 
   // Closing an agent pane stops its agent (owner decision): no confirmation, nothing left running,
@@ -907,12 +921,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const terminal = terminalById.get(content.terminalId);
         if (!terminal) return null;
         const running = terminal.status === "running";
+        const org = orgItems.get(contentKey(content));
+        // The tab's dot takes the organization badge's tone when it is known (the words stay in the
+        // tooltip and the Terminal Stack, so tab names don't change); otherwise the record's own state.
+        const badge = org?.status ? BADGES[org.status.badge] : null;
         return {
-          title: labels.get(terminal.id) ?? terminal.title,
+          title: org?.title ?? labels.get(terminal.id) ?? terminal.title,
           glyph: <ProviderGlyph provider="shell" size="xs" />,
-          tone: terminalTone(terminal),
+          tone: badge?.tone ?? terminalTone(terminal),
           stateLabel: running ? undefined : "Ended",
-          statusText: describeTerminalStatus(terminal),
+          statusText: org?.status ? `${badge?.label} · ${org.status.detail}` : describeTerminalStatus(terminal),
           terminal: true,
           running,
           actions: running ? (
@@ -927,8 +945,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         if (!entry) return null;
         const status = paneStatus(entry.thread.status);
         const account = accountFor(entry.thread);
+        const name = orgItems.get(contentKey(content))?.title ?? entry.thread.name;
         return {
-          title: account ? `${entry.thread.name} · ${paneAccountLabel(account)}` : entry.thread.name,
+          title: account ? `${name} · ${paneAccountLabel(account)}` : name,
           glyph: <ProviderGlyph provider={entry.thread.providerId} size="xs" />,
           tone: status.tone,
           statusText: `${entry.thread.providerName}${account ? ` · ${paneAccountLabel(account)}` : ""} · ${status.label}`,
@@ -947,7 +966,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminalTab, accountFor, stopAgent],
+    [terminalById, labels, paneById, closeTerminalTab, accountFor, stopAgent, orgItems],
   );
 
   const render = useCallback(
@@ -1400,6 +1419,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       titleOf,
       applyTaskLayout,
       layoutSuggestion,
+      organization,
     }),
     [
       controller,
@@ -1411,6 +1431,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       titleOf,
       applyTaskLayout,
       layoutSuggestion,
+      organization,
     ],
   );
 
