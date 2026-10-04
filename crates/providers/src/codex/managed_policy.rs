@@ -784,9 +784,8 @@ mod tests {
             "a stale profile config must be replaced by the native one: {serialized}"
         );
 
-        // Every headless turn argv KalCode builds (`exec --json --ignore-rules
-        // --ignore-user-config`, the policy floor, the managed overrides, each permission mode and
-        // `exec resume`) must parse. `--help` replaces the stdin prompt marker so no turn starts.
+        // Every headless turn argv KalCode builds (`exec --json`, the policy config, the managed
+        // overrides, each permission mode and `exec resume`) must parse. `--help` replaces the stdin prompt marker so no turn starts.
         use kalcode_contracts::permissions::PermissionMode;
         let resume_id = kalcode_contracts::ids::new_id();
         for mode in [

@@ -131,33 +131,12 @@ function codexSetting(mode: PermissionMapping["mode"]): string {
       : mode === "bypass"
         ? "--sandbox danger-full-access -c approval_policy='never'"
         : `--sandbox workspace-write -c approval_policy='${mode === "auto" ? "never" : "on-request"}'`;
-  const policy = [
-    "--ignore-rules",
-    "--ignore-user-config",
-    "mcp_servers={}",
-    "web_search='disabled'",
-    "shell_environment_policy.inherit='core'",
-    "sandbox_workspace_write.network_access=false",
-    "sandbox_workspace_write.writable_roots=[]",
-    "windows.sandbox='unelevated'",
-    "features.apps=false",
-    "features.plugins=false",
-    "features.remote_plugin=false",
-    "features.hooks=false",
-    "features.multi_agent=false",
-    "features.multi_agent_v2=false",
-    "features.skill_mcp_dependency_install=false",
-    "features.browser_use=false",
-    "features.browser_use_external=false",
-    "features.computer_use=false",
-    "features.in_app_browser=false",
-    "features.image_generation=false",
-    "features.code_mode_host=true",
-    "features.auth_elicitation=false",
-    "features.tool_call_mcp_elicitation=false",
-  ];
-  return `${sandbox} ${policy.map((value) => (value.startsWith("--") ? value : `-c ${value}`)).join(" ")}`;
+  // POLICY_CONFIG (Windows): Codex keeps its native tools, the person's config and rules.
+  const policy = ["windows.sandbox='unelevated'", "features.code_mode_host=true"];
+  return `${sandbox} ${policy.map((value) => `-c ${value}`).join(" ")}`;
 }
+
+const codexNative = "Your Codex tools, MCP servers, web search and rules work as in your terminal.";
 
 const codexNotEnforced =
   "Codex has no deny-rule flag: KalCode can't stop reads of credential files that its native sandbox permits.";
@@ -239,17 +218,17 @@ export function providerCatalog(): ProviderStatus[] {
           stricter(
             "approve",
             codexSetting("approve"),
-            `Workspace writes use Codex's native on-request approval prompt; connected tools and web search remain disabled. ${codexNotEnforced}`,
+            `Workspace writes use Codex's native on-request approval prompt. ${codexNative} ${codexNotEnforced}`,
           ),
           stricter(
             "auto",
             codexSetting("auto"),
-            `Workspace writes run without approval prompts inside Codex's native sandbox; connected tools and web search remain disabled. ${codexNotEnforced}`,
+            `Workspace writes run without approval prompts inside Codex's native sandbox. ${codexNative} ${codexNotEnforced}`,
           ),
           stricter(
             "bypass",
             codexSetting("bypass"),
-            `Uses Codex's explicit danger-full-access sandbox with approval prompts disabled; connected tools and web search remain disabled. ${codexNotEnforced}`,
+            `Uses Codex's explicit danger-full-access sandbox with approval prompts disabled. ${codexNative} ${codexNotEnforced}`,
           ),
         ],
       },

@@ -57,11 +57,18 @@ describe("memory transport providers", () => {
       expect(setting(mode)).toContain("-c features.code_mode_host=true");
       expect(setting(mode)).not.toContain("features.code_mode=false");
       expect(setting(mode)).not.toContain("features.code_mode_host=false");
-      expect(setting(mode)).toContain("--ignore-user-config");
-      expect(setting(mode)).toContain("-c mcp_servers={}");
-      expect(setting(mode)).toContain("-c sandbox_workspace_write.network_access=false");
-      expect(setting(mode)).toContain("-c sandbox_workspace_write.writable_roots=[]");
-      expect(setting(mode)).toContain("-c web_search='disabled'");
+      // Native tools, the person's config and their execpolicy rules stay (TOOL_STRIPPING in argv.rs).
+      for (const stripping of [
+        "--ignore-rules",
+        "--ignore-user-config",
+        "mcp_servers={}",
+        "web_search='disabled'",
+        "sandbox_workspace_write.network_access=false",
+        "features.apps=false",
+        "features.plugins=false",
+      ]) {
+        expect(setting(mode)).not.toContain(stripping);
+      }
     }
     const claudeAuto = claude?.capabilities.permissionMappings.find((mapping) => mapping.mode === "auto");
     expect(claudeAuto?.providerSetting).toContain("--permission-mode auto");
