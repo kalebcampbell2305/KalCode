@@ -460,6 +460,19 @@ export function createMemoryWorkspaces({
       startSession(tab);
       return tab.info;
     },
+    terminal_duplicate: (args) => {
+      requireCore();
+      requireSize(args);
+      const source = tabOr404(requireId(args.terminalId));
+      const workspace = workspaceOr404(source.info.workspaceId);
+      if (!workspace.available) fail(folderMissing());
+      if (!SHELLS.some((s) => s.id === source.info.shellId))
+        fail(validation("shell_unavailable", "That shell isn't available."));
+      const tab = addTab(workspace, source.info.shellId);
+      tab.info = { ...tab.info, title: `${[...source.info.title].slice(0, 249).join("")} (copy)` };
+      startSession(tab);
+      return tab.info;
+    },
     terminal_restart: (args) => {
       requireCore();
       requireSize(args);

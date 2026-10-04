@@ -7,13 +7,14 @@ export function duplicatePaneInput(thread: ThreadSummary): CreatePaneInput | nul
   if (!isPaneProvider(thread.providerId) || thread.permissionMode === "custom" || thread.archivedAt !== null)
     return null;
   return {
+    sourceThreadId: thread.id,
     providerId: thread.providerId,
     providerAccountId: thread.providerAccountId,
     workspaceId: thread.workspaceId,
     model: thread.model,
     effort: thread.effort,
     permissionMode: thread.permissionMode,
-    name: `${thread.name.slice(0, 73)} (copy)`,
+    name: `${[...thread.name].slice(0, 73).join("")} (copy)`,
   };
 }
 
@@ -35,4 +36,21 @@ export function paneRebindAccounts(
       account.archivedAt === null &&
       account.authenticationState !== "not_authenticated",
   );
+}
+
+export type DuplicatePlacement = "split" | "tab";
+const placementKey = (workspaceId: string) => `kalcode:duplicate-placement:${workspaceId}`;
+export function duplicatePlacement(workspaceId: string): DuplicatePlacement {
+  try {
+    return localStorage.getItem(placementKey(workspaceId)) === "tab" ? "tab" : "split";
+  } catch {
+    return "split";
+  }
+}
+export function rememberDuplicatePlacement(workspaceId: string, placement: DuplicatePlacement): void {
+  try {
+    localStorage.setItem(placementKey(workspaceId), placement);
+  } catch {
+    /* Optional preference. */
+  }
 }

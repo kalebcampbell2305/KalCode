@@ -1236,7 +1236,7 @@ impl ThreadRuntime {
     /// Creates a thread whose session starts without a task; it waits (`idle`) for input. Coding
     /// agents (provider panes) start this way, so an untitled one is a "New agent".
     pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
-        self.create_idle_inner(request, None)
+        self.create_idle_inner(request, None, None)
     }
 
     /// [`Self::create_idle`] with a caller-chosen thread id (a provider pane marks its id
@@ -1247,13 +1247,25 @@ impl ThreadRuntime {
         request: CreateIdleThread,
     ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_idle_inner(request, Some(thread_id))
+        self.create_idle_inner(request, Some(thread_id), None)
+    }
+
+    /// Fresh live session in a native-resolved directory (never resumes a source session).
+    pub fn create_idle_with_id_in_directory(
+        &self,
+        thread_id: &str,
+        request: CreateIdleThread,
+        cwd: PathBuf,
+    ) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.create_idle_inner(request, Some(thread_id), Some(cwd))
     }
 
     fn create_idle_inner(
         &self,
         request: CreateIdleThread,
         thread_id: Option<&str>,
+        cwd: Option<PathBuf>,
     ) -> Result<ThreadSummary> {
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
@@ -1269,7 +1281,7 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
-                cwd: None,
+                cwd: cwd.map(|path| Box::new(move || Ok(path)) as PrepareFolder<'_>),
             },
             None,
             thread_id,
@@ -3949,7 +3961,12 @@ impl Inner {
         // A thread with its own worktree never runs in the workspace folder: it keeps its folder
         // while that exists, and otherwise gets it back from its branch, or doesn't start.
         let cwd = if !row.isolated {
-            workspace.root.to_string_lossy().into_owned()
+            // Fresh copies may share a selected subdirectory without owning its worktree.
+            // A missing directory must never silently move execution to the workspace root.
+            if !Path::new(&row.cwd).is_absolute() || !Path::new(&row.cwd).is_dir() {
+                return Err(thread_folder_unavailable());
+            }
+            row.cwd.clone()
         } else if row.worktree_id.is_some() && Path::new(&row.cwd).is_dir() {
             row.cwd.clone()
         } else {
