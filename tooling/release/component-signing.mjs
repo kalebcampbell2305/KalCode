@@ -84,7 +84,18 @@ function buildSigner(root, { spawn = spawnSync } = {}) {
       ...releaseProcessOptions({ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
     },
   );
-  if (result.error || result.status !== 0) throw new Error("component signer could not be built");
+  if (result.error || result.status !== 0) {
+    // Compiler output carries no key material (the signer has not run), so name the cause.
+    const cause =
+      result.error?.code ??
+      String(result.stderr ?? "")
+        .split(/\r?\n/)
+        .find((line) => /^error/u.test(line.trim()))
+        ?.trim()
+        .slice(0, 300) ??
+      `exit ${result.status}`;
+    throw new Error(`component signer could not be built: ${cause}`);
+  }
 }
 
 export function runComponentSigner(

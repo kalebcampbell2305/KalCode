@@ -436,11 +436,11 @@ export function runSuite(
     });
     if (child.error || child.status !== 0 || child.signal) {
       const state = child.error?.code ?? child.signal ?? child.status ?? "unknown";
-      // Output stays suppressed; only the names of failing tests are shown, so a failure on a
+      // Output stays suppressed; only failing test names and their error lines are shown, so a failure on a
       // runner nobody can open is still diagnosable.
       const failing = `${child.stdout ?? ""}\n${child.stderr ?? ""}`
         .split(/\r?\n/)
-        .filter((line) => /^\s*(?:not ok \d+ - |✖ )/u.test(line))
+        .filter((line) => /^\s*(?:not ok \d+ - |✖ |error: )/u.test(line))
         .map((line) => line.trim().slice(0, 200))
         .filter((line, index, all) => all.indexOf(line) === index)
         .slice(0, 20);
