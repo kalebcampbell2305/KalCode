@@ -6,6 +6,7 @@
  * viewport or someone presses a "Try it" control anywhere on the page.
  */
 import liveCss from "../../styles/live.css?url";
+import liveCanvasCss from "../../styles/live-canvas.css?url";
 import { LIVE_ICON_PATHS } from "../../lib/live/icons";
 import { initialState } from "../../lib/live/model";
 import { iconSprite, renderApp } from "../../lib/live/render";
@@ -17,6 +18,7 @@ const cfg = { downloadHref: cta.href, downloadLabel: "Download KalCode", account
 const html = renderApp(initialState(), cfg);
 ---
 <link rel="stylesheet" href={liveCss} />
+<link rel="stylesheet" href={liveCanvasCss} />
 <div
   class="live"
   data-live

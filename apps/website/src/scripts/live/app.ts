@@ -36,6 +36,7 @@ import {
 } from "../../lib/live/model";
 import { paletteCommands, type RenderConfig, renderApp } from "../../lib/live/render";
 import { TOUR } from "../../lib/live/tour";
+import { mountAdaptiveCanvas } from "./canvas";
 import { morph } from "./morph";
 
 const TICK_MS = 1500;
@@ -66,6 +67,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
   let lastNudge = "";
   let pendingFocus: string | null = null;
   const tip = root.querySelector<HTMLElement>("[data-live-tip]");
+  const adaptiveCanvas = mountAdaptiveCanvas(host, { getState: () => state, render, focusSoon });
 
   try {
     const seen = JSON.parse(sessionStorage.getItem("kc-live-nudged") ?? "[]");
@@ -118,6 +120,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
       host.querySelector<HTMLElement>(pendingFocus)?.focus({ preventScroll: true });
       pendingFocus = null;
     }
+    adaptiveCanvas.afterRender();
     if (state.tour !== null) placeTour();
     root.dataset.surface = state.surface;
   }
@@ -135,6 +138,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
 
   function act(action: string, el?: HTMLElement) {
     hideTip();
+    if (adaptiveCanvas.act(action)) return;
     const [name, ...rest] = action.split(":");
     const arg = rest.join(":");
     switch (name) {

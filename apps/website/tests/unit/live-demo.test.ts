@@ -142,7 +142,9 @@ describe("the live demo's truth", () => {
   it("tags a surface Coming soon exactly when its roadmap feature has not shipped", () => {
     for (const feature of PLAN_FEATURES) expect(isAvailable(feature.id)).toBe(feature.status === "available");
     const html = renderApp(initialState(), cfg);
-    const soon = ["agent-fleet", "provider-terminals", "account-hub"].filter((id) => !isAvailable(id)).length;
+    const soon = ["agent-fleet", "provider-terminals", "account-hub", "adaptive-canvas"].filter(
+      (id) => !isAvailable(id),
+    ).length;
     expect((html.match(/lk-soon/g) ?? []).length).toBeLessThanOrEqual(soon);
   });
 
