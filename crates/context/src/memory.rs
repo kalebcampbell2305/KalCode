@@ -161,6 +161,18 @@ pub fn save(
     input: &MemoryInput,
     root: &Path,
 ) -> Result<MemoryRecord> {
+    save_with_expected_hash(conn, account, workspace, id, input, root, None)
+}
+
+fn save_with_expected_hash(
+    conn: &Connection,
+    account: &str,
+    workspace: &str,
+    id: Option<&str>,
+    input: &MemoryInput,
+    root: &Path,
+    expected_file_hash: Option<&str>,
+) -> Result<MemoryRecord> {
     scope(account, workspace)?;
     let title = input.title.trim();
     let content = input.content.trim();
@@ -235,6 +247,13 @@ pub fn save(
             })
             .transpose()?
     };
+    if expected_file_hash
+        .is_some_and(|expected| snapshot.as_ref().map(|(_, hash)| hash.as_str()) != Some(expected))
+    {
+        return Err(MemoryError::Invalid(
+            "The instruction file changed during capture.",
+        ));
+    }
     let now = kalcode_core::time::now_rfc3339();
     let record = MemoryRecord {
         id: old
@@ -595,7 +614,15 @@ pub fn capture(
         return Ok(0);
     }
     let source_snapshot = if source_kind == MemorySourceKind::Instructions {
-        source_id.and_then(|path| file_snapshot(root, path))
+        let Some(snapshot) = source_id.and_then(|path| file_snapshot(root, path)) else {
+            return Ok(0);
+        };
+        // The importer read text before queueing capture. Never pair that earlier text with
+        // a newer file's evidence. A subsequent refresh can retry the changed document.
+        if format!("{:x}", Sha256::digest(text.as_bytes())) != snapshot.1 {
+            return Ok(0);
+        }
+        Some(snapshot)
     } else {
         None
     };
@@ -665,7 +692,15 @@ pub fn capture(
                 None
             },
         };
-        match save(conn, account, workspace, None, &input, root) {
+        match save_with_expected_hash(
+            conn,
+            account,
+            workspace,
+            None,
+            &input,
+            root,
+            source_snapshot.as_ref().map(|(_, hash)| hash.as_str()),
+        ) {
             Ok(_) => saved += 1,
             Err(MemoryError::Secret | MemoryError::Invalid(_)) => continue,
             Err(error) => return Err(error),
@@ -1027,6 +1062,98 @@ mod tests {
         let entries = list(&conn, "alice", "one", "").unwrap();
         assert_eq!(entries.iter().filter(|entry| entry.stale).count(), 1);
         assert_eq!(entries.iter().filter(|entry| !entry.stale).count(), 1);
+    }
+
+    #[test]
+    fn instructions_capture_rejects_changed_or_unavailable_source_snapshots() {
+        let (conn, root) = setup();
+        let old = "Architecture: The old module owns the dashboard shell.";
+        let current = "Architecture: The new module owns the dashboard shell.";
+        std::fs::write(root.path().join("AGENTS.md"), current).unwrap();
+        // The importer read the old document; disk changed before capture began.
+        assert_eq!(
+            capture(
+                &conn,
+                "alice",
+                "one",
+                MemorySourceKind::Instructions,
+                Some("AGENTS.md"),
+                old,
+                root.path()
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            capture(
+                &conn,
+                "alice",
+                "one",
+                MemorySourceKind::Instructions,
+                Some("missing.md"),
+                old,
+                root.path()
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            capture(
+                &conn,
+                "alice",
+                "one",
+                MemorySourceKind::Instructions,
+                None,
+                old,
+                root.path()
+            )
+            .unwrap(),
+            0
+        );
+        assert!(list(&conn, "alice", "one", "").unwrap().is_empty());
+
+        // A second change after initial capture verification must also fail before insert.
+        let (_, verified_hash) = file_snapshot(root.path(), "AGENTS.md").unwrap();
+        std::fs::write(
+            root.path().join("AGENTS.md"),
+            "Architecture: A third module now owns the shell.",
+        )
+        .unwrap();
+        let mut claim = input("The new module owns the dashboard shell.");
+        claim.source_kind = MemorySourceKind::Instructions;
+        claim.file_path = Some("AGENTS.md".into());
+        assert!(matches!(
+            save_with_expected_hash(
+                &conn,
+                "alice",
+                "one",
+                None,
+                &claim,
+                root.path(),
+                Some(&verified_hash)
+            ),
+            Err(MemoryError::Invalid(_))
+        ));
+        assert!(list(&conn, "alice", "one", "").unwrap().is_empty());
+
+        // Retrying with the current document captures a correctly linked claim.
+        std::fs::write(root.path().join("AGENTS.md"), current).unwrap();
+        assert_eq!(
+            capture(
+                &conn,
+                "alice",
+                "one",
+                MemorySourceKind::Instructions,
+                Some("AGENTS.md"),
+                current,
+                root.path()
+            )
+            .unwrap(),
+            1
+        );
+        let record = list(&conn, "alice", "one", "").unwrap().remove(0);
+        assert_eq!(record.file_hash.as_deref(), Some(verified_hash.as_str()));
+        assert!(record.content.contains("new module"));
     }
 
     #[test]
