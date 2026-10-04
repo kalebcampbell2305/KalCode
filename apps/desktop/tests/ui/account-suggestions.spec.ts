@@ -14,8 +14,7 @@ test("Code suggests a healthy account inline and waits for explicit confirmation
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   await launcher.getByRole("group", { name: "Codex", exact: true }).getByRole("option", { name: /Work/ }).click();
-  await launcher.getByRole("button", { name: "Sign in to Work" }).click();
-  await launcher.getByRole("button", { name: "Launch Codex agent" }).click();
+  await launcher.getByRole("button", { name: "Reconnect" }).click();
   const source = page.locator("[data-provider-pane]").first();
   const sourceId = await source.getAttribute("data-provider-pane");
   const suggestion = source.getByRole("complementary", { name: "Account suggestion" });
