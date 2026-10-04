@@ -292,6 +292,16 @@ mod tests {
         let files = ConfigFiles::from_env(&env);
         assert_eq!(files.profile, None);
         assert!(files.native.is_some());
+        // Windows: USERPROFILE wins over a Git Bash HOME, as in Claude Code itself.
+        env.insert(OsString::from("USERPROFILE"), OsString::from(r"C:\Users\a"));
+        env.insert(OsString::from("HOME"), OsString::from("/c/Users/a"));
+        let native = ConfigFiles::from_env(&env).native.expect("native");
+        let expected = if cfg!(windows) {
+            r"C:\Users\a"
+        } else {
+            "/c/Users/a"
+        };
+        assert_eq!(native, Path::new(expected).join(".claude.json"));
     }
 
     #[test]
