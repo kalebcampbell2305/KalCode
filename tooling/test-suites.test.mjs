@@ -29,16 +29,16 @@ test("the registered Rust release gate includes the production speech engine and
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
   // The retired standalone Manual Claude status probe was one intentional ignore on every platform.
   for (const [platform, expected] of [
-    ["win32", 27],
-    ["darwin", 27],
+    ["win32", 28],
+    ["darwin", 28],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 24],
+    ["linux", 25],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 27);
+  assert.equal(inventory.rustIntentionalIgnores.length, 28);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {

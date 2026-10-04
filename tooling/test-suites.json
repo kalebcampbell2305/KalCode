@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 27,
-          "skippedMaximum": 27,
+          "skippedMinimum": 28,
+          "skippedMaximum": 28,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 24,
-          "skippedMaximum": 24,
+          "skippedMinimum": 25,
+          "skippedMaximum": 25,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -401,10 +401,6 @@
     {
       "path": "crates/providers/tests/interactive_cli_real.rs",
       "reason": "consumes AI quota; requires the owner's explicit approval"
-    },
-    {
-      "path": "crates/providers/tests/cursor_real.rs",
-      "reason": "requires KALCODE_TEST_CURSOR_BIN containing an official Cursor Agent installation"
     },
     {
       "path": "crates/providers/tests/native_parity_real.rs",
