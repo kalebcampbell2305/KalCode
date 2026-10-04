@@ -1282,7 +1282,7 @@ mod tests {
         linked.file_path = Some("Dashboard.tsx".into());
         let record = save(&conn, "alice", "one", None, &linked, root.path()).unwrap();
         std::fs::write(root.path().join("Dashboard.tsx"), "updated").unwrap();
-        let pending = inspect_staleness(&[record.clone()], root.path());
+        let pending = inspect_staleness(std::slice::from_ref(&record), root.path());
         assert_eq!(pending.len(), 1);
         linked.content = "Dashboard.tsx now owns the shell and navigation.".into();
         save(
