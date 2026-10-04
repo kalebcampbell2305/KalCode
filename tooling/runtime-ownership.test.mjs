@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const source = (name) => readFileSync(new URL(`../apps/desktop/src-tauri/src/${name}.rs`, import.meta.url), "utf8");
+// A command module may keep its commands in submodule files (`src/<module>/*.rs`), re-exported from `<module>.rs`.
+const moduleSource = (name) => {
+  const dir = new URL(`../apps/desktop/src-tauri/src/${name}/`, import.meta.url);
+  const nested = existsSync(dir)
+    ? readdirSync(dir, { recursive: true })
+        .filter((file) => String(file).endsWith(".rs"))
+        .sort()
+        .map((file) => readFileSync(new URL(String(file).replaceAll("\\", "/"), dir), "utf8"))
+    : [];
+  return [source(name), ...nested].join("\n");
+};
 
 test("production KalVoice owns its signed components and injects the local interpreter", () => {
   assert.match(source("runtime_coordinator"), /KalVoiceComponentManager::for_runtime/);
@@ -111,7 +122,7 @@ test("every registered non-bootstrap native command holds epoch admission", () =
   const unguarded = [];
   for (const [, module, command] of registered) {
     if (bootstrap.has(command) || module === "account_commands") continue;
-    const signature = source(module).match(
+    const signature = moduleSource(module).match(
       new RegExp(`pub (?:async )?fn ${command}\\(([\\s\\S]*?)\\)\\s*(?:->[^\\{]+)?\\{`),
     );
     if (!signature?.[1].includes("RuntimeAccess")) unguarded.push(command);
