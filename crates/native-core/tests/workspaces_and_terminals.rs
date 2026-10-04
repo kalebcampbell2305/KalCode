@@ -669,6 +669,14 @@ fn closing_a_tab_ends_its_shell_and_records_it() {
         .expect("create");
     let events = collect_events(&core);
 
+    assert_eq!(
+        core.close_terminal_if_ended(&terminal.id)
+            .expect_err("protect live shell")
+            .code,
+        "terminal_still_running"
+    );
+    assert_eq!(core.running_terminals().expect("still running").len(), 1);
+
     core.close_terminal(&terminal.id).expect("close");
     assert!(core.terminals(&workspace.id).expect("list").is_empty());
     assert!(core.running_terminals().expect("running").is_empty());
