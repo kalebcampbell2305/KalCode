@@ -619,6 +619,9 @@ impl CapacityUpdates for std::sync::mpsc::Receiver<()> {
     }
 }
 impl ComponentAdmission for CountingAdmission {
+    // `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+    // supported toolchains lack; keep one spelling that builds on both.
+    #[allow(deprecated)]
     fn reserve_acquisition(
         &self,
         _: u64,

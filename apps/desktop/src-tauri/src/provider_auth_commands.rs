@@ -1355,6 +1355,9 @@ struct SyntheticPendingLogin {
 
 #[cfg(test)]
 impl SyntheticPendingLogin {
+    // `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+    // supported toolchains lack; keep one spelling that builds on both.
+    #[allow(deprecated)]
     fn cancel(&self) -> Result<(), RuntimeAuthError> {
         if self
             .failures_remaining

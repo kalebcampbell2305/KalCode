@@ -755,6 +755,9 @@ pub fn provider_pane_attach(
 }
 
 #[tauri::command]
+// `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+// supported toolchains lack; keep one spelling that builds on both.
+#[allow(deprecated)]
 pub fn provider_pane_ack(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,

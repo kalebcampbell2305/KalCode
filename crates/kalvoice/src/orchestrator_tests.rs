@@ -47,6 +47,9 @@ impl crate::accounting::RequestAccounting for AccountMeter {
             resets_at: "2026-10-10T08:00:00.000Z".into(),
         })
     }
+    // `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+    // supported toolchains lack; keep one spelling that builds on both.
+    #[allow(deprecated)]
     fn authorize(&self, id: &str) -> Result<crate::accounting::MeterDecision> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let key = crate::accounting::execution_id(self.account, id);

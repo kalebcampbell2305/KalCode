@@ -433,6 +433,9 @@ pub fn terminal_attach(
 /// Acknowledges `bytes` of output rendered by the calling view. Returns `false` when the view
 /// no longer receives output (it fell too far behind, or was released) and must re-attach.
 #[tauri::command]
+// `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+// supported toolchains lack; keep one spelling that builds on both.
+#[allow(deprecated)]
 pub fn terminal_ack(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
