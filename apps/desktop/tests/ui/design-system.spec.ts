@@ -11,8 +11,13 @@ const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 async function open(page: Page, scenario: string, theme: "dark" | "light") {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-  // Scenarios open on different surfaces (Home, Code, Dashboard); the shell's primary nav is common to all.
-  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+  // A returning user with an active workspace is sent to Code once restore finishes; choose
+  // Dashboard explicitly so the check never races that redirect.
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "Dashboard", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.keyboard.press(`${MOD}+k`);
   await page.keyboard.type(`use ${theme} theme`);
   await page.keyboard.press("Enter");
