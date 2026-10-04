@@ -4,11 +4,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
   Tooltip,
 } from "@kalcode/ui/components";
-import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, MoreHorizontal, Pin, PinOff } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, FolderX, MoreHorizontal, Pin, PinOff } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
@@ -37,7 +38,7 @@ function countsByWorkspace(threads: readonly ThreadSummary[]): Map<string, Count
 }
 
 export function ProjectList({ collapsed }: { collapsed: boolean }) {
-  const { workspaces, active, activate, openFolder, state: loadState } = useWorkspaces();
+  const { workspaces, active, activate, openFolder, remove, state: loadState } = useWorkspaces();
   const { state } = useCodingAgents();
   const { navigate } = useNavigation();
   const pins = useRail();
@@ -168,6 +169,8 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                 .filter(Boolean)
                 .join(", ");
               const label = status ? `${workspace.name}, ${status}` : workspace.name;
+              // A missing folder can't be fixed from here; removing it keeps the list honest.
+              const missing = workspace.available ? undefined : workspaces.find((w) => w.id === workspace.id);
               return (
                 <li
                   key={workspace.id}
@@ -193,7 +196,6 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                       className={collapsed ? styles.tile : styles.row}
                       aria-current={workspace.id === active?.id ? "true" : undefined}
                       aria-label={label}
-                      aria-disabled={!workspace.available || undefined}
                       data-unavailable={!workspace.available || undefined}
                       onContextMenu={(e) => {
                         e.preventDefault();
@@ -261,7 +263,9 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                           suppressClick.current = false;
                           return;
                         }
+                        // An unavailable project can't open; its menu offers what can be done.
                         if (workspace.available) choose(workspace.id);
+                        else setMenuFor(workspace.id);
                       }}
                     >
                       {/* A narrow tile keeps the project's initial (pinned tiles would all look alike)
@@ -346,6 +350,18 @@ export function ProjectList({ collapsed }: { collapsed: boolean }) {
                             onSelect={() => void pins.pinProject(workspace.id, index + 1)}
                           >
                             Move pin down
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                      {missing ? (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            icon={<FolderX />}
+                            description="The folder isn't changed."
+                            onSelect={() => void remove(missing)}
+                          >
+                            Remove from KalCode
                           </DropdownMenuItem>
                         </>
                       ) : null}

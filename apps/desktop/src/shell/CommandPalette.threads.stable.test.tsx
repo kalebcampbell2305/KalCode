@@ -99,6 +99,20 @@ describe("palette threads (Stable)", () => {
     );
   }, 15_000);
 
+  it("offers New agent… first and finds it by agent or provider words", async () => {
+    const { user } = await mountStable();
+    const palette = await openPalette(user);
+    const options = palette.getAllByRole("option");
+    expect(options[0]).toHaveAccessibleName("New agent…");
+    await user.type(palette.getByRole("combobox"), "codex");
+    expect(await palette.findByRole("option", { name: "New agent…" })).toBeInTheDocument();
+    await user.clear(palette.getByRole("combobox"));
+    await user.type(palette.getByRole("combobox"), "new agent");
+    await user.keyboard("{Enter}");
+    // The palette closes and Code opens for the launcher.
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull());
+  }, 15_000);
+
   it("lists a coding agent under Agents, never under Threads", async () => {
     const { user, client } = await mountStable();
     const listThreads = client.listThreads.bind(client);

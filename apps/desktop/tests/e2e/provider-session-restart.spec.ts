@@ -161,15 +161,13 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     await waitForProviderAdmission(app.page);
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
-    const accountPicker = launcher.getByRole("listbox", { name: "Account", exact: true });
-    const codexGroup = accountPicker.getByRole("group", { name: "Codex", exact: true });
-    const codexAOption = codexGroup.getByRole("option", { name: /^Codex A\b/ });
-    const codexBOption = codexGroup.getByRole("option", { name: /^Codex B\b/ });
+    // The launcher lists each provider's accounts as options; the restored default is marked.
+    const codexGroup = launcher.getByRole("group", { name: "Codex", exact: true });
+    const account = (group: typeof codexGroup, name: string) => group.getByRole("option").filter({ hasText: name });
     await expect(codexGroup.getByRole("option")).toHaveCount(2);
-    await expect(codexAOption).toBeVisible();
-    await expect(codexBOption).toBeVisible();
-    await codexAOption.click();
-    await expect(codexAOption).toHaveAttribute("aria-selected", "true");
+    await expect(account(codexGroup, "Codex A")).toBeVisible();
+    await account(codexGroup, "Codex A").click();
+    await expect(account(codexGroup, "Codex A")).toHaveAttribute("aria-selected", "true");
     await app.page.screenshot({ path: test.info().outputPath("restored-codex-account-picker.png") });
     expect(readFileSync(codexAReadMarker, "utf8")).toBe("entered\n");
     const launchStartedAt = Date.now();
@@ -192,8 +190,8 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     );
 
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
-    await codexBOption.click();
-    await expect(codexBOption).toHaveAttribute("aria-selected", "true");
+    await account(codexGroup, "Codex B").click();
+    await expect(account(codexGroup, "Codex B")).toHaveAttribute("aria-selected", "true");
     await launcher.getByRole("button", { name: "Launch Codex agent", exact: true }).click();
     await expect(launcher).not.toBeVisible({ timeout: 30_000 });
     const codexBThreads = await invoke<{ id: string; providerAccountId: string; runtimeKind: string }[]>(
@@ -211,11 +209,10 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     );
 
     await app.page.getByRole("button", { name: "New agent", exact: true }).click();
-    const claudeGroup = accountPicker.getByRole("group", { name: "Claude Code", exact: true });
-    const claudeBOption = claudeGroup.getByRole("option", { name: /^Claude B\b/ });
+    const claudeGroup = launcher.getByRole("group", { name: "Claude Code", exact: true });
     await expect(claudeGroup.getByRole("option")).toHaveCount(2);
-    await claudeBOption.click();
-    await expect(claudeBOption).toHaveAttribute("aria-selected", "true");
+    await account(claudeGroup, "Claude B").click();
+    await expect(account(claudeGroup, "Claude B")).toHaveAttribute("aria-selected", "true");
     await launcher.getByRole("button", { name: "Launch Claude Code agent", exact: true }).click();
     await expect(launcher).not.toBeVisible({ timeout: 30_000 });
     const threads = await invoke<{ id: string; providerAccountId: string; runtimeKind: string }[]>(
@@ -279,9 +276,13 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     await app.page.getByRole("button", { name: "Providers", exact: true }).click();
     await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
     const codexARegion = app.page.getByRole("region", { name: /Codex A/ });
+    // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake
+    // provider records no rate limits, so it says so instead of inventing a number.
     await expect(codexARegion.getByText("1 agent", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(codexARegion.getByText("Not checked", { exact: true })).toBeVisible();
     const codexBRegion = app.page.getByRole("region", { name: /Codex B/ });
+    // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake
+    // provider records no rate limits, so it says so instead of inventing a number.
     await expect(codexBRegion.getByText("1 agent", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(codexBRegion.getByText("Not checked", { exact: true })).toBeVisible();
   } finally {

@@ -241,11 +241,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [feed, refresh]);
 
+  // A workspace whose folder is gone can't run anything: its failure offers removing it from the list.
+  const removeMissing = useRef<(workspaceId: string) => void>(() => {});
   const fail = useCallback(
-    (title: string, err: unknown) => {
-      toast.show({ tone: "danger", title, description: toKalCodeError(err).message });
+    (title: string, err: unknown, workspaceId: string | null = lifecycle.workspaceId) => {
+      const error = toKalCodeError(err);
+      const missing = error.code === "folder_not_found" && workspaceId ? workspaceId : null;
+      toast.show({
+        tone: "danger",
+        title,
+        description: error.message,
+        ...(missing ? { action: { label: "Remove from list", onSelect: () => removeMissing.current(missing) } } : {}),
+      });
     },
-    [toast],
+    [toast, lifecycle],
   );
 
   const active = snapshot.active;
@@ -339,6 +348,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [client, refresh, fail, toast, captureLifetime],
   );
+  removeMissing.current = (workspaceId) => {
+    const workspace = snapshot.workspaces.find((w) => w.id === workspaceId);
+    if (workspace) void remove(workspace);
+  };
 
   const selectTerminal = useCallback(
     (terminalId: string, focus = false, workspaceId: string | undefined = active?.id) => {
@@ -387,7 +400,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       try {
         terminal = await client.createTerminal(workspaceId, shellId, lastSize.current);
       } catch (err) {
-        if (mayFocus()) fail("Couldn't start a terminal", err);
+        if (mayFocus()) fail("Couldn't start a terminal", err, workspaceId);
         return null;
       }
       if (!current()) return null;

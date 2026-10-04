@@ -44,6 +44,11 @@ test("the audited account-auth credential removal is allowed but reads and assig
   assert.equal(scan('env.insert("OPENAI_API_KEY", value);', "rs", file).status, 1);
   assert.equal(scan('remove_env(&mut env, "OPENAI_API_KEY"); call("api.openai.com");', "rs", file).status, 1);
   assert.equal(scan('remove_env(&mut env, "OPENAI_API_KEY");').status, 1);
+  const usage = "crates/providers/src/usage.rs";
+  const usageUrl = 'const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";';
+  assert.equal(scan(usageUrl, "rs", usage).status, 0);
+  assert.equal(scan(usageUrl).status, 1);
+  assert.equal(scan('const URL: &str = "https://api.anthropic.com/v1/messages";', "rs", usage).status, 1);
 });
 
 test("production after an inline test module is still scanned at its original line", () => {

@@ -158,8 +158,31 @@ describe("AccountOnboarding", () => {
     rerender(
       <AccountOnboarding snapshot={snapshot("signed_out")} busy={false} error={null} actions={accountActions} />,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Create with email" }));
-    expect(screen.getByRole("button", { name: "Email me a sign-in link" })).toBeInTheDocument();
+    // One email entry serves new and returning people alike.
+    expect(screen.getAllByRole("button", { name: /with email/ })).toHaveLength(1);
+  });
+
+  it("checks the email link when KalCode regains focus, and keeps the manual button", async () => {
+    const accountActions = actions();
+    const { rerender, unmount } = render(
+      <AccountOnboarding snapshot={snapshot("email_pending")} busy={false} error={null} actions={accountActions} />,
+    );
+    expect(screen.getByRole("button", { name: "I've verified my email" })).toBeInTheDocument();
+    window.dispatchEvent(new Event("focus"));
+    expect(accountActions.pollEmail).toHaveBeenCalledOnce();
+    // Not while a check is already running.
+    rerender(
+      <AccountOnboarding snapshot={snapshot("email_pending")} busy={true} error={null} actions={accountActions} />,
+    );
+    window.dispatchEvent(new Event("focus"));
+    expect(accountActions.pollEmail).toHaveBeenCalledOnce();
+    // Nor once the email step is over.
+    rerender(
+      <AccountOnboarding snapshot={snapshot("signed_out")} busy={false} error={null} actions={accountActions} />,
+    );
+    window.dispatchEvent(new Event("focus"));
+    expect(accountActions.pollEmail).toHaveBeenCalledOnce();
+    unmount();
   });
 
   it("tells a returning person their session expired instead of showing the first-run welcome", async () => {

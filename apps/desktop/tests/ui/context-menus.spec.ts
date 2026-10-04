@@ -1,10 +1,19 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
+async function waitForFolderQueue(page: Page) {
+  await page.waitForFunction(
+    () =>
+      typeof (window as unknown as { __kalcodeMemory?: { queueFolders?: (...names: string[]) => void } })
+        .__kalcodeMemory?.queueFolders === "function",
+  );
+}
+
 test("Fleet right-click renames its coding agent and opens Browser beside the same pane", async ({ page }) => {
   await page.goto("/");
+  await waitForFolderQueue(page);
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...names: string[]) => void } }
@@ -80,6 +89,7 @@ test("Workspace actions open at the target and unavailable actions stay absent",
 
 test("terminal tab rename, duplicate and stop act on the selected terminal", async ({ page }) => {
   await page.goto("/");
+  await waitForFolderQueue(page);
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...names: string[]) => void } }

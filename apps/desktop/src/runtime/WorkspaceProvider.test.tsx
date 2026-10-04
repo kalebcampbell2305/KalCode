@@ -872,6 +872,24 @@ describe("WorkspaceProvider lifecycle", () => {
     expect(view.result.current.active?.id).toBe("good");
   });
 
+  it("offers removing a workspace whose folder is gone from the failure toast", async () => {
+    const f = await fixture();
+    vi.spyOn(f.client, "createTerminal").mockRejectedValueOnce({
+      category: "filesystem",
+      code: "folder_not_found",
+      message: "This workspace's folder no longer exists. It may have been moved or deleted.",
+      retryable: false,
+    });
+    const remove = vi.spyOn(f.client, "removeWorkspace").mockResolvedValue(undefined);
+    const view = await mount(f);
+    await act(async () => {
+      expect(await view.result.current.createTerminal()).toBeNull();
+    });
+    expect(screen.getByText("Couldn't start a terminal")).toBeInTheDocument();
+    await act(async () => screen.getByRole("button", { name: "Remove from list" }).click());
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("initial"));
+  });
+
   it("shows and focuses a created terminal before the refresh, and an older load can't drop it", async () => {
     const f = await fixture("old");
     mockActions(f.client);

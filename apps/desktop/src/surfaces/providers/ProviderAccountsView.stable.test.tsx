@@ -226,8 +226,15 @@ describe("Providers → Accounts (Stable)", () => {
     expect(calls).toContain("provider_account_create");
     expect(calls).toContain(loginStart);
     expect(calls.indexOf("provider_account_create")).toBeLessThan(calls.indexOf(loginStart));
-    // Connecting never touches a workspace, a thread or a provider pane.
-    expect(calls.filter((c) => c.startsWith("provider_pane_") || c === "provider_account_bind")).toEqual([]);
+    // Returning-user startup may read pane info while restoring Code. Connecting mutates no pane
+    // and does not bind the new account to a workspace.
+    expect(
+      calls.filter(
+        (command) =>
+          command === "provider_account_bind" ||
+          (command.startsWith("provider_pane_") && command !== "provider_pane_info"),
+      ),
+    ).toEqual([]);
     await openDetails(user, added, "Side");
     expect(usage(added, "Active threads")).toBe("None");
   });

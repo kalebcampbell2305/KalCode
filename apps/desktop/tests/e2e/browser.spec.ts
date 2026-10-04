@@ -366,6 +366,14 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     const secondId = await second.getAttribute("data-browser-id");
     expect(secondId).toBeTruthy();
     expect(secondId).not.toBe(firstId);
+    const expectNativeBrowsersHidden = async () => {
+      await expect
+        .poll(async () => [
+          (await state(page, firstId as string)).visible,
+          (await state(page, secondId as string)).visible,
+        ])
+        .toEqual([false, false]);
+    };
     await second.getByLabel("Web address").fill(`${web.origin}/two`);
     await second.getByLabel("Web address").press("Enter");
     await expect
@@ -381,6 +389,7 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     const oldRect = await firstViewport.boundingBox();
     expect(oldRect).not.toBeNull();
     await firstFrame.getByRole("button", { name: /Actions for pane/ }).click();
+    await expectNativeBrowsersHidden();
     await page.getByRole("menuitem", { name: "Move pane right" }).click();
     await expect.poll(async () => (await state(page, firstId as string)).bounds.x).not.toBe(oldBounds.bounds.x);
     // A first position update can arrive before the adaptive layout has settled.
@@ -393,6 +402,7 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
       })
       .toBeLessThan(2);
     await firstFrame.getByRole("button", { name: /Actions for pane/ }).click();
+    await expectNativeBrowsersHidden();
     await page.getByRole("menuitem", { name: "Move pane left" }).click();
     await expect.poll(async () => (await state(page, firstId as string)).bounds.x).toBe(oldBounds.bounds.x);
     console.log("browser-e2e:position-only-swap");

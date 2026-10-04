@@ -43,6 +43,7 @@ import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
+import { useLaunchAgent } from "../surfaces/code/useLaunchAgent.ts";
 import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
 import { accountInlineLabel, accountName, accountSignIn, sortAccounts } from "../surfaces/providers/accountIdentity.ts";
 import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
@@ -114,6 +115,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const workspaces = useWorkspaces();
   const kalTidy = useKalTidy();
   const threadsIntent = useThreadsIntent();
+  const launchAgent = useLaunchAgent();
   // Z7-W2: typed text also searches the Session Locator (threads, workspaces, terminals, …) when
   // the build shows it; gated features stay unreachable on Stable.
   const featureVisible = (id: string) => info.flags.features?.some((f) => f.id === id && f.visible) ?? false;
@@ -316,6 +318,38 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         ) : null}
         {located > 0 ? null : <Command.Empty className={styles.empty}>No matching commands.</Command.Empty>}
 
+        {/* Agents are coding terminals in Code, never Threads (AGENTS.md). Launching one comes first. */}
+        <Command.Group heading="Agents" className={styles.group}>
+          <Item
+            icon={<SquareTerminal />}
+            onSelect={run(launchAgent)}
+            keywords={["agent", "launch", "start", "claude", "codex", "gemini", "coding agent"]}
+          >
+            New agent…
+          </Item>
+          {visible.has("threads") && typed && !locatorVisible
+            ? threadItems(agents).map(({ thread, label, value }) => (
+                <Item
+                  key={thread.id}
+                  icon={<SquareTerminal />}
+                  value={`${value} · agent`}
+                  thread
+                  onSelect={focusThread(thread)}
+                  keywords={[
+                    "agent",
+                    "go to",
+                    thread.name,
+                    thread.providerName,
+                    thread.accountLabel ?? "",
+                    thread.workspaceName,
+                  ].filter(Boolean)}
+                >
+                  {label}
+                </Item>
+              ))
+            : null}
+        </Command.Group>
+
         {visible.has("threads") ? (
           <Command.Group heading="Threads" className={styles.group}>
             <Item
@@ -359,30 +393,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               : null}
           </Command.Group>
         ) : null}
-        {visible.has("threads") && typed && !locatorVisible && agents.length > 0 ? (
-          <Command.Group heading="Agents" className={styles.group}>
-            {threadItems(agents).map(({ thread, label, value }) => (
-              <Item
-                key={thread.id}
-                icon={<SquareTerminal />}
-                value={`${value} · agent`}
-                thread
-                onSelect={focusThread(thread)}
-                keywords={[
-                  "agent",
-                  "go to",
-                  thread.name,
-                  thread.providerName,
-                  thread.accountLabel ?? "",
-                  thread.workspaceName,
-                ].filter(Boolean)}
-              >
-                {label}
-              </Item>
-            ))}
-          </Command.Group>
-        ) : null}
-
         <Command.Group heading="Go to" className={styles.group}>
           {views.map((id) => {
             const meta = VIEWS[id];

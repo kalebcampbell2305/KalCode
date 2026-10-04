@@ -1,6 +1,6 @@
 import { Button, SegmentedControl, TextInput } from "@kalcode/ui/components";
 import { Check, Circle, Mail, ShieldCheck } from "lucide-react";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import {
   type AccountSnapshot,
   type BillingInterval,
@@ -32,7 +32,7 @@ export interface AccountOnboardingProps {
   actions: AccountOnboardingActions;
 }
 
-type EntryMode = "sign_in" | "create" | null;
+type EntryMode = "sign_in" | null;
 const FLOW = ["Sign in", "Verify", "Plan", "Ready"] as const;
 const BILLING_OPTIONS = [
   { value: "month", label: "Monthly" },
@@ -91,6 +91,18 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
   const [email, setEmail] = useState("");
   const [billing, setBilling] = useState<BillingInterval>("month");
   const emailId = useId();
+  // Coming back from the email app checks the link without another click; the button stays.
+  const pollWhenBack = useRef({ busy, pollEmail: actions.pollEmail });
+  pollWhenBack.current = { busy, pollEmail: actions.pollEmail };
+  const emailPending = snapshot.phase === "email_pending";
+  useEffect(() => {
+    if (!emailPending) return;
+    const onFocus = () => {
+      if (!pollWhenBack.current.busy) void pollWhenBack.current.pollEmail();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [emailPending]);
   const submitEmail = async (event: FormEvent) => {
     event.preventDefault();
     const normalized = email.trim().toLowerCase();
@@ -138,17 +150,15 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <p>Sign in securely. Your session stays in this device's credential store.</p>
             <SocialAuthButtons busy={busy} startSocial={actions.startSocial} />
             <div className={styles.actions}>
+              {/* One email entry: the same one-time link signs in or creates the account. */}
               <Button variant="primary" size="lg" disabled={busy} onClick={() => setMode("sign_in")}>
                 Continue with email
-              </Button>
-              <Button size="lg" disabled={busy} onClick={() => setMode("create")}>
-                Create with email
               </Button>
             </div>
           </div>
         ) : snapshot.phase === "signed_out" ? (
           <form className={styles.form} onSubmit={submitEmail}>
-            <p className={styles.eyebrow}>{mode === "create" ? "Create account" : "Sign in"}</p>
+            <p className={styles.eyebrow}>Sign in</p>
             <h1 id="account-title">Continue with email</h1>
             <p>KalCode sends the same private, one-time link whether this email is new or returning.</p>
             <label htmlFor={emailId}>Email</label>

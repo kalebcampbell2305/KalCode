@@ -175,6 +175,13 @@ describe("OperationsPage", () => {
     vi.clearAllMocks();
   });
 
+  it("resumes a paused queue from its header badge", async () => {
+    const client = operations();
+    renderPage(client);
+    await userEvent.click(await screen.findByRole("button", { name: "Queue paused · Resume" }));
+    expect(client.pause).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   it("acknowledges voice focus only after the requested Operations tab is focused", async () => {
     const client = operations();
     renderPage(client);

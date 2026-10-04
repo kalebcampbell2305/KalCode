@@ -83,6 +83,15 @@ export function needsYouCount(
   return threads.size + approvals.filter((a) => !a.action.threadId || !threads.has(a.action.threadId)).length;
 }
 
+/**
+ * Where the "N need you" chip leads. Approvals only when every need is an
+ * approval; replies and failures live on the agents, so show those instead.
+ */
+export function needsChipTarget(needs: number, pendingApprovals: number): "approvals" | "agents" | "dashboard" {
+  if (needs === 0) return "dashboard";
+  return pendingApprovals > 0 && needs <= pendingApprovals ? "approvals" : "agents";
+}
+
 // ---- Environments (top bar) ----
 
 const ENV_RANK = { production: 3, staging: 2, preview: 1, local: 0 } as const;

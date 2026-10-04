@@ -413,7 +413,17 @@ export function OperationsPage({ client, threadOptions, providerAccounts }: Oper
           <div className={styles.headingLine}>
             <h1>Operations</h1>
             {snapshot.paused ? (
-              <Badge tone="paused">Queue paused</Badge>
+              // Paused is a state with one obvious next step, so the badge is the Resume control.
+              <button
+                type="button"
+                className={styles.pausedChip}
+                disabled={busy === "scheduler"}
+                aria-busy={busy === "scheduler" || undefined}
+                onClick={() => void mutate("scheduler", () => client.pause(false), "Queue resumed")}
+              >
+                <Play aria-hidden="true" />
+                Queue paused · <span className={styles.pausedChipAction}>Resume</span>
+              </button>
             ) : (
               <Badge tone="accent">Scheduler active</Badge>
             )}

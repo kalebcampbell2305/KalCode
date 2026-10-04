@@ -148,7 +148,7 @@
   --z-base: 0;
   --z-sticky: 10;
   --z-sidebar: 20;
-  --z-dropdown: 40;
+  --z-dropdown: 50; /* above the floating KalVoice layer (45), below dialogs */
   --z-overlay: 50;
   --z-dialog: 60;
   --z-palette: 70;

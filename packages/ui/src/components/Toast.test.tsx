@@ -25,6 +25,16 @@ afterEach(() => {
 });
 
 describe("ToastProvider", () => {
+  it("keeps notification list semantics inside its polite live region", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Saved" }));
+    const status = screen.getByRole("status", { name: "Notifications" });
+    const list = screen.getByRole("list");
+    expect(status).toContainElement(list);
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(list).toContainElement(screen.getByRole("listitem"));
+  });
+
   it("runs its one action and dismisses itself", () => {
     const onSelect = vi.fn();
     const { result } = renderHook(useToast, { wrapper });

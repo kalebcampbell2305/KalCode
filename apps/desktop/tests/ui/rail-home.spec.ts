@@ -13,6 +13,8 @@ test.use({ viewport: { width: 1600, height: 900 } });
 
 async function open(page: Page, scenario?: "rail" | "home") {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
+  await expect(page.locator("#main")).toHaveAttribute("data-surface", scenario ? "code" : "dashboard");
+  await nav(page, "Dashboard").click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 

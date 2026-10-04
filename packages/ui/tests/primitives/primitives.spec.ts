@@ -6,6 +6,8 @@ test.beforeEach(async ({ page }) => {
 
 test("asChild menu action receives keyboard focus and selects once", async ({ page }) => {
   const trigger = page.getByRole("button", { name: "Editor options" });
+  // The Context thread control now precedes the original primitive harness controls.
+  await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await expect(trigger).toBeFocused();
   await page.keyboard.press("Enter");
@@ -55,6 +57,7 @@ test("asChild radio items navigate, select, retain selection and return focus on
 test("tooltip combines the existing description with its hint and restores it on Escape", async ({ page }) => {
   const trigger = page.getByRole("button", { name: "Save document" });
   await expect(trigger).toHaveAccessibleDescription("Saves your current document.");
+  await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await expect(trigger).toBeFocused();

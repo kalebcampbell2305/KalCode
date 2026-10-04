@@ -282,8 +282,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 345);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 345);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 352);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 352);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -291,9 +291,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 345);
+  assert.equal(functional.size, 352);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 401);
+  assert.equal(established.size, 408);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],
@@ -429,7 +429,20 @@ test("tooling profiles account exactly for Windows-only signer and workflow exec
 test("website skip profiles require reviewed counts and runtime reasons", () => {
   const website = inventory.suites.find(({ id }) => id === "website-e2e");
   const defaultProfile = selectProfile(website, "win32", {});
-  assert.equal(defaultProfile.skippedMinimum, 8);
+  assert.equal(defaultProfile.minimumExecuted, 164);
+  assert.equal(defaultProfile.skippedMinimum, 33);
+  assert.equal(defaultProfile.skippedMaximum, 33);
+  assert.throws(
+    () =>
+      validateSuiteResult(website, defaultProfile, {
+        executed: 163,
+        failed: 0,
+        skipped: 33,
+        flaky: 0,
+        skipReasons: ["TryKalCode is not on /"],
+      }),
+    /executed/,
+  );
   const configuredProfile = selectProfile(website, "win32", { STAGE_URL: "/product" });
   assert.equal(configuredProfile.skippedMaximum, 16);
   assert.doesNotThrow(() =>

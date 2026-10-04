@@ -68,7 +68,11 @@ test.describe("threads", () => {
   test("empty state explains threads and offers to create one", async ({ page }) => {
     await openThreads(page);
     await expect(page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Thread list" }).getByText("No threads yet.")).toBeVisible();
+    // Said once, in the detail pane; the list only says where threads will appear.
+    await expect(page.getByText(/No threads yet/)).toHaveCount(1);
+    await expect(
+      page.getByRole("region", { name: "Thread list" }).getByText("Threads you start appear here."),
+    ).toBeVisible();
     await expectNoSeriousA11yViolations(page);
   });
 

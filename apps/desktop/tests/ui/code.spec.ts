@@ -393,3 +393,19 @@ test.describe("accessibility", () => {
     });
   }
 });
+
+test("KalTidy menu in Code clears agents and closes everything after one confirmation", async ({ page }) => {
+  await open(page);
+  await openFolderAndTerminal(page);
+  await page.getByRole("button", { name: "More KalTidy actions" }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: /Clear failed agents/ })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /Clear finished agents/ })).toBeVisible();
+  await menu.getByRole("menuitem", { name: /Close all terminals and agents/ }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Close all terminals and agents?" });
+  await expect(confirm).toBeVisible();
+  // Cancel keeps everything running.
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /PowerShell 7/ })).toBeVisible();
+});

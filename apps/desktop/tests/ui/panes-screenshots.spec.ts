@@ -32,7 +32,7 @@ async function shot(page: Page, name: string) {
 
 async function start(page: Page, theme: "dark" | "light") {
   await page.goto("/?scenario=code");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   if (theme === "light") {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();

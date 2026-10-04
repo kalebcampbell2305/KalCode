@@ -102,3 +102,15 @@ test("pinned projects stay distinguishable in the narrow sidebar", async ({ page
     clip: { x: 0, y: 0, width: 260, height: 860 },
   });
 });
+
+test("clicking an unavailable project opens its menu, which removes it from KalCode", async ({ page }) => {
+  await open(page);
+  const missing = projects(page).getByRole("button", { name: /unavailable, folder not found/ });
+  await expect(missing).toHaveCount(1);
+  await missing.click();
+  const remove = page.getByRole("menuitem", { name: /Remove from KalCode/ });
+  await expect(remove).toBeVisible();
+  await page.screenshot({ path: "test-results/projects-remove-unavailable.png" });
+  await remove.click();
+  await expect(projects(page).getByRole("button", { name: /unavailable, folder not found/ })).toHaveCount(0);
+});

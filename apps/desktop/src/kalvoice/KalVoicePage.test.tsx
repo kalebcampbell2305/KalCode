@@ -91,13 +91,15 @@ describe("KalVoice local intelligence first use", () => {
   });
 
   it.each(["installed", "unavailable", undefined])(
-    "routes %s readiness to the existing local startup recovery",
+    "retries %s readiness in place with the existing local startup recovery",
     (localReasoning) => {
       seams.value.status = { ...(seams.value.status as object), localReasoning };
       const page = render(<KalVoicePage />);
       expect(intelligenceCard().queryByText("Ready")).not.toBeInTheDocument();
-      fireEvent.click(intelligenceCard().getByRole("button", { name: "Open KalVoice settings" }));
-      expect(seams.navigate).toHaveBeenCalledExactlyOnceWith("settings");
+      fireEvent.click(intelligenceCard().getByRole("button", { name: "Retry" }));
+      expect(retry).toHaveBeenCalledOnce();
+      expect(seams.navigate).not.toHaveBeenCalled();
+      retry.mockClear();
       page.unmount();
       render(<KalVoiceSettings />);
       fireEvent.click(screen.getByRole("button", { name: "Retry local startup" }));

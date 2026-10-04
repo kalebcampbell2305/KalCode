@@ -152,3 +152,50 @@ test("the command field and its shortcut open the palette", async ({ page }) => 
   await page.keyboard.press(`${MOD}+k`);
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
 });
+
+test("the needs-you chip opens the agents when replies or failures need the person, not just approvals", async ({
+  page,
+}) => {
+  await open(page, "busy");
+  await toOperations(page);
+  const chip = bar(page).getByRole("button", { name: /^\d+ things need you$/ });
+  await chip.click();
+  // Busy has replies and failures as well as approvals: Approvals would show only part of them.
+  await expect(page.getByRole("dialog", { name: "Approvals" })).toHaveCount(0);
+  await expect(agents(page).getByRole("heading", { name: /^Needs you/ })).toBeVisible();
+});
+
+test("with no workspaces the workspace chip opens the folder picker directly", async ({ page }) => {
+  await page.goto("/?channel=stable");
+  const chip = bar(page).getByRole("button", { name: "Workspace: none. Open a project folder" });
+  await expect(chip).toBeVisible();
+  await chip.click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  // The picked folder becomes the workspace (the memory picker returns its next folder).
+  await expect(bar(page).getByRole("button", { name: "Workspace kalcode-site" })).toBeVisible();
+  await expect(chip).toHaveCount(0);
+});
+
+test("the mode menu explains each mode in full, above the KalVoice widget", async ({ page }) => {
+  await open(page, "busy");
+  await bar(page)
+    .getByRole("button", { name: /^Permission mode/ })
+    .click();
+  const menu = page.getByRole("menu", { name: /^Permission mode/ });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("New agents start in")).toBeVisible();
+  // Descriptions wrap rather than truncate.
+  const clipped = await menu.evaluate((el) =>
+    [...el.querySelectorAll<HTMLElement>("[role=menuitemradio] span span:last-child")].some(
+      (d) => d.scrollWidth > d.clientWidth + 1,
+    ),
+  );
+  expect(clipped).toBe(false);
+  // The menu paints above the floating KalVoice widget where they overlap.
+  const menuZ = await menu.evaluate((el) => Number(getComputedStyle(el).zIndex));
+  const widgetZ = await page
+    .getByRole("region", { name: "KalVoice widget" })
+    .evaluate((el) => Number(getComputedStyle(el).zIndex));
+  expect(menuZ).toBeGreaterThan(widgetZ);
+  await page.screenshot({ path: "test-results/mode-menu.png" });
+});
