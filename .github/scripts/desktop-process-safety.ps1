@@ -55,6 +55,27 @@ function Run-Installer([string]$exe, [string[]]$arguments) {
   $script:PendingInstaller.Dispose(); $script:PendingInstaller = $null
   if ($code -ne 0) { Refuse "installer failed: $code" }
 }
+function Wait-InstalledImagesUnlocked([int]$seconds = 60) {
+  # Windows can keep an exited process's image locked for a moment, and NSIS aborts (exit 2) when it
+  # can't replace a locked executable. Wait until every installed KalCode executable opens exclusively.
+  $d = InstallDir
+  if (-not $d) { return }
+  $images = @('kalcode.exe', 'kalcode-provider-guardian.exe', 'kalcode-update-helper.exe', 'kalcode-hook.exe' |
+      ForEach-Object { Join-Path $d $_ } | Where-Object { Test-Path -LiteralPath $_ })
+  $wait = [Diagnostics.Stopwatch]::StartNew()
+  while ($true) {
+    $locked = @($images | Where-Object {
+        try { $stream = [IO.File]::Open($_, 'Open', 'ReadWrite', 'None'); $stream.Dispose(); $false } catch { $true } })
+    if (-not $locked.Count) {
+      if ($wait.Elapsed.TotalSeconds -ge 1) { Note "installed executables unlocked after $([int]$wait.Elapsed.TotalSeconds)s" }
+      return
+    }
+    if ($wait.Elapsed.TotalSeconds -ge $seconds) {
+      Refuse ('installed executables still locked after shutdown: ' + (($locked | ForEach-Object { Split-Path -Leaf $_ }) -join ', '))
+    }
+    Start-Sleep -Milliseconds 500
+  }
+}
 function Assert-CleanupAllowed {
   if (-not $script:QaStateOwned) { Refuse 'this run does not own the QA profile; preserving it' }
   if ($script:PendingInstaller -or @(KalProcs).Count) { Refuse 'QA runtime or installer still present; preserving all state without forcing shutdown' }
