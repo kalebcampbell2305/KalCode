@@ -3,6 +3,8 @@
  * Loaded on demand (components/live/LiveKalCode.astro imports it when the demo nears the viewport,
  * or at once when someone clicks Try KalCode). Nothing persists: Reset or a reload starts over.
  */
+
+import { MEMORY_CATEGORIES, memoryAction, saveMemory } from "../../lib/live/memory";
 import {
   afterLaunch,
   answerApproval,
@@ -142,6 +144,12 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     if (adaptiveCanvas.act(action)) return;
     const [name, ...rest] = action.split(":");
     const arg = rest.join(":");
+    if (name?.startsWith("memory-")) {
+      memoryAction(state.memory, name.slice(7), arg);
+      if (name === "memory-edit" || name === "memory-new") focusSoon('[data-key="memory-title"]');
+      render();
+      return;
+    }
     switch (name) {
       case "go":
         go(state, arg as Surface);
@@ -461,6 +469,11 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
   host.addEventListener("submit", (event) => {
     const form = event.target as HTMLFormElement;
     event.preventDefault();
+    if (form.dataset.form === "memory") {
+      if (saveMemory(state.memory)) toast(state, "Saved in this temporary sample workspace.", "done");
+      render();
+      return;
+    }
     const input = form.querySelector<HTMLInputElement>("input");
     const value = input?.value ?? "";
     const [kind, id] = (form.dataset.form ?? "").split(":");
@@ -478,6 +491,24 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
 
   host.addEventListener("input", (event) => {
     const input = event.target as HTMLInputElement;
+    if (input.matches("[data-memory-query]")) {
+      state.memory.query = input.value;
+      render();
+      return;
+    }
+    if (input.matches("[data-memory-category]")) {
+      state.memory.category = input.value;
+      render();
+      return;
+    }
+    if (input.matches("[data-memory-field]") && state.memory.draft) {
+      const field = input.dataset.memoryField;
+      if (field === "title" || field === "content") state.memory.draft[field] = input.value;
+      else if (field === "category" && Object.hasOwn(MEMORY_CATEGORIES, input.value)) {
+        state.memory.draft.category = input.value as keyof typeof MEMORY_CATEGORIES;
+      }
+      return;
+    }
     if (!input.matches("[data-palette]")) return;
     state.palette = { q: input.value, sel: 0 };
     render();

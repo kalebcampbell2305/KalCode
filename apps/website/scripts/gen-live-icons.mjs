@@ -21,6 +21,7 @@ export const LIVE_ICONS = {
   kalvoice: "audio-lines",
   code: "code-xml",
   threads: "messages-square",
+  memory: "brain-circuit",
   providers: "plug-zap",
   approvals: "shield-check",
   bell: "bell",
