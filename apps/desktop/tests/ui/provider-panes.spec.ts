@@ -275,6 +275,7 @@ test.describe("provider panes", () => {
     await expect(region.getByRole("button", { name: "Login flake. Rename agent" })).toBeVisible();
     const threadId = await region.getAttribute("data-provider-pane");
     await expect(page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`)).toHaveText("Login flake");
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Login flake");
 
     await region.getByRole("button", { name: /More actions/ }).click();
     await page.getByRole("menuitem", { name: "Stop…" }).click();

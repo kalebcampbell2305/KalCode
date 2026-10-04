@@ -2247,6 +2247,41 @@ mod tests {
     use kalcode_contracts::permissions::PermissionMode;
     use kalcode_core::{CoreConfig, Paths, flags::BuildChannel};
 
+    // Operations tests exercise persisted work and runtime projections, not host inventory.
+    // Keep the real governor lifecycle while avoiding machine-dependent OS probe latency.
+    struct OperationsProbe;
+
+    impl kalcode_resources::SystemProbe for OperationsProbe {
+        fn sample(
+            &mut self,
+            _plan: &kalcode_resources::probe::ProbePlan<'_>,
+        ) -> kalcode_resources::probe::RawSample {
+            use kalcode_resources::Reading;
+            use kalcode_resources::probe::{Counters, RawCpu, RawMemory, RawSample};
+
+            RawSample {
+                cpu: Reading::Value(RawCpu {
+                    total_percent: 5.0,
+                    logical_cores: 8,
+                }),
+                memory: Reading::Value(RawMemory {
+                    total_bytes: 16 << 30,
+                    available_bytes: 12 << 30,
+                }),
+                disk_io: Reading::Value(Counters {
+                    generation: 1,
+                    a_bytes: 0,
+                    b_bytes: 0,
+                }),
+                commit: None,
+                network: None,
+                volumes: Some(Reading::Value(Vec::new())),
+                processes: None,
+                gpu: None,
+            }
+        }
+    }
+
     fn fixture(
         core: Arc<Core>,
         data: &Path,
@@ -2254,7 +2289,11 @@ mod tests {
         OperationsState,
         Arc<crate::resource_commands::ResourceGovernorState>,
     ) {
-        let resources = Arc::new(crate::resource_commands::ResourceGovernorState::start());
+        let resources = Arc::new(
+            crate::resource_commands::ResourceGovernorState::start_with_probe(Box::new(
+                OperationsProbe,
+            )),
+        );
         let detection = Arc::new(kalcode_providers::ProviderRegistry::with_specs(
             kalcode_providers::DetectEnv {
                 vars: Vec::new(),
@@ -2301,7 +2340,11 @@ mod tests {
         OperationsState,
         Arc<crate::resource_commands::ResourceGovernorState>,
     ) {
-        let resources = Arc::new(crate::resource_commands::ResourceGovernorState::start());
+        let resources = Arc::new(
+            crate::resource_commands::ResourceGovernorState::start_with_probe(Box::new(
+                OperationsProbe,
+            )),
+        );
         let detection = Arc::new(kalcode_providers::ProviderRegistry::with_specs(
             kalcode_providers::DetectEnv {
                 vars: Vec::new(),

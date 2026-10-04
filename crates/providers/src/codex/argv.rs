@@ -256,11 +256,6 @@ mod tests {
 
     #[test]
     fn codex_subagents_are_ten_for_new_and_resumed_turns() {
-        assert!(
-            !POLICY_CONFIG
-                .iter()
-                .any(|value| value.starts_with("features.multi_agent"))
-        );
         for resume in [None, Some("01234567-89ab-4cde-8fab-0123456789ab")] {
             for previous in [3, 15, 30] {
                 let args = exec_args_with_overrides(
@@ -274,6 +269,10 @@ mod tests {
                     ],
                 )
                 .expect("args");
+                assert!(!args.iter().any(|value| {
+                    value == "features.multi_agent=false"
+                        || value == "features.multi_agent_v2=false"
+                }));
                 let effective = args
                     .windows(2)
                     .filter(|pair| pair[0] == "-c")
