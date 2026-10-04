@@ -129,8 +129,9 @@ only (no status change). `Stop` also closes tool calls that never completed as "
 
 ## 3. Launch, per provider
 
-Every launch uses Z2's process rules: argv only (never a shell string); `env_clear()` plus the OS
-allow-list and that provider's own variables; the native-resolved workspace folder as cwd;
+Every launch uses Z2's process rules: argv only (never a shell string); `env_clear()` plus the
+user's own environment (native provider parity, `docs/providers/native-parity.md`); the
+native-resolved workspace folder as cwd;
 process-tree kill on stop. The launch goes through the new Z1 PTY launch API.
 
 ### Claude Code

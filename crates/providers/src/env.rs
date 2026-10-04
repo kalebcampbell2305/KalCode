@@ -1,10 +1,15 @@
-//! Sanitized environments for provider child processes.
+//! Environments for provider child processes.
 //!
-//! Provider processes never inherit KalCode's environment wholesale. They get an allow-list of
-//! variables the OS and a CLI need to run (paths, locale, temp folders, proxies), plus only the
-//! variables belonging to *that* provider (`ANTHROPIC_*` for Claude Code, `OPENAI_*` for Codex,
-//! ...). A Claude Code process therefore never sees an OpenAI key and vice versa, and nothing
-//! KalCode-internal (`KALCODE_*`, WebView2 debugging variables) reaches any provider.
+//! A provider launched by KalCode must behave as it does when the user starts it in their own
+//! terminal (AGENTS.md native provider parity rule), so provider sessions get
+//! [`EnvPolicy::NATIVE`]: everything KalCode itself inherited, except KalCode-internal variables
+//! (`KALCODE_*`, WebView2 debugging variables). SSH agents, `GH_TOKEN`, toolchain homes, cloud
+//! settings and the variables MCP servers reference reach the provider as they would natively.
+//!
+//! KalCode's own short-lived probes (Environment Doctor `--version` checks) keep an allow-list:
+//! [`EnvPolicy::BASE`] plus the probe's own names. A managed account session also drops the few
+//! variables that would make *that* provider authenticate as someone other than the selected
+//! account ([`strip_auth_overrides`]).
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -68,26 +73,31 @@ const BASE_ALLOW: &[&str] = &[
 /// Prefixes that are never passed through, even if a provider allow-list would match them.
 const ALWAYS_DENY_PREFIXES: &[&str] = &["KALCODE_", "WEBVIEW2_", "WEBKIT_INSPECTOR"];
 
-/// Which provider-specific variables a child may receive.
+/// Which variables a child may receive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnvPolicy {
-    /// Variable-name prefixes owned by the provider (e.g. `ANTHROPIC_`, `CLAUDE_`).
+    /// Variable-name prefixes passed on top of the base allow-list (e.g. `RUSTUP_`).
     pub provider_prefixes: &'static [&'static str],
-    /// Exact variable names owned by the provider.
+    /// Exact variable names passed on top of the base allow-list.
     pub provider_names: &'static [&'static str],
+    /// Pass every variable except KalCode-internal ones, as a native terminal would.
+    pub inherit_all: bool,
 }
 
 impl EnvPolicy {
-    /// Native terminal parity: preserve the user's tool, Git, MCP and provider environment.
-    /// KalCode/WebView internals are still denied and launch hardening still applies.
-    pub const NATIVE: Self = Self {
-        provider_prefixes: &[""],
-        provider_names: &[],
-    };
-    /// Only the base allow-list; no provider variables.
+    /// Only the base allow-list; no provider variables. For KalCode's own short-lived probes.
     pub const BASE: Self = Self {
         provider_prefixes: &[],
         provider_names: &[],
+        inherit_all: false,
+    };
+
+    /// The user's whole environment minus KalCode-internal variables: what every provider
+    /// session receives (native provider parity).
+    pub const NATIVE: Self = Self {
+        provider_prefixes: &[],
+        provider_names: &[],
+        inherit_all: true,
     };
 
     fn allows(&self, name: &str) -> bool {
@@ -95,10 +105,59 @@ impl EnvPolicy {
         if ALWAYS_DENY_PREFIXES.iter().any(|p| upper.starts_with(p)) {
             return false;
         }
-        BASE_ALLOW.contains(&upper.as_str())
+        self.inherit_all
+            || BASE_ALLOW.contains(&upper.as_str())
             || self.provider_names.contains(&upper.as_str())
             || self.provider_prefixes.iter().any(|p| upper.starts_with(p))
     }
+}
+
+/// Variables that make a provider authenticate as something other than its own signed-in
+/// account: an API key, an injected OAuth token, a different cloud backend or another profile
+/// directory. A managed account session drops these for its own provider so an agent launched on
+/// "Claude B" really is Claude B. Everything else passes, including other providers' keys.
+pub fn auth_overrides(provider_id: &str) -> &'static [&'static str] {
+    match provider_id {
+        "claude-code" => &[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        ],
+        "codex" => &[
+            "CODEX_API_KEY",
+            "OPENAI_API_KEY",
+            "CODEX_HOME",
+            // Developer overrides that point Codex's sign-in at another issuer or client.
+            "CODEX_APP_SERVER_LOGIN_ISSUER",
+            "CODEX_APP_SERVER_LOGIN_CLIENT_ID",
+            "CODEX_APP_SERVER_DEV_OPEN_APP_URL",
+        ],
+        "gemini-cli" => &[
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_GENAI_USE_GCA",
+            "GOOGLE_CLOUD_ACCESS_TOKEN",
+            "GEMINI_CLI_HOME",
+        ],
+        _ => &[],
+    }
+}
+
+/// Removes [`auth_overrides`] for `provider_id`, matching names case-insensitively as Windows
+/// does.
+pub fn strip_auth_overrides(env: &mut BTreeMap<OsString, OsString>, provider_id: &str) {
+    let names = auth_overrides(provider_id);
+    env.retain(|name, _| {
+        !name
+            .to_str()
+            .is_some_and(|n| names.iter().any(|o| n.eq_ignore_ascii_case(o)))
+    });
 }
 
 /// Builds the environment for a provider child from `source` (normally `std::env::vars_os()`).
@@ -182,6 +241,7 @@ mod tests {
     const CLAUDE: EnvPolicy = EnvPolicy {
         provider_prefixes: &["ANTHROPIC_", "CLAUDE_"],
         provider_names: &[],
+        inherit_all: false,
     };
 
     fn vars(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
@@ -292,6 +352,7 @@ mod tests {
         let policy = EnvPolicy {
             provider_prefixes: &["KAL"],
             provider_names: &["KALCODE_LOG"],
+            inherit_all: true,
         };
         let env = sanitized_env(vars(&[("KALCODE_LOG", "debug")]), &policy);
         assert!(lookup(&env, "KALCODE_LOG").is_none());
@@ -310,5 +371,63 @@ mod tests {
         );
         assert_eq!(env.len(), 2, "TEMP and {NO_CWD_EXE_SEARCH}: {env:?}");
         assert_eq!(lookup(&env, "TEMP"), Some(OsStr::new("/t")));
+    }
+
+    #[test]
+    fn native_policy_passes_the_user_environment_except_kalcode_internals() {
+        let env = sanitized_env(
+            vars(&[
+                ("PATH", "/usr/bin"),
+                ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
+                ("GH_TOKEN", "t"),
+                ("JAVA_HOME", "/jdk"),
+                ("PSModulePath", "C:\\ps"),
+                ("AWS_PROFILE", "dev"),
+                ("MCP_TIMEOUT", "30000"),
+                ("OPENAI_API_KEY", "o"),
+                ("ANTHROPIC_API_KEY", "a"),
+                ("KALCODE_DATA_DIR", "/k"),
+                ("WEBVIEW2_USER_DATA_FOLDER", "/w"),
+            ]),
+            &EnvPolicy::NATIVE,
+        );
+        for name in [
+            "PATH",
+            "SSH_AUTH_SOCK",
+            "GH_TOKEN",
+            "JAVA_HOME",
+            "PSModulePath",
+            "AWS_PROFILE",
+            "MCP_TIMEOUT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ] {
+            assert!(lookup(&env, name).is_some(), "{name} must pass: {env:?}");
+        }
+        assert!(lookup(&env, "KALCODE_DATA_DIR").is_none());
+        assert!(lookup(&env, "WEBVIEW2_USER_DATA_FOLDER").is_none());
+        assert_eq!(lookup(&env, NO_CWD_EXE_SEARCH), Some(OsStr::new("1")));
+    }
+
+    #[test]
+    fn managed_sessions_drop_only_their_own_provider_auth_overrides() {
+        let mut env = sanitized_env(
+            vars(&[
+                ("anthropic_api_key", "a"),
+                ("CLAUDE_CODE_OAUTH_TOKEN", "t"),
+                ("ANTHROPIC_BASE_URL", "https://proxy"),
+                ("OPENAI_API_KEY", "o"),
+                ("GH_TOKEN", "g"),
+            ]),
+            &EnvPolicy::NATIVE,
+        );
+        strip_auth_overrides(&mut env, "claude-code");
+        assert!(lookup(&env, "ANTHROPIC_API_KEY").is_none());
+        assert!(lookup(&env, "CLAUDE_CODE_OAUTH_TOKEN").is_none());
+        for kept in ["ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "GH_TOKEN"] {
+            assert!(lookup(&env, kept).is_some(), "{kept}: {env:?}");
+        }
+        strip_auth_overrides(&mut env, "codex");
+        assert!(lookup(&env, "OPENAI_API_KEY").is_none());
     }
 }

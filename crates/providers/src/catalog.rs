@@ -31,10 +31,8 @@ pub fn claude_spec() -> DetectionSpec {
         // credentials are durably written. Detect only installation/version here. Managed
         // accounts restore their persisted safe state; a real coding session is authoritative.
         auth: None,
-        env_policy: EnvPolicy {
-            provider_prefixes: &["ANTHROPIC_", "CLAUDE_"],
-            provider_names: &[],
-        },
+        // The user's own environment, as in a native terminal (native provider parity).
+        env_policy: EnvPolicy::NATIVE,
     }
 }
 
@@ -59,10 +57,8 @@ pub fn codex_spec() -> DetectionSpec {
                 signed_out: "Not logged in",
             },
         }),
-        env_policy: EnvPolicy {
-            provider_prefixes: &["OPENAI_", "CODEX_"],
-            provider_names: &[],
-        },
+        // The user's own environment, as in a native terminal (native provider parity).
+        env_policy: EnvPolicy::NATIVE,
     }
 }
 
@@ -79,10 +75,8 @@ pub fn gemini_spec() -> DetectionSpec {
         minimum_version: None,
         // Gemini CLI documents no side-effect-free sign-in status command.
         auth: None,
-        env_policy: EnvPolicy {
-            provider_prefixes: &["GEMINI_", "GOOGLE_"],
-            provider_names: &[],
-        },
+        // The user's own environment, as in a native terminal (native provider parity).
+        env_policy: EnvPolicy::NATIVE,
     }
 }
 

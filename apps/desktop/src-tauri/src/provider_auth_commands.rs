@@ -55,7 +55,6 @@ enum RuntimeAuthError {
     Claude(ClaudeAccountAuthError),
     Gemini(GeminiAccountAuthError),
     GeminiUnavailable,
-    OrganizationPlan,
     PlanUnverified,
 }
 
@@ -108,11 +107,6 @@ impl RuntimeAuthError {
             Self::Gemini(_) => refused(
                 error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
                 "KalCode couldn't confirm this Gemini CLI account with Gemini CLI's official account check. Check your connection, then resume this thread."
-                    .into(),
-            ),
-            Self::OrganizationPlan => refused(
-                error_codes::PROVIDER_ACCOUNT_PLAN_UNSUPPORTED,
-                "KalCode doesn't support Codex organization plans (Business, Enterprise, Edu) yet. Use a personal ChatGPT plan for this Codex account."
                     .into(),
             ),
             Self::PlanUnverified => refused(
@@ -202,10 +196,6 @@ impl RuntimeAuthError {
             Self::Gemini(_) => (
                 "provider_auth_failed",
                 "The official Gemini CLI account operation did not complete safely.",
-            ),
-            Self::OrganizationPlan => (
-                "provider_account_plan_unsupported",
-                "This Codex organization plan isn't supported by managed profiles yet.",
             ),
             Self::PlanUnverified => (
                 "provider_account_plan_unverified",
@@ -1166,18 +1156,12 @@ impl ProviderRuntimeAuthority {
                     .map_err(RuntimeAuthError::into_provider_error)?;
             }
         }
-        match self
-            .cached_codex_eligibility(account_id)
-            .map_err(RuntimeAuthError::into_provider_error)?
-        {
-            CloudConfigEligibility::Ineligible => Ok(()),
-            CloudConfigEligibility::Eligible => {
-                Err(RuntimeAuthError::OrganizationPlan.into_provider_error())
-            }
-            CloudConfigEligibility::Unknown => {
-                Err(RuntimeAuthError::PlanUnverified.into_provider_error())
-            }
-        }
+        // A current official account check is required; every plan then launches (native
+        // provider parity). Organization (Business, Enterprise, Edu) cloud configuration applies
+        // inside KalCode exactly as it does in a native terminal.
+        self.cached_codex_eligibility(account_id)
+            .map(|_| ())
+            .map_err(RuntimeAuthError::into_provider_error)
     }
 
     /// Resolver used by the interactive Codex adapter after `prepare_account_launch` and while
@@ -2702,14 +2686,11 @@ mod tests {
             )
             .expect("observe organization plan");
         drop(second);
-        assert!(matches!(
-            fixture
-                .runtime
-                .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id),
-            Err(ProviderError::Refused { code, message })
-                if code == "provider_account_plan_unsupported"
-                    && message.contains("organization plans")
-        ));
+        // Organization plans launch like any other (native provider parity).
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("organization plan launches");
 
         fixture
             .runtime
