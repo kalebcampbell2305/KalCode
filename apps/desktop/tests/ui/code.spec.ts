@@ -115,7 +115,7 @@ test.describe("terminals", () => {
     await expect(visibleTerminal(page)).toContainText("hello-from-ui");
   });
 
-  test("multiple tabs: shell picker, switching with Ctrl+Tab; closing a tab keeps its shell running, ending is explicit", async ({
+  test("multiple tabs: shell picker, switching with Ctrl+Tab; Stop and Close ends the selected shell", async ({
     page,
   }) => {
     await open(page);
@@ -144,6 +144,7 @@ test.describe("terminals", () => {
 
     // Closing a terminal ends it (owner decision): Ctrl+Shift+W closes the tab in front and its shell.
     await page.keyboard.press("Control+Shift+W");
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect(cmd).toHaveCount(0);
     await expect(page.getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toHaveAttribute("aria-selected", "true");
     await expect.poll(() => runningProcesses(page)).toBe(2);
@@ -155,6 +156,7 @@ test.describe("terminals", () => {
       .getByRole("tab", { name: /^PowerShell 7$/ })
       .locator("[data-tab-close]")
       .click();
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect(page.getByRole("tab")).toHaveCount(1);
     await expect.poll(() => runningProcesses(page)).toBe(1);
     await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
@@ -162,6 +164,7 @@ test.describe("terminals", () => {
     // The pane menu's "End terminal" still ends the shell in front.
     await page.getByRole("button", { name: "Actions for pane 1" }).click();
     await page.getByRole("menuitem", { name: "End terminal" }).click();
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect.poll(() => runningProcesses(page)).toBe(0);
   });
 
@@ -229,6 +232,7 @@ test.describe("keyboard", () => {
     await page.keyboard.press("Control+Shift+E");
     await expect(page.getByRole("tab", { name: /^PowerShell 7$/ })).toBeFocused();
     await page.keyboard.press("Delete");
+    await page.getByRole("button", { name: "Stop and Close", exact: true }).click();
     await expect(page.getByRole("tab")).toHaveCount(3);
   });
 

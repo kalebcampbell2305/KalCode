@@ -161,3 +161,61 @@ fn removed_worktree_ownership_disables_move_but_duplicate_is_independent() {
     assert_eq!(copy.can_move_workspace, Some(true));
     assert!(copy.worktree_id.is_none());
 }
+
+#[test]
+fn fresh_idle_copy_starts_an_independent_live_session_in_the_selected_directory() {
+    let h = Harness::new();
+    let source = h
+        .runtime
+        .create(h.request("Source conversation stays here"))
+        .unwrap();
+    let original = h.provider.last_session();
+    let before = original.calls();
+    let cwd = h.dir.path().join("selected worktree");
+    std::fs::create_dir(&cwd).unwrap();
+    let copied = h
+        .runtime
+        .create_idle_with_id_in_directory(
+            &new_id(),
+            kalcode_threads::CreateIdleThread {
+                provider_id: source.provider_id.to_string(),
+                provider_account_id: source.provider_account_id.clone(),
+                account_label: source.account_label.clone(),
+                workspace_id: source.workspace_id.clone(),
+                model: source.model.clone(),
+                effort: Some("high".into()),
+                permission_mode: source.permission_mode,
+                name: Some("Source (copy)".into()),
+            },
+            cwd.clone(),
+        )
+        .unwrap();
+    assert_ne!(source.id, copied.id);
+    assert_eq!(h.provider.session_count(), 2);
+    assert_eq!(copied.status, ThreadStatus::Idle);
+    assert_eq!(copied.effort.as_deref(), Some("high"));
+    let session = h.provider.last_session();
+    assert_eq!(
+        std::path::PathBuf::from(&session.config.working_directory),
+        cwd
+    );
+    assert!(session.config.resume_session_id.is_none());
+    assert!(
+        h.runtime
+            .messages(&copied.id, 100, None)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(original.calls(), before);
+    h.runtime.stop(&copied.id).unwrap();
+    assert_eq!(original.calls(), before);
+    h.runtime.resume(&copied.id, None).unwrap();
+    assert_eq!(
+        std::path::PathBuf::from(&h.provider.last_session().config.working_directory),
+        cwd
+    );
+    h.runtime.stop(&copied.id).unwrap();
+    std::fs::remove_dir(&cwd).unwrap();
+    assert!(h.runtime.resume(&copied.id, None).is_err());
+    assert_eq!(original.calls(), before);
+}

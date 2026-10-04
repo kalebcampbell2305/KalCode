@@ -289,15 +289,14 @@ fn operation_shell(mut shell: ShellInfo, command: &str) -> Result<ShellInfo> {
         ));
     }
     shell.args = match shell.id.as_str() {
-        "pwsh" | "powershell" => {
-            let mut args = shell.args;
-            args.extend([
-                "-NoProfile".to_owned(),
-                "-Command".to_owned(),
-                command.to_owned(),
-            ]);
-            args
-        }
+        // Operations exit when their command finishes; interactive prompt integration and
+        // -NoExit belong only to user shells.
+        "pwsh" | "powershell" => vec![
+            "-NoLogo".to_owned(),
+            "-NoProfile".to_owned(),
+            "-Command".to_owned(),
+            command.to_owned(),
+        ],
         "cmd" => vec![
             "/D".to_owned(),
             "/S".to_owned(),
@@ -874,6 +873,35 @@ impl Core {
         size: TerminalSize,
         limit: Option<PlanLimit>,
     ) -> Result<TerminalInfo> {
+        self.create_terminal_from(workspace_id, shell_id, size, limit, None)
+    }
+
+    /// Starts a fresh shell using only the source's launch context. No input, environment,
+    /// scrollback, attachments or process handles are copied.
+    pub fn duplicate_terminal(
+        self: &Arc<Self>,
+        source_id: &str,
+        size: TerminalSize,
+        limit: Option<PlanLimit>,
+    ) -> Result<TerminalInfo> {
+        let source = self.terminal(source_id)?;
+        self.create_terminal_from(
+            &source.workspace_id,
+            Some(&source.shell_id),
+            size,
+            limit,
+            Some(source_id),
+        )
+    }
+
+    fn create_terminal_from(
+        self: &Arc<Self>,
+        workspace_id: &str,
+        shell_id: Option<&str>,
+        size: TerminalSize,
+        limit: Option<PlanLimit>,
+        source_id: Option<&str>,
+    ) -> Result<TerminalInfo> {
         validate_id(workspace_id)?;
         if let Some(shell_id) = shell_id {
             validate_shell_id(shell_id)?;
@@ -882,7 +910,7 @@ impl Core {
         let id = new_id();
 
         let mut conn = self.conn();
-        let workspace =
+        let mut workspace =
             load_workspace(&conn, workspace_id)?.ok_or_else(|| not_found("workspace"))?;
         if !workspace.available {
             return Err(folder_missing());
@@ -890,6 +918,47 @@ impl Core {
         if let Some(limit) = limit {
             admit_terminal(&conn, limit)?;
         }
+        let title = if let Some(source_id) = source_id {
+            let source = self.terminal_in(&conn, source_id)?;
+            let session = self.terminal_registry().session(source_id);
+            let cwd = if let Some(session) = session.filter(|s| s.exit_info().is_none()) {
+                // Read only this shell's directory. Never inspect its environment or argv.
+                let pid = session.pid().ok_or_else(duplicate_directory_unavailable)?;
+                let mut system = sysinfo::System::new();
+                let pid = sysinfo::Pid::from_u32(pid);
+                system.refresh_processes_specifics(
+                    sysinfo::ProcessesToUpdate::Some(&[pid]),
+                    true,
+                    sysinfo::ProcessRefreshKind::nothing().with_cwd(sysinfo::UpdateKind::Always),
+                );
+                let cwd = system
+                    .process(pid)
+                    .and_then(|p| p.cwd())
+                    .map(PathBuf::from)
+                    .ok_or_else(duplicate_directory_unavailable)?;
+                if session.exit_info().is_some() {
+                    return Err(duplicate_directory_unavailable());
+                }
+                cwd
+            } else {
+                let saved: Option<String> = conn.query_row(
+                    "SELECT launch_cwd FROM terminals WHERE id = ?1",
+                    [source_id],
+                    |row| row.get(0),
+                )?;
+                PathBuf::from(saved.unwrap_or_else(|| workspace.root_path.clone()))
+            };
+            if !cwd.is_absolute() || !cwd.is_dir() {
+                return Err(duplicate_directory_unavailable());
+            }
+            workspace.root_path = cwd.to_string_lossy().into_owned();
+            format!(
+                "{} (copy)",
+                source.title.chars().take(249).collect::<String>()
+            )
+        } else {
+            shell.name.clone()
+        };
         let tx = conn.transaction()?;
         let position: i64 = tx.query_row(
             "SELECT COALESCE(MAX(position), -1) + 1 FROM terminals WHERE workspace_id = ?1",
@@ -899,14 +968,7 @@ impl Core {
         tx.execute(
             "INSERT INTO terminals (id, workspace_id, shell_id, title, position, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                id,
-                workspace_id,
-                shell.id,
-                shell.name,
-                position,
-                now_rfc3339()
-            ],
+            params![id, workspace_id, shell.id, title, position, now_rfc3339()],
         )?;
         tx.execute(
             "UPDATE workspaces SET active_terminal_id = ?1 WHERE id = ?2",
@@ -1099,8 +1161,16 @@ impl Core {
         if terminal.status == TerminalStatus::Running {
             return Ok(terminal);
         }
-        let workspace =
+        let mut workspace =
             load_workspace(&conn, &terminal.workspace_id)?.ok_or_else(|| not_found("workspace"))?;
+        let launch_cwd: Option<String> = conn.query_row(
+            "SELECT launch_cwd FROM terminals WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        if let Some(cwd) = launch_cwd {
+            workspace.root_path = cwd;
+        }
         if !workspace.available {
             return Err(folder_missing());
         }
@@ -1206,6 +1276,10 @@ impl Core {
             "KalCode couldn't start that shell.",
         ))?;
         let recorded = (|| {
+            tx.execute(
+                "UPDATE terminals SET launch_cwd = ?1 WHERE id = ?2",
+                params![workspace.root_path, id],
+            )?;
             tx.execute(
                 "UPDATE terminals SET started_at = ?1, ended_at = NULL, exit_code = NULL, end_reason = NULL
                  WHERE id = ?2",
@@ -1451,11 +1525,28 @@ impl Core {
     /// in it — then forgets the tab. A running shell's end is recorded as `shell.completed`
     /// with `closedByUser`.
     pub fn close_terminal(&self, id: &str) -> Result<()> {
+        self.close_terminal_checked(id, true)
+    }
+
+    /// Automatic Smart Close must not kill a shell restarted after the UI checked its state.
+    pub fn close_terminal_if_ended(&self, id: &str) -> Result<()> {
+        self.close_terminal_checked(id, false)
+    }
+
+    fn close_terminal_checked(&self, id: &str, allow_running: bool) -> Result<()> {
         validate_id(id)?;
         let registry = self.terminal_registry();
         let conn = self.conn();
         let terminal = self.terminal_in(&conn, id)?;
         let session = registry.session(id);
+        // Restart also holds the connection lock: checking and deleting an ended tab is atomic
+        // with respect to replacement. Only an explicit Stop and Close may terminate live work.
+        if !allow_running && session.as_ref().is_some_and(|s| s.exit_info().is_none()) {
+            return Err(KalError::validation(
+                "terminal_still_running",
+                "This terminal is running. Choose Keep Running or Stop and Close.",
+            ));
+        }
         let running = session.as_ref().is_some_and(|s| {
             let mut closing = lock(&registry.closing);
             // Checked under the `closing` lock that the exit recorder also takes, so either
@@ -1495,17 +1586,15 @@ impl Core {
             std::thread::sleep(Duration::from_millis(15));
         }
         if lock(&registry.closing).contains_key(id) {
-            // The shell did not report its exit in time. Forget the tab now, but keep the
-            // session tracked: the recorder still records the event and releases it when the
-            // exit arrives, and shutdown ends it if it never does.
+            // Retain its visible record and attachment until termination is proved. The exit
+            // recorder may still finish later; reporting success now would hide live work.
             tracing::warn!(event = "terminal.close_timeout", terminal_id = %id);
-            let mut conn = self.conn();
-            let tx = conn.transaction()?;
-            delete_terminal_row(&tx, id)?;
-            tx.commit()?;
-            drop(conn);
-            registry.detach_views(id);
-            return Ok(());
+            return Err(KalError::new(
+                ErrorCategory::Terminal,
+                "terminal_close_unproven",
+                "KalCode couldn't confirm that this terminal stopped. Try again.",
+            )
+            .retryable());
         }
         registry.forget(id);
         Ok(())
@@ -2121,4 +2210,11 @@ mod tests {
         assert_eq!(folder_name(Path::new("/home/me/site")), "site");
         assert_eq!(folder_name(Path::new("/")), "/");
     }
+}
+
+fn duplicate_directory_unavailable() -> KalError {
+    KalError::validation(
+        "terminal_directory_unavailable",
+        "KalCode couldn't read this terminal's working directory. Open a new terminal from the workspace instead.",
+    )
 }

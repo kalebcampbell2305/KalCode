@@ -3,53 +3,53 @@ import type { KalVoiceIntelligence } from "./KalVoiceIntelligence.ts";
 import type { PanelAnchor } from "./PanelAnchor.ts";
 import type { PanelPlacement } from "./PanelPlacement.ts";
 
-export type KalVoicePreferences = { 
+export type KalVoicePreferences = {
 /**
  * The push-to-talk key: hold, speak, release (`F8` by default).
  */
-talkKey: string, 
+talkKey: string,
 /**
  * Push to talk works even while the floating widget is hidden.
  */
-talkEnabled: boolean, 
+talkEnabled: boolean,
 /**
  * Legacy selection retained for storage/wire compatibility. Current reasoning is local-only,
  * and provider values never authorize provider inference.
  */
-intelligence: KalVoiceIntelligence | null, 
+intelligence: KalVoiceIntelligence | null,
 /**
  * Speech model id from the catalog (`base.en` by default).
  */
-speechModel: string, 
+speechModel: string,
 /**
  * Speak short replies with the operating system's speech synthesis. Off by default.
  */
-voiceReplies: boolean, 
+voiceReplies: boolean,
 /**
  * Where the floating panel starts in a window size class it hasn't been placed in.
  */
-panelDefault: PanelAnchor, 
+panelDefault: PanelAnchor,
 /**
  * Whether the floating widget is shown (the push-to-talk key brings it back).
  */
-panelVisible: boolean, 
+panelVisible: boolean,
 /**
  * Remembered placement per window size class.
  */
-panelPlacements: Array<PanelPlacement>, 
+panelPlacements: Array<PanelPlacement>,
 /**
  * KalCode fetches the default speech model (`tiny.en`) through its signed component
  * catalog without a click. Set to `false` when the owner removes or cancels a speech model,
  * so a model they took away is never fetched again on its own (Settings keeps the manual
  * download).
  */
-speechModelAutoDownload: boolean, 
+speechModelAutoDownload: boolean,
 /**
  * "Prepare local intelligence automatically": once a speech model is ready, KalCode fetches
  * the on-device interpreter through the same signed pipeline. On by default; a genuine
  * preference for metered connections.
  */
-localIntelligenceAuto: boolean, 
+localIntelligenceAuto: boolean,
 /**
  * The owner paused the automatic local-intelligence download. Survives restarts.
  */
