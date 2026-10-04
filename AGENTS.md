@@ -93,6 +93,13 @@ This replaces the single-release-driver model, including the old "one release at
 - **Failure and supersession.** A failed job never stops the other jobs: isolate it, then fix and retry only that job or component. When a newer build contains the same changes and ships, mark the older blocked job SUPERSEDED and retire it safely. Never finish obsolete releases in order.
 - **Shipped** still means: the user closes KalCode, reopens it, the production update path serves the newest valid build, and the feature is there.
 
+## Permanent build cache and build machine rule (owner directive 2026-10-04)
+
+**KEEP THE BUILD CACHE. NEVER FORCE A FULL REBUILD.** Release builds on the Mac and on Windows reuse the warm compiled cache (`target/`, including Cargo `.fingerprint` and incremental data) from the most recent build of the nearest commit. Never delete Cargo fingerprints, incrementals or the release `target` before a release build, and never start from a cold clone when a warm one exists. Cargo's own fingerprinting decides what is stale, so a warm cache is correct, not a shortcut. The only exception is a targeted removal of one artifact that is proven to be wrongly reused, such as `guardian-packaging.mjs` and `hook-packaging.mjs` forcing their one binary to relink; never remove a whole cache. A slow cold rebuild is a pipeline bug to fix.
+
+- **Release builds always run on the owner's main Windows PC** (and the Mac for macOS). Building, signing and packaging never move to another machine.
+- **The second Windows machine runs gates**, under its own runner name and label (`kalcode-win-gate-2`, `kalcode-gate-2`; see `tooling/runners/README.md`). Gates there never compete with release builds for memory. Windows update QA stays on the build PC, where its packets are staged.
+
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 
 **KALCODE OPTIMIZES FOR THE FASTEST TRUTHFUL PATH FROM CODE TO USERS.**

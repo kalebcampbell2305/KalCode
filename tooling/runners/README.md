@@ -19,6 +19,15 @@ $t = gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration
 Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\setup-gate-runner.ps1 -RegistrationToken $t"
 ```
 
+Second Windows gate machine (owner directive 2026-10-04: gates move off the build PC; release builds never do). Same script, its own name and label, so it never replaces this PC's runner:
+
+```powershell
+$t = gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration-token --jq .token
+Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\setup-gate-runner.ps1 -RegistrationToken $t -RunnerName kalcode-win-gate-2 -Labels kalcode-gate-2"
+```
+
+Once it shows Idle under Settings → Actions → Runners, the Windows job in `gate.yml` targets `kalcode-gate-2`.
+
 Windows release runner (as the owner, no elevation):
 
 ```powershell

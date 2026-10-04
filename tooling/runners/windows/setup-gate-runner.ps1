@@ -15,7 +15,11 @@ param(
     [string]$RunnerVersion = '2.337.0',
     [string]$PnpmVersion = '10.33.2',
     [string]$Root = 'C:\kalcode-ci',
-    [string]$Account = 'kalcode-ci'
+    [string]$Account = 'kalcode-ci',
+    # A second gate machine registers under its own name and label (for example
+    # -RunnerName kalcode-win-gate-2 -Labels kalcode-gate-2) so it never replaces this PC's runner.
+    [string]$RunnerName = 'kalcode-win-gate',
+    [string]$Labels = 'kalcode-gate'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,7 +88,7 @@ Push-Location $runner
 try {
     & .\config.cmd --unattended --replace `
         --url https://github.com/kalebcampbell2305/KalCode --token $RegistrationToken `
-        --name kalcode-win-gate --labels kalcode-gate --work _work `
+        --name $RunnerName --labels $Labels --work _work `
         --runasservice --windowslogonaccount ".\$Account" --windowslogonpassword $password
     if ($LASTEXITCODE -ne 0) { throw "runner configuration failed ($LASTEXITCODE)" }
 } finally {
