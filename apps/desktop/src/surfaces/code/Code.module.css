@@ -1006,3 +1006,19 @@
     display: none;
   }
 }
+
+/* The workspace title always keeps room: header controls never squeeze (they fold their labels
+   and extras instead), and the New agent label folds before the title would. */
+.heading {
+  min-width: 5rem;
+}
+
+.toolbar > * {
+  flex-shrink: 0;
+}
+
+@container code (max-width: 32rem) {
+  .agentLabel {
+    display: none;
+  }
+}
