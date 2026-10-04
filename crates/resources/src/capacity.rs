@@ -7,7 +7,7 @@
 //!
 //! Unknown data never produces a resource hold. When a metric is unknown the matching constraint
 //! is skipped and the advice says so (`DataQuality`, `CapacityNote::MetricUnknown`); count limits
-//! (the mode's maximum simultaneous agents and per-provider limits) still apply because they do
+//! (explicit Custom agent ceilings and per-provider limits) still apply because they do
 //! not depend on sampling.
 
 use std::collections::BTreeMap;
@@ -84,15 +84,17 @@ pub fn capacity(
     let mut constraints = Vec::new();
     let mut notes = Vec::new();
 
-    // 1. Count limits (always known).
-    constraints.push(Constraint {
-        reason: HoldReason::UserLimit {
-            running: running.agents,
-            limit: limits.max_agents,
-            mode,
-        },
-        allows: limits.max_agents.saturating_sub(running.agents),
-    });
+    // 1. Only explicit user custom limits impose a local agent count ceiling.
+    if limits.max_agents != u32::MAX {
+        constraints.push(Constraint {
+            reason: HoldReason::UserLimit {
+                running: running.agents,
+                limit: limits.max_agents,
+                mode,
+            },
+            allows: limits.max_agents.saturating_sub(running.agents),
+        });
+    }
     let running_for =
         |provider: &ProviderId| running.per_provider.get(provider).copied().unwrap_or(0);
     if let Some(provider) = &request.provider
@@ -269,7 +271,11 @@ pub fn capacity(
             .map(|resource| CapacityNote::MetricUnknown { resource }),
     );
 
-    let additional = constraints.iter().map(|c| c.allows).min().unwrap_or(0);
+    let additional = constraints
+        .iter()
+        .map(|c| c.allows)
+        .min()
+        .unwrap_or(u32::MAX);
     let holds = constraints
         .iter()
         .filter(|c| c.allows == additional)

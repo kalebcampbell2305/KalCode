@@ -305,15 +305,16 @@ fn stale_and_future_snapshots_fail_closed() {
 
 #[test]
 fn zero_capacity_preserves_the_typed_capacity_holds() {
-    let snapshot = provider_snapshot();
+    let mut snapshot = provider_snapshot();
+    snapshot.mode = ModeKind::Custom;
     let running = RunningWork {
-        agents: ModeLimits::balanced().max_agents,
+        agents: 4,
         ..RunningWork::default()
     };
     let decision = evaluate_admission(
         &GovernorStatus::Running,
         Some(&snapshot),
-        Some(advice(&snapshot, running)),
+        Some(custom_advice(&snapshot, running)),
         AdmissionRequirements::provider_task(),
         NOW_MS,
         admission_max_age(&snapshot),
@@ -395,9 +396,9 @@ fn a_held_decision_summarizes_to_its_most_actionable_reason() {
     use kalcode_resources::{HoldReason, decision_codes, launch_hold};
     let decision = evaluate_admission(
         &GovernorStatus::Running,
-        Some(&provider_snapshot()),
-        Some(advice(
-            &provider_snapshot(),
+        Some(&custom_snapshot()),
+        Some(custom_advice(
+            &custom_snapshot(),
             RunningWork {
                 agents: 4,
                 ..RunningWork::default()
@@ -405,7 +406,7 @@ fn a_held_decision_summarizes_to_its_most_actionable_reason() {
         )),
         AdmissionRequirements::provider_task(),
         NOW_MS,
-        admission_max_age(&provider_snapshot()),
+        admission_max_age(&custom_snapshot()),
     );
     assert_eq!(decision.state, AdmissionState::Held);
     let hold = launch_hold(&decision, Duration::from_secs(1), Duration::from_secs(90));
@@ -416,4 +417,50 @@ fn a_held_decision_summarizes_to_its_most_actionable_reason() {
         decision.reasons.as_slice(),
         [AdmissionReason::Capacity { holds }] if matches!(holds[0], HoldReason::UserLimit { .. })
     ));
+}
+
+fn custom_snapshot() -> ResourceSnapshot {
+    let mut s = provider_snapshot();
+    s.mode = ModeKind::Custom;
+    s
+}
+fn custom_advice(
+    snapshot: &ResourceSnapshot,
+    running: RunningWork,
+) -> kalcode_resources::CapacityAdvice {
+    capacity(
+        snapshot,
+        &ModeLimits::custom(&kalcode_resources::CustomLimits::default()),
+        &running,
+        &CapacityRequest::default(),
+    )
+}
+#[test]
+fn every_preset_admits_more_than_eight_agents_when_cpu_and_memory_allow() {
+    for limits in [
+        ModeLimits::conservative(),
+        ModeLimits::balanced(),
+        ModeLimits::performance(),
+    ] {
+        let mut snapshot = provider_snapshot();
+        snapshot.mode = limits.kind;
+        let advice = capacity(
+            &snapshot,
+            &limits,
+            &RunningWork {
+                agents: 32,
+                ..Default::default()
+            },
+            &CapacityRequest::default(),
+        );
+        let decision = evaluate_admission(
+            &GovernorStatus::Running,
+            Some(&snapshot),
+            Some(advice),
+            AdmissionRequirements::provider_task(),
+            NOW_MS,
+            admission_max_age(&snapshot),
+        );
+        assert_eq!(decision.state, AdmissionState::Allowed, "{:?}", limits.kind);
+    }
 }
