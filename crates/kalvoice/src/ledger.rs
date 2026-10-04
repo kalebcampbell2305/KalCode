@@ -420,7 +420,7 @@ mod tests {
         }
         let u = usage(&conn, NOW, 1, Some(25)).expect("usage");
         assert_eq!(u.used, 1);
-        assert_eq!(u.remaining(), Some(74));
+        assert_eq!(u.remaining(), Some(24));
     }
 
     #[test]

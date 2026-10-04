@@ -497,12 +497,12 @@ mod tests {
     #[test]
     fn usage_math() {
         let usage = KalVoiceUsage {
-            used: 412,
+            used: 41,
             allowance: Some(150),
             period_start: String::new(),
             resets_at: String::new(),
         };
-        assert_eq!(usage.remaining(), Some(1088));
+        assert_eq!(usage.remaining(), Some(109));
         assert!(!usage.exhausted());
         let owner = KalVoiceUsage {
             used: 99_999,

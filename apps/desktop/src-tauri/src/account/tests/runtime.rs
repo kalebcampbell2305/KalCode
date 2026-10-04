@@ -2557,20 +2557,21 @@ fn free_memory_keeps_local_notes_and_instructions_without_provider_enrichment() 
     let account = metering_account(api, "free", None, false);
     let (_directory, core) = metering_core();
     let project = tempfile::tempdir().expect("project");
+    let instructions = "Architecture: SQLite stores project knowledge.";
+    std::fs::write(project.path().join("AGENTS.md"), instructions).expect("instruction file");
     let workspace = core.open_workspace(project.path()).expect("workspace");
     let memory = crate::unified_memory_commands::MemoryService::start(core.clone(), &account)
         .expect("basic memory");
-    assert!(
-        memory
-            .capture_now(
-                &workspace.id,
-                MemorySourceKind::Instructions,
-                Some("AGENTS.md"),
-                "Architecture: SQLite stores project knowledge.",
-            )
-            .expect("instructions")
-            > 0
-    );
+    // The background importer may already have captured this exact file; both paths must
+    // preserve the same basic memory, without requiring a duplicate insertion.
+    memory
+        .capture_now(
+            &workspace.id,
+            MemorySourceKind::Instructions,
+            Some("AGENTS.md"),
+            instructions,
+        )
+        .expect("instructions");
     assert!(
         memory
             .recall(&workspace.id, "SQLite")
