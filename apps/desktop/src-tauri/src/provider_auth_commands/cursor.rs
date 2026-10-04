@@ -104,10 +104,7 @@ impl ProviderRuntimeAuthority {
                 message: "Cursor's runtime is unavailable. Restart KalCode.".to_owned(),
             })?;
             let result = cursor::discover_models_guarded(&self.inner.source_env, Some(&guardian));
-            if result
-                .as_ref()
-                .is_err_and(|error| cursor_auth_failed(error))
-            {
+            if result.as_ref().is_err_and(cursor_auth_failed) {
                 self.cursor_signed_out(account_id)?;
             }
             result
