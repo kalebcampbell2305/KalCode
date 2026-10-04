@@ -106,7 +106,7 @@
   right: 30%;
   bottom: 0;
   height: 0.625rem;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   cursor: ns-resize;
   touch-action: none;
 }
@@ -118,7 +118,7 @@
   bottom: 0.1875rem;
   width: 2rem;
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--color-border-strong);
   opacity: 0;
   transform: translateX(-50%);

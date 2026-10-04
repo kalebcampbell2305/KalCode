@@ -186,7 +186,9 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                 ref={mainRef}
                 id="main"
                 className={styles.main}
-                tabIndex={-1}
+                // A scrolling page is a keyboard stop, so text-only pages (and any page at a large
+                // Text size) can be scrolled without a mouse. Code scrolls inside its terminals.
+                tabIndex={current === "code" ? -1 : 0}
                 aria-label={destinationMeta(current).label}
                 data-surface={current}
               >

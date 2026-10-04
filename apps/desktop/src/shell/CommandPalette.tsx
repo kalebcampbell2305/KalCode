@@ -2,12 +2,14 @@ import type { FileRef, ProviderAccount, SettingsPatch, SurfaceId, ThreadSummary 
 import { useToast } from "@kalcode/ui/components";
 import { Command } from "cmdk";
 import {
+  ALargeSmall,
   AudioLines,
   Bot,
   BroomSparkles,
   ChevronsDownUp,
   ClipboardCopy,
   Columns2,
+  Contrast,
   Equal,
   FileText,
   FolderGit2,
@@ -55,6 +57,7 @@ import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsAction
 import { requestRebind, useSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { accountKeywords, accountProviderName, matchAccounts, parseAccountCommand } from "./accountCommands.ts";
+import { nextTextSize, TEXT_SIZE_COMMAND } from "./appearance.ts";
 import styles from "./CommandPalette.module.css";
 import { FilePreview } from "./context/FilePreview.tsx";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
@@ -644,6 +647,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               onSelect={set({ density: settings.density === "compact" ? "comfortable" : "compact" })}
             >
               {settings.density === "compact" ? "Use comfortable density" : "Use compact density"}
+            </Item>
+            <Item
+              icon={<Contrast />}
+              onSelect={set({ contrast: settings.contrast === "more" ? "system" : "more" })}
+              keywords={["accessibility", "high contrast", "readability"]}
+            >
+              {settings.contrast === "more" ? "Use standard contrast" : "Use high contrast"}
+            </Item>
+            <Item
+              icon={<ALargeSmall />}
+              onSelect={set({ textSize: nextTextSize(settings.textSize) })}
+              keywords={["accessibility", "font", "zoom", "bigger", "smaller"]}
+            >
+              {TEXT_SIZE_COMMAND[nextTextSize(settings.textSize)]}
             </Item>
             <Item
               icon={<PanelLeft />}

@@ -3,7 +3,7 @@ import type { ITheme } from "@xterm/xterm";
 /**
  * Terminal palettes, derived from the design tokens (packages/ui/src/styles/tokens.css).
  *
- * Dark: Starlight text on the code background (#070C17), accents from Constellation, status
+ * Dark: Starlight text on the graphite code background (#0A0B0E), accents from Constellation, status
  * hues from the success / waiting / danger tokens, lifted for text on near-black.
  * Light: navy ink on the white surface, every hue darkened until it reads as text.
  *
@@ -39,31 +39,31 @@ export function invalidateMonoFontFamily(): void {
 
 export const TERMINAL_THEMES: Record<"dark" | "light", Required<Pick<ITheme, PaletteKey>> & ITheme> = {
   dark: {
-    background: "#070c17",
-    foreground: "#dfe7f3",
+    background: "#0a0b0e",
+    foreground: "#e3e7ee",
     cursor: "#8db6ff",
-    cursorAccent: "#070c17",
+    cursorAccent: "#0a0b0e",
     selectionBackground: "rgba(76, 141, 255, 0.32)",
-    selectionInactiveBackground: "rgba(142, 170, 220, 0.18)",
-    scrollbarSliderBackground: "rgba(142, 170, 220, 0.18)",
-    scrollbarSliderHoverBackground: "rgba(142, 170, 220, 0.3)",
-    scrollbarSliderActiveBackground: "rgba(142, 170, 220, 0.4)",
-    black: "#27324a",
+    selectionInactiveBackground: "rgba(180, 195, 225, 0.18)",
+    scrollbarSliderBackground: "rgba(180, 195, 225, 0.18)",
+    scrollbarSliderHoverBackground: "rgba(180, 195, 225, 0.3)",
+    scrollbarSliderActiveBackground: "rgba(180, 195, 225, 0.4)",
+    black: "#2b3039",
     red: "#f0707a",
     green: "#43cf93",
     yellow: "#efb84f",
     blue: "#5f9bff",
     magenta: "#c595f0",
     cyan: "#4ccbd9",
-    white: "#b9c4d6",
-    brightBlack: "#7d8aa1",
+    white: "#bcc3cf",
+    brightBlack: "#828b9b",
     brightRed: "#ff959d",
     brightGreen: "#74e3b0",
     brightYellow: "#ffd580",
     brightBlue: "#91b8ff",
     brightMagenta: "#dcb6ff",
     brightCyan: "#87e3ee",
-    brightWhite: "#f3f6fb",
+    brightWhite: "#f3f5f8",
   },
   light: {
     background: "#ffffff",

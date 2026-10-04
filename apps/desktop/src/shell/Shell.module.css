@@ -6,7 +6,12 @@
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
-  background: var(--app-backdrop), var(--color-bg);
+  /* The deep-space atmosphere: a faint star field over blue washes, visible in the gutters
+     between opaque panels (tokens.css turns it off in high contrast). */
+  background:
+    var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--atmosphere-glow),
+    var(--color-bg);
 }
 
 .shell {
@@ -89,6 +94,13 @@
   overflow-y: auto;
   scrollbar-gutter: stable;
   outline: none;
+}
+
+/* Keyboard focus on the page itself (Tab, or the skip link) is shown inside its edge. */
+.main:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+  border-radius: 0;
 }
 
 /* The Code surface fills the window and scrolls inside its terminals. */

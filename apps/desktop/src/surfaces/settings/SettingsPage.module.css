@@ -115,8 +115,11 @@
   padding: var(--space-2) 0;
 }
 
-/* The brand artwork keeps its own dark ground in both themes. */
+/* The brand artwork keeps its own dark ground in both themes, so its colours come from the
+   theme-invariant --brand-* tokens (as in the gated-surface hero), never theme surface/text tokens. */
 .about {
+  --about-ink: var(--brand-ink);
+  --about-blue: var(--brand-blue);
   position: relative;
   display: flex;
   align-items: center;
@@ -125,8 +128,10 @@
   padding: var(--space-5) var(--space-8);
   overflow: hidden;
   border-radius: 0 0 calc(var(--radius-panel) - 1px) calc(var(--radius-panel) - 1px);
-  background: radial-gradient(30rem 14rem at 12% 50%, rgb(76 141 255 / 0.16), transparent 70%), #000104;
-  color: #eef3fb;
+  background:
+    radial-gradient(30rem 14rem at 12% 50%, color-mix(in srgb, var(--about-blue) 16%, transparent), transparent 70%),
+    var(--brand-ground);
+  color: var(--about-ink);
 }
 
 .aboutMascot {
@@ -161,7 +166,7 @@
 
 .aboutMeta {
   margin-top: var(--space-2);
-  color: #9aa7bd;
+  color: color-mix(in srgb, var(--about-ink) 68%, transparent);
   font-family: var(--font-mono);
   font-size: var(--type-small);
 }

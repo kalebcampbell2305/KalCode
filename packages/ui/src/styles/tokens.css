@@ -2,15 +2,22 @@
  * KalCode design tokens.
  *
  * Palette (brand references: constellation globe on deep space):
- *   Space        #05080F  base background (dark)
- *   Hull         #0B1322  surfaces (dark)
- *   Constellation#4C8DFF  accent, focus, live state
- *   Starlight    #E6EDF8  primary text (dark)
- *   Nebula       #8593AB  secondary text (dark)
+ *   Graphite      #08090C  base background (dark): near-black, a faint cool cast, never navy
+ *   Hull          #0F1115  surfaces (dark): graphite steps, separated by hairlines and sheen
+ *   Constellation #4C8DFF  the one accent: focus, the active item, primary actions, live data
+ *   Starlight     #EEF1F6  primary text (dark)
+ *   Nebula        #959EAE  secondary text (dark)
+ * The deep-space atmosphere (--atmosphere-*) is a faint star field and blue glow behind major
+ * surfaces; panels are opaque on top of it, so it never lowers text contrast.
  * Light theme is designed separately: navy ink on cool paper, never an inversion.
  *
- * Theme is selected with [data-theme="light"|"dark"] on <html>; density with
- * [data-density="compact"]; motion with [data-motion="reduced"].
+ * Modes, all on <html>: [data-theme="light"|"dark"], [data-density="compact"],
+ * [data-motion="reduced"|"full"], [data-contrast="more"] (high contrast, designed per theme),
+ * [data-text-size="large"|"larger"] (scales the rem-based UI).
+ *
+ * Token families: color, surface/elevation, hairline, type roles, space, radius, motion, focus,
+ * status, chart, loading, empty, error, atmosphere. Components and surfaces use these only;
+ * apps/desktop/src/designTokens.test.ts fails on colour literals in UI stylesheets.
  *
  * Z7-W0 (premium direction) adds, without changing any existing value the website relies on:
  *   - type roles (--type-display/headline/title/body/ui/label/mono + weights/tracking);
@@ -150,6 +157,7 @@
   --z-sidebar: 20;
   --z-dropdown: 50; /* above the floating KalVoice layer (45), below dialogs */
   --z-overlay: 50;
+  --z-popover: 55; /* anchored popovers (usage center): above menus and floating layers */
   --z-dialog: 60;
   --z-palette: 70;
   --z-toast: 80;
@@ -170,6 +178,27 @@
   --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
   --dur-status: 900ms; /* one-shot highlight when a status changes (done, failed) */
   --dur-pulse: 2400ms; /* working breathe */
+  --dur-shimmer: 1600ms; /* loading sweep; removed with the other loops under reduced motion */
+
+  /* ---------- Focus: always visible on keyboard focus, never on pointer focus ---------- */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* ---------- Brand ground (theme-invariant) ----------
+     The brand artwork (KalVoice and gated-surface heroes, Settings → About) keeps its own
+     deep-space ground in every theme, so its colours never flip with light/dark. Text >= 7:1. */
+  --brand-ground: #000104;
+  --brand-ink: #eef3fb;
+  --brand-ink-2: #b4c1d6;
+  --brand-ink-3: #8d9bb3;
+  --brand-blue: #4c8dff;
+  --brand-icy: #a9c8ff;
+  --brand-line: rgb(142 170 220 / 0.16);
+  --brand-lit: rgb(92 150 255 / 0.55);
+
+  /* ---------- Radius roles ---------- */
+  --radius-card: var(--radius-lg); /* 10: cards, wells, framed states, menus */
+  --radius-floating: var(--radius-xl); /* 14: dialogs and the command palette */
 
   color-scheme: dark;
 }
@@ -177,24 +206,24 @@
 /* ---------- Dark theme (default) ---------- */
 :root,
 [data-theme="dark"] {
-  --color-bg: #05080f; /* Space */
-  --color-bg-sunken: #03050b;
-  --color-surface: #0b1322; /* Hull */
-  --color-surface-raised: #101a2d;
-  --color-surface-overlay: #121d33;
-  --color-surface-hover: rgb(120 160 230 / 0.07);
-  --color-surface-active: rgb(120 160 230 / 0.12);
+  --color-bg: #08090c; /* Graphite */
+  --color-bg-sunken: #050608;
+  --color-surface: #0f1115; /* Hull */
+  --color-surface-raised: #14171c;
+  --color-surface-overlay: #181b21;
+  --color-surface-hover: rgb(200 210 235 / 0.06);
+  --color-surface-active: rgb(200 210 235 / 0.1);
   --color-surface-selected: rgb(76 141 255 / 0.14);
 
-  --color-border: rgb(142 170 220 / 0.12);
-  --color-border-strong: rgb(142 170 220 / 0.22);
+  --color-border: rgb(180 195 225 / 0.11);
+  --color-border-strong: rgb(180 195 225 / 0.2);
   --color-border-focus: #4c8dff;
 
-  --color-text: #e6edf8; /* Starlight */
-  --color-text-secondary: #a8b4c9;
-  --color-text-muted: #8593ab; /* Nebula */
-  --color-text-faint: #7a879e; /* ≥4.6:1 on every dark surface */
-  --color-text-inverse: #05080f;
+  --color-text: #eef1f6; /* Starlight */
+  --color-text-secondary: #b4bccb;
+  --color-text-muted: #959eae; /* Nebula */
+  --color-text-faint: #8a93a3; /* ≥4.8:1 on every dark surface, hover included */
+  --color-text-inverse: #08090c;
 
   --color-accent: #4c8dff; /* Constellation */
   --color-accent-hover: #6aa1ff;
@@ -214,33 +243,35 @@
   --color-danger: #ef5f6b;
   --color-danger-soft: rgb(239 95 107 / 0.13);
   --color-danger-text: #ff8a93;
-  --color-idle: #8593ab;
-  --color-idle-soft: rgb(133 147 171 / 0.14);
+  --color-idle: #8a93a3;
+  --color-idle-soft: rgb(138 147 163 / 0.14);
 
-  --color-code-bg: #070c17;
-  --color-scrim: rgb(2 4 9 / 0.66);
+  --color-code-bg: #0a0b0e;
+  --color-scrim: rgb(3 4 6 / 0.68);
 
   --shadow-sm: 0 1px 0 rgb(0 0 0 / 0.4);
   --shadow-md: 0 8px 24px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--color-border);
   --shadow-lg: 0 24px 64px -16px rgb(0 0 0 / 0.75), 0 0 0 1px var(--color-border-strong);
-  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
+  --focus-ring-color: var(--color-border-focus);
+  --shadow-focus:
+    0 0 0 var(--focus-ring-offset) var(--color-bg),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width)) var(--focus-ring-color);
 
   /* ---- Z7-W0: elevation, lit hairlines, panels ---- */
   /* Surface steps: bg (0) < surface-1 panel < surface-2 panel header/input well < surface-3 popover.
      Every text token keeps >= 4.5:1 on all of them. */
-  --color-surface-1: #09101d;
-  --color-surface-2: #0d1627;
-  --color-surface-3: #111c31;
-  --color-border-subtle: rgb(142 170 220 / 0.08);
+  --color-surface-1: #0c0e12;
+  --color-surface-2: #111318;
+  --color-surface-3: #16191f;
+  --color-border-subtle: rgb(180 195 225 / 0.07);
   /* Blue-lit hairlines: focused / active / selected surfaces only. Used sparingly. */
   --color-border-lit: rgb(92 150 255 / 0.55);
   --color-border-lit-soft: rgb(92 150 255 / 0.26);
   --color-accent-icy: #a9c8ff;
-  --panel-sheen: linear-gradient(180deg, rgb(140 175 240 / 0.045) 0%, rgb(140 175 240 / 0) 3.5rem);
-  --app-backdrop:
-    radial-gradient(90rem 40rem at 78% -18%, rgb(76 141 255 / 0.075), transparent 62%),
-    radial-gradient(60rem 30rem at -10% 110%, rgb(76 141 255 / 0.035), transparent 60%);
-  --shadow-panel: inset 0 1px 0 rgb(200 220 255 / 0.035), 0 1px 0 rgb(0 0 0 / 0.45), 0 18px 40px -26px rgb(0 0 0 / 0.9);
+  --panel-sheen: linear-gradient(180deg, rgb(210 222 250 / 0.04) 0%, rgb(210 222 250 / 0) 3.5rem);
+  /* The blue washes of the atmosphere, for surfaces that paint their own backdrop. */
+  --app-backdrop: var(--atmosphere-glow);
+  --shadow-panel: inset 0 1px 0 rgb(220 230 255 / 0.035), 0 1px 0 rgb(0 0 0 / 0.5), 0 18px 40px -26px rgb(0 0 0 / 0.95);
   --shadow-lit: 0 0 0 1px var(--color-border-lit-soft), 0 0 28px -10px rgb(76 141 255 / 0.4);
   --shadow-xl: 0 32px 80px -24px rgb(0 0 0 / 0.85), 0 0 0 1px var(--color-border-strong);
   --shadow-well: inset 0 1px 2px rgb(0 0 0 / 0.45);
@@ -264,10 +295,10 @@
   --status-waiting-soft: rgb(242 181 68 / 0.12);
   --status-waiting-text: #f6c566;
   --status-waiting-line: rgb(242 181 68 / 0.4);
-  --status-muted: #8593ab;
-  --status-muted-soft: rgb(133 147 171 / 0.12);
-  --status-muted-text: #a8b4c9;
-  --status-muted-line: rgb(133 147 171 / 0.28);
+  --status-muted: #8a93a3;
+  --status-muted-soft: rgb(138 147 163 / 0.12);
+  --status-muted-text: #b4bccb;
+  --status-muted-line: rgb(138 147 163 / 0.28);
   --status-done: #eef3fb;
   --status-done-soft: rgb(238 243 251 / 0.08);
   --status-done-text: #f3f6fb;
@@ -284,6 +315,40 @@
   --status-recovering-soft: rgb(95 155 255 / 0.13);
   --status-recovering-text: #8db6ff;
   --status-recovering-line: rgb(95 155 255 / 0.42);
+
+  /* Charts. Series 1 is the accent; the rest differ in hue and lightness and never carry status
+     on their own (a legend or label always names a series). */
+  --chart-1: #4c8dff;
+  --chart-2: #3ccf8e;
+  --chart-3: #a98bff;
+  --chart-4: #f2b544;
+  --chart-5: #4ccbd9;
+  --chart-grid: rgb(180 195 225 / 0.08);
+  --chart-track: rgb(180 195 225 / 0.1);
+  --chart-axis: var(--color-text-faint);
+  --chart-area: linear-gradient(180deg, rgb(76 141 255 / 0.26), rgb(76 141 255 / 0));
+
+  /* Loading: skeletons sit on the surface they replace and sweep once per --dur-shimmer. */
+  --skeleton-base: rgb(180 195 225 / 0.07);
+  --skeleton-highlight: rgb(200 215 245 / 0.07);
+
+  /* Empty and error states: designed wells, never a blank area. */
+  --empty-well-bg: var(--color-bg-sunken);
+  --empty-well-border: var(--color-border);
+  --error-surface: var(--status-failed-soft);
+  --error-line: var(--status-failed-line);
+  --error-text: var(--status-failed-text);
+
+  /* The chevron every native single select wears (base.css), in --color-text-muted. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23959eae' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Deep-space atmosphere behind major surfaces: a faint star field over two blue washes.
+     Panels are opaque on top; high contrast turns it off. */
+  --atmosphere-stars: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='360'%3E%3Cg fill='%23dfe8ff'%3E%3Ccircle cx='23' cy='41' r='0.7' opacity='0.55'/%3E%3Ccircle cx='97' cy='13' r='0.5' opacity='0.35'/%3E%3Ccircle cx='151' cy='77' r='0.8' opacity='0.5'/%3E%3Ccircle cx='211' cy='29' r='0.5' opacity='0.3'/%3E%3Ccircle cx='289' cy='61' r='0.6' opacity='0.45'/%3E%3Ccircle cx='337' cy='117' r='0.5' opacity='0.3'/%3E%3Ccircle cx='61' cy='131' r='0.5' opacity='0.35'/%3E%3Ccircle cx='127' cy='181' r='0.6' opacity='0.4'/%3E%3Ccircle cx='247' cy='149' r='0.9' opacity='0.55'/%3E%3Ccircle cx='313' cy='211' r='0.5' opacity='0.3'/%3E%3Ccircle cx='19' cy='227' r='0.6' opacity='0.4'/%3E%3Ccircle cx='181' cy='247' r='0.5' opacity='0.3'/%3E%3Ccircle cx='89' cy='283' r='0.8' opacity='0.5'/%3E%3Ccircle cx='229' cy='311' r='0.5' opacity='0.35'/%3E%3Ccircle cx='331' cy='293' r='0.7' opacity='0.45'/%3E%3Ccircle cx='151' cy='343' r='0.5' opacity='0.3'/%3E%3Ccircle cx='271' cy='241' r='0.4' opacity='0.3'/%3E%3Ccircle cx='47' cy='331' r='0.4' opacity='0.3'/%3E%3C/g%3E%3C/svg%3E");
+  --atmosphere-stars-size: 360px 360px;
+  --atmosphere-glow:
+    radial-gradient(80rem 36rem at 82% -16%, rgb(76 141 255 / 0.085), transparent 62%),
+    radial-gradient(56rem 30rem at -8% 112%, rgb(76 141 255 / 0.04), transparent 60%);
 
   color-scheme: dark;
 }
@@ -335,7 +400,10 @@
   --shadow-sm: 0 1px 2px rgb(16 32 64 / 0.06);
   --shadow-md: 0 8px 24px -10px rgb(16 32 64 / 0.22), 0 0 0 1px var(--color-border);
   --shadow-lg: 0 24px 60px -18px rgb(16 32 64 / 0.3), 0 0 0 1px var(--color-border);
-  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
+  --focus-ring-color: var(--color-border-focus);
+  --shadow-focus:
+    0 0 0 var(--focus-ring-offset) var(--color-bg),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width)) var(--focus-ring-color);
 
   --color-surface-1: #ffffff;
   --color-surface-2: #f7f9fc;
@@ -345,9 +413,7 @@
   --color-border-lit-soft: rgb(29 91 224 / 0.22);
   --color-accent-icy: #1a52cb;
   --panel-sheen: linear-gradient(180deg, rgb(29 91 224 / 0.022) 0%, rgb(29 91 224 / 0) 3.5rem);
-  --app-backdrop:
-    radial-gradient(90rem 40rem at 78% -18%, rgb(29 91 224 / 0.05), transparent 62%),
-    radial-gradient(60rem 30rem at -10% 110%, rgb(29 91 224 / 0.025), transparent 60%);
+  --app-backdrop: var(--atmosphere-glow);
   --shadow-panel: 0 1px 2px rgb(16 32 64 / 0.05), 0 10px 28px -20px rgb(16 32 64 / 0.22);
   --shadow-lit: 0 0 0 1px var(--color-border-lit-soft), 0 8px 22px -12px rgb(29 91 224 / 0.32);
   --shadow-xl: 0 28px 70px -24px rgb(16 32 64 / 0.35), 0 0 0 1px var(--color-border);
@@ -389,7 +455,125 @@
   --status-recovering-text: #1a52cb;
   --status-recovering-line: rgb(29 91 224 / 0.36);
 
+  --chart-1: #1d5be0;
+  --chart-2: #0b7a51;
+  --chart-3: #6b4fd8;
+  --chart-4: #a86a00;
+  --chart-5: #087a8c;
+  --chart-grid: rgb(16 32 64 / 0.08);
+  --chart-track: rgb(16 32 64 / 0.08);
+  --chart-axis: var(--color-text-faint);
+  --chart-area: linear-gradient(180deg, rgb(29 91 224 / 0.16), rgb(29 91 224 / 0));
+
+  --skeleton-base: rgb(16 32 64 / 0.06);
+  --skeleton-highlight: rgb(255 255 255 / 0.7);
+
+  --empty-well-bg: var(--color-bg-sunken);
+  --empty-well-border: var(--color-border);
+  --error-surface: var(--status-failed-soft);
+  --error-line: var(--status-failed-line);
+  --error-text: var(--status-failed-text);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235b6880' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Light keeps the blue wash only: a star field belongs to the dark sky. */
+  --atmosphere-stars: none;
+  --atmosphere-stars-size: auto;
+  --atmosphere-glow:
+    radial-gradient(80rem 36rem at 82% -16%, rgb(29 91 224 / 0.05), transparent 62%),
+    radial-gradient(56rem 30rem at -8% 112%, rgb(29 91 224 / 0.025), transparent 60%);
+
   color-scheme: light;
+}
+
+/* ---------- High contrast (designed per theme, never an automatic inversion) ----------
+   Raises text (>= 7:1, AAA), hairline and focus contrast, strengthens selection and lit states,
+   and removes decoration: sheen, glow and the atmosphere. The app resolves "System" contrast to
+   this mode when the OS asks for more contrast. */
+:root:not([data-theme="light"])[data-contrast="more"] {
+  --color-bg: #000000;
+  --color-bg-sunken: #000000;
+  --color-surface: #0b0c0f;
+  --color-surface-raised: #101216;
+  --color-surface-overlay: #14161b;
+  --color-surface-1: #08090b;
+  --color-surface-2: #0d0f12;
+  --color-surface-3: #121418;
+  --color-surface-hover: rgb(210 222 245 / 0.12);
+  --color-surface-active: rgb(210 222 245 / 0.18);
+  --color-surface-selected: rgb(76 141 255 / 0.26);
+
+  --color-border-subtle: rgb(215 225 245 / 0.26);
+  --color-border: rgb(215 225 245 / 0.38);
+  --color-border-strong: rgb(215 225 245 / 0.6);
+  --color-border-lit: rgb(141 182 255 / 0.95);
+  --color-border-lit-soft: rgb(141 182 255 / 0.7);
+  --color-border-focus: #a9c8ff;
+
+  --color-text: #ffffff;
+  --color-text-secondary: #dde2ea;
+  --color-text-muted: #c5ccd8;
+  --color-text-faint: #b6bfcc;
+  --color-accent-text: #a9c8ff;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23dde2ea' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --focus-ring-width: 3px;
+  --panel-sheen: linear-gradient(transparent, transparent);
+  --color-glow: transparent;
+  --shadow-panel: 0 0 0 1px var(--color-border);
+  --shadow-lit: 0 0 0 2px var(--color-border-lit);
+  --btn-primary-edge: rgb(255 255 255 / 0.7);
+  --btn-primary-glow: transparent;
+  --chart-grid: rgb(215 225 245 / 0.22);
+  --chart-track: rgb(215 225 245 / 0.26);
+  --skeleton-base: rgb(215 225 245 / 0.16);
+  --skeleton-highlight: rgb(215 225 245 / 0.12);
+  --atmosphere-stars: none;
+  --atmosphere-glow: linear-gradient(transparent, transparent);
+}
+
+:root[data-theme="light"][data-contrast="more"] {
+  --color-bg: #ffffff;
+  --color-bg-sunken: #eef1f6;
+  --color-surface-2: #f3f5f9;
+  --color-surface-hover: rgb(10 20 40 / 0.08);
+  --color-surface-active: rgb(10 20 40 / 0.13);
+  --color-surface-selected: rgb(29 91 224 / 0.16);
+
+  --color-border-subtle: rgb(10 20 40 / 0.24);
+  --color-border: rgb(10 20 40 / 0.38);
+  --color-border-strong: rgb(10 20 40 / 0.62);
+  --color-border-lit: rgb(19 67 168 / 0.95);
+  --color-border-lit-soft: rgb(19 67 168 / 0.7);
+  --color-border-focus: #0b3fb3;
+
+  --color-text: #000000;
+  --color-text-secondary: #141c2b;
+  --color-text-muted: #1f2a3d;
+  --color-text-faint: #27334a;
+  --color-accent-text: #1343a8;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23141c2b' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --focus-ring-width: 3px;
+  --panel-sheen: linear-gradient(transparent, transparent);
+  --color-glow: transparent;
+  --shadow-panel: 0 0 0 1px var(--color-border);
+  --shadow-lit: 0 0 0 2px var(--color-border-lit);
+  --btn-primary-glow: transparent;
+  --chart-grid: rgb(10 20 40 / 0.2);
+  --chart-track: rgb(10 20 40 / 0.2);
+  --skeleton-base: rgb(10 20 40 / 0.12);
+  --atmosphere-stars: none;
+  --atmosphere-glow: linear-gradient(transparent, transparent);
+}
+
+/* ---------- Text size: the UI is rem-based, so the root size scales it proportionally ---------- */
+:root[data-text-size="large"] {
+  font-size: 112.5%;
+}
+
+:root[data-text-size="larger"] {
+  font-size: 125%;
 }
 
 /* ---------- Density ---------- */
@@ -410,6 +594,7 @@
 
 /* ---------- Motion ---------- */
 [data-motion="reduced"] {
+  --dur-shimmer: 0ms;
   --dur-status: 0ms;
   --dur-instant: 0ms;
   --dur-fast: 0ms;
@@ -420,6 +605,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) {
+    --dur-shimmer: 0ms;
     --dur-status: 0ms;
     --dur-instant: 0ms;
     --dur-fast: 0ms;
