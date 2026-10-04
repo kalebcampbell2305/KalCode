@@ -1,0 +1,29 @@
+[package]
+name = "kalcode-integrations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kalcode-secure-store = { path = "../secure-store" }
+kalcode-native-core = { path = "../native-core" }
+base64 = "0.22"
+sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rusqlite.workspace = true
+uuid.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["net", "time", "rt", "macros"] }
+url = "2"
+jsonschema = { version = "0.33", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true
+kalcode-secure-store = { path = "../secure-store", features = ["test-support"] }
+
+[lints]
+workspace = true

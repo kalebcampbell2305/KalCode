@@ -13,6 +13,7 @@ import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
 import { viewVisible } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
 import { DoctorSettings } from "../doctor/DoctorSettings.tsx";
+import { IntegrationSettings } from "../integrations/IntegrationSettings.tsx";
 import { PermissionsSettings } from "../permissions/index.ts";
 import { ResourceGovernorSettingsGate } from "../resources/ResourceGovernorSettingsGate.tsx";
 import { ProfileSettings } from "./ProfileSettings.tsx";
@@ -33,6 +34,7 @@ export function SettingsPage() {
   const homeVisible = viewVisible("home", info.flags.features);
   return (
     <Page title="Settings" description="Changes apply immediately and are saved on this device.">
+      <IntegrationSettings />
       {/* One column up to wide windows; then permissions get a column of their own. */}
       <div className={styles.layout}>
         <div className={styles.column}>

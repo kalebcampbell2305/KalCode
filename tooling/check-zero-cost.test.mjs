@@ -32,6 +32,15 @@ function scan(source, extension = "rs", fileOverride) {
 const forbidden = 'fn production() { let _ = "api.openai.com"; }';
 const testModule = '#[cfg(test)]\nmod tests {\n  fn fixture() { let _ = "OPENAI_API_KEY"; }\n}';
 
+test("user-funded integration endpoint exception cannot enable company keys or other callers", () => {
+  const file = "crates/integration-openai/src/lib.rs";
+  const endpoint = 'const ENDPOINT: &str = "https://api.openai.com/v1/responses";';
+  assert.equal(scan(endpoint, "rs", file).status, 0);
+  assert.equal(scan(endpoint).status, 1);
+  assert.equal(scan(`${endpoint}\nstd::env::var("OPENAI_API_KEY");`, "rs", file).status, 1);
+  assert.equal(scan(`${endpoint} read_company_key("OPENAI_API_KEY");`, "rs", file).status, 1);
+});
+
 test("a whole module explicitly compiled only for tests may contain credential fixtures", () => {
   const result = scan('#![cfg(test)]\nfn fixture() { let _ = "OPENAI_API_KEY"; }');
   assert.equal(result.status, 0, result.stderr);

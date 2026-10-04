@@ -257,7 +257,11 @@ impl ProviderPanesState {
 
     /// Starts the bridge when the feature is visible for this build, and registers the
     /// interactive provider for [`PaneRoutes::route_claude`]. Must run before threads start.
-    pub fn start(app: &AppState, runtime: Option<ProviderRuntimeAuthority>) -> Self {
+    pub fn start(
+        app: &AppState,
+        runtime: Option<ProviderRuntimeAuthority>,
+        integrations: Option<Arc<crate::integration_bridge::IntegrationBridge>>,
+    ) -> Self {
         let panes = Arc::new(PaneRegistry::new());
         let glue = Arc::new(Glue::default());
         let disabled = |reason| Self {
@@ -312,19 +316,22 @@ impl ProviderPanesState {
             limits: SessionLimits::default(),
         };
         let codex_runtime = runtime.clone();
-        let codex = Some(Arc::new(
-            InteractiveCliProvider::new(
-                PaneCli::Codex,
-                DetectEnv::from_process(),
-                Some(bridge.clone()),
-                cli_config.clone(),
-                panes.clone(),
-            )
-            .with_managed_profiles(runtime.managed_profiles())
-            .with_codex_cloud_config_resolver(move |account_id| {
-                codex_runtime.codex_cloud_config(account_id)
-            }),
-        ));
+        let mut codex_provider = InteractiveCliProvider::new(
+            PaneCli::Codex,
+            DetectEnv::from_process(),
+            Some(bridge.clone()),
+            cli_config.clone(),
+            panes.clone(),
+        )
+        .with_managed_profiles(runtime.managed_profiles())
+        .with_codex_cloud_config_resolver(move |account_id| {
+            codex_runtime.codex_cloud_config(account_id)
+        });
+        if let Some(integrations) = integrations.clone() {
+            codex_provider = codex_provider
+                .with_integrations(Arc::new(move |config| integrations.connect(config)));
+        }
+        let codex = Some(Arc::new(codex_provider));
         let gemini = Some(Arc::new(
             InteractiveCliProvider::new(
                 PaneCli::Gemini,
@@ -335,7 +342,7 @@ impl ProviderPanesState {
             )
             .with_managed_profiles(runtime.managed_profiles()),
         ));
-        let provider = InteractiveClaudeProvider::new(
+        let mut provider = InteractiveClaudeProvider::new(
             DetectEnv::from_process(),
             bridge.clone(),
             InteractiveConfig {
@@ -350,6 +357,10 @@ impl ProviderPanesState {
         .with_managed_profiles(runtime.managed_profiles())
         .with_expiry(glue.clone())
         .with_titles(glue.clone());
+        if let Some(integrations) = integrations {
+            provider =
+                provider.with_integrations(Arc::new(move |config| integrations.connect(config)));
+        }
         let routes = PaneRoutes {
             claude: Some(Arc::new(provider)),
             codex,
