@@ -127,3 +127,29 @@ it("does not suggest a launch for unmanaged, archived or custom-permission sessi
   for (const overrides of [{ providerAccountId: null }, { archivedAt: "today" }, { permissionMode: "custom" }])
     expect(suggest(undefined, undefined, { ...thread, ...overrides } as ThreadSummary)).toBeNull();
 });
+
+it("uses a structured native turn failure without fabricating quota or carrying it into a resumed turn", () => {
+  const failed = {
+    ...thread,
+    status: "idle",
+    currentActivity: "Last turn failed",
+    error: { code: "provider_rate_limit", message: "provider output" },
+  } as ThreadSummary;
+  const result = suggest(undefined, [], failed);
+  expect(result?.reason).toBe("A reached a provider-reported limit.");
+  expect(result?.reason).not.toContain("%");
+  expect(suggest(undefined, [], { ...failed, status: "active" })).toBeNull();
+  expect(suggest(undefined, [], { ...failed, currentActivity: null })).toBeNull();
+  expect(suggest(undefined, [], { ...failed, error: { code: "unrelated", message: "rate limit" } })).toBeNull();
+});
+
+it.each([
+  ["provider_authentication_failed", "sign-in"],
+  ["provider_oauth_org_not_allowed", "sign-in"],
+  ["provider_billing_error", "billing"],
+  ["provider_account_on_hold", "billing"],
+])("recognizes structured %s with no numeric usage", (code, condition) => {
+  expect(suggest(undefined, [], { ...thread, status: "failed", error: { code, message: "failure" } })?.condition).toBe(
+    condition,
+  );
+});

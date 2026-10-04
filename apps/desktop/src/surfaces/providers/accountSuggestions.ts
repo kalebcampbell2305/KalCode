@@ -36,6 +36,7 @@ export interface SuggestedAccount {
 }
 
 export interface AccountSuggestion {
+  condition: "missing" | "sign-in" | "connection" | "low" | "provider-limit" | "billing";
   reason: string;
   alternatives: SuggestedAccount[];
 }
@@ -52,15 +53,40 @@ export function suggestAccounts(
   if (!thread.providerAccountId || thread.archivedAt !== null || thread.permissionMode === "custom") return null;
   const current = accounts.find((account) => account.id === thread.providerAccountId);
   const window = currentWindow(usageForAccount(usage, thread.providerAccountId), thread.model, now);
+  // A native provider can report a failed turn without exposing numeric quota. Do not infer
+  // account limits from prose or retain a previous turn's failure after work has resumed.
+  const failure =
+    thread.status === "failed" || (thread.status === "idle" && thread.currentActivity === "Last turn failed")
+      ? thread.error?.code
+      : null;
   let reason: string;
-  if (!current || current.archivedAt !== null) reason = "This session's account is no longer available.";
-  else if (current.providerId !== thread.providerId) return null;
-  else if (current.authenticationState === "not_authenticated") reason = `${accountName(current)} needs sign-in.`;
-  else if (current.lastErrorCode || validationErrors.has(current.id))
+  let condition: AccountSuggestion["condition"];
+  if (!current || current.archivedAt !== null) {
+    condition = "missing";
+    reason = "This session's account is no longer available.";
+  } else if (current.providerId !== thread.providerId) return null;
+  else if (current.authenticationState === "not_authenticated") {
+    condition = "sign-in";
+    reason = `${accountName(current)} needs sign-in.`;
+  } else if (current.lastErrorCode || validationErrors.has(current.id)) {
+    condition = "connection";
     reason = `${accountName(current)} has an account connection error.`;
-  else if (window && window.remainingPercent < LOW_USAGE_PERCENT)
+  } else if (failure === "provider_authentication_failed" || failure === "provider_oauth_org_not_allowed") {
+    condition = "sign-in";
+    reason = `${accountName(current)} could not authenticate this session.`;
+  } else if (failure === "provider_billing_error" || failure === "provider_account_on_hold") {
+    condition = "billing";
+    reason = `${accountName(current)} has a provider-reported billing or account hold.`;
+  } else if (
+    failure === "provider_rate_limit" ||
+    (thread.providerId === "gemini-cli" && (failure === "rate_limited" || failure === "quota_exhausted"))
+  ) {
+    condition = "provider-limit";
+    reason = `${accountName(current)} reached a provider-reported limit.`;
+  } else if (window && window.remainingPercent < LOW_USAGE_PERCENT) {
+    condition = "low";
     reason = `${accountName(current)} has ${Math.round(window.remainingPercent)}% left in its ${window.label.toLowerCase()} limit.`;
-  else return null;
+  } else return null;
 
   const alternatives: SuggestedAccount[] = [];
   for (const account of accounts) {
@@ -97,5 +123,5 @@ export function suggestAccounts(
       a.account.displayName.localeCompare(b.account.displayName, undefined, { numeric: true, sensitivity: "base" }) ||
       a.account.id.localeCompare(b.account.id),
   );
-  return { reason, alternatives };
+  return { condition, reason, alternatives };
 }

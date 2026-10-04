@@ -65,13 +65,18 @@ it("offers advice without launching, previews on click, and starts only on expli
   expect(state.setDefault).not.toHaveBeenCalled();
 });
 
-it("can be dismissed and does not make claims from a failed registry refresh", async () => {
+it("dismisses the current condition but surfaces a different account failure", async () => {
   const onContinue = vi.fn();
   const user = userEvent.setup();
   const { rerender } = render(<PaneAccountSuggestion thread={thread} account={null} onContinue={onContinue} />);
   await user.click(screen.getByRole("button", { name: "Dismiss account suggestion" }));
   expect(screen.queryByRole("complementary", { name: "Account suggestion" })).not.toBeInTheDocument();
   rerender(<PaneAccountSuggestion thread={thread} account={null} onContinue={onContinue} />);
+  expect(onContinue).not.toHaveBeenCalled();
+  expect(screen.queryByRole("complementary", { name: "Account suggestion" })).not.toBeInTheDocument();
+  state.accounts = [{ ...account("a"), lastErrorCode: "connection_failed" }, account("b")];
+  rerender(<PaneAccountSuggestion thread={thread} account={null} onContinue={onContinue} />);
+  expect(screen.getByText("A has an account connection error.")).toBeVisible();
   expect(onContinue).not.toHaveBeenCalled();
 });
 

@@ -10,13 +10,13 @@ import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPic
 /** Inline advice never steals focus, launches an agent, or changes an account preference. */
 export function PaneAccountSuggestion(props: PaneAccountPickerProps) {
   const sessions = useOptionalProviderAccountSessions();
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState<string | null>(null);
   const [, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
-  if (dismissed || !sessions?.accounts || sessions.loadError) return null;
+  if (!sessions?.accounts || sessions.loadError) return null;
   const suggestion = suggestAccounts(
     props.thread,
     sessions.accounts,
@@ -26,6 +26,8 @@ export function PaneAccountSuggestion(props: PaneAccountPickerProps) {
     Date.now(),
   );
   if (!suggestion) return null;
+  const conditionKey = `${props.thread.providerAccountId}:${suggestion.condition}`;
+  if (dismissed === conditionKey) return null;
   const best = suggestion.alternatives[0];
   return (
     <aside className={styles.suggestion} aria-label="Account suggestion">
@@ -52,7 +54,12 @@ export function PaneAccountSuggestion(props: PaneAccountPickerProps) {
           label: best ? `Continue with ${accountName(best.account)}?` : "Review accounts",
         }}
       />
-      <IconButton label="Dismiss account suggestion" icon={<X />} size="sm" onClick={() => setDismissed(true)} />
+      <IconButton
+        label="Dismiss account suggestion"
+        icon={<X />}
+        size="sm"
+        onClick={() => setDismissed(conditionKey)}
+      />
     </aside>
   );
 }

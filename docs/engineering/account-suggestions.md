@@ -6,6 +6,10 @@ usage window. It reads the shared account registry and usage state. Unknown, sta
 malformed, or mismatched account readings never imply a limit. Model-specific Claude windows
 apply only to the agent's selected model.
 
+A structured provider rate-limit, authentication, billing, or account-hold failure on the
+current failed turn can also trigger advice without numeric usage. Raw terminal text is never
+parsed for a quota. Previous turn failures stop triggering advice once the agent resumes.
+
 Alternatives must be active, signed-in accounts of the same provider, without a reported
 connection error or an in-progress check. Accounts with known low quota are excluded. Known
 headroom ranks before unavailable usage; the user's explicit default follows, then account
