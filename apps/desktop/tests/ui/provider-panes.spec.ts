@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
@@ -144,6 +145,53 @@ test.describe("provider panes", () => {
     await typeInPane(page, "say Status: FAILED. PERMISSION REQUIRED.");
     await expect(paneText(page)).toContainText("Status: FAILED. PERMISSION REQUIRED.");
     await expect(status(page)).toHaveText("IDLE");
+
+    // The supported minimum pane width must keep account usage, the risky permission mode and
+    // runtime status readable together. Check actual rendered boxes, including both themes.
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Code", exact: true })
+        .click();
+      for (const width of [320, 360, 480, 800]) {
+        await region.evaluate((element, size) => {
+          element.style.width = `${size}px`;
+          element.style.maxWidth = `${size}px`;
+        }, width);
+        const chips = region.locator("[data-pane-account], [data-pane-usage], [data-pane-mode], [data-pane-status]");
+        await expect(chips).toHaveCount(4);
+        for (const chip of await chips.all()) await expect(chip).toBeVisible();
+        await expect
+          .poll(() =>
+            region.evaluate((element) => {
+              const header = element.querySelector("header")?.getBoundingClientRect();
+              if (!header) throw new Error("The provider pane header is missing.");
+              const boxes = Array.from(
+                element.querySelectorAll(
+                  "[data-pane-account], [data-pane-usage], [data-pane-mode], [data-pane-status]",
+                ),
+                (chip) => chip.getBoundingClientRect(),
+              );
+              const outside = boxes.some((box) => box.left < header.left - 1 || box.right > header.right + 1);
+              const overlaps = boxes.some((box, index) =>
+                boxes
+                  .slice(index + 1)
+                  .some(
+                    (other) =>
+                      Math.min(box.right, other.right) - Math.max(box.left, other.left) > 1 &&
+                      Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 1,
+                  ),
+              );
+              return { outside, overlaps };
+            }),
+          )
+          .toEqual({ outside: false, overlaps: false });
+        if (width === 320 || width === 800) {
+          await region.screenshot({ path: fileURLToPath(new URL(`provider-header-${theme}-${width}.png`, OUT)) });
+        }
+      }
+    }
   });
 
   test("a KalCode approval holds the tool call on the pane until the person answers", async ({ page }) => {
