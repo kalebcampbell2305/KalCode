@@ -418,9 +418,9 @@ test("tooling profiles account exactly for Windows-only signer and workflow exec
   assert.equal(selectProfile(tooling, "win32", {}).skippedMaximum, 0);
   for (const platform of ["darwin", "linux"]) {
     const profile = selectProfile(tooling, platform, {});
-    const result = { executed: profile.minimumExecuted, failed: 0, skipped: 2, flaky: 0, skipReasons: [] };
+    const result = { executed: profile.minimumExecuted, failed: 0, skipped: 11, flaky: 0, skipReasons: [] };
     assert.doesNotThrow(() => validateSuiteResult(tooling, profile, result));
-    for (const skipped of [1, 3]) {
+    for (const skipped of [10, 12]) {
       assert.throws(() => validateSuiteResult(tooling, profile, { ...result, skipped }), /reviewed bounds/);
     }
   }

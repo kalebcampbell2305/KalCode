@@ -39,6 +39,11 @@ jobs:
   verify:
     name: Desktop update (kalcode-qa)
     if: github.ref == 'refs/heads/main'
+    # GitHub exposes draft releases only to tokens with push access, even for reads.
+    # This trusted-main job uses only release metadata/download APIs; checkout never
+    # persists credentials and the script clears GH_TOKEN before launching KalCode.
+    permissions:
+      contents: write
     runs-on: [self-hosted, Windows, kalcode-desktop-qa]
     timeout-minutes: 40
     steps:

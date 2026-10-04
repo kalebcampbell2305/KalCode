@@ -170,7 +170,7 @@ try {
   if ($ChangesData -and (-not $CandidateTag -or $LiveSchema -lt 1 -or $ExpectSchema -le $LiveSchema)) { Refuse 'migration proof requires a draft and increasing pinned live/candidate schemas' }
   if ($CandidateTag -and $LiveSchema -gt 0 -and $LiveSchema -ne $ExpectSchema -and -not $ChangesData) { Refuse 'schema changes require the restore guard proof' }
   if ($CandidateTag) {
-    if ($id.Name -cne 'KALEBSLAPTOP\kalcode-qa' -or $env:COMPUTERNAME -cne 'KALEBSLAPTOP') { Refuse 'package proof requires the exact dedicated laptop QA account' }
+    if ($id.Name -ine 'KALEBSLAPTOP\kalcode-qa' -or $env:COMPUTERNAME -ine 'KALEBSLAPTOP') { Refuse 'package proof requires the exact dedicated laptop QA account' }
     $profile = Get-CimInstance Win32_UserProfile -Filter ("SID = '" + $id.User.Value + "'")
     if ($profile.LocalPath -cne 'C:\Users\kalcode-qa' -or $env:USERPROFILE -cne $profile.LocalPath -or $env:APPDATA -cne ($profile.LocalPath + '\AppData\Roaming') -or $env:LOCALAPPDATA -cne ($profile.LocalPath + '\AppData\Local')) { Refuse 'package proof requires canonical SID-bound QA profile paths' }
     foreach ($path in $env:APPDATA, $env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs')) {

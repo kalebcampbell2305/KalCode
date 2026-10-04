@@ -81,6 +81,8 @@ test("migration proof requires exact schemas, rollback floor and preserves unsuc
   assert.match(source, /checks\.restoreGuard = \$true/u);
   assert.match(source, /\$ExpectSchema \$expectedLive/u);
   assert.match(entry, /KALEBSLAPTOP\\kalcode-qa/u);
+  assert.match(entry, /\$id\.Name -ine 'KALEBSLAPTOP\\kalcode-qa'/u);
+  assert.match(source, /finally \{ \$env:GH_TOKEN = \$workflowToken \}/u);
   assert.match(entry, /canonical SID-bound QA profile paths/u);
   assert.ok(entry.indexOf("QA profile is not clean") < entry.indexOf("$script:QaStateOwned = $true"));
   assert.match(entry, /if \(\$CandidateTag -and \$receipt\.status -ne 'PASS'\)/u);

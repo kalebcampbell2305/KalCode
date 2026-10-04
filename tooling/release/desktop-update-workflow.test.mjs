@@ -19,9 +19,12 @@ test("desktop update workflow runs only on the dedicated desktop QA runner from 
   assert.doesNotMatch(workflow, /^ {2}(push|pull_request|schedule):/mu, "dispatch only");
   assert.match(workflow, /permissions:\n {2}contents: read/u);
   assert.match(workflow, /persist-credentials: false/u);
+  assert.match(workflow, /permissions:\n {6}contents: write/u, "draft reads require job-scoped push access");
+  assert.match(script, /\$env:GH_TOKEN = \$null/u, "application must not inherit the draft-read token");
 });
 
 test("desktop update script checks account, session and owner PC before any action", () => {
+  assert.match(script, /\$id\.Name -ine 'KALEBSLAPTOP\\kalcode-qa'/u, "Windows identity matching is case-insensitive");
   const firstAction = script.indexOf("Invoke-RestMethod");
   for (const guard of [
     "-notmatch '\\\\kalcode-qa$'",

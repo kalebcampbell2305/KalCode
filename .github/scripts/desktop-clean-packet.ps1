@@ -8,8 +8,8 @@ function Assert-PacketName([string]$name) {
 }
 function Get-CleanPacket {
   $zip = Join-Path $OutDir 'windows-clean-packet.zip'
-  & gh release download $CandidateTag --pattern windows-clean-packet.zip --dir $OutDir
-  if ($LASTEXITCODE -ne 0 -or (Sha $zip) -cne $CleanPacketSha256) { Refuse 'canonical verifier packet download/hash mismatch' }
+  $null = Invoke-CandidateRelease @('release', 'download', $CandidateTag, '--pattern', 'windows-clean-packet.zip', '--dir', $OutDir)
+  if ((Sha $zip) -cne $CleanPacketSha256) { Refuse 'canonical verifier packet download/hash mismatch' }
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $archive = [IO.Compression.ZipFile]::OpenRead($zip)
   $seen = @{}; $size = [int64]0
