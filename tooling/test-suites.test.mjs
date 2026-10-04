@@ -13,6 +13,7 @@ import {
   parseNodeTestReport,
   parsePlaywrightReport,
   parseVitestReport,
+  playwrightFlakyTitles,
   runSuite,
   selectProfile,
   selectSuites,
@@ -148,6 +149,23 @@ function playwrightReport({ expected = 2, unexpected = 0, flaky = 0, skipped = [
     stats: { expected, unexpected, flaky, skipped: skipped.length },
   };
 }
+
+test("a flaky Playwright gate names its flaky tests", () => {
+  const report = {
+    suites: [
+      {
+        file: "home.spec.ts",
+        specs: [
+          { file: "home.spec.ts", title: "stable", tests: [{ status: "expected" }] },
+          { file: "home.spec.ts", title: "demo opens", tests: [{ status: "flaky" }] },
+        ],
+        suites: [{ specs: [{ file: "nested.spec.ts", title: "tour", tests: [{ status: "flaky" }] }] }],
+      },
+    ],
+  };
+  assert.deepEqual(playwrightFlakyTitles(report), ["home.spec.ts › demo opens", "nested.spec.ts › tour"]);
+  assert.deepEqual(playwrightFlakyTitles({}), []);
+});
 
 test("the reviewed inventory covers every required workspace suite and Rust ignore", () => {
   assert.equal(inventory.suites.length, 13);

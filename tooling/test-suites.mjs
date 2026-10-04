@@ -303,6 +303,23 @@ function playwrightTests(suites, found) {
   }
 }
 
+/** `file › title` of every test Playwright reports as flaky (passed only on retry). */
+export function playwrightFlakyTitles(value) {
+  const names = [];
+  const visit = (suites) => {
+    for (const suite of Array.isArray(suites) ? suites : []) {
+      for (const spec of Array.isArray(suite.specs) ? suite.specs : []) {
+        for (const test of Array.isArray(spec.tests) ? spec.tests : []) {
+          if (test?.status === "flaky") names.push(`${spec.file ?? suite.file ?? "?"} › ${spec.title}`.slice(0, 200));
+        }
+      }
+      visit(suite.suites);
+    }
+  };
+  visit(value?.suites);
+  return names.slice(0, 20);
+}
+
 export function parsePlaywrightReport(value) {
   reportObject(value, "Playwright report");
   const stats = reportObject(value.stats, "Playwright report stats");
@@ -448,12 +465,22 @@ export function runSuite(
       throw new Error(`${suite.id} did not complete successfully (${state}); child output suppressed${names}`);
     }
     let result;
+    let flakyNames = [];
     if (suite.runner === "vitest") result = parseVitestReport(readJsonReport(reportPath, `${suite.id} report`));
-    else if (suite.runner === "playwright")
-      result = parsePlaywrightReport(readJsonReport(reportPath, `${suite.id} report`));
-    else if (suite.runner === "cargo") result = parseCargoTestReport(`${child.stdout}\n${child.stderr}`);
+    else if (suite.runner === "playwright") {
+      const report = readJsonReport(reportPath, `${suite.id} report`);
+      result = parsePlaywrightReport(report);
+      flakyNames = playwrightFlakyTitles(report);
+    } else if (suite.runner === "cargo") result = parseCargoTestReport(`${child.stdout}\n${child.stderr}`);
     else result = parseNodeTestReport(`${child.stdout}\n${child.stderr}`);
-    return validateSuiteResult(suite, profile, result);
+    try {
+      return validateSuiteResult(suite, profile, result);
+    } catch (error) {
+      // The report is deleted with the temporary directory, so name the flaky tests here or a
+      // flaky gate stays undiagnosable.
+      if (flakyNames.length > 0) error.message += `; flaky: ${flakyNames.join(" | ")}`;
+      throw error;
+    }
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
