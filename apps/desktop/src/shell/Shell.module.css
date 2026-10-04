@@ -96,6 +96,13 @@
   outline: none;
 }
 
+/* Keyboard focus on the page itself (Tab, or the skip link) is shown inside its edge. */
+.main:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+  border-radius: 0;
+}
+
 /* The Code surface fills the window and scrolls inside its terminals. */
 .main[data-surface="code"] {
   overflow: hidden;
