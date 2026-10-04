@@ -87,7 +87,28 @@ pub fn gemini_spec() -> DetectionSpec {
 }
 
 pub fn specs() -> Vec<DetectionSpec> {
-    vec![claude_spec(), codex_spec(), gemini_spec()]
+    vec![claude_spec(), codex_spec(), gemini_spec(), cursor_spec()]
+}
+
+pub fn cursor_spec() -> DetectionSpec {
+    DetectionSpec {
+        provider_id: ProviderId::CURSOR,
+        display_name: "Cursor",
+        // The official installer provides both agent and cursor-agent. Prefer the
+        // unambiguous provider-specific name over unrelated programs called agent.
+        executable: "cursor-agent",
+        install_dirs: &[".local/bin"],
+        appdata_dirs: &[],
+        local_appdata_dirs: &["cursor-agent"],
+        // Native Windows launcher, additive plugins and post-onboarding sessionStart
+        // ordering were verified against official Cursor Agent 2026.10.01-e373342.
+        minimum_version: Some(crate::version::Version::new(2026, 10, 1)),
+        // The supported status command can refresh API-key credentials in its
+        // dashboard middleware. Run it only for explicit account operations, never
+        // as a short-lived passive/background installation probe.
+        auth: None,
+        env_policy: EnvPolicy::NATIVE,
+    }
 }
 
 pub fn claude_capabilities() -> ProviderCapabilities {
@@ -353,6 +374,20 @@ pub fn statuses() -> Vec<ProviderStatus> {
                 .unwrap_or_else(|| "npm install -g @google/gemini-cli".into()),
             docs_url: "https://geminicli.com/docs/".into(),
         },
+        ProviderStatus {
+            id: ProviderId::new(ProviderId::CURSOR),
+            display_name: "Cursor".into(),
+            detection: None,
+            detection_error_code: None,
+            auth_check: Some("cursor-agent status --format json".into()),
+            capabilities: crate::cursor::capabilities(),
+            adapter: AdapterState::Implemented,
+            model_source: ModelSource::Runtime,
+            integration: "Native Cursor Agent in an interactive terminal; models discovered from the current account using agent models".into(),
+            sign_in_command: "agent login".into(),
+            install_command: if cfg!(windows) { "irm 'https://cursor.com/install?win32=true' | iex" } else { "curl https://cursor.com/install -fsS | bash" }.into(),
+            docs_url: "https://cursor.com/docs/cli/installation".into(),
+        },
     ]
 }
 
@@ -435,6 +470,14 @@ mod tests {
     #[test]
     fn auth_checks_are_documented_commands() {
         let checks: Vec<_> = statuses().into_iter().map(|s| s.auth_check).collect();
-        assert_eq!(checks, [None, Some("codex login status".to_owned()), None]);
+        assert_eq!(
+            checks,
+            [
+                None,
+                Some("codex login status".to_owned()),
+                None,
+                Some("cursor-agent status --format json".to_owned())
+            ]
+        );
     }
 }

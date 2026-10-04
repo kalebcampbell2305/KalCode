@@ -63,6 +63,24 @@ const CODEX_TOOLS: ToolCapability[] = [
   },
   native("extensions", "plugins / skills"),
 ];
+/** Mirrors `cursor::tools` in `crates/providers/src/cursor.rs`: only what Cursor documents. */
+const CURSOR_TOOLS: ToolCapability[] = [
+  {
+    kind: "shell",
+    availability: { state: "native" },
+    providerName: null,
+    note: "Cursor's own approvals and sandbox decide.",
+  },
+  { kind: "file_read", availability: { state: "native" }, providerName: null, note: null },
+  { kind: "file_edit", availability: { state: "native" }, providerName: null, note: "Plan makes no edits." },
+  { kind: "repo_search", availability: { state: "native" }, providerName: null, note: null },
+  {
+    kind: "mcp",
+    availability: { state: "native" },
+    providerName: null,
+    note: "The MCP servers in your Cursor mcp.json load as in your terminal.",
+  },
+];
 const GEMINI_TOOLS: ToolCapability[] = [
   native("shell", "run_shell_command"),
   native("file_read", "read_file"),
@@ -288,6 +306,29 @@ export function providerCatalog(): ProviderStatus[] {
       installCommand: "npm install -g @google/gemini-cli@0.61.0",
       docsUrl: "https://geminicli.com/docs/",
     },
+    {
+      id: "cursor",
+      displayName: "Cursor",
+      detection: null,
+      detectionErrorCode: null,
+      authCheck: "cursor-agent status --format json",
+      capabilities: {
+        streaming: true,
+        interrupt: true,
+        resume: true,
+        hostApprovals: false,
+        interactive: null,
+        tools: CURSOR_TOOLS,
+        models: [],
+        permissionMappings: [],
+      },
+      adapter: "implemented",
+      modelSource: "runtime",
+      integration: "Native Cursor Agent CLI in an interactive terminal",
+      signInCommand: "agent login",
+      installCommand: "irm 'https://cursor.com/install?win32=true' | iex",
+      docsUrl: "https://cursor.com/docs/cli/installation",
+    },
   ];
 }
 
@@ -325,6 +366,13 @@ function fakeMachine(scenario: ProviderScenario): Record<string, Fake> {
   const signedOut = scenario === "providers-signed-out";
   return {
     "claude-code": claude,
+    cursor: {
+      state: "installed",
+      displayPath: "~/.local/bin/cursor-agent",
+      version: "test-fixture",
+      auth: "authenticated",
+      message: null,
+    },
     codex: {
       state: "installed",
       displayPath: "~\\AppData\\Roaming\\npm\\codex.cmd",

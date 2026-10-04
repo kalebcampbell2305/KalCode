@@ -50,6 +50,7 @@ type CodexCloudConfigResolver =
 pub enum PaneCli {
     Codex,
     Gemini,
+    Cursor,
 }
 
 impl PaneCli {
@@ -57,6 +58,7 @@ impl PaneCli {
         match self {
             Self::Codex => catalog::codex_spec(),
             Self::Gemini => catalog::gemini_spec(),
+            Self::Cursor => catalog::cursor_spec(),
         }
     }
 
@@ -64,6 +66,7 @@ impl PaneCli {
         match self {
             Self::Codex => ProviderId::CODEX,
             Self::Gemini => ProviderId::GEMINI_CLI,
+            Self::Cursor => ProviderId::CURSOR,
         }
     }
 
@@ -71,6 +74,7 @@ impl PaneCli {
         match self {
             Self::Codex => "Codex",
             Self::Gemini => "Gemini CLI",
+            Self::Cursor => "Cursor",
         }
     }
 
@@ -84,6 +88,10 @@ impl PaneCli {
                 answer_in: "Answer in Gemini CLI",
                 kalcode_answers: false,
             },
+            Self::Cursor => PaneProfile {
+                answer_in: "Answer in Cursor",
+                kalcode_answers: false,
+            },
         }
     }
 }
@@ -94,6 +102,7 @@ pub struct InteractiveCliProvider {
     env: DetectEnv,
     managed_profiles: Option<ManagedProfiles>,
     codex_cloud_config: Option<Arc<CodexCloudConfigResolver>>,
+    integrations: Option<Arc<super::integrations::IntegrationConnector>>,
     /// Codex `notify` reaches KalCode through the bridge; Gemini CLI panes don't use it.
     bridge: Option<Arc<BridgeServer>>,
     config: InteractiveConfig,
@@ -113,6 +122,7 @@ impl InteractiveCliProvider {
             env,
             managed_profiles: None,
             codex_cloud_config: None,
+            integrations: None,
             bridge,
             config,
             panes,
@@ -140,6 +150,14 @@ impl InteractiveCliProvider {
         self.config.sessions_dir.clone()
     }
 
+    pub fn with_integrations(
+        mut self,
+        connector: Arc<super::integrations::IntegrationConnector>,
+    ) -> Self {
+        self.integrations = Some(connector);
+        self
+    }
+
     fn start(
         &self,
         config: SessionConfig,
@@ -149,7 +167,7 @@ impl InteractiveCliProvider {
             self.managed_profiles.as_ref(),
             config.provider_account_id.as_deref(),
         ) {
-            (None, Some(_)) => {
+            (None, Some(_)) if self.cli != PaneCli::Cursor => {
                 return Err(ProviderError::Start(
                     "A managed provider profile is required for this account.".into(),
                 ));
@@ -162,18 +180,42 @@ impl InteractiveCliProvider {
             }
             (Some(_), Some(account_id)) => Some(account_id),
             (None, None) => None,
+            (None, Some(_)) => None,
         };
         if config.secret_ref.is_some() {
             return Err(ProviderError::Unsupported);
+        }
+        if self.cli == PaneCli::Cursor && config.effort.is_some() {
+            return Err(ProviderError::Refused {
+                code: "cursor_effort_unavailable".into(),
+                message: "Cursor exposes effort through model variants. Select an available exact model variant, or change effort with /model in its terminal.".into(),
+            });
         }
         let spec = self.cli.spec();
         let workspace = working_directory(&config.working_directory)
             .map_err(|e| ProviderError::Start(e.to_string()))?;
         let mut codex_overrides = Vec::new();
         let mut gemini_args = None;
+        let mut integration_lifetime = None;
         let mut lease: Option<ProfileLease> = None;
         let (executable, mut env, cwd) = match (self.managed_profiles.as_ref(), account_id) {
             (Some(profiles), Some(account_id)) => match self.cli {
+                PaneCli::Cursor => {
+                    let guardian = profiles.probe_guardian()?;
+                    let detected = detect_guarded(&spec, &self.env, &guardian);
+                    let executable = detected.executable.ok_or(ProviderError::NotInstalled)?;
+                    if detected.detection.state != DetectionState::Installed {
+                        return Err(ProviderError::Start(detected.detection.message.unwrap_or_else(|| "Cursor integration could not be checked. Update Cursor Agent and retry.".into())));
+                    }
+                    // Metadata/lease isolation only. Cursor keeps its native configuration,
+                    // authentication and tool environment; no invented profile selector.
+                    lease = Some(profiles.acquire_session_lease(ProviderId::CURSOR, account_id)?);
+                    (
+                        executable,
+                        self.env.provider_env(&spec.env_policy),
+                        workspace.clone(),
+                    )
+                }
                 PaneCli::Codex => {
                     let probe_guardian = profiles.probe_guardian()?;
                     let resolve_cloud_config = self.codex_cloud_config.as_ref().ok_or_else(|| {
@@ -275,7 +317,88 @@ impl InteractiveCliProvider {
             shared.forget_session_id();
         }
 
+        if matches!(self.cli, PaneCli::Codex)
+            && let Some(connect) = &self.integrations
+        {
+            let connection = connect(&config)?;
+            codex_overrides.extend(super::integrations::codex_config(&connection.url));
+            env.insert(
+                super::integrations::BEARER_ENV.into(),
+                connection.bearer.expose_secret().into(),
+            );
+            integration_lifetime = Some(connection.lifetime);
+        }
         let args: Vec<OsString> = match self.cli {
+            PaneCli::Cursor => {
+                let mut args = crate::cursor::interactive_args(
+                    config.permission_mode,
+                    &cwd,
+                    config.model.as_deref(),
+                    config.resume_session_id.as_deref(),
+                )?;
+                if let Some(model) = config.model.as_deref() {
+                    let guardian = self
+                        .managed_profiles
+                        .as_ref()
+                        .map(ManagedProfiles::probe_guardian)
+                        .transpose()?;
+                    let models =
+                        crate::cursor::discover_models_guarded(&self.env, guardian.as_ref())?;
+                    if !models.iter().any(|available| available.id == model) {
+                        return Err(ProviderError::Refused {
+                            code: "cursor_model_unavailable".into(),
+                            message: format!(
+                                "Model unavailable for this Cursor account: {model}. Refresh available models or use /model in the Cursor terminal."
+                            ),
+                        });
+                    }
+                }
+                if let Some(bridge) = &self.bridge {
+                    if !self.config.hook_program.is_absolute()
+                        || !self.config.hook_program.is_file()
+                    {
+                        return Err(ProviderError::Start(
+                            "KalCode's Cursor session helper is missing. Reinstall KalCode.".into(),
+                        ));
+                    }
+                    if !kalcode_contracts::ids::is_valid_id(&config.thread_id) {
+                        return Err(ProviderError::Start(
+                            "Cursor requires a valid KalCode session identity.".into(),
+                        ));
+                    }
+                    let registration = bridge
+                        .register_channel_with(
+                            Arc::new(HandlerRef::new(&shared)),
+                            kalcode_hook_bridge::server::HookChannel::Cursor,
+                            // Cursor hooks only observe; Cursor's own permissions decide.
+                            kalcode_hook_bridge::server::HookGate::Observe,
+                        )
+                        .map_err(|error| ProviderError::Start(error.to_string()))?;
+                    let plugin_dir = self
+                        .config
+                        .sessions_dir
+                        .join(&config.thread_id)
+                        .join("cursor-plugin");
+                    super::cursor_hooks::write_plugin(
+                        &plugin_dir,
+                        &self.config.hook_program,
+                        bridge.endpoint().as_str(),
+                        registration.session_id(),
+                        &self
+                            .config
+                            .hook_prefix_args
+                            .iter()
+                            .map(OsString::from)
+                            .collect::<Vec<_>>(),
+                    )?;
+                    args.extend(["--plugin-dir".into(), plugin_dir.into_os_string()]);
+                    env.insert(KEY_ENV.into(), registration.key_hex().into());
+                    shared.set_registration(registration);
+                } else {
+                    shared.mark_limited();
+                }
+                args
+            }
             PaneCli::Codex => {
                 let bridge = self.bridge.as_ref().ok_or_else(|| {
                     ProviderError::Start("KalCode's hook channel isn't available.".into())
@@ -347,6 +470,7 @@ impl InteractiveCliProvider {
                 .map_err(|e| ProviderError::Start(e.to_string()))?,
         };
         let on_exit = move |exit: kalcode_pty::ExitInfo| {
+            drop(integration_lifetime);
             if let Some(shared) = weak.upgrade() {
                 shared.on_exit(exit.code, exit.killed);
             }
@@ -369,6 +493,18 @@ impl InteractiveCliProvider {
         tracing::info!(event = "pane.started", provider_id = self.cli.id(), thread_id = %config.thread_id, pid = ?pty.pid());
 
         let _ = shared.pty.set(pty);
+        if self.cli == PaneCli::Cursor && self.bridge.is_some() {
+            let watchdog = Arc::downgrade(&shared);
+            let wait = self.config.limits.hooks_expected_within;
+            let _ = std::thread::Builder::new()
+                .name("kalcode-cursor-watchdog".into())
+                .spawn(move || {
+                    std::thread::sleep(wait);
+                    if let Some(shared) = watchdog.upgrade() {
+                        shared.hooks_overdue();
+                    }
+                });
+        }
         self.panes.insert(&config.thread_id, shared.clone());
         let session: Box<dyn AgentSession> = Box::new(InteractiveSession { shared });
         Ok(match shared_lease {
@@ -438,6 +574,7 @@ impl AgentProvider for InteractiveCliProvider {
         match self.cli {
             PaneCli::Codex => catalog::codex_capabilities(),
             PaneCli::Gemini => catalog::gemini_capabilities(),
+            PaneCli::Cursor => crate::cursor::capabilities(),
         }
     }
 

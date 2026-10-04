@@ -2,7 +2,7 @@
 import type { OperationSpec } from "./OperationSpec.ts";
 import type { OperationStatus } from "./OperationStatus.ts";
 
-export type OperationRecord = { id: string, spec: OperationSpec,
+export type OperationRecord = { id: string, spec: OperationSpec, 
 /**
  * operations, thread, terminal, or background; observed records cannot be queued twice.
  */

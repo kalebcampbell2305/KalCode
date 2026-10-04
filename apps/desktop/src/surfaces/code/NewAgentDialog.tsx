@@ -127,6 +127,7 @@ export function NewAgentDialog({
 }: NewAgentDialogProps) {
   const { client } = useRuntime();
   const sessions = useOptionalProviderAccountSessions();
+  const replaceAccount = sessions?.replace;
   const sharedSessions = sessions !== null;
   const usages = useAccountUsages();
   const id = useId();
@@ -153,6 +154,11 @@ export function NewAgentDialog({
   const [signingIn, setSigningIn] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [cursorModels, setCursorModels] = useState<{
+    accountId: string;
+    models: readonly ModelInfo[];
+    error: string | null;
+  } | null>(null);
 
   const reloadAccounts = useCallback(async () => {
     try {
@@ -215,7 +221,7 @@ export function NewAgentDialog({
   }, [client, sharedSessions]);
 
   const providers = PANE_PROVIDERS.filter(
-    (p) => p === "claude-code" || offered.includes(p) || (optionProviders?.has(p) ?? false),
+    (p) => p === "claude-code" || p === "cursor" || offered.includes(p) || (optionProviders?.has(p) ?? false),
   );
   const providerKnown = providers.includes(requested);
   const providerPending = !providerKnown && optionProviders === null;
@@ -252,8 +258,34 @@ export function NewAgentDialog({
   const selectedSession = account ? sessionOf(account) : null;
   const activeChoice: Choice | null = providerPending ? null : { providerId, accountId: account?.id ?? "" };
 
+  // Cursor models belong to the real account/runtime, never the static catalog or launch memory.
+  const cursorAccountId = providerId === "cursor" ? account?.id : undefined;
+  useEffect(() => {
+    if (!cursorAccountId) return;
+    let cancelled = false;
+    setCursorModels(null);
+    client.refreshCursorAccount(cursorAccountId).then(
+      (state) => {
+        if (cancelled) return;
+        if (replaceAccount) replaceAccount(state.account);
+        else
+          setLocalAccounts((current) => current?.map((a) => (a.id === state.account.id ? state.account : a)) ?? null);
+        setCursorModels({ accountId: cursorAccountId, models: state.models, error: state.modelsError });
+      },
+      (failure) => {
+        if (!cancelled)
+          setCursorModels({ accountId: cursorAccountId, models: [], error: toKalCodeError(failure).message });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, cursorAccountId, replaceAccount]);
+  const currentCursorModels = cursorModels?.accountId === selectedAccountId ? cursorModels : null;
+
   // Model: provider/account default first, then the exact models this provider reports.
-  const providerModels = models?.get(providerId) ?? null;
+  const providerModels =
+    providerId === "cursor" ? (currentCursorModels?.models ?? null) : (models?.get(providerId) ?? null);
   const defaultModel = providerModels?.find((m) => m.isDefault) ?? null;
   const rawModel =
     config.providerId === providerId && config.model !== undefined ? config.model : (remembered?.model ?? "");
@@ -266,11 +298,21 @@ export function NewAgentDialog({
   const modelOptions: { value: string; label: string }[] = [
     { value: "", label: defaultModel?.displayName ?? "Default" },
     ...(providerModels
-      ? providerModels.filter((m) => !m.isDefault).map((m) => ({ value: m.id, label: m.displayName }))
-      : model
+      ? providerModels
+          .filter((m) => !m.isDefault)
+          .map((m) => ({
+            value: m.id,
+            label:
+              providerId === "cursor" && m.displayName !== m.id && !m.displayName.endsWith(`(${m.id})`)
+                ? `${m.displayName} (${m.id})`
+                : m.displayName,
+          }))
+      : model && providerId !== "cursor"
         ? [{ value: model, label: remembered?.modelName ?? model }]
         : []),
   ];
+  const unavailableCursorModel =
+    providerId === "cursor" && !!rawModel && !!providerModels && !providerModels.some((m) => m.id === rawModel);
   const modelName = model ? (modelOptions.find((o) => o.value === model)?.label ?? model) : null;
   const efforts = AGENT_EFFORTS[providerId];
   const rawEffort =
@@ -301,7 +343,9 @@ export function NewAgentDialog({
     !providerPending &&
     !!selectedAccountId &&
     !!selectedSession?.usable &&
-    !accountLoadError;
+    !accountLoadError &&
+    !unavailableCursorModel &&
+    !(providerId === "cursor" && !!rawModel && !providerModels);
 
   const launch = async (spec: AgentLaunchSpec, launchedModelName: string | null) => {
     const ok = await onLaunch(spec);
@@ -343,7 +387,14 @@ export function NewAgentDialog({
       ? launchAccounts(restoredAccounts ?? [], last.providerId).find((a) => a.id === last.accountId)
       : undefined;
   const recent = last && recentAccount ? { ...last, account: recentAccount } : null;
-  const recentModels = recent ? models?.get(recent.providerId) : undefined;
+  const recentModels =
+    recent?.providerId === "cursor"
+      ? cursorModels?.accountId === recent.accountId
+        ? cursorModels.models
+        : undefined
+      : recent
+        ? models?.get(recent.providerId)
+        : undefined;
   const recentModel =
     recent?.model && recentModels && !recentModels.some((m) => m.id === recent.model) ? null : (recent?.model ?? null);
   const recentSession = recent ? sessionOf(recent.account) : null;
@@ -356,6 +407,10 @@ export function NewAgentDialog({
     (fixedCount ?? recent.count) === count;
   const launchRecent = () => {
     if (!recent || busy || signingIn || !recentSession?.usable || accountLoadError) return;
+    if (recent.providerId === "cursor" && recent.model && !recentModels?.some((m) => m.id === recent.model)) {
+      choose({ providerId: "cursor", accountId: recent.accountId });
+      return;
+    }
     void launch(
       {
         providerId: recent.providerId,
@@ -687,6 +742,19 @@ export function NewAgentDialog({
                   pending={providerModels === null}
                   onChange={(next) => setConfig((c) => ({ ...c, providerId, model: next }))}
                 />
+                {providerId === "cursor" && currentCursorModels?.error ? (
+                  <p className={styles.signInText} role="status">
+                    {currentCursorModels.error} Use Cursor's native model picker in the terminal.
+                  </p>
+                ) : null}
+                {unavailableCursorModel ? (
+                  <p className={styles.error} role="alert">
+                    {currentCursorModels?.error
+                      ? "Model availability could not be verified"
+                      : "Model unavailable for this account"}
+                    : {rawModel}. Choose an available model or Default.
+                  </p>
+                ) : null}
                 {efforts.length > 0 ? (
                   <ChipGroup
                     label="Effort"

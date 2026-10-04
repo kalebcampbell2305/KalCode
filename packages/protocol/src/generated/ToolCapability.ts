@@ -5,11 +5,11 @@ import type { ToolKind } from "./ToolKind.ts";
 /**
  * One tool family a provider declares.
  */
-export type ToolCapability = { kind: ToolKind, availability: ToolAvailability,
+export type ToolCapability = { kind: ToolKind, availability: ToolAvailability, 
 /**
  * What the provider calls it (`WebSearch`, `web_search`, `google_web_search`).
  */
-providerName: string | null,
+providerName: string | null, 
 /**
  * Mode-dependent behavior worth knowing (Plan reads only; Approve asks first).
  */

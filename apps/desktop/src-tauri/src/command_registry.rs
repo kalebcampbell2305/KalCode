@@ -1,5 +1,6 @@
 // Canonical native command inventory, shared by build-time capabilities and runtime admission.
 pub(crate) const COMMANDS: &[&str] = &[
+    "integration_dispatch",
     "account_bootstrap",
     "account_status",
     "account_email_start",
@@ -40,6 +41,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "handoff_complete",
     "handoff_return",
     "provider_claude_account_refresh",
+    "provider_cursor_account_refresh",
+    "provider_cursor_login",
     "provider_claude_login_start",
     "provider_claude_login_wait",
     "provider_claude_login_cancel",

@@ -73,6 +73,12 @@ enum PreparedProviderLaunch {
     Assigned(CreateThread),
 }
 
+pub type CursorModelCatalog = Arc<
+    dyn Fn(Option<&str>) -> Result<Vec<kalcode_contracts::agent::ModelInfo>, ExecError>
+        + Send
+        + Sync,
+>;
+
 pub struct DesktopExecutor {
     /// Surfaces this build shows (navigation to others is refused).
     pub visible: Vec<SurfaceId>,
@@ -89,6 +95,8 @@ pub struct DesktopExecutor {
     /// operation needs them (`ThreadsState::ensure_providers`), exactly as the thread commands
     /// do. Without it, a voice launch before any other thread operation sees no providers.
     pub ensure_providers: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Resolves the selected native Cursor session's live model catalog.
+    pub cursor_models: Option<CursorModelCatalog>,
     /// `None` when the permission engine didn't start.
     pub permissions: Option<Arc<PermissionService>>,
     /// The Session Locator (Z7-W2), for Search and for Focus by meaning. `None` when it didn't
@@ -189,6 +197,12 @@ fn validate_launch_effort(
                 "Gemini does not expose an effort setting. Remove the effort level and try again.",
             ));
         }
+        ProviderId::CURSOR => {
+            return Err(ExecError::new(
+                "effort_not_supported",
+                "Cursor does not expose a separate effort setting. Choose an available model and its native reasoning variant instead.",
+            ));
+        }
         _ => false,
     };
     if !supported {
@@ -221,6 +235,12 @@ fn validate_launch_model(
         return Ok(None);
     };
     if available.models.is_empty() {
+        if provider.as_str() == ProviderId::CURSOR {
+            return Err(ExecError::new(
+                "cursor_models_unavailable",
+                "Cursor's available models could not be verified. Reconnect Cursor or choose the native default model.",
+            ));
+        }
         return Ok(Some(requested));
     }
     if let Some(exact) = available
@@ -253,7 +273,11 @@ fn validate_launch_model(
         [one] => Ok(Some(one.id.clone())),
         _ => Err(ExecError::new(
             "invalid_model",
-            "That model is not available for this provider.",
+            if provider.as_str() == ProviderId::CURSOR {
+                "That model is not available for this Cursor account/session."
+            } else {
+                "That model is not available for this provider."
+            },
         )),
     }
 }
@@ -276,6 +300,7 @@ fn launch_retry_text(
     let provider = match provider.as_str() {
         ProviderId::CLAUDE_CODE => "claude",
         ProviderId::CODEX => "codex",
+        ProviderId::CURSOR => "cursor",
         ProviderId::GEMINI_CLI => "gemini",
         _ => return None,
     };
@@ -628,6 +653,7 @@ impl DesktopExecutor {
                         && [
                             ProviderId::CLAUDE_CODE,
                             ProviderId::CODEX,
+                            ProviderId::CURSOR,
                             ProviderId::GEMINI_CLI,
                         ]
                         .contains(&option.id.as_str())
@@ -686,6 +712,7 @@ impl DesktopExecutor {
                 && [
                     ProviderId::CLAUDE_CODE,
                     ProviderId::CODEX,
+                    ProviderId::CURSOR,
                     ProviderId::GEMINI_CLI,
                 ]
                 .contains(&provider.as_str())
@@ -811,7 +838,7 @@ impl DesktopExecutor {
                 self.with_launch_provider_choices(
                     ExecError::new(
                         "provider_required",
-                        "Choose Claude Code, Codex, or Gemini for these sessions.",
+                        "Choose Claude Code, Codex, Cursor, or Gemini for these sessions.",
                     ),
                     groups,
                     group_index,
@@ -822,6 +849,7 @@ impl DesktopExecutor {
             if ![
                 ProviderId::CLAUDE_CODE,
                 ProviderId::CODEX,
+                ProviderId::CURSOR,
                 ProviderId::GEMINI_CLI,
             ]
             .contains(&provider.as_str())
@@ -841,7 +869,6 @@ impl DesktopExecutor {
                         "That provider is not ready. Check Providers before opening sessions.",
                     )
                 })?;
-            let model = validate_launch_model(provider, available, group.model.as_deref())?;
             let effort = validate_launch_effort(provider, group.effort.as_deref())?;
             let explicit_id = if let Some(query) = group.account_query.as_deref() {
                 if let Some(account_id) = explicit_account_id(query) {
@@ -899,6 +926,13 @@ impl DesktopExecutor {
                     "That provider account is signed out. Sign in under Providers, then try again.",
                 ));
             }
+            let mut available = available.clone();
+            if provider.as_str() == ProviderId::CURSOR && group.model.is_some() {
+                available.models = self.cursor_models.as_ref().ok_or_else(|| {
+                    ExecError::new("cursor_models_unavailable", "Cursor model discovery is unavailable. Choose the native default model or reconnect Cursor.")
+                })?(account.as_ref().map(|account| account.id.as_str()))?;
+            }
+            let model = validate_launch_model(provider, &available, group.model.as_deref())?;
             let idle = CreateIdleThread {
                 provider_id: provider.to_string(),
                 provider_account_id: account.as_ref().map(|a| a.id.clone()),
@@ -1416,6 +1450,23 @@ impl DesktopExecutor {
         verb: &str,
     ) -> Result<ThreadSummary, ExecError> {
         let threads = self.sessions_for_query(query)?;
+        if use_ == TargetUse::Open && query == "cursor agent that just finished" {
+            let workspace = self.target_workspace(ctx.workspace_id.as_deref())?;
+            return threads
+                .into_iter()
+                .find(|thread| {
+                    thread.provider_id.as_str() == ProviderId::CURSOR
+                        && thread.workspace_id == workspace.id
+                        && thread.runtime_kind == Some(ThreadRuntimeKind::InteractivePty)
+                        && thread.status == ThreadStatus::Completed
+                })
+                .ok_or_else(|| {
+                    ExecError::new(
+                        "completed_agent_not_found",
+                        "No completed Cursor coding terminal was found in the current workspace.",
+                    )
+                });
+        }
         // "There" points at the session in front, like "it".
         let query = if query.trim().eq_ignore_ascii_case("there") {
             "it"
@@ -1777,6 +1828,7 @@ fn without_provider<'a>(words: &'a [String], provider: &ProviderId) -> &'a [Stri
     let aliases: &[&[&str]] = match provider.as_str() {
         ProviderId::CLAUDE_CODE => &[&["claude", "code"], &["claude"]],
         ProviderId::CODEX => &[&["codex"]],
+        ProviderId::CURSOR => &[&["cursor", "cli"], &["cursor"]],
         ProviderId::GEMINI_CLI => &[&["gemini", "cli"], &["gemini"]],
         _ => &[],
     };
@@ -2844,6 +2896,7 @@ mod tests {
             account: None,
             threads: None,
             ensure_providers: None,
+            cursor_models: None,
             permissions: None,
             locator: None,
         }
@@ -3389,6 +3442,11 @@ mod tests {
             match self.0 {
                 ProviderId::CLAUDE_CODE => kalcode_providers::catalog::claude_capabilities(),
                 ProviderId::GEMINI_CLI => kalcode_providers::catalog::gemini_capabilities(),
+                ProviderId::CURSOR => {
+                    let mut caps = kalcode_providers::catalog::codex_capabilities();
+                    caps.models.clear();
+                    caps
+                }
                 _ => kalcode_providers::catalog::codex_capabilities(),
             }
         }
@@ -3472,6 +3530,7 @@ mod tests {
         registry.register(Arc::new(IdleProvider(ProviderId::CLAUDE_CODE, fail_start)));
         registry.register(Arc::new(IdleProvider(ProviderId::CODEX, fail_start)));
         registry.register(Arc::new(IdleProvider(ProviderId::GEMINI_CLI, fail_start)));
+        registry.register(Arc::new(IdleProvider(ProviderId::CURSOR, fail_start)));
         let runtime = Arc::new(
             ThreadRuntime::new(
                 executor.core.clone(),
@@ -3947,6 +4006,92 @@ mod tests {
         assert_eq!(
             f.runtime.list(None, false).expect("threads").len(),
             before_signed_out
+        );
+    }
+
+    #[test]
+    fn cursor_voice_launch_validates_the_selected_accounts_live_models() {
+        let mut f = accounts_fixture();
+        let account = f.account(ProviderId::CURSOR, "Cursor B", AuthState::Authenticated);
+        let selected_id = account.id.clone();
+        f.executor.cursor_models = Some(Arc::new(move |account_id| {
+            assert_eq!(account_id, Some(selected_id.as_str()));
+            Ok(vec![kalcode_contracts::agent::ModelInfo {
+                id: "custom/Future-9.2".into(),
+                display_name: "Future 9.2 (thinking)".into(),
+                is_default: false,
+            }])
+        }));
+        let launch = |model: &str| KalVoiceIntent::CreateProviderPanes {
+            groups: vec![ProviderPaneRequest {
+                provider_id: Some(ProviderId::new(ProviderId::CURSOR)),
+                count: 4,
+                account_query: Some("cursor b".into()),
+                model: Some(model.into()),
+                effort: None,
+                assignments: Vec::new(),
+            }],
+            workspace_id: None,
+        };
+        assert_eq!(
+            f.run(&launch("made-up-model"), &ctx()).unwrap_err().code,
+            "invalid_model"
+        );
+        assert!(f.runtime.list(None, false).unwrap().is_empty());
+        let done = f
+            .run(&launch("custom-future-9-2"), &ctx())
+            .expect("live model launch");
+        let Some(UiDirective::OpenProviderPanes {
+            thread_ids,
+            workspace_id,
+            ..
+        }) = done.directive
+        else {
+            panic!("real terminal directive");
+        };
+        assert_eq!(thread_ids.len(), 4);
+        assert_eq!(workspace_id, f.workspace_id);
+        assert!(f.runtime.list(None, false).unwrap().iter().all(|thread| {
+            thread.model.as_deref() == Some("custom/Future-9.2")
+                && thread.provider_account_id.as_deref() == Some(account.id.as_str())
+        }));
+        f.executor.cursor_models = Some(Arc::new(|_| Ok(Vec::new())));
+        assert_eq!(
+            f.run(&launch("custom/Future-9.2"), &ctx())
+                .unwrap_err()
+                .code,
+            "cursor_models_unavailable"
+        );
+        assert_eq!(f.runtime.list(None, false).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn completed_cursor_voice_target_opens_its_actual_terminal() {
+        let f = accounts_fixture();
+        let account = f.account(ProviderId::CURSOR, "Cursor", AuthState::Authenticated);
+        let terminal = f.named(ProviderId::CURSOR, &account, "Cursor coding agent");
+        kalcode_providers::interactive::provider::mark_interactive(
+            &f.executor.core.paths().data_dir.join("sessions"),
+            &terminal.id,
+        )
+        .unwrap();
+        f.set_status(&terminal, ThreadStatus::Completed);
+        let headless = f.named(ProviderId::CURSOR, &account, "Cursor thread");
+        f.set_status(&headless, ThreadStatus::Completed);
+        let done = f
+            .run(
+                &KalVoiceIntent::Focus {
+                    query: "cursor agent that just finished".into(),
+                },
+                &f.ctx(),
+            )
+            .unwrap();
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::OpenAgent {
+                agent_id: terminal.id,
+                workspace_id: f.workspace_id.clone(),
+            })
         );
     }
 

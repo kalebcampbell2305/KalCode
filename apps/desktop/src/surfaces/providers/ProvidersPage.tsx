@@ -295,7 +295,13 @@ function ProviderSection({
     {
       key: "models",
       label: "Models",
-      value: models ?? <span className={styles.muted}>Not listed without starting a session</span>,
+      value: models ?? (
+        <span className={styles.muted}>
+          {status.id === "cursor"
+            ? "Discovered from your Cursor account when launching an agent"
+            : "Not listed without starting a session"}
+        </span>
+      ),
     },
     {
       key: "docs",

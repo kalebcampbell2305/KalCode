@@ -337,6 +337,13 @@
     }
   ],
   "rustIntentionalIgnores": [
+    { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    {
+      "path": "crates/providers/tests/cursor_real.rs",
+      "reason": "requires KALCODE_TEST_CURSOR_BIN containing an official Cursor Agent installation"
+    },
     {
       "path": "apps/desktop/src-tauri/src/kalvoice_guardian.rs",
       "reason": "requires production-signed pinned components and the native guardian helper"

@@ -33,6 +33,9 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
 
+mod cursor;
+pub use cursor::*;
+
 #[cfg(feature = "e2e")]
 mod e2e;
 
@@ -1207,6 +1210,11 @@ impl ProviderRuntimeAuthority {
                 self.inner.source_env.clone(),
                 self.managed_profiles(),
             ))),
+            ProviderId::CURSOR => Err(ProviderError::Refused {
+                code: "cursor_terminal_required".into(),
+                message: "Cursor runs as a coding terminal. Open Code and launch a Cursor agent."
+                    .into(),
+            }),
             _ => Err(ProviderError::Unsupported),
         }
     }

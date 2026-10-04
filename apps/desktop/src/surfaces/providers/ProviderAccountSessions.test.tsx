@@ -52,6 +52,24 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 describe("provider account session restoration", () => {
+  it("restores Cursor native identity without running a credential-refreshing observer", async () => {
+    const cursor = account("cursor-native", "cursor", "Cursor A");
+    runtime.client = {
+      listProviderAccounts: vi.fn(async () => [cursor]),
+      refreshCursorAccount: vi.fn(),
+      loginCursorAccount: vi.fn(),
+    } as unknown as KalCodeClient;
+    const view = renderHook(useOptionalProviderAccountSessions, { wrapper, reactStrictMode: true });
+    await waitFor(() => expect(view.result.current?.accounts).toEqual([cursor]));
+    await act(async () => {
+      await view.result.current?.reload();
+    });
+    expect(runtime.client.refreshCursorAccount).not.toHaveBeenCalled();
+    expect(runtime.client.loginCursorAccount).not.toHaveBeenCalled();
+    expect(view.result.current?.checking.size).toBe(0);
+    expect(view.result.current?.accounts?.[0]?.lastCheckedAt).toBe(cursor.lastCheckedAt);
+  });
+
   it("quietly retries a failed startup metadata read and validates the restored account once", async () => {
     const codex = account("codex-a", "codex", "Codex A");
     runtime.client = {

@@ -33,7 +33,7 @@ function sameIds(previous: readonly string[], next: readonly string[]): boolean 
 }
 
 /** Codex and Gemini CLI panes are offered only when threads can use that provider (PROVIDERS-2). */
-const OPTIONAL_PANE_PROVIDERS: readonly PaneProviderId[] = ["codex", "gemini-cli"];
+const OPTIONAL_PANE_PROVIDERS: readonly PaneProviderId[] = ["codex", "cursor", "gemini-cli"];
 
 /** Whether this build offers provider panes (the `provider_panes` feature flag). */
 export function useProviderPanesEnabled(): boolean {
@@ -151,7 +151,7 @@ export function useProviderPanes(workspace: Workspace, { active = true }: Provid
       (options) => {
         if (cancelled) return;
         const usable = new Set(options.providers.map((p) => p.id));
-        setOffered(OPTIONAL_PANE_PROVIDERS.filter((id) => usable.has(id)));
+        setOffered(OPTIONAL_PANE_PROVIDERS.filter((id) => id === "cursor" || usable.has(id)));
       },
       () => {
         if (!cancelled) setOffered([]);

@@ -32,7 +32,7 @@ use crate::guardian::{
 mod managed_lock;
 
 const SUPPORTED_PROVIDERS: &str =
-    "managed profiles support only claude-code, codex, and gemini-cli";
+    "provider account leases support only claude-code, codex, gemini-cli, and cursor";
 const UNSAFE_PATH: &str = "managed profile storage must not contain filesystem links";
 const MANAGED_PROFILE_DIRECTORY: &str = "provider-profiles";
 const OBSERVER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -267,6 +267,7 @@ enum ManagedProvider {
     Claude,
     Codex,
     Gemini,
+    Cursor,
 }
 
 impl ManagedProvider {
@@ -275,6 +276,7 @@ impl ManagedProvider {
             "claude-code" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
             "gemini-cli" => Ok(Self::Gemini),
+            "cursor" => Ok(Self::Cursor),
             _ => Err(ProviderError::Start(SUPPORTED_PROVIDERS.into())),
         }
     }
@@ -284,15 +286,19 @@ impl ManagedProvider {
             Self::Claude => "claude-code",
             Self::Codex => "codex",
             Self::Gemini => "gemini-cli",
+            Self::Cursor => "cursor",
         }
     }
 
-    fn home_variable(self) -> &'static str {
+    fn home_variable(self) -> Option<&'static str> {
         match self {
-            Self::Claude => "CLAUDE_CONFIG_DIR",
-            Self::Codex => "CODEX_HOME",
+            Self::Claude => Some("CLAUDE_CONFIG_DIR"),
+            Self::Codex => Some("CODEX_HOME"),
             // Gemini appends `.gemini` to this documented parent directory.
-            Self::Gemini => "GEMINI_CLI_HOME",
+            Self::Gemini => Some("GEMINI_CLI_HOME"),
+            // Cursor has no verified account-isolation selector. Its canonical account is
+            // a reference to the native sign-in; leases still protect account operations.
+            Self::Cursor => None,
         }
     }
 }
@@ -505,6 +511,10 @@ impl ManagedProfiles {
         source: &DetectEnv,
     ) -> Result<BTreeMap<OsString, OsString>, ProviderError> {
         let provider = ManagedProvider::parse(provider)?;
+        let Some(home_variable) = provider.home_variable() else {
+            self.account_root(provider, account_id)?;
+            return Ok(source.provider_env(&EnvPolicy::NATIVE));
+        };
         let home = self.profile_home(provider.id(), account_id)?;
         // BASE retains only ordinary OS/process launch variables. In particular, API keys and
         // provider-owned selectors from either provider are absent before the managed selector
@@ -519,12 +529,11 @@ impl ManagedProfiles {
             // directory, lstat 'C:'") when GEMINI_CLI_HOME carries the Windows verbatim prefix
             // that `std::fs::canonicalize` returns. The plain form names the same directory.
             ManagedProvider::Gemini => plain_path(&home),
-            ManagedProvider::Claude | ManagedProvider::Codex => home.clone(),
+            ManagedProvider::Claude | ManagedProvider::Codex | ManagedProvider::Cursor => {
+                home.clone()
+            }
         };
-        env.insert(
-            provider.home_variable().into(),
-            selected_home.into_os_string(),
-        );
+        env.insert(home_variable.into(), selected_home.into_os_string());
         if matches!(provider, ManagedProvider::Claude) {
             // Claude Code resolves its credential store independently from general config in
             // current native builds. Pin both selectors to the exact same canonical account

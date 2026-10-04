@@ -4,6 +4,7 @@
  */
 import type {
   IpcError,
+  ModelInfo,
   ProviderAccount,
   ProviderAccountBinding,
   ProviderAccountBindingKind,
@@ -12,6 +13,9 @@ import type {
 } from "@kalcode/protocol";
 import type { DashboardHandlers } from "./dashboard.ts";
 
+/** Mutable only in the ui-test runtime: tests supply discovery results, never a product model catalog. */
+export const cursorModelFixture: ModelInfo[] = [];
+
 const IDS = {
   claudePersonal: "0192f3c4-0000-7000-8000-000000000101",
   codexPersonal: "0192f3c4-0000-7000-8000-000000000201",
@@ -19,7 +23,7 @@ const IDS = {
   geminiPersonal: "0192f3c4-0000-7000-8000-000000000301",
 } as const;
 
-const PROVIDERS = new Set(["claude-code", "codex", "gemini-cli"]);
+const PROVIDERS = new Set(["claude-code", "codex", "gemini-cli", "cursor"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROVIDER_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const CREATED_AT = "2026-09-24T12:00:00.000Z";
@@ -81,6 +85,7 @@ function seed(): ProviderAccount[] {
     account(IDS.codexPersonal, "codex", "Personal", "authenticated", true),
     account(IDS.codexWork, "codex", "Work", "not_authenticated", false),
     account(IDS.geminiPersonal, "gemini-cli", "Personal", "unknown", true),
+    account("0192f3c4-0000-7000-8000-000000000401", "cursor", "Cursor", "authenticated", true),
   ];
 }
 
@@ -150,7 +155,7 @@ export interface ProviderAccountsMemory {
 
 export function createProviderAccountsMemory(requireCore: () => void, empty = false): ProviderAccountsMemory {
   let accounts = empty ? [] : seed();
-  let nextAccount = 400;
+  let nextAccount = 500;
   let nextLogin = 1;
   const logins = new Map<string, { accountId: string; cancelled: boolean }>();
   const bindings = new Map<string, ProviderAccountBinding>();
@@ -221,6 +226,15 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
         requireCore();
         const provider = providerId(args.providerId);
         const displayName = label(args.displayName);
+        if (
+          provider === "cursor" &&
+          accounts.some((candidate) => candidate.providerId === "cursor" && candidate.archivedAt === null)
+        ) {
+          fail(
+            "cursor_native_account_exists",
+            "Cursor uses one native sign-in. Rename or reconnect the existing account.",
+          );
+        }
         if (
           accounts.some(
             (candidate) =>
@@ -319,6 +333,33 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
               accounts.some((candidate) => candidate.id === binding.accountId && candidate.archivedAt === null),
           )
           .sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
+      },
+      provider_cursor_account_refresh: (args) => {
+        requireCore();
+        const current = active(args.accountId);
+        if (current.providerId !== "cursor")
+          fail("provider_account_mismatch", "That account belongs to a different provider.");
+        return {
+          account: current,
+          models: cursorModelFixture,
+          modelsError: cursorModelFixture.length ? null : "No model discovery fixture configured",
+        };
+      },
+      provider_cursor_login: (args) => {
+        requireCore();
+        const current = active(args.accountId);
+        if (current.providerId !== "cursor")
+          fail("provider_account_mismatch", "That account belongs to a different provider.");
+        return {
+          account: replace({
+            ...current,
+            authenticationState: "authenticated",
+            lastErrorCode: null,
+            lastCheckedAt: new Date().toISOString(),
+          }),
+          models: [],
+          modelsError: null,
+        };
       },
       provider_codex_account_refresh: (args) => {
         requireCore();

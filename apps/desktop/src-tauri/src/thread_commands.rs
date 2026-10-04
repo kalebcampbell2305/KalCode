@@ -295,6 +295,7 @@ fn adapter(
             ProviderId::GEMINI_CLI => {
                 Some(Arc::new(GeminiProvider::new(DetectEnv::from_process())))
             }
+            ProviderId::CURSOR => None,
             _ => return None,
         }
     } else {
@@ -324,6 +325,7 @@ fn adapter(
         ProviderId::CLAUDE_CODE => routes.route_claude(headless, guard),
         ProviderId::CODEX => routes.route_cli(ProviderId::CODEX, headless, guard),
         ProviderId::GEMINI_CLI => routes.route_cli(ProviderId::GEMINI_CLI, headless, guard),
+        ProviderId::CURSOR => routes.route_cli(ProviderId::CURSOR, headless, guard),
         _ => return None,
     };
     Some(adapter)
@@ -481,6 +483,14 @@ impl ThreadsState {
         spec: &OperationSpec,
     ) -> kalcode_core::Result<ThreadSummary> {
         let request = self.reviewed_operation_request(core, spec)?;
+        if request.provider_id == ProviderId::CURSOR {
+            let runtime = self.operation_runtime()?;
+            return self
+                .routes
+                .create_operation_pane(runtime, operation_id, |id| {
+                    runtime.create_reviewed_for_operation(id, request, None)
+                });
+        }
         self.operation_runtime()?
             .create_reviewed_for_operation(operation_id, request, None)
     }

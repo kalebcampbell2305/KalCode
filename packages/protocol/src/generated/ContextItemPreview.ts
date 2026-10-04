@@ -8,7 +8,7 @@ import type { TranslationPlan } from "./TranslationPlan.ts";
 /**
  * What the UI shows for one item.
  */
-export type ContextItemPreview = { position: number, label: string, kind: ItemKind, sourceKind: string, bytes: number, sensitivity: Sensitivity, verdict: FirewallVerdict, rules: Array<FirewallReason>,
+export type ContextItemPreview = { position: number, label: string, kind: ItemKind, sourceKind: string, bytes: number, sensitivity: Sensitivity, verdict: FirewallVerdict, rules: Array<FirewallReason>, 
 /**
  * Redacted and bounded (≤ 4 KiB). Empty for finally blocked items.
  */

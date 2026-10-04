@@ -39,6 +39,7 @@ pub struct RuntimeBundle {
     pub utilities: Option<Arc<crate::utility_commands::UtilityState>>,
     pub operations: Option<Arc<crate::operations_commands::OperationsState>>,
     pub handoffs: Option<Arc<HandoffState>>,
+    pub integrations: Option<Arc<crate::integration_commands::IntegrationState>>,
 }
 
 impl RuntimeBundle {
@@ -93,7 +94,28 @@ impl RuntimeBundle {
         bundle.resources = Some(resources.clone());
         bundle.notifications = Some(notifications.clone());
         check!();
-        let panes = Arc::new(ProviderPanesState::start(state, authority.clone()));
+        if let (Some(identity), Ok(lease)) =
+            (account.snapshot().account, account.acquire_active_lease())
+        {
+            let weak = Arc::downgrade(&account);
+            let valid = Arc::new(move || {
+                weak.upgrade()
+                    .is_some_and(|account| account.validate_active_lease(&lease))
+            });
+            match crate::integration_commands::IntegrationState::start(state, &identity.id, valid) {
+                Ok(integrations) => bundle.integrations = Some(Arc::new(integrations)),
+                Err(_) => tracing::warn!(event = "integrations.start_failed"),
+            }
+        }
+        let integration_bridge = bundle
+            .integrations
+            .as_ref()
+            .map(|state| state.bridge.clone());
+        let panes = Arc::new(ProviderPanesState::start(
+            state,
+            authority.clone(),
+            integration_bridge,
+        ));
         bundle.panes = Some(panes.clone());
         check!();
         let Ok(providers) = ProviderState::from_process(runtime_authority) else {
@@ -281,6 +303,9 @@ impl RuntimeBundle {
         // Source-bearing Context previews are the exception: leases are already drained here,
         // so erase them before any cleanup retry and never carry them into another account.
         let mut clean = true;
+        if let Some(integrations) = &self.integrations {
+            integrations.bridge.shutdown();
+        }
         if let Some(handoffs) = &self.handoffs {
             clean &= handoffs.shutdown_checked();
         }
@@ -967,6 +992,7 @@ service!(crate::doctor_commands::DoctorState, doctor);
 service!(crate::utility_commands::UtilityState, utilities);
 service!(crate::operations_commands::OperationsState, operations);
 service!(HandoffState, handoffs);
+service!(crate::integration_commands::IntegrationState, integrations);
 
 pub struct RuntimeState<T: RuntimeService> {
     service: Arc<T>,

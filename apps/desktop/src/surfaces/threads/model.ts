@@ -285,6 +285,7 @@ export function unavailableProviders(
 }
 
 export function unavailableReason(status: ProviderStatus): string {
+  if (status.id === "cursor") return "Use a Cursor coding terminal in Code";
   const detection = status.detection;
   const state = detection?.state;
   if (status.adapter !== "implemented") {

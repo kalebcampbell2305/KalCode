@@ -202,6 +202,11 @@ struct LifecycleState {
     codex_tracking_failed: bool,
     codex_in_bracketed_paste: bool,
     codex_paste_prefix: Vec<u8>,
+    cursor_generation: Option<String>,
+    cursor_finished_generations: HashSet<String>,
+    cursor_tracking_failed: bool,
+    cursor_start_seen: bool,
+    cursor_model: Option<String>,
     handoff_readiness: HandoffReadiness,
     reconfigure_reserved: bool,
 }
@@ -404,7 +409,7 @@ impl Shared {
             return;
         };
         let trailing_input = last_submit + 1 < data.len();
-        if self.provider_id.as_str() == "claude-code" {
+        if matches!(self.provider_id.as_str(), "claude-code" | "cursor") {
             // The authenticated UserPromptSubmit that follows consumes this exact boundary.
             // A later write has a higher generation and therefore survives that hook.
             self.record_claude_submit_boundary_locked(lifecycle, generation, trailing_input, true);
@@ -560,11 +565,11 @@ impl Shared {
                 &mut lifecycle,
                 [AgentEvent::Error {
                     code: "hooks_inactive".into(),
-                    message:
-                        "KalCode isn't receiving Claude Code's hook events, so this pane shows \
-                          limited status and approvals happen in Claude Code. Your Claude Code \
-                          settings may disable hooks."
-                            .into(),
+                    message: if self.provider_id == "cursor" {
+                        "KalCode isn't receiving Cursor's hook events. This terminal remains usable, but status and automatic task delivery are unavailable. Check Cursor's plugin and hook settings.".into()
+                    } else {
+                        "KalCode isn't receiving Claude Code's hook events, so this pane shows limited status and approvals happen in Claude Code. Your Claude Code settings may disable hooks.".into()
+                    },
                     recoverable: true,
                 }],
             )
@@ -978,7 +983,7 @@ impl Shared {
                 ]
             }
             // Codex `notify` (docs/PROVIDER_PANES.md §3): the thread id, and turn completion.
-            HookEvent::CodexNotify => {
+            HookEvent::CodexNotify | HookEvent::Cursor => {
                 // Codex completion is correlated and deduplicated under the lifecycle lock in
                 // `accept_codex_notify_locked`; reaching this arm would split those decisions.
                 Vec::new()
@@ -1179,6 +1184,146 @@ impl Shared {
         }
     }
 
+    fn accept_cursor_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        record: &HookRecord,
+    ) -> Vec<AgentEvent> {
+        let Some(cursor) = record.cursor.as_ref() else {
+            return Vec::new();
+        };
+        let Some(id) = record.provider_session_id.as_deref() else {
+            return Vec::new();
+        };
+        let (accepted, started) = self.observe_session_id(id, false);
+        if !accepted {
+            return Vec::new();
+        }
+        let current_generation =
+            cursor.generation_id.is_some() && cursor.generation_id == lifecycle.cursor_generation;
+        let current_model_signal = cursor.event == "sessionStart"
+            || (cursor.event == "beforeSubmitPrompt"
+                && cursor
+                    .generation_id
+                    .as_ref()
+                    .is_some_and(|id| !lifecycle.cursor_finished_generations.contains(id)))
+            || current_generation;
+        let model_changed = current_model_signal
+            && cursor.model.is_some()
+            && cursor.model != lifecycle.cursor_model;
+        let first_identity = started.is_some();
+        let mut events = started
+            .into_iter()
+            .map(|event| match event {
+                AgentEvent::SessionStarted {
+                    provider_session_id,
+                    ..
+                } => AgentEvent::SessionStarted {
+                    provider_session_id,
+                    model: cursor.model.clone(),
+                },
+                other => other,
+            })
+            .collect::<Vec<_>>();
+        if model_changed {
+            lifecycle.cursor_model.clone_from(&cursor.model);
+            if !first_identity {
+                // The shared runtime updates native session metadata without starting another
+                // terminal. This follows model switches made inside Cursor's own UI.
+                events.push(AgentEvent::SessionStarted {
+                    provider_session_id: id.to_owned(),
+                    model: cursor.model.clone(),
+                });
+            }
+        }
+        self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+        match cursor.event.as_str() {
+            "sessionStart"
+                if !lifecycle.cursor_start_seen
+                    && !lifecycle.cursor_tracking_failed
+                    && lifecycle.cursor_generation.is_none()
+                    && lifecycle.cursor_finished_generations.is_empty() =>
+            {
+                // Verified Cursor CLI 2026.10.01: trust/auth/MCP onboarding precedes this
+                // hook; resume skips it. Only a fresh authenticated session can start ready.
+                lifecycle.handoff_readiness = HandoffReadiness::Ready;
+                lifecycle.cursor_start_seen = true;
+                events.push(AgentEvent::Status {
+                    status: ThreadStatus::Idle,
+                    detail: None,
+                });
+            }
+            "beforeSubmitPrompt" => {
+                let Some(generation) = cursor.generation_id.clone() else {
+                    return events;
+                };
+                if lifecycle.cursor_finished_generations.contains(&generation)
+                    || lifecycle.cursor_generation.as_ref() == Some(&generation)
+                {
+                    return events;
+                }
+                if let Some(boundary) = lifecycle.claude_submit_boundaries.pop_front()
+                    && boundary.clears_input
+                    && !boundary.trailing_input
+                    && lifecycle.input_pending_generation <= boundary.generation
+                {
+                    lifecycle.input_pending = false;
+                }
+                lifecycle.cursor_generation = Some(generation);
+                lifecycle.cursor_start_seen = true;
+                lifecycle.handoff_readiness = HandoffReadiness::Busy;
+                events.push(AgentEvent::Status {
+                    status: ThreadStatus::Active,
+                    detail: None,
+                });
+            }
+            "stop" => {
+                let Some(generation) = cursor.generation_id.as_ref() else {
+                    return events;
+                };
+                if lifecycle.cursor_finished_generations.contains(generation) {
+                    return events;
+                }
+                if lifecycle.cursor_generation.as_ref() != Some(generation) {
+                    lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+                    return events;
+                }
+                if lifecycle.cursor_finished_generations.len() >= MAX_CODEX_SEEN_TURNS {
+                    lifecycle.cursor_tracking_failed = true;
+                } else {
+                    lifecycle
+                        .cursor_finished_generations
+                        .insert(generation.clone());
+                }
+                lifecycle.cursor_generation = None;
+                let completed = cursor.status.as_deref() == Some("completed");
+                lifecycle.handoff_readiness = if completed && !lifecycle.cursor_tracking_failed {
+                    HandoffReadiness::Ready
+                } else {
+                    HandoffReadiness::Unverified
+                };
+                events.push(AgentEvent::TurnCompleted { ok: completed });
+                if !completed {
+                    events.push(AgentEvent::Error {
+                        code: "cursor_turn_ended".into(),
+                        message: format!("Cursor reported this turn as {}. Open the coding terminal for details.", cursor.status.as_deref().unwrap_or("error")),
+                        recoverable: true,
+                    });
+                }
+            }
+            "sessionEnd" => {
+                lifecycle.handoff_readiness = HandoffReadiness::Unverified;
+                lifecycle.cursor_generation = None;
+            }
+            "postToolUse" | "postToolUseFailure" if current_generation => {
+                // A tool event proves work, never prompt readiness or tool permission.
+                lifecycle.handoff_readiness = HandoffReadiness::Busy;
+            }
+            _ => {}
+        }
+        events
+    }
+
     pub(crate) fn handle(&self, record: HookRecord) -> HookReply {
         let blocking = record.event.is_some_and(HookEvent::is_blocking);
         if record.validate().is_err() {
@@ -1187,6 +1332,9 @@ impl Shared {
             } else {
                 HookReply::Ack
             };
+        }
+        if (self.provider_id == "cursor") != (record.event == Some(HookEvent::Cursor)) {
+            return HookReply::Ack;
         }
         if blocking {
             return self.pre_tool_use(&record);
@@ -1197,7 +1345,9 @@ impl Shared {
             if self.is_terminal() {
                 return HookReply::Ack;
             }
-            self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+            if self.provider_id != "cursor" {
+                self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+            }
             let first_prompt = if record.event == Some(HookEvent::UserPromptSubmit) {
                 let first = {
                     let mut state = lock(&self.state);
@@ -1207,7 +1357,9 @@ impl Shared {
             } else {
                 None
             };
-            let events = if record.event == Some(HookEvent::CodexNotify) {
+            let events = if record.event == Some(HookEvent::Cursor) {
+                self.accept_cursor_locked(&mut lifecycle, &record)
+            } else if record.event == Some(HookEvent::CodexNotify) {
                 self.accept_codex_notify_locked(&mut lifecycle, &record)
             } else {
                 let events = self.status_events(&record);
@@ -1246,14 +1398,19 @@ impl Shared {
         if self.provider_id == "codex" && lifecycle.codex_tracking_failed {
             return Some(HandoffDeliveryError::Unverified);
         }
-        if self.provider_id == "claude-code"
+        if matches!(self.provider_id.as_str(), "claude-code" | "cursor")
             && (lifecycle.claude_submit_tracking_failed
                 || lifecycle.claude_submit_boundaries.len() >= MAX_SUBMIT_BOUNDARIES)
         {
             return Some(HandoffDeliveryError::Unverified);
         }
-        if !matches!(self.provider_id.as_str(), "claude-code" | "codex")
-            || self.channel_state() != HookChannelState::Active
+        if self.provider_id == "cursor" && lifecycle.cursor_tracking_failed {
+            return Some(HandoffDeliveryError::Unverified);
+        }
+        if !matches!(
+            self.provider_id.as_str(),
+            "claude-code" | "codex" | "cursor"
+        ) || self.channel_state() != HookChannelState::Active
         {
             return Some(HandoffDeliveryError::Unverified);
         }
@@ -1316,7 +1473,7 @@ impl Shared {
         lifecycle.input_pending = false;
         if self.provider_id == "codex" {
             self.record_codex_submit_locked(&mut lifecycle);
-        } else if self.provider_id == "claude-code" {
+        } else if matches!(self.provider_id.as_str(), "claude-code" | "cursor") {
             let generation = lifecycle.input_writes;
             self.record_claude_submit_boundary_locked(&mut lifecycle, generation, false, false);
             if !lifecycle.claude_submit_tracking_failed {
@@ -1367,7 +1524,9 @@ impl Shared {
         // Claude must establish its authenticated lifecycle hook before an automated submit.
         // Codex and Gemini keep provider-native input authority, matching manual pane typing;
         // only their structured prompt signals can block a write.
-        if self.provider_id == "claude-code" && self.channel_state() != HookChannelState::Active {
+        if matches!(self.provider_id.as_str(), "claude-code" | "cursor")
+            && self.channel_state() != HookChannelState::Active
+        {
             return Some(PaneVoiceWriteError::Unverified);
         }
         None
@@ -1645,9 +1804,25 @@ impl AgentSession for InteractiveSession {
         lock(&self.shared.provider_session_id).clone()
     }
 
-    fn send(&self, _input: AgentInput) -> Result<(), ProviderError> {
-        // The person types in the pane. KalCode never types into a provider's TUI for them.
-        Err(ProviderError::Unsupported)
+    fn send(&self, input: AgentInput) -> Result<(), ProviderError> {
+        if self.shared.provider_id != "cursor" {
+            return Err(ProviderError::Unsupported);
+        }
+        let AgentInput::Text { text } = input;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match self.shared.deliver_handoff(&text, || Ok(())) {
+                Ok(()) => return Ok(()),
+                Err(HandoffDeliveryError::Unverified) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(HandoffDeliveryError::Io) => return Err(ProviderError::Io("Cursor task delivery could not be verified. Check the terminal before retrying.".into())),
+                Err(error) => return Err(ProviderError::Refused {
+                    code: "cursor_input_not_ready".into(),
+                    message: format!("Cursor could not accept the task: {error} Launch a Cursor terminal in Code, finish native setup, then retry the task."),
+                }),
+            }
+        }
     }
 
     fn interrupt(&self) -> Result<(), ProviderError> {
@@ -1875,6 +2050,126 @@ mod tests {
 
     fn drain(rx: &mpsc::Receiver<AgentEvent>) -> Vec<AgentEvent> {
         rx.try_iter().collect()
+    }
+
+    #[test]
+    fn cursor_lifecycle_binds_native_identity_and_protects_handoff_input() {
+        let (s, rx) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        s.forget_session_id();
+        let event = |name: &str, session: &str, generation: &str| {
+            kalcode_hook_bridge::record::from_cursor_stdin(
+                name,
+                json!({
+                    "hook_event_name":name,"conversation_id":session,
+                    "generation_id":generation,"status":"completed", "model":"future-9-thinking"
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        s.handle(record(HookEvent::Stop, json!({"session_id":"session"})));
+        assert!(
+            drain(&rx).is_empty(),
+            "Claude-shaped records cannot certify Cursor readiness"
+        );
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
+        s.handle(event("sessionStart", "native-session", "turn-1"));
+        assert!(drain(&rx).iter().any(|event| matches!(event,
+            AgentEvent::SessionStarted { provider_session_id, model }
+            if provider_session_id == "native-session" && model.as_deref() == Some("future-9-thinking"))));
+        assert!(s.handoff_readiness().is_ok());
+        {
+            let mut lifecycle = lock(&s.lifecycle);
+            s.observe_input_write_locked(&mut lifecycle, b"task\r");
+        }
+        s.handle(event("beforeSubmitPrompt", "native-session", "turn-1"));
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::ReadyBusy));
+        // A delayed duplicate startup cannot certify an active turn as idle.
+        s.handle(event("sessionStart", "native-session", "turn-1"));
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::ReadyBusy));
+        s.handle(event("stop", "other-session", "turn-1"));
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::ReadyBusy));
+        {
+            let mut lifecycle = lock(&s.lifecycle);
+            s.observe_input_write_locked(&mut lifecycle, b"unfinished next prompt");
+        }
+        s.handle(event("stop", "native-session", "turn-1"));
+        assert_eq!(
+            s.handoff_readiness(),
+            Err(HandoffDeliveryError::InputPending)
+        );
+        let completed = drain(&rx);
+        assert_eq!(
+            completed
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::TurnCompleted { ok: true }))
+                .count(),
+            1
+        );
+        s.handle(event("stop", "native-session", "turn-1"));
+        assert!(
+            drain(&rx).is_empty(),
+            "duplicate completions are never replayed"
+        );
+        s.handle(event("sessionEnd", "native-session", "turn-1"));
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
+    }
+
+    #[test]
+    fn cursor_unmatched_stop_and_resume_cannot_certify_an_idle_prompt() {
+        let (s, rx) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        let id = lock(&s.provider_session_id).clone().unwrap();
+        let event = kalcode_hook_bridge::record::from_cursor_stdin("stop", json!({
+            "hook_event_name":"stop","conversation_id":id,"generation_id":"unknown-turn", "status":"completed"
+        }).to_string().as_bytes()).unwrap();
+        s.handle(event);
+        assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
+        assert!(
+            !drain(&rx)
+                .iter()
+                .any(|event| matches!(event, AgentEvent::TurnCompleted { .. }))
+        );
+    }
+
+    #[test]
+    fn cursor_reviewed_task_never_submits_into_a_provider_prompt_or_dirty_buffer() {
+        for (readiness, input_pending) in [
+            (HandoffReadiness::ProviderPrompt, false),
+            (HandoffReadiness::Ready, true),
+            (HandoffReadiness::Busy, false),
+        ] {
+            let (shared, _rx) = shared_for(
+                "cursor",
+                DecisionRouting::ProviderPrompt,
+                SessionLimits::default(),
+            );
+            shared.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+            {
+                let mut lifecycle = lock(&shared.lifecycle);
+                lifecycle.handoff_readiness = readiness;
+                lifecycle.input_pending = input_pending;
+            }
+            let session = InteractiveSession { shared };
+            let error = session
+                .send(AgentInput::Text {
+                    text: "reviewed task".into(),
+                })
+                .unwrap_err();
+            assert!(
+                matches!(error, ProviderError::Refused { code, .. } if code == "cursor_input_not_ready")
+            );
+            // No PTY exists: a write would report SessionEnded, so reaching these specific
+            // blockers proves refusal happened before any terminal access.
+        }
     }
 
     #[test]

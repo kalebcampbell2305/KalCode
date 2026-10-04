@@ -7,23 +7,23 @@ import type { PermissionScope } from "./PermissionScope.ts";
 /**
  * A restriction applied on top of the policy. Ceilings only ever restrict (K7).
  */
-export type AuthorityCeiling = { id: string, source: CeilingSource,
+export type AuthorityCeiling = { id: string, source: CeilingSource, 
 /**
  * The broadest mode actions may be evaluated under (never Bypass for non-user origins).
  */
-maxMode: PermissionMode,
+maxMode: PermissionMode, 
 /**
  * `None` = no allow-list; `Some` = only these scopes may be anything other than Deny.
  */
-allowScopes: Array<PermissionScope> | null,
+allowScopes: Array<PermissionScope> | null, 
 /**
  * Treated as `never` rules.
  */
-never: Array<PermissionRule>,
+never: Array<PermissionRule>, 
 /**
  * Path globs (workspace-relative) outside which filesystem scopes are denied.
  */
-pathGlobs: Array<string>,
+pathGlobs: Array<string>, 
 /**
  * Parent ceiling this one was intersected with.
  */

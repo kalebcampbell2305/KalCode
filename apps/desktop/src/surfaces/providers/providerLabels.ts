@@ -87,6 +87,8 @@ export function needsSignIn(status: ProviderStatus): boolean {
  * guidance. A terminal login would sign in a different profile, so it is never suggested.
  */
 export function accountSignInHint(status: Pick<ProviderStatus, "id" | "displayName">): string | null {
+  if (status.id === "cursor")
+    return "Cursor opens its official browser sign-in and keeps the session in its native profile.";
   const opens: Record<string, string> = {
     "gemini-cli": "Gemini opens Google sign-in",
     "claude-code": "Claude Code opens its sign-in",

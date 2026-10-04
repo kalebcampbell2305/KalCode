@@ -24,6 +24,7 @@ import { isBrowserAuthProvider, NO_USAGE, useProviderAccounts } from "./useProvi
 const PROVIDERS = [
   { id: "claude-code", name: "Claude Code" },
   { id: "codex", name: "Codex" },
+  { id: "cursor", name: "Cursor" },
   { id: "gemini-cli", name: "Gemini CLI" },
 ] as const;
 
@@ -76,7 +77,9 @@ export function ProviderAccountsView({
         statuses?.find((s) => s.id === id)?.displayName ??
         PROVIDERS.find((provider) => provider.id === id)?.name ??
         accountProviderName(id),
-      addable: PROVIDERS.some((provider) => provider.id === id),
+      addable:
+        PROVIDERS.some((provider) => provider.id === id) &&
+        (id !== "cursor" || !accounts?.some((account) => account.providerId === id)),
     }));
   }, [accounts, statuses]);
 
@@ -86,9 +89,13 @@ export function ProviderAccountsView({
     if (!request || !loaded) return;
     consumeProviderAccountsRequest(request.nonce);
     setFilter("");
-    if (request.connect) setConnecting(request.providerId);
+    if (
+      request.connect &&
+      !(request.providerId === "cursor" && accounts?.some((account) => account.providerId === "cursor"))
+    )
+      setConnecting(request.providerId);
     document.getElementById(sectionId(request.providerId))?.scrollIntoView?.({ block: "start" });
-  }, [request, loaded]);
+  }, [request, loaded, accounts]);
 
   // Setup's Sign in: this view owns the browser sign-in (its row shows progress and Cancel), so it
   // starts it here. One request starts at most one sign-in, even if the effect re-runs.
@@ -156,9 +163,9 @@ export function ProviderAccountsView({
           <p className={styles.note}>
             <ShieldCheck aria-hidden="true" />
             <span>
-              <strong>Accounts stay isolated.</strong> Each account has its own managed provider profile and signs in
-              with the provider's official flow: Claude Code and Codex use their browser sign-in, and Gemini CLI opens
-              Google sign-in in your browser. KalCode never sees the credentials.
+              <strong>Provider-owned sign-in.</strong> Claude Code, Codex and Gemini use managed account profiles.
+              Cursor uses its persistent native sign-in and settings; one Cursor account is supported. Credentials stay
+              with the provider.
             </span>
           </p>
         </div>
@@ -365,7 +372,11 @@ function ConnectAccount({
       <Field
         htmlFor={`${id}-name`}
         label={`Name for the new ${providerName} account`}
-        hint={`Stored locally. ${providerName} then opens its own sign-in in your browser for this account only.`}
+        hint={
+          providerId === "cursor"
+            ? "A local name for your native Cursor sign-in. Cursor opens its official browser flow."
+            : `Stored locally. ${providerName} then opens its own sign-in in your browser for this account only.`
+        }
       >
         <TextInput
           id={`${id}-name`}

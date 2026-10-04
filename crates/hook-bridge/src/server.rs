@@ -36,6 +36,7 @@ pub trait HookHandler: Send + Sync {
 pub enum HookChannel {
     Claude,
     Codex,
+    Cursor,
 }
 
 impl HookChannel {
@@ -43,6 +44,7 @@ impl HookChannel {
         match self {
             Self::Claude => HookEvent::CLAUDE.contains(&event),
             Self::Codex => event == HookEvent::CodexNotify,
+            Self::Cursor => event == HookEvent::Cursor,
         }
     }
 }

@@ -269,6 +269,7 @@ pub struct InteractiveClaudeProvider {
     panes: Arc<PaneRegistry>,
     expiry: Option<Arc<dyn ApprovalExpiry>>,
     titles: Option<Arc<dyn TitleSink>>,
+    integrations: Option<Arc<super::integrations::IntegrationConnector>>,
 }
 
 impl InteractiveClaudeProvider {
@@ -286,11 +287,19 @@ impl InteractiveClaudeProvider {
             panes,
             expiry: None,
             titles: None,
+            integrations: None,
         }
     }
 
     pub fn with_managed_profiles(mut self, profiles: crate::managed::ManagedProfiles) -> Self {
         self.managed = Some(profiles);
+        self
+    }
+    pub fn with_integrations(
+        mut self,
+        connector: Arc<super::integrations::IntegrationConnector>,
+    ) -> Self {
+        self.integrations = Some(connector);
         self
     }
 
@@ -451,7 +460,7 @@ impl InteractiveClaudeProvider {
                     tracing::warn!(event = "pane.mcp_config_failed", error = %e);
                     None
                 });
-        let args = interactive_args(&InteractiveArgs {
+        let mut args = interactive_args(&InteractiveArgs {
             mode: config.permission_mode,
             start,
             settings_path: &settings_path,
@@ -461,6 +470,17 @@ impl InteractiveClaudeProvider {
             mcp_config: mcp_config.as_deref(),
         })
         .map_err(|e| ProviderError::Start(e.to_string()))?;
+        let integration_lifetime = if let Some(connect) = &self.integrations {
+            let connection = connect(&config)?;
+            args.extend(super::integrations::claude_config(&connection.url));
+            env.insert(
+                super::integrations::BEARER_ENV.into(),
+                connection.bearer.expose_secret().into(),
+            );
+            Some(connection.lifetime)
+        } else {
+            None
+        };
         env.insert(KEY_ENV.into(), registration.key_hex().into());
         shared.set_registration(registration);
 
@@ -476,6 +496,7 @@ impl InteractiveClaudeProvider {
                 .map_err(|e| ProviderError::Start(e.to_string()))?,
         };
         let on_exit = move |exit: kalcode_pty::ExitInfo| {
+            drop(integration_lifetime);
             if let Some(shared) = weak.upgrade() {
                 shared.on_exit(exit.code, exit.killed);
             }
@@ -657,6 +678,7 @@ impl AgentProvider for InteractiveClaudeProvider {
                 panes: self.panes.clone(),
                 expiry: self.expiry.clone(),
                 titles: self.titles.clone(),
+                integrations: self.integrations.clone(),
             };
             let mut isolated_config = config;
             isolated_config.provider_account_id = None;

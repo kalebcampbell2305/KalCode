@@ -9,6 +9,7 @@ import type { ProviderAccount } from "@kalcode/protocol";
 export const ACCOUNT_PROVIDER_NAMES: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   "gemini-cli": "Gemini CLI",
 };
 
@@ -16,6 +17,7 @@ export const ACCOUNT_PROVIDER_NAMES: Record<string, string> = {
 const PROVIDER_ALIASES: Record<string, string[][]> = {
   "claude-code": [["claude", "code"], ["claude"]],
   codex: [["codex"]],
+  cursor: [["cursor"]],
   "gemini-cli": [["gemini", "cli"], ["gemini"]],
 };
 

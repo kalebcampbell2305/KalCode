@@ -35,6 +35,7 @@ const SETTING_LABELS: Record<string, string> = {
 const PROVIDER_NAMES: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   "gemini-cli": "Gemini CLI",
 };
 
