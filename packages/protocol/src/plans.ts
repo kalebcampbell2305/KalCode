@@ -511,6 +511,12 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         status: "coming_soon",
       },
       {
+        id: "unified-memory",
+        label: "Unified Memory: shared project context across providers",
+        from: "pro",
+        status: "coming_soon",
+      },
+      {
         id: "launch-recipes",
         label: "Launch Recipes",
         from: "pro",

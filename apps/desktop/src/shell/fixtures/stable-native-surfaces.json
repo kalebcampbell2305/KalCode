@@ -9,7 +9,7 @@
   { "id": "automations", "state": "gated", "visible": false },
   { "id": "skills", "state": "gated", "visible": false },
   { "id": "plugins", "state": "gated", "visible": false },
-  { "id": "memory", "state": "gated", "visible": false },
+  { "id": "memory", "state": "available", "visible": true },
   { "id": "providers", "state": "available", "visible": true },
   { "id": "settings", "state": "available", "visible": true },
   { "id": "command_center", "state": "gated", "visible": false }

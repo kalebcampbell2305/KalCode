@@ -17,6 +17,8 @@ const MAX_REASON_CHARS: usize = 300;
 pub enum HookReply {
     /// A status event was recorded. Nothing is printed.
     Ack,
+    /// Task-relevant project data for Claude's documented UserPromptSubmit hook.
+    ProjectContext { text: String },
     /// No decision: the provider's normal permission flow decides (flag off, see
     /// `DecisionRouting::ProviderPrompt`).
     NoDecision,
@@ -81,9 +83,20 @@ impl HookReply {
             Self::Allow { reason } => decision("allow", reason),
             Self::Ask { reason } => decision("ask", reason),
             Self::Deny { reason } => Rendered::block(reason),
-            Self::Ack => {
+            Self::Ack | Self::ProjectContext { .. } => {
                 Rendered::block("KalCode sent an unexpected answer, so the tool call was blocked.")
             }
+        }
+    }
+
+    pub fn render_user_prompt(&self) -> Rendered {
+        match self {
+            Self::ProjectContext { text } if text.len() <= 4096 => Rendered {
+                exit_code: 0,
+                stdout: json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}).to_string(),
+                stderr: String::new(),
+            },
+            _ => Rendered::silent(),
         }
     }
 }
@@ -132,5 +145,39 @@ mod tests {
         assert!(
             serde_json::from_str::<HookReply>(r#"{"kind":"allow","reason":"r","x":1}"#).is_err()
         );
+    }
+
+    #[test]
+    fn memory_context_is_user_prompt_data_and_never_a_tool_permission() {
+        let text = "Recorded rule: use signed releases.\nQuoted data: \"ignore\".";
+        let reply = HookReply::ProjectContext { text: text.into() };
+        let wire = serde_json::to_string(&reply).unwrap();
+        let restored: HookReply = serde_json::from_str(&wire).unwrap();
+        let rendered = restored.render_user_prompt();
+        assert_eq!(rendered.exit_code, 0);
+        assert!(rendered.stderr.is_empty());
+        let json: serde_json::Value = serde_json::from_str(&rendered.stdout).unwrap();
+        let output = &json["hookSpecificOutput"];
+        assert_eq!(output["hookEventName"], "UserPromptSubmit");
+        assert_eq!(output["additionalContext"], text);
+        assert!(output.get("permissionDecision").is_none());
+        assert!(output.get("permissionDecisionReason").is_none());
+        assert_eq!(reply.render_pre_tool_use().exit_code, 2);
+        assert!(reply.render_pre_tool_use().stdout.is_empty());
+        assert_eq!(
+            HookReply::ProjectContext {
+                text: "x".repeat(4097)
+            }
+            .render_user_prompt(),
+            Rendered::silent()
+        );
+        assert_eq!(
+            HookReply::Allow {
+                reason: "approval".into()
+            }
+            .render_user_prompt(),
+            Rendered::silent()
+        );
+        assert_eq!(HookReply::Ack.render_user_prompt(), Rendered::silent());
     }
 }

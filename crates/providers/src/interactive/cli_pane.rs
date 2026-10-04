@@ -298,6 +298,7 @@ impl InteractiveCliProvider {
         #[cfg(unix)]
         crate::launch::apply_launch_env(&launch, &mut env);
 
+        let project_context = sink.project_context();
         let shared = Shared::new(SessionParts {
             ctx: ActionContext {
                 thread_id: config.thread_id.clone(),
@@ -328,7 +329,7 @@ impl InteractiveCliProvider {
             );
             integration_lifetime = Some(connection.lifetime);
         }
-        let args: Vec<OsString> = match self.cli {
+        let mut args: Vec<OsString> = match self.cli {
             PaneCli::Cursor => {
                 let mut args = crate::cursor::interactive_args(
                     config.permission_mode,
@@ -448,6 +449,17 @@ impl InteractiveCliProvider {
             }
         };
 
+        // Use native initial input, preserving the provider's own system instructions,
+        // tools and user configuration. No keystrokes race the terminal's startup.
+        if let Some(context) = project_context {
+            let context = format!(
+                "{context}\n\nThis is saved project context only. Wait for the user's next request before taking action."
+            );
+            if matches!(self.cli, PaneCli::Gemini) {
+                args.push("--prompt-interactive".into());
+            }
+            args.push(context.into());
+        }
         let shared_lease = lease.map(share_profile_lease);
         let guardian_job = shared_lease
             .as_ref()

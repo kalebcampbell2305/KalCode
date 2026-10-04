@@ -305,6 +305,22 @@ pub enum ProviderError {
 /// Receives a session's events. Implementations must be cheap and non-blocking.
 pub trait AgentEventSink: Send + Sync {
     fn emit(&self, event: AgentEvent);
+
+    /// Small, privacy-filtered workspace context for native interactive launches.
+    /// Implementations must use local bounded retrieval only.
+    fn project_context(&self) -> Option<String> {
+        None
+    }
+    fn project_context_for(&self, _query: &str) -> Option<String> {
+        self.project_context()
+    }
+
+    /// Explicit durable knowledge from structured provider output. Never a terminal log.
+    /// The receiver validates and filters candidates before persistence.
+    fn remember(&self, _text: &str) {}
+    fn remember_user(&self, text: &str) {
+        self.remember(text);
+    }
 }
 
 impl<F: Fn(AgentEvent) + Send + Sync> AgentEventSink for F {

@@ -141,6 +141,7 @@ fn run_claude(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendere
         env.cap(connect),
     ) {
         Ok(reply) if blocking => reply.render_pre_tool_use(),
+        Ok(reply) if event == HookEvent::UserPromptSubmit => reply.render_user_prompt(),
         Ok(_) => Rendered::silent(),
         Err(BridgeError::TimedOut) => fail("KalCode did not answer in time"),
         Err(BridgeError::BadReply) => fail("KalCode's answer could not be verified"),

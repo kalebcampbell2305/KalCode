@@ -99,10 +99,9 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
   },
   memory: {
     id: "memory",
-    label: "Memory",
+    label: "Unified Memory",
     icon: BrainCircuit,
-    summary: "Scoped, inspectable memory for you, your projects and your agents.",
-    dependsOn: "Agents and workspaces",
+    summary: "Your project's shared knowledge, across providers, agents and sessions.",
   },
   providers: {
     id: "providers",

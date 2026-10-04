@@ -923,6 +923,7 @@ fn speech_output() -> Arc<dyn SpeechOutput> {
 
 /// Native services assembled by the account-owned coordinator.
 pub struct KalVoiceServices {
+    pub memory: Option<Arc<crate::unified_memory_commands::MemoryService>>,
     pub registry: Arc<ProviderRegistry>,
     pub provider_runtime: crate::provider_auth_commands::ProviderRuntimeAuthority,
     pub threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
@@ -944,6 +945,7 @@ pub fn init(
     services: KalVoiceServices,
 ) -> KalVoiceState {
     let KalVoiceServices {
+        memory,
         registry,
         provider_runtime,
         threads,
@@ -1008,6 +1010,7 @@ pub fn init(
         core.clone(),
         accounting.clone(),
         Arc::new(crate::kalvoice_executor::DesktopExecutor {
+            memory,
             visible,
             session_locator_enabled,
             core: core.clone(),

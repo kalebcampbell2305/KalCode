@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unified-memory-delete"
+description = "Enables the unified_memory_delete command without any pre-configured scope."
+commands.allow = ["unified_memory_delete"]
+
+[[permission]]
+identifier = "deny-unified-memory-delete"
+description = "Denies the unified_memory_delete command without any pre-configured scope."
+commands.deny = ["unified_memory_delete"]

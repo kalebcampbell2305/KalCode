@@ -17,6 +17,7 @@ import { focusSection } from "../surfaces/dashboard/useNow.ts";
 import { FolderSurface } from "../surfaces/folder/FolderSurface.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
 import { HomeSurface } from "../surfaces/home/HomeSurface.tsx";
+import { UnifiedMemory } from "../surfaces/memory/UnifiedMemory.tsx";
 import { OperationsPage } from "../surfaces/operations/OperationsPage.tsx";
 import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
 import { ProviderAccountSessionsProvider } from "../surfaces/providers/ProviderAccountSessions.tsx";
@@ -202,6 +203,8 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
                   <ProvidersPage />
                 ) : current === "threads" ? (
                   <ThreadsSurface />
+                ) : current === "memory" ? (
+                  <UnifiedMemory />
                 ) : (
                   <GatedSurface id={current} />
                 )}

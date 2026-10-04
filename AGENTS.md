@@ -1,5 +1,16 @@
 # KalCode agent policy
 
+## Permanent Unified Memory definition (owner directive 2026-10-04)
+
+**UNIFIED MEMORY IS KALCODE'S SHARED, PROVIDER-INDEPENDENT PROJECT MEMORY.** It preserves useful
+long-lived project context across agents, providers, terminals, sessions, restarts, KalVoice,
+Brainstorm, Runs, and orchestration. Memory must be relevant, inspectable, editable, fast, safe,
+and truthful. Users should not have to keep re-explaining their project. Reuse the canonical
+workspace memory service; never create provider-owned competing project memory. Retrieve the
+smallest useful context, retain provenance, withhold stale claims, and never blindly retain
+terminal logs, conversations, secrets, or credentials. See `docs/UNIFIED-MEMORY.md` for the
+implemented paths and current provider/workflow limits.
+
 ## Permanent Cursor provider rule (owner directive 2026-10-04)
 
 **CURSOR IS A FIRST-CLASS KALCODE CODING PROVIDER. CURSOR AGENTS ARE REAL CODING TERMINALS, NEVER CHAT THREADS.**
