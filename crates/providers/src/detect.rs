@@ -271,8 +271,7 @@ fn detect_inner(
     };
     let mut error_code = None;
 
-    let dirs = env.search_dirs(spec);
-    let executable = resolve_executable(spec.executable, &dirs, &env.extensions());
+    let executable = env.resolve_executable_only(spec);
     if let Some(exe) = &executable {
         detection.display_path = Some(display_path(exe));
         let provider_env = env.provider_env(&spec.env_policy);

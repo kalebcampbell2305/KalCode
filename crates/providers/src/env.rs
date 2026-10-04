@@ -78,6 +78,12 @@ pub struct EnvPolicy {
 }
 
 impl EnvPolicy {
+    /// Native terminal parity: preserve the user's tool, Git, MCP and provider environment.
+    /// KalCode/WebView internals are still denied and launch hardening still applies.
+    pub const NATIVE: Self = Self {
+        provider_prefixes: &[""],
+        provider_names: &[],
+    };
     /// Only the base allow-list; no provider variables.
     pub const BASE: Self = Self {
         provider_prefixes: &[],

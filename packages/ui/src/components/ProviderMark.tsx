@@ -14,6 +14,7 @@ export type ProviderGlyphKind = "claude" | "codex" | "gemini" | "shell" | "gener
 const KNOWN: Record<string, { glyph: ProviderGlyphKind; name: string }> = {
   "claude-code": { glyph: "claude", name: "Claude Code" },
   codex: { glyph: "codex", name: "Codex" },
+  cursor: { glyph: "generic", name: "Cursor" },
   "gemini-cli": { glyph: "gemini", name: "Gemini CLI" },
   shell: { glyph: "shell", name: "Terminal" },
   terminal: { glyph: "shell", name: "Terminal" },

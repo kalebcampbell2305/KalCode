@@ -41,7 +41,13 @@ export const PROCESS_SCAN_LIMIT = 1_000;
 
 const UNFINISHED = new Set(["queued", "starting", "running", "paused", "blocked", "unknown"]);
 const STOPPED_SERVICE = new Set(["stopped", "exited", "failed", "crashed"]);
-const AGENTS: Record<string, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI" };
+const AGENTS: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  gemini: "Gemini CLI",
+  "cursor-agent": "Cursor",
+  agent: "Cursor",
+};
 /** Console hosts Windows attaches to console programs: infrastructure, never anyone's work. */
 const CONSOLE_HOSTS = new Set(["conhost.exe", "openconsole.exe"]);
 

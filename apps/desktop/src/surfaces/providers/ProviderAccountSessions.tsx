@@ -10,6 +10,8 @@ function supportsPassiveValidation(providerId: string): providerId is "codex" | 
   // Claude's auth-status command can refresh provider-owned OAuth state before exiting. Running it
   // as a short-lived observer risks interrupting that write, so Claude is validated by the real
   // provider launch instead. Persisted Claude state remains available in the meantime.
+  // Cursor's status/models commands can also refresh native credentials; run them only for
+  // explicit connection, refresh or model discovery, never as a startup observer.
   return providerId === "codex" || providerId === "gemini-cli";
 }
 

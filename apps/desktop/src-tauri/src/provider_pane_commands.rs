@@ -61,10 +61,22 @@ pub struct PaneRoutes {
     claude: Option<Arc<InteractiveClaudeProvider>>,
     codex: Option<Arc<InteractiveCliProvider>>,
     gemini: Option<Arc<InteractiveCliProvider>>,
+    cursor: Option<Arc<InteractiveCliProvider>>,
     sessions_dir: PathBuf,
 }
 
 impl PaneRoutes {
+    /// Queue-owned coding agents keep their reserved ID and the same durable terminal marker
+    /// as agents launched from Code, including a resource wait or a later retry.
+    pub(crate) fn create_operation_pane(
+        &self,
+        runtime: &ThreadRuntime,
+        operation_id: &str,
+        create: impl FnOnce(&str) -> kalcode_core::Result<ThreadSummary>,
+    ) -> kalcode_core::Result<ThreadSummary> {
+        create_pane_thread_with_id(runtime, &self.sessions_dir, operation_id, create)
+    }
+
     pub fn route_claude(
         &self,
         headless: Arc<dyn AgentProvider>,
@@ -88,6 +100,7 @@ impl PaneRoutes {
         let interactive = match id {
             ProviderId::CODEX => self.codex.as_ref(),
             ProviderId::GEMINI_CLI => self.gemini.as_ref(),
+            ProviderId::CURSOR => self.cursor.as_ref(),
             _ => None,
         };
         let router = match interactive {
@@ -337,6 +350,16 @@ impl ProviderPanesState {
                 PaneCli::Gemini,
                 DetectEnv::from_process(),
                 None,
+                cli_config.clone(),
+                panes.clone(),
+            )
+            .with_managed_profiles(runtime.managed_profiles()),
+        ));
+        let cursor = Some(Arc::new(
+            InteractiveCliProvider::new(
+                PaneCli::Cursor,
+                DetectEnv::from_process(),
+                Some(bridge.clone()),
                 cli_config,
                 panes.clone(),
             )
@@ -365,6 +388,7 @@ impl ProviderPanesState {
             claude: Some(Arc::new(provider)),
             codex,
             gemini,
+            cursor,
             sessions_dir: app.paths.data_dir.join("sessions"),
         };
         tracing::info!(event = "pane.enabled", routing = ?routing);
@@ -545,6 +569,7 @@ pub fn provider_pane_create(
         ProviderId::CLAUDE_CODE,
         ProviderId::CODEX,
         ProviderId::GEMINI_CLI,
+        ProviderId::CURSOR,
     ]
     .contains(&provider_id.as_str())
     {
@@ -601,7 +626,16 @@ pub(crate) fn create_pane_thread(
     create: impl FnOnce(&str) -> kalcode_core::Result<ThreadSummary>,
 ) -> kalcode_core::Result<ThreadSummary> {
     let thread_id = kalcode_contracts::ids::new_id();
-    mark_interactive(sessions_dir, &thread_id).map_err(|error| {
+    create_pane_thread_with_id(runtime, sessions_dir, &thread_id, create)
+}
+
+fn create_pane_thread_with_id(
+    runtime: &ThreadRuntime,
+    sessions_dir: &Path,
+    thread_id: &str,
+    create: impl FnOnce(&str) -> kalcode_core::Result<ThreadSummary>,
+) -> kalcode_core::Result<ThreadSummary> {
+    mark_interactive(sessions_dir, thread_id).map_err(|error| {
         KalError::new(
             ErrorCategory::Filesystem,
             "interactive_marker_unavailable",
@@ -610,11 +644,11 @@ pub(crate) fn create_pane_thread(
         .retryable()
         .with_source(error)
     })?;
-    let created = RuntimeRouter::create_interactive(|| create(&thread_id));
+    let created = RuntimeRouter::create_interactive(|| create(thread_id));
     if created.is_err()
-        && matches!(runtime.get(&thread_id), Err(error) if error.code == "thread_not_found")
+        && matches!(runtime.get(thread_id), Err(error) if error.code == "thread_not_found")
     {
-        unmark_interactive(sessions_dir, &thread_id);
+        unmark_interactive(sessions_dir, thread_id);
     }
     created
 }

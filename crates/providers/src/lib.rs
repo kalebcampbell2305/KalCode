@@ -22,6 +22,7 @@ pub mod catalog;
 pub mod claude;
 pub mod claude_account_auth;
 pub mod codex;
+pub mod cursor;
 pub mod detect;
 pub mod env;
 pub mod gemini;

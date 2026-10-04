@@ -3,4 +3,4 @@
 /**
  * Where a provider's model list comes from.
  */
-export type ModelSource = "documented_aliases" | "not_discoverable";
+export type ModelSource = "runtime" | "documented_aliases" | "not_discoverable";

@@ -31,6 +31,7 @@ import type {
   LocatorQuery,
   LocatorResponse,
   LocatorVia,
+  ModelInfo,
   NotificationMark,
   NotificationPage,
   Page,
@@ -460,6 +461,14 @@ export class KalCodeClient {
    */
   providerAccountUsage(accountIds?: readonly string[]): Promise<ProviderAccountUsage[]> {
     return this.call("provider_account_usage", { accountIds: accountIds ? [...accountIds] : null });
+  }
+
+  refreshCursorAccount(accountId: string): Promise<CursorAccountState> {
+    return this.call("provider_cursor_account_refresh", { accountId });
+  }
+
+  loginCursorAccount(accountId: string): Promise<CursorAccountState> {
+    return this.call("provider_cursor_login", { accountId });
   }
 
   refreshCodexAccount(accountId: string): Promise<ProviderAccount> {
@@ -1028,4 +1037,11 @@ export class KalCodeClient {
       // Title-bar theming is cosmetic; never surface it as an error.
     }
   }
+}
+
+/** Live public Cursor metadata; native authentication remains provider-owned. */
+export interface CursorAccountState {
+  account: ProviderAccount;
+  models: ModelInfo[];
+  modelsError: string | null;
 }

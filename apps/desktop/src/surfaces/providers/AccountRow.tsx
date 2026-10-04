@@ -269,7 +269,7 @@ export function AccountRow({
               >
                 Rename
               </DropdownMenuItem>
-              {browserAuth && signedIn ? (
+              {browserAuth && signedIn && account.providerId !== "cursor" ? (
                 <DropdownMenuItem
                   icon={<LogOut />}
                   disabled={busy}

@@ -63,7 +63,11 @@ pub fn model(model: Option<&str>) -> Result<Option<String>> {
     };
     let valid = model.chars().count() <= MAX_MODEL_CHARS
         && model.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '@' | '[' | ']')
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '.' | '_' | '-' | ':' | '/' | '@' | '[' | ']' | '=' | '?' | '&' | ','
+                )
         });
     if valid {
         Ok(Some(model.to_owned()))
@@ -218,6 +222,20 @@ mod tests {
         );
         assert!(model(Some("x; rm -rf /")).is_err());
         assert!(model(Some(&"m".repeat(129))).is_err());
+        for exact in ["gpt-5.4[effort=high]", "custom/deepseek-v9?reasoning=high"] {
+            assert_eq!(
+                model(Some(exact)).expect("runtime model").as_deref(),
+                Some(exact)
+            );
+        }
+        for invalid in [
+            "model\n--force",
+            "model\0id",
+            "model;command",
+            "model`command",
+        ] {
+            assert!(model(Some(invalid)).is_err());
+        }
     }
 
     #[test]

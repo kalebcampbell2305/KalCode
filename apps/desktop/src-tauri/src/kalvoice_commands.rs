@@ -977,7 +977,7 @@ pub fn init(
     let reasoning = DesktopLocalInterpreter::new(components.clone(), resources, launcher);
     let providers = Arc::new(DesktopProviders {
         registry,
-        runtime: provider_runtime,
+        runtime: provider_runtime.clone(),
         reasoning_dir: core.paths().data_dir.join("kalvoice").join("reasoning"),
     });
     let session_locator_enabled = feature_enabled(&info.flags, FeatureId::SessionLocator);
@@ -1014,6 +1014,30 @@ pub fn init(
             account: Some(account),
             threads,
             ensure_providers,
+            cursor_models: Some(Arc::new(move |account_id| {
+                let account_id = account_id.ok_or_else(|| {
+                    kalcode_kalvoice::orchestrator::ExecError::new(
+                        "cursor_session_expired",
+                        "Connect Cursor in Accounts before choosing a model.",
+                    )
+                })?;
+                provider_runtime.cursor_models(account_id).map_err(|error| {
+                    use kalcode_contracts::agent::ProviderError;
+                    use kalcode_kalvoice::orchestrator::ExecError;
+                    match error {
+                        ProviderError::Refused { code, message } => ExecError::new(code, message),
+                        ProviderError::NotAuthenticated => ExecError::new(
+                            "cursor_session_expired",
+                            "Cursor session expired. Reconnect Cursor in Accounts.",
+                        ),
+                        ProviderError::NotInstalled => ExecError::new(
+                            "cursor_not_installed",
+                            "Cursor integration is not installed. Set up Cursor in Providers.",
+                        ),
+                        error => ExecError::new("cursor_models_unavailable", error.to_string()),
+                    }
+                })
+            })),
             permissions,
             // A gated Session Locator is never read by voice (it still runs for other callers).
             locator: locator.filter(|_| session_locator_enabled),

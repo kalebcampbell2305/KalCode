@@ -499,6 +499,7 @@ pub fn command_shaped(text: &str) -> bool {
         "status",
         "kalvoice",
         "codex",
+        "cursor",
         "claude",
         "gemini",
         "page",

@@ -88,6 +88,7 @@ export const SCOPE_LABELS: Record<PermissionScope, string> = {
 const PROVIDER_NAMES: Record<string, string> = {
   [KNOWN_PROVIDERS.claudeCode]: "Claude Code",
   [KNOWN_PROVIDERS.codex]: "Codex",
+  [KNOWN_PROVIDERS.cursor]: "Cursor",
   [KNOWN_PROVIDERS.geminiCli]: "Gemini CLI",
 };
 

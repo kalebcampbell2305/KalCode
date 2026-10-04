@@ -107,3 +107,21 @@ describe("provider account memory contract", () => {
     });
   });
 });
+
+it("keeps Cursor as one native sign-in and reports no fabricated model catalog", async () => {
+  const api = client();
+  const [cursor] = await api.listProviderAccounts("cursor");
+  expect(cursor).toBeDefined();
+  if (!cursor) throw new Error("Missing Cursor fixture");
+  await expect(api.createProviderAccount("cursor", "Cursor B")).rejects.toMatchObject({
+    code: "cursor_native_account_exists",
+  });
+  const status = await api.refreshCursorAccount(cursor.id);
+  expect(status.account.id).toBe(cursor.id);
+  expect(status.models).toEqual([]);
+  expect(status.modelsError).toBeTruthy();
+  expect((await api.loginCursorAccount(cursor.id)).account).toMatchObject({
+    id: cursor.id,
+    authenticationState: "authenticated",
+  });
+});

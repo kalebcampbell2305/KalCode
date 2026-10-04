@@ -41,6 +41,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "handoff_complete",
     "handoff_return",
     "provider_claude_account_refresh",
+    "provider_cursor_account_refresh",
+    "provider_cursor_login",
     "provider_claude_login_start",
     "provider_claude_login_wait",
     "provider_claude_login_cancel",

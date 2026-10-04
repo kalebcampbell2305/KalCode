@@ -240,6 +240,12 @@ describe("KalTidy classifier", () => {
     expect(entry).toMatchObject({ cls: "protected", reason: "Claude Code agent is running" });
   });
 
+  it.each(["cursor-agent.exe", "agent.exe"])("keeps a real Cursor agent process %s protected", (name) => {
+    const root = shell("t1");
+    const entry = only({ terminals: [terminal("t1")], processes: [root, child(root, { name })] });
+    expect(entry).toMatchObject({ cls: "protected", reason: "Cursor agent is running" });
+  });
+
   it("rule 5: an ended shell is idle once quiet, active just after it ended", () => {
     const ended = only({
       terminals: [terminal("t1", { status: "exited", exitCode: 1, endedAt: LONG_AGO })],

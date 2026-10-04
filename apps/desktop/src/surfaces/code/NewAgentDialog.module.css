@@ -613,15 +613,17 @@
 }
 
 .chip {
-  height: 1.75rem;
-  padding: 0 var(--space-2-5);
+  min-height: 1.75rem;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2-5);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
   font-size: var(--type-small);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   cursor: pointer;
   transition:
     background-color var(--dur-fast) var(--ease-standard),

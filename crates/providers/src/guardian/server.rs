@@ -333,7 +333,14 @@ mod tests {
             done_tx.send(()).expect("completion signal");
         });
 
-        std::thread::sleep(Duration::from_millis(40));
+        // Under a parallel workspace test run the worker may not receive a time
+        // slice within 40ms. Wait for the observable retry, while keeping the
+        // fake process active, instead of assuming wall time proves scheduling.
+        let retry_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while terminations.load(Ordering::Acquire) < 2 && std::time::Instant::now() < retry_deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert!(
             done_rx.try_recv().is_err(),
             "cleanup returned without a zero-process witness"

@@ -394,7 +394,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
         <EmptyState title="No agents yet" className={styles.state} actions={newAgent}>
           {providerPanes ? (
             <p>
-              Launch a <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" /> or{" "}
+              Launch a <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" />,{" "}
+              <ProviderMark provider="cursor" name="Cursor" size="sm" /> or{" "}
               <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> agent from Code and it shows up here with
               what it's doing and whether it needs you. A CLI you type into a plain terminal isn't tracked here.
             </p>
