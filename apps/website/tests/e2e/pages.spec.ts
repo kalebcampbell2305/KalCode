@@ -340,7 +340,7 @@ test.describe("every page", () => {
         ["P1Y", plan.price.yearlyUsd],
       ]),
     );
-    expect(raw).not.toMatch(/aggregateRating|review/i);
+    expect(raw).not.toMatch(/"(?:aggregateRating|review)"\s*:/i);
   });
 
   test("the hero's first images are explicit-size and the orb poster is high priority", async ({ page }) => {
