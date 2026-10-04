@@ -1,6 +1,6 @@
 import type { SurfaceFlag } from "@kalcode/protocol";
 import { ToastProvider, TooltipProvider } from "@kalcode/ui/components";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountProvider } from "../account/AccountProvider.tsx";
@@ -99,6 +99,36 @@ describe("palette threads (Stable)", () => {
     await waitFor(() =>
       expect(within(detail).getByRole("heading", { name: "Write Unit Tests for Parser Module" })).toBeInTheDocument(),
     );
+  }, 15_000);
+
+  it("keeps a deliberate keyboard selection when slower account metadata arrives", async () => {
+    const { user, client } = await mountStable();
+    const threads = await client.listThreads({ includeArchived: false });
+    const base = threads[0];
+    if (!base) throw new Error("Missing thread fixture");
+    vi.spyOn(client, "listThreads").mockResolvedValue([
+      { ...base, id: "selection-a", name: "Selection alpha", archivedAt: null },
+      { ...base, id: "selection-b", name: "Selection beta", archivedAt: null },
+    ]);
+    const accounts = await client.listProviderAccounts();
+    let release: ((value: typeof accounts) => void) | undefined;
+    vi.spyOn(client, "listProviderAccounts").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const palette = await openPalette(user);
+    await user.type(palette.getByRole("combobox"), "Selection");
+    const alpha = await palette.findByRole("option", { name: /Selection alpha/ });
+    const beta = await palette.findByRole("option", { name: /Selection beta/ });
+    await waitFor(() => expect(alpha).toHaveAttribute("aria-selected", "true"));
+    await user.keyboard("{ArrowDown}");
+    expect(beta).toHaveAttribute("aria-selected", "true");
+    await act(async () => release?.(accounts.map((account) => ({ ...account, displayName: "Selection account" }))));
+    await palette.findAllByRole("option", { name: /Selection account/ });
+    await waitFor(() => expect(beta).toHaveAttribute("aria-selected", "true"));
+    expect(palette.getByRole("combobox")).toHaveAttribute("aria-activedescendant", beta.id);
   }, 15_000);
 
   it("offers New agent… first and finds it by agent or provider words", async () => {
