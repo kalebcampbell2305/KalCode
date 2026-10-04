@@ -223,6 +223,8 @@ function evidence(channel = "stable") {
         name: "no-shortcuts",
         installedAppSignature,
         installedAppSignerMatchesInstaller: true,
+        installedUninstallerSignature: { status: "Valid", timestamped: true },
+        installedUninstallerSignerMatchesInstaller: true,
         installedGuardian,
         installedHook,
         afterUninstall,
@@ -231,6 +233,8 @@ function evidence(channel = "stable") {
         name: "default",
         installedAppSignature,
         installedAppSignerMatchesInstaller: true,
+        installedUninstallerSignature: { status: "Valid", timestamped: true },
+        installedUninstallerSignerMatchesInstaller: true,
         installedGuardian,
         installedHook,
         afterUninstall,
@@ -239,6 +243,8 @@ function evidence(channel = "stable") {
         name: "upgrade",
         installedAppSignature,
         installedAppSignerMatchesInstaller: true,
+        installedUninstallerSignature: { status: "Valid", timestamped: true },
+        installedUninstallerSignerMatchesInstaller: true,
         installedGuardian,
         installedHook,
         updateModeRehearsal: true,
@@ -400,6 +406,35 @@ test("rejects ineligible, unsigned, mismatched-channel, and identity-bearing bui
       }),
       /not eligible|signature|channel|redacted/,
     );
+  }
+});
+
+test("public updater publication requires signed timestamped publisher-bound uninstallers in every Windows pass", async () => {
+  for (const name of ["no-shortcuts", "default", "upgrade"]) {
+    for (const mutate of [
+      (pass) => {
+        delete pass.installedUninstallerSignature;
+      },
+      (pass) => {
+        pass.installedUninstallerSignature.status = "NotSigned";
+      },
+      (pass) => {
+        pass.installedUninstallerSignature.timestamped = false;
+      },
+      (pass) => {
+        delete pass.installedUninstallerSignerMatchesInstaller;
+      },
+      (pass) => {
+        pass.installedUninstallerSignerMatchesInstaller = false;
+      },
+    ]) {
+      const input = fixture();
+      mutate(input.verify.passes.find((pass) => pass.name === name));
+      await assert.rejects(
+        createUpdaterManifest({ ...input, publishedAt: "2026-09-25T12:00:00.000Z", notes: "Update." }),
+        /installed uninstaller/,
+      );
+    }
   }
 });
 
