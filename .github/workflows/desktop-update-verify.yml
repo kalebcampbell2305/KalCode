@@ -8,7 +8,7 @@ name: Desktop update verify (self-hosted)
 #   gh workflow run desktop-update-verify.yml --ref main -f live_url=... -f live_sha256=... -f live_version=...
 #     -f candidate_version=... -f candidate_sha256=... -f candidate_commit=...
 # Before publication, add candidate_tag=qa-... and expect_schema=N for signed package update/data preservation proof.
-# Package proof does not claim normal updater delivery and only supports unchanged data schema/updater releases.
+# Package proof does not claim normal updater delivery. Data migrations require changes_data and their rollback floor.
 
 run-name: Desktop update ${{ inputs.live_version }} -> ${{ inputs.candidate_version }}
 
@@ -22,7 +22,10 @@ on:
       candidate_sha256: { description: SHA-256 of the live Windows installer, required: true, type: string }
       candidate_commit: { description: Commit of the live build, required: true, type: string }
       candidate_tag: { description: Optional private draft QA release tag for prepublication package proof (no feed delivery claim), required: false, type: string }
-      expect_schema: { description: Expected SQLite schema for package proof (unchanged data schema only), required: false, default: '0', type: string }
+      expect_schema: { description: Expected candidate SQLite schema for package proof, required: false, default: '0', type: string }
+      changes_data: { description: Require a forward migration and candidate rollback floor, required: false, default: false, type: boolean }
+      clean_packet_sha256: { description: Optional SHA-256 of draft windows-clean-packet.zip for canonical clean install proof, required: false, type: string }
+      clean_verifier_sha256: { description: Exact candidate verify-windows.mjs SHA-256 inside the clean packet, required: false, type: string }
 
 permissions:
   contents: read
@@ -57,6 +60,9 @@ jobs:
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           EXPECT_SCHEMA: ${{ inputs.expect_schema }}
+          CHANGES_DATA: ${{ inputs.changes_data }}
+          CLEAN_PACKET_SHA256: ${{ inputs.clean_packet_sha256 }}
+          CLEAN_VERIFIER_SHA256: ${{ inputs.clean_verifier_sha256 }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -64,6 +70,8 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP ('desktop-update-out-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
           $packageArgs = @()
           if ($env:CANDIDATE_TAG) { $packageArgs = @('-CandidateTag', $env:CANDIDATE_TAG, '-ExpectSchema', $env:EXPECT_SCHEMA) }
+          if ($env:CHANGES_DATA -eq 'true') { $packageArgs += '-ChangesData' }
+          if ($env:CLEAN_PACKET_SHA256 -or $env:CLEAN_VERIFIER_SHA256) { $packageArgs += @('-CleanPacketSha256', $env:CLEAN_PACKET_SHA256, '-CleanVerifierSha256', $env:CLEAN_VERIFIER_SHA256) }
           & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
             -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
             -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `

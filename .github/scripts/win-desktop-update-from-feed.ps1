@@ -14,12 +14,13 @@ normal close cannot be proven. No test hooks, no seeded data: the public signed 
 Writes <OutDir>\desktop-update-receipt.json. Exit 0 = PASS.
 Optional -CandidateTag qa-... -ExpectSchema N downloads a private draft's exact signed package and proves a manual
 /S /UPDATE transition plus actual SQLite preservation. That mode never claims normal updater delivery and is only
-for releases with unchanged application data schema and updater behavior.
+for releases with unchanged updater behavior. -ChangesData verifies a forward schema migration and rollback floor.
 #>
 param(
   [string]$LiveUrl = '', [string]$LiveSha256 = '', [string]$LiveVersion = '',
   [string]$CandidateVersion = '', [string]$CandidateSha256 = '', [string]$CandidateCommit = '',
-  [string]$CandidateTag = '', [int]$ExpectSchema = 0,
+  [string]$CandidateTag = '', [int]$ExpectSchema = 0, [switch]$ChangesData,
+  [string]$CleanPacketSha256 = '', [string]$CleanVerifierSha256 = '',
   [string]$FeedUrl = 'https://kalcoded.com/releases/updater/stable.json',
   [int]$StageTimeoutSec = 900,
   [Parameter(Mandatory)][string]$OutDir,
@@ -52,7 +53,15 @@ function Read-Shared([string]$p) {
   try { $sr = New-Object IO.StreamReader($fs, (New-Object Text.UTF8Encoding $false), $true); $sr.ReadToEnd() } finally { $fs.Dispose() }
 }
 function Read-Json([string]$p) { if (Test-Path -LiteralPath $p) { try { (Read-Shared $p) | ConvertFrom-Json } catch { $null } } else { $null } }
-function KalProcs { @(Get-Process -Name kalcode, kalcode-provider-guardian, kalcode-update-helper -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) }
+function KalProcs {
+  # NSIS can affect this user in other sessions too: protect all of them.
+  foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='kalcode.exe' OR Name='kalcode-provider-guardian.exe' OR Name='kalcode-update-helper.exe'")) {
+    $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop
+    if ($owner.ReturnValue -ne 0) { Refuse 'cannot determine a KalCode process owner; preserving state' }
+    if ($owner.Sid -ceq $id.User.Value) { Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue }
+  }
+}
+. (Join-Path $PSScriptRoot 'desktop-process-safety.ps1')
 function InstallDir {
   $u = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode' -ErrorAction SilentlyContinue
   if (-not $u) { return $null }; $d = ([string]$u.InstallLocation).Trim('"'); if (-not $d) { $d = Split-Path -Parent ([string]$u.UninstallString).Trim('"') }; $d
@@ -80,30 +89,25 @@ function Wait-Started([string]$version, [DateTime]$since, [int]$sec = 180) {
   Refuse "no app.started $version within ${sec}s"
 }
 function Launch([string]$version) {
+  if (@(KalProcs).Count) { Refuse 'application launch requires an idle QA account' }
   $i = Installed; if (-not $i) { Refuse 'no installed kalcode.exe to launch' }
-  $t = [DateTime]::UtcNow.AddSeconds(-1); $p = Start-Process -FilePath $i.exe -PassThru
+  $t = [DateTime]::UtcNow.AddSeconds(-1); $p = Start-Process -FilePath $i.exe -WindowStyle Hidden -PassThru
+  $identity = Bind-App $p $i.exe $t
   $line = Wait-Started $version $t; Note "launched $version as PID $($p.Id): $line"
   # The main window must exist and be visible in this interactive session before a normal close can be proven.
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while ($sw.Elapsed.TotalSeconds -lt 60) { $p.Refresh(); if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }; Start-Sleep -Seconds 1 }
   if ($p.MainWindowHandle -eq [IntPtr]::Zero) { Refuse "PID $($p.Id) has no main window after 60s" }
-  [ordered]@{ pid = $p.Id; startedAt = $p.StartTime.ToUniversalTime().ToString('o'); window = [int64]$p.MainWindowHandle; appStarted = $line }
-}
-function Close-Exact([int]$procId, [int]$sec = 120) {
-  $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-  if (-not $p) { return [ordered]@{ pid = $procId; method = 'already-exited'; exited = $true; seconds = 0 } }
-  $requested = [DateTime]::UtcNow; $accepted = $p.CloseMainWindow()
-  $sw = [Diagnostics.Stopwatch]::StartNew()
-  while ($sw.Elapsed.TotalSeconds -lt $sec -and (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 500 }
-  $exited = -not (Get-Process -Id $procId -ErrorAction SilentlyContinue)
-  $r = [ordered]@{ pid = $procId; method = 'Process.CloseMainWindow (WM_CLOSE)'; accepted = $accepted; requestedAt = $requested.ToString('o'); exited = $exited; seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) }
-  Note "close PID $procId accepted=$accepted exited=$exited after $($r.seconds)s"
-  $r
+  [ordered]@{ pid = $p.Id; identity = $identity; startedAt = $p.StartTime.ToUniversalTime().ToString('o'); window = [int64]$p.MainWindowHandle; appStarted = $line }
 }
 function Leftovers {
   $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+  $run = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
   [ordered]@{
     uninstallEntry = Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode'
+    productKey = Test-Path -LiteralPath 'HKCU:\Software\KalCode'
+    protocolRegistration = Test-Path -LiteralPath 'HKCU:\Software\Classes\kalcode'
+    runValue = [bool]($run -and @($run.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and [string]$_.Value -match '(?i)kalcode' }).Count)
     installFolder = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'KalCode')) -or (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'))
     appData = (Test-Path -LiteralPath $AppData) -or (Test-Path -LiteralPath $LocalData)
     shortcuts = (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'KalCode.lnk')) -or (Test-Path -LiteralPath (Join-Path $programs 'KalCode'))
@@ -111,12 +115,24 @@ function Leftovers {
   }
 }
 function Cleanup {
-  # This is the dedicated QA account: after normal closes, any remaining KalCode process of this session is stopped so the
-  # next run starts clean. Each forced action is counted in the receipt.
-  foreach ($p in @(KalProcs | Where-Object { $_.Name -eq 'kalcode' })) { $null = Close-Exact $p.Id 30 }
-  $left = @(KalProcs); if ($left.Count) { $receipt.forcedProcessActions += $left.Count; $left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
+  # A failed close is diagnostic evidence. Never repair it with process termination.
+  $wait = [Diagnostics.Stopwatch]::StartNew()
+  while (@(KalProcs).Count -and $wait.Elapsed.TotalSeconds -lt 15) { Start-Sleep -Milliseconds 500 }
+  Assert-CleanupAllowed
   $d = InstallDir
-  if ($d) { $un = Join-Path $d 'uninstall.exe'; if (Test-Path -LiteralPath $un) { $p = Start-Process -FilePath $un -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait; Start-Sleep -Seconds 8; Note "uninstall exit $($p.ExitCode)" } }
+  if ($d) {
+    $allowed = @((Join-Path $env:LOCALAPPDATA 'KalCode'), (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'))
+    if ($d -notin $allowed) { Refuse 'uninstall registration points outside the task install locations' }
+    Assert-CleanupPath $d $env:USERPROFILE
+    $un = Join-Path $d 'uninstall.exe'
+    if (Test-Path -LiteralPath $un) {
+      $signature = Get-AuthenticodeSignature -LiteralPath $un
+      if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne $script:InstallerPublisher) { Refuse 'uninstaller publisher mismatch' }
+      Run-Installer $un @('/S')
+      Wait-UninstallComplete $d
+    }
+  }
+  Assert-CleanupAllowed
   foreach ($k in 'HKCU:\Software\KalCode', 'HKCU:\Software\Classes\kalcode', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode') {
     if (Test-Path -LiteralPath $k) { Remove-Item -LiteralPath $k -Recurse -Force -ErrorAction SilentlyContinue }
   }
@@ -126,6 +142,7 @@ function Cleanup {
   $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   # WebView2 and the uninstaller can hold files for a few seconds after exit, so retry the data removal briefly.
   $paths = @($AppData, $LocalData, (Join-Path $env:LOCALAPPDATA 'KalCode'), (Join-Path $env:LOCALAPPDATA 'Programs\KalCode'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'KalCode.lnk'), (Join-Path $programs 'KalCode.lnk'), (Join-Path $programs 'KalCode'))
+  foreach ($path in $paths) { Assert-CleanupPath $path $env:USERPROFILE }
   for ($attempt = 0; $attempt -lt 10; $attempt++) {
     foreach ($p in $paths) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue } }
     if (-not @($paths | Where-Object { Test-Path -LiteralPath $_ }).Count) { break }
@@ -137,7 +154,6 @@ function Cleanup {
 }
 
 # Cleanup closes, uninstalls and deletes KalCode data, so it may run only after every account and session guard passed.
-$guardsPassed = $false
 try {
   # Account and session rules come first: this check closes and reinstalls KalCode, so it must never reach the owner.
   $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -151,13 +167,18 @@ try {
   if ($LiveUrl -notmatch '^https://kalcoded\.com/releases/updater/stable/[A-Za-z0-9._+%/-]{1,200}\.exe$') { Refuse 'LiveUrl must be an immutable kalcoded.com updater URL' }
   if ($FeedUrl -cne 'https://kalcoded.com/releases/updater/stable.json') { Refuse 'FeedUrl must be the production Stable feed' }
   if ($CandidateTag -and ($CandidateTag -cnotmatch '^qa-[A-Za-z0-9][A-Za-z0-9._-]{1,100}$' -or $ExpectSchema -lt 1)) { Refuse 'package proof requires a qa- draft tag and expected schema' }
+  if ($ChangesData -and -not $CandidateTag) { Refuse 'migration proof requires a signed draft package' }
+  if ($CleanPacketSha256 -or $CleanVerifierSha256) {
+    if (-not $CandidateTag -or $CleanPacketSha256 -cnotmatch '^[0-9a-f]{64}$' -or $CleanVerifierSha256 -cnotmatch '^[0-9a-f]{64}$') { Refuse 'clean verification requires a draft package and exact packet/verifier hashes' }
+    . (Join-Path $PSScriptRoot 'desktop-clean-packet.ps1')
+  }
   if ($SelfTest) { $receipt.status = 'SELFTEST'; Save; Write-Host 'SELFTEST PASS'; exit 0 }
   if (@(KalProcs).Count) { Refuse 'QA session already has KalCode processes; preserve them and retry once idle' }
-  $guardsPassed = $true
 
   if ($CandidateTag) {
     . (Join-Path $PSScriptRoot 'win-desktop-package-proof.ps1')
     $candidatePackage = Get-CandidatePackage
+    if ($CleanPacketSha256) { $cleanPacket = Get-CleanPacket }
   } else {
   # 0. The feed must already serve the exact candidate; otherwise there is nothing for the updater to deliver.
   $feed = Invoke-RestMethod -UseBasicParsing -Uri ($FeedUrl + '?t=' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
@@ -170,18 +191,17 @@ try {
   $env:GH_TOKEN = $null
 
   $pre = Leftovers
-  if ($pre.Values -contains $true) {
-    Note ('profile had KalCode leftovers: ' + ($pre | ConvertTo-Json -Compress) + '; cleaning first')
-    if (-not (Cleanup)) { Refuse 'could not clean KalCode leftovers before the check' }
-  }
+  if ($pre.Values -contains $true) { Refuse ('QA profile already contains KalCode state; preserving it: ' + ($pre | ConvertTo-Json -Compress)) }
 
   # 1. live build
   $live = Join-Path $OutDir ([IO.Path]::GetFileName(([Uri]$LiveUrl).AbsolutePath))
   Invoke-WebRequest -UseBasicParsing -Uri $LiveUrl -OutFile $live
   if ((Sha $live) -ne $LiveSha256) { Refuse "downloaded live installer is $(Sha $live), not $LiveSha256" }
   $sig = Get-AuthenticodeSignature -LiteralPath $live; if ($sig.Status -ne 'Valid') { Refuse "live installer Authenticode $($sig.Status)" }
-  $p = Start-Process -FilePath $live -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
-  if ($p.ExitCode -ne 0) { Refuse "live installer exited $($p.ExitCode)" }
+  $script:InstallerPublisher = $sig.SignerCertificate.Subject
+  if ((Leftovers).Values -contains $true) { Refuse 'QA state appeared during download; preserving it' }
+  $script:QaStateOwned = $true
+  Run-Installer $live @('/S')
   $sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Installed) -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Seconds 2 }
   $i = Installed; if (-not $i -or $i.productVersion -ne $LiveVersion) { Refuse "live install reports $($i.productVersion), expected $LiveVersion" }
   Note "installed live $LiveVersion ($($i.signature))"
@@ -207,7 +227,7 @@ try {
 
   # 3. normal close of the exact live PID
   $receipt.liveClose = Close-Exact $liveRun.pid
-  if (-not $receipt.liveClose.exited) { Refuse "live PID $($liveRun.pid) did not exit after WM_CLOSE" }
+  if (-not $receipt.liveClose.accepted -or -not $receipt.liveClose.exited) { Refuse "live PID $($liveRun.pid) did not exit after WM_CLOSE" }
 
   # 4. the staged candidate is installed after exit. kalcode.exe is not opened while the update helper or the staged
   # installer still runs (reading it then fails, and an open handle could block the replacement); a busy file means not yet.
@@ -231,8 +251,10 @@ try {
 
   # 5. reopen (or adopt the relaunched instance) and require a healthy journal
   if ($relaunched.Count) {
+    if ($relaunched.Count -ne 1) { Refuse 'ambiguous native relaunch; preserving all processes' }
+    $identity = Bind-App $relaunched[0] $applied.exe ([DateTime]::Parse($receipt.liveClose.requestedAt).ToUniversalTime())
     $line = Wait-Started $CandidateVersion ([DateTime]::Parse($receipt.liveClose.requestedAt).ToUniversalTime())
-    $receipt.reopen = [ordered]@{ pid = $relaunched[0].Id; method = 'automatic relaunch'; appStarted = $line }
+    $receipt.reopen = [ordered]@{ pid = $relaunched[0].Id; identity = $identity; method = 'automatic relaunch'; appStarted = $line }
   } else {
     $receipt.reopen = Launch $CandidateVersion
   }
@@ -245,15 +267,21 @@ try {
   if ($si -and $si.stagedForExit -eq $true) { Refuse 'silent install is still staged after the candidate started' }
   Note "journal healthy: lastSuccessfulVersion $($journal.lastSuccessfulVersion)"
   $receipt.candidateClose = Close-Exact $receipt.reopen.pid
-  if (-not $receipt.candidateClose.exited) { Refuse "candidate PID $($receipt.reopen.pid) did not exit after WM_CLOSE" }
+  if (-not $receipt.candidateClose.accepted -or -not $receipt.candidateClose.exited) { Refuse "candidate PID $($receipt.reopen.pid) did not exit after WM_CLOSE" }
   $receipt.normalUpdaterDeliveryProven = $true
   }
 
+  if ($CleanPacketSha256) {
+    if (-not (Cleanup)) { Refuse 'update cleanup must finish before clean installer verification' }
+    $script:QaStateOwned = $false
+    Invoke-CleanPacket $cleanPacket
+    $receipt.cleanupClean = -not ((Leftovers).Values -contains $true)
+  }
   $receipt.status = 'PASS'
 } catch {
   $receipt.error = "$_"; Note "FAILED: $_"
 } finally {
-  if ($guardsPassed) { try { $receipt.cleanupClean = Cleanup } catch { $receipt.cleanupClean = $false; Note "cleanup: $_" } }
+  if ($script:QaStateOwned) { try { $receipt.cleanupClean = Cleanup } catch { $receipt.cleanupClean = $false; Note "cleanup: $_" } }
   if ($receipt.status -eq 'PASS' -and ($receipt.cleanupClean -ne $true -or $receipt.forcedProcessActions -ne 0)) {
     $receipt.status = 'FAILED'; $receipt.error = 'clean natural shutdown required; cleanup was incomplete or forced'
     $receipt.normalUpdaterDeliveryProven = $false

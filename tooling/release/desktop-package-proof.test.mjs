@@ -20,7 +20,10 @@ test("package proof requires draft exact commit, signed exact bytes and build id
   }
   assert.match(source, /normal|production updater delivery/u);
   assert.doesNotMatch(source, /normalUpdaterDeliveryProven = \$true|Stop-Process|Invoke-RestMethod/u);
-  assert.match(source, /\$env:GH_TOKEN = \$null/u);
+  assert.match(
+    readFileSync(new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url), "utf8"),
+    /\$env:GH_TOKEN = \$null/u,
+  );
   assert.match(source, /candidateClose\.accepted/u);
   assert.match(source, /liveClose\.accepted/u);
 });
@@ -41,6 +44,14 @@ with tempfile.TemporaryDirectory() as folder:
             c.execute('INSERT INTO app_meta VALUES(?,?)', ('first_run_at', '2026-10-04'))
             c.executemany('INSERT INTO project VALUES(?)', [(b'secret',),(b'secret',)])
     assert m.compare(a,b,'0.1.9+1467',22)['differences'] == []
+    with closing(sqlite3.connect(b)) as c, c:
+        c.executescript('INSERT INTO schema_migrations VALUES(23); INSERT INTO schema_migrations VALUES(24); CREATE TABLE memory(id TEXT);')
+    forward=m.compare(a,b,'0.1.9+1467',24,True)
+    assert forward['differences'] == [] and forward['liveSchema']==22 and forward['candidateSchema']==24, forward
+    assert 'unchanged expected schema' in str(m.compare(a,b,'0.1.9+1467',24))
+    assert 'forward migration' in str(m.compare(a,b,'0.1.9+1467',23,True))
+    with closing(sqlite3.connect(b)) as c, c: c.execute('DELETE FROM schema_migrations WHERE version>22')
+    assert 'forward migration' in str(m.compare(a,b,'0.1.9+1467',22,True))
     with closing(sqlite3.connect(b)) as c, c: c.execute('INSERT INTO project VALUES(?)',(b'new',))
     assert m.compare(a,b,'0.1.9+1467',22)['differences'] == []
     with closing(sqlite3.connect(b)) as c, c: c.execute('DELETE FROM project WHERE rowid=1')

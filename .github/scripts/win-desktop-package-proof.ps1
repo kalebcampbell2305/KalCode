@@ -20,15 +20,14 @@ function Get-CandidatePackage {
   $sig = Get-AuthenticodeSignature -LiteralPath $exe
   if ($sig.Status -ne 'Valid') { Refuse 'candidate installer signature is not valid' }
   $receipt.schema = 'kalcode-fast-update-from-live/v1'
-  $receipt.changesData = $false; $receipt.changesUpdater = $false; $receipt.expectSchema = $ExpectSchema
+  $receipt.changesData = [bool]$ChangesData; $receipt.changesUpdater = $false; $receipt.expectSchema = $ExpectSchema
   $receipt.proofMechanism = 'signed /S /UPDATE package transition in isolated interactive desktop'
   $receipt.checks = [ordered]@{ install = $false; launch = $false; updateFromLive = $false; dataKept = $false; restoreGuard = $null }
   $receipt.safeguards = [ordered]@{ authenticationBypassed = $false; cacheSeeded = $false; fixtureOnly = $false; testHooks = $false; tlsBypassed = $false }
   $receipt.candidate.source = 'private-draft-release'; $receipt.candidate.tag = $CandidateTag
   $receipt.candidate.installerSignature = [string]$sig.Status
   $receipt.candidate.buildRecordSha256 = Sha (Join-Path $packet 'build.json')
-  # The token is only for draft download; the application never inherits it.
-  $env:GH_TOKEN = $null
+  # The caller clears GH_TOKEN after all draft assets are downloaded, before launching anything.
   [ordered]@{ exe = $exe; signer = $sig.SignerCertificate.Subject }
 }
 
@@ -49,9 +48,7 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $receipt.liveClose = Close-Exact $liveRun.pid
   if (-not $receipt.liveClose.exited -or -not $receipt.liveClose.accepted) { Refuse 'live application did not exit naturally through its window' }
   $before = Copy-ClosedDatabase 'db-live'
-  $installer = Start-Process -FilePath $package.exe -ArgumentList '/S', '/UPDATE' -WindowStyle Hidden -PassThru
-  if (-not $installer.WaitForExit(300000)) { Refuse 'candidate installer exceeded 300s; leaving owned process for diagnosis' }
-  if ($installer.ExitCode -ne 0) { Refuse "candidate installer failed: $($installer.ExitCode)" }
+  Run-Installer $package.exe @('/S', '/UPDATE')
   $receipt.applied = Installed
   if (-not $receipt.applied -or $receipt.applied.productVersion -cne $CandidateVersion -or $receipt.applied.fileVersion -cne $CandidateVersion -or $receipt.applied.signature -cne 'Valid') { Refuse 'installed candidate identity/signature mismatch' }
   $receipt.checks.install = $true
@@ -62,11 +59,19 @@ function Invoke-PackageProof($package, $liveRun, $liveSignature) {
   $receipt.candidateClose = Close-Exact $receipt.reopen.pid
   if (-not $receipt.candidateClose.exited -or -not $receipt.candidateClose.accepted) { Refuse 'candidate application did not exit naturally through its window' }
   $after = Copy-ClosedDatabase 'db-candidate'
-  $comparison = (& python -I -B (Join-Path $PSScriptRoot 'compare-desktop-databases.py') $before $after $CandidateVersion $ExpectSchema | Out-String).Trim()
+  $migrationArgs = @(); if ($ChangesData) { $migrationArgs += '--changes-data' }
+  $comparison = (& python -I -B (Join-Path $PSScriptRoot 'compare-desktop-databases.py') $before $after $CandidateVersion $ExpectSchema @migrationArgs | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $comparison) { Refuse 'read-only database comparison failed' }
   $receipt.dataCompare = $comparison | ConvertFrom-Json
   [IO.File]::WriteAllText((Join-Path $OutDir 'database-comparison.json'), $comparison)
   if (@($receipt.dataCompare.differences).Count) { Refuse 'candidate changed or lost pre-existing project data; see database-comparison.json' }
   $receipt.checks.dataKept = $true; $receipt.checks.updateFromLive = $true
+  if ($ChangesData) {
+    $floorPath = Join-Path $Updates 'rollback-floor'
+    $floor = if (Test-Path -LiteralPath $floorPath) { (Read-Shared $floorPath).Trim() } else { '' }
+    $receipt.rollbackFloor = $floor
+    if ($floor -cne $CandidateVersion) { Refuse 'migrating candidate did not establish its rollback floor' }
+    $receipt.checks.restoreGuard = $true
+  }
   Note "signed package update passed; $($receipt.dataCompare.rowsKept) existing rows retained"
 }
