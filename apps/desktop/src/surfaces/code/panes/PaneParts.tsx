@@ -126,9 +126,13 @@ export function PaneAccountChip({ account }: { account: PaneAccountIdentity }) {
   );
 }
 
-/** The display status: glyph + UPPERCASE words, tone as a reinforcement only. */
-export function PaneStatusChip({ status }: { status: ThreadStatus }) {
+/**
+ * The display status: glyph + UPPERCASE words, tone as a reinforcement only. `qualifier` replaces
+ * the shared one when the pane knows more (a held launch's real reason: "memory is critically low").
+ */
+export function PaneStatusChip({ status, qualifier }: { status: ThreadStatus; qualifier?: string | null }) {
   const view = paneStatus(status);
+  const shownQualifier = qualifier ?? view.qualifier;
   const Icon = ICONS[status];
   const tone: StatusTone = view.tone;
   return (
@@ -137,7 +141,7 @@ export function PaneStatusChip({ status }: { status: ThreadStatus }) {
         <Icon aria-hidden="true" />
         <span className={styles.chipLabel}>{view.label}</span>
       </span>
-      {view.qualifier ? <span className={styles.qualifier}>{view.qualifier}</span> : null}
+      {shownQualifier ? <span className={styles.qualifier}>{shownQualifier}</span> : null}
     </span>
   );
 }

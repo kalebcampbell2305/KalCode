@@ -49,7 +49,7 @@ export const STATUS_META: Record<ThreadStatus, StatusMeta> = {
   recovering: meta("recovering", "Recovering", "working"),
   waiting_for_permission: meta("waiting_for_permission", "Needs approval", "attention"),
   waiting_for_user: meta("waiting_for_user", "Needs your reply", "attention"),
-  waiting_for_dependency: meta("waiting_for_dependency", "Blocked", "waiting"),
+  waiting_for_dependency: meta("waiting_for_dependency", "Waiting", "waiting"),
   idle: meta("idle", "Idle", "idle"),
   paused: meta("paused", "Paused", "idle"),
   offline: meta("offline", "Offline", "idle"),

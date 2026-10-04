@@ -20,6 +20,7 @@ import {
   providerModeNote,
   threadActions,
   unavailableReason,
+  waitingReason,
 } from "./model.ts";
 
 const ALL: ThreadStatus[] = [
@@ -104,6 +105,7 @@ describe("threadActions", () => {
       stop: true,
       resume: false,
       archive: false,
+      startAnyway: false,
       compose: "send",
     });
     // Stop only while something runs; a quiet thread is archived instead (its idle session ends).
@@ -126,31 +128,36 @@ describe("threadActions", () => {
         stop: false,
         resume: true,
         archive: true,
+        startAnyway: false,
         compose: "resume",
       });
     }
     expect(threadActions({ status: "paused" })).toMatchObject({ resume: true, stop: true, compose: "resume" });
   });
 
-  it("a thread waiting for system resources can only be stopped", () => {
+  it("a thread held by hard resource pressure can be stopped or started anyway", () => {
     const waiting = {
       status: "waiting_for_dependency" as const,
-      error: { code: "waiting_for_resources", message: "KalCode is waiting for system resources (CPU busy)." },
+      currentActivity: "Waiting to start: memory is critically low (412 MB free)",
+      error: { code: "waiting_for_resources", message: "Memory is critically low (412 MB free)." },
     };
     expect(threadActions(waiting)).toEqual({
       interrupt: false,
       stop: true,
       resume: false,
       archive: false,
+      startAnyway: true,
       compose: "blocked",
     });
-    // Its wait ran out: resumable, not failed.
+    // Its wait ran out: resumable or Start Anyway, not failed.
     expect(
       threadActions({
         status: "interrupted",
         error: { code: "resources_unavailable", message: "Codex didn't start." },
       }),
-    ).toMatchObject({ stop: false, resume: true, archive: true, compose: "resume" });
+    ).toMatchObject({ stop: false, resume: true, archive: true, startAnyway: true, compose: "resume" });
+    // A wait on another task is not a resource hold: no Start Anyway.
+    expect(threadActions({ status: "waiting_for_dependency", error: null })).toMatchObject({ startAnyway: false });
   });
 
   it("archived threads are read-only", () => {
@@ -159,6 +166,7 @@ describe("threadActions", () => {
       stop: false,
       resume: false,
       archive: false,
+      startAnyway: false,
       compose: "blocked",
     });
   });
@@ -167,15 +175,23 @@ describe("threadActions", () => {
 describe("thread problems", () => {
   const error = (code: string, message = "Details from the runtime.") => ({ code, message });
 
-  it("a launch waiting for system resources reads as waiting, not as another task or a failure", () => {
+  it("a held launch reads as waiting with the real reason, not as another task, a failure or CPU busy", () => {
     const thread = {
       status: "waiting_for_dependency" as const,
-      currentActivity: "Waiting for system resources (CPU busy)",
+      currentActivity: "Waiting to start: memory is critically low (412 MB free)",
       error: error("waiting_for_resources"),
     };
     expect(isWaitingForResources(thread)).toBe(true);
-    expect(presentThread(thread)).toMatchObject({ label: "Waiting for system resources", tone: "waiting" });
-    expect(presentProblem(thread)).toEqual({ title: "Waiting for system resources", tone: "waiting" });
+    expect(waitingReason(thread)).toBe("memory is critically low (412 MB free)");
+    expect(presentThread(thread)).toMatchObject({ label: "Waiting to start", tone: "waiting", display: "waiting" });
+    expect(presentProblem(thread)).toEqual({
+      title: "Waiting to start: memory is critically low (412 MB free)",
+      tone: "waiting",
+    });
+    expect(presentProblem({ ...thread, currentActivity: null })).toEqual({
+      title: "Waiting to start",
+      tone: "waiting",
+    });
     // A provider's own dependency wait keeps its generic label.
     expect(presentThread({ status: "waiting_for_dependency", error: null }).label).toBe("Waiting on another task");
   });
@@ -183,7 +199,7 @@ describe("thread problems", () => {
   it("a wait that ran out is resumable and never looks like a provider failure", () => {
     const thread = { status: "interrupted" as const, error: error("resources_unavailable") };
     expect(presentThread(thread)).toMatchObject({ label: "Not started", tone: "waiting" });
-    expect(presentProblem(thread)).toEqual({ title: "Not started: system resources were busy", tone: "waiting" });
+    expect(presentProblem(thread)).toEqual({ title: "Not started: system resources were too low", tone: "waiting" });
   });
 
   it("an idle thread whose last turn failed says so next to the error", () => {

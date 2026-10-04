@@ -16,12 +16,14 @@ import {
 import {
   Archive,
   ArchiveRestore,
+  BrushCleaning,
   CirclePause,
   CircleX,
   Hourglass,
   Info,
   Pencil,
   Play,
+  Rocket,
   ShieldAlert,
   Square,
   UserRound,
@@ -44,6 +46,7 @@ import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
+import { useKalTidy } from "../code/kaltidy/kalTidyContext.ts";
 import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
 import { AccountSwitcher } from "./AccountSwitcher.tsx";
 import {
@@ -70,12 +73,13 @@ interface ThreadDetailProps {
 /** Prefix of the runtime's structured activity while a thread waits for approval. */
 const APPROVAL_PREFIX = "Waiting for approval: ";
 
-type Action = "interrupt" | "stop" | "resume" | "archive" | "unarchive" | "send" | "rename";
+type Action = "interrupt" | "stop" | "resume" | "start_anyway" | "archive" | "unarchive" | "send" | "rename";
 
 const FAILURE_TITLES: Record<Action, string> = {
   interrupt: "Couldn't interrupt the thread",
   stop: "Couldn't stop the thread",
   resume: "Couldn't resume the thread",
+  start_anyway: "Couldn't start the thread",
   archive: "Couldn't archive the thread",
   unarchive: "Couldn't unarchive the thread",
   send: "Message not sent",
@@ -88,6 +92,7 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: T
   const toast = useToast();
   const detail = useThreadDetail(threadId);
   const [busy, setBusy] = useState<Action | null>(null);
+  const kalTidy = useKalTidy();
   // A rebind from anywhere (this header, the palette, KalVoice, another window) shows at once.
   useThreadAccountChanges(threadId, (change) =>
     detail.setThread((current) =>
@@ -170,6 +175,17 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: T
                 onClick={() => void run("resume", () => client.resumeThread(thread.id))}
               >
                 Resume
+              </Button>
+            ) : null}
+            {actions.startAnyway ? (
+              <Button
+                size="sm"
+                variant="primary"
+                icon={<Rocket />}
+                busy={busy === "start_anyway"}
+                onClick={() => void run("start_anyway", () => client.startThreadAnyway(thread.id))}
+              >
+                Start Anyway
               </Button>
             ) : null}
             {actions.stop ? (
@@ -288,6 +304,13 @@ export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: T
             <p className={styles.noticeCode}>
               {problem.tone === "danger" ? "Error code" : "Code"}: {thread.error.code}
             </p>
+            {actions.startAnyway && kalTidy ? (
+              <div className={styles.noticeActions}>
+                <Button size="sm" variant="secondary" icon={<BrushCleaning />} onClick={() => kalTidy.openReview()}>
+                  Run KalTidy
+                </Button>
+              </div>
+            ) : null}
           </div>
         </ContentContextMenu>
       ) : null}

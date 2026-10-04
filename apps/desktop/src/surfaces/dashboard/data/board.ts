@@ -198,6 +198,7 @@ const DISPLAY_RANK: Record<DisplayStatus, number> = {
   reviewing: 3,
   recovering: 4,
   starting: 5,
+  waiting: 5,
   done: 6,
   paused: 7,
   idle: 8,

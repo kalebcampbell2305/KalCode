@@ -184,7 +184,7 @@ export function useOrganization({ workspaceId, terminals, shells, panes, active 
     const waiting = panes.filter(
       ({ thread }) =>
         thread.archivedAt === null &&
-        byKey.get(contentKey({ kind: "agent", agentId: thread.id }))?.status?.badge === "waiting",
+        byKey.get(contentKey({ kind: "agent", agentId: thread.id }))?.status?.badge === "needs_you",
     );
     const approvals = (pending ?? []).filter((a) => a.action.workspaceId === workspaceId);
     const first = waiting[0];
