@@ -18,7 +18,7 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::AppState;
-use crate::runtime_coordinator::RuntimeState;
+use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
 use crate::thread_commands::ThreadsState;
 
 struct AccountSecrets {
@@ -408,7 +408,7 @@ pub async fn integration_dispatch(
     webview: Webview,
     state: State<'_, AppState>,
     integrations: RuntimeState<IntegrationState>,
-    threads: RuntimeState<ThreadsState>,
+    threads: RuntimeAccess,
     request: IntegrationRequest,
 ) -> Result<Value, IpcError> {
     if webview.label() != "main" {
