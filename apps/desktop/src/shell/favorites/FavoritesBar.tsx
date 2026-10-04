@@ -17,8 +17,9 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { FilePreview } from "../context/FilePreview.tsx";
 import { useOptionalSearchActions } from "../rail/search/SearchProvider.tsx";
 import styles from "./Favorites.module.css";
@@ -46,8 +47,19 @@ export function FavoritesBar() {
   const favorites = useFavorites();
   const resolver = useFavoriteResolver();
   const search = useOptionalSearchActions();
-  const entries = visibleFavorites(favorites.entries, active?.id ?? null);
+  const { state: threadState } = useThreadSummaries();
   const [unavailable, setUnavailable] = useState<Record<string, string | null>>({});
+  // Reuse the shell's canonical event-refreshed cache. Labels follow automatic
+  // and manual renames; persisted favorites retain their stable identity/fallback.
+  const threadNames = useMemo(
+    () => new Map(threadState.status === "ready" ? threadState.data.map((thread) => [thread.id, thread.name]) : []),
+    [threadState],
+  );
+  const entries = visibleFavorites(favorites.entries, active?.id ?? null).map((entry) => {
+    if (unavailable[entry.key] || (entry.target.kind !== "agent" && entry.target.kind !== "thread")) return entry;
+    const title = threadNames.get(entry.target.id);
+    return title?.trim() && title !== entry.title ? { ...entry, title } : entry;
+  });
   const [notice, setNotice] = useState<{ entry: FavoriteEntry; reason: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
@@ -185,12 +197,12 @@ export function FavoritesBar() {
                             dragged.current = null;
                           }}
                           onDragOver={(event) => {
-                            const source = favorites.entries.find((item) => item.key === dragged.current);
+                            const source = entries.find((item) => item.key === dragged.current);
                             if (source?.scopeId === scope) event.preventDefault();
                           }}
                           onDrop={(event) => {
                             event.preventDefault();
-                            const source = favorites.entries.find((item) => item.key === dragged.current);
+                            const source = entries.find((item) => item.key === dragged.current);
                             if (source && source.scopeId === scope && source.key !== entry.key) {
                               const siblings = entries.filter((item) => item.scopeId === scope);
                               const sourceIndex = siblings.findIndex((item) => item.key === source.key);

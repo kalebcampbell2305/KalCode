@@ -9,9 +9,13 @@ import { FAVORITES_STORAGE_KEY } from "./store.ts";
 
 const mocks = vi.hoisted(() => ({
   active: { id: "w1", name: "Project One" },
+  threads: [] as { id: string; name: string }[],
   open: vi.fn(),
   check: vi.fn(),
   find: vi.fn(),
+}));
+vi.mock("../../surfaces/dashboard/data/DashboardData.tsx", () => ({
+  useThreadSummaries: () => ({ state: { status: "ready", data: mocks.threads } }),
 }));
 vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
   useWorkspaces: () => ({ active: mocks.active }),
@@ -36,6 +40,7 @@ function saved(): FavoriteEntry[] {
 beforeEach(() => {
   localStorage.clear();
   mocks.active = { id: "w1", name: "Project One" };
+  mocks.threads = [];
   mocks.check.mockReset().mockResolvedValue(null);
   mocks.open.mockReset().mockResolvedValue({ opened: true });
   mocks.find.mockClear();
@@ -43,6 +48,35 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("favorites strip", () => {
+  it.each(["agent", "thread"] as const)(
+    "shows canonical automatic/manual renames for a pinned %s without changing its saved identity",
+    async (kind) => {
+      const savedTarget: FavoriteTarget = { kind, id: "session-1", workspaceId: "w1" };
+      const pinned = { key: favoriteKey(savedTarget, null), target: savedTarget, title: "New agent", scopeId: null };
+      seed([pinned]);
+      mocks.threads = [{ id: "session-1", name: "New agent" }];
+      const view = render(<FavoritesBar />);
+      expect(screen.getByRole("button", { name: "New agent" })).toBeVisible();
+      // DashboardData's canonical cache refreshes from thread.renamed events for
+      // both first-task naming and an explicit user rename.
+      mocks.threads = [{ id: "session-1", name: "Fix Login Race" }];
+      view.rerender(<FavoritesBar />);
+      expect(screen.getByRole("button", { name: "Fix Login Race" })).toBeVisible();
+      mocks.threads = [{ id: "session-1", name: "Login Review" }];
+      view.rerender(<FavoritesBar />);
+      await userEvent.click(screen.getByRole("button", { name: "Login Review" }));
+      expect(mocks.open).toHaveBeenLastCalledWith({ ...pinned, title: "Login Review" });
+      expect(saved()).toEqual([pinned]);
+      expect(mocks.threads).toEqual([{ id: "session-1", name: "Login Review" }]);
+      mocks.threads = [{ id: "session-1", name: "   " }];
+      view.rerender(<FavoritesBar />);
+      expect(screen.getByRole("button", { name: "New agent" })).toBeVisible();
+      mocks.threads = [];
+      view.rerender(<FavoritesBar />);
+      expect(screen.getByRole("button", { name: "New agent" })).toBeVisible();
+    },
+  );
+
   it("deduplicates global/scoped targets and changes visible favorites with the workspace", () => {
     const entries = [entry("one", "One"), entry("two", "Two", "w2"), entry("one", "One", null)];
     expect(visibleFavorites(entries, "w1").map((item) => item.scopeId)).toEqual([null]);
