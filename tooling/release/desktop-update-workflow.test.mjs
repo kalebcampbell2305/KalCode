@@ -52,6 +52,15 @@ test("desktop update script cleans up only after every guard passed", () => {
   );
 });
 
+test("desktop update script does not open kalcode.exe while the update is being applied", () => {
+  const apply = script.slice(script.indexOf("# 4. the staged candidate"), script.indexOf("if (-not $applied)"));
+  assert.ok(
+    apply.indexOf("if ($busy.Count) { continue }") < apply.indexOf("Installed"),
+    "waits for helper and installer first",
+  );
+  assert.match(apply, /try \{ \$i = Installed \} catch \{ continue \}/u, "a locked file means not done yet");
+});
+
 test("desktop update script closes KalCode by its window, never by name", () => {
   assert.match(script, /\$p\.CloseMainWindow\(\)/u);
   assert.doesNotMatch(script, /taskkill/iu);

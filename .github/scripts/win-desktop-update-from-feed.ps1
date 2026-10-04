@@ -189,12 +189,17 @@ try {
   $receipt.liveClose = Close-Exact $liveRun.pid
   if (-not $receipt.liveClose.exited) { Refuse "live PID $($liveRun.pid) did not exit after WM_CLOSE" }
 
-  # 4. the staged candidate is installed after exit
+  # 4. the staged candidate is installed after exit. kalcode.exe is not opened while the update helper or the staged
+  # installer still runs (reading it then fails, and an open handle could block the replacement); a busy file means not yet.
+  $prepared = Join-Path $Updates 'prepared'
   $sw = [Diagnostics.Stopwatch]::StartNew(); $applied = $null
   while ($sw.Elapsed.TotalSeconds -lt 300) {
-    $i = Installed
-    if ($i -and $i.productVersion -eq $CandidateVersion -and -not @(KalProcs | Where-Object { $_.Name -eq 'kalcode-update-helper' }).Count) { $applied = $i; break }
     Start-Sleep -Seconds 2
+    $busy = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.SessionId -eq $me -and ($_.Name -eq 'kalcode-update-helper' -or ($_.Path -and $_.Path.StartsWith($prepared, [StringComparison]::OrdinalIgnoreCase))) })
+    if ($busy.Count) { continue }
+    try { $i = Installed } catch { continue }
+    if ($i -and $i.productVersion -eq $CandidateVersion) { $applied = $i; break }
   }
   if (-not $applied) { Refuse "installed version is $((Installed).productVersion) 300s after exit, not $CandidateVersion" }
   if ($applied.signature -ne 'Valid') { Refuse "installed candidate kalcode.exe Authenticode $($applied.signature)" }
