@@ -6,7 +6,7 @@ import type { ThemePreference } from "./ThemePreference.ts";
 /**
  * A partial update. Unknown fields are rejected.
  */
-export type SettingsPatch = { theme?: ThemePreference, motion?: MotionPreference, density?: Density, sidebarCollapsed?: boolean,
+export type SettingsPatch = { theme?: ThemePreference, motion?: MotionPreference, density?: Density, sidebarCollapsed?: boolean, 
 /**
  * 1–60 characters without control characters; an empty (or all-space) value clears it.
  */

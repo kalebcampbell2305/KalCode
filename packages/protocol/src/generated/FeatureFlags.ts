@@ -2,7 +2,7 @@
 import type { FeatureFlag } from "./FeatureFlag.ts";
 import type { SurfaceFlag } from "./SurfaceFlag.ts";
 
-export type FeatureFlags = { surfaces: Array<SurfaceFlag>,
+export type FeatureFlags = { surfaces: Array<SurfaceFlag>, 
 /**
  * Added in CA-1; absent in older payloads.
  */
