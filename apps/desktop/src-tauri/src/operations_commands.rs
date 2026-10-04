@@ -394,7 +394,7 @@ impl OperationsState {
 
     fn prune_finished_terminals(&self, rows: &[OperationRecord]) -> Result<()> {
         // Finished command output belongs to the durable run. Keep four recent terminal tabs
-        // per workspace; until pruned they count toward the plan's open-terminal cap.
+        // per workspace; pruning keeps the visible terminal list manageable.
         for workspace in self.core.workspaces()? {
             let mut finished = self
                 .core

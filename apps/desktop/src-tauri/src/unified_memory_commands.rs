@@ -95,22 +95,36 @@ impl MemoryService {
         if snapshot.account.as_ref().map(|a| a.id.as_str()) != Some(self.owner.as_str()) {
             return Err(unavailable());
         }
-        let rank = match snapshot.plan_tier() {
-            kalcode_core::plans::PlanTier::Free => 0,
-            kalcode_core::plans::PlanTier::Pro => 1,
-            kalcode_core::plans::PlanTier::Max | kalcode_core::plans::PlanTier::Max2x => 2,
-            kalcode_core::plans::PlanTier::Owner => 3,
-        };
-        if !kalcode_contracts::app::FeatureId::Memory
-            .placement()
-            .included_in(rank)
-        {
-            return Err(KalError::validation(
-                "memory_plan_required",
-                "Unified Memory is included with KalCode Pro and higher plans.",
-            ));
-        }
         Ok(())
+    }
+
+    /// Basic local project memory is universal. Automatic provider context and capture are
+    /// the Pro project-memory capability; inspect current verified authority on every use.
+    fn provider_context_enabled(&self) -> bool {
+        self.account.upgrade().is_some_and(|account| {
+            !matches!(
+                account.snapshot().plan_tier(),
+                kalcode_core::plans::PlanTier::Free
+            )
+        })
+    }
+
+    fn automatic_capture_enabled(&self, source: MemorySourceKind) -> bool {
+        matches!(source, MemorySourceKind::Instructions) || self.provider_context_enabled()
+    }
+
+    pub(crate) fn provider_context(&self, workspace: &str, query: &str) -> Result<String> {
+        self.require()?;
+        if !self.provider_context_enabled() {
+            return Ok(String::new());
+        }
+        let context = self.retrieve(workspace, query)?;
+        // An in-flight lookup cannot retain premium sharing after a downgrade.
+        Ok(if self.provider_context_enabled() {
+            context
+        } else {
+            String::new()
+        })
     }
 
     pub fn retrieve(&self, workspace: &str, query: &str) -> Result<String> {
@@ -147,6 +161,9 @@ impl MemoryService {
 
     fn startup_context(&self, workspace: &str) -> Result<String> {
         self.require()?;
+        if !self.provider_context_enabled() {
+            return Ok(String::new());
+        }
         let root = crate::git_commands::workspace_root_in(&self.core, workspace)?;
         let context = memory::retrieve_startup(
             &self.core.reader(),
@@ -156,11 +173,18 @@ impl MemoryService {
             root.path(),
         )?;
         self.require()?;
-        Ok(context)
+        Ok(if self.provider_context_enabled() {
+            context
+        } else {
+            String::new()
+        })
     }
 
     pub fn capture(&self, workspace: &str, source: MemorySourceKind, source_id: &str, text: &str) {
-        if text.len() > 64 * 1024 || self.require().is_err() {
+        if text.len() > 64 * 1024
+            || self.require().is_err()
+            || !self.automatic_capture_enabled(source)
+        {
             return;
         }
         // A full queue skips optional capture, never stalls a terminal or provider callback.
@@ -172,7 +196,7 @@ impl MemoryService {
         });
     }
 
-    fn capture_now(
+    pub(crate) fn capture_now(
         &self,
         workspace: &str,
         source: MemorySourceKind,
@@ -184,6 +208,9 @@ impl MemoryService {
         self.core
             .transact(|tx| {
                 self.require()?;
+                if !self.automatic_capture_enabled(source) {
+                    return Ok((0, vec![]));
+                }
                 let count = memory::capture(
                     tx,
                     &self.owner,
@@ -427,7 +454,7 @@ struct MemorySink {
 impl AgentEventSink for MemorySink {
     fn project_context_for(&self, query: &str) -> Option<String> {
         self.memory
-            .retrieve(&self.workspace, query)
+            .provider_context(&self.workspace, query)
             .ok()
             .filter(|text| !text.is_empty())
     }
@@ -532,7 +559,7 @@ impl AgentSession for MemorySession {
             .capture(&self.workspace, MemorySourceKind::User, &self.thread, &text);
         let context = self
             .memory
-            .retrieve(&self.workspace, &text)
+            .provider_context(&self.workspace, &text)
             .unwrap_or_default();
         let text = if context.is_empty() {
             text

@@ -408,10 +408,9 @@ impl KalVoiceIntent {
         matches!(self, Self::Reasoning { .. })
     }
 
-    /// Whether executing this intent counts as one KalVoice Request against the plan
-    /// allowance. "Send that" and "clear that" are the voice equivalent of pressing Send or
-    /// clearing a text box, so they never count (owner ruling, 0.1.5).
-    pub fn counts_against_allowance(&self) -> bool {
+    /// Whether this local intent needs a durable execution fence. Composer Send/clear
+    /// directives are handled by the UI. A claim never consumes KalVoice cloud quota.
+    pub fn requires_execution_claim(&self) -> bool {
         !matches!(self, Self::SubmitFocused | Self::ClearFocused)
     }
 }
@@ -498,12 +497,12 @@ mod tests {
     #[test]
     fn usage_math() {
         let usage = KalVoiceUsage {
-            used: 412,
-            allowance: Some(1500),
+            used: 41,
+            allowance: Some(150),
             period_start: String::new(),
             resets_at: String::new(),
         };
-        assert_eq!(usage.remaining(), Some(1088));
+        assert_eq!(usage.remaining(), Some(109));
         assert!(!usage.exhausted());
         let owner = KalVoiceUsage {
             used: 99_999,
@@ -513,8 +512,8 @@ mod tests {
         assert_eq!(owner.remaining(), None);
         assert!(!owner.exhausted());
         let full = KalVoiceUsage {
-            used: 75,
-            allowance: Some(75),
+            used: 25,
+            allowance: Some(25),
             ..usage
         };
         assert!(full.exhausted());
@@ -743,16 +742,16 @@ mod tests {
 
     #[test]
     fn only_send_that_and_clear_that_are_free_of_the_allowance() {
-        assert!(!KalVoiceIntent::SubmitFocused.counts_against_allowance());
-        assert!(!KalVoiceIntent::ClearFocused.counts_against_allowance());
+        assert!(!KalVoiceIntent::SubmitFocused.requires_execution_claim());
+        assert!(!KalVoiceIntent::ClearFocused.requires_execution_claim());
         for intent in ca1_intents() {
             let free = matches!(
                 intent,
                 KalVoiceIntent::SubmitFocused | KalVoiceIntent::ClearFocused
             );
-            assert_eq!(intent.counts_against_allowance(), !free, "{intent:?}");
+            assert_eq!(intent.requires_execution_claim(), !free, "{intent:?}");
         }
-        assert!(KalVoiceIntent::StatusReport.counts_against_allowance());
+        assert!(KalVoiceIntent::StatusReport.requires_execution_claim());
     }
 
     #[test]

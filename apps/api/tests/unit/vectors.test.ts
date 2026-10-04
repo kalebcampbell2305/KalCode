@@ -52,7 +52,19 @@ const VECTORS_PATH = join(REPO_ROOT, "crates", "entitlements", "testdata", "vect
 const T0 = 1_790_000_000; // 2026-09-21T14:13:20Z
 const ACCOUNT = "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11";
 const FEATURE_QUERIES = ["persistentAgents", "advancedMissions", "eventAutomations", "featureAddedInTheFuture"];
-const LIMIT_QUERIES = ["parallelAgents", "openTerminals", "kalvoiceRequestsPerMonth", "limitAddedInTheFuture"];
+const LIMIT_QUERIES = [
+  "parallelAgents",
+  "openTerminals",
+  "kalvoiceRequestsPerMonth",
+  "workspaces",
+  "providerAccounts",
+  "brainstormsPerMonth",
+  "launchRecipes",
+  "externalIntegrations",
+  "operationsHistoryDays",
+  "queuedTasks",
+  "limitAddedInTheFuture",
+];
 
 type Expectation =
   | { ok: true; entitlement: Entitlement; features: Record<string, boolean>; limits: Record<string, number | null> }
@@ -159,6 +171,13 @@ async function generateVectors(): Promise<Vectors> {
   await valid("max", issue("max"));
   await valid("max2x", issue("max2x"));
   await valid("free", issue("free"));
+  // Already-issued documents may retain retired caps until their next refresh. Both verifiers
+  // must still remove the artificial local execution ceiling immediately after the app updates.
+  const legacyFree = issue("free");
+  await valid("legacy-free-local-caps-ignored", {
+    ...legacyFree,
+    limits: { ...legacyFree.limits, openTerminals: 4, parallelAgents: 1 },
+  });
   await valid("owner-last-valid-second", owner, owner.expiresAt - 1);
   await valid("owner-within-clock-skew", owner, T0 - ENTITLEMENT_CLOCK_SKEW_SECONDS);
 

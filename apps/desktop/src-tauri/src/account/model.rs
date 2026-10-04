@@ -58,6 +58,7 @@ pub struct PublicAccount {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageSnapshot {
+    pub billing_interval: Option<super::api::BillingInterval>,
     pub used: u64,
     pub allowance: Option<u64>,
     pub period_start: String,
@@ -75,6 +76,7 @@ pub struct AccountSnapshot {
     pub phase: AccountPhase,
     pub account: Option<PublicAccount>,
     pub tier: Option<AccountTier>,
+    pub billing_interval: Option<super::api::BillingInterval>,
     pub session_expires_at: Option<String>,
     pub entitlement_expires_at: Option<i64>,
     pub offline_grace_until: Option<i64>,
@@ -132,6 +134,7 @@ impl AccountSnapshot {
             phase,
             account: None,
             tier: None,
+            billing_interval: None,
             session_expires_at: None,
             entitlement_expires_at: None,
             offline_grace_until: None,

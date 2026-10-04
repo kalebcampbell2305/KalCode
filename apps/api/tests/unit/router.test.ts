@@ -178,6 +178,7 @@ describe("route table", () => {
       { method: "POST", path: "/v1/account/delete/start", access: "account" },
       { method: "POST", path: "/v1/billing/checkout", access: "account" },
       { method: "POST", path: "/v1/billing/portal", access: "account" },
+      { method: "GET", path: "/v1/billing/status", access: "account" },
       { method: "POST", path: "/v1/billing/webhook", access: "public" },
       { method: "GET", path: "/v1/entitlement", access: "account" },
       { method: "GET", path: "/v1/entitlement/keys", access: "public" },
@@ -195,6 +196,7 @@ describe("route table", () => {
     expect(ROUTES.filter((route) => route.path.startsWith("/v1/billing/")).map((route) => route.path)).toEqual([
       "/v1/billing/checkout",
       "/v1/billing/portal",
+      "/v1/billing/status",
       "/v1/billing/webhook",
     ]);
   });

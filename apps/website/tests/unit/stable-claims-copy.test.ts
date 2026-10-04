@@ -134,8 +134,6 @@ const NOT_IN_016 = [
   /Environment Doctor/i,
   /Resource Governor/i,
   /Workspace Home/i,
-  /\bwidgets?\b/i,
-  /\bworktrees?\b/i,
   /Git and diff views (?!Planned)/i,
 ];
 
@@ -232,14 +230,12 @@ describe("KalVoice command examples", () => {
       expect(docs).toContain(example);
     }
     expect(docs).toContain("A command, such as “Pause every active thread”");
-    expect(docs).toContain(
-      "“Open a terminal” is one request. “Pause every active thread” is also one request, however many threads it pauses.",
-    );
+    expect(docs).toContain("Local/on-device commands, dictation and voice into terminals");
   });
 
-  it("count requests with Stable examples in the pricing FAQ", async () => {
+  it("keep local commands outside the cloud quota in the pricing FAQ", async () => {
     expect(text(await render(Pricing, "/pricing"))).toContain(
-      "“Open a terminal” is one request. “Pause every active thread” is also one request, however many threads it pauses.",
+      "Local/on-device commands, dictation and voice into terminals",
     );
   });
 });
@@ -263,7 +259,7 @@ describe("plans", () => {
     const html = await render(Pricing, "/pricing");
     const copy = text(html);
     expect(copy).toContain(
-      "Start free. Upgrade for more agents, more terminals and more autonomy. Your AI usage stays on your own provider account.",
+      "Unlimited local coding agents + terminals on every plan. Bring your AI accounts. KalCode handles the workflow.",
     );
     expect(copy).not.toMatch(/Plans differ in KalVoice Requests/i);
     const rowHeads = [...html.matchAll(/<th scope="row"[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
@@ -275,7 +271,7 @@ describe("plans", () => {
         .replace(/, ([^,]*)$/, " and $1")}`,
     );
     expect(description).toContain("monthly or yearly");
-    expect(description).toContain("coding agents, terminals, workspaces and KalVoice Requests");
+    expect(description).toContain("Unlimited local coding agents and terminals");
     expect(description).not.toMatch(/plans differ in KalVoice Requests/i);
   });
 

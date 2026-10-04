@@ -156,7 +156,9 @@ mod tests {
             if Tier::Pro.includes(feature) {
                 assert!(Tier::Max.includes(feature));
             }
-            assert_eq!(Tier::Max.includes(feature), Tier::Max2x.includes(feature));
+            if Tier::Max.includes(feature) {
+                assert!(Tier::Max2x.includes(feature));
+            }
         }
         assert!(!Tier::Free.includes(FeatureId::TimeMachine));
         assert!(Tier::Pro.includes(FeatureId::TimeMachine));

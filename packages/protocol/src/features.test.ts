@@ -71,7 +71,8 @@ describe("product features", () => {
     };
     within(free, pro);
     within(pro, max);
-    expect(max2x).toEqual(max);
+    within(max, max2x);
+    expect(max?.size).toBeLessThan(max2x?.size ?? 0);
     within(max2x, owner);
     expect(free?.size).toBeLessThan(pro?.size ?? 0);
     expect(pro?.size).toBeLessThan(max?.size ?? 0);

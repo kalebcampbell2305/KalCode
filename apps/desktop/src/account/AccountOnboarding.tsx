@@ -1,3 +1,4 @@
+import { CORE_LIMITS, formatCoreLimit, getPlan, UNLIMITED_NOTE } from "@kalcode/protocol";
 import { Button, SegmentedControl, TextInput } from "@kalcode/ui/components";
 import { Check, Circle, Mail, ShieldCheck } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
@@ -211,7 +212,7 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <div className={styles.planHeading}>
               <p className={styles.eyebrow}>Account verified</p>
               <h1 id="account-title">Choose your plan</h1>
-              <p>Dictation is unlimited on every plan.</p>
+              <p>Unlimited local coding agents, terminals and on-device dictation on every plan.</p>
               <SegmentedControl<BillingInterval>
                 aria-label="Billing interval"
                 className={styles.billing}
@@ -234,10 +235,11 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                       <p>{price.detail}</p>
                       <p className={styles.tagline}>{plan.tagline}</p>
                     </div>
-                    <p className={styles.allowance}>
-                      {plan.requests === null ? "Unlimited" : plan.requests.toLocaleString("en-US")} KalVoice Requests a
-                      month
-                    </p>
+                    <ul className={styles.planLimits}>
+                      {CORE_LIMITS.map((limit) => (
+                        <li key={limit.key}>{formatCoreLimit(getPlan(plan.tier).limits, limit)}</li>
+                      ))}
+                    </ul>
                     <Button
                       variant={plan.popular ? "primary" : "secondary"}
                       busy={busy}
@@ -251,6 +253,7 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                 );
               })}
             </div>
+            <p className={styles.planNote}>{UNLIMITED_NOTE}</p>
           </div>
         ) : snapshot.phase === "confirming_plan" ? (
           <div className={styles.center} role="status" aria-busy={busy || undefined}>

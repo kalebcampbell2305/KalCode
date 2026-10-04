@@ -52,7 +52,11 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
           <p class="account-summary__email" data-account-email></p>
           <div class="account-summary__metrics">
             <div><span>Plan</span><strong data-account-plan>Choose a plan</strong></div>
-            <div><span>Local Dictation</span><strong>Unlimited</strong></div>
+            <div><span>Local agents + terminals</span><strong>Unlimited</strong></div>
+            <div><span>Workspaces</span><strong data-account-workspaces>&mdash;</strong></div>
+            <div><span>Provider accounts</span><strong data-account-providers>&mdash;</strong></div>
+            <div><span>External integrations</span><strong data-account-integrations>&mdash;</strong></div>
+            <div><span>Billing period</span><strong data-account-interval>&mdash;</strong></div>
           </div>
           <div class="account-usage">
             <span class="account-usage__label">KalVoice Requests</span>
@@ -400,7 +404,7 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 </style>
 
 <script>
-  import { type BillingInterval, formatInterval, formatPrice, getPlan, type PlanId } from "@kalcode/protocol/plans";
+  import { type BillingInterval, formatInterval, formatPrice, formatLimit, limitsFor, getPlan, PLANS, type PlanId } from "@kalcode/protocol/plans";
   import {
     CHECKOUT_INTENT_KEY,
     type CheckoutIntent,
@@ -696,6 +700,10 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
     if (emailOutput) emailOutput.textContent = "";
     if (planOutput) planOutput.textContent = "Plan unavailable";
     if (usageOutput) usageOutput.textContent = "Usage unavailable";
+    for (const name of ["workspaces", "providers", "integrations", "interval"]) {
+      const output = document.querySelector<HTMLElement>(`[data-account-${name}]`);
+      if (output) output.textContent = "Unavailable";
+    }
     if (activateFree) activateFree.hidden = true;
     if (upgrades) upgrades.hidden = true;
     if (ownerNotice) {
@@ -732,6 +740,29 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
       accountState.tier = tier;
       if (upgradeLink) upgradeLink.hidden = tier !== "free";
       if (planOutput) planOutput.textContent = entitlement.entitlement.tier === "max2x" ? "MAX 2X" : entitlement.entitlement.tier.toUpperCase();
+      const plan = PLANS.find((entry) => entry.id === tier);
+      if (plan || tier === "owner") {
+        const limits = limitsFor(tier === "owner" ? "owner" : plan!.id);
+        for (const [key, value] of [["workspaces", limits.workspaces], ["providers", limits.providerAccounts], ["integrations", limits.externalIntegrations]] as const) {
+          const output = document.querySelector<HTMLElement>(`[data-account-${key}]`);
+          if (output) output.textContent = formatLimit(value);
+        }
+        if (planOutput && plan) planOutput.textContent = plan.name;
+      }
+      const intervalOutput = document.querySelector<HTMLElement>("[data-account-interval]");
+      if (intervalOutput) {
+        intervalOutput.textContent = tier === "free" || tier === "owner" ? "No subscription" : "Unavailable";
+        if (plan && plan.price.monthlyUsd > 0) {
+          void (async () => {
+            const response = await api("/v1/billing/status", { signal: AbortSignal.timeout(5000) });
+            if (!response?.ok) return;
+            const billing = await response.json() as { billing?: { interval?: string | null } };
+            if (accountState.tier !== tier || emailOutput?.textContent !== body.account.email) return;
+            if (billing.billing?.interval === "month") intervalOutput.textContent = "Monthly";
+            if (billing.billing?.interval === "year") intervalOutput.textContent = "Yearly";
+          })().catch(() => {});
+        }
+      }
       if (upgrades) upgrades.hidden = entitlement.entitlement.tier !== "free";
       const owner = entitlement.entitlement.tier === "owner";
       if (ownerNotice) {

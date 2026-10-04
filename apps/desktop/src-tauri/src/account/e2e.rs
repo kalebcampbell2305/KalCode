@@ -528,6 +528,7 @@ impl AccountApi for E2eAccountApi {
         };
         Ok(UsageResponse {
             usage: AccountUsageSnapshot {
+                billing_interval: None,
                 used,
                 allowance: Some(allowance),
                 period_start: "2026-09-10T08:00:00.000Z".into(),
