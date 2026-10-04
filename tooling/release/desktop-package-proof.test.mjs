@@ -1,14 +1,21 @@
-import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const script = fileURLToPath(new URL('../../.github/scripts/win-desktop-package-proof.ps1', import.meta.url));
-const compare = fileURLToPath(new URL('../../.github/scripts/compare-desktop-databases.py', import.meta.url));
-const source = readFileSync(script, 'utf8');
-test('package proof requires draft exact commit, signed exact bytes and build identity before install', () => {
-  for (const check of ['meta.isDraft', 'meta.targetCommitish -cne $CandidateCommit', 'build.sha256 -cne $CandidateSha256', '(Sha $exe) -cne $CandidateSha256', "$sig.Status -ne 'Valid'", 'package.signer -cne $liveSignature.SignerCertificate.Subject']) {
+const script = fileURLToPath(new URL("../../.github/scripts/win-desktop-package-proof.ps1", import.meta.url));
+const compare = fileURLToPath(new URL("../../.github/scripts/compare-desktop-databases.py", import.meta.url));
+const source = readFileSync(script, "utf8");
+test("package proof requires draft exact commit, signed exact bytes and build identity before install", () => {
+  for (const check of [
+    "meta.isDraft",
+    "meta.targetCommitish -cne $CandidateCommit",
+    "build.sha256 -cne $CandidateSha256",
+    "(Sha $exe) -cne $CandidateSha256",
+    "$sig.Status -ne 'Valid'",
+    "package.signer -cne $liveSignature.SignerCertificate.Subject",
+  ]) {
     assert.ok(source.includes(check), check);
   }
   assert.match(source, /normal|production updater delivery/u);
@@ -18,7 +25,7 @@ test('package proof requires draft exact commit, signed exact bytes and build id
   assert.match(source, /liveClose\.accepted/u);
 });
 
-test('real read-only SQLite comparison detects lost duplicates, schema changes, metadata loss and permits appended rows', () => {
+test("real read-only SQLite comparison detects lost duplicates, schema changes, metadata loss and permits appended rows", () => {
   const py = String.raw`
 import importlib.util, sqlite3, tempfile
 from contextlib import closing
@@ -47,14 +54,19 @@ with tempfile.TemporaryDirectory() as folder:
     assert 'app_meta lost keys' in m.compare(a,b,'0.1.9+1467',22)['differences']
 print('PASS')
 `;
-  const result = spawnSync('python', ['-I', '-B', '-c', py], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  const result = spawnSync("python", ["-I", "-B", "-c", py], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /PASS/u);
 });
 
-test('PowerShell helper parses without executing any QA action', {skip: process.platform !== 'win32'}, () => {
-  const command = "$errors = $null; $tokens = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }";
+test("PowerShell helper parses without executing any QA action", { skip: process.platform !== "win32" }, () => {
+  const command =
+    "$errors = $null; $tokens = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }";
   const quoted = script.replaceAll("'", "''");
-  const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command.replace('$args[0]', `'${quoted}'`)], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  const result = spawnSync(
+    "powershell",
+    ["-NoProfile", "-NonInteractive", "-Command", command.replace("$args[0]", `'${quoted}'`)],
+    { encoding: "utf8", windowsHide: true, timeout: 30_000 },
+  );
   assert.equal(result.status, 0, result.stderr);
 });
