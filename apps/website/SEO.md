@@ -5,7 +5,9 @@ unique titles and descriptions, canonical URLs, social previews and schema.org p
 data. The home page identifies the KalCode organization, website and software application.
 Prices and release platforms in structured data come from the existing product catalogs.
 
-The sitemap is https://kalcoded.com/sitemap-index.xml. Account, owner, email-action and error
+The primary sitemap is https://kalcoded.com/sitemap.xml, generated from the public page catalog.
+The previous `/sitemap-index.xml` and `/sitemap-0.xml` remain available for existing submissions.
+Account, owner, email-action and error
 pages must remain noindex and outside the sitemap. Do not block those pages in robots.txt:
 crawlers must be able to read their noindex directives.
 
@@ -21,7 +23,7 @@ proof, not an account credential. A 200 or 202 response acknowledges submission,
 IndexNow does not submit to Google.
 
 For Google, verify the `kalcoded.com` domain property in Google Search Console using the DNS TXT
-record Google provides, then submit `sitemap-index.xml` and request indexing of the homepage.
+record Google provides, then submit `sitemap.xml` and request indexing of the homepage.
 In Bing Webmaster Tools, import that verified property or verify the domain and submit the same
 sitemap. Account access/verification must be completed by an authorized owner; never invent a
 verification token or report a submission that has not happened.
