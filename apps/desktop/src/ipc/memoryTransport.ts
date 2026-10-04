@@ -217,7 +217,7 @@ export interface MemoryTransport extends Transport {
   /** Test hooks for Dashboard scenarios (null in scenarios without Dashboard data). */
   readonly dashboard: DashboardControls | null;
   /** Test hooks for workspaces and terminals (folder picker results, moved folders). */
-  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal" | "snapshotWorkspaces">;
+  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal" | "snapshotWorkspaces" | "relatedProcesses">;
   /** Test hook: permission state (Z4), e.g. an agent asking for approval. */
   permissions: PermissionMemory;
   /** Provider panes (Z7-W4): pane output, like `attachTerminal`. */
@@ -542,6 +542,12 @@ export function createMemoryTransport(
     ...updater.handlers,
     ...account.handlers,
     ...operations.handlers,
+    // The related-process scan Code reads for terminal status (KalTidy's scan): one shell per live
+    // terminal, plus the commands a test put under it.
+    utility_processes: () => {
+      const processes = code.relatedProcesses();
+      return { processes, total: processes.length, hidden: 0, cpuReady: true, sampledAt: new Date().toISOString() };
+    },
     // UI-test fixture only: native owns PNG decoding, private storage and target leases.
     terminal_image_import: (args) => {
       requireCore();
@@ -832,6 +838,7 @@ export function createMemoryTransport(
       queueFolders: code.queueFolders,
       makeUnavailable: code.makeUnavailable,
       runningProcessCount: code.runningProcessCount,
+      setTerminalWork: code.setTerminalWork,
     },
     permissions,
     panes: panes.controls,

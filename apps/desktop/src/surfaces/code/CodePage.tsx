@@ -60,8 +60,10 @@ import styles from "./Code.module.css";
 import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
 import { useKalTidy } from "./kaltidy/kalTidyContext.ts";
+import { HappeningStrip } from "./organization/HappeningStrip.tsx";
+import { AgentCounters, BrowserButton, FocusButton, RunTestsButton, WidgetsMenu } from "./organization/QuickBar.tsx";
+import { TerminalStack } from "./organization/TerminalStack.tsx";
 import { CODE_SHORTCUT_LABELS, codeShortcut } from "./shortcuts.ts";
-import { WorkspaceContextMenu } from "./WorkspaceContextMenu.tsx";
 import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 
 /** The Code surface: the active workspace as one flexible pane canvas (Z7-W1). */
@@ -127,10 +129,15 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </header>
           {integrationsOpen ? <CodeIntegrationPanel workspaceId={workspace.id} /> : null}
           <div className={styles.canvasArea}>
+            {api ? <TerminalStack organization={api.organization} controller={api.controller} /> : null}
             {canvas}
             {workspace.available ? null : <MissingFolder workspace={workspace} />}
           </div>
-          {api ? <StatusBar api={api} /> : <div className={styles.statusBar} aria-hidden="true" />}
+          {api ? (
+            <StatusBar api={api} workspaceId={workspace.id} />
+          ) : (
+            <div className={styles.statusBar} aria-hidden="true" />
+          )}
         </div>
       )}
     </CodeCanvas>
@@ -386,6 +393,22 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+      <AgentCounters controller={controller} organization={api.organization} />
+      {providerPanes.enabled ? (
+        <Tooltip content="Launch Claude Code, Codex or Gemini CLI in a pane">
+          <Button
+            size="sm"
+            variant="primary"
+            className={styles.primaryAction}
+            icon={<Bot />}
+            aria-label="New agent"
+            busy={providerPanes.creating}
+            onClick={() => api.openAgentLauncher()}
+          >
+            <span className={styles.agentLabel}>New agent</span>
+          </Button>
+        </Tooltip>
+      ) : null}
       <SplitControl>
         <Tooltip content={`New ${defaultShell?.name ?? "terminal"} terminal (${CODE_SHORTCUT_LABELS["new-terminal"]})`}>
           <Button
@@ -437,6 +460,12 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           </DropdownMenuContent>
         </DropdownMenu>
       </SplitControl>
+      <BrowserButton controller={controller} />
+      <WidgetsMenu controller={controller} />
+      <RunTestsButton controller={controller} organization={api.organization} />
+      <KalTidyActions />
+      <FocusButton controller={controller} onFocus={() => api.applyTaskLayout("focus")} />
+      <span className={styles.groupDivider} aria-hidden="true" />
       <Tooltip content="Arrange panes without stopping work. Undo restores your exact layout.">
         <Button size="sm" variant="ghost" icon={<LayoutGrid />} onClick={() => controller.tidy()}>
           Tidy
@@ -452,9 +481,6 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           />
         </Tooltip>
       ) : null}
-      <KalTidyActions />
-      <WorkspaceContextMenu controller={controller} />
-      <span className={styles.groupDivider} aria-hidden="true" />
       <DropdownMenu
         onOpenChange={(open) => {
           if (open) loadPresets();
@@ -576,21 +602,6 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {providerPanes.enabled ? (
-        <Tooltip content="Launch Claude Code, Codex or Gemini CLI in a pane">
-          <Button
-            size="sm"
-            variant="primary"
-            className={styles.primaryAction}
-            icon={<Bot />}
-            aria-label="New agent"
-            busy={providerPanes.creating}
-            onClick={() => api.openAgentLauncher()}
-          >
-            <span className={styles.agentLabel}>New agent</span>
-          </Button>
-        </Tooltip>
-      ) : null}
     </div>
   );
 });
@@ -677,21 +688,19 @@ function KalTidyActions() {
 }
 
 /**
- * The foot of the canvas: the focused pane and its state, pane and process counts, and the
- * keys that drive panes (fewer as the canvas narrows; they never overlap the counts). Decorative
- * duplicate of pane state, so it is not a live region (the canvas announces changes itself).
+ * The foot of the canvas: What's Happening (observed facts about the workspace, each one opens
+ * what it describes), then the focused pane, the pane count and the keys that drive panes (fewer as
+ * the canvas narrows). The pane parts duplicate pane state, so they are not a live region.
  */
-const StatusBar = memo(function StatusBar({ api }: { api: CodeCanvasApi }) {
-  const { controller, background, titleOf } = api;
+const StatusBar = memo(function StatusBar({ api, workspaceId }: { api: CodeCanvasApi; workspaceId: string }) {
+  const { controller, titleOf } = api;
   const panes = leaves(controller.layout.root);
   const focused = panes.find((p) => p.paneId === controller.focusedPaneId);
   const content = focused?.tabs[focused.activeTab];
-  const agentsRunning = api.providerPanes.panes.filter((p) => p.info?.running).length;
-  const terminalsRunning = useWorkspaces().terminals.filter((t) => t.status === "running").length;
-  const running = terminalsRunning + agentsRunning;
   return (
     <div className={styles.statusBar}>
-      <div className={styles.statusInfo}>
+      <HappeningStrip organization={api.organization} controller={controller} workspaceId={workspaceId} />
+      <div className={styles.statusInfo} data-trailing>
         {content ? (
           <span className={styles.statusFocus}>
             <ProviderGlyph
@@ -716,11 +725,6 @@ const StatusBar = memo(function StatusBar({ api }: { api: CodeCanvasApi }) {
         <span className={styles.statusItem}>
           {panes.length} {panes.length === 1 ? "pane" : "panes"}
         </span>
-        <span className={styles.statusItem} data-running={running > 0 || undefined}>
-          <span className={styles.runDot} aria-hidden="true" />
-          {running} running
-        </span>
-        {background.length > 0 ? <span className={styles.statusItem}>{background.length} in background</span> : null}
       </div>
       <span className={styles.statusKeys} aria-hidden="true">
         <span data-key="move">

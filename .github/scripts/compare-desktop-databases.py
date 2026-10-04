@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-def compare(live, candidate, version, schema):
+def compare(live, candidate, version, schema, live_expected=None):
     def connect(path):
         return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
 
@@ -60,11 +60,16 @@ def compare(live, candidate, version, schema):
         def migration(db):
             return db.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0]
         live_schema, candidate_schema = migration(before), migration(after)
-        if live_schema != schema or candidate_schema != schema:
-            differences.append("this package proof requires unchanged expected schema")
+        if live_expected is None:
+            live_expected = schema
+        if live_schema != live_expected or candidate_schema != schema:
+            differences.append("database schema does not match pinned live/candidate schemas")
+        if after.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            differences.append("candidate database has a foreign key violation")
         return dict(liveSchema=live_schema, candidateSchema=candidate_schema,
                     rowsKept=kept, tablesGrew=grew, differences=differences)
 
 
 if __name__ == "__main__":
-    print(json.dumps(compare(sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]))))
+    print(json.dumps(compare(sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]),
+                             int(sys.argv[5]) if len(sys.argv) > 5 else None)))

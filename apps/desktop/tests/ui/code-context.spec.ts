@@ -22,7 +22,7 @@ test("Code context keeps workspace runs, services and test evidence beside real 
     ),
   ).toBeNull();
 
-  await page.getByRole("button", { name: "Context", exact: true }).click();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
   await page.getByRole("menuitem", { name: "Runs, services & tests" }).click();
   const context = page.getByRole("region", { name: "Workspace context for kalcode-site" });
   await expect(context).toBeVisible();
@@ -74,7 +74,7 @@ test("Code context keeps workspace runs, services and test evidence beside real 
 test("Code context stays usable in a narrow pane and is accessibility clean", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 900, height: 700 });
   await openCode(page);
-  await page.getByRole("button", { name: "Context", exact: true }).click();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
   await page.getByRole("menuitem", { name: "Runs, services & tests" }).click();
   const context = page.getByRole("region", { name: "Workspace context for kalcode-site" });
   await expect(context).toBeVisible();
@@ -95,7 +95,7 @@ test("Code context stays usable in a narrow pane and is accessibility clean", as
 test("run evidence stays inside a narrow window with the Agent rail open", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 900, height: 700 });
   await openCode(page);
-  await page.getByRole("button", { name: "Context", exact: true }).click();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
   await page.getByRole("menuitem", { name: "Runs, services & tests" }).click();
   await page.getByRole("button", { name: "Show agents", exact: true }).click();
 

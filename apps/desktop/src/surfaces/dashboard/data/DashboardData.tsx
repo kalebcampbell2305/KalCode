@@ -408,6 +408,20 @@ export function useCodingAgents() {
   return { ...threads, state };
 }
 
+/**
+ * Every coding agent, open and archived, when a Dashboard data provider is mounted (the Shell
+ * mounts one); null otherwise or until threads load. Code uses it so its call signs ("Claude A")
+ * match the Agent Fleet's.
+ */
+export function useOptionalAllCodingAgents(): readonly ThreadSummary[] | null {
+  const value = useContext(DashboardDataContext);
+  return useMemo(() => {
+    if (value?.threads.state.status !== "ready") return null;
+    const archived = value.archived.state.status === "ready" ? value.archived.state.data : [];
+    return [...value.threads.state.data, ...archived].filter(isCodingAgent);
+  }, [value]);
+}
+
 /** Archived coding agents (the Fleet's archived view; call signs stay stable across both). */
 export function useArchivedCodingAgents() {
   const archived = useArchivedThreads();

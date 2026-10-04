@@ -292,7 +292,8 @@ test.describe("provider panes", () => {
         threadId,
       );
     // The pane's tab close control, with no confirmation: the agent stops and its tab goes away.
-    const tab = page.getByRole("tab", { name: /New agent/ }).first();
+    // Its tab, by the pane's content (the tab reads the agent's call sign, e.g. "Claude A").
+    const tab = page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`);
     await tab.hover();
     await tab.locator("[data-tab-close]").click();
     await expect(page.locator(`[data-provider-pane="${threadId}"]`)).toHaveCount(0);

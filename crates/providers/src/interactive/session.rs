@@ -186,6 +186,9 @@ struct ClaudeSubmitBoundary {
     generation: u64,
     trailing_input: bool,
     clears_input: bool,
+    /// A programmatic task or reviewed handoff; enriched text is not a new user claim.
+    kalcode_submitted: bool,
+    cursor_fingerprint: Option<String>,
 }
 
 #[derive(Default)]
@@ -207,6 +210,7 @@ struct LifecycleState {
     cursor_tracking_failed: bool,
     cursor_start_seen: bool,
     cursor_model: Option<String>,
+    cursor_input: super::cursor_input::CursorInput,
     handoff_readiness: HandoffReadiness,
     reconfigure_reserved: bool,
 }
@@ -256,6 +260,7 @@ pub(crate) struct SessionParts {
 
 impl Shared {
     pub(crate) fn new(parts: SessionParts) -> Arc<Self> {
+        let cursor_resumed = parts.provider_id == "cursor" && !parts.provider_session_id.is_empty();
         Arc::new(Self {
             ctx: parts.ctx,
             provider_id: parts.provider_id,
@@ -264,7 +269,10 @@ impl Shared {
             sink: parts.sink,
             pty: OnceLock::new(),
             registration: Mutex::new(None),
-            lifecycle: Mutex::new(LifecycleState::default()),
+            lifecycle: Mutex::new(LifecycleState {
+                cursor_start_seen: cursor_resumed,
+                ..LifecycleState::default()
+            }),
             state: Mutex::new(HookState::default()),
             pending: Mutex::new(HashMap::new()),
             provider_session_id: Mutex::new(Some(parts.provider_session_id)),
@@ -291,6 +299,9 @@ impl Shared {
 
     /// The provider session id isn't known yet (a new Codex pane learns it from `notify`).
     pub(crate) fn forget_session_id(&self) {
+        if self.provider_id == "cursor" {
+            lock(&self.lifecycle).cursor_start_seen = false;
+        }
         lock(&self.provider_session_id).take();
         self.session_started_emitted.store(false, Ordering::SeqCst);
     }
@@ -340,6 +351,7 @@ impl Shared {
         generation: u64,
         trailing_input: bool,
         clears_input: bool,
+        kalcode_submitted: bool,
     ) {
         if lifecycle.claude_submit_tracking_failed {
             lifecycle.handoff_readiness = HandoffReadiness::Unverified;
@@ -356,6 +368,8 @@ impl Shared {
                 generation,
                 trailing_input,
                 clears_input,
+                kalcode_submitted,
+                cursor_fingerprint: None,
             });
     }
 
@@ -405,14 +419,37 @@ impl Shared {
         }
         lifecycle.input_pending = true;
         lifecycle.input_pending_generation = generation;
+        if self.provider_id == "cursor" {
+            for submission in lifecycle.cursor_input.observe(data) {
+                self.record_claude_submit_boundary_locked(
+                    lifecycle,
+                    generation,
+                    submission.trailing_input,
+                    true,
+                    false,
+                );
+                if !lifecycle.claude_submit_tracking_failed
+                    && let Some(boundary) = lifecycle.claude_submit_boundaries.back_mut()
+                {
+                    boundary.cursor_fingerprint = submission.fingerprint;
+                }
+            }
+            return;
+        }
         let Some(last_submit) = data.iter().rposition(|byte| matches!(byte, b'\r' | b'\n')) else {
             return;
         };
         let trailing_input = last_submit + 1 < data.len();
-        if matches!(self.provider_id.as_str(), "claude-code" | "cursor") {
+        if self.provider_id == "claude-code" {
             // The authenticated UserPromptSubmit that follows consumes this exact boundary.
             // A later write has a higher generation and therefore survives that hook.
-            self.record_claude_submit_boundary_locked(lifecycle, generation, trailing_input, true);
+            self.record_claude_submit_boundary_locked(
+                lifecycle,
+                generation,
+                trailing_input,
+                true,
+                false,
+            );
         }
     }
 
@@ -1254,7 +1291,16 @@ impl Shared {
                 {
                     return events;
                 }
-                if let Some(boundary) = lifecycle.claude_submit_boundaries.pop_front()
+                // /model, native setup and other UI submissions do not emit prompt hooks.
+                // Match exact native text instead of consuming the oldest Enter. Choose the
+                // earliest identical submission, retaining later identical/partial input.
+                let boundary = Self::cursor_submit_index(lifecycle, record).and_then(|index| {
+                    lifecycle
+                        .claude_submit_boundaries
+                        .drain(..=index)
+                        .next_back()
+                });
+                if let Some(boundary) = boundary
                     && boundary.clears_input
                     && !boundary.trailing_input
                     && lifecycle.input_pending_generation <= boundary.generation
@@ -1316,6 +1362,14 @@ impl Shared {
         events
     }
 
+    fn cursor_submit_index(lifecycle: &LifecycleState, record: &HookRecord) -> Option<usize> {
+        let fingerprint = record.cursor.as_ref()?.prompt_fingerprint.as_ref()?;
+        lifecycle
+            .claude_submit_boundaries
+            .iter()
+            .position(|boundary| boundary.cursor_fingerprint.as_ref() == Some(fingerprint))
+    }
+
     pub(crate) fn handle(&self, record: HookRecord) -> HookReply {
         let blocking = record.event.is_some_and(HookEvent::is_blocking);
         if record.validate().is_err() {
@@ -1334,7 +1388,7 @@ impl Shared {
             return self.pre_tool_use(&record);
         }
 
-        let (should_drain, first_prompt) = {
+        let (should_drain, first_prompt, cursor_context, cursor_capture) = {
             let mut lifecycle = lock(&self.lifecycle);
             if self.is_terminal() {
                 return HookReply::Ack;
@@ -1351,6 +1405,19 @@ impl Shared {
             } else {
                 None
             };
+            let cursor_started = lifecycle.cursor_start_seen;
+            let cursor_generation = lifecycle.cursor_generation.clone();
+            let kalcode_submitted = Self::cursor_submit_index(&lifecycle, &record)
+                .and_then(|index| lifecycle.claude_submit_boundaries.get(index))
+                .map_or_else(
+                    || {
+                        lifecycle
+                            .claude_submit_boundaries
+                            .iter()
+                            .any(|boundary| boundary.kalcode_submitted)
+                    },
+                    |boundary| boundary.kalcode_submitted,
+                );
             let events = if record.event == Some(HookEvent::Cursor) {
                 self.accept_cursor_locked(&mut lifecycle, &record)
             } else if record.event == Some(HookEvent::CodexNotify) {
@@ -1360,9 +1427,43 @@ impl Shared {
                 self.observe_handoff_lifecycle_locked(&mut lifecycle, &record);
                 events
             };
+            // Only the validated parent identity and accepted generations can produce memory.
+            // A response arriving after its matching stop can be saved without changing readiness.
+            let cursor_bound = record.event == Some(HookEvent::Cursor)
+                && record
+                    .provider_session_id
+                    .as_ref()
+                    .is_some_and(|id| lock(&self.provider_session_id).as_ref() == Some(id));
+            let cursor_context = cursor_bound
+                && !cursor_started
+                && lifecycle.cursor_start_seen
+                && record
+                    .cursor
+                    .as_ref()
+                    .is_some_and(|cursor| cursor.event == "sessionStart");
+            let cursor_capture = cursor_bound
+                && record.cursor.as_ref().is_some_and(|cursor| {
+                    let Some(generation) = cursor.generation_id.as_ref() else {
+                        return false;
+                    };
+                    match cursor.event.as_str() {
+                        "beforeSubmitPrompt" => {
+                            !kalcode_submitted
+                                && cursor_generation.as_ref() != Some(generation)
+                                && lifecycle.cursor_generation.as_ref() == Some(generation)
+                        }
+                        "afterAgentResponse" => {
+                            lifecycle.cursor_generation.as_ref() == Some(generation)
+                                || lifecycle.cursor_finished_generations.contains(generation)
+                        }
+                        _ => false,
+                    }
+                });
             (
                 self.queue_events_locked(&mut lifecycle, events),
                 first_prompt,
+                cursor_context,
+                cursor_capture,
             )
         };
         if let (Some(titles), Some(prompt)) = (&self.titles, first_prompt.as_deref()) {
@@ -1373,7 +1474,10 @@ impl Shared {
                 .provider_session_id
                 .as_ref()
                 .is_some_and(|id| lock(&self.provider_session_id).as_ref() == Some(id));
-        if memory_session && let Some(text) = record.memory_candidate.as_deref() {
+        if memory_session
+            && (record.event != Some(HookEvent::Cursor) || cursor_capture)
+            && let Some(text) = record.memory_candidate.as_deref()
+        {
             if record.event == Some(HookEvent::UserPromptSubmit)
                 || record
                     .cursor
@@ -1386,8 +1490,16 @@ impl Shared {
             }
         }
         self.drain_events(should_drain);
+        if cursor_context && let Some(text) = self.sink.project_context() {
+            return HookReply::ProjectContext { text };
+        }
         if memory_session
-            && record.event == Some(HookEvent::UserPromptSubmit)
+            && (record.event == Some(HookEvent::UserPromptSubmit)
+                || (cursor_capture
+                    && record
+                        .cursor
+                        .as_ref()
+                        .is_some_and(|cursor| cursor.event == "beforeSubmitPrompt")))
             && let Some(query) = record.prompt.as_deref()
             && let Some(text) = self.sink.project_context_for(query)
         {
@@ -1493,7 +1605,20 @@ impl Shared {
             self.record_codex_submit_locked(&mut lifecycle);
         } else if matches!(self.provider_id.as_str(), "claude-code" | "cursor") {
             let generation = lifecycle.input_writes;
-            self.record_claude_submit_boundary_locked(&mut lifecycle, generation, false, false);
+            self.record_claude_submit_boundary_locked(
+                &mut lifecycle,
+                generation,
+                false,
+                false,
+                true,
+            );
+            if self.provider_id == "cursor"
+                && !lifecycle.claude_submit_tracking_failed
+                && let Some(boundary) = lifecycle.claude_submit_boundaries.back_mut()
+            {
+                boundary.cursor_fingerprint =
+                    Some(kalcode_hook_bridge::record::cursor_prompt_fingerprint(text));
+            }
             if !lifecycle.claude_submit_tracking_failed {
                 lifecycle.handoff_readiness = HandoffReadiness::Busy;
             }
@@ -2048,6 +2173,162 @@ mod tests {
     }
 
     #[test]
+    fn cursor_memory_startup_is_once_and_capture_follows_native_generation_and_submit_source() {
+        #[derive(Default)]
+        struct MemorySink {
+            contexts: std::sync::atomic::AtomicUsize,
+            queries: Mutex<Vec<String>>,
+            claims: Mutex<Vec<(bool, String)>>,
+            events: Mutex<Vec<AgentEvent>>,
+        }
+        struct ObserveMemory(Arc<MemorySink>);
+        impl AgentEventSink for ObserveMemory {
+            fn emit(&self, event: AgentEvent) {
+                lock(&self.0.events).push(event);
+            }
+            fn project_context(&self) -> Option<String> {
+                self.0.contexts.fetch_add(1, Ordering::SeqCst);
+                Some("Recorded project context".into())
+            }
+            fn project_context_for(&self, query: &str) -> Option<String> {
+                lock(&self.0.queries).push(query.into());
+                Some("Current task context".into())
+            }
+            fn remember(&self, text: &str) {
+                lock(&self.0.claims).push((false, text.into()));
+            }
+            fn remember_user(&self, text: &str) {
+                lock(&self.0.claims).push((true, text.into()));
+            }
+        }
+        let make_shared = |resume: bool, sink: Arc<MemorySink>| {
+            Shared::new(SessionParts {
+                ctx: ActionContext {
+                    thread_id: new_id(),
+                    workspace_id: new_id(),
+                    working_directory: "/work".into(),
+                },
+                provider_id: "cursor".into(),
+                routing: DecisionRouting::ProviderPrompt,
+                sink: Box::new(ObserveMemory(sink)),
+                provider_session_id: if resume {
+                    "session".into()
+                } else {
+                    String::new()
+                },
+                limits: SessionLimits::default(),
+                expiry: None,
+                titles: None,
+            })
+        };
+        let record = |event: &str, session: &str, generation: &str| {
+            kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+                "hook_event_name":event,"conversation_id":session,"generation_id":generation,"status":"completed",
+                "prompt":"Decision: User explicitly selected the native runtime.",
+                "text":"Architecture: Saved facts belong to this workspace."
+            }).to_string().as_bytes()).unwrap()
+        };
+        let sink = Arc::new(MemorySink::default());
+        let shared = make_shared(false, sink.clone());
+        shared.forget_session_id();
+        assert!(matches!(
+            shared.handle(record("sessionStart", "session", "session")),
+            HookReply::ProjectContext { .. }
+        ));
+        assert_eq!(
+            shared.handle(record("sessionStart", "session", "session")),
+            HookReply::Ack
+        );
+        assert_eq!(
+            shared.handle(record("sessionStart", "foreign", "foreign")),
+            HookReply::Ack
+        );
+        assert_eq!(sink.contexts.load(Ordering::SeqCst), 1);
+        shared.handle(record("afterAgentResponse", "session", "unknown"));
+        assert!(lock(&sink.claims).is_empty());
+        assert_eq!(
+            shared.handle(record("beforeSubmitPrompt", "session", "typed")),
+            HookReply::ProjectContext {
+                text: "Current task context".into()
+            }
+        );
+        assert_eq!(
+            shared.handle(record("beforeSubmitPrompt", "session", "typed")),
+            HookReply::Ack
+        );
+        assert_eq!(lock(&sink.claims).len(), 1);
+        shared.handle(record("stop", "session", "typed"));
+        let events_before = lock(&sink.events).len();
+        shared.handle(record("afterAgentResponse", "session", "typed"));
+        assert_eq!(
+            lock(&sink.events).len(),
+            events_before,
+            "late response must not complete another turn"
+        );
+        assert_eq!(shared.handoff_readiness(), Ok(()));
+        shared.handle(record("beforeSubmitPrompt", "session", "typed"));
+        shared.handle(record("afterAgentResponse", "session", "stale-unknown"));
+        shared.handle(record("afterAgentResponse", "foreign", "typed"));
+        assert_eq!(lock(&sink.claims).len(), 2);
+        // An atomic KalCode submission already captured its original task before enrichment.
+        // Its hook must not attribute retrieved memory or reviewed handoff context to the user.
+        shared.record_claude_submit_boundary_locked(
+            &mut lock(&shared.lifecycle),
+            1,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            shared.handle(record("beforeSubmitPrompt", "session", "kalcode-task")),
+            HookReply::Ack
+        );
+        assert_eq!(lock(&sink.claims).len(), 2);
+        assert_eq!(
+            lock(&sink.queries).len(),
+            1,
+            "enriched KalCode task and duplicate/stale hooks never retrieve again"
+        );
+        shared.handle(record("afterAgentResponse", "session", "kalcode-task"));
+        assert_eq!(lock(&sink.claims).len(), 3);
+        let claims = lock(&sink.claims);
+        assert!(claims[0].0);
+        assert!(!claims[1].0 && !claims[2].0);
+        drop(claims);
+        let resumed_sink = Arc::new(MemorySink::default());
+        let resumed = make_shared(true, resumed_sink.clone());
+        assert_eq!(
+            resumed.handle(record("sessionStart", "session", "session")),
+            HookReply::Ack
+        );
+        assert_eq!(resumed_sink.contexts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            resumed.handoff_readiness(),
+            Err(HandoffDeliveryError::Unverified)
+        );
+        // Voice writes use this same user-origin boundary; resumed terminals get current
+        // task memory even though they never replay the fresh sessionStart context.
+        resumed.record_claude_submit_boundary_locked(
+            &mut lock(&resumed.lifecycle),
+            1,
+            false,
+            true,
+            false,
+        );
+        assert_eq!(
+            resumed.handle(record("beforeSubmitPrompt", "session", "voice-prompt")),
+            HookReply::ProjectContext {
+                text: "Current task context".into()
+            }
+        );
+        assert_eq!(
+            lock(&resumed_sink.queries).as_slice(),
+            ["Decision: User explicitly selected the native runtime."]
+        );
+        assert!(lock(&resumed_sink.claims)[0].0);
+    }
+
+    #[test]
     fn cursor_memory_preserves_user_provenance_and_rejects_other_sessions() {
         struct MemorySink(Arc<Mutex<Vec<(bool, String)>>>);
         impl AgentEventSink for MemorySink {
@@ -2162,6 +2443,109 @@ mod tests {
         );
         s.handle(event("sessionEnd", "native-session", "turn-1"));
         assert_eq!(s.handoff_readiness(), Err(HandoffDeliveryError::Unverified));
+    }
+
+    #[test]
+    fn cursor_native_model_command_does_not_leave_a_phantom_pending_prompt() {
+        let (shared, _) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        shared.forget_session_id();
+        let hook =
+            |event: &str| {
+                kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+            "hook_event_name":event,"conversation_id":"native","generation_id":"task-one",
+            "prompt":"Build the requested feature","status":"completed"
+        }).to_string().as_bytes()).unwrap()
+            };
+        // Native setup input also lacks a model-turn hook.
+        shared.observe_input_write_locked(&mut lock(&shared.lifecycle), b"y\r");
+        shared.handle(hook("sessionStart"));
+        {
+            let mut lifecycle = lock(&shared.lifecycle);
+            shared.observe_input_write_locked(&mut lifecycle, b"/model\r");
+            shared.observe_input_write_locked(&mut lifecycle, b"\x1b[B\r");
+            shared.observe_input_write_locked(&mut lifecycle, b"Build the requested feature\r");
+        }
+        shared.handle(hook("beforeSubmitPrompt"));
+        shared.handle(hook("stop"));
+        assert_eq!(
+            shared.handoff_readiness(),
+            Ok(()),
+            "native /model consumes no model turn and must not offset later prompt acknowledgement"
+        );
+    }
+
+    #[test]
+    fn cursor_prompt_correlation_preserves_later_partial_and_identical_submissions() {
+        for (later, second_submit, same_packet) in [
+            (b"later unfinished".as_slice(), false, false),
+            (b"task\r".as_slice(), true, false),
+            (b"later unfinished".as_slice(), false, true),
+            (b"task\r".as_slice(), true, true),
+        ] {
+            let (shared, _) = shared_for(
+                "cursor",
+                DecisionRouting::ProviderPrompt,
+                SessionLimits::default(),
+            );
+            shared.forget_session_id();
+            let hook = |event: &str, generation: &str| {
+                kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+                "hook_event_name":event,"conversation_id":"native","generation_id":generation,"prompt":"task","status":"completed"
+            }).to_string().as_bytes()).unwrap()
+            };
+            shared.handle(hook("sessionStart", "native"));
+            {
+                let mut lifecycle = lock(&shared.lifecycle);
+                shared.observe_input_write_locked(&mut lifecycle, b"/model\r");
+                if same_packet {
+                    shared.observe_input_write_locked(
+                        &mut lifecycle,
+                        &[b"task\r".as_slice(), later].concat(),
+                    );
+                } else {
+                    shared.observe_input_write_locked(&mut lifecycle, b"task\r");
+                    shared.observe_input_write_locked(&mut lifecycle, later);
+                }
+            }
+            shared.handle(hook("beforeSubmitPrompt", "one"));
+            shared.handle(hook("stop", "one"));
+            assert_eq!(
+                shared.handoff_readiness(),
+                Err(HandoffDeliveryError::InputPending)
+            );
+            if second_submit {
+                shared.handle(hook("beforeSubmitPrompt", "two"));
+                shared.handle(hook("stop", "two"));
+                assert_eq!(shared.handoff_readiness(), Ok(()));
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_unknown_editing_never_clears_pending_input_from_a_native_hook() {
+        let (shared, _) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        shared.forget_session_id();
+        let hook = |event: &str| {
+            kalcode_hook_bridge::record::from_cursor_stdin(event, json!({
+            "hook_event_name":event,"conversation_id":"native","generation_id":"one","prompt":"history-selected task","status":"completed"
+        }).to_string().as_bytes()).unwrap()
+        };
+        shared.handle(hook("sessionStart"));
+        shared.observe_input_write_locked(&mut lock(&shared.lifecycle), b"\x1b[A\r");
+        shared.handle(hook("beforeSubmitPrompt"));
+        shared.handle(hook("stop"));
+        assert_eq!(
+            shared.handoff_readiness(),
+            Err(HandoffDeliveryError::InputPending)
+        );
     }
 
     #[test]
@@ -2517,11 +2901,13 @@ mod tests {
                 generation: generation as u64,
                 trailing_input: false,
                 clears_input: true,
+                kalcode_submitted: false,
+                cursor_fingerprint: None,
             })
             .collect();
         lifecycle.handoff_readiness = HandoffReadiness::Ready;
 
-        s.record_claude_submit_boundary_locked(&mut lifecycle, u64::MAX, false, true);
+        s.record_claude_submit_boundary_locked(&mut lifecycle, u64::MAX, false, true, false);
 
         assert!(lifecycle.claude_submit_tracking_failed);
         assert_eq!(lifecycle.handoff_readiness, HandoffReadiness::Unverified);

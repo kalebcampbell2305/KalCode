@@ -333,7 +333,8 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         id: "external-integrations",
         label: "External integrations with your own credentials",
         from: "free",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: "0.1.9+1467",
       },
       {
         id: "adaptive-canvas",

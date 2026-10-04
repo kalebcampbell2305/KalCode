@@ -23,7 +23,10 @@ test("package proof requires draft exact commit, signed exact bytes and build id
   }
   assert.match(source, /normal|production updater delivery/u);
   assert.doesNotMatch(source, /normalUpdaterDeliveryProven = \$true|Stop-Process|Invoke-RestMethod/u);
-  assert.match(source, /\$env:GH_TOKEN = \$null/u);
+  assert.match(
+    readFileSync(new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url), "utf8"),
+    /\$env:GH_TOKEN = \$null/u,
+  );
   assert.match(source, /candidateClose\.accepted/u);
   assert.match(source, /liveClose\.accepted/u);
 });
@@ -50,7 +53,14 @@ with tempfile.TemporaryDirectory() as folder:
     result=m.compare(a,b,'0.1.9+1467',22)
     assert result['differences'] == ['project: 1 live rows missing or changed'], result
     assert 'secret' not in str(result)
-    assert 'unchanged expected schema' in str(m.compare(a,b,'0.1.9+1467',23))
+    assert 'pinned live/candidate schemas' in str(m.compare(a,b,'0.1.9+1467',23))
+    with closing(sqlite3.connect(b)) as c, c:
+        c.execute('INSERT INTO project VALUES(?)',(b'secret',))
+        c.executescript('INSERT INTO schema_migrations VALUES(23); INSERT INTO schema_migrations VALUES(24); CREATE TABLE workspace_memory(id TEXT);')
+    migrated=m.compare(a,b,'0.1.9+1467',24,22)
+    assert migrated['differences'] == [], migrated
+    assert migrated['liveSchema'] == 22 and migrated['candidateSchema'] == 24
+    assert m.compare(a,b,'0.1.9+1467',24,21)['differences']
     with closing(sqlite3.connect(b)) as c, c: c.execute("UPDATE app_meta SET value='changed' WHERE key='first_run_at'")
     assert 'app_meta changed non-launch metadata' in m.compare(a,b,'0.1.9+1467',22)['differences']
     with closing(sqlite3.connect(b)) as c, c: c.execute('DELETE FROM app_meta')
@@ -60,6 +70,24 @@ print('PASS')
   const result = spawnSync("python", ["-I", "-B", "-c", py], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /PASS/u);
+});
+
+test("migration proof requires exact schemas, rollback floor and preserves unsuccessful QA processes", () => {
+  const entry = readFileSync(
+    new URL("../../.github/scripts/win-desktop-update-from-feed.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /floorAfter -cne \$CandidateVersion/u);
+  assert.match(source, /checks\.restoreGuard = \$true/u);
+  assert.match(source, /\$ExpectSchema \$expectedLive/u);
+  assert.match(entry, /KALEBSLAPTOP\\kalcode-qa/u);
+  assert.match(entry, /\$id\.Name -ine 'KALEBSLAPTOP\\kalcode-qa'/u);
+  assert.match(source, /finally \{ \$env:GH_TOKEN = \$workflowToken \}/u);
+  assert.match(entry, /canonical SID-bound QA profile paths/u);
+  assert.ok(entry.indexOf("QA profile is not clean") < entry.indexOf("$script:QaStateOwned = $true"));
+  assert.match(entry, /if \(\$CandidateTag -and \$receipt\.status -ne 'PASS'\)/u);
+  assert.doesNotMatch(entry, /Stop-Process|taskkill/u);
+  assert.match(entry, /Bind-App \$p \$i\.exe \$t/u);
 });
 
 test("PowerShell helper parses without executing any QA action", { skip: process.platform !== "win32" }, () => {

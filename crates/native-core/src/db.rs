@@ -596,6 +596,72 @@ mod tests {
     }
 
     #[test]
+    fn cursor_accounts_and_workspace_memory_survive_upgrade_and_reopen() {
+        let dir = tempfile::tempdir().expect("profile");
+        let path = dir.path().join("kalcode.db");
+        let mut conn = open(&path).expect("database");
+        let memory_position = MIGRATIONS
+            .iter()
+            .position(|m| m.name == "unified_memory")
+            .expect("memory migration");
+        migrate(&mut conn, &MIGRATIONS[..memory_position], None).expect("Cursor schema");
+        conn.execute_batch(
+            "INSERT INTO workspaces(id,name,root_path,created_at,last_opened_at) VALUES('w','Project','/project','now','now');
+             INSERT INTO provider_accounts(id,provider_id,display_name,authentication_state,is_default,created_at)
+             VALUES('cursor-a','cursor','Cursor A','authenticated',1,'now');
+             INSERT INTO provider_account_bindings VALUES('cursor','workspace','w','cursor-a');
+             INSERT INTO threads(id,name,provider_id,provider_name,workspace_id,workspace_name,cwd,permission_mode,status,created_at,last_activity_at,provider_account_id)
+             VALUES('t','Cursor coding terminal','cursor','Cursor','w','Project','/project','bypass','idle','now','now','cursor-a');"
+        ).expect("existing Cursor session");
+        migrate(&mut conn, MIGRATIONS, None).expect("memory upgrade");
+        conn.execute_batch(
+            "INSERT INTO unified_memory(id,account_id,workspace_id,title,content,category,fingerprint,record_json,updated_at)
+             VALUES('m','owner','w','Architecture','Use SQLite for workspace memory','architecture','f','{}','now');
+             INSERT INTO unified_memory_settings VALUES('owner','w',0,1);"
+        ).expect("shared memory");
+        drop(conn);
+        let mut conn = open(&path).expect("reopen");
+        assert!(
+            !migrate(&mut conn, MIGRATIONS, None)
+                .expect("restore")
+                .applied_any()
+        );
+        let identity: (String, String, String) = conn.query_row(
+            "SELECT a.display_name,a.authentication_state,t.provider_account_id FROM provider_accounts a JOIN threads t ON t.provider_account_id=a.id WHERE t.id='t'",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        ).expect("restored identity");
+        assert_eq!(
+            identity,
+            ("Cursor A".into(), "authenticated".into(), "cursor-a".into())
+        );
+        assert_eq!(conn.query_row("SELECT account_id FROM provider_account_bindings WHERE provider_id='cursor' AND scope_id='w'", [], |r| r.get::<_, String>(0)).expect("binding"), "cursor-a");
+        assert_eq!(
+            conn.query_row("SELECT content FROM unified_memory WHERE id='m'", [], |r| r
+                .get::<_, String>(0))
+                .expect("memory"),
+            "Use SQLite for workspace memory"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM unified_memory_fts WHERE unified_memory_fts MATCH 'SQLite'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("search"),
+            1
+        );
+        assert_eq!(conn.query_row("SELECT auto_capture FROM unified_memory_settings WHERE account_id='owner' AND workspace_id='w'", [], |r| r.get::<_, i64>(0)).expect("settings"), 0);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .expect("integrity"),
+            0
+        );
+    }
+
+    #[test]
     fn fresh_database_migrates_to_latest() {
         let mut conn = open_in_memory().expect("open");
         let outcome = migrate(&mut conn, MIGRATIONS, None).expect("migrate");

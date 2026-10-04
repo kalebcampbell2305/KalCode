@@ -175,8 +175,8 @@ fn run_codex_notify(args: &[String], env: &HelperEnv) -> Rendered {
 }
 
 fn run_cursor(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
-    // These are observing hooks. Always return schema-valid no-op output, including when the
-    // bridge is unavailable; never modify Cursor's native tool permission decisions.
+    // These are observing hooks. Startup and native user prompts may receive project context.
+    // Failures return schema-valid no-op output; native tool permissions stay with Cursor.
     let response = Rendered {
         exit_code: 0,
         stdout: if args
@@ -205,7 +205,7 @@ fn run_cursor(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendere
         .is_ok()
         && let Ok(record) = record::from_cursor_stdin(event, &bytes)
     {
-        let _ = exchange_within(
+        let result = exchange_within(
             endpoint,
             session.clone(),
             key,
@@ -213,6 +213,13 @@ fn run_cursor(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendere
             env.cap(STATUS_DEADLINE),
             env.cap(STATUS_CONNECT),
         );
+        if let Ok(reply) = result {
+            match event.as_str() {
+                "sessionStart" => return reply.render_cursor_session_start(),
+                "beforeSubmitPrompt" => return reply.render_cursor_prompt(),
+                _ => {}
+            }
+        }
     }
     response
 }

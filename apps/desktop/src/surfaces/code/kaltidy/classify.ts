@@ -39,8 +39,8 @@ export const ACTIVE_CPU_PERCENT = 0.5;
 /** The process scan lists at most this many rows; a full list may have dropped a terminal's. */
 export const PROCESS_SCAN_LIMIT = 1_000;
 
-const UNFINISHED = new Set(["queued", "starting", "running", "paused", "blocked", "unknown"]);
-const STOPPED_SERVICE = new Set(["stopped", "exited", "failed", "crashed"]);
+export const UNFINISHED = new Set(["queued", "starting", "running", "paused", "blocked", "unknown"]);
+export const STOPPED_SERVICE = new Set(["stopped", "exited", "failed", "crashed"]);
 const AGENTS: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",
@@ -135,7 +135,7 @@ export function workUnderShell(terminal: TerminalInfo, tree: readonly ProcessInf
 
 type Verdict = Pick<TidyEntry, "cls" | "reason">;
 
-function shellRoot(tree: readonly ProcessInfo[]): ProcessInfo | undefined {
+export function shellRoot(tree: readonly ProcessInfo[]): ProcessInfo | undefined {
   return tree.find((p) => p.terminalGeneration !== null);
 }
 
