@@ -269,3 +269,8 @@ export function usePermissions(): PermissionsValue {
   if (!value) throw new Error("usePermissions must be used inside <PermissionsProvider>");
   return value;
 }
+
+/** Permissions when a provider is mounted (the Shell mounts one); null otherwise. */
+export function useOptionalPermissions(): PermissionsValue | null {
+  return useContext(PermissionsContext);
+}

@@ -50,7 +50,24 @@ import styles from "./CodeContextOperations.module.css";
 
 export const CODE_CONTEXT_OPERATIONS_WIDGET_ID = "code-context-operations";
 
-type ContextTab = "runs" | "services" | "tests";
+export type ContextTab = "runs" | "services" | "tests";
+
+// A tab another control asked for (Run Tests, What's Happening): taken by the next mounted pane,
+// or by the pane already showing.
+let requestedTab: ContextTab | null = null;
+const tabRequests = new Set<(tab: ContextTab) => void>();
+
+/** Shows a tab of Runs & services: now when the pane is mounted, otherwise when it next mounts. */
+export function requestCodeContextTab(tab: ContextTab) {
+  requestedTab = tab;
+  for (const listener of tabRequests) listener(tab);
+}
+
+function takeRequestedTab(): ContextTab | null {
+  const tab = requestedTab;
+  requestedTab = null;
+  return tab;
+}
 
 const STATUS_TONE: Record<
   OperationStatus,
@@ -117,7 +134,17 @@ export function CodeContextOperations({ client, visible = true }: { client: Oper
   const workspaces = useWorkspaces();
   const openInPane = useOpenInPane();
   const tier = planTier(useOptionalAccount()?.snapshot);
-  const [tab, setTab] = useState<ContextTab>("runs");
+  const [tab, setTab] = useState<ContextTab>(() => takeRequestedTab() ?? "runs");
+  useEffect(() => {
+    const listener = (requested: ContextTab) => {
+      requestedTab = null;
+      setTab(requested);
+    };
+    tabRequests.add(listener);
+    return () => {
+      tabRequests.delete(listener);
+    };
+  }, []);
   const [selected, setSelected] = useState<{ id: string; tab: OperationsDetailTab } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const mutation = useRef<string | null>(null);

@@ -1,0 +1,524 @@
+/*
+ * Terminal Organization: the Terminal Stack beside the canvas, the quick bar's counters and the
+ * What's Happening strip in the status bar. Dense (13 px text, 28-32 px rows), status as tone +
+ * glyph + word through the contract tones, and quiet chrome: the canvas stays the focus.
+ */
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* ---- Terminal Stack ---- */
+
+.stack {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 15.5rem;
+  min-height: 0;
+  margin-right: var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-1);
+}
+
+.stackHeader {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 2.25rem;
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.stackIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--color-text-muted);
+}
+
+.stackTitle {
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--type-label-weight);
+}
+
+.stackCounts {
+  color: var(--color-text-faint);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.stackBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-1) 0 var(--space-2);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.empty {
+  margin: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  line-height: 1.45;
+}
+
+.group + .group {
+  margin-top: var(--space-1);
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  height: 1.75rem;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--type-small);
+  font-weight: var(--type-label-weight);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.groupHeader:hover {
+  color: var(--color-text);
+}
+
+.groupHeader:focus-visible,
+.finishedToggle:focus-visible,
+.itemMain:focus-visible,
+.addGroup:focus-visible,
+.railButton:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.groupHeader svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.groupName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupTotal {
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+.groupCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--status-muted-text);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+.groupCount svg {
+  width: 11px;
+  height: 11px;
+}
+
+.groupCount[data-tone="working"] {
+  color: var(--status-working-text);
+}
+.groupCount[data-tone="waiting"] {
+  color: var(--status-waiting-text);
+}
+.groupCount[data-tone="failed"] {
+  color: var(--status-failed-text);
+}
+.groupCount[data-tone="done"] {
+  color: var(--status-done-text);
+}
+
+.groupEmpty {
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-6);
+  color: var(--color-text-faint);
+  font-size: var(--type-small);
+}
+
+.items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.item:hover {
+  background: var(--color-surface-hover);
+}
+
+.item[data-focused] {
+  background: var(--color-surface-selected);
+}
+
+.item[data-focused]::before {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  content: "";
+}
+
+/* Waiting work is marked: an amber edge, so it is found without reading every row. */
+.item[data-badge="waiting"]:not([data-focused])::before {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--status-waiting);
+  content: "";
+}
+
+.itemMain {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  height: 1.875rem;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--type-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.item[data-badge="done"] .itemTitle,
+.item[data-badge="idle"] .itemTitle {
+  color: var(--color-text-muted);
+}
+
+.itemTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinMark {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  color: var(--color-text-faint);
+}
+
+.badge {
+  flex: none;
+}
+
+.itemMenu {
+  flex: none;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  margin-right: 2px;
+  opacity: 0;
+}
+
+.item:hover .itemMenu,
+.item:focus-within .itemMenu,
+.itemMenu[data-state="open"] {
+  opacity: 1;
+}
+
+.finishedToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: calc(100% - var(--space-2));
+  height: 1.625rem;
+  margin: 0 var(--space-1);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--type-small);
+  cursor: pointer;
+}
+
+.finishedToggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+.finishedToggle svg {
+  width: 12px;
+  height: 12px;
+}
+
+.finishedIcon {
+  color: var(--status-done-text);
+}
+
+.addGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: var(--space-2) var(--space-2) 0;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  font: inherit;
+  font-size: var(--type-small);
+  cursor: pointer;
+}
+
+.addGroup:hover {
+  color: var(--color-text-secondary);
+}
+
+.addGroup svg {
+  width: 12px;
+  height: 12px;
+}
+
+.newGroup {
+  margin: var(--space-2) var(--space-2) 0;
+}
+
+/* The collapsed stack: one slim button with live counters. */
+.stackRail {
+  display: flex;
+  flex: none;
+  margin-right: var(--space-2);
+}
+
+.railButton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: 1.75rem;
+  padding: var(--space-2) 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-1);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.railButton:hover {
+  color: var(--color-text);
+}
+
+.railButton > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.railCount {
+  min-width: 1rem;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+  line-height: 1rem;
+  text-align: center;
+}
+
+.railCount[data-tone="working"] {
+  background: var(--status-working-soft);
+  color: var(--status-working-text);
+}
+
+.railCount[data-tone="waiting"] {
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+}
+
+/* While the stack shows on a wide canvas, its rail is only for narrow canvases. */
+.stackRail[data-narrow-only] {
+  display: none;
+}
+
+/* A narrow canvas keeps its width for the panes: the stack folds to its rail, which opens it
+   over the canvas's left edge. */
+@container code (max-width: 44rem) {
+  .stack {
+    display: none;
+  }
+
+  .stackRail[data-narrow-only] {
+    display: flex;
+  }
+
+  .stack[data-overlay] {
+    position: absolute;
+    top: 0;
+    bottom: var(--space-2);
+    left: calc(var(--space-2) + 1.75rem + var(--space-2));
+    z-index: var(--z-sticky);
+    display: flex;
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+/* ---- Quick bar counters ---- */
+
+.counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 var(--space-1-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  font: inherit;
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.counter svg {
+  width: 12px;
+  height: 12px;
+}
+
+.counter[data-tone="working"] {
+  border-color: var(--status-working-line);
+  background: var(--status-working-soft);
+  color: var(--status-working-text);
+}
+
+.counter[data-tone="waiting"] {
+  border-color: var(--status-waiting-line);
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+}
+
+.counter:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+/* ---- What's Happening ---- */
+
+.happening {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.happeningLabel {
+  flex: none;
+  margin-right: var(--space-2);
+  color: var(--color-text-faint);
+}
+
+.segment {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 1.25rem;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.segment:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.segment:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -1px;
+}
+
+.segment svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.segment[data-tone="working"] svg {
+  color: var(--status-working);
+}
+.segment[data-tone="waiting"] {
+  color: var(--status-waiting-text);
+}
+.segment[data-tone="done"] svg {
+  color: var(--status-done);
+}
+.segment[data-tone="failed"] {
+  color: var(--status-failed-text);
+}
+.segment[data-tone="muted"] svg {
+  color: var(--status-muted);
+}
+
+.separator {
+  flex: none;
+  margin: 0 2px;
+  color: var(--color-text-faint);
+}
+
+.quiet {
+  color: var(--color-text-faint);
+}
+
+/* The quick bar folds before the workspace title does: narrow canvases keep + Agent, + Terminal,
+   Widgets and KalTidy; Browser, Run Tests and Focus stay in the pane menus, Widgets and the Layout
+   menu. */
+@container code (max-width: 44rem) {
+  .quickExtra {
+    display: none;
+  }
+}
+
+@container code (max-width: 30rem) {
+  .counter {
+    display: none;
+  }
+}
