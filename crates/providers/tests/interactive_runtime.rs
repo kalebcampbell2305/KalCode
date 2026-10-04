@@ -146,6 +146,8 @@ impl AgentProvider for HeldProvider {
                 kind: LaunchHoldKind::ConcurrencyLimit,
                 running: Some(1),
                 limit: Some(1),
+                free_mb: None,
+                floor_mb: None,
                 retry_after: Duration::from_millis(15),
                 wait_limit: WAIT,
             }));

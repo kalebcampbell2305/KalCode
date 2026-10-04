@@ -76,10 +76,12 @@ pub const PAUSED_ACTIVITY: &str = "Paused";
 /// Activity of a thread whose idle session was ended because its account was switched.
 pub const ACCOUNT_SWITCHED_ACTIVITY: &str = "Switched provider account";
 const NEW_SESSION_NOTICE: &str = "Started a new provider session. The earlier conversation couldn't be restored, so the provider won't remember the messages above.";
-/// Activity while the Resource Governor holds a launch or turn (a reason follows in brackets).
-pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting for system resources";
+/// Activity while the Resource Governor holds a launch or turn: followed by ": " and the real
+/// reason ("Waiting to start: memory is critically low"). Only genuine hard pressure or an
+/// explicit Custom limit holds a user-requested agent; CPU load never does.
+pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting to start";
 /// Activity of a thread whose bounded wait for system resources ended without starting.
-pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were busy";
+pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were too low";
 /// Activity of an idle thread whose last turn reported failure.
 pub const LAST_TURN_FAILED_ACTIVITY: &str = "Last turn failed";
 /// Activity of an idle thread whose session ended because it was archived.
@@ -1492,6 +1494,23 @@ impl ThreadRuntime {
         self.inner.summary(thread_id)
     }
 
+    /// Start Anyway: re-checks a held launch or turn immediately instead of on the governor's
+    /// cadence (the host grants the one-launch override to its resource governor first). A
+    /// thread whose wait already ran out (`resources_unavailable`) is resumed. Any other thread
+    /// is returned unchanged.
+    pub fn retry_held_launch(&self, thread_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        if !self.inner.recheck_now(thread_id) {
+            let row = self.inner.row(thread_id)?;
+            let ran_out = row.status == ThreadStatus::Interrupted
+                && row.error_code.as_deref() == Some(error_codes::RESOURCES_UNAVAILABLE);
+            if ran_out {
+                self.inner.resume(thread_id, None)?;
+            }
+        }
+        self.inner.summary(thread_id)
+    }
+
     pub fn rename(&self, thread_id: &str, name: &str) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         let name = validate::name(name)?;
@@ -2020,29 +2039,42 @@ fn describe_provider_error(error: &ProviderError, provider: &str) -> (String, St
     (code.to_owned(), message)
 }
 
-/// "(CPU busy)", "(4 of 4 threads are already working)".
+/// The real reason, sentence case: "memory is critically low (412 MB free)",
+/// "4 of 4 agents are already working (your Custom limit)".
 fn hold_phrase(hold: &LaunchHold, provider: &str) -> String {
-    match (hold.kind, hold.running, hold.limit) {
-        (LaunchHoldKind::ConcurrencyLimit, Some(running), Some(limit)) => {
-            format!("{running} of {limit} threads are already working")
+    match (hold.kind, hold.running, hold.limit, hold.free_mb) {
+        (LaunchHoldKind::ConcurrencyLimit, Some(running), Some(limit), _) => {
+            format!("{running} of {limit} agents are already working (your Custom limit)")
         }
-        (LaunchHoldKind::ProviderLimit, Some(running), Some(limit)) => {
-            format!("{running} of {limit} {provider} threads are already working")
+        (LaunchHoldKind::ProviderLimit, Some(running), Some(limit), _) => {
+            format!(
+                "{running} of {limit} {provider} agents are already working (your Custom limit)"
+            )
         }
-        (kind, _, _) => kind.phrase().to_owned(),
+        (LaunchHoldKind::MemoryCritical | LaunchHoldKind::DiskFull, _, _, Some(free)) => {
+            format!("{} ({free} MB free)", hold.kind.phrase())
+        }
+        (kind, _, _, _) => kind.phrase().to_owned(),
     }
 }
 
-/// While waiting: what is held, that KalCode re-checks, and what the person can do.
+fn capitalized(phrase: &str) -> String {
+    let mut chars = phrase.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// While waiting: the real reason, what happens next, and what the person can do now.
 fn waiting_message(provider: &str, hold: &LaunchHold) -> String {
-    let phrase = hold_phrase(hold, provider);
+    let reason = capitalized(&hold_phrase(hold, provider));
     if hold.kind.freed_by_stopping_a_thread() {
         format!(
-            "KalCode is waiting for system resources ({phrase}). {provider} starts as soon as one finishes; stop a thread you're not using to start it sooner."
+            "{reason}. {provider} starts as soon as one finishes. Stop an agent you're not using, or choose Start Anyway."
         )
     } else {
         format!(
-            "KalCode is waiting for system resources ({phrase}). {provider} starts when they free up; KalCode checks again every few seconds."
+            "{reason}. KalCode is holding {provider} so your system stays usable; it starts as soon as this clears. Run KalTidy to free resources, or choose Start Anyway."
         )
     }
 }
@@ -2064,11 +2096,11 @@ fn unavailable_message(provider: &str, hold: &LaunchHold, has_message: bool, tur
     };
     if hold.kind.freed_by_stopping_a_thread() {
         format!(
-            "{what}: KalCode waited {waited} s for system resources ({phrase}).{saved} Stop a thread you're not using, then resume this one."
+            "{what}: {phrase} after {waited} s.{saved} Stop an agent you're not using, then resume this one, or choose Start Anyway."
         )
     } else {
         format!(
-            "{what}: KalCode waited {waited} s for system resources ({phrase}).{saved} Resume this thread to try again."
+            "{what}: {phrase} after {waited} s.{saved} Run KalTidy to free resources and resume, or choose Start Anyway."
         )
     }
 }
@@ -2649,7 +2681,7 @@ impl Inner {
         if changed {
             let provider_name = self.row(&ctx.thread_id)?.provider_name;
             let activity = format!(
-                "{WAITING_FOR_RESOURCES_ACTIVITY} ({})",
+                "{WAITING_FOR_RESOURCES_ACTIVITY}: {}",
                 hold_phrase(&waiting.hold, &provider_name)
             );
             let message = waiting_message(&provider_name, &waiting.hold);
@@ -2733,6 +2765,23 @@ impl Inner {
                 )
                 .with_source(e)
             })
+    }
+
+    /// Start Anyway: re-checks this thread's current wait now. Returns whether it was waiting.
+    fn recheck_now(&self, thread_id: &str) -> bool {
+        let Some(live) = self.existing_live(thread_id) else {
+            return false;
+        };
+        let ticket = {
+            let state = live.lock();
+            let Some(waiting) = state.waiting.as_ref() else {
+                return false;
+            };
+            waiting.ticket
+        };
+        tracing::info!(event = "thread.start_anyway", thread_id = %thread_id);
+        self.recheck_wait(&live, ticket);
+        true
     }
 
     /// Re-evaluates a held launch or turn against current admission. Returns whether the same
@@ -4269,7 +4318,7 @@ fn archived() -> KalError {
 fn waiting_for_resources() -> KalError {
     KalError::validation(
         "thread_waiting_for_resources",
-        "This thread is waiting for system resources and starts on its own. Stop it to cancel.",
+        "This thread is waiting to start and starts on its own, or choose Start Anyway. Stop it to cancel.",
     )
 }
 

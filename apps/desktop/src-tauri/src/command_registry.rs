@@ -171,6 +171,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "thread_interrupt",
     "thread_resume",
     "thread_stop",
+    "thread_start_anyway",
     "thread_rebind_account",
     "thread_rename",
     "thread_duplicate",

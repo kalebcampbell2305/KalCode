@@ -1,7 +1,14 @@
 import type { Reading, ResourcePressure } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import type { ResourceAdmissionDecision, ResourceFreshness } from "../../ipc/resources.ts";
-import { admissionSummary, formatBytes, freshnessSummary, pressureSummary, readingSummary } from "./resourceModel.ts";
+import {
+  admissionSummary,
+  backgroundAdmissionSummary,
+  formatBytes,
+  freshnessSummary,
+  pressureSummary,
+  readingSummary,
+} from "./resourceModel.ts";
 
 describe("resource model", () => {
   it("never turns unknown telemetry into a zero measurement", () => {
@@ -69,24 +76,52 @@ describe("resource model", () => {
     expect(freshnessSummary(unavailable)).toEqual({ label: "No current sample", tone: "danger" });
   });
 
-  it("makes a held admission honest and actionable", () => {
-    const held: ResourceAdmissionDecision = {
-      state: "held",
+  it("never says a coding agent waits for CPU: agents start, background work yields", () => {
+    const agents: ResourceAdmissionDecision = {
+      state: "allowed",
       mode: "balanced",
-      additional: 0,
-      reasons: [{ kind: "snapshot_stale", ageMs: 55_000, maxAgeMs: 45_000 }],
+      additional: 4_294_967_295,
+      reasons: [],
       snapshotSeq: 7,
       sampledAtUnixMs: 1_800_000_000_000,
     };
+    expect(admissionSummary(agents)).toEqual({
+      label: "New coding agents start immediately",
+      detail: "CPU load never delays an agent you start; KalCode slows optional background work instead.",
+      tone: "success",
+    });
+    expect(admissionSummary({ ...agents, additional: 2 }).detail).toBe("2 more agents fit your Custom limit.");
 
-    expect(admissionSummary(held)).toEqual({
-      label: "New provider work is paused",
+    const background: ResourceAdmissionDecision = {
+      ...agents,
+      state: "held",
+      additional: 0,
+      reasons: [{ kind: "snapshot_stale", ageMs: 55_000, maxAgeMs: 45_000 }],
+    };
+    expect(backgroundAdmissionSummary(background)).toEqual({
+      label: "Background work is yielding",
       detail: "Waiting for a current resource sample.",
       tone: "warning",
     });
   });
 
-  it("keeps new work paused until the selected mode has a matching sample", () => {
+  it("names the real hard-pressure reason when coding agents are held", () => {
+    const held: ResourceAdmissionDecision = {
+      state: "held",
+      mode: "balanced",
+      additional: 0,
+      reasons: [{ kind: "hard_pressure", pressure: { kind: "disk_full", mount: "C:\\", freeMb: 600, floorMb: 1_024 } }],
+      snapshotSeq: 7,
+      sampledAtUnixMs: 1_800_000_000_000,
+    };
+    expect(admissionSummary(held)).toEqual({
+      label: "New coding agents are waiting",
+      detail: "The disk is almost full (600 MB free on C:\\). Start Anyway is available on each waiting agent.",
+      tone: "warning",
+    });
+  });
+
+  it("keeps background work paused until the selected mode has a matching sample", () => {
     const held = {
       state: "held",
       mode: "performance",
@@ -102,8 +137,8 @@ describe("resource model", () => {
       sampledAtUnixMs: 1_800_000_000_000,
     } as unknown as ResourceAdmissionDecision;
 
-    expect(admissionSummary(held)).toEqual({
-      label: "New provider work is paused",
+    expect(backgroundAdmissionSummary(held)).toEqual({
+      label: "Background work is yielding",
       detail: "Waiting for a resource sample under the selected mode.",
       tone: "warning",
     });

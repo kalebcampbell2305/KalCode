@@ -164,6 +164,11 @@ fn classify_hold(decision: &AdmissionDecision) -> Hold {
                     }
                 }
             }
+            AdmissionReason::HardPressure { pressure: hard } => match hard {
+                kalcode_resources::HardPressure::MemoryCritical { .. }
+                | kalcode_resources::HardPressure::CommitExhausted { .. } => memory = true,
+                kalcode_resources::HardPressure::DiskFull { .. } => pressure = true,
+            },
             AdmissionReason::CapacityUnavailable => {}
         }
     }

@@ -718,6 +718,14 @@ export class KalCodeClient {
   }
 
   /**
+   * Start Anyway: the person's override for a coding agent held by genuine hard pressure (low
+   * memory, a full disk) or their own Custom limit. Starts it now.
+   */
+  startThreadAnyway(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_start_anyway", { threadId });
+  }
+
+  /**
    * Explicitly rebinds a thread to another account of the same provider (the person confirmed
    * the Rebind dialog). Future provider requests use the new account; past history is unchanged.
    */
