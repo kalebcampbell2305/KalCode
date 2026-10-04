@@ -84,7 +84,7 @@ test("Dashboard Launch an agent routes through Code, implicitly uses sole Claude
   await expect(dialog.getByRole("button", { name: "Launch Claude Code agent" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Launch Claude Code agent" }).click();
 
-  await expect(pane(page)).toHaveAttribute("aria-label", "New agent, Claude Code agent, account Personal");
+  await expect(pane(page)).toHaveAttribute("aria-label", "Claude Code, Claude Code agent, account Personal");
   await expect(pane(page).locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
 });
 
@@ -113,7 +113,7 @@ test("Code + immediately offers multiple Codex accounts, signs Work in inline an
   await expect(dialog.getByRole("button", { name: "Launch Codex agent" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Launch Codex agent" }).click();
 
-  await expect(pane(page)).toHaveAttribute("aria-label", "New agent, Codex agent, account Work");
+  await expect(pane(page)).toHaveAttribute("aria-label", "Codex, Codex agent, account Work");
   await expect(pane(page).locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
 });
 
@@ -169,7 +169,7 @@ test("empty-account + flows add and sign in without leaving either agent or thre
   await expect(surface.getByText(/^Studio(?: · Default)?$/)).toBeVisible();
   await expect(surface.getByRole("button", { name: "Launch Claude Code agent" })).toBeEnabled();
   await surface.getByRole("button", { name: "Launch Claude Code agent" }).click();
-  await expect(pane(page)).toHaveAttribute("aria-label", "New agent, Claude Code agent, account Studio");
+  await expect(pane(page)).toHaveAttribute("aria-label", "Claude Code, Claude Code agent, account Studio");
 
   await openThreads(page);
   await page.getByRole("button", { name: "New thread" }).first().click();

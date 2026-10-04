@@ -34,6 +34,21 @@ use serde_json::Value;
 const FAKE: &str = env!("CARGO_BIN_EXE_kalcode-fake-provider");
 const WAIT: Duration = Duration::from_secs(30);
 
+#[derive(Default)]
+struct CapturedTitles(Mutex<Vec<(String, String)>>);
+impl kalcode_providers::interactive::TitleSink for CapturedTitles {
+    fn terminal_prompt(&self, thread_id: &str, prompt: &str) {
+        self.first_prompt(thread_id, prompt);
+    }
+
+    fn first_prompt(&self, thread_id: &str, prompt: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((thread_id.to_owned(), prompt.to_owned()));
+    }
+}
+
 struct Rig {
     #[cfg(any(windows, target_os = "macos"))]
     _guardian: Option<kalcode_providers::guardian::GuardianRuntime>,
@@ -44,6 +59,7 @@ struct Rig {
     provider: Arc<InteractiveCliProvider>,
     profiles: Option<ManagedProfiles>,
     resolved_accounts: Arc<Mutex<Vec<String>>>,
+    titles: Arc<CapturedTitles>,
 }
 
 impl Rig {
@@ -118,6 +134,7 @@ impl Rig {
         let profiles = managed
             .then(|| ManagedProfiles::new(dir_root.join("managed")).expect("managed profiles"));
         let resolved_accounts = Arc::new(Mutex::new(Vec::new()));
+        let titles = Arc::new(CapturedTitles::default());
         let mut provider = InteractiveCliProvider::new(
             cli,
             DetectEnv {
@@ -135,7 +152,8 @@ impl Rig {
                 limits: SessionLimits::default(),
             },
             panes.clone(),
-        );
+        )
+        .with_titles(titles.clone());
         if let Some(profiles) = &profiles {
             provider = provider.with_managed_profiles(profiles.clone());
         }
@@ -157,6 +175,7 @@ impl Rig {
             provider,
             profiles,
             resolved_accounts,
+            titles,
         }
     }
 
@@ -315,6 +334,25 @@ fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
+}
+
+#[test]
+fn every_cli_pane_sends_actual_submitted_input_to_the_shared_namer() {
+    for cli in [PaneCli::Codex, PaneCli::Gemini, PaneCli::Cursor] {
+        let rig = Rig::new(cli);
+        let pane = rig.start(PermissionMode::Bypass);
+        // Drafts and terminal status reports never name a session.
+        pane.panes.write(&pane.thread_id, b"Redesign the ").unwrap();
+        pane.panes.write(&pane.thread_id, b"\x1b[1;1R").unwrap();
+        assert!(rig.titles.0.lock().unwrap().is_empty());
+        pane.type_line("pricing page");
+        assert_eq!(
+            *rig.titles.0.lock().unwrap(),
+            [(pane.thread_id.clone(), "Redesign the pricing page".into())]
+        );
+        pane.type_line("exit");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
 }
 
 struct UnifiedMemorySink {

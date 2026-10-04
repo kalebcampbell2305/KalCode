@@ -3,7 +3,7 @@
  *
  * The demo mirrors the shipped desktop app (apps/desktop): the same shell (Command Deck top bar,
  * sidebar, Agents rail), the same Code panes and New agent launcher, the same status vocabulary
- * (@kalcode/protocol/display-status), the same call signs ("Claude A", "Codex A") and the same
+ * (@kalcode/protocol/display-status), the same task-based names and the same
  * plan roadmap (@kalcode/protocol/plans). It is temporary by design: state lives in memory for
  * this page view, and Reset (or a reload) returns to the sample workspace.
  *
@@ -83,12 +83,11 @@ export interface Approval {
 
 export interface Agent {
   id: string;
-  sign: string;
+  name: string;
   provider: ProviderId;
   account: string;
   model: string;
   effort: string;
-  task: string;
   status: AgentStatus;
   activity: string;
   branch: string;
@@ -192,7 +191,6 @@ export type Environment = "Local" | "Preview" | "Staging" | "Production";
 export const ENVIRONMENTS: readonly Environment[] = ["Local", "Preview", "Staging", "Production"];
 
 export const PROVIDER_NAME: Record<ProviderId, string> = { claude: "Claude Code", codex: "Codex" };
-export const PROVIDER_SHORT: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
 
 /** Model and effort choices exactly as the desktop launcher lists them (crates/providers/src/catalog.rs). */
 export const MODELS: Record<ProviderId, readonly string[]> = {
@@ -344,12 +342,11 @@ function sampleAgents(): Agent[] {
   return [
     {
       id: "a1",
-      sign: "Claude A",
+      name: "Dashboard Redesign",
       provider: "claude",
       account: "claude-personal",
       model: "Opus",
       effort: "High",
-      task: "Dashboard redesign",
       status: "working",
       activity: "Editing src/pages/Dashboard.tsx",
       branch: "agent/dashboard-redesign",
@@ -388,18 +385,17 @@ function sampleAgents(): Agent[] {
           line: L("accent", "  Done. The dashboard is redesigned — have a look in Live Browser."),
           status: "waiting_for_you",
           activity: "Ready for your review",
-          finished: "Claude A finished Dashboard redesign",
+          finished: "Dashboard Redesign finished",
         },
       ],
     },
     {
       id: "a2",
-      sign: "Codex A",
+      name: "Dashboard Tests",
       provider: "codex",
       account: "codex-personal",
       model: "Default",
       effort: "Medium",
-      task: "Tests",
       status: "testing",
       activity: "Running pnpm test",
       branch: "agent/tests",
@@ -431,18 +427,17 @@ function sampleAgents(): Agent[] {
           line: L("accent", "  All 14 tests pass."),
           status: "done",
           activity: "14 tests passed",
-          finished: "Codex A finished Tests · 14 passed",
+          finished: "Dashboard Tests finished · 14 passed",
         },
       ],
     },
     {
       id: "a3",
-      sign: "Claude B",
+      name: "Code Review",
       provider: "claude",
       account: "claude-work",
       model: "Sonnet",
       effort: "Default",
-      task: "Review",
       status: "done",
       activity: "Review complete · 2 suggestions",
       branch: "agent/review",
@@ -464,12 +459,11 @@ function sampleAgents(): Agent[] {
     },
     {
       id: "a4",
-      sign: "Claude C",
+      name: "Login Validation",
       provider: "claude",
       account: "claude-personal",
       model: "Sonnet",
       effort: "Medium",
-      task: "Login form validation",
       status: "permission_required",
       activity: "Wants to run pnpm add zod",
       branch: "agent/login-validation",
@@ -493,7 +487,7 @@ function sampleAgents(): Agent[] {
           line: L("accent", "  Done. The login form validates and shows inline errors."),
           status: "done",
           activity: "Validation added",
-          finished: "Claude C finished Login form validation",
+          finished: "Login Validation finished",
         },
       ],
     },
@@ -520,10 +514,10 @@ export function initialState(): State {
       { id: "f3", tabs: ["t-ps"], active: "t-ps" },
     ],
     tabs: {
-      "t-a1": { id: "t-a1", kind: "agent", agent: "a1", title: "Claude A" },
-      "t-a3": { id: "t-a3", kind: "agent", agent: "a3", title: "Claude B" },
-      "t-a2": { id: "t-a2", kind: "agent", agent: "a2", title: "Codex A" },
-      "t-a4": { id: "t-a4", kind: "agent", agent: "a4", title: "Claude C" },
+      "t-a1": { id: "t-a1", kind: "agent", agent: "a1", title: "Dashboard Redesign" },
+      "t-a3": { id: "t-a3", kind: "agent", agent: "a3", title: "Code Review" },
+      "t-a2": { id: "t-a2", kind: "agent", agent: "a2", title: "Dashboard Tests" },
+      "t-a4": { id: "t-a4", kind: "agent", agent: "a4", title: "Login Validation" },
       "t-ps": { id: "t-ps", kind: "terminal", title: "PowerShell · dev server", lines: DEV_SERVER_LINES.slice() },
     },
     agents: Object.fromEntries(agents.map((agent) => [agent.id, agent])),
@@ -586,16 +580,6 @@ export function counts(state: State) {
     idle: list.filter((agent) => agent.status === "idle").length,
   };
 }
-/** The agents a call sign letter is free for: "Claude A", "Claude B"… in creation order. */
-function nextSign(state: State, provider: ProviderId): string {
-  const used = new Set(agentsList(state).map((agent) => agent.sign));
-  for (let i = 0; i < 26; i++) {
-    const sign = `${PROVIDER_SHORT[provider]} ${String.fromCharCode(65 + i)}`;
-    if (!used.has(sign)) return sign;
-  }
-  return `${PROVIDER_SHORT[provider]} ${state.seq}`;
-}
-
 export interface Run {
   id: string;
   name: string;
@@ -613,7 +597,7 @@ export function runs(state: State): Run[] {
     .filter((agent) => !agent.prompt)
     .map((agent) => ({
       id: `run-${agent.id}`,
-      name: agent.task,
+      name: agent.name,
       kind: "agent",
       where: `${WORKSPACE.name} · ${agent.branch} · ${PROVIDER_NAME[agent.provider]} · ${accountLabel(state, agent.account)}`,
       action: agent.activity,
@@ -735,12 +719,11 @@ function freshAgent(state: State, provider: ProviderId, accountId: string, model
   const agentId = id(state, "a");
   return {
     id: agentId,
-    sign: nextSign(state, provider),
+    name: PROVIDER_NAME[provider],
     provider,
     account: accountId,
     model,
     effort,
-    task: "New agent",
     status: "starting",
     activity: "Starting",
     branch: `agent/${agentId}`,
@@ -765,7 +748,7 @@ export function launch(state: State): string[] {
     const agent = freshAgent(state, l.provider, l.account, l.model, l.effort);
     state.agents[agent.id] = agent;
     state.order.push(agent.id);
-    placeTab(state, { id: `t-${agent.id}`, kind: "agent", agent: agent.id, title: agent.sign });
+    placeTab(state, { id: `t-${agent.id}`, kind: "agent", agent: agent.id, title: agent.name });
     created.push(agent.id);
   }
   state.launcher = null;
@@ -901,7 +884,7 @@ export function answerApproval(state: State, agentId: string, approve: boolean) 
         line: L("accent", "  Done, without new dependencies."),
         status: "done",
         activity: "Validation added",
-        finished: "Claude C finished Login form validation",
+        finished: "Login Validation finished",
       },
     ];
     agent.cursor = 0;
@@ -916,8 +899,18 @@ export function promptAgent(state: State, agentId: string, text: string) {
   const prompt = text.trim().slice(0, 160);
   if (!agent || !prompt) return;
   const claude = agent.provider === "claude";
+  if (agent.prompt) {
+    // Scripted demo examples only; production generates its task titles in Rust.
+    const sampleNames: Record<string, string> = {
+      "add a dark mode toggle": "Dark Mode Toggle",
+      "write tests for login": "Login Tests",
+      "fix the failing build": "Build Repair",
+    };
+    agent.name = sampleNames[prompt.toLowerCase()] ?? "Project Update";
+    const tab = tabOfAgent(state, agent.id);
+    if (tab && state.tabs[tab]) state.tabs[tab].title = agent.name;
+  }
   agent.prompt = false;
-  agent.task = prompt.length > 42 ? `${prompt.slice(0, 40)}…` : prompt;
   agent.lines.push(L("in", `${claude ? ">" : "›"} ${prompt}`));
   agent.status = "working";
   agent.activity = "Reading the project";
@@ -936,7 +929,7 @@ export function promptAgent(state: State, agentId: string, text: string) {
       ),
       status: "done",
       activity: "Done",
-      finished: `${agent.sign} finished ${agent.task}`,
+      finished: `${agent.name} finished`,
     },
   ];
 }
@@ -1086,7 +1079,7 @@ export function runVoice(state: State, phrase: string): string {
     if (waiting.length === 0) return "Nothing needs you right now.";
     jumpToNeeds(state);
     const first = waiting[0] as Agent;
-    return `${first.sign} needs you: ${first.activity.toLowerCase()}.`;
+    return `${first.name} needs you: ${first.activity.toLowerCase()}.`;
   }
   if (/fleet|my agents|show (the )?agents/.test(p)) {
     go(state, "dashboard");

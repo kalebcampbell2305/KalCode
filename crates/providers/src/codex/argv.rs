@@ -26,6 +26,11 @@ use kalcode_contracts::permissions::PermissionMode;
 
 use crate::version::Version;
 
+/// Owner policy: ten concurrent child agents for each Codex parent session.
+/// This does not limit KalCode's top-level terminals or coding agents.
+/// https://developers.openai.com/codex/config-reference/
+pub const SUBAGENT_CONFIG: &str = "agents.max_concurrent_threads_per_session=10";
+
 /// The oldest Codex CLI KalCode's headless adapter was verified against (`exec --json`,
 /// `exec resume`, `--ignore-rules`).
 #[cfg(not(windows))]
@@ -54,8 +59,6 @@ pub(crate) const POLICY_CONFIG: &[&str] = &[
     "features.plugins=false",
     "features.remote_plugin=false",
     "features.hooks=false",
-    "features.multi_agent=false",
-    "features.multi_agent_v2=false",
     "features.skill_mcp_dependency_install=false",
     "features.browser_use=false",
     "features.browser_use_external=false",
@@ -219,6 +222,8 @@ pub(crate) fn exec_args_with_overrides(
         out.extend([OsString::from("-c"), OsString::from(value)]);
     }
     out.extend_from_slice(overrides);
+    // Apply after inherited profile/project overrides so stale limits cannot win.
+    out.extend([OsString::from("-c"), OsString::from(SUBAGENT_CONFIG)]);
     out.extend(sandbox_args(mode).into_iter().map(OsString::from));
     if let Some(model) = model {
         if !crate::claude::argv::valid_model_name(model) {
@@ -248,6 +253,40 @@ pub(crate) fn exec_args_with_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_subagents_are_ten_for_new_and_resumed_turns() {
+        assert!(
+            !POLICY_CONFIG
+                .iter()
+                .any(|value| value.starts_with("features.multi_agent"))
+        );
+        for resume in [None, Some("01234567-89ab-4cde-8fab-0123456789ab")] {
+            for previous in [3, 15, 30] {
+                let args = exec_args_with_overrides(
+                    PermissionMode::Approve,
+                    None,
+                    None,
+                    resume,
+                    &[
+                        "-c".into(),
+                        format!("agents.max_concurrent_threads_per_session={previous}").into(),
+                    ],
+                )
+                .expect("args");
+                let effective = args
+                    .windows(2)
+                    .filter(|pair| pair[0] == "-c")
+                    .filter_map(|pair| pair[1].to_str())
+                    .filter(|value| value.starts_with("agents.max_concurrent_threads_per_session="))
+                    .last();
+                assert_eq!(
+                    effective,
+                    Some("agents.max_concurrent_threads_per_session=10")
+                );
+            }
+        }
+    }
 
     const ALL: [PermissionMode; 5] = [
         PermissionMode::Plan,

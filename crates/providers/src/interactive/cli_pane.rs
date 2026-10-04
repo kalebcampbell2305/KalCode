@@ -103,6 +103,7 @@ pub struct InteractiveCliProvider {
     managed_profiles: Option<ManagedProfiles>,
     codex_cloud_config: Option<Arc<CodexCloudConfigResolver>>,
     integrations: Option<Arc<super::integrations::IntegrationConnector>>,
+    titles: Option<Arc<dyn super::TitleSink>>,
     /// Codex `notify` reaches KalCode through the bridge; Gemini CLI panes don't use it.
     bridge: Option<Arc<BridgeServer>>,
     config: InteractiveConfig,
@@ -123,6 +124,7 @@ impl InteractiveCliProvider {
             managed_profiles: None,
             codex_cloud_config: None,
             integrations: None,
+            titles: None,
             bridge,
             config,
             panes,
@@ -133,6 +135,11 @@ impl InteractiveCliProvider {
     /// launches only through that provider's canonical managed policy.
     pub fn with_managed_profiles(mut self, profiles: ManagedProfiles) -> Self {
         self.managed_profiles = Some(profiles);
+        self
+    }
+
+    pub fn with_titles(mut self, titles: Arc<dyn super::TitleSink>) -> Self {
+        self.titles = Some(titles);
         self
     }
 
@@ -315,7 +322,7 @@ impl InteractiveCliProvider {
             provider_session_id: config.resume_session_id.clone().unwrap_or_default(),
             limits: self.config.limits,
             expiry: None,
-            titles: None,
+            titles: self.titles.clone(),
         });
         shared.set_profile(self.cli.profile());
         if config.resume_session_id.is_none() {

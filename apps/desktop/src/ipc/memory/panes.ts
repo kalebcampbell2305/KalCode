@@ -29,7 +29,7 @@ import type {
   ThreadSummary,
 } from "@kalcode/protocol";
 import type { PermissionMemory } from "./permissions.ts";
-import { nameFromPrompt, type ThreadsMemory } from "./threads.ts";
+import type { ThreadsMemory } from "./threads.ts";
 
 type Handler = (args: Record<string, unknown>) => unknown;
 export type PaneCommand =
@@ -242,12 +242,7 @@ export function createPanesMemory(options: {
     }
     if (!p.titled) {
       p.titled = true;
-      const current = threads.handlers.thread_get({ threadId: p.thread.id }) as ThreadSummary;
-      if (current.name === "New agent" || current.name === "New thread")
-        p.thread = threads.handlers.thread_rename({
-          threadId: p.thread.id,
-          name: nameFromPrompt(line),
-        }) as ThreadSummary;
+      p.thread = threads.autoNamePane(p.thread.id, line);
     }
     status(p, "active");
     if (line.startsWith("run ")) {
@@ -311,7 +306,7 @@ export function createPanesMemory(options: {
           model: source.model,
           effort: source.effort,
           permissionMode: source.permissionMode,
-          name: `${[...source.name].slice(0, 73).join("")} (copy)`,
+          name: null,
         };
       }
       const kind = args.providerId as PaneKind;

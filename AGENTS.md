@@ -630,7 +630,7 @@ NOTHING SHIPS BLAND.
 THE WEBSITE MUST BE BEAUTIFUL, DYNAMIC, FAST, SIMPLE, AND UNMISTAKABLY KALCODE."
 
 - **The live demo** is the home page's centerpiece: `apps/website/src/lib/live/` (state, sample workspace, renderer, tour) and `src/scripts/live/` (browser runtime, loaded on demand). One renderer draws both the build-time first paint and every client update.
-- **It mirrors the shipped app, from shared sources:** shell, labels and flows follow `apps/desktop` (Command Deck top bar, the Stable sidebar, tabbed Code panes, the New agent launcher, Agent Fleet call signs); statuses come from `@kalcode/protocol/display-status`; availability, plans and limits from `@kalcode/protocol/plans`; icons are generated from the app's lucide version (`scripts/gen-live-icons.mjs`, drift-tested); colours and type from `@kalcode/ui` tokens. When the app's UI changes, update the demo in the same follow-up so a visitor who downloads KalCode sees what the website showed them.
+- **It mirrors the shipped app, from shared sources:** shell, labels and flows follow `apps/desktop` (Command Deck top bar, the Stable sidebar, tabbed Code panes, the New agent launcher, shared Agent Fleet task names and secondary account metadata); statuses come from `@kalcode/protocol/display-status`; availability, plans and limits from `@kalcode/protocol/plans`; icons are generated from the app's lucide version (`scripts/gen-live-icons.mjs`, drift-tested); colours and type from `@kalcode/ui` tokens. When the app's UI changes, update the demo in the same follow-up so a visitor who downloads KalCode sees what the website showed them.
 - **Agents in the demo are coding terminals**, per the AGENT definition above, never threads.
 - **The demo is not the Free plan.** It is a temporary sample in the browser; the Free plan is a real account tier from `plans.ts`. Never invent prices, limits or plan features for the website.
 - **Truth:** a demo surface whose `PLAN_FEATURE_GROUPS` entry is `coming_soon` carries a Coming soon tag automatically; flipping the entry to `available` (after production verification) removes it. Sample data is fictional sample data, never real user information.
@@ -786,3 +786,29 @@ When storage is meaningfully constrained, broaden the audit to drive free space,
 Routine reports should state storage reclaimed, important active caches/releases/evidence preserved, and remaining free space. For major cleanup, also report free space before/after, largest removals, important large items intentionally kept, whether active Rust caches were preserved, and whether future builds will take longer.
 
 For significant work, DONE means: **IMPLEMENT -> TEST -> REVIEW -> MERGE -> BUILD -> SHIP WHEN REQUIRED -> VERIFY -> PRESERVE REQUIRED ARTIFACTS/EVIDENCE -> CLEAN SAFE DISPOSABLE ARTIFACTS -> LEAVE ADEQUATE DISK SPACE FOR THE NEXT TASK**. Cleanup must never alter project truth.
+
+## Permanent smart agent and terminal naming (owner directive 2026-10-04)
+
+This policy is authoritative for BOTH Claude Code and Codex (`CLAUDE.md` imports this file), and replaces older visible agent call-sign rules.
+
+**KALCODE DOES NOT USE A/B/C/AA/AB ALPHABET SEQUENCES AS VISIBLE CODING-AGENT NAMES. A NEW AGENT STARTS WITH ITS CLEAN PROVIDER NAME. ONCE IT RECEIVES A REAL TASK, KALCODE AUTOMATICALLY GIVES IT A SHORT HUMAN-READABLE TASK NAME. PROVIDER ACCOUNT, MODEL, AND EFFORT LIVE IN SECONDARY METADATA. MANUAL USER RENAMES ALWAYS OVERRIDE AUTOMATIC NAMING. THIS RULE APPLIES TO ALL CURRENT AND FUTURE PROVIDERS.**
+
+- Naming priority is **user custom name > intelligent task-based name > clean registered provider name** (Claude Code, Codex, Cursor, Gemini, and future providers). Account labels may remain secondary metadata; never concatenate them into the main title.
+- Use one shared provider-independent naming system. Task names are concise, normally 2-5 words, not pasted prompts: Pricing Redesign, Provider Tool Fix, Billing Webhooks, Live Browser. Authentication input, injected environment metadata and slash commands are not tasks.
+- Name the first meaningful task. Keep the automatic title stable through replies/refinements; update it only when a genuinely different primary task makes the prior title misleading. Never replace a manual name, even if it equals the provider default.
+- Persist title and manual/automatic ownership across workspace switches, restarts, updates and layout restore. Code, Agent Fleet, Runs, Needs You and KalTidy use the same durable agent identity/name; account, exact model and effort stay separately available.
+- Test multiple providers, manual precedence, persistence and cross-surface consistency. Mirror the shipped behavior in the website demo. Submit validated work through the shared merge train, ship immediately and verify users can receive it; no direct main mutation or separate public-version wait.
+
+## Permanent Codex sub-agent concurrency (owner directive 2026-10-04)
+
+**CODEX MAY RUN A MAXIMUM OF 10 CONCURRENT SUB-AGENTS PER PARENT AGENT. 10 IS THE CANONICAL LIMIT. DO NOT REVERT TO THE OLD 3-AGENT LIMIT OR INCREASE IT ABOVE 10 WITHOUT EXPLICIT OWNER INSTRUCTION.** This supersedes every older conflicting sub-agent maximum, including 3 and 15. Do not silently configure a lower maximum.
+
+When ten child agents are active, wait for one to finish/close and reuse the available slot before spawning another. Apply the same rule to orchestration, implementation, research, parallel review, testing, manager/worker structures, KalVoice-triggered Codex work and Codex sub-agents used by Squads or Handoffs. This is not a KalCode subscription entitlement: top-level local coding agents and terminals remain unlimited on every plan.
+
+Use the supported Codex `agents.max_concurrent_threads_per_session = 10` setting (which excludes the primary thread; legacy alias `agents.max_threads`). KalCode's interactive and headless Codex launch paths share the canonical override in `crates/providers/src/codex/argv.rs`, including resumed sessions. Preserve provider-native sub-agent capabilities and unrelated user configuration. A running external tool host may expose fewer slots; report that actual host constraint truthfully rather than claiming the setting changes an already-running session. Do not persist the host's temporary constraint as a lower policy.
+
+## Permanent resource governor responsiveness (owner directive 2026-10-04)
+
+**KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
+
+Priority is KalCode UI > user-requested coding agents > builds/tests the user started > important active services > optional/background work > indexing/maintenance/analytics. Throttle from the bottom. Hard pressure means critically low memory, full disk, an OS process-creation failure, or exhaustion likely to crash. Show the actual cause with Run KalTidy / Start Anyway where safe; never a generic CPU-busy wait loop. Report truthful STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE or FAILED states, never IDLE for a process that has not started. Apply uniformly across providers. This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.

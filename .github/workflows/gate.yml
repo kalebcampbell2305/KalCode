@@ -38,9 +38,8 @@ jobs:
     name: Gate (Windows)
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # The second Windows machine (AGENTS.md build machine rule): gates never compete with release
-    # builds on the build PC. Windows update QA workflows stay on the build PC's kalcode-gate runner.
-    runs-on: [self-hosted, Windows, kalcode-gate-2]
+    # Owner policy: validate on the main 64 GB Windows PC, never the second PC.
+    runs-on: [self-hosted, Windows, kalcode-gate]
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

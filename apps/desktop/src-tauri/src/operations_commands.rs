@@ -903,14 +903,10 @@ impl OperationsState {
                 .into_iter()
                 .map(|thread| (thread.id.clone(), thread))
                 .collect::<HashMap<_, _>>();
-            for row in rows.iter_mut().filter(|row| {
-                row.source == "operations"
-                    && row.thread_id.is_some()
-                    && matches!(
-                        row.status,
-                        OperationStatus::Starting | OperationStatus::Running
-                    )
-            }) {
+            for row in rows
+                .iter_mut()
+                .filter(|row| row.source == "operations" && row.thread_id.is_some())
+            {
                 let id = row.thread_id.as_deref().unwrap_or_default();
                 let thread = if let Some(thread) = threads.get(id) {
                     thread.clone()
@@ -973,7 +969,7 @@ impl OperationsState {
     fn history(&self, before: Option<&str>) -> Result<OperationHistoryPage> {
         let cursor = history_cursor(before)?;
         let fetch = u32::try_from(HISTORY_PAGE_SIZE + 1).unwrap_or(101);
-        let (operations, more_operations) =
+        let (mut operations, more_operations) =
             history_source(self.store.history(cursor.operations.as_deref(), fetch))?;
         let runtime = self.threads.runtime_handle().ok_or_else(unavailable)?;
         let (turns, more_turns) =
@@ -996,6 +992,15 @@ impl OperationsState {
             .into_iter()
             .map(|thread| (thread.id.clone(), thread))
             .collect::<HashMap<_, _>>();
+        for operation in &mut operations {
+            if let Some(id) = &operation.thread_id {
+                match runtime.get(id) {
+                    Ok(thread) => project_operation_name(operation, &thread)?,
+                    Err(error) if error.code == "thread_not_found" => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
         let mut turn_rows = Vec::with_capacity(turns.len());
         for turn in turns {
             let record = if turn.operation_id.is_some() {
@@ -1231,15 +1236,14 @@ impl OperationsState {
             let detail = self.store.detail(id)?;
             let mut run = detail.run.clone();
             if run.source == "operations"
-                && matches!(
-                    run.status,
-                    OperationStatus::Starting | OperationStatus::Running
-                )
                 && let Some(thread_id) = run.thread_id.as_deref()
                 && let Some(runtime) = self.threads.runtime_handle()
             {
-                let thread = runtime.get(thread_id)?;
-                project_active_operation_thread(&mut run, &thread)?;
+                match runtime.get(thread_id) {
+                    Ok(thread) => project_active_operation_thread(&mut run, &thread)?,
+                    Err(error) if error.code == "thread_not_found" => {}
+                    Err(error) => return Err(error),
+                }
             }
             if run.spec.kind == OperationKind::Agent {
                 event_evidence_available = false;
@@ -1805,6 +1809,7 @@ fn project_active_operation_thread(
     row: &mut OperationRecord,
     thread: &ThreadSummary,
 ) -> Result<()> {
+    project_operation_name(row, thread)?;
     if row.source != "operations"
         || !matches!(
             row.status,
@@ -1838,6 +1843,21 @@ fn project_active_operation_thread(
         .as_deref()
         .map(safe)
         .or(row.current_action.take());
+    Ok(())
+}
+
+/// Display projection only: never rewrite the queued/executed specification or its consent.
+fn project_operation_name(row: &mut OperationRecord, thread: &ThreadSummary) -> Result<()> {
+    if row.source != "operations" || row.spec.kind != OperationKind::Agent {
+        return Ok(());
+    }
+    if row.thread_id.as_deref() != Some(thread.id.as_str()) {
+        return Err(KalError::internal(
+            "operation_thread_identity_mismatch",
+            "An Operations thread did not match its task.",
+        ));
+    }
+    row.spec.name = safe(&thread.name);
     Ok(())
 }
 
@@ -2954,11 +2974,33 @@ mod tests {
 
         let persisted = state.store.get(&operation.id).expect("operation");
         assert_eq!(persisted.status, OperationStatus::Succeeded);
+        state
+            .threads
+            .runtime_handle()
+            .expect("runtime")
+            .rename(&operation.id, "Billing Webhooks")
+            .expect("manual name");
+        assert_eq!(
+            state.store.get(&operation.id).unwrap().spec.name,
+            "Agent operation",
+            "display naming must not rewrite execution or authorization inputs"
+        );
+        let (_, _, projected) = state.rows(&[]).expect("snapshot rows");
+        assert_eq!(
+            projected
+                .iter()
+                .find(|row| row.id == operation.id)
+                .unwrap()
+                .spec
+                .name,
+            "Billing Webhooks"
+        );
         assert_eq!(
             persisted.ended_at.as_deref(),
             Some(completion.occurred_at.as_str())
         );
         let detail = state.detail(&operation.id).expect("operation detail");
+        assert_eq!(detail.run.spec.name, "Billing Webhooks");
         let logs = detail.logs.expect("first-turn logs");
         assert!(logs.contains("first-turn-user"));
         assert!(logs.contains("first-turn-assistant"));
@@ -2966,6 +3008,16 @@ mod tests {
         assert!(!logs.contains("second-turn-assistant"));
 
         let history = state.history(None).expect("unified history");
+        assert_eq!(
+            history
+                .items
+                .iter()
+                .find(|row| row.id == operation.id)
+                .unwrap()
+                .spec
+                .name,
+            "Billing Webhooks"
+        );
         assert_eq!(
             history
                 .items

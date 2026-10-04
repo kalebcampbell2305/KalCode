@@ -74,18 +74,18 @@ test("phone canvas keeps a readable pane and restores minimized sessions with re
   const errors = await open(page);
   await app(page)
     .getByRole("group", { name: "Panes", exact: true })
-    .getByRole("button", { name: /Codex A/ })
+    .getByRole("button", { name: /Dashboard Tests/ })
     .click();
-  await expect(app(page).getByRole("log", { name: "Codex A terminal" })).toBeVisible();
+  await expect(app(page).getByRole("log", { name: "Dashboard Tests terminal" })).toBeVisible();
   const focused = app(page).locator("[data-canvas-frame]:not([hidden])");
   const bounds = await focused.boundingBox();
   expect(bounds?.width).toBeGreaterThanOrEqual(320);
   expect(bounds?.height).toBeGreaterThanOrEqual(220);
   await focused.getByRole("button", { name: /Minimize pane/ }).click();
   await app(page)
-    .getByRole("button", { name: /Restore Codex/ })
+    .getByRole("button", { name: /Restore Dashboard Tests/ })
     .click();
-  await expect(app(page).getByRole("log", { name: "Codex A terminal" })).toBeVisible();
+  await expect(app(page).getByRole("log", { name: "Dashboard Tests terminal" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.locator("[data-live]").screenshot({ path: "test-results/adaptive-canvas-mobile.png" });
   expect(errors).toEqual([]);

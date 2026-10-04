@@ -168,7 +168,6 @@ struct OpenTool {
 struct HookState {
     /// Tool calls requested and not completed, by tool call id.
     open_tools: BTreeMap<String, OpenTool>,
-    first_prompt_seen: bool,
     last_status: Option<(ThreadStatus, Option<String>)>,
 }
 
@@ -211,6 +210,7 @@ struct LifecycleState {
     cursor_start_seen: bool,
     cursor_model: Option<String>,
     cursor_input: super::cursor_input::CursorInput,
+    title_input: super::cursor_input::CursorInput,
     handoff_readiness: HandoffReadiness,
     reconfigure_reserved: bool,
 }
@@ -470,7 +470,39 @@ impl Shared {
         if !protocol_reply {
             self.observe_input_write_locked(&mut lifecycle, data);
         }
+        let submitted = self.title_submissions(&mut lifecycle, data, protocol_reply);
+        drop(lifecycle);
+        self.submit_titles(submitted);
         Ok(())
+    }
+
+    fn title_submissions(
+        &self,
+        lifecycle: &mut LifecycleState,
+        data: &[u8],
+        protocol_reply: bool,
+    ) -> Vec<String> {
+        if protocol_reply || self.titles.is_none() {
+            return Vec::new();
+        }
+        if lifecycle.handoff_readiness == HandoffReadiness::ProviderPrompt {
+            lifecycle.title_input = Default::default();
+            return Vec::new();
+        }
+        lifecycle
+            .title_input
+            .observe(data)
+            .into_iter()
+            .filter_map(|submission| submission.text)
+            .collect()
+    }
+
+    fn submit_titles(&self, prompts: Vec<String>) {
+        if let Some(titles) = &self.titles {
+            for prompt in prompts {
+                titles.terminal_prompt(&self.ctx.thread_id, &prompt);
+            }
+        }
     }
 
     pub(crate) fn reserve_if_unused(&self) -> Result<bool, ProviderError> {
@@ -1396,15 +1428,12 @@ impl Shared {
             if self.provider_id != "cursor" {
                 self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
             }
-            let first_prompt = if record.event == Some(HookEvent::UserPromptSubmit) {
-                let first = {
-                    let mut state = lock(&self.state);
-                    !std::mem::replace(&mut state.first_prompt_seen, true)
+            let first_prompt =
+                if record.event == Some(HookEvent::UserPromptSubmit) && !record.in_subagent {
+                    record.prompt.clone()
+                } else {
+                    None
                 };
-                first.then(|| record.prompt.clone()).flatten()
-            } else {
-                None
-            };
             let cursor_started = lifecycle.cursor_start_seen;
             let cursor_generation = lifecycle.cursor_generation.clone();
             let kalcode_submitted = Self::cursor_submit_index(&lifecycle, &record)
@@ -1459,6 +1488,15 @@ impl Shared {
                         _ => false,
                     }
                 });
+            let first_prompt = first_prompt.or_else(|| {
+                (cursor_capture
+                    && record
+                        .cursor
+                        .as_ref()
+                        .is_some_and(|cursor| cursor.event == "beforeSubmitPrompt"))
+                .then(|| record.prompt.clone())
+                .flatten()
+            });
             (
                 self.queue_events_locked(&mut lifecycle, events),
                 first_prompt,
@@ -1697,6 +1735,9 @@ impl Shared {
         if !protocol_reply {
             self.observe_input_write_locked(&mut lifecycle, data);
         }
+        let submitted = self.title_submissions(&mut lifecycle, data, protocol_reply);
+        drop(lifecycle);
+        self.submit_titles(submitted);
         Ok(())
     }
 }
@@ -3462,7 +3503,32 @@ mod tests {
     }
 
     #[test]
-    fn first_prompt_is_used_only_for_the_title() {
+    fn cursor_trusted_task_titles_require_matching_session_and_generation() {
+        let (mut shared, _) = shared_for(
+            "cursor",
+            DecisionRouting::ProviderPrompt,
+            SessionLimits::default(),
+        );
+        let titles = Arc::new(Titles(Mutex::new(Vec::new())));
+        Arc::get_mut(&mut shared).unwrap().titles = Some(titles.clone());
+        shared.forget_session_id();
+        let hook = |event: &str, session: &str| {
+            kalcode_hook_bridge::record::from_cursor_stdin(event,
+            json!({"hook_event_name":event,"conversation_id":session,"generation_id":"one","prompt":"Billing Webhooks","status":"completed"}).to_string().as_bytes()).unwrap()
+        };
+        shared.handle(hook("sessionStart", "native"));
+        shared.handle(hook("beforeSubmitPrompt", "foreign"));
+        assert!(lock(&titles.0).is_empty());
+        // A native history/edit selection is unknown to the raw-input parser. The authenticated
+        // prompt still names the correct parent task without granting input/readiness authority.
+        shared.observe_input_write_locked(&mut lock(&shared.lifecycle), b"\x1b[A\r");
+        shared.handle(hook("beforeSubmitPrompt", "native"));
+        shared.handle(hook("beforeSubmitPrompt", "native"));
+        assert_eq!(*lock(&titles.0), ["Billing Webhooks"]);
+    }
+
+    #[test]
+    fn submitted_prompts_are_ephemeral_title_candidates() {
         let (tx, rx) = mpsc::channel();
         let titles = Arc::new(Titles(Mutex::new(Vec::new())));
         let s = Shared::new(SessionParts {
@@ -3481,6 +3547,11 @@ mod tests {
             expiry: None,
             titles: Some(titles.clone()),
         });
+        s.submit_titles(vec!["correct horse battery staple".into()]);
+        assert!(
+            lock(&titles.0).is_empty(),
+            "raw terminal input never uses the trusted prompt callback"
+        );
         s.handle(record(
             HookEvent::UserPromptSubmit,
             json!({"prompt": "Fix the flaky login test"}),
@@ -3489,7 +3560,7 @@ mod tests {
             HookEvent::UserPromptSubmit,
             json!({"prompt": "second"}),
         ));
-        assert_eq!(*lock(&titles.0), ["Fix the flaky login test"]);
+        assert_eq!(*lock(&titles.0), ["Fix the flaky login test", "second"]);
         // The prompt never appears in an event.
         for event in drain(&rx) {
             let text = serde_json::to_string(&event).expect("json");

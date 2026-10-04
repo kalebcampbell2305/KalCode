@@ -166,7 +166,7 @@ function rail(state: State): string {
         `<div class="lk-rail__group"><p class="lk-label" data-tone="${tone}"><span class="lk-dot"></span>${label} <span>${agents.length}</span></p>${agents
           .map(
             (a) =>
-              `<button type="button" class="lk-rail__row" data-key="r-${a.id}" data-do="agent:${a.id}" data-tone="${statusTone(a.status)}" data-needs="${needsYou(a)}"><span class="lk-rail__glyph">${glyph(a.provider)}<span class="lk-pulse"></span></span><span class="lk-rail__text"><strong>${esc(a.task)}</strong><span>${esc(needsYou(a) ? fleetStage(a.status) : a.activity)}</span><small>${a.sign} · ${WORKSPACE.name}</small></span><time>${a.minutes ? `${a.minutes}m` : "now"}</time></button>`,
+              `<button type="button" class="lk-rail__row" data-key="r-${a.id}" data-do="agent:${a.id}" data-tone="${statusTone(a.status)}" data-needs="${needsYou(a)}"><span class="lk-rail__glyph">${glyph(a.provider)}<span class="lk-pulse"></span></span><span class="lk-rail__text"><strong>${esc(a.name)}</strong><span>${esc(needsYou(a) ? fleetStage(a.status) : a.activity)}</span><small>${PROVIDER_NAME[a.provider]} · ${accountLabel(state, a.account)} · ${WORKSPACE.name}</small></span><time>${a.minutes ? `${a.minutes}m` : "now"}</time></button>`,
           )
           .join("")}</div>`,
     )
@@ -186,7 +186,7 @@ function lines(list: readonly Line[]): string {
 function tabTitle(state: State, tab: Tab): string {
   if (tab.kind === "agent" && tab.agent) {
     const agent = state.agents[tab.agent];
-    return agent ? `${agent.sign} · ${accountLabel(state, agent.account)}` : tab.title;
+    return agent ? agent.name : tab.title;
   }
   return tab.title;
 }
@@ -210,11 +210,11 @@ export function agentPane(state: State, agent: Agent): string {
   const account = accountOf(state, agent.account);
   const usage = account?.windows[0];
   const approval = agent.approval
-    ? `<div class="lk-approval" role="group" aria-label="${esc(agent.sign)} needs approval"><p class="lk-approval__title">${icon("shield")} ${esc(agent.approval.title)}</p><code>${esc(agent.approval.command)}</code><p class="lk-approval__why">${esc(agent.approval.reason)}</p><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${agent.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${agent.id}">Approve once</button></div></div>`
+    ? `<div class="lk-approval" role="group" aria-label="${esc(agent.name)} needs approval"><p class="lk-approval__title">${icon("shield")} ${esc(agent.approval.title)}</p><code>${esc(agent.approval.command)}</code><p class="lk-approval__why">${esc(agent.approval.reason)}</p><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${agent.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${agent.id}">Approve once</button></div></div>`
     : "";
   const prompt =
     agent.prompt && agent.status === "idle"
-      ? `<form class="lk-prompt" data-form="prompt:${agent.id}"><span aria-hidden="true">${agent.provider === "claude" ? ">" : "›"}</span><input name="q" data-key="in-${agent.id}" autocomplete="off" placeholder="Ask ${esc(agent.sign)} to build something…" aria-label="Prompt for ${esc(agent.sign)}"/><button type="submit" class="lk-icon-btn" aria-label="Send">${icon("send")}</button></form><div class="lk-suggest">${[
+      ? `<form class="lk-prompt" data-form="prompt:${agent.id}"><span aria-hidden="true">${agent.provider === "claude" ? ">" : "›"}</span><input name="q" data-key="in-${agent.id}" autocomplete="off" placeholder="Ask ${esc(agent.name)} to build something…" aria-label="Prompt for ${esc(agent.name)}"/><button type="submit" class="lk-icon-btn" aria-label="Send">${icon("send")}</button></form><div class="lk-suggest">${[
           "Add a dark mode toggle",
           "Write tests for Login",
           "Fix the failing build",
@@ -224,7 +224,7 @@ export function agentPane(state: State, agent: Agent): string {
       : "";
   return `<div class="lk-agent">
   <div class="lk-agent__head">
-    <strong class="lk-agent__title">${esc(agent.sign)}</strong>
+    <strong class="lk-agent__title">${esc(agent.name)}</strong>
     ${statusChip(agent)}
     <span class="lk-tag"${hint("The provider account this agent runs on.")}>${glyph(agent.provider)}${esc(account?.name ?? "")}</span>
     <span class="lk-tag lk-mono"${hint("The exact model and effort, fixed when you launched it.")}>${esc(agent.model === "Default" ? "Default model" : agent.model)} · ${esc(agent.effort)}</span>
@@ -232,7 +232,7 @@ export function agentPane(state: State, agent: Agent): string {
     <span class="lk-agent__spacer"></span>
     <span class="lk-agent__mode">Approve</span>
   </div>
-  <div class="lk-term" tabindex="0" role="log" aria-label="${esc(agent.sign)} terminal" data-scroll="bottom">${lines(agent.lines)}${isWorking(agent) ? `<div class="lk-ln lk-ln--cursor" data-k="dim">${agent.provider === "claude" ? "✻" : "•"} ${esc(agent.activity)}…</div>` : ""}</div>
+  <div class="lk-term" tabindex="0" role="log" aria-label="${esc(agent.name)} terminal" data-scroll="bottom">${lines(agent.lines)}${isWorking(agent) ? `<div class="lk-ln lk-ln--cursor" data-k="dim">${agent.provider === "claude" ? "✻" : "•"} ${esc(agent.activity)}…</div>` : ""}</div>
   ${approval}${prompt}
 </div>`;
 }
@@ -270,7 +270,7 @@ function browserPane(state: State, tab: Tab): string {
     <button type="button" class="lk-icon-btn" aria-label="Open externally" disabled>${icon("external")}</button>
   </div>
   <div class="lk-browser__view">${sampleApp(state.preview)}</div>
-  <div class="lk-browser__foot"><span>${state.preview ? "Sample App · updated by Claude A" : "Sample App"}</span><span>http://${esc(tab.url ?? DEV_URL)}/</span></div>
+  <div class="lk-browser__foot"><span>${state.preview ? "Sample App · updated by Dashboard Redesign" : "Sample App"}</span><span>http://${esc(tab.url ?? DEV_URL)}/</span></div>
 </div>`;
 }
 
@@ -282,7 +282,7 @@ function widgetPane(state: State, tab: Tab): string {
       ? list
           .map(
             (a) =>
-              `<button type="button" class="lk-widget__row" data-key="w-${a.id}" data-do="agent:${a.id}">${glyph(a.provider)}<span><strong>${esc(a.sign)}</strong> ${esc(a.task)}</span>${statusChip(a)}</button>`,
+              `<button type="button" class="lk-widget__row" data-key="w-${a.id}" data-do="agent:${a.id}">${glyph(a.provider)}<span><strong>${esc(a.name)}</strong></span>${statusChip(a)}</button>`,
           )
           .join("")
       : `<p class="lk-empty">Nothing here right now.</p>`
@@ -375,9 +375,9 @@ function fleetCard(state: State, a: Agent): string {
   const approval = a.approval
     ? `<div class="lk-approval lk-approval--card"><p class="lk-approval__title">${icon("shield")} ${esc(a.approval.title)}</p><code>${esc(a.approval.command)}</code><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${a.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${a.id}">Approve once</button></div></div>`
     : "";
-  return `<article class="lk-card" data-key="c-${a.id}" data-tone="${statusTone(a.status)}" data-needs="${needsYou(a)}" aria-label="${esc(a.sign)}: ${esc(a.task)}">
-  <p class="lk-card__top"><span class="lk-dot" data-tone="${statusTone(a.status)}"></span><strong>${esc(a.sign)}</strong><span class="lk-stage" data-tone="${statusTone(a.status)}">${fleetStage(a.status)}</span><time>${icon("clock")}${a.minutes ? `${a.minutes} min` : "<1 min"}</time></p>
-  <h5 class="lk-card__name">${esc(a.task)}</h5>
+  return `<article class="lk-card" data-key="c-${a.id}" data-tone="${statusTone(a.status)}" data-needs="${needsYou(a)}" aria-label="${esc(a.name)}">
+  <p class="lk-card__top"><span class="lk-dot" data-tone="${statusTone(a.status)}"></span><strong>${esc(accountLabel(state, a.account))}</strong><span class="lk-stage" data-tone="${statusTone(a.status)}">${fleetStage(a.status)}</span><time>${icon("clock")}${a.minutes ? `${a.minutes} min` : "<1 min"}</time></p>
+  <h5 class="lk-card__name">${esc(a.name)}</h5>
   <p class="lk-card__meta">${glyph(a.provider)}${PROVIDER_NAME[a.provider]} · ${accountLabel(state, a.account)} · ${WORKSPACE.name}</p>
   <p class="lk-card__mono lk-mono"><span>${esc(a.model === "Default" ? "default" : a.model.toLowerCase())}</span><span class="lk-kbd">${esc(a.effort.toLowerCase())}</span>${icon("branch")}${esc(a.branch)}</p>
   ${approval || `<p class="lk-card__activity">${esc(a.activity)}</p>`}
@@ -449,7 +449,7 @@ const RUN_TONE: Record<Run["status"], string> = {
 
 function contextOperations(state: State): string {
   const all = runs(state);
-  const tests = all.filter((run) => run.name === "Tests");
+  const tests = all.filter((run) => run.agent === "a2");
   const services = all.filter((run) => run.kind === "service");
   const running = all.filter((run) => run.status === "Running").length;
   const failed = all.filter((run) => run.status === "Failed").length;
@@ -545,8 +545,8 @@ function opsRuns(state: State, all: Run[]): string {
   const agent = selected?.agent ? state.agents[selected.agent] : undefined;
   const inspector = selected
     ? `<div class="lk-inspect"><p class="lk-label">Run</p><h5>${esc(selected.name)}</h5><p class="lk-inspect__state"><span class="lk-dot" data-tone="${RUN_TONE[selected.status]}"></span>${selected.status} · ${selected.duration}</p>
-      <ol class="lk-timeline"><li data-done="true">Queued</li><li data-done="true">Started${agent ? ` · ${esc(agent.sign)} on ${esc(accountLabel(state, agent.account))}` : ""}</li><li data-done="${selected.status === "Succeeded"}">${esc(selected.action)}</li></ol>
-      <dl class="lk-dl"><div><dt>Changed files</dt><dd>${agent ? agent.files : selected.kind === "build" ? "—" : "0"}</dd></div><div><dt>Tests</dt><dd>${selected.name === "Tests" || agent?.status === "done" ? "14 passed" : "—"}</dd></div><div><dt>Branch</dt><dd class="lk-mono">${esc(agent?.branch ?? "main")}</dd></div></dl>
+      <ol class="lk-timeline"><li data-done="true">Queued</li><li data-done="true">Started${agent ? ` · ${esc(agent.name)} on ${esc(accountLabel(state, agent.account))}` : ""}</li><li data-done="${selected.status === "Succeeded"}">${esc(selected.action)}</li></ol>
+      <dl class="lk-dl"><div><dt>Changed files</dt><dd>${agent ? agent.files : selected.kind === "build" ? "—" : "0"}</dd></div><div><dt>Tests</dt><dd>${selected.agent === "a2" || agent?.status === "done" ? "14 passed" : "—"}</dd></div><div><dt>Branch</dt><dd class="lk-mono">${esc(agent?.branch ?? "main")}</dd></div></dl>
       ${agent ? `<button type="button" class="lk-btn lk-btn--primary" data-do="agent:${agent.id}">${icon("terminal")}Open its terminal</button>` : selected.kind === "service" ? `<button type="button" class="lk-btn lk-btn--primary" data-do="browser">${icon("globe")}Open in Browser</button>` : ""}</div>`
     : `<div class="lk-inspect lk-inspect--empty"><p>Select a run to inspect its timeline, changed files and tests.</p></div>`;
   return `<div class="lk-ops__split"><div class="lk-runs">${list}</div>${inspector}</div>`;
@@ -560,7 +560,7 @@ function opsQueue(state: State, all: Run[]): string {
     `<div class="lk-qcard"><strong>${esc(name)}</strong><small>${esc(meta)}</small></div>`;
   return `<div class="lk-queue">${col(
     "Now",
-    now.map((r) => card(r.name, r.agent ? `${state.agents[r.agent]?.sign ?? ""} · ${r.status}` : r.status)),
+    now.map((r) => card(r.name, r.agent ? `${state.agents[r.agent]?.name ?? ""} · ${r.status}` : r.status)),
   )}${col("Next", [card("Update README screenshots", "Codex · Personal · Default"), card("Dark mode tokens", "Claude Code · Personal · Sonnet")])}${col("Later", [card("Upgrade the router", "Unassigned")])}</div>`;
 }
 
@@ -592,7 +592,7 @@ function opsActivity(state: State): string {
   }).join("");
   const latest = agentsList(state)
     .slice(0, 5)
-    .map((a) => `<li>${glyph(a.provider)}<strong>${esc(a.sign)}</strong> ${esc(a.activity)}</li>`)
+    .map((a) => `<li>${glyph(a.provider)}<strong>${esc(a.name)}</strong> ${esc(a.activity)}</li>`)
     .join("");
   return `<div class="lk-activity"><div class="lk-heat" aria-hidden="true">${cells}</div><p class="lk-label">Latest activity</p><ul role="list" class="lk-latest">${latest}</ul></div>`;
 }
@@ -743,7 +743,7 @@ export function paletteCommands(state: State): Command[] {
     ...SURFACES.map((s) => ({ label: `Go to ${s.label}`, act: `go:${s.id}`, icon: s.icon as LiveIcon })),
     { label: "Go to Settings", act: "go:settings", icon: "settings" },
     ...agentsList(state).map((a) => ({
-      label: `Open ${a.sign} · ${a.task}`,
+      label: `Open ${a.name}`,
       act: `agent:${a.id}`,
       icon: "terminal" as LiveIcon,
     })),

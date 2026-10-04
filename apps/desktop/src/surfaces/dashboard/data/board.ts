@@ -131,7 +131,7 @@ function searchFields(thread: ThreadSummary, extra: readonly (string | undefined
 }
 
 /**
- * Case-insensitive match on what a card shows: task, account, call sign, provider, workspace,
+ * Case-insensitive match on what a card shows: task, account, provider, workspace,
  * branch, model, effort, activity and status. Every word must match some field.
  */
 export function matchesQuery(
