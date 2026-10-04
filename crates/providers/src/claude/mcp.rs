@@ -42,7 +42,13 @@ impl ConfigFiles {
                 .map(|(_, value)| value.as_os_str())
                 .filter(|value| !value.is_empty())
         };
-        let home = get("HOME").or_else(|| get("USERPROFILE"));
+        // Claude Code finds `~` the way Node's `os.homedir()` does: USERPROFILE on Windows (a
+        // Git Bash `HOME` such as `/c/Users/me` is not a Windows path), HOME elsewhere.
+        let home = if cfg!(windows) {
+            get("USERPROFILE").or_else(|| get("HOME"))
+        } else {
+            get("HOME").or_else(|| get("USERPROFILE"))
+        };
         Self::new(get("CLAUDE_CONFIG_DIR"), home)
     }
 
