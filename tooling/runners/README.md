@@ -9,6 +9,9 @@ A personal-account repository has no runner groups, so a runner label is not acc
 | `kalcode-win-gate` | Windows PC, local account `kalcode-ci`, Windows service | `kalcode-gate` | `gate.yml` for PRs (same repo only) and `main` | None. It has its own toolchain and caches under `C:\kalcode-ci` and can't read the owner's profile. |
 | `kalcode-win-release` | Windows PC, the owner (`Kaleb`), starts at sign-in | `kalcode-release` | Only `release.yml` from `main`, enforced by `release-job-guard.ps1` as the runner's pre-job hook | Azure Artifact Signing login, DPAPI updater key, Wrangler |
 | `kalcode-mac-gate` | Mac, hidden standard account `kalcodeci` (not an admin), LaunchDaemon | `kalcode-gate` (macOS) | The macOS Rust job in `gate.yml` | None. It can't read the owner's home folder or login Keychain (Developer ID, notary profile). |
+| `kalcode-win-desktop-qa` | Second Windows PC, standard account `kalcode-qa`, a normal app in that account's signed-in desktop (Startup shortcut to `run.cmd`, not a service) | `kalcode-desktop-qa` | Only `desktop-update-verify.yml` from `main`: Windows update delivery from the live Stable feed with a real, visible KalCode window | None. A dedicated test profile; the check uninstalls KalCode and removes its data after each run. |
+
+`kalcode-win-desktop-qa` exists because a service runs in session 0, where KalCode's window stays hidden, so a normal close and reopen can't be proven there. Its desktop must stay signed in: after the second PC restarts, sign in to `kalcode-qa` once and switch back to your own account without signing out.
 
 ## Install
 

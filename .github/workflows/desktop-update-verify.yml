@@ -1,0 +1,65 @@
+name: Desktop update verify (self-hosted)
+
+# Windows production update delivery on a real interactive desktop (docs/RELEASING.md, "shipped"): after a build is live on
+# the Stable feed, the kalcode-desktop-qa runner installs the previous public build, lets its own updater stage the new
+# build from the feed, closes KalCode by its window, and requires the new build to install on exit and reopen healthy.
+# The runner is the dedicated kalcode-qa account on the second Windows PC, running as a normal app inside that account's
+# signed-in desktop (tooling/runners/README.md), so KalCode's window is real and visible. It never runs on the owner's PC.
+#   gh workflow run desktop-update-verify.yml --ref main -f live_url=... -f live_sha256=... -f live_version=...
+#     -f candidate_version=... -f candidate_sha256=... -f candidate_commit=...
+
+run-name: Desktop update ${{ inputs.live_version }} -> ${{ inputs.candidate_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_url: { description: Immutable kalcoded.com updater URL of the previous public Windows installer, required: true, type: string }
+      live_sha256: { description: SHA-256 of that installer, required: true, type: string }
+      live_version: { description: Previous public version X.Y.Z+N, required: true, type: string }
+      candidate_version: { description: Version now live on the Stable feed X.Y.Z+N, required: true, type: string }
+      candidate_sha256: { description: SHA-256 of the live Windows installer, required: true, type: string }
+      candidate_commit: { description: Commit of the live build, required: true, type: string }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-update-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Desktop update (kalcode-qa)
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Windows, kalcode-desktop-qa]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Run the desktop update delivery check
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          LIVE_URL: ${{ inputs.live_url }}
+          LIVE_SHA256: ${{ inputs.live_sha256 }}
+          LIVE_VERSION: ${{ inputs.live_version }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'desktop-update-out'
+          if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\win-desktop-update-from-feed.ps1 `
+            -LiveUrl $env:LIVE_URL -LiveSha256 $env:LIVE_SHA256 -LiveVersion $env:LIVE_VERSION `
+            -CandidateVersion $env:CANDIDATE_VERSION -CandidateSha256 $env:CANDIDATE_SHA256 -CandidateCommit $env:CANDIDATE_COMMIT `
+            -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "desktop update check failed (exit $LASTEXITCODE)" }
+      - name: Upload the receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-update-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-update-out/desktop-update-receipt.json
+          if-no-files-found: warn
