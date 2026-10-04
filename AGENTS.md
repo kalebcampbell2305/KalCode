@@ -229,7 +229,7 @@ This replaces the single-release-driver model, including the old "one release at
 **KEEP THE BUILD CACHE. NEVER FORCE A FULL REBUILD.** Release builds on the Mac and on Windows reuse the warm compiled cache (`target/`, including Cargo `.fingerprint` and incremental data) from the most recent build of the nearest commit. Never delete Cargo fingerprints, incrementals or the release `target` before a release build, and never start from a cold clone when a warm one exists. Cargo's own fingerprinting decides what is stale, so a warm cache is correct, not a shortcut. The only exception is a targeted removal of one artifact that is proven to be wrongly reused, such as `guardian-packaging.mjs` and `hook-packaging.mjs` forcing their one binary to relink; never remove a whole cache. A slow cold rebuild is a pipeline bug to fix.
 
 - **Release builds always run on the owner's main Windows PC** (and the Mac for macOS). Building, signing and packaging never move to another machine.
-- **The second Windows machine runs gates**, under its own runner name and label (`kalcode-win-gate-2`, `kalcode-gate-2`; see `tooling/runners/README.md`). Gates there never compete with release builds for memory. Windows update QA stays on the build PC, where its packets are staged.
+- **The build PC runs everything (owner directive 2026-10-04: it now has 64 GB of RAM).** Gates (`kalcode-win-gate`, label `kalcode-gate`), builds, tests and QA run on the owner's main Windows PC. Do not use the second Windows machine (`kalcode-win-gate-2`, `kalcode-win-desktop-qa`) for gates, QA or anything else.
 
 ## Permanent fastest truthful release policy (owner directive 2026-10-02)
 
