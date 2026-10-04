@@ -36,6 +36,7 @@ import {
 } from "../../lib/live/model";
 import { paletteCommands, type RenderConfig, renderApp } from "../../lib/live/render";
 import { TOUR } from "../../lib/live/tour";
+import { mountContextMenus } from "./contextMenus";
 import { morph } from "./morph";
 
 const TICK_MS = 1500;
@@ -653,6 +654,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
   }
 
   state.mobile = root.clientWidth < MOBILE_BELOW;
+  mountContextMenus(host, () => state, render);
   render();
   loop();
   root.dataset.live = "ready";
