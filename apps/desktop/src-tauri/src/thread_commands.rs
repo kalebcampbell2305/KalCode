@@ -1493,17 +1493,17 @@ fn rebind_thread_account(
     }
     let account = AccountStore::new(core.clone()).get(account_id)?;
     let account = validate_creation_account(account, thread.provider_id.as_str())?;
-    if thread.provider_account_id.as_deref() != Some(account.id.as_str()) {
-        if account.authentication_state == AuthState::NotAuthenticated {
-            return Err(KalError::new(
-                ErrorCategory::Provider,
-                "provider_account_not_authenticated",
-                format!(
-                    "{label} isn't signed in. Sign in to {label} in Providers, then switch.",
-                    label = account.display_name
-                ),
-            ));
-        }
+    if thread.provider_account_id.as_deref() != Some(account.id.as_str())
+        && account.authentication_state == AuthState::NotAuthenticated
+    {
+        return Err(KalError::new(
+            ErrorCategory::Provider,
+            "provider_account_not_authenticated",
+            format!(
+                "{label} isn't signed in. Sign in to {label} in Providers, then switch.",
+                label = account.display_name
+            ),
+        ));
     }
     runtime.rebind_account(thread_id, &account.id)
 }
