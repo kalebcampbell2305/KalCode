@@ -490,11 +490,14 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
                 {current.stale && (
                   <div className={styles.stale}>
                     <p>
-                      The related file changed or could not be verified. Check the source, then edit outdated knowledge
-                      or mark this memory reviewed.
+                      {current.filePath
+                        ? "The related file changed or could not be verified. Check the source, then edit outdated knowledge or mark this memory reviewed."
+                        : "This memory has not been reviewed recently. Check that the knowledge is still current, then edit it or mark it reviewed."}
                     </p>
                     <p id="memory-review-help">
-                      Mark reviewed rechecks the linked file and confirms this knowledge is still current.
+                      {current.filePath
+                        ? "Mark reviewed rechecks the linked file and records your confirmation that this knowledge is still current."
+                        : "Mark reviewed records your confirmation that this knowledge is still current."}
                     </p>
                     <Button
                       size="sm"
@@ -591,7 +594,7 @@ function WorkspaceMemory({ workspaceId, name }: { workspaceId: string; name: str
               </h2>
               <p>Useful knowledge travels with your workspace, so each new agent has somewhere to start.</p>
               <div className={styles.sharedWith}>
-                Coding agents <span>·</span> KalVoice <span>·</span> Brainstorm
+                Coding agents <span>·</span> KalVoice
               </div>
               <p className={styles.hint}>
                 {records.length
