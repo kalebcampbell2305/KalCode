@@ -31,7 +31,6 @@ import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useCodingAgents } from "../dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../dashboard/data/status.ts";
-import { fleetHandles } from "../dashboard/fleet/fleetModel.ts";
 import { focusSection } from "../dashboard/useNow.ts";
 import styles from "./HandOffDialog.module.css";
 
@@ -128,7 +127,6 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
   const allAgents = codingAgents.state.status === "ready" ? codingAgents.state.data : [];
   const recipients = useMemo(() => allAgents.filter((agent) => agent.id !== source.id), [allAgents, source.id]);
-  const handles = useMemo(() => fleetHandles(allAgents), [allAgents]);
   const selectedTarget = recipients.find((agent) => agent.id === targetId) ?? null;
   const staleTarget = targetId.length > 0 && selectedTarget === null;
   const soleRecipientId = recipients.length === 1 ? (recipients[0]?.id ?? null) : null;
@@ -464,7 +462,6 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                   {recipients.map((agent) => {
                     const selected = agent.id === targetId;
                     const status = STATUS_META[agent.status];
-                    const handle = handles.get(agent.id) ?? agent.name;
                     return (
                       <label key={agent.id} className={styles.recipient} data-selected={selected || undefined}>
                         <input
@@ -481,8 +478,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
                         <ProviderGlyph provider={agent.providerId} size="sm" />
                         <span className={styles.recipientCopy}>
                           <span className={styles.recipientName}>
-                            <span className={styles.recipientHandle}>{handle}</span>
-                            {agent.name !== handle ? <span className={styles.recipientAlias}>{agent.name}</span> : null}
+                            <span className={styles.recipientTitle}>{agent.name}</span>
                           </span>
                           <span className={styles.recipientMeta}>
                             {agent.workspaceName} · {status.label}

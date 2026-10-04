@@ -382,7 +382,10 @@ mod tests {
             .exit_error(Some(41), "")
             .expect("auth exit is recognized");
         assert_eq!(code, "provider_not_authenticated");
-        assert!(message.contains("Sign in to this Gemini account in Providers"));
+        assert_eq!(
+            message,
+            "Gemini session expired. Reconnect this Gemini account to continue."
+        );
         for other in [None, Some(0), Some(1), Some(42), Some(130)] {
             assert!(turns.exit_error(other, "").is_none(), "{other:?}");
         }

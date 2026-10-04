@@ -319,7 +319,7 @@ describe("in-memory provider panes", () => {
       model: source.model,
       effort: "high",
       permissionMode: "plan",
-      name: "Review (copy)",
+      name: "Codex",
       runtimeKind: "interactive_pty",
     });
     expect(await channel.info(copy.id)).toMatchObject({ running: true });

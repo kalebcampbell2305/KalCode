@@ -28,14 +28,14 @@ import { renderApp } from "../../src/lib/live/render";
 const cfg = { downloadHref: "/download", downloadLabel: "Download KalCode", accountHref: "/account" };
 
 describe("the live demo's sample workspace", () => {
-  it("opens on Code with Claude A working, Codex A testing, a dev server and one agent needing you", () => {
+  it("opens on Code with Dashboard Redesign working, Dashboard Tests testing, a dev server and one agent needing you", () => {
     const state = initialState();
     expect(state.surface).toBe("code");
     expect(SURFACES[0]?.id).toBe("code");
-    const bySign = Object.fromEntries(agentsList(state).map((a) => [a.sign, a]));
-    expect(bySign["Claude A"]?.status).toBe("working");
-    expect(bySign["Codex A"]?.status).toBe("testing");
-    expect(bySign["Claude B"]?.status).toBe("done");
+    const byName = Object.fromEntries(agentsList(state).map((a) => [a.name, a]));
+    expect(byName["Dashboard Redesign"]?.status).toBe("working");
+    expect(byName["Dashboard Tests"]?.status).toBe("testing");
+    expect(byName["Code Review"]?.status).toBe("done");
     expect(counts(state).needs).toBe(1);
     expect(Object.values(state.tabs).some((t) => t.kind === "terminal" && t.title.includes("dev server"))).toBe(true);
   });
@@ -60,7 +60,7 @@ describe("the live demo's sample workspace", () => {
     const state = initialState();
     openOperationsContext(state);
     state.contextTab = "tests";
-    const run = runs(state).find((entry) => entry.name === "Tests");
+    const run = runs(state).find((entry) => entry.name === "Dashboard Tests");
     if (!run) throw new Error("The sample workspace must have a test run");
     expect(run?.status).toBe("Running");
     state.run = run.id;
@@ -82,8 +82,8 @@ describe("the live demo's sample workspace", () => {
       expect(tab?.kind).toBe("agent");
       expect(state.agents[id]?.provider).toBe("codex");
     }
-    // Call signs follow the Fleet's creation order: Codex A exists, so these are B, C and D.
-    expect(created.map((id) => state.agents[id]?.sign)).toEqual(["Codex B", "Codex C", "Codex D"]);
+    // Fresh sessions keep clean provider names until they receive a meaningful task.
+    expect(created.map((id) => state.agents[id]?.name)).toEqual(["Codex", "Codex", "Codex"]);
     expect(state.surface).toBe("code");
   });
 
@@ -103,7 +103,7 @@ describe("the live demo's sample workspace", () => {
     const state = initialState();
     expect(jumpToNeeds(state)).toBe(true);
     const focused = state.frames.find((f) => f.id === state.focus);
-    expect(state.tabs[focused?.active ?? ""]?.title).toBe("Claude C");
+    expect(state.tabs[focused?.active ?? ""]?.title).toBe("Login Validation");
     openTerminal(state);
     const before = agentsList(state).length;
     const result = tidyIdle(state);
@@ -126,8 +126,11 @@ describe("the live demo's sample workspace", () => {
     tick(state);
     tick(state);
     promptAgent(state, id ?? "", "Add a dark mode toggle");
+    expect(state.agents[id ?? ""]?.name).toBe("Dark Mode Toggle");
     for (let i = 0; i < 30; i++) tick(state);
     expect(state.agents[id ?? ""]?.status).toBe("done");
+    promptAgent(state, id ?? "", "Write tests for Login");
+    expect(state.agents[id ?? ""]?.name).toBe("Dark Mode Toggle");
   });
 
   it("answers KalVoice commands by acting on the workspace", () => {

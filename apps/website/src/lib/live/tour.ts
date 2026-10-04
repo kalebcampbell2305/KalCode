@@ -23,7 +23,7 @@ export const TOUR: readonly TourStep[] = [
   {
     kicker: "Code",
     title: "Your agents, in real terminals",
-    body: "This is Code, where your real Claude Code and Codex coding agents run. Each agent is its own terminal pane: Claude A is redesigning the dashboard while Codex A runs the tests.",
+    body: "This is Code, where your real Claude Code and Codex coding agents run. Each agent is its own terminal pane: Dashboard Redesign is redesigning the dashboard while Dashboard Tests runs the tests.",
     tip: "An agent is a terminal, not a chat thread.",
     target: "nav-code",
     setup: ["menus-close", "go:code"],
@@ -46,7 +46,7 @@ export const TOUR: readonly TourStep[] = [
   {
     kicker: "Needs You",
     title: "Know the moment an agent needs you",
-    body: "Claude C wants to run a command. Needs You counts every agent waiting on you, and one click takes you to it.",
+    body: "Login Validation wants to run a command. Needs You counts every agent waiting on you, and one click takes you to it.",
     target: "needs",
     setup: ["menus-close", "go:dashboard"],
   },

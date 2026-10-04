@@ -1,7 +1,7 @@
 import type { ThreadStatus, ThreadWorktreeState } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { thread } from "../data/testing.ts";
-import { fleetHandles, fleetStage, fleetSummary, mergeReadiness } from "./fleetModel.ts";
+import { fleetStage, fleetSummary, mergeReadiness } from "./fleetModel.ts";
 
 function facts(overrides: Partial<ThreadWorktreeState> = {}): ThreadWorktreeState {
   return {
@@ -18,27 +18,6 @@ function facts(overrides: Partial<ThreadWorktreeState> = {}): ThreadWorktreeStat
     ...overrides,
   };
 }
-
-describe("fleetHandles", () => {
-  it("gives each provider's agents a letter in the order they started", () => {
-    const a = thread({ providerId: "claude-code", createdAt: "2026-10-02T01:00:00.000Z" });
-    const b = thread({ providerId: "claude-code", createdAt: "2026-10-02T02:00:00.000Z" });
-    const c = thread({ providerId: "codex", providerName: "Codex", createdAt: "2026-10-02T00:30:00.000Z" });
-    const handles = fleetHandles([b, c, a]);
-    expect(handles.get(a.id)).toBe("Claude A");
-    expect(handles.get(b.id)).toBe("Claude B");
-    expect(handles.get(c.id)).toBe("Codex A");
-  });
-
-  it("keeps lettering past Z", () => {
-    const many = Array.from({ length: 28 }, (_, i) =>
-      thread({ providerId: "codex", createdAt: `2026-10-02T00:${String(i).padStart(2, "0")}:00.000Z` }),
-    );
-    const handles = fleetHandles(many);
-    expect(handles.get(many[25]?.id ?? "")).toBe("Codex Z");
-    expect(handles.get(many[26]?.id ?? "")).toBe("Codex AA");
-  });
-});
 
 describe("mergeReadiness", () => {
   const isolated = (status: ThreadStatus) => thread({ status, worktreeId: "w", branch: "kal/agent-1234abcd" });

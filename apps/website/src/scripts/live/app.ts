@@ -216,7 +216,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
           const first = state.agents[created[0] as string];
           toast(
             state,
-            `Launched ${created.length === 1 ? first?.sign : `${created.length} agents`} in Code`,
+            `Launched ${created.length === 1 ? first?.name : `${created.length} agents`} in Code`,
             "info",
             created[0],
           );

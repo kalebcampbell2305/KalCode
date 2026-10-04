@@ -14,9 +14,8 @@ import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
-import { useArchivedCodingAgents, useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
-import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
 import { beginLiveResize } from "../panes/liveResize.ts";
@@ -29,16 +28,6 @@ export function AgentRail() {
   const { state, reload } = useCodingAgents();
   const now = useNow(30_000);
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
-  const archived = useArchivedCodingAgents().state;
-  // The same call signs as the Fleet (archived agents keep their letters).
-  const handles = useMemo(
-    () =>
-      fleetHandles([
-        ...(state.status === "ready" ? state.data : []),
-        ...(archived.status === "ready" ? archived.data : []),
-      ]),
-    [state, archived],
-  );
   // Until the person pins or collapses it, the rail opens while an agent runs or needs them.
   const active = sections ? runningAgentCount(sections) > 0 || sections.needsYou.length > 0 : null;
   useEffect(() => {
@@ -89,7 +78,7 @@ export function AgentRail() {
                 </Button>
               </div>
             ) : sections ? (
-              <AgentList sections={sections} now={now} handles={handles} />
+              <AgentList sections={sections} now={now} />
             ) : (
               <p className={styles.quiet}>Agents aren't part of this build.</p>
             )}
@@ -162,15 +151,7 @@ function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: ()
   );
 }
 
-function AgentList({
-  sections,
-  now,
-  handles,
-}: {
-  sections: AgentSections;
-  now: number;
-  handles: ReadonlyMap<string, string>;
-}) {
+function AgentList({ sections, now }: { sections: AgentSections; now: number }) {
   const { navigate } = useNavigation();
   const intents = useOptionalUiIntents();
   const launchAgent = useLaunchAgent();
@@ -223,17 +204,9 @@ function AgentList({
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group
-        title="Needs you"
-        tone="waiting"
-        threads={sections.needsYou}
-        now={now}
-        onOpen={open}
-        handles={handles}
-        {...rowActions}
-      />
-      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} handles={handles} />
-      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
+      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} {...rowActions} />
+      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} />
+      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} />
       {sections.idle.length > 0 ? (
         <section className={styles.group}>
           <button
@@ -250,28 +223,13 @@ function AgentList({
           {showIdle ? (
             <ul id={idleId} className={styles.list}>
               {sections.idle.map((thread) => (
-                <AgentRow
-                  key={thread.id}
-                  thread={thread}
-                  now={now}
-                  onOpen={open}
-                  handle={handles.get(thread.id)}
-                  {...rowActions}
-                />
+                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} {...rowActions} />
               ))}
             </ul>
           ) : null}
         </section>
       ) : null}
-      <Group
-        title="Just finished"
-        tone="done"
-        threads={sections.finished}
-        now={now}
-        onOpen={open}
-        handles={handles}
-        {...rowActions}
-      />
+      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} {...rowActions} />
     </>
   );
 }
@@ -282,12 +240,11 @@ interface GroupProps {
   threads: ThreadSummary[];
   now: number;
   onOpen: (thread: ThreadSummary) => void;
-  handles: ReadonlyMap<string, string>;
   leaving?: ReadonlySet<string>;
   onDismiss?: (thread: ThreadSummary) => void;
 }
 
-function Group({ title, tone, threads, now, onOpen, handles, leaving, onDismiss }: GroupProps) {
+function Group({ title, tone, threads, now, onOpen, leaving, onDismiss }: GroupProps) {
   const headingId = useId();
   if (threads.length === 0) return null;
   return (
@@ -298,15 +255,7 @@ function Group({ title, tone, threads, now, onOpen, handles, leaving, onDismiss 
       </h3>
       <ul className={styles.list}>
         {threads.map((thread) => (
-          <AgentRow
-            key={thread.id}
-            thread={thread}
-            now={now}
-            onOpen={onOpen}
-            handle={handles.get(thread.id)}
-            leaving={leaving}
-            onDismiss={onDismiss}
-          />
+          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} leaving={leaving} onDismiss={onDismiss} />
         ))}
       </ul>
     </section>
@@ -317,14 +266,12 @@ function AgentRow({
   thread,
   now,
   onOpen,
-  handle,
   leaving,
   onDismiss,
 }: {
   thread: ThreadSummary;
   now: number;
   onOpen: (t: ThreadSummary) => void;
-  handle?: string;
   leaving?: ReadonlySet<string>;
   /** Present for agents whose session is over: the row's X clears them. */
   onDismiss?: (t: ThreadSummary) => void;
@@ -362,7 +309,7 @@ function AgentRow({
           </span>
           <span className={styles.rowDetail}>{detail}</span>
           <span className={styles.rowMeta}>
-            {handle ?? thread.providerName} · {thread.workspaceName}
+            {thread.providerName} · {thread.workspaceName}
             {thread.pendingApprovals > 0 && thread.status !== "waiting_for_permission" ? (
               <span className={styles.rowFlag}>
                 {thread.pendingApprovals} {thread.pendingApprovals === 1 ? "approval" : "approvals"}

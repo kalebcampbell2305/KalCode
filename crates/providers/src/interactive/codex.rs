@@ -111,6 +111,10 @@ pub fn interactive_args_with_overrides(
         out.extend([OsString::from("-c"), OsString::from(value)]);
     }
     out.extend_from_slice(overrides);
+    out.extend([
+        OsString::from("-c"),
+        OsString::from(crate::codex::argv::SUBAGENT_CONFIG),
+    ]);
     if let Some(model) = args.model {
         if !crate::claude::argv::valid_model_name(model) {
             return Err(CodexArgsError::InvalidModel);
@@ -255,6 +259,43 @@ impl Osc9Scanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_subagents_are_ten_for_new_and_resumed_panes() {
+        for resume in [None, Some("01234567-89ab-4cde-8fab-0123456789ab")] {
+            for previous in [3, 15, 30] {
+                let launch = CodexArgs {
+                    mode: PermissionMode::Approve,
+                    workspace: Path::new("C:/work/repo"),
+                    model: None,
+                    effort: None,
+                    resume_session_id: resume,
+                    hook_program: Path::new("kalcode-hook.exe"),
+                    hook_prefix_args: &[],
+                    endpoint: "test-endpoint",
+                    session: "test-session",
+                };
+                let args = interactive_args_with_overrides(
+                    &launch,
+                    &[
+                        "-c".into(),
+                        format!("agents.max_concurrent_threads_per_session={previous}").into(),
+                    ],
+                )
+                .expect("args");
+                let effective = args
+                    .windows(2)
+                    .filter(|pair| pair[0] == "-c")
+                    .filter_map(|pair| pair[1].to_str())
+                    .filter(|value| value.starts_with("agents.max_concurrent_threads_per_session="))
+                    .last();
+                assert_eq!(
+                    effective,
+                    Some("agents.max_concurrent_threads_per_session=10")
+                );
+            }
+        }
+    }
 
     fn args(mode: PermissionMode, resume: Option<&str>) -> Vec<String> {
         interactive_args(&CodexArgs {

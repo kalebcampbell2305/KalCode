@@ -8,9 +8,12 @@ import {
   Tooltip,
 } from "@kalcode/ui/components";
 import { ArrowLeft, ArrowRight, ChevronRight, History, Search } from "lucide-react";
+import { useMemo } from "react";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
+import { useOptionalAllCodingAgents } from "../surfaces/dashboard/data/DashboardData.tsx";
 import styles from "./NavigationBar.module.css";
 import { destinationMeta, useNavigation } from "./navigation.tsx";
+import { navigationEntryLabel } from "./navigationHistory.ts";
 import { useSearchOpen } from "./rail/search/SearchProvider.tsx";
 import { IS_MAC, MOD_LABEL } from "./shortcuts.ts";
 
@@ -19,6 +22,8 @@ export function NavigationBar() {
   const navigation = useNavigation();
   const { active } = useWorkspaces();
   const { setOpen } = useSearchOpen();
+  const agents = useOptionalAllCodingAgents();
+  const agentNames = useMemo(() => new Map(agents?.map((agent) => [agent.id, agent.name]) ?? []), [agents]);
   const {
     current,
     navigate,
@@ -31,6 +36,7 @@ export function NavigationBar() {
     restore,
   } = navigation;
   const entry = history[historyIndex];
+  const entryLabel = entry ? navigationEntryLabel(entry, agentNames) : undefined;
   const meta = destinationMeta(current);
   return (
     <div className={styles.bar}>
@@ -65,7 +71,7 @@ export function NavigationBar() {
               .map((visit) => (
                 <DropdownMenuItem key={visit.id} onSelect={() => void restore(visit.id)}>
                   <span className={styles.visit}>
-                    <span>{visit.label ?? destinationMeta(visit.destination).label}</span>
+                    <span>{navigationEntryLabel(visit, agentNames) ?? destinationMeta(visit.destination).label}</span>
                     <small>
                       {destinationMeta(visit.destination).label}
                       {visit.id === entry?.id ? " · Current" : ""}
@@ -86,11 +92,11 @@ export function NavigationBar() {
           </>
         ) : null}
         <span aria-current={!entry?.target ? "page" : undefined}>{meta.label}</span>
-        {entry?.target && entry.label ? (
+        {entry?.target && entryLabel ? (
           <>
             <ChevronRight aria-hidden="true" />
-            <span aria-current="page" title={entry.label}>
-              {entry.label}
+            <span aria-current="page" title={entryLabel}>
+              {entryLabel}
             </span>
           </>
         ) : null}

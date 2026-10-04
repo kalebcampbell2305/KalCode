@@ -38,8 +38,7 @@ jobs:
     name: Gate (Windows)
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # The build PC (64 GB) runs gates (AGENTS.md build machine rule, owner directive 2026-10-04): the
-    # second Windows machine is no longer used for gates or QA.
+    # Owner policy: validate on the main 64 GB Windows PC, never the second PC.
     runs-on: [self-hosted, Windows, kalcode-gate]
     timeout-minutes: 150
     steps:
