@@ -140,6 +140,73 @@ test.describe("Z7-W0 design system accessibility", () => {
   }
 });
 
+/** Applies a resolved appearance mode the way appearance.ts does, after a scene has opened. */
+async function mode(page: Page, attrs: { contrast?: "more"; textSize?: "large" | "larger" }) {
+  await page.evaluate((next) => {
+    if (next.contrast) document.documentElement.dataset.contrast = next.contrast;
+    if (next.textSize) document.documentElement.dataset.textSize = next.textSize;
+  }, attrs);
+}
+
+test.describe("appearance modes", () => {
+  test("Settings switches contrast and text size, and the whole UI follows", async ({ page }) => {
+    await page.goto("/");
+    await nav(page, "Settings");
+    const html = page.locator("html");
+    await expect(html).toHaveAttribute("data-contrast", "standard");
+    await page.getByRole("radiogroup", { name: "Contrast" }).getByRole("radio", { name: "High" }).click();
+    await expect(html).toHaveAttribute("data-contrast", "more");
+    // High contrast removes the atmosphere and thickens the focus ring.
+    const tokens = await page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement);
+      return {
+        stars: style.getPropertyValue("--atmosphere-stars").trim(),
+        ring: style.getPropertyValue("--focus-ring-width").trim(),
+      };
+    });
+    expect(tokens).toEqual({ stars: "none", ring: "3px" });
+
+    await page.getByRole("radiogroup", { name: "Text size" }).getByRole("radio", { name: "Larger" }).click();
+    await expect(html).toHaveAttribute("data-text-size", "larger");
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe("20px");
+
+    await page.getByRole("radiogroup", { name: "Text size" }).getByRole("radio", { name: "Default" }).click();
+    await expect(html).not.toHaveAttribute("data-text-size", /./);
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe("16px");
+  });
+
+  test("the command palette toggles high contrast", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.type("use high contrast");
+    await page.keyboard.press("Enter");
+    await expect(page.locator("html")).toHaveAttribute("data-contrast", "more");
+  });
+
+  for (const theme of ["dark", "light"] as const) {
+    test(`every restyled surface passes axe in ${theme} high contrast`, async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      for (const scene of SCENES) {
+        await scene.run(page, theme);
+        await mode(page, { contrast: "more" });
+        await expectAxeClean(page, `${scene.name} (${theme}, high contrast)`);
+      }
+    });
+  }
+
+  test("every restyled surface passes axe at the larger text size", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const scene of SCENES) {
+      await scene.run(page, "dark");
+      await mode(page, { textSize: "larger" });
+      await expectAxeClean(page, `${scene.name} (larger text)`);
+    }
+  });
+});
+
 const SIZES = [
   { width: 1366, height: 768 },
   { width: 1440, height: 900 },
@@ -166,3 +233,24 @@ for (const theme of ["dark", "light"] as const) {
     }
   });
 }
+
+test("@screenshots appearance modes: high contrast and larger text", async ({ page }) => {
+  test.setTimeout(300_000);
+  mkdirSync(OUT, { recursive: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const variants = [
+    { suffix: "dark-hc", theme: "dark", attrs: { contrast: "more" } },
+    { suffix: "light-hc", theme: "light", attrs: { contrast: "more" } },
+    { suffix: "dark-larger", theme: "dark", attrs: { textSize: "larger" } },
+  ] as const;
+  for (const variant of variants) {
+    for (const scene of SCENES) {
+      await scene.run(page, variant.theme);
+      await mode(page, variant.attrs);
+      await page.waitForTimeout(200);
+      await page.screenshot({
+        path: new URL(`${scene.name}-${variant.suffix}-1440.png`, OUT).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+      });
+    }
+  }
+});
