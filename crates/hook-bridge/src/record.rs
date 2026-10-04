@@ -13,7 +13,7 @@ pub const MAX_STDIN_BYTES: usize = 1024 * 1024;
 /// Largest tool input forwarded for classification (serialized). Larger inputs are dropped and
 /// the call is classified as an opaque tool, which always asks.
 pub const MAX_TOOL_INPUT_BYTES: usize = 64 * 1024;
-/// The first prompt is forwarded only so KalCode's deterministic namer can title the thread.
+/// Bounded prompt text for deterministic naming and task-specific local memory retrieval.
 pub const MAX_PROMPT_CHARS: usize = 2048;
 const MAX_ID_CHARS: usize = 128;
 const MAX_WORD_CHARS: usize = 64;
@@ -124,7 +124,8 @@ pub struct HookRecord {
     pub error_type: Option<String>,
     /// SessionEnd `reason`.
     pub end_reason: Option<String>,
-    /// UserPromptSubmit only, clipped. Used for the title, never stored or put in an event.
+    /// Bounded UserPromptSubmit/beforeSubmitPrompt query for naming and local memory retrieval.
+    /// Never stored or emitted as an agent event; capture uses filtered memory_candidate only.
     pub prompt: Option<String>,
     /// Codex notify `type` (e.g. `agent-turn-complete`).
     pub codex_type: Option<String>,
@@ -233,12 +234,13 @@ mod cursor_tests {
                 record.memory_candidate.as_deref(),
                 Some("Decision: SQLite holds durable project knowledge.")
             );
-            assert!(record.prompt.is_none());
+            assert_eq!(record.prompt.is_some(), event == "beforeSubmitPrompt");
             assert!(record.validate().is_ok());
             assert!(
-                !serde_json::to_string(&record)
-                    .unwrap()
-                    .contains("Ordinary private prose")
+                event == "beforeSubmitPrompt"
+                    || !serde_json::to_string(&record)
+                        .unwrap()
+                        .contains("Ordinary private prose")
             );
             let mut forged = record.clone();
             forged.cursor.as_mut().unwrap().event = "postToolUse".into();
@@ -248,6 +250,40 @@ mod cursor_tests {
             assert!(forged.validate().is_err());
             payload["is_background_agent"] = json!(true);
             assert!(from_cursor_stdin(event, payload.to_string().as_bytes()).is_err());
+            payload["is_background_agent"] = json!(false);
+            payload["generation_id"] = json!(null);
+            assert!(from_cursor_stdin(event, payload.to_string().as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn cursor_memory_query_is_bounded_and_allowed_only_on_native_prompt_submission() {
+        let text = format!("{}\nprivate tail", "query ".repeat(MAX_PROMPT_CHARS));
+        let payload = json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn","prompt":text});
+        let record =
+            from_cursor_stdin("beforeSubmitPrompt", payload.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            record.prompt.as_ref().unwrap().chars().count(),
+            MAX_PROMPT_CHARS
+        );
+        assert!(
+            !serde_json::to_string(&record)
+                .unwrap()
+                .contains("private tail")
+        );
+        for query in [
+            "x".repeat(MAX_PROMPT_CHARS + 1),
+            "query\nwith controls".into(),
+            " ".into(),
+        ] {
+            let mut forged = record.clone();
+            forged.prompt = Some(query);
+            assert!(forged.validate().is_err());
+        }
+        for event in ["sessionStart", "afterAgentResponse", "postToolUse"] {
+            let mut forged = record.clone();
+            forged.cursor.as_mut().unwrap().event = event.into();
+            assert!(forged.validate().is_err());
         }
     }
 }
@@ -289,6 +325,11 @@ impl HookRecord {
                 && valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
                 && valid_id(cursor.generation_id.as_deref(), MAX_ID_CHARS)
                 && valid_model(cursor.model.as_deref())
+                && self.prompt.as_deref().is_none_or(|prompt| {
+                    cursor.event == "beforeSubmitPrompt"
+                        && !prompt.trim().is_empty()
+                        && clean_text(prompt, MAX_PROMPT_CHARS) == prompt
+                })
                 && matches!(
                     cursor.status.as_deref(),
                     None | Some("completed" | "aborted" | "error")
@@ -296,12 +337,16 @@ impl HookRecord {
                 && (cursor.event == "stop" || cursor.status.is_none())
                 && (cursor.event != "stop"
                     || (cursor.status.is_some() && cursor.generation_id.is_some()))
-                && (cursor.event != "beforeSubmitPrompt" || cursor.generation_id.is_some());
+                && (!matches!(
+                    cursor.event.as_str(),
+                    "beforeSubmitPrompt" | "afterAgentResponse"
+                ) || cursor.generation_id.is_some());
             let mut only_cursor = HookRecord {
                 event: Some(HookEvent::Cursor),
                 provider_session_id: self.provider_session_id.clone(),
                 cursor: self.cursor.clone(),
                 memory_candidate: self.memory_candidate.clone(),
+                prompt: self.prompt.clone(),
                 ..HookRecord::default()
             };
             // Cursor subagent records cannot affect the parent terminal lifecycle.
@@ -570,6 +615,12 @@ pub fn from_cursor_stdin(event: &str, bytes: &[u8]) -> Result<HookRecord, Record
     let record = HookRecord {
         event: Some(HookEvent::Cursor),
         provider_session_id: Some(conversation),
+        // Retrieval needs only a bounded query, never the complete prompt or transcript.
+        prompt: (event == "beforeSubmitPrompt")
+            .then(|| field("prompt"))
+            .flatten()
+            .map(|prompt| clean_text(&prompt, MAX_PROMPT_CHARS))
+            .filter(|prompt| !prompt.trim().is_empty()),
         memory_candidate: match event {
             "beforeSubmitPrompt" => field("prompt").as_deref().and_then(durable_lines),
             "afterAgentResponse" => field("text").as_deref().and_then(durable_lines),

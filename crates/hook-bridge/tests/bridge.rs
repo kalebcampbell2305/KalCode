@@ -375,6 +375,88 @@ fn registrations_reject_records_from_the_other_provider_channel() {
 }
 
 #[test]
+fn cursor_helper_returns_context_only_for_authenticated_startup_and_prompt() {
+    let (_dir, server) = server();
+    let handler = Fixed::new(HookReply::ProjectContext {
+        text: "Saved workspace facts".into(),
+    });
+    let registration = server
+        .register_channel(handler.clone(), HookChannel::Cursor)
+        .unwrap();
+    for (event, key, expected) in [
+        (
+            "sessionStart",
+            Some(registration.key_hex()),
+            serde_json::json!({"additional_context":"Saved workspace facts"}),
+        ),
+        (
+            "beforeSubmitPrompt",
+            Some(registration.key_hex()),
+            serde_json::json!({"continue":true,"additional_context":"Saved workspace facts"}),
+        ),
+        (
+            "afterAgentResponse",
+            Some(registration.key_hex()),
+            serde_json::json!({}),
+        ),
+        (
+            "sessionStart",
+            Some(SessionKey::generate().unwrap().to_hex()),
+            serde_json::json!({}),
+        ),
+        ("sessionStart", None, serde_json::json!({})),
+        (
+            "beforeSubmitPrompt",
+            None,
+            serde_json::json!({"continue":true}),
+        ),
+    ] {
+        let payload = serde_json::json!({"hook_event_name":event,"conversation_id":"session","generation_id":"generation"}).to_string();
+        let output = helper(
+            &[
+                "cursor",
+                event,
+                server.endpoint().as_str(),
+                registration.session_id(),
+            ],
+            key.as_deref(),
+            payload.as_bytes(),
+            None,
+        );
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&output.stdout).unwrap(),
+            expected
+        );
+    }
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 3);
+    let delayed = Fixed::slow(
+        HookReply::ProjectContext {
+            text: "late context".into(),
+        },
+        Duration::from_millis(150),
+    );
+    let delayed_registration = server
+        .register_channel(delayed, HookChannel::Cursor)
+        .unwrap();
+    let output = helper(
+        &[
+            "cursor",
+            "sessionStart",
+            server.endpoint().as_str(),
+            delayed_registration.session_id(),
+        ],
+        Some(&delayed_registration.key_hex()),
+        br#"{"hook_event_name":"sessionStart","conversation_id":"session"}"#,
+        Some(10),
+    );
+    assert_eq!(output.code, 0);
+    assert_eq!(output.stdout, "{}");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn cursor_channel_authenticates_only_its_bounded_lifecycle_records() {
     let (_dir, server) = server();
     let handler = Fixed::new(HookReply::Ack);

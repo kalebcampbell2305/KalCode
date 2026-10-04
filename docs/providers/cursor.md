@@ -19,7 +19,9 @@ This integration supports one native Cursor sign-in per OS user. The account can
 
 Cursor uses the shared provider registry, account bindings, pane lifecycle, resource limits, Code launcher, Agents/Fleet, account usage, KalVoice, KalTidy, Operations queue/runs and handoff/context delivery. Queued Cursor agent tasks are durably marked as coding terminals before launch or resource admission. Handoffs respect the receiving terminal's actual readiness and partial user input.
 
-Workspace instructions and files remain available to every provider, and shared context/handoff packages are provider-neutral. Current main does not implement a Unified Memory storage/retrieval service. Squads, Launch Recipes, Handoff Chains, Agent File Ownership and Stuck Agent Detector are roadmap entries, not services implemented by this adapter. Cursor uses their shared identity foundation; this change does not claim those products are shipped.
+Cursor participates in [Unified Memory](../UNIFIED-MEMORY.md), the shared workspace storage and retrieval service used across providers. Fresh terminals receive selected context through Cursor's native `sessionStart` hook without submitting an extra model turn. Accepted native user prompts and final responses can contribute explicit durable knowledge with provenance; retrieved task and handoff text is not recaptured as a new user decision. Memory remains inspectable and editable in KalCode, and account bindings and saved notes survive reopening.
+
+Workspace instructions, files and shared context/handoff packages remain provider-neutral. Squads, Launch Recipes, Handoff Chains, Agent File Ownership and Stuck Agent Detector are roadmap entries, not services implemented by this adapter. Cursor uses their shared identity foundation; this change does not claim those products are shipped.
 
 ## Official references
 

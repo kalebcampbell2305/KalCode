@@ -12,5 +12,6 @@ KalCode hosts supported provider CLIs in real terminals. Provider-native authent
 | Turn status | Authenticated hooks | Authenticated completion notifications | Process-only status | Authenticated plugin hooks, with limited fallback |
 | Usage | Canonical provider-reported source | Canonical provider-reported source | Unavailable | Unavailable |
 | User settings and integrations | Native configuration | Native configuration | Native configuration | Native configuration plus additive observer plugin |
+| Unified Memory | Shared workspace service and native prompt context | Shared workspace service and task context | Shared workspace service and task context | Shared workspace service and native startup/prompt context |
 
 This table describes integration mechanisms, not certification of every upstream extension or model. Provider policy can disable a native feature; KalCode must show the real limitation and must not fabricate status or availability.
