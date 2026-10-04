@@ -1,20 +1,33 @@
 # Loaded only after the desktop verifier's account/session/owner-machine guards.
 # Signed installer transition proof, not production updater delivery. No fixtures.
+function Invoke-CandidateRelease([string[]]$Arguments) {
+  $workflowToken = $env:GH_TOKEN
+  try {
+    $output = (& gh @Arguments | Out-String)
+    $code = $LASTEXITCODE
+    if ($code -ne 0 -and $workflowToken) {
+      # Read-only Actions tokens cannot see drafts. Try the runner's existing
+      # native gh login without reading, printing, copying or changing credentials.
+      $env:GH_TOKEN = $null
+      $output = (& gh @Arguments | Out-String)
+      $code = $LASTEXITCODE
+    }
+    if ($code -ne 0) { Refuse 'candidate draft access failed with workflow and existing runner-native authentication' }
+    $output
+  } finally { $env:GH_TOKEN = $workflowToken }
+}
 function Get-CandidatePackage {
-  $metaText = (& gh release view $CandidateTag --json isDraft,targetCommitish,tagName | Out-String)
-  if ($LASTEXITCODE -ne 0) { Refuse 'cannot read private candidate release' }
+  $metaText = Invoke-CandidateRelease @('release', 'view', $CandidateTag, '--json', 'isDraft,targetCommitish,tagName')
   $meta = $metaText | ConvertFrom-Json
   if (-not $meta.isDraft -or $meta.tagName -cne $CandidateTag -or $meta.targetCommitish -cne $CandidateCommit) { Refuse 'candidate must be a draft release targeting the exact source commit' }
   $packet = Join-Path $OutDir 'candidate-package'
   $null = New-Item -ItemType Directory -Path $packet
-  & gh release download $CandidateTag --pattern build.json --dir $packet
-  if ($LASTEXITCODE -ne 0) { Refuse 'candidate build record download failed' }
+  $null = Invoke-CandidateRelease @('release', 'download', $CandidateTag, '--pattern', 'build.json', '--dir', $packet)
   $build = Get-Content -LiteralPath (Join-Path $packet 'build.json') -Raw | ConvertFrom-Json
   if ($build.product -cne 'KalCode' -or $build.version -cne $CandidateVersion -or $build.commit -cne $CandidateCommit -or $build.sha256 -cne $CandidateSha256 -or $build.os -cne 'windows' -or $build.arch -cne 'x64' -or $build.kind -cne 'nsis' -or $build.signed -ne $true -or $build.signatureStatus -cne 'Valid') { Refuse 'candidate build record identity mismatch' }
   $expectedFile = 'KalCode_' + $CandidateVersion.Replace('+', '_build') + '_x64-setup.exe'
   if ($build.file -cne $expectedFile) { Refuse 'candidate build filename mismatch' }
-  & gh release download $CandidateTag --pattern $expectedFile --dir $packet
-  if ($LASTEXITCODE -ne 0) { Refuse 'candidate installer download failed' }
+  $null = Invoke-CandidateRelease @('release', 'download', $CandidateTag, '--pattern', $expectedFile, '--dir', $packet)
   $exe = Join-Path $packet $expectedFile
   if ((Sha $exe) -cne $CandidateSha256 -or (Get-Item -LiteralPath $exe).Length -ne $build.size) { Refuse 'candidate installer bytes mismatch' }
   $sig = Get-AuthenticodeSignature -LiteralPath $exe
