@@ -555,6 +555,8 @@ pub fn provider_pane_create(
     effort: Option<String>,
     permission_mode: PermissionMode,
     name: Option<String>,
+    source_thread_id: Option<String>,
+    switch_account_id: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
     panes.require()?;
@@ -579,6 +581,70 @@ pub fn provider_pane_create(
         )
         .to_ipc());
     }
+    // Only durable launch configuration crosses to the new runtime. Resolve it from the
+    // source row, never the renderer's cached identity, conversation or provider session id.
+    let source = source_thread_id
+        .as_deref()
+        .map(|id| {
+            validate_thread_id(id)?;
+            if !panes
+                .is_interactive_thread(id)
+                .map_err(|e| e.log_and_convert("provider_pane_duplicate_source"))?
+            {
+                return Err(KalError::validation(
+                    "pane_duplicate_unavailable",
+                    "Choose a coding agent to duplicate.",
+                )
+                .to_ipc());
+            }
+            let row = app
+                .core()?
+                .read(|conn| kalcode_threads::store::get(conn, id))
+                .map_err(|e| e.log_and_convert("provider_pane_duplicate_source"))?;
+            if row.archived_at.is_some() || row.permission_mode == PermissionMode::Custom {
+                return Err(KalError::validation(
+                    "pane_duplicate_unavailable",
+                    "This agent cannot be duplicated with its current settings.",
+                )
+                .to_ipc());
+            }
+            Ok(row)
+        })
+        .transpose()?;
+    if switch_account_id.is_some() && source.is_none() {
+        return Err(KalError::validation(
+            "pane_switch_source_required",
+            "Choose a coding session before switching accounts.",
+        )
+        .to_ipc());
+    }
+    let (provider_id, provider_account_id, workspace_id, model, effort, permission_mode, name) =
+        if let Some(source) = &source {
+            (
+                source.provider_id.to_string(),
+                switch_account_id
+                    .clone()
+                    .or_else(|| source.provider_account_id.clone()),
+                source.workspace_id.clone(),
+                source.model.clone(),
+                source.effort.clone(),
+                source.permission_mode,
+                Some(format!(
+                    "{} (copy)",
+                    source.name.chars().take(73).collect::<String>()
+                )),
+            )
+        } else {
+            (
+                provider_id,
+                provider_account_id,
+                workspace_id,
+                model,
+                effort,
+                permission_mode,
+                name,
+            )
+        };
     let account = crate::thread_commands::resolve_creation_account(
         app.core()?,
         &provider_id,
@@ -587,23 +653,40 @@ pub fn provider_pane_create(
         None,
     )
     .map_err(|e| e.log_and_convert("provider_pane_create_account"))?;
+    if switch_account_id.is_none()
+        && source.as_ref().is_some_and(|source| {
+            source.provider_account_id.as_deref()
+                != account.as_ref().map(|account| account.id.as_str())
+        })
+    {
+        return Err(KalError::validation(
+            "pane_duplicate_account_changed",
+            "Choose an account for the original agent before duplicating it.",
+        )
+        .to_ipc());
+    }
     let effort = pane_effort(&provider_id, effort)?;
     threads.ensure_providers(app.core.as_ref());
     let runtime = threads.runtime()?;
     let mut thread = create_pane_thread(runtime, &panes.sessions_dir, |thread_id| {
-        runtime.create_idle_with_id(
-            thread_id,
-            CreateIdleThread {
-                provider_id,
-                provider_account_id: account.as_ref().map(|account| account.id.clone()),
-                account_label: account.map(|account| account.display_name),
-                workspace_id,
-                model,
-                effort,
-                permission_mode,
-                name,
-            },
-        )
+        let request = CreateIdleThread {
+            provider_id,
+            provider_account_id: account.as_ref().map(|account| account.id.clone()),
+            account_label: account.map(|account| account.display_name),
+            workspace_id,
+            model,
+            effort,
+            permission_mode,
+            name,
+        };
+        match source {
+            Some(source) => runtime.create_idle_with_id_in_directory(
+                thread_id,
+                request,
+                PathBuf::from(source.cwd),
+            ),
+            None => runtime.create_idle_with_id(thread_id, request),
+        }
     })
     .map_err(|e| e.log_and_convert("provider_pane_create"))?;
     panes.stamp_runtime_kind(&mut thread);

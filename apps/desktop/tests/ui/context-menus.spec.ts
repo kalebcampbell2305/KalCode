@@ -109,11 +109,14 @@ test("terminal tab rename, duplicate and stop act on the selected terminal", asy
   await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await page.getByRole("dialog").getByRole("textbox").fill("Build output");
   await page.getByRole("dialog").getByRole("button", { name: /Save/ }).click();
-  const renamed = page.getByRole("tab", { name: /Build output/ });
+  const renamed = page.getByRole("tab", { name: /^Build output(?: Ended)?$/ });
   await expect(renamed).toBeVisible();
   await renamed.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Duplicate terminal", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New like this", exact: true }).click();
   await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tab", { name: /Build output \(copy\)/ })).toBeVisible();
+  await expect(page.locator("[data-pane-id]")).toHaveCount(2);
+  await page.screenshot({ path: "test-results/smart-duplicate-terminal.png" });
   await renamed.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Stop terminal", exact: true }).click();
   await expect(renamed).toBeVisible();

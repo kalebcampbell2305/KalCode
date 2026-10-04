@@ -825,6 +825,10 @@ export class KalCodeClient {
     return this.call("terminals_running");
   }
 
+  duplicateTerminal(terminalId: string, size: TerminalSize): Promise<TerminalInfo> {
+    return this.call("terminal_duplicate", { terminalId, ...clampTerminalSize(size) });
+  }
+
   createTerminal(workspaceId: string, shellId: string | null, size: TerminalSize): Promise<TerminalInfo> {
     return this.call("terminal_create", { workspaceId, shellId, ...clampTerminalSize(size) });
   }
@@ -848,8 +852,8 @@ export class KalCodeClient {
     return this.call("utility_file_read", { workspaceId, handle });
   }
 
-  closeTerminal(terminalId: string): Promise<void> {
-    return this.call("terminal_close", { terminalId });
+  closeTerminal(terminalId: string, onlyIfEnded = false): Promise<void> {
+    return this.call("terminal_close", { terminalId, ...(onlyIfEnded ? { onlyIfEnded: true } : {}) });
   }
 
   /** Stages the selected pixels locally; the terminal performs a separate, non-submitting paste. */

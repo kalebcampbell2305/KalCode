@@ -25,7 +25,6 @@ import type {
   HookChannelState,
   IpcError,
   PaneInfo,
-  PermissionMode,
   ThreadStatus,
   ThreadSummary,
 } from "@kalcode/protocol";
@@ -298,12 +297,28 @@ export function createPanesMemory(options: {
     provider_pane_create: async (args) => {
       requireEnabled();
       await options.beforeCreate?.();
+      if (args.switchAccountId !== undefined && typeof args.sourceThreadId !== "string")
+        invalid("pane_switch_source_required", "Choose a coding session before switching accounts.");
+      if (typeof args.sourceThreadId === "string") {
+        const source = (await threads.handlers.thread_get({ threadId: args.sourceThreadId })) as ThreadSummary;
+        if (source.archivedAt !== null || source.permissionMode === "custom")
+          invalid("pane_duplicate_unavailable", "This agent cannot be duplicated with its current settings.");
+        args = {
+          ...args,
+          providerId: source.providerId,
+          providerAccountId: args.switchAccountId ?? source.providerAccountId,
+          workspaceId: source.workspaceId,
+          model: source.model,
+          effort: source.effort,
+          permissionMode: source.permissionMode,
+          name: `${[...source.name].slice(0, 73).join("")} (copy)`,
+        };
+      }
       const kind = args.providerId as PaneKind;
       if (!PANE_PROVIDERS.includes(kind)) invalid("provider_pane_unsupported", "That provider can't run in a pane.");
       const effort = typeof args.effort === "string" ? args.effort.trim().toLowerCase() : "";
       if (effort && effort !== "default" && !PANE_EFFORTS[kind].includes(effort))
         invalid("invalid_effort", "That provider doesn't support this effort level.");
-      const mode = args.permissionMode as PermissionMode;
       let created: Pane | null = null;
       const thread = threads.createPaneThread(args, () => {
         if (created) end(created, 1, true);

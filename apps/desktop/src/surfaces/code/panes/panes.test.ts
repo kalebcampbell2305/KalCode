@@ -258,6 +258,75 @@ function settle(ms = 400) {
 }
 
 describe("in-memory provider panes", () => {
+  it("continues with an explicit account in a fresh runtime without rebinding the live source", async () => {
+    const { transport, channel, workspace } = await setup();
+    const client = new KalCodeClient(transport);
+    const source = await channel.create({
+      workspaceId: workspace.id,
+      providerId: "codex",
+      permissionMode: "plan",
+      effort: "high",
+    });
+    const original = await channel.info(source.id);
+    const target = await client.createProviderAccount("codex", "Continuation");
+    const input = {
+      sourceThreadId: source.id,
+      switchAccountId: target.id,
+      workspaceId: "stale",
+      permissionMode: "bypass" as const,
+    };
+    const next = await channel.create(input);
+    expect(next.id).not.toBe(source.id);
+    expect(next).toMatchObject({
+      providerAccountId: target.id,
+      workspaceId: source.workspaceId,
+      permissionMode: "plan",
+      effort: "high",
+    });
+    expect((await channel.info(next.id))?.instanceId).not.toBe(original?.instanceId);
+    expect((await client.getThread(source.id)).providerAccountId).toBe(source.providerAccountId);
+    expect(await channel.info(source.id)).toMatchObject({ running: true, instanceId: original?.instanceId });
+    const foreign = await client.createProviderAccount("claude-code", "Wrong provider");
+    await expect(channel.create({ ...input, switchAccountId: foreign.id })).rejects.toMatchObject({
+      code: "provider_account_mismatch",
+    });
+    await client.archiveProviderAccount(target.id);
+    await expect(channel.create(input)).rejects.toMatchObject({ code: "provider_account_archived" });
+    await expect(
+      channel.create({ workspaceId: workspace.id, permissionMode: "plan", switchAccountId: "missing" }),
+    ).rejects.toMatchObject({ code: "pane_switch_source_required" });
+    await client.stopThread(next.id);
+    await client.stopThread(source.id);
+  });
+  it("New like this starts a fresh live provider while preserving the original and exact configuration", async () => {
+    const { transport, channel, workspace } = await setup();
+    const source = await channel.create({
+      workspaceId: workspace.id,
+      providerId: "codex",
+      model: (await new KalCodeClient(transport).threadOptions()).providers.find((p) => p.id === "codex")?.models[0]
+        ?.id,
+      effort: "high",
+      permissionMode: "plan",
+      name: "Review",
+    });
+    const original = await channel.info(source.id);
+    const copy = await channel.create({ sourceThreadId: source.id, workspaceId: "stale", permissionMode: "bypass" });
+    expect(copy.id).not.toBe(source.id);
+    expect(copy).toMatchObject({
+      workspaceId: source.workspaceId,
+      providerId: source.providerId,
+      providerAccountId: source.providerAccountId,
+      model: source.model,
+      effort: "high",
+      permissionMode: "plan",
+      name: "Review (copy)",
+      runtimeKind: "interactive_pty",
+    });
+    expect(await channel.info(copy.id)).toMatchObject({ running: true });
+    expect((await channel.info(copy.id))?.instanceId).not.toBe(original?.instanceId);
+    await new KalCodeClient(transport).stopThread(copy.id);
+    expect(await channel.info(source.id)).toMatchObject({ running: true, instanceId: original?.instanceId });
+  });
   it("creates a pane thread, streams output and drives status through the thread runtime", async () => {
     const { transport, channel, workspace } = await setup();
     const thread = await channel.create({ workspaceId: workspace.id, permissionMode: "approve" });

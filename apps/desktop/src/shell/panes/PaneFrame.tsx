@@ -127,6 +127,8 @@ export function PaneFrame(props: PaneFrameProps) {
   const title = activeInfo?.title ?? "Empty pane";
   const label = `Pane ${index + 1} of ${count}: ${title}`;
   const collapsed = leaf.collapsed;
+  const attentionInfo = tabs.find((tab) => tab.attention === "needs-you") ?? tabs.find((tab) => tab.attention);
+  const attentionLabel = (info: TabInfo) => (info.attention === "needs-you" ? "Needs You" : "Done");
   function menuFor(content: PaneContent, title: string, child: ReactElement) {
     return contextMenu ? (
       <ObjectContextMenu key={contentKey(content)} label={`${title} actions`} items={contextMenu(content, leaf.paneId)}>
@@ -165,6 +167,7 @@ export function PaneFrame(props: PaneFrameProps) {
     const move = (next: number) => {
       event.preventDefault();
       const target = (next + n) % n;
+      tabs[target]?.onAttentionSeen?.();
       onActivate(target, false);
       requestAnimationFrame(() => document.getElementById(tabDomId(leaf.paneId, target))?.focus());
     };
@@ -184,6 +187,7 @@ export function PaneFrame(props: PaneFrameProps) {
       case "Enter":
       case " ":
         event.preventDefault();
+        activeInfo?.onAttentionSeen?.();
         onActivate(leaf.activeTab, true);
         break;
       case "Delete":
@@ -204,6 +208,7 @@ export function PaneFrame(props: PaneFrameProps) {
         data-pane-id={leaf.paneId}
         data-collapsed={collapsedStrip ? "strip" : "bar"}
         data-focused={focused || undefined}
+        data-attention={attentionInfo?.attention}
         data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
         hidden={hidden}
         aria-current={focused ? "true" : undefined}
@@ -229,6 +234,15 @@ export function PaneFrame(props: PaneFrameProps) {
             {activeInfo?.glyph}
           </span>
           <span className={styles.collapsedTitle}>{title}</span>
+          {attentionInfo ? (
+            <span
+              className={styles.tabState}
+              data-attention-badge
+              title={`${attentionInfo.title}: ${attentionLabel(attentionInfo)}`}
+            >
+              {attentionLabel(attentionInfo)}
+            </span>
+          ) : null}
           {leaf.tabs.length > 1 ? <span className={styles.collapsedCount}>+{leaf.tabs.length - 1}</span> : null}
           {activeInfo?.tone ? <span className={styles.dot} data-tone={activeInfo.tone} aria-hidden="true" /> : null}
         </div>
@@ -244,6 +258,7 @@ export function PaneFrame(props: PaneFrameProps) {
       className={styles.frame}
       data-pane-id={leaf.paneId}
       data-focused={focused || undefined}
+      data-attention={attentionInfo?.attention}
       data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
       data-maximized={maximized || undefined}
       data-drop-target={dropTarget || undefined}
@@ -252,8 +267,14 @@ export function PaneFrame(props: PaneFrameProps) {
       aria-current={focused ? "true" : undefined}
       aria-label={label}
       style={style}
-      onFocusCapture={() => onFocus(leaf.paneId)}
-      onPointerDownCapture={() => onFocus(leaf.paneId)}
+      onFocusCapture={(event) => {
+        onFocus(leaf.paneId);
+        if ((event.target as HTMLElement).closest("[data-pane-body]")) activeInfo?.onAttentionSeen?.();
+      }}
+      onPointerDownCapture={(event) => {
+        onFocus(leaf.paneId);
+        if ((event.target as HTMLElement).closest("[data-pane-body]")) activeInfo?.onAttentionSeen?.();
+      }}
     >
       {/* biome-ignore lint/a11y/noStaticElementInteractions: dragging the header moves the pane; the menu offers the same moves by keyboard. */}
       <header
@@ -280,17 +301,20 @@ export function PaneFrame(props: PaneFrameProps) {
                 key={contentKey(content)}
                 id={tabDomId(leaf.paneId, i)}
                 role="tab"
+                aria-label={info.attention ? `${info.title} ${attentionLabel(info)}` : undefined}
                 tabIndex={selected ? 0 : -1}
                 aria-selected={selected}
                 aria-controls={selected ? panelDomId(leaf.paneId) : undefined}
                 className={styles.tab}
                 data-tone={info.tone}
+                data-attention={info.attention}
                 data-kind={content.kind}
                 data-content-key={contentKey(content)}
                 title={info.statusText ? `${info.title} — ${info.statusText}` : info.title}
                 onPointerDown={(event) => onTabPointerDown(event, i)}
                 onClick={() => {
                   if (consumeClick()) return;
+                  info.onAttentionSeen?.();
                   onActivate(i, true);
                 }}
                 onMouseDown={(event) => {
@@ -305,9 +329,13 @@ export function PaneFrame(props: PaneFrameProps) {
                 </span>
                 <span className={styles.tabLabel}>{info.title}</span>
                 {/* A state word carries its tone itself; otherwise the dot does. */}
-                {info.stateLabel ? (
-                  <span className={styles.tabState} data-tone={info.tone}>
-                    {info.stateLabel}
+                {info.attention || info.stateLabel ? (
+                  <span
+                    className={styles.tabState}
+                    data-tone={info.tone}
+                    data-attention-badge={info.attention ? "true" : undefined}
+                  >
+                    {info.attention ? attentionLabel(info) : info.stateLabel}
                   </span>
                 ) : info.tone ? (
                   <span className={styles.dot} data-tone={info.tone} aria-hidden="true" />

@@ -460,6 +460,19 @@ export function createMemoryWorkspaces({
       startSession(tab);
       return tab.info;
     },
+    terminal_duplicate: (args) => {
+      requireCore();
+      requireSize(args);
+      const source = tabOr404(requireId(args.terminalId));
+      const workspace = workspaceOr404(source.info.workspaceId);
+      if (!workspace.available) fail(folderMissing());
+      if (!SHELLS.some((s) => s.id === source.info.shellId))
+        fail(validation("shell_unavailable", "That shell isn't available."));
+      const tab = addTab(workspace, source.info.shellId);
+      tab.info = { ...tab.info, title: `${[...source.info.title].slice(0, 249).join("")} (copy)` };
+      startSession(tab);
+      return tab.info;
+    },
     terminal_restart: (args) => {
       requireCore();
       requireSize(args);
@@ -473,6 +486,9 @@ export function createMemoryWorkspaces({
     terminal_close: (args) => {
       requireCore();
       const tab = tabOr404(requireId(args.terminalId));
+      if (args.onlyIfEnded === true && status(tab) === "running") {
+        fail(validation("terminal_still_running", "This terminal is running. Choose Keep Running or Stop and Close."));
+      }
       if (status(tab) === "running") endSession(tab, 1, true);
       tabs.delete(tab.info.id);
       const workspace = workspaces.get(tab.info.workspaceId);

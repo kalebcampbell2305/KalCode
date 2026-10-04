@@ -1,0 +1,41 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  background: var(--color-scrim);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--z-dialog);
+  transform: translate(-50%, -50%);
+  width: min(30rem, calc(100vw - 2rem));
+  padding: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-3);
+  color: var(--color-text);
+}
+
+.title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--type-h3);
+}
+.description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.error {
+  color: var(--status-failed-text);
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
