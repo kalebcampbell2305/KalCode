@@ -515,7 +515,7 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         label: "Unified Memory: shared project context across providers",
         from: "pro",
         status: "available",
-        verifiedIn: "0.1.9+1487",
+        verifiedIn: "0.1.9+1502",
       },
       {
         id: "launch-recipes",
