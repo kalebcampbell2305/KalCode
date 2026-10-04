@@ -340,7 +340,9 @@ test.describe("every page", () => {
         ["P1Y", plan.price.yearlyUsd],
       ]),
     );
-    expect(raw).not.toMatch(/aggregateRating|review/i);
+    // No rating or review markup (there are none to report). Match the schema.org properties
+    // themselves: plain copy such as "preview your app" is allowed.
+    expect(raw).not.toMatch(/"(?:aggregateRating|reviews?)"\s*:/i);
   });
 
   test("the hero's first images are explicit-size and the orb poster is high priority", async ({ page }) => {

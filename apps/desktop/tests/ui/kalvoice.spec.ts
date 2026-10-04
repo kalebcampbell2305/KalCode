@@ -261,7 +261,8 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(readiness).toContainText(/Preparing speech|Verifying speech/);
     await expect(readiness).toContainText(/from KalCode's signed component catalog|signature and checksum/);
     await expect(readiness).not.toContainText(/^Ready/);
-    await expect(page.getByText("Speech model installed").first()).toBeVisible();
+    // The test double's first run takes about 6 s from boot, so its intermediate states stay observable.
+    await expect(page.getByText("Speech model installed").first()).toBeVisible({ timeout: 15_000 });
     await expect(readiness).toContainText("Ready. Hold F8 to talk to KalVoice.");
     const section = page.getByRole("region", { name: "KalVoice", exact: true });
     // First-run disclosure: one-time, verified downloads from the signed catalog, and the preference.

@@ -20,9 +20,10 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { accountName } from "../../providers/accountIdentity.ts";
 import styles from "./Panes.module.css";
-import { paneStatus } from "./paneLabels.ts";
+import { type PaneToolView, paneStatus, paneToolActivity } from "./paneLabels.ts";
 
 const ICONS: Record<ThreadStatus, LucideIcon> = {
   starting: Play,
@@ -137,6 +138,45 @@ export function PaneStatusChip({ status }: { status: ThreadStatus }) {
         <span className={styles.chipLabel}>{view.label}</span>
       </span>
       {view.qualifier ? <span className={styles.qualifier}>{view.qualifier}</span> : null}
+    </span>
+  );
+}
+
+/** How long a finished tool stays visible before the indicator steps aside. */
+const TOOL_LINGER_MS = 2400;
+
+type ToolPhase = "running" | "done" | "failed";
+
+/**
+ * A compact "TOOL · Search web · Running…" indicator for the call the agent is making, then
+ * "Completed" for a moment. Reads only structured status; never adds noise to the terminal.
+ */
+export function PaneToolChip({ status, activity }: { status: ThreadStatus; activity: string | null }) {
+  const [shown, setShown] = useState<(PaneToolView & { phase: ToolPhase }) | null>(null);
+  useEffect(() => {
+    const live = paneToolActivity(status, activity);
+    if (live) {
+      setShown({ ...live, phase: "running" });
+      return;
+    }
+    setShown((prev) =>
+      prev?.phase === "running" ? { ...prev, phase: status === "failed" ? "failed" : "done" } : prev,
+    );
+    const timer = window.setTimeout(
+      () => setShown((prev) => (prev?.phase === "running" ? prev : null)),
+      TOOL_LINGER_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [status, activity]);
+  if (!shown) return null;
+  const phaseLabel = shown.phase === "running" ? "Running…" : shown.phase === "failed" ? "Failed" : "Completed";
+  return (
+    <span className={styles.tool} data-phase={shown.phase} data-pane-tool={shown.label} title={shown.detail}>
+      <span className={styles.toolEyebrow}>Tool</span>
+      <span className={styles.toolLabel}>{shown.label}</span>
+      <span className={styles.toolPhase} role="status">
+        {phaseLabel}
+      </span>
     </span>
   );
 }

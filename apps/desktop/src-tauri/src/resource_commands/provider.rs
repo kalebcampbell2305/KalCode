@@ -34,6 +34,7 @@ pub(super) trait ProviderAdmission: Send + Sync {
 
 struct GovernorAdmission {
     governor: Arc<ResourceGovernorState>,
+    interactive: bool,
 }
 
 struct GovernorPermit {
@@ -47,7 +48,13 @@ impl ProviderAdmission for GovernorAdmission {
         &self,
         provider: ProviderId,
     ) -> Result<Box<dyn ProviderAdmissionPermit>, ProviderError> {
-        match self.governor.reserve_provider_task(provider.clone()) {
+        let reservation = if self.interactive {
+            self.governor
+                .reserve_interactive_provider_task(provider.clone())
+        } else {
+            self.governor.reserve_provider_task(provider.clone())
+        };
+        match reservation {
             Ok(reservation) => Ok(Box::new(GovernorPermit {
                 _reservation: reservation,
             })),
@@ -95,7 +102,27 @@ impl ResourceAdmissionProvider {
         inner: Arc<dyn AgentProvider>,
         governor: Arc<ResourceGovernorState>,
     ) -> Arc<dyn AgentProvider> {
-        Self::with_admission(inner, Arc::new(GovernorAdmission { governor }))
+        Self::with_admission(
+            inner,
+            Arc::new(GovernorAdmission {
+                governor,
+                interactive: false,
+            }),
+        )
+    }
+
+    /// User-requested coding terminals outrank optional background CPU work.
+    pub(crate) fn wrap_interactive(
+        inner: Arc<dyn AgentProvider>,
+        governor: Arc<ResourceGovernorState>,
+    ) -> Arc<dyn AgentProvider> {
+        Self::with_admission(
+            inner,
+            Arc::new(GovernorAdmission {
+                governor,
+                interactive: true,
+            }),
+        )
     }
 
     pub(super) fn with_admission(

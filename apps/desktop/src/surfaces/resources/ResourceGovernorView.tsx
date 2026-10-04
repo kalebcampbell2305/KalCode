@@ -101,7 +101,10 @@ export function ResourceGovernorContent({
         </Panel>
 
         <aside className={styles.controlColumn} aria-label="Resource controls and admission">
-          <Panel title="New work" description="Admission applies only when starting governed provider work.">
+          <Panel
+            title="Background work"
+            description="CPU pressure pauses background work. Coding terminals only wait for hard resource pressure or your explicit limits."
+          >
             <div className={styles.admission} data-tone={admission.tone}>
               <strong>{admission.label}</strong>
               <span>{admission.detail}</span>

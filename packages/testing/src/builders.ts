@@ -496,6 +496,7 @@ export function createFixtures(options: FixtureOptions = {}) {
           { mode: "approve", fidelity: "exact", providerSetting: "--permission-mode default", notes: "" },
         ],
         interactive: null,
+        tools: [],
       },
       overrides,
     );

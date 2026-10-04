@@ -90,6 +90,35 @@ function usageClient(read: () => Promise<ProviderAccountUsage[]>) {
 }
 
 describe("usage state mapping", () => {
+  it.each([null, undefined, "0", Number.NaN, Number.POSITIVE_INFINITY, -1, 101])(
+    "rejects invalid native percentages %s without hiding valid windows",
+    (remainingPercent) => {
+      const invalid = { ...CODEX_LOW.windows[0], remainingPercent } as ProviderAccountUsage["windows"][number];
+      const bad = toAccountUsageState({ ...CODEX_LOW, windows: [invalid] }, NOW);
+      expect(usageSummary(bad)).toEqual({ short: "Usage unavailable", low: false, tone: "muted" });
+      const valid = toAccountUsageState(
+        { ...CODEX_LOW, windows: [invalid, { ...invalid, id: "valid", remainingPercent: 0 }] },
+        NOW,
+      );
+      expect(valid.windows).toHaveLength(1);
+      expect(usageSummary(valid).short).toBe("0% left");
+    },
+  );
+
+  it.each([null, "bad timestamp"])("requires a provider observation time: %s", (checkedAt) => {
+    expect(usageSummary(toAccountUsageState({ ...CODEX_LOW, checkedAt }, NOW)).short).toBe("Usage unavailable");
+  });
+
+  it("does not erase a measured quota when reset timing is unavailable", () => {
+    const native = { ...CODEX_LOW, windows: [{ ...CODEX_LOW.windows[0], resetsAt: null }] } as ProviderAccountUsage;
+    expect(usageSummary(toAccountUsageState(native, NOW)).short).toBe("8% left");
+  });
+
+  it("an account omitted by a completed read loses its previous quota", () => {
+    const first = nextUsageMap(new Map(), [CODEX], [CODEX_LOW], NOW);
+    const next = nextUsageMap(first, [CODEX], [], NOW);
+    expect(next.get(CODEX.id)).toMatchObject({ status: "unavailable", plan: "Pro", windows: [] });
+  });
   it("labels real numbers fresh or stale by the provider read's age", () => {
     expect(toAccountUsageState(claudeUsage(), NOW)).toMatchObject({ status: "fresh", plan: "Max 20x" });
     expect(toAccountUsageState(claudeUsage(USAGE_STALE_AFTER_MS + 1), NOW).status).toBe("stale");
@@ -135,6 +164,77 @@ describe("useAccountUsageReader", () => {
   });
 
   const flush = () => act(async () => vi.advanceTimersByTimeAsync(0));
+
+  it("a replacement runtime never inherits quota from the previous native client", async () => {
+    const oldRead = deferred<ProviderAccountUsage[]>();
+    const newRead = deferred<ProviderAccountUsage[]>();
+    const oldClient = usageClient(() => oldRead.promise).client;
+    const newClient = usageClient(() => newRead.promise).client;
+    const view = renderHook(({ client }) => useAccountUsageReader(client, [CODEX], null), {
+      initialProps: { client: oldClient },
+    });
+    await flush();
+    view.rerender({ client: newClient });
+    oldRead.resolve([CODEX_LOW]);
+    await flush();
+    expect(view.result.current.get(CODEX.id)).toMatchObject({ status: "checking", windows: [] });
+    newRead.resolve([{ ...CODEX_LOW, status: "unavailable", windows: [], checkedAt: null }]);
+    await flush();
+    expect(view.result.current.get(CODEX.id)?.status).toBe("unavailable");
+  });
+
+  it("invalidates cached quota during a same-identity reconnect revision", async () => {
+    const { client, providerAccountUsage } = usageClient(async () => [CODEX_LOW]);
+    const revisions = new Map([[CODEX.id, 0]]);
+    const pending = deferred<ProviderAccountUsage[]>();
+    const view = renderHook(
+      ({ render }) => {
+        void render;
+        return useAccountUsageReader(client, [CODEX], null, 0, revisions);
+      },
+      { initialProps: { render: 0 } },
+    );
+    await flush();
+    expect(view.result.current.get(CODEX.id)?.status).toBe("fresh");
+    providerAccountUsage.mockImplementationOnce(() => pending.promise);
+    revisions.set(CODEX.id, 1);
+    view.rerender({ render: 1 });
+    expect(view.result.current.get(CODEX.id)).toMatchObject({ status: "checking", windows: [] });
+    pending.resolve([{ ...CODEX_LOW, status: "unavailable", windows: [], checkedAt: null, plan: null }]);
+    await flush();
+    expect(view.result.current.get(CODEX.id)).toMatchObject({ status: "unavailable", windows: [], plan: null });
+  });
+
+  it("never exposes a prior identity's cache or in-flight result after reconnect", async () => {
+    const oldIdentity = { ...CODEX, providerReportedIdentity: "old@example.test" };
+    const newIdentity = { ...CODEX, providerReportedIdentity: "new@example.test" };
+    const oldRead = deferred<ProviderAccountUsage[]>();
+    const newRead = deferred<ProviderAccountUsage[]>();
+    const { client, providerAccountUsage } = usageClient(async () => [CODEX_LOW]);
+    const view = renderHook(({ accounts, request }) => useAccountUsageReader(client, accounts, null, request), {
+      initialProps: { accounts: [oldIdentity], request: 0 },
+    });
+    await flush();
+    expect(view.result.current.get(CODEX.id)?.windows[0]?.remainingPercent).toBe(8);
+    providerAccountUsage.mockImplementationOnce(() => oldRead.promise).mockImplementationOnce(() => newRead.promise);
+    view.rerender({ accounts: [oldIdentity], request: 1 });
+    await flush();
+    view.rerender({ accounts: [newIdentity], request: 1 });
+    expect(view.result.current.get(CODEX.id)).toBeUndefined();
+    oldRead.resolve([CODEX_LOW]);
+    await flush();
+    expect(view.result.current.get(CODEX.id)).toMatchObject({ status: "checking", windows: [] });
+    newRead.resolve([
+      {
+        ...CODEX_LOW,
+        plan: null,
+        windows: [{ ...CODEX_LOW.windows[0], remainingPercent: 62 }],
+      } as ProviderAccountUsage,
+    ]);
+    await flush();
+    expect(view.result.current.get(CODEX.id)).toMatchObject({ status: "fresh", plan: null });
+    expect(view.result.current.get(CODEX.id)?.windows[0]?.remainingPercent).toBe(62);
+  });
 
   it("reads after accounts restore without blocking, showing checking until the read lands", async () => {
     const pending = deferred<ProviderAccountUsage[]>();
@@ -253,7 +353,7 @@ describe("useAccountUsageReader", () => {
     expect(providerAccountUsage).toHaveBeenCalledTimes(2);
   });
 
-  it("never invents numbers when a read fails, and keeps last real numbers on a later failure", async () => {
+  it("failed reads make usage unavailable while preserving independent plan metadata", async () => {
     let result: () => Promise<ProviderAccountUsage[]> = async () => {
       throw new Error("Runtime starting");
     };
@@ -261,7 +361,7 @@ describe("useAccountUsageReader", () => {
     const view = renderHook(() => useAccountUsageReader(client, [CLAUDE], null));
     await flush();
     expect(view.result.current.get(CLAUDE.id)).toMatchObject({
-      status: "not_checked",
+      status: "unavailable",
       windows: [],
       reason: "Usage couldn't be read",
     });
@@ -276,8 +376,12 @@ describe("useAccountUsageReader", () => {
     vi.setSystemTime(NOW + USAGE_STALE_AFTER_MS + 60_000);
     await act(async () => vi.advanceTimersByTimeAsync(USAGE_REFRESH_MS));
     expect(providerAccountUsage).toHaveBeenCalledTimes(3);
-    // Still the real reading, now honestly labelled stale.
-    expect(view.result.current.get(CLAUDE.id)).toMatchObject({ status: "stale", checkedAt: iso(-30_000) });
+    expect(view.result.current.get(CLAUDE.id)).toMatchObject({
+      status: "unavailable",
+      plan: "Max 20x",
+      windows: [],
+      checkedAt: null,
+    });
   });
 
   it("coalesces triggers that arrive during a read into one follow-up read", async () => {

@@ -80,7 +80,7 @@ impl PaneRoutes {
     pub fn route_claude(
         &self,
         headless: Arc<dyn AgentProvider>,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Arc<dyn AgentProvider> {
         let router = match self.claude.as_ref() {
             Some(interactive) => RuntimeRouter::new(headless, interactive.clone()),
@@ -95,7 +95,7 @@ impl PaneRoutes {
         &self,
         id: &str,
         headless: Arc<dyn AgentProvider>,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Arc<dyn AgentProvider> {
         let interactive = match id {
             ProviderId::CODEX => self.codex.as_ref(),
@@ -838,6 +838,9 @@ pub fn provider_pane_attach(
 }
 
 #[tauri::command]
+// `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+// supported toolchains lack; keep one spelling that builds on both.
+#[allow(deprecated)]
 pub fn provider_pane_ack(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,

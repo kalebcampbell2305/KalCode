@@ -1,15 +1,14 @@
 //! Account-isolated Codex launch policy for the certified Codex CLI release lines
 //! ([`crate::codex::MANAGED_VERSIONS`]).
 //!
-//! A launch uses a dedicated `CODEX_HOME`, resets only that profile's known `config.toml`,
-//! forces the selected working directory to be untrusted with a complete inline TOML table,
-//! and disables connected-app/plugin surfaces. Authentication uses a neutral managed directory
-//! and an exclusive profile lease; sessions use a shared lease.
-//!
-//! Codex merges maps across config layers, so `-c mcp_servers={}` is defense in depth rather
-//! than a way to erase a lower-layer map. Session launches therefore accept only accounts known
-//! to be ineligible for enterprise cloud config. Real OS administrator configuration remains
-//! administrator authority and is neither inspected nor modified here.
+//! A launch uses a dedicated `CODEX_HOME` per account, so each account keeps its own sign-in and
+//! sessions. That profile's `config.toml` is rewritten before every launch from the user's
+//! native Codex configuration, and the user's skills, prompts, rules, agents, plugins and global
+//! `AGENTS.md` reach it through [`crate::native_config`] (native provider parity): MCP servers,
+//! plugins, features, model providers and project trust behave as in a native terminal.
+//! Authentication and account probes use a neutral managed directory with an exclusive or
+//! observer lease; sessions use a shared lease. Organization cloud configuration and real OS
+//! administrator configuration remain the provider's and administrator's authority.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -33,9 +32,9 @@ pub(crate) fn is_unmanaged_config(error: &ProviderError) -> bool {
     matches!(error, ProviderError::Start(message) if message == UNMANAGED_CONFIG)
 }
 
-/// Whether the official Codex account result permits a session without an enterprise cloud
-/// config layer. Business, Education, and Enterprise accounts are eligible; missing/unknown
-/// plan data must remain [`Unknown`](Self::Unknown).
+/// Informational classification of the official Codex plan. Native Codex applies its own
+/// organization cloud configuration regardless of this cached value. Missing or unrecognized
+/// plan data remains [`Unknown`](Self::Unknown) and never authorizes or blocks a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudConfigEligibility {
     /// Official account data identifies a consumer Free, Plus, or Pro plan.
@@ -72,39 +71,40 @@ pub struct ManagedAuthLaunch {
     pub lease: ProfileLease,
 }
 
-/// Prepares a consumer-account session. Enterprise-eligible and unknown accounts fail closed
-/// because the certified Codex releases have no supported CLI switch that disables their cloud
-/// config bundle.
+/// Prepares an account session. Every plan launches (native provider parity): the profile's
+/// `config.toml` is the user's native Codex configuration, the user's own project trust applies,
+/// and an organization's cloud configuration applies as it does in a native terminal.
+/// `_cloud_config` is informational; unknown or unavailable plan metadata never blocks a session.
 pub fn prepare_session(
     profiles: &ManagedProfiles,
     source: &DetectEnv,
     account_id: &str,
     workspace: &Path,
-    cloud_config: CloudConfigEligibility,
+    _cloud_config: CloudConfigEligibility,
 ) -> Result<ManagedSessionLaunch, ProviderError> {
-    if cloud_config != CloudConfigEligibility::Ineligible {
-        return Err(ProviderError::Start(
-            "Codex managed sessions require a verified consumer account plan".into(),
-        ));
-    }
-    let workspace = working_directory(&workspace.to_string_lossy())
+    working_directory(&workspace.to_string_lossy())
         .map_err(|error| ProviderError::Start(error.to_string()))?;
     let lease = profiles.acquire_session_lease(PROVIDER, account_id)?;
     let profile_home = profiles.profile_home(PROVIDER, account_id)?;
-    reset_managed_config(&profile_home)?;
+    reset_managed_config(&profile_home, &native_config(profiles, source))?;
     let detect_env = profiles.prepare_env(PROVIDER, account_id, source)?;
     let env = profiles.launch_env(PROVIDER, account_id, source)?;
     Ok(ManagedSessionLaunch {
         detect_env,
         env,
-        cli_overrides: config_args([repository_override(&workspace)?]),
+        cli_overrides: Vec::new(),
         lease,
     })
 }
 
+/// The profile's `config.toml`: KalCode's header followed by the user's native configuration.
+fn native_config(profiles: &ManagedProfiles, source: &DetectEnv) -> String {
+    crate::native_config::codex_config(&profiles.native_homes(source), SAFE_CONFIG)
+}
+
 /// Prepares the isolated Codex app-server used only for account/read and supported sign-in RPCs.
 /// It never starts a thread. The caller must terminate it before releasing `lease`, and must
-/// reject a newly reported enterprise-eligible plan before starting any provider session.
+/// preserve the selected account's authentication and configuration without requiring plan metadata.
 pub fn prepare_auth(
     profiles: &ManagedProfiles,
     source: &DetectEnv,
@@ -129,14 +129,14 @@ pub fn prepare_auth_with_lease(
         ));
     }
     let profile_home = profiles.profile_home(PROVIDER, account_id)?;
-    reset_managed_config(&profile_home)?;
+    reset_managed_config(&profile_home, &native_config(profiles, source))?;
     // Reuse the account id as a canonical stable directory key. This directory is outside the
     // profile home and every repository; no thread is created by the auth process.
     let cwd = profiles.session_dir(PROVIDER, account_id, account_id)?;
     reject_repository_marker(&cwd)?;
     let env = profiles.launch_env(PROVIDER, account_id, source)?;
     let mut args = config_args(
-        crate::codex::argv::POLICY_CONFIG
+        crate::codex::argv::PROBE_CONFIG
             .iter()
             .copied()
             .chain(["approval_policy='never'", "sandbox_mode='read-only'"])
@@ -170,14 +170,14 @@ pub fn prepare_observer_with_lease(
     let profile_home = profiles.profile_home(PROVIDER, account_id)?;
     // The observer deliberately preserves provider-native configuration, but it must not follow a
     // config symlink/reparse point or multiply-linked file outside this isolated profile.
-    verify_safe_config_or_missing(&profile_home.join(CONFIG_NAME))?;
+    verify_regular_or_missing(&profile_home.join(CONFIG_NAME))?;
     // Reuse the account id as a canonical stable directory key. This directory is outside the
     // profile home and every repository; no thread is created by the observer.
     let cwd = profiles.session_dir(PROVIDER, account_id, account_id)?;
     reject_repository_marker(&cwd)?;
     let env = profiles.launch_env(PROVIDER, account_id, source)?;
     let mut args = config_args(
-        crate::codex::argv::POLICY_CONFIG
+        crate::codex::argv::PROBE_CONFIG
             .iter()
             .copied()
             .chain(["approval_policy='never'", "sandbox_mode='read-only'"])
@@ -207,7 +207,10 @@ pub fn repair_observer_config_with_lease(
         ));
     }
     let profile_home = profiles.profile_home(PROVIDER, account_id)?;
-    reset_managed_config(&profile_home)
+    reset_managed_config(
+        &profile_home,
+        &native_config(profiles, &DetectEnv::from_process()),
+    )
 }
 
 fn reject_repository_marker(cwd: &Path) -> Result<(), ProviderError> {
@@ -265,7 +268,7 @@ fn toml_basic_string(value: &str) -> String {
     out
 }
 
-fn reset_managed_config(profile_home: &Path) -> Result<(), ProviderError> {
+fn reset_managed_config(profile_home: &Path, contents: &str) -> Result<(), ProviderError> {
     let target = profile_home.join(CONFIG_NAME);
     verify_regular_or_missing(&target)?;
     let temp = profile_home.join(format!(
@@ -279,7 +282,7 @@ fn reset_managed_config(profile_home: &Path) -> Result<(), ProviderError> {
             .open(&temp)
             .map_err(|error| io_error("couldn't create the managed Codex config", error))?;
         set_private_permissions(&file)?;
-        file.write_all(SAFE_CONFIG.as_bytes())
+        file.write_all(contents.as_bytes())
             .and_then(|()| file.sync_all())
             .map_err(|error| io_error("couldn't write the managed Codex config", error))?;
         drop(file);
@@ -313,28 +316,6 @@ fn verify_regular_or_missing(path: &Path) -> Result<(), ProviderError> {
         Ok(_) => Err(ProviderError::Start(UNSAFE_CONFIG.into())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error("couldn't inspect the managed Codex config", error)),
-    }
-}
-
-/// A shared observer cannot repair configuration while sessions may be using the profile. It
-/// therefore accepts only the exact KalCode-owned inert file (or no file) and fails closed on
-/// drift without reading, copying, or exposing provider credentials.
-fn verify_safe_config_or_missing(path: &Path) -> Result<(), ProviderError> {
-    verify_regular_or_missing(path)?;
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(io_error("couldn't inspect the managed Codex config", error)),
-    };
-    if metadata.len() != SAFE_CONFIG.len() as u64 {
-        return Err(ProviderError::Start(UNMANAGED_CONFIG.into()));
-    }
-    let bytes = std::fs::read(path)
-        .map_err(|error| io_error("couldn't verify the managed Codex config", error))?;
-    if bytes == SAFE_CONFIG.as_bytes() {
-        Ok(())
-    } else {
-        Err(ProviderError::Start(UNMANAGED_CONFIG.into()))
     }
 }
 
@@ -447,29 +428,37 @@ mod tests {
     }
 
     #[test]
-    fn session_requires_verified_consumer_and_binds_the_complete_repository_table() {
-        let (_temp, profiles, source, account_id, workspace) = fixture();
+    fn every_plan_launches_with_the_users_own_configuration_and_trust() {
+        let (temp, profiles, mut source, account_id, workspace) = fixture();
+        let native = temp.path().join("native-codex");
+        std::fs::create_dir(&native).expect("native codex home");
+        std::fs::write(
+            native.join(CONFIG_NAME),
+            "cli_auth_credentials_store = \"keyring\"\n[mcp_servers.docs]\ncommand = \"docs-mcp\"\n[projects.'C:\\repo']\ntrust_level = \"trusted\"\n",
+        )
+        .expect("native config");
+        source
+            .vars
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("CODEX_HOME"));
+        source
+            .vars
+            .push(("CODEX_HOME".into(), native.into_os_string()));
         for eligibility in [
+            CloudConfigEligibility::Ineligible,
             CloudConfigEligibility::Eligible,
             CloudConfigEligibility::Unknown,
         ] {
-            assert!(
-                prepare_session(&profiles, &source, &account_id, &workspace, eligibility).is_err()
-            );
+            let launch = prepare_session(&profiles, &source, &account_id, &workspace, eligibility)
+                .expect("every plan launches");
+            assert!(launch.cli_overrides.is_empty(), "no forced trust override");
         }
-        let launch = prepare_session(
-            &profiles,
-            &source,
-            &account_id,
-            &workspace,
-            CloudConfigEligibility::Ineligible,
-        )
-        .expect("consumer launch");
-        let args = strings(&launch.cli_overrides);
-        assert_eq!(args[0], "-c");
-        assert!(args[1].starts_with("projects={\""), "{args:?}");
-        assert!(args[1].contains("repo.with.dots"), "{args:?}");
-        assert!(!args[1].starts_with("projects.\""), "{args:?}");
+        let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
+        assert_eq!(
+            std::fs::read_to_string(home.join(CONFIG_NAME)).expect("profile config"),
+            format!(
+                "{SAFE_CONFIG}[mcp_servers.docs]\ncommand = \"docs-mcp\"\n[projects.'C:\\repo']\ntrust_level = \"trusted\"\n"
+            )
+        );
     }
 
     #[test]
@@ -478,7 +467,7 @@ mod tests {
         let launch = prepare_auth(&profiles, &source, &account_id).expect("auth launch");
         assert_eq!(
             env_value(&launch.env, "CODEX_HOME"),
-            Some(launch.profile_home.as_os_str())
+            Some(crate::managed::plain_path(&launch.profile_home).as_os_str())
         );
         for denied in [
             "OPENAI_API_KEY",
@@ -525,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_is_read_only_and_refuses_config_drift() {
+    fn observer_is_read_only_and_keeps_the_profiles_configuration() {
         let (_temp, profiles, source, account_id, _workspace) = fixture();
         let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
         let config = home.join(CONFIG_NAME);
@@ -543,44 +532,32 @@ mod tests {
         assert_eq!(std::fs::read(&config).expect("config after"), before);
         drop(launch);
 
-        let hostile = b"[mcp_servers.hostile]\ncommand='hostile'\n";
-        std::fs::write(&config, hostile).expect("hostile config");
+        // The user's own configuration (copied from their native Codex home) is not drift: the
+        // observer reads the account without rewriting it.
+        let native = b"[mcp_servers.docs]\ncommand='docs-mcp'\n";
+        std::fs::write(&config, native).expect("native config");
         let auth = home.join("auth.json");
         std::fs::write(&auth, b"opaque-provider-native-credential").expect("auth fixture");
         let lease = profiles
             .acquire_observer_lease(PROVIDER, &account_id)
             .expect("observer lease");
-        assert!(
-            prepare_observer_with_lease(&profiles, &source, &account_id, lease).is_err(),
-            "a shared observer must never start under an unowned config"
-        );
-        assert_eq!(std::fs::read(&config).expect("hostile unchanged"), hostile);
+        let launch = prepare_observer_with_lease(&profiles, &source, &account_id, lease)
+            .expect("observer under the user's configuration");
+        drop(launch);
+        assert_eq!(std::fs::read(&config).expect("config unchanged"), native);
 
         let lease = profiles
             .acquire_sign_in_lease(PROVIDER, &account_id)
             .expect("exclusive config repair");
         repair_observer_config_with_lease(&profiles, &account_id, lease).expect("config repair");
-        assert_eq!(
-            std::fs::read_to_string(&config).expect("normalized config"),
-            SAFE_CONFIG
+        assert!(
+            std::fs::read_to_string(&config)
+                .expect("rewritten config")
+                .starts_with(SAFE_CONFIG)
         );
         assert_eq!(
             std::fs::read(&auth).expect("auth unchanged"),
             b"opaque-provider-native-credential"
-        );
-        let lease = profiles
-            .acquire_observer_lease(PROVIDER, &account_id)
-            .expect("observer after repair");
-        let launch = prepare_observer_with_lease(&profiles, &source, &account_id, lease)
-            .expect("observer after repair");
-        drop(launch);
-        std::fs::write(&config, hostile).expect("repeated drift");
-        let lease = profiles
-            .acquire_observer_lease(PROVIDER, &account_id)
-            .expect("observer lease after repeated drift");
-        assert!(
-            prepare_observer_with_lease(&profiles, &source, &account_id, lease).is_err(),
-            "a writer that reintroduces drift after the one repair remains fail-closed"
         );
     }
 
@@ -680,9 +657,11 @@ mod tests {
         assert_eq!(std::fs::read(outside).expect("outside"), b"outside");
     }
 
-    /// Non-inference certification of one official Codex CLI release. This exercises the real
-    /// binary with synthetic homes and repository config only: no prompt, account read, network
-    /// request, or provider credential is involved.
+    /// Non-inference certification of one official Codex CLI release: a managed account session
+    /// sees the user's native Codex configuration (native provider parity), never a stale profile
+    /// copy, and every argv KalCode builds parses. This exercises the real binary with synthetic
+    /// homes and repository config only: no prompt, account read, network request, or provider
+    /// credential is involved.
     ///
     /// `KALCODE_CERTIFY_CODEX` names the executable or npm shim to certify (for example
     /// `<scratch>/codex-0.158.0/node_modules/.bin/codex.cmd` after
@@ -691,7 +670,7 @@ mod tests {
     /// the binary reports.
     #[test]
     #[ignore = "run explicitly when certifying a Codex CLI release (KALCODE_CERTIFY_CODEX)"]
-    fn certifies_codex_config_isolation() {
+    fn certifies_codex_native_config_parity() {
         use crate::process::{ProcessSpec, run_probe};
         use std::time::Duration;
 
@@ -796,46 +775,14 @@ mod tests {
         let configured: serde_json::Value =
             serde_json::from_str(&mcp.stdout).expect("mcp list JSON");
         let serialized = configured.to_string();
-        for forbidden in ["ordinary_probe", "profile_probe", "workspace_probe"] {
-            assert!(
-                !serialized.contains(forbidden),
-                "synthetic lower-layer MCP escaped isolation: {forbidden}"
-            );
-        }
-
-        let mut feature_args = config_args(
-            crate::codex::argv::POLICY_CONFIG
-                .iter()
-                .copied()
-                .map(str::to_owned),
-        );
-        feature_args.extend(prepared.cli_overrides.iter().cloned());
-        feature_args.extend([OsString::from("features"), "list".into()]);
-        let features = run_probe(
-            &ProcessSpec {
-                program: executable.clone(),
-                args: feature_args,
-                cwd: Some(workspace.clone()),
-                env: prepared.env.clone(),
-            },
-            Duration::from_secs(15),
-            true,
-            64 * 1024,
-        )
-        .expect("bounded feature config probe");
         assert!(
-            features.status.success(),
-            "feature probe failed: {}",
-            features.stderr
+            serialized.contains("ordinary_probe"),
+            "the user's native MCP server must reach the managed session: {serialized}"
         );
-        for feature in ["apps", "plugins", "remote_plugin", "hooks"] {
-            let line = features
-                .stdout
-                .lines()
-                .find(|line| line.split_whitespace().next() == Some(feature))
-                .unwrap_or_else(|| panic!("installed CLI did not report feature {feature}"));
-            assert_eq!(line.split_whitespace().last(), Some("false"), "{line}");
-        }
+        assert!(
+            !serialized.contains("profile_probe"),
+            "a stale profile config must be replaced by the native one: {serialized}"
+        );
 
         // Every headless turn argv KalCode builds (`exec --json --ignore-rules
         // --ignore-user-config`, the policy floor, the managed overrides, each permission mode and
@@ -888,7 +835,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(managed_home.join(CONFIG_NAME)).expect("managed config"),
-            SAFE_CONFIG
+            format!("{SAFE_CONFIG}{ordinary_config}")
         );
     }
 }

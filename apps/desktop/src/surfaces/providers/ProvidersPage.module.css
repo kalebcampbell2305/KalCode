@@ -212,6 +212,57 @@
   font-size: var(--type-small);
 }
 
+/* ---------- Tools in KalCode: native tools per provider, truthful states ---------- */
+
+.tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: var(--space-1) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.toolItem {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  color: var(--color-text);
+}
+
+.toolItem svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--status-working);
+}
+
+.toolItem[data-state="needs_setup"] svg {
+  color: var(--status-waiting);
+}
+
+.toolItem[data-state="unavailable"] {
+  color: var(--color-text-muted);
+}
+
+.toolItem[data-state="unavailable"] svg {
+  color: var(--color-text-faint);
+}
+
+.toolState {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.toolDetail {
+  flex-basis: 100%;
+  padding-inline-start: calc(0.875rem + var(--space-1-5));
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
 /* ---------- Permission mapping table (Table language: LABEL heads, hairline rows) ---------- */
 
 /* Collapsed by default: the raw flags are reference detail below each provider's setup facts. */

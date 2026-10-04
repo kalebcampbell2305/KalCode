@@ -551,13 +551,14 @@ fn text_turn_flows_from_process_to_normalized_events() {
         "headless launch must never run Claude's unsafe short-lived status command"
     );
     let env: Vec<String> = serde_json::from_value(fake.read_json("last-env.json")).expect("env");
-    assert!(env.iter().any(|n| n == "ANTHROPIC_API_KEY"), "{env:?}");
-    for leaked in ["OPENAI_API_KEY", "KALCODE_DATA_DIR", "GITHUB_TOKEN"] {
-        assert!(
-            !env.iter().any(|n| n == leaked),
-            "{leaked} reached the provider: {env:?}"
-        );
+    // The user's environment, as in a native terminal (native provider parity).
+    for inherited in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN"] {
+        assert!(env.iter().any(|n| n == inherited), "{inherited}: {env:?}");
     }
+    assert!(
+        !env.iter().any(|n| n == "KALCODE_DATA_DIR"),
+        "KalCode's own settings reached the provider: {env:?}"
+    );
     let cwd = std::fs::read_to_string(fake.dir.path().join("last-cwd.txt")).expect("cwd");
     assert_eq!(
         std::fs::canonicalize(cwd).expect("canon"),
@@ -811,7 +812,7 @@ fn one_session_crashing_does_not_affect_another() {
 }
 
 #[test]
-fn resume_passes_the_session_id_and_plan_mode_is_restricted() {
+fn resume_passes_the_session_id_and_plan_mode_keeps_research() {
     let fake = FakeInstall::new("claude", json!({}));
     let resume_id = "5d7a3c0e-8a1b-4c7e-9f00-1234567890ab";
     let (tx, rx) = mpsc::channel();
@@ -831,7 +832,12 @@ fn resume_passes_the_session_id_and_plan_mode_is_restricted() {
     }));
     let args: Vec<String> = serde_json::from_value(fake.read_json("last-args.json")).expect("args");
     assert!(args.windows(2).any(|w| w == ["--resume", resume_id]));
-    assert!(args.iter().any(|a| a == "--restricted"));
+    // Claude Code's own plan mode, which still researches; not `--restricted`.
+    assert!(!args.iter().any(|a| a == "--restricted"));
+    assert!(
+        args.windows(3)
+            .any(|w| w == ["--allowedTools", "WebSearch", "WebFetch"])
+    );
     assert!(args.windows(2).any(|w| w == ["--permission-mode", "plan"]));
 }
 

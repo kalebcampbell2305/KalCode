@@ -14,19 +14,15 @@
 //!   once an agent has run on the account. `.claude.json` holds no tokens (those live in
 //!   `.credentials.json` or the macOS Keychain, which this module never touches). The cache is
 //!   used only when its `accountUuid` matches the profile's signed-in `oauthAccount`.
-//! - **Codex** records `rate_limits` (primary/secondary windows: `used_percent`,
-//!   `window_minutes`, `resets_at`/`resets_in_seconds`, `plan_type`) on `token_count` events in
-//!   its session rollouts (`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`). The newest such
-//!   record for the account's own `CODEX_HOME` is read from the file tail; conversation content
-//!   is never parsed or retained.
+//! - **Codex** usage comes only from the authenticated account's live usage endpoint.
+//!   Rollout history has no reliable account attribution after reconnect, so it is never
+//!   used as evidence of the currently connected identity's quota.
 //! - **Gemini CLI** (and anything else) exposes no plan usage: `unavailable`.
 //!
 //! A window whose reset time has passed is dropped (the provider hasn't reported the new
 //! window yet), so a stale "0% left" never outlives its reset.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -44,13 +40,6 @@ use crate::managed::ManagedProfiles;
 
 /// `.claude.json` is normally ~60 KiB; anything far larger is not something to parse on a timer.
 const MAX_CLAUDE_STATE_BYTES: u64 = 16 * 1024 * 1024;
-/// Rollout tail scanned for the newest `token_count` record (one is written per turn).
-const ROLLOUT_TAIL_BYTES: u64 = 4 * 1024 * 1024;
-/// Rate-limit windows are at most a week long; older rollouts can't describe a live window.
-const ROLLOUT_LOOKBACK_DAYS: i64 = 8;
-/// Newest rollouts inspected per read (a turn in any of them carries the account's limits).
-const ROLLOUT_FILES_SCANNED: usize = 6;
-
 const FIRST_RUN: &str = "Usage appears after the first agent run";
 const SIGNED_OUT: &str = "Signed out";
 const RESET_SINCE_READ: &str = "Usage reset since the last agent run";
@@ -81,7 +70,9 @@ pub fn read_account_usage(
     let reading = if provider == ProviderId::CLAUDE_CODE {
         read_claude(&home)
     } else {
-        read_codex(&home, now)
+        // Rollouts do not identify the authenticated account. A reconnect in the
+        // same profile could otherwise report a previous identity's quota.
+        Ok(None)
     };
     usage_from_reading(account, reading, now)
 }
@@ -128,9 +119,15 @@ fn usage_from_reading(
         Ok(None) => return outcome(account, ProviderUsageStatus::NotChecked, Some(FIRST_RUN)),
         Err(()) => return outcome(account, ProviderUsageStatus::NotChecked, Some(UNREADABLE)),
     };
+    let has_valid_measurement = reading.windows.iter().any(|window| {
+        window.used_percent.is_finite() && (0.0..=100.0).contains(&window.used_percent)
+    });
     let mut windows: Vec<ProviderUsageWindow> = reading
         .windows
         .into_iter()
+        .filter(|window| {
+            window.used_percent.is_finite() && (0.0..=100.0).contains(&window.used_percent)
+        })
         .filter(|window| match window.resets_at {
             Some(resets_at) => resets_at > now,
             // Without a reset time, the reading can only describe a window it still falls in.
@@ -141,7 +138,7 @@ fn usage_from_reading(
         .map(|window| ProviderUsageWindow {
             id: window.id,
             label: window.label,
-            remaining_percent: (100.0 - window.used_percent).clamp(0.0, 100.0),
+            remaining_percent: 100.0 - window.used_percent,
             resets_at: window.resets_at.map(format_rfc3339),
         })
         .collect();
@@ -150,7 +147,11 @@ fn usage_from_reading(
         let mut usage = outcome(
             account,
             ProviderUsageStatus::NotChecked,
-            Some(RESET_SINCE_READ),
+            Some(if has_valid_measurement {
+                RESET_SINCE_READ
+            } else {
+                UNREADABLE
+            }),
         );
         usage.plan = reading.plan;
         return usage;
@@ -222,11 +223,9 @@ fn parse_claude_state(state: &Value) -> Option<Reading> {
     // No signed-in account in this profile means the cache can't be attributed to it.
     let account = state.get("oauthAccount")?.as_object()?;
     let cache = state.get("cachedUsageUtilization")?;
-    if let (Some(expected), Some(cached_for)) = (
-        account.get("accountUuid").and_then(Value::as_str),
-        cache.get("accountUuid").and_then(Value::as_str),
-    ) && expected != cached_for
-    {
+    let expected = account.get("accountUuid")?.as_str()?.trim();
+    let cached_for = cache.get("accountUuid")?.as_str()?.trim();
+    if expected.is_empty() || expected != cached_for {
         return None;
     }
     let fetched_ms = cache.get("fetchedAtMs").and_then(Value::as_i64)?;
@@ -309,11 +308,12 @@ fn claude_utilization(
             window_minutes: Some(minutes),
         });
     }
-    if windows.is_empty() {
+    let plan = tier.and_then(claude_plan);
+    if windows.is_empty() && plan.is_none() {
         return None;
     }
     Some(Reading {
-        plan: tier.and_then(claude_plan),
+        plan,
         checked_at,
         windows,
     })
@@ -354,159 +354,6 @@ fn rfc3339(value: Option<&Value>) -> Option<OffsetDateTime> {
 }
 
 // --- Codex ----------------------------------------------------------------------------------
-
-fn read_codex(home: &Path, now: OffsetDateTime) -> Result<Option<Reading>, ()> {
-    let mut rollouts = recent_rollouts(&home.join("sessions"), now);
-    rollouts.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-    for (_, path) in rollouts.into_iter().take(ROLLOUT_FILES_SCANNED) {
-        // An unreadable or torn rollout doesn't hide an older readable one.
-        if let Ok(Some(reading)) = cached(&path, parse_rollout_tail) {
-            return Ok(Some(reading));
-        }
-    }
-    Ok(None)
-}
-
-/// Rollout files from the last [`ROLLOUT_LOOKBACK_DAYS`] day directories, with their mtimes.
-fn recent_rollouts(sessions: &Path, now: OffsetDateTime) -> Vec<(SystemTime, PathBuf)> {
-    let oldest = now.date() - Duration::days(ROLLOUT_LOOKBACK_DAYS);
-    let mut found = Vec::new();
-    for (year, year_path) in numbered_dirs(sessions) {
-        for (month, month_path) in numbered_dirs(&year_path) {
-            for (day, day_path) in numbered_dirs(&month_path) {
-                let Ok(month) = time::Month::try_from(u8::try_from(month).unwrap_or(0)) else {
-                    continue;
-                };
-                let Ok(date) = time::Date::from_calendar_date(
-                    i32::try_from(year).unwrap_or(0),
-                    month,
-                    u8::try_from(day).unwrap_or(0),
-                ) else {
-                    continue;
-                };
-                if date < oldest {
-                    continue;
-                }
-                let Ok(entries) = std::fs::read_dir(&day_path) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let Some(name) = name.to_str() else { continue };
-                    if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
-                        continue;
-                    }
-                    let Ok(metadata) = entry.metadata() else {
-                        continue;
-                    };
-                    if metadata.is_file() {
-                        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                        found.push((modified, entry.path()));
-                    }
-                }
-            }
-        }
-    }
-    found
-}
-
-fn numbered_dirs(path: &Path) -> Vec<(u32, PathBuf)> {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| {
-            let number = entry.file_name().to_str()?.parse::<u32>().ok()?;
-            Some((number, entry.path()))
-        })
-        .collect()
-}
-
-fn parse_rollout_tail(path: &Path) -> Result<Option<Reading>, ()> {
-    let mut file = File::open(path).map_err(|_| ())?;
-    let length = file.metadata().map_err(|_| ())?.len();
-    let start = length.saturating_sub(ROLLOUT_TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).map_err(|_| ())?;
-    let mut bytes = Vec::new();
-    file.take(ROLLOUT_TAIL_BYTES)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
-    let text = String::from_utf8_lossy(&bytes);
-    Ok(newest_rate_limits(&text))
-}
-
-/// The newest `token_count` record carrying Codex rate limits, scanning lines from the end.
-fn newest_rate_limits(text: &str) -> Option<Reading> {
-    text.lines()
-        .rev()
-        // Cheap prefilter: only token_count lines are parsed; conversation lines are skipped.
-        .filter(|line| line.contains("\"token_count\"") && line.contains("\"rate_limits\""))
-        .find_map(|line| {
-            let event: Value = serde_json::from_str(line).ok()?;
-            codex_reading(&event)
-        })
-}
-
-fn codex_reading(event: &Value) -> Option<Reading> {
-    let payload = event.get("payload")?;
-    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
-        return None;
-    }
-    let limits = payload.get("rate_limits")?.as_object()?;
-    // Codex can report additional, separately-metered limits; the account's plan limit is
-    // `codex` (older versions omit the id).
-    if let Some(limit_id) = limits.get("limit_id").and_then(Value::as_str)
-        && limit_id != "codex"
-    {
-        return None;
-    }
-    let checked_at = rfc3339(event.get("timestamp"))?;
-    let mut windows = Vec::new();
-    for slot in ["primary", "secondary"] {
-        let Some(window) = limits.get(slot).filter(|window| window.is_object()) else {
-            continue;
-        };
-        let Some(used) = window.get("used_percent").and_then(Value::as_f64) else {
-            continue;
-        };
-        let minutes = window.get("window_minutes").and_then(Value::as_i64);
-        let resets_at = window
-            .get("resets_at")
-            .and_then(Value::as_i64)
-            .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok())
-            .or_else(|| {
-                window
-                    .get("resets_in_seconds")
-                    .and_then(Value::as_i64)
-                    .map(|seconds| checked_at + Duration::seconds(seconds))
-            });
-        let (mut id, label) = codex_window_name(slot, minutes);
-        if windows.iter().any(|existing: &RawWindow| existing.id == id) {
-            id = slot.to_owned();
-        }
-        windows.push(RawWindow {
-            id,
-            label,
-            used_percent: used,
-            resets_at,
-            window_minutes: minutes,
-        });
-    }
-    if windows.is_empty() {
-        return None;
-    }
-    let plan = limits
-        .get("plan_type")
-        .and_then(Value::as_str)
-        .and_then(codex_plan);
-    Some(Reading {
-        plan,
-        checked_at,
-        windows,
-    })
-}
 
 fn codex_window_name(slot: &str, minutes: Option<i64>) -> (String, String) {
     match minutes {
@@ -660,13 +507,16 @@ pub fn usage_from_live_response(
 }
 
 fn codex_live_reading(body: &Value, now: OffsetDateTime) -> Option<Reading> {
-    let limits = body.get("rate_limit")?.as_object()?;
+    let limits = body.get("rate_limit").and_then(Value::as_object);
     let mut windows = Vec::new();
     for (key, slot) in [
         ("primary_window", "primary"),
         ("secondary_window", "secondary"),
     ] {
-        let Some(window) = limits.get(key).filter(|window| window.is_object()) else {
+        let Some(window) = limits
+            .and_then(|limits| limits.get(key))
+            .filter(|window| window.is_object())
+        else {
             continue;
         };
         let Some(used) = window.get("used_percent").and_then(Value::as_f64) else {
@@ -698,14 +548,15 @@ fn codex_live_reading(body: &Value, now: OffsetDateTime) -> Option<Reading> {
             window_minutes: minutes,
         });
     }
-    if windows.is_empty() {
+    let plan = body
+        .get("plan_type")
+        .and_then(Value::as_str)
+        .and_then(codex_plan);
+    if windows.is_empty() && plan.is_none() {
         return None;
     }
     Some(Reading {
-        plan: body
-            .get("plan_type")
-            .and_then(Value::as_str)
-            .and_then(codex_plan),
+        plan,
         checked_at: now,
         windows,
     })
@@ -935,87 +786,6 @@ mod tests {
         assert_eq!(usage.plan.as_deref(), Some("Max 20x"));
     }
 
-    fn token_count(timestamp: &str, limits: &str) -> String {
-        format!(
-            r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":10}}}},"rate_limits":{limits}}}}}"#
-        )
-    }
-
-    #[test]
-    fn codex_reads_the_newest_rate_limits_from_recent_rollouts() {
-        let (_temp, profiles) = profiles();
-        let sessions = home(&profiles, "codex", CODEX_ID).join("sessions");
-        // Real 0.16x shape: one weekly primary window, credits, plan.
-        let weekly = r#"{"limit_id":"codex","limit_name":null,"primary":{"used_percent":44.0,"window_minutes":10080,"resets_at":1791337663},"secondary":null,"credits":{"has_credits":true,"unlimited":false,"balance":"10.0"},"plan_type":"pro","rate_limit_reached_type":null}"#;
-        let older = r#"{"limit_id":"codex","primary":{"used_percent":12.0,"window_minutes":10080,"resets_at":1791337663},"secondary":null,"plan_type":"pro"}"#;
-        let rollout = [
-            r#"{"timestamp":"2026-10-03T10:00:00.000Z","type":"session_meta","payload":{"id":"x"}}"#.to_owned(),
-            token_count("2026-10-03T10:01:00.000Z", older),
-            r#"{"timestamp":"2026-10-03T10:02:00.000Z","type":"response_item","payload":{"type":"message","content":"rate_limits token_count"}}"#.to_owned(),
-            token_count("2026-10-03T10:03:00.000Z", weekly),
-            token_count("2026-10-03T10:04:00.000Z", "null"),
-            // A separately-metered limit is not the account's plan window.
-            token_count(
-                "2026-10-03T10:05:00.000Z",
-                r#"{"limit_id":"other","primary":{"used_percent":99.0,"window_minutes":300,"resets_at":1791337663}}"#,
-            ),
-        ]
-        .join("\n");
-        write(
-            &sessions.join("2026/10/03/rollout-2026-10-03T10-00-00-a.jsonl"),
-            &rollout,
-        );
-        // Outside the lookback window: never read.
-        write(
-            &sessions.join("2026/09/01/rollout-2026-09-01T10-00-00-b.jsonl"),
-            &token_count("2026-10-03T11:00:00.000Z", older),
-        );
-        let usage = read_account_usage(
-            &profiles,
-            &account(CODEX_ID, "codex", AuthState::Authenticated),
-            NOW,
-        );
-        assert_eq!(usage.status, ProviderUsageStatus::Available);
-        assert_eq!(usage.plan.as_deref(), Some("Pro"));
-        assert_eq!(
-            usage.checked_at.as_deref(),
-            Some("2026-10-03T10:03:00.000Z")
-        );
-        assert_eq!(usage.windows.len(), 1);
-        assert_eq!(usage.windows[0].id, "weekly");
-        assert_eq!(usage.windows[0].label, "Weekly");
-        assert_eq!(usage.windows[0].remaining_percent, 56.0);
-        assert_eq!(
-            usage.windows[0].resets_at.as_deref(),
-            Some("2026-10-07T01:47:43.000Z")
-        );
-    }
-
-    #[test]
-    fn codex_legacy_relative_resets_and_two_windows() {
-        let event = token_count(
-            "2026-10-03T17:00:00.000Z",
-            r#"{"primary":{"used_percent":92.5,"window_minutes":300,"resets_in_seconds":3600},"secondary":{"used_percent":30.0,"window_minutes":10080,"resets_in_seconds":86400}}"#,
-        );
-        let reading = newest_rate_limits(&event).unwrap_or_else(|| panic!("reading"));
-        assert_eq!(reading.plan, None);
-        assert_eq!(
-            reading.windows[0].resets_at,
-            Some(datetime!(2026-10-03 18:00 UTC))
-        );
-        let usage = usage_from_reading(
-            &account(CODEX_ID, "codex", AuthState::Authenticated),
-            Ok(Some(reading)),
-            NOW,
-        );
-        let windows: Vec<_> = usage
-            .windows
-            .iter()
-            .map(|window| (window.id.as_str(), window.remaining_percent))
-            .collect();
-        assert_eq!(windows, vec![("five_hour", 7.5), ("weekly", 70.0)]);
-    }
-
     #[test]
     fn codex_without_rollouts_is_not_checked() {
         let (_temp, profiles) = profiles();
@@ -1159,5 +929,133 @@ mod tests {
         assert_eq!(codex_plan("plus").as_deref(), Some("Plus"));
         assert_eq!(codex_plan("mystery"), None);
         assert_eq!(codex_window_name("primary", Some(1440)).1, "1-day");
+    }
+
+    #[test]
+    fn invalid_percentages_never_become_exhausted_usage() {
+        let codex = account(CODEX_ID, ProviderId::CODEX, AuthState::Authenticated);
+        for used_percent in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 101.0] {
+            let reading = Reading {
+                plan: Some("Pro".to_owned()),
+                checked_at: NOW,
+                windows: vec![RawWindow {
+                    id: "primary".to_owned(),
+                    label: "Primary".to_owned(),
+                    used_percent,
+                    resets_at: Some(NOW + Duration::hours(1)),
+                    window_minutes: Some(300),
+                }],
+            };
+            let usage = usage_from_reading(&codex, Ok(Some(reading)), NOW);
+            assert!(
+                usage.windows.is_empty(),
+                "invalid {used_percent} was converted to quota"
+            );
+            assert_ne!(usage.status, ProviderUsageStatus::Available);
+            assert_eq!(usage.plan.as_deref(), Some("Pro"));
+        }
+    }
+
+    #[test]
+    fn live_adapters_reject_malformed_values_and_preserve_real_zero() {
+        let (_temp, profiles) = profiles();
+        let codex = account(CODEX_ID, ProviderId::CODEX, AuthState::Authenticated);
+        let claude = account(CLAUDE_ID, ProviderId::CLAUDE_CODE, AuthState::Authenticated);
+        home(&profiles, ProviderId::CLAUDE_CODE, CLAUDE_ID);
+        for value in [
+            Value::Null,
+            serde_json::json!("100"),
+            serde_json::json!(-1),
+            serde_json::json!(101),
+            serde_json::json!({}),
+        ] {
+            for (provider, body) in [
+                (
+                    &codex,
+                    serde_json::json!({"rate_limit":{"primary_window":{"used_percent":value,"limit_window_seconds":300}}}),
+                ),
+                (
+                    &claude,
+                    serde_json::json!({"five_hour":{"utilization":value}}),
+                ),
+            ] {
+                let usage = usage_from_live_response(&profiles, provider, &body, NOW);
+                assert!(usage.is_none_or(|usage| usage.windows.is_empty()));
+            }
+        }
+        for (used, remaining) in [(100.0, 0.0), (0.0, 100.0), (99.9, 0.1)] {
+            for (provider, body) in [
+                (
+                    &codex,
+                    serde_json::json!({"rate_limit":{"primary_window":{"used_percent":used,"limit_window_seconds":300}}}),
+                ),
+                (
+                    &claude,
+                    serde_json::json!({"five_hour":{"utilization":used}}),
+                ),
+            ] {
+                let usage = usage_from_live_response(&profiles, provider, &body, NOW)
+                    .expect("reported usage");
+                assert_eq!(usage.status, ProviderUsageStatus::Available);
+                assert!((usage.windows[0].remaining_percent - remaining).abs() < 0.00001);
+                assert_eq!(usage.plan, None, "plan is independent of quota");
+            }
+        }
+    }
+
+    #[test]
+    fn claude_cache_requires_explicit_matching_identity() {
+        let mut state: Value = serde_json::from_str(CLAUDE_STATE).expect("fixture");
+        state["cachedUsageUtilization"]
+            .as_object_mut()
+            .expect("cache")
+            .remove("accountUuid");
+        assert!(parse_claude_state(&state).is_none());
+    }
+
+    #[test]
+    fn known_plan_survives_missing_or_malformed_usage() {
+        let (_temp, profiles) = profiles();
+        let codex = account(CODEX_ID, ProviderId::CODEX, AuthState::Authenticated);
+        let claude = account(CLAUDE_ID, ProviderId::CLAUDE_CODE, AuthState::Authenticated);
+        write(
+            &home(&profiles, ProviderId::CLAUDE_CODE, CLAUDE_ID).join(".credentials.json"),
+            r#"{"claudeAiOauth":{"rateLimitTier":"default_claude_pro"}}"#,
+        );
+        for (provider, body) in [
+            (&codex, serde_json::json!({"plan_type":"pro"})),
+            (
+                &codex,
+                serde_json::json!({"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":null}}}),
+            ),
+            (
+                &claude,
+                serde_json::json!({"five_hour":{"utilization":null}}),
+            ),
+        ] {
+            let usage = usage_from_live_response(&profiles, provider, &body, NOW)
+                .expect("known plan response");
+            assert_eq!(usage.plan.as_deref(), Some("Pro"));
+            assert!(usage.windows.is_empty());
+            assert_eq!(usage.checked_at, None, "no fake usage freshness");
+            assert_ne!(usage.status, ProviderUsageStatus::Available);
+            assert_eq!(provider.authentication_state, AuthState::Authenticated);
+        }
+    }
+
+    #[test]
+    fn codex_rollouts_cannot_attribute_usage_to_a_reconnected_identity() {
+        let (_temp, profiles) = profiles();
+        write(
+            &home(&profiles, "codex", CODEX_ID).join("sessions/2026/10/03/rollout-old.jsonl"),
+            r#"{"timestamp":"2026-10-03T17:44:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":10080},"plan_type":"pro"}}}"#,
+        );
+        let usage = read_account_usage(
+            &profiles,
+            &account(CODEX_ID, "codex", AuthState::Authenticated),
+            NOW,
+        );
+        assert!(usage.windows.is_empty());
+        assert_eq!(usage.plan, None);
     }
 }

@@ -91,7 +91,7 @@ impl DetectEnv {
         }
     }
 
-    fn var(&self, name: &str) -> Option<&OsStr> {
+    pub(crate) fn var(&self, name: &str) -> Option<&OsStr> {
         self.vars
             .iter()
             .find(|(key, _)| {
@@ -106,7 +106,7 @@ impl DetectEnv {
             .map(|(_, value)| value.as_os_str())
     }
 
-    fn home(&self) -> Option<PathBuf> {
+    pub(crate) fn home(&self) -> Option<PathBuf> {
         let name = if self.windows { "USERPROFILE" } else { "HOME" };
         self.var(name)
             .or_else(|| self.var("HOME"))

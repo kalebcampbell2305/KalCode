@@ -82,18 +82,21 @@ Owner decision. KalCode is **zero-cost to run for providers**: it never pays for
   substitutes another route.
 - API-key accounts stored in KalCode (`SessionConfig.secretRef`) are a later campaign; Z2 refuses
   them (`ProviderError::Unsupported`). When added, keys stay the user's own, in the OS keychain.
-- **Credential scoping.** Each provider child gets only its own variables plus an OS, locale,
-  temp-folder and proxy/CA allow-list (`crates/providers/src/env.rs`):
+- **The user's own environment** (native provider parity, `EnvPolicy::NATIVE` in
+  `crates/providers/src/env.rs`). A provider child gets the environment it would get in the
+  user's own terminal: SSH agent, `GH_TOKEN`, toolchain homes, cloud settings and the variables
+  MCP servers reference all pass. `KALCODE_*`, `WEBVIEW2_*` and `WEBKIT_INSPECTOR*` never pass.
+  A managed account session also drops the few variables that would make *that* provider
+  authenticate as something other than the selected account (`env::auth_overrides`):
 
-  | Provider | Provider variables passed |
+  | Provider | Dropped in a managed account session |
   | --- | --- |
-  | Claude Code | `ANTHROPIC_*`, `CLAUDE_*` |
-  | Codex | `OPENAI_*`, `CODEX_*` |
-  | Gemini CLI | `GEMINI_*`, `GOOGLE_*` |
+  | Claude Code | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`/`_FOUNDRY`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR` |
+  | Codex | `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_HOME`, the `CODEX_APP_SERVER_LOGIN_*`/`DEV_OPEN_APP_URL` sign-in overrides |
+  | Gemini CLI | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`/`_GCA`, `GOOGLE_CLOUD_ACCESS_TOKEN`, `GEMINI_CLI_HOME` |
 
-  `KALCODE_*`, `WEBVIEW2_*` and `WEBKIT_INSPECTOR*` never pass, even if a prefix would match.
-  A Claude Code process never sees an OpenAI key, and unrelated secrets (`GITHUB_TOKEN`, cloud
-  keys) never pass at all.
+  KalCode's own short-lived probes (Environment Doctor `--version` checks) keep the OS, locale,
+  temp-folder and proxy/CA allow-list (`EnvPolicy::BASE`). See `docs/providers/native-parity.md`.
 - **No lookups in the working directory** (`env::harden`, applied when the environment is built
   and again at spawn). Every provider environment has `NoDefaultCurrentDirectoryInExePath=1`, so
   `cmd.exe` never looks for a bare program name (`node`) in the workspace, and its `PATH` keeps
@@ -378,7 +381,7 @@ documented install command but never runs an installer.
 | --- | --- |
 | argv only | `Command` with an argument vector, never a shell string. Model names and session ids are validated before they reach argv (no leading `-`, restricted charset; ids must be UUIDs). |
 | Launch (Windows shims) | `crates/providers/src/launch.rs`. A `.cmd`/`.bat` shim is read (at most 16 KiB, never executed) and its single `%dp0%` target resolved to an absolute file: a native target (current npm Claude Code: `bin\claude.exe`) starts directly; a script target starts as `<node.exe> <script>`, with `node.exe` from the shim's folder or an absolute `PATH` entry (never `node.cmd`). `cmd.exe` is used only for a shim KalCode can't read, with the hardened environment (§3) and the system `cmd.exe` with `/d`. Starting the shim in an empty KalCode folder instead is not possible: Claude Code has no flag that sets its project folder apart from its working directory. |
-| Sanitized environment | `env_clear()`, then the per-provider allow-list (§3). |
+| Environment | `env_clear()`, then the user's own environment minus KalCode-internal variables and, for a managed account, that provider's auth overrides (§3). |
 | Bounded stdout | Read line by line on its own thread; lines over 8 MiB are discarded without buffering. |
 | Redacted stderr | Last 16 KiB kept on its own thread, passed through the log redactor, and only logged. |
 | Timeouts | Probes 15 s; interrupt acknowledgement 5 s; terminate grace 3 s, then kill. |
@@ -590,9 +593,9 @@ release (`npm install -g @openai/codex@0.160.0`, `npm install -g @google/gemini-
 
 Certification (2026-09-28) ran the official npm packages installed into scratch prefixes
 (`npm install --prefix <scratch>/codex-<v> @openai/codex@<v>`), never a global install, with no
-sign-in, prompt or quota. Codex: `codex::managed_policy::tests::certifies_codex_config_isolation`
-(`--version` format `codex-cli <v>`, MCP/feature isolation from standalone, profile and repository
-config, and every headless `exec --json --ignore-rules --ignore-user-config` argv, including
+sign-in, prompt or quota. Codex: `codex::managed_policy::tests::certifies_codex_native_config_parity`
+(`--version` format `codex-cli <v>`, the user's native MCP configuration reaching the managed
+session while a stale profile copy does not, and every headless `exec --json --ignore-rules --ignore-user-config` argv, including
 `exec resume`, accepted) and `tests/codex_certification_real.rs` (production sign-in path under
 the guardian: version gate, app-server `initialize` reporting the managed `codexHome`,
 `account/read` shape, `account/login/start` returning an official-origin `authUrl` and a
@@ -803,7 +806,7 @@ host-enabled policy, without a manual enable switch or persisted configuration m
 Regression coverage: `code_host_is_available_for_new_and_resumed_turns_in_every_mode`,
 `code_host_is_available_for_new_and_resumed_panes_in_every_mode`,
 `code_host_failures_are_visible_alongside_other_provider_errors`, and
-`memoryProviders.test.ts`. The real-CLI config-isolation certification checks the installed
+`memoryProviders.test.ts`. The real-CLI native-config certification checks the installed
 provider against synthetic profiles. Tests and a source change alone are not evidence of
 production delivery: signed Windows/macOS packages and normal updater receipt still need proof.
 Rollback uses a revert PR and a newer signed internal build; do not reset or delete user profiles.

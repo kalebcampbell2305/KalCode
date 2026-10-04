@@ -16,7 +16,7 @@ import {
   TabsTrigger,
   useToast,
 } from "@kalcode/ui/components";
-import { Check, Copy, LogIn, Minus, Plus, RefreshCw } from "lucide-react";
+import { Check, CircleDashed, Copy, LogIn, Minus, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
@@ -40,6 +40,7 @@ import {
   needsInstall,
   needsSignIn,
   settingGroups,
+  toolItems,
 } from "./providerLabels.ts";
 import { consumeProvidersTab, type ProvidersTab, useProvidersTabRequest } from "./providersTab.ts";
 import { isBrowserAuthProvider } from "./useProviderAccounts.ts";
@@ -330,6 +331,9 @@ function ProviderSection({
   const details: KeyValueItem[] = [
     { key: "integration", label: "Integration", value: status.integration },
     { key: "capabilities", label: "Capabilities", value: <Capabilities status={status} /> },
+    ...(status.capabilities.tools.length > 0
+      ? [{ key: "tools", label: "Tools in KalCode", value: <ToolList status={status} /> }]
+      : []),
     {
       key: "models",
       label: "Models",
@@ -421,6 +425,34 @@ function Capabilities({ status }: { status: ProviderStatus }) {
           {item.supported ? <Check aria-hidden="true" /> : <Minus aria-hidden="true" />}
           <span>{item.label}</span>
           <span className={styles.capabilityValue}>{item.supported ? "Yes" : "No"}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The provider's native tools inside KalCode, as its adapter declares them. */
+function ToolList({ status }: { status: ProviderStatus }) {
+  return (
+    <ul className={styles.tools} aria-label={`${status.displayName} tools in KalCode`}>
+      {toolItems(status.capabilities).map((item) => (
+        <li
+          key={item.kind}
+          className={styles.toolItem}
+          data-state={item.state}
+          data-provider-tool={item.kind}
+          title={item.detail ?? undefined}
+        >
+          {item.state === "native" ? (
+            <Check aria-hidden="true" />
+          ) : item.state === "needs_setup" ? (
+            <CircleDashed aria-hidden="true" />
+          ) : (
+            <Minus aria-hidden="true" />
+          )}
+          <span>{item.label}</span>
+          <span className={styles.toolState}>{item.value}</span>
+          {item.state !== "native" && item.detail ? <span className={styles.toolDetail}>{item.detail}</span> : null}
         </li>
       ))}
     </ul>

@@ -1161,7 +1161,10 @@ fn migrations_keep_permissions_at_v4() {
             (19, "kalvoice_account_usage"),
             (20, "operations"),
             (21, "threads_effort"),
-            (22, "handoffs")
+            (22, "handoffs"),
+            (23, "cursor_accounts"),
+            (24, "unified_memory"),
+            (25, "terminal_directory")
         ]
     );
 }

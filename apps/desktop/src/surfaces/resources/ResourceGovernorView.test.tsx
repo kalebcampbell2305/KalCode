@@ -156,7 +156,7 @@ describe("ResourceGovernorContent", () => {
     };
     render(<ResourceGovernorContent report={held} changingMode={false} onModeChange={vi.fn()} />);
 
-    expect(screen.getByText("New provider work is paused")).toBeInTheDocument();
+    expect(screen.getByText("Background work is paused")).toBeInTheDocument();
     expect(screen.getByText(/Running work continues/)).toBeInTheDocument();
   });
 

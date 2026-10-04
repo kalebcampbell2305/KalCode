@@ -41,6 +41,8 @@ use crate::launch::{LaunchKind, resolve};
 const DEFAULT_SIZE: (u16, u16) = (120, 32);
 const MARKER: &str = "interactive";
 const SETTINGS_FILE: &str = "claude-settings.json";
+/// The person's native-only MCP servers for one pane (`--mcp-config`); private like the settings.
+const MCP_CONFIG_FILE: &str = "claude-mcp.json";
 /// Panes kept for re-attach after their process exited (scrollback replay).
 const MAX_ENDED_PANES: usize = 32;
 
@@ -424,11 +426,14 @@ impl InteractiveClaudeProvider {
             expiry: self.expiry.clone(),
             titles: self.titles.clone(),
         });
+        let handler = HandlerRef::new(&shared);
+        let gate = handler.gate();
         let registration = self
             .bridge
-            .register_channel(
-                Arc::new(HandlerRef(Arc::downgrade(&shared))),
+            .register_channel_with(
+                Arc::new(handler),
                 kalcode_hook_bridge::server::HookChannel::Claude,
+                gate,
             )
             .map_err(|e| ProviderError::Start(e.to_string()))?;
         let settings_path = dir.join(SETTINGS_FILE);
@@ -437,11 +442,25 @@ impl InteractiveClaudeProvider {
             prefix_args: &self.config.hook_prefix_args,
             endpoint: self.bridge.endpoint().as_str(),
             session: registration.session_id(),
+            enforce: gate == kalcode_hook_bridge::server::HookGate::Decide,
         });
         write_atomically(&settings_path, settings.to_string().as_bytes()).map_err(|e| {
             tracing::warn!(event = "pane.settings_write_failed", error = %e);
             ProviderError::Start("KalCode couldn't write the session settings.".into())
         })?;
+        // The profile's own MCP servers load natively; the person's native-only servers are added
+        // so the pane has the same tools as their terminal. Failure only loses those servers.
+        let native_servers = crate::claude::mcp::UserServers::read(
+            &crate::claude::mcp::ConfigFiles::from_env(&env),
+            &cwd,
+        )
+        .native_only;
+        let mcp_config =
+            crate::claude::mcp::write_config(&dir.join(MCP_CONFIG_FILE), &native_servers)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(event = "pane.mcp_config_failed", error = %e);
+                    None
+                });
         let mut args = interactive_args(&InteractiveArgs {
             mode: config.permission_mode,
             start,
@@ -449,6 +468,7 @@ impl InteractiveClaudeProvider {
             model: config.model.as_deref(),
             effort: config.effort.as_deref(),
             title: None,
+            mcp_config: mcp_config.as_deref(),
         })
         .map_err(|e| ProviderError::Start(e.to_string()))?;
         if let Some(context) = project_context {
@@ -748,10 +768,10 @@ impl RuntimeRouter {
     /// thread retries, after the creation thread's transient intent has gone away.
     pub fn with_session_guards(
         mut self,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Self {
-        self.headless = guard(self.headless);
-        self.interactive = self.interactive.map(guard);
+        self.headless = guard(self.headless, false);
+        self.interactive = self.interactive.map(|provider| guard(provider, true));
         self
     }
 
