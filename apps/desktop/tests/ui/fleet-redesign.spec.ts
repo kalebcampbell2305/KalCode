@@ -104,8 +104,10 @@ test("cleanup: the card X, Clear failed, and Close all asks once", async ({ page
   // Clear failed from the group header: every failed agent goes at once.
   await chip(page, "Failed").click();
   await board(page).getByRole("button", { name: "Clear failed" }).click();
-  await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 0");
+  // The summary toast shows as soon as the archives finish and leaves after 4.5 s; the board
+  // catches up through 121 archive events, which takes seconds on a slow machine. Toast first.
   await expect(page.getByText("Cleared 121 failed agents.")).toBeVisible();
+  await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 0", { timeout: 15_000 });
   await chip(page, "All").click();
 
   // Close all. With KalTidy's canonical cleanup (#152) the Fleet hands off to KalTidy's one
