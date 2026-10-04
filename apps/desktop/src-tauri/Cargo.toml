@@ -27,6 +27,9 @@ serde_json.workspace = true
 tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
+kalcode-integrations = { path = "../../../crates/integrations" }
+kalcode-integration-openai = { path = "../../../crates/integration-openai" }
+tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
 kalcode-native-core = { path = "../../../crates/native-core" }
 kalcode-providers = { path = "../../../crates/providers" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }

@@ -30,6 +30,7 @@ import {
   LayoutGrid,
   ListChecks,
   Minimize2,
+  PlugZap,
   Plus,
   PowerOff,
   Save,
@@ -54,6 +55,7 @@ import {
   PRESET_PANES,
 } from "../../shell/panes/model.ts";
 import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
+import { CodeIntegrationPanel } from "../integrations/IntegrationSettings.tsx";
 import styles from "./Code.module.css";
 import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
@@ -104,6 +106,7 @@ export function CodePage() {
  * every terminal. The missing-folder state covers the canvas instead.
  */
 function WorkspaceView({ workspace }: { workspace: Workspace }) {
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
   return (
     <CodeCanvas workspace={workspace}>
       {(api, canvas) => (
@@ -112,9 +115,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           <header className={styles.header}>
             <WorkspaceTitle workspace={workspace} />
             <div className={styles.headerActions} id="code-actions" tabIndex={-1}>
+              <Button
+                icon={<PlugZap />}
+                aria-expanded={integrationsOpen}
+                onClick={() => setIntegrationsOpen((open) => !open)}
+              >
+                Tools
+              </Button>
               {api ? <Toolbar api={api} available={workspace.available} /> : <ToolbarPlaceholder />}
             </div>
           </header>
+          {integrationsOpen ? <CodeIntegrationPanel workspaceId={workspace.id} /> : null}
           <div className={styles.canvasArea}>
             {canvas}
             {workspace.available ? null : <MissingFolder workspace={workspace} />}

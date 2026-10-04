@@ -20,6 +20,7 @@ pub mod claude;
 pub mod cli_pane;
 pub mod codex;
 pub mod cursor_hooks;
+pub mod integrations;
 pub mod provider;
 pub mod session;
 

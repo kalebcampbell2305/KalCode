@@ -4,6 +4,7 @@
   "description": "Least-privilege capability for the KalCode main webview: KalCode's own commands, event plumbing, and theme sync. No filesystem, shell, HTTP, or opener access from the WebView.",
   "webviews": ["main"],
   "permissions": [
+    "allow-integration-dispatch",
     "allow-account-bootstrap",
     "allow-account-status",
     "allow-account-email-start",

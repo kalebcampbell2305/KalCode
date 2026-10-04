@@ -1,5 +1,6 @@
 // Canonical native command inventory, shared by build-time capabilities and runtime admission.
 pub(crate) const COMMANDS: &[&str] = &[
+    "integration_dispatch",
     "account_bootstrap",
     "account_status",
     "account_email_start",

@@ -6,6 +6,7 @@ import type { UtilityCommandName } from "./utilities";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
+  | "integration_dispatch"
   | HandoffsCommandName
   | OperationsCommandName
   | "boot"

@@ -330,6 +330,12 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       { id: "core-browser", label: "Integrated Browser", from: "free", status: "available", verifiedIn: LIVE },
       {
+        id: "external-integrations",
+        label: "External integrations with your own credentials",
+        from: "free",
+        status: "coming_soon",
+      },
+      {
         id: "adaptive-canvas",
         label: "Adaptive Canvas: task layouts, snap and reversible Tidy",
         from: "free",
