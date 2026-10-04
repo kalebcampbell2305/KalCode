@@ -2234,7 +2234,9 @@ mod tests {
         OperationsState,
         Arc<crate::resource_commands::ResourceGovernorState>,
     ) {
-        let resources = Arc::new(crate::resource_commands::ResourceGovernorState::start());
+        // A synthetic healthy machine: these tests are about operations, and a real sampler can
+        // outlast the governor's 2 s shutdown bound on a loaded gate machine.
+        let resources = crate::resource_commands::tests::healthy_governor();
         let detection = Arc::new(kalcode_providers::ProviderRegistry::with_specs(
             kalcode_providers::DetectEnv {
                 vars: Vec::new(),
@@ -2281,7 +2283,9 @@ mod tests {
         OperationsState,
         Arc<crate::resource_commands::ResourceGovernorState>,
     ) {
-        let resources = Arc::new(crate::resource_commands::ResourceGovernorState::start());
+        // A synthetic healthy machine: these tests are about operations, and a real sampler can
+        // outlast the governor's 2 s shutdown bound on a loaded gate machine.
+        let resources = crate::resource_commands::tests::healthy_governor();
         let detection = Arc::new(kalcode_providers::ProviderRegistry::with_specs(
             kalcode_providers::DetectEnv {
                 vars: Vec::new(),

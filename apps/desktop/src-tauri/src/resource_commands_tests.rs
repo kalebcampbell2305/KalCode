@@ -1178,7 +1178,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 
 /// The owner's 24-thread, 31 GiB PC on a quiet moment.
-fn healthy_governor() -> Arc<ResourceGovernorState> {
+pub(crate) fn healthy_governor() -> Arc<ResourceGovernorState> {
     let state = Arc::new(ResourceGovernorState::start_with_probe(Box::new(
         SteadyProbe {
             cpu_percent: 12.0,

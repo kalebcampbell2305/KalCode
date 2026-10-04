@@ -1528,4 +1528,4 @@ pub fn resource_set_view_open(
 
 #[cfg(test)]
 #[path = "resource_commands_tests.rs"]
-mod tests;
+pub(crate) mod tests;
