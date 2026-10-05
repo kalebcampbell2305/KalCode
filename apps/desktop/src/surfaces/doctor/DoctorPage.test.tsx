@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorApi, DoctorRun } from "../../ipc/doctor.ts";
@@ -79,5 +79,43 @@ describe("DoctorPage", () => {
       "Environment Doctor could not start. No changes were made.",
     );
     expect(screen.queryByText(/private-value/)).not.toBeInTheDocument();
+  });
+
+  it("polls only the running check list, slower while it is unchanged, and re-reads the rest once at the end", async () => {
+    vi.useFakeTimers();
+    try {
+      let current = run("running");
+      const doctor = api({ last: vi.fn(async () => current) });
+      render(<DoctorPage api={doctor} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(doctor.fixLog).toHaveBeenCalledTimes(1);
+      expect(doctor.ignored).toHaveBeenCalledTimes(1);
+
+      // 20 s of an unchanged run: backs off to one read every 2 s instead of 80 reads of each command.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      const reads = vi.mocked(doctor.last).mock.calls.length;
+      expect(reads).toBeGreaterThan(5);
+      expect(reads).toBeLessThan(16);
+      expect(doctor.fixLog).toHaveBeenCalledTimes(1);
+      expect(doctor.ignored).toHaveBeenCalledTimes(1);
+
+      current = run("completed");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(doctor.fixLog).toHaveBeenCalledTimes(2);
+      expect(doctor.ignored).toHaveBeenCalledTimes(2);
+      const settled = vi.mocked(doctor.last).mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(vi.mocked(doctor.last).mock.calls.length).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

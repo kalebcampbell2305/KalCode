@@ -44,6 +44,7 @@ function testBridge(overrides: Partial<BrowserBridge> = {}): BrowserBridge {
     hideAll: vi.fn(async () => 0),
     openExternal: vi.fn(async () => undefined),
     subscribeFocus: vi.fn(async () => () => undefined),
+    subscribeState: vi.fn(async () => () => undefined),
     inspect: vi.fn(async () => ({ available: true, errorCount: 0, errors: [], picking: false, picked: null })),
     pick: vi.fn(async (_id: string, active: boolean) => active),
     screenshot: vi.fn(async () => ({ path: "C:\\Pictures\\KalCode\\shot.png", fileName: "shot.png" })),
@@ -264,6 +265,67 @@ describe("BrowserPane address editing", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("re-reads unchanged native status less and less often, and at once when native says it moved", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
+      x: 20,
+      y: 60,
+      left: 20,
+      top: 60,
+      right: 820,
+      bottom: 660,
+      width: 800,
+      height: 600,
+      toJSON() {},
+    }));
+    vi.useFakeTimers();
+    try {
+      let announce: (event: { browserId: string }) => void = () => undefined;
+      const subscribeState = vi.fn(async (listener: (event: { browserId: string }) => void) => {
+        announce = listener;
+        return () => undefined;
+      });
+      const info = vi.fn(async () => nativeState());
+      const inspect = vi.fn(async () => ({ available: true, errorCount: 0, errors: [], picking: false, picked: null }));
+      render(pane(testBridge({ info, inspect, subscribeState })));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      // A fixed 750 ms poll would read 40 times; an unchanged pane backs off to one read per 6 s.
+      expect(info.mock.calls.length).toBeGreaterThan(3);
+      expect(info.mock.calls.length).toBeLessThan(12);
+      // Page errors: a fixed 2 s poll would read 15 times.
+      expect(inspect.mock.calls.length).toBeLessThan(10);
+
+      const before = info.mock.calls.length;
+      await act(async () => {
+        announce({ browserId });
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(info).toHaveBeenCalledTimes(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases native listeners that finish subscribing after the pane unmounts", async () => {
+    const pending: Array<(dispose: () => void) => void> = [];
+    const subscribe = () =>
+      new Promise<() => void>((resolve) => {
+        pending.push(resolve);
+      });
+    const bridge = testBridge({ subscribeFocus: vi.fn(subscribe), subscribeState: vi.fn(subscribe) });
+    const view = render(pane(bridge));
+    await waitFor(() => expect(bridge.subscribeFocus).toHaveBeenCalled());
+    view.unmount();
+
+    const disposals = pending.map(() => vi.fn());
+    await act(async () => {
+      for (const [index, resolve] of pending.entries()) resolve(disposals[index] as () => void);
+    });
+    expect(disposals.length).toBeGreaterThan(0);
+    for (const dispose of disposals) expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("retries a bounded attach while an earlier native child is closing", async () => {

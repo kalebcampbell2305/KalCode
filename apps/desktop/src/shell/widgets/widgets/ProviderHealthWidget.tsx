@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../../runtime/describeEvent.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { useThrottledValue } from "../../../runtime/useThrottledValue.ts";
 import { healthSummary } from "../../../surfaces/providers/healthLabels.ts";
 import { requestProvidersTab } from "../../../surfaces/providers/providersTab.ts";
 import { useNavigation } from "../../navigation.tsx";
@@ -40,7 +41,9 @@ export function ProviderHealthWidget() {
   const [reread, setReread] = useState(0);
 
   // Re-read when a provider event is recorded (detected, health or capacity changed, ...).
-  const providerSeq = useMemo(() => events.find((e) => e.type.startsWith("provider."))?.seq ?? 0, [events]);
+  const providerSeq = useThrottledValue(
+    useMemo(() => events.find((e) => e.type.startsWith("provider."))?.seq ?? 0, [events]),
+  );
   useEffect(() => {
     void providerSeq;
     void reread;
