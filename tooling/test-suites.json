@@ -276,8 +276,8 @@
             "PUBLIC_CHECKOUT_ENABLED": "absent"
           },
           "minimumExecuted": 164,
-          "skippedMinimum": 33,
-          "skippedMaximum": 33,
+          "skippedMinimum": 38,
+          "skippedMaximum": 38,
           "allowedSkipReasons": [
             "^no published release, so there are no release notes to link$",
             "^No stage components on .+$",
