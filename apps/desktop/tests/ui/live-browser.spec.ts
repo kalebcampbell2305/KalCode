@@ -27,7 +27,10 @@ async function hooks<T>(page: Page, fn: string): Promise<T> {
   return page.evaluate(`(${fn})(window.__kalcodeMemory.browser)`) as Promise<T>;
 }
 
-/** Paints a realistic page where the native webview would draw (the in-memory build has none). */
+/**
+ * Paints a realistic page where the native webview would draw (the in-memory build has none).
+ * The axe scan covers it, so its colours meet WCAG AA like any page we'd show off.
+ */
 async function paintMockPage(page: Page) {
   await browserPane(page)
     .locator('button[aria-label^="Browser"]')
@@ -46,14 +49,14 @@ async function paintMockPage(page: Page) {
         <div style="padding:30px 28px 0">
           <div style="font-size:12px;font-weight:600;color:#7c3aed;letter-spacing:.06em;text-transform:uppercase">Checkout</div>
           <div style="margin-top:6px;font-size:26px;font-weight:700;letter-spacing:-.02em">Upgrade to Studio Pro</div>
-          <div style="margin-top:6px;color:#64748b;max-width:460px">Unlimited projects, preview deployments and priority builds for your whole team.</div>
+          <div style="margin-top:6px;color:#475569;max-width:460px">Unlimited projects, preview deployments and priority builds for your whole team.</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-top:22px">
             <div style="padding:16px;border-radius:12px;background:#fff;border:1px solid #e5e7eb"><div style="color:#64748b;font-size:12px">Plan</div><div style="font-weight:700;font-size:18px">Pro · $24/mo</div></div>
             <div style="padding:16px;border-radius:12px;background:#fff;border:1px solid #e5e7eb"><div style="color:#64748b;font-size:12px">Seats</div><div style="font-weight:700;font-size:18px">5 members</div></div>
             <div style="padding:16px;border-radius:12px;background:#fff;border:1px solid #e5e7eb"><div style="color:#64748b;font-size:12px">Billing</div><div style="font-weight:700;font-size:18px">Monthly</div></div>
           </div>
           <div style="display:flex;gap:10px;margin-top:22px">
-            <span style="padding:10px 18px;border-radius:10px;background:#cbd5e1;color:#fff;font-weight:600">Pay now</span>
+            <span style="padding:10px 18px;border-radius:10px;background:#e2e8f0;color:#475569;font-weight:600">Pay now</span>
             <span style="padding:10px 18px;border-radius:10px;border:1px solid #cbd5e1;font-weight:600;color:#334155">Compare plans</span>
           </div>
         </div>`;
@@ -70,7 +73,14 @@ async function openLiveBrowserBesideAgent(page: Page, options: { roomy?: boolean
   // Give Code the room a focused session has: the workspace and agent rails folded away.
   if (options.roomy) {
     await page.getByRole("button", { name: "Hide the workspace rail" }).click();
-    await page.getByRole("button", { name: "Hide agents" }).click();
+    // The agents rail follows the agents: a strip while none runs, opening on its own once one
+    // works. Pin it folded the way a person does (open it, then Hide agents) so the agent this
+    // spec launches doesn't reopen it mid-run.
+    const strip = page.getByRole("complementary", { name: "Agents (collapsed)" });
+    await expect(strip).toBeVisible();
+    await strip.getByRole("button", { name: "Show agents", exact: true }).click();
+    await page.getByRole("button", { name: "Hide agents", exact: true }).click();
+    await expect(strip).toBeVisible();
   }
 
   // A real coding agent first (AGENTS.md: an agent is a provider terminal pane).
@@ -102,63 +112,78 @@ async function openLiveBrowserBesideAgent(page: Page, options: { roomy?: boolean
   return id;
 }
 
+/**
+ * The beside-an-agent flow: targets, console errors, picking, Ask Agent through the agent's own
+ * terminal. `capture` takes the review screenshots; the functional run passes none.
+ */
+async function askAgentBesideIt(page: Page, id: string, capture: (name: string) => Promise<void> = async () => {}) {
+  const pane: Locator = browserPane(page);
+
+  // Targets: Local is the dev server; Preview and Production come from Operations.
+  await expect(pane.getByRole("button", { name: "Local" })).toHaveAttribute("aria-pressed", "true");
+  await pane.getByRole("button", { name: "Production" }).click();
+  await expect(pane.getByLabel("Web address")).toHaveValue("https://app.example.test/");
+  await expect(pane.getByRole("button", { name: "Production" })).toHaveAttribute("aria-pressed", "true");
+  await pane.getByRole("button", { name: "Local" }).click();
+  await expect(pane.getByLabel("Web address")).toHaveValue("http://localhost:3000/");
+
+  // Console errors appear as a badge the moment the page reports them.
+  await hooks(
+    page,
+    `(b) => b.setErrors(${JSON.stringify(id)}, ["TypeError: Cannot read properties of undefined (reading 'total') at Checkout.tsx:42", "Failed to load img http://localhost:3000/plan-badge.svg"])`,
+  );
+  await expect(pane.getByRole("button", { name: "2 console errors" })).toBeVisible();
+  await capture("live-browser-beside-agent-dark-1440");
+
+  await pane.getByRole("button", { name: "2 console errors" }).click();
+  await expect(pane.getByRole("region", { name: "Console errors" })).toContainText("Checkout.tsx:42");
+  await capture("live-browser-console-errors-dark-1440");
+
+  // Pick an element on the page, then ask the agent about it with a screenshot attached.
+  await pane.getByRole("button", { name: "Pick an element" }).click();
+  await expect(pane.getByText("Click any element on the page.")).toBeVisible();
+  await capture("live-browser-picking-dark-1440");
+  await hooks(
+    page,
+    `(b) => b.pickElement(${JSON.stringify(id)}, { selector: "main > div.actions > button.pay", tag: "button", text: "Pay now", html: '<button class="pay" disabled>Pay now</button>' })`,
+  );
+  const ask = pane.getByRole("region", { name: "Ask an agent about this page" });
+  await expect(ask.getByText("button.pay")).toBeVisible();
+  await ask.getByRole("button", { name: "Add screenshot" }).click();
+  await expect(ask.getByText("Screenshot", { exact: true })).toBeVisible();
+  await expect(ask.getByLabel("Agent", { exact: true })).toHaveValue(/.+/);
+  await ask.getByLabel("Question", { exact: true }).fill("Why is Pay now disabled when the plan is selected?");
+  await capture("live-browser-ask-agent-dark-1440");
+
+  await ask.getByLabel("Question", { exact: true }).press("Enter");
+  await expect(pane.getByText(/^Sent to /u)).toBeVisible();
+  // The prompt went through the agent's own terminal input path.
+  await expect(agentText(page)).toContainText("Why is Pay now disabled");
+}
+
 test.describe("Live Browser", () => {
-  test("@screenshots works beside an agent: targets, errors, pick, screenshot, Ask Agent", async ({ page }) => {
+  test("works beside an agent: targets, errors, pick, Ask Agent, and passes axe", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await openLiveBrowserBesideAgent(page, { roomy: true });
-    const pane: Locator = browserPane(page);
+    await askAgentBesideIt(page, id);
 
-    // Targets: Local is the dev server; Preview and Production come from Operations.
-    await expect(pane.getByRole("button", { name: "Local" })).toHaveAttribute("aria-pressed", "true");
-    await pane.getByRole("button", { name: "Production" }).click();
-    await expect(pane.getByLabel("Web address")).toHaveValue("https://app.example.test/");
-    await expect(pane.getByRole("button", { name: "Production" })).toHaveAttribute("aria-pressed", "true");
-    await pane.getByRole("button", { name: "Local" }).click();
-    await expect(pane.getByLabel("Web address")).toHaveValue("http://localhost:3000/");
-
-    // Console errors appear as a badge the moment the page reports them.
-    await hooks(
-      page,
-      `(b) => b.setErrors(${JSON.stringify(id)}, ["TypeError: Cannot read properties of undefined (reading 'total') at Checkout.tsx:42", "Failed to load img http://localhost:3000/plan-badge.svg"])`,
-    );
-    await expect(pane.getByRole("button", { name: "2 console errors" })).toBeVisible();
+    // The pane as a person sees it: chrome, panels and the page standing in for the webview.
     await paintMockPage(page);
-    await shot(page, "live-browser-beside-agent-dark-1440");
-
-    await pane.getByRole("button", { name: "2 console errors" }).click();
-    await expect(pane.getByRole("region", { name: "Console errors" })).toContainText("Checkout.tsx:42");
-    await paintMockPage(page);
-    await shot(page, "live-browser-console-errors-dark-1440");
-
-    // Pick an element on the page, then ask the agent about it with a screenshot attached.
-    await pane.getByRole("button", { name: "Pick an element" }).click();
-    await expect(pane.getByText("Click any element on the page.")).toBeVisible();
-    await paintMockPage(page);
-    await shot(page, "live-browser-picking-dark-1440");
-    await hooks(
-      page,
-      `(b) => b.pickElement(${JSON.stringify(id)}, { selector: "main > div.actions > button.pay", tag: "button", text: "Pay now", html: '<button class="pay" disabled>Pay now</button>' })`,
-    );
-    const ask = pane.getByRole("region", { name: "Ask an agent about this page" });
-    await expect(ask.getByText("button.pay")).toBeVisible();
-    await ask.getByRole("button", { name: "Add screenshot" }).click();
-    await expect(ask.getByText("Screenshot", { exact: true })).toBeVisible();
-    await expect(ask.getByLabel("Agent", { exact: true })).toHaveValue(/.+/);
-    await ask.getByLabel("Question", { exact: true }).fill("Why is Pay now disabled when the plan is selected?");
-    await paintMockPage(page);
-    await shot(page, "live-browser-ask-agent-dark-1440");
-
-    await ask.getByLabel("Question", { exact: true }).press("Enter");
-    await expect(pane.getByText(/^Sent to /u)).toBeVisible();
-    // The prompt went through the agent's own terminal input path.
-    await expect(agentText(page)).toContainText("Why is Pay now disabled");
-
     const results = await new AxeBuilder({ page })
       .include("[data-browser-id]")
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
       .analyze();
     const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-    expect(serious.map((v) => v.id)).toEqual([]);
+    expect(serious.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target.join(" ")) }))).toEqual([]);
+  });
+
+  test("@screenshots works beside an agent: targets, errors, pick, screenshot, Ask Agent", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const id = await openLiveBrowserBesideAgent(page, { roomy: true });
+    await askAgentBesideIt(page, id, async (name) => {
+      await paintMockPage(page);
+      await shot(page, name);
+    });
   });
 
   test("@screenshots a sign-in pop-up is explained and continues in the system browser", async ({ page }) => {
