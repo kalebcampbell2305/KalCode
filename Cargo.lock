@@ -3209,6 +3209,7 @@ dependencies = [
 name = "kalcode-update-helper"
 version = "0.0.0"
 dependencies = [
+ "kalcode-contracts",
  "kalcode-updater",
  "libc",
  "serde_json",

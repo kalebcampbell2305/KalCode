@@ -19,7 +19,10 @@ kalcode-updater = { path = "../updater" }
 sha2 = "=0.10.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The macOS swap reads the app identity and writes JSON receipts; on other targets only the stub main compiles.
+kalcode-contracts = { path = "../contracts" }
 libc = "0.2"
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
