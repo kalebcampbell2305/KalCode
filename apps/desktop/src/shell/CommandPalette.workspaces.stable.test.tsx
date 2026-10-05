@@ -1,6 +1,6 @@
 import type { SurfaceFlag, Workspace } from "@kalcode/protocol";
 import { ToastProvider, TooltipProvider } from "@kalcode/ui/components";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountProvider } from "../account/AccountProvider.tsx";
@@ -9,6 +9,7 @@ import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
 import { resetAccountIntentForTests } from "../surfaces/threads/accountIntent.ts";
+import { createFavoritesStore, FAVORITES_STORAGE_KEY } from "./favorites/store.ts";
 import nativeStableSurfaces from "./fixtures/stable-native-surfaces.json";
 import { Shell } from "./Shell.tsx";
 
@@ -80,10 +81,33 @@ async function mountStable() {
       </TooltipProvider>
     </ToastProvider>,
   );
-  return { user: userEvent.setup(), activated };
+  return { user: userEvent.setup(), activated, client };
 }
 
 describe("palette workspace switching (Stable)", () => {
+  it("omits a visible pin from suggestions while keeping it in typed search", async () => {
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
+    const { user, client } = await mountStable();
+    const workspace = (await client.listWorkspaces()).find(
+      (item) => item.name === "api-server" && item.id !== CLONE_ID,
+    );
+    if (!workspace) throw new Error("Missing workspace fixture");
+    act(() => {
+      createFavoritesStore(() => localStorage).toggle(
+        { kind: "workspace", id: workspace.id, workspaceId: workspace.id },
+        workspace.name,
+        null,
+      );
+      window.dispatchEvent(new StorageEvent("storage", { key: FAVORITES_STORAGE_KEY }));
+    });
+    await user.keyboard("{Control>}k{/Control}");
+    const palette = within(await screen.findByRole("dialog", { name: "Command palette" }));
+    await waitFor(() => expect(palette.getAllByRole("option", { name: /^api-server.*Workspace/ })).toHaveLength(1));
+    await user.type(palette.getByRole("combobox"), "api-server");
+    await waitFor(() => expect(palette.getAllByRole("option", { name: /^api-server.*Workspace/ })).toHaveLength(2));
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
+  });
+
   it("reaches and opens each of two same-named projects from the keyboard", async () => {
     const { user, activated } = await mountStable();
     await user.keyboard("{Control>}k{/Control}");

@@ -1260,3 +1260,16 @@
 :global([data-motion="reduced"]) .detail {
   animation: none;
 }
+.favoriteRunRow {
+  position: relative;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.favoriteRunRow .runRow {
+  padding-right: 2.5rem;
+}
+.favoriteRunAction {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+}

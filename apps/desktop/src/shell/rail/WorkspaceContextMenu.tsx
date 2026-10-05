@@ -25,6 +25,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { browserContent } from "../../surfaces/browser/browserModel.ts";
 import { useDeckData } from "../deck/DeckData.tsx";
+import { useFavoriteMenuItems } from "../favorites/FavoriteActions.tsx";
 import { useNavigation } from "../navigation.tsx";
 import { activateAndDispatchPaneCommand } from "../panes/paneCommands.ts";
 import { useOpenInPane } from "../panes/useOpenInPane.ts";
@@ -72,7 +73,10 @@ export function WorkspaceContextMenu({
   const agentEnabled = info.flags.features?.some(
     (flag) => flag.id === "provider_panes" && flag.visible && flag.state !== "gated",
   );
-  const items: ObjectMenuItem[] = [];
+  const items: ObjectMenuItem[] = useFavoriteMenuItems(
+    { kind: "workspace", id: entry.workspaceId, workspaceId: entry.workspaceId },
+    entry.name,
+  );
   if (entry.available) {
     if (agentEnabled)
       items.push({
@@ -118,7 +122,7 @@ export function WorkspaceContextMenu({
   if (!entry.archived)
     items.push({
       id: "pin",
-      label: entry.pinned ? "Unpin" : "Pin",
+      label: entry.pinned ? "Unpin workspace from rail" : "Pin workspace in rail",
       icon: entry.pinned ? <PinOff /> : <Pin />,
       onSelect: () => void rail.update({ workspaceId: entry.workspaceId, pinned: !entry.pinned }),
     });

@@ -2,6 +2,7 @@ import { Badge, Button, ErrorState, ProviderGlyph, Skeleton, StatusChip, TextInp
 import { Search } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { FavoriteButton } from "../../shell/favorites/FavoriteActions.tsx";
 import { matchesQuery, presentThread } from "./model.ts";
 import { ThreadContextMenu, ThreadMenuDataProvider } from "./ThreadContextMenu.tsx";
 import styles from "./ThreadList.module.css";
@@ -123,7 +124,7 @@ export function ThreadList({
               const status = presentThread(thread);
               const selected = thread.id === selectedId;
               return (
-                <li key={thread.id}>
+                <li key={thread.id} className={styles.favoriteRow}>
                   <ThreadContextMenu
                     thread={thread}
                     archived={archived}
@@ -187,6 +188,11 @@ export function ThreadList({
                       </span>
                     </button>
                   </ThreadContextMenu>
+                  <FavoriteButton
+                    className={styles.favoriteAction}
+                    target={{ kind: "thread", id: thread.id, workspaceId: thread.workspaceId }}
+                    title={thread.name}
+                  />
                 </li>
               );
             })}

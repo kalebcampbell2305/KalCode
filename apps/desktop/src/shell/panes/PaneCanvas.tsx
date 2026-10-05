@@ -502,6 +502,7 @@ function PaneCanvasSurface({
           const tabs = leaf.tabs.map(describe);
           return (
             <PaneFrame
+              workspaceId={scope}
               key={leaf.paneId}
               leaf={leaf}
               index={index}

@@ -60,6 +60,10 @@ import { accountKeywords, accountProviderName, matchAccounts, parseAccountComman
 import { nextTextSize, TEXT_SIZE_COMMAND } from "./appearance.ts";
 import styles from "./CommandPalette.module.css";
 import { FilePreview } from "./context/FilePreview.tsx";
+import { FavoriteButton, FavoriteToggle } from "./favorites/FavoriteActions.tsx";
+import type { FavoriteTarget } from "./favorites/model.ts";
+import { isVisibleFavorite } from "./favorites/selection.ts";
+import { useFavorites } from "./favorites/store.ts";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand } from "./panes/paneCommands.ts";
 import { PANE_SHORTCUT_LABELS } from "./panes/paneShortcuts.ts";
@@ -87,6 +91,24 @@ const KALTIDY_KEYWORDS = ["tidy", "clean", "cleanup", "idle", "close terminals",
 export function paletteThreadLabel(thread: Pick<ThreadSummary, "name" | "providerName" | "accountLabel">): string {
   const account = thread.accountLabel?.trim();
   return account ? `${thread.name} · ${thread.providerName} · ${account}` : `${thread.name} · ${thread.providerName}`;
+}
+
+function quickFavoriteTarget(target: QuickTarget): FavoriteTarget | null {
+  switch (target.kind) {
+    case "workspace":
+      return { kind: "workspace", id: target.workspaceId, workspaceId: target.workspaceId };
+    case "agent":
+    case "thread":
+      return { kind: target.kind, id: target.thread.id, workspaceId: target.thread.workspaceId };
+    case "terminal":
+      return { kind: "terminal", id: target.terminalId, workspaceId: target.workspaceId };
+    case "account":
+      return { kind: "account", id: target.account.id, workspaceId: null };
+    case "file":
+      return { kind: "file", id: target.file.displayPath, workspaceId: target.file.workspaceId };
+    default:
+      return null;
+  }
 }
 
 function namedCommand(root: HTMLElement, typed: string): HTMLElement | undefined {
@@ -122,6 +144,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const search = useSearch();
   const openBrowser = useOpenBrowser();
   const quick = useQuickSwitcher(open, search.query, search.kinds);
+  const favorites = useFavorites();
+  const quickResults = search.query.trim()
+    ? quick.results
+    : quick.results.filter((result) => {
+        const target = quickFavoriteTarget(result.target);
+        return !target || !isVisibleFavorite(favorites.entries, workspaces.active?.id ?? null, target);
+      });
   const [preview, setPreview] = useState<FileRef | null>(null);
   const rail = useOptionalRail();
   const locator = useLocatorSearch(search.query, {
@@ -139,15 +168,35 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // The best locator match is selected when results arrive (Enter opens it) — unless the text
   // names a command ("Open folder"), which keeps Enter.
   const [selected, setSelected] = useState("");
+  const [favoriteCommand, setFavoriteCommand] = useState<{
+    id: string;
+    title: string;
+    value: string;
+    query: string;
+  } | null>(null);
   const commandRoot = useRef<HTMLDivElement>(null);
   const navigatedQuery = useRef<string | null>(null);
   const first = current ? locator.response?.results.items[0] : undefined;
-  const firstValue = quick.results[0]
-    ? `quick:${quick.results[0].id}`
+  const firstValue = quickResults[0]
+    ? `quick:${quickResults[0].id}`
     : first
       ? `locator:${first.kind}:${first.entityId}`
       : "";
   const typed = search.query.trim().toLowerCase();
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => {
+      const item = [
+        ...(commandRoot.current?.querySelectorAll<HTMLElement>("[cmdk-item][data-favorite-command]") ?? []),
+      ].find((node) => node.dataset.value === selected && !node.closest("[hidden]"));
+      const id = item?.dataset.favoriteCommand;
+      const title = item?.dataset.favoriteTitle;
+      setFavoriteCommand(id && title ? { id, title, value: selected, query: typed } : null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, selected, typed]);
+  const selectedFavorite =
+    favoriteCommand?.value === selected && favoriteCommand.query === typed ? favoriteCommand : null;
   useEffect(() => {
     if (!open || navigatedQuery.current !== typed) navigatedQuery.current = null;
   }, [open, typed]);
@@ -305,13 +354,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         />
         {searching ? <LocatorFilterBar state={locator} kinds={search.kinds} onKinds={search.setKinds} /> : null}
         <Command.List className={styles.list}>
-          {quick.results.length > 0 ? (
+          {quickResults.length > 0 ? (
             <Command.Group
               heading={typed ? "Best matches" : "Recent and suggested"}
               className={styles.group}
               forceMount
             >
-              {quick.results.map((result) => (
+              {quickResults.map((result) => (
                 <Item
                   key={result.id}
                   value={`quick:${result.id}`}
@@ -373,7 +422,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               onOpen={(item) => run(() => openLocated(item.kind, item.entityId, "palette"))()}
             />
           ) : null}
-          {located > 0 || quick.results.length > 0 ? null : (
+          {located > 0 || quickResults.length > 0 ? null : (
             <Command.Empty className={styles.empty}>No matches. Try a name, file path, or setting.</Command.Empty>
           )}
 
@@ -382,6 +431,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <Item
               icon={<SquareTerminal />}
               onSelect={run(launchAgent)}
+              commandId="agent:new"
               keywords={["agent", "launch", "start", "claude", "codex", "cursor", "gemini", "coding agent"]}
             >
               New agent…
@@ -392,6 +442,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <Command.Group heading="Threads" className={styles.group}>
               <Item
                 icon={<MessageSquarePlus />}
+                commandId="thread:new"
                 onSelect={run(() => {
                   navigate("threads");
                   threadsIntent.request("new");
@@ -401,6 +452,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               </Item>
               <Item
                 icon={<Search />}
+                commandId="thread:search"
                 onSelect={run(() => {
                   navigate("threads");
                   threadsIntent.request("search");
@@ -414,6 +466,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <Item
               icon={<Globe />}
               onSelect={run(openBrowser)}
+              commandId="browser:open"
               keywords={["browser", "web", "preview", "website", "localhost"]}
             >
               Browser
@@ -422,7 +475,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               const meta = VIEWS[id];
               const Icon = meta.icon;
               return (
-                <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
+                <Item
+                  key={id}
+                  commandId={`navigate:${id}`}
+                  icon={<Icon />}
+                  onSelect={run(() => navigate(id))}
+                  keywords={[meta.summary]}
+                >
                   {meta.label}
                 </Item>
               );
@@ -431,7 +490,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               const meta = SURFACES[id];
               const Icon = meta.icon;
               return (
-                <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
+                <Item
+                  key={id}
+                  commandId={`navigate:${id}`}
+                  icon={<Icon />}
+                  onSelect={run(() => navigate(id))}
+                  keywords={[meta.summary]}
+                >
                   {meta.label}
                 </Item>
               );
@@ -447,6 +512,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   return workspaces.createTerminal(null);
                 })}
                 shortcut={CODE_SHORTCUT_LABELS["new-terminal"]}
+                commandId="terminal:new"
                 keywords={["shell", "console", "command line", workspaces.active.name]}
               >
                 New terminal
@@ -464,6 +530,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ) : null}
             <Item
               icon={<FolderPlus />}
+              commandId="workspace:open"
               onSelect={run(async () => {
                 const opened = await workspaces.openFolder();
                 if (opened) navigate("code");
@@ -707,6 +774,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         </Command.List>
         <footer className={styles.footer}>
           <span>{quick.refreshing ? "Refreshing local results..." : "Search across your workspace"}</span>
+          {selectedFavorite ? (
+            <FavoriteToggle
+              target={{ kind: "command", id: selectedFavorite.id, workspaceId: null }}
+              title={selectedFavorite.title}
+            >
+              <span className={styles.favoriteSelection}>
+                <span className={styles.favoriteSelectionTitle}>{selectedFavorite.title}</span>
+                <FavoriteButton
+                  className={styles.favoriteAction}
+                  target={{ kind: "command", id: selectedFavorite.id, workspaceId: null }}
+                  title={selectedFavorite.title}
+                />
+              </span>
+            </FavoriteToggle>
+          ) : null}
           <span>
             <kbd>Up / Down</kbd> navigate <kbd>Enter</kbd> open <kbd>Esc</kbd> close
           </span>
@@ -732,6 +814,7 @@ interface ItemProps {
   thread?: boolean;
   entity?: boolean;
   metadata?: string;
+  commandId?: string;
 }
 
 function Item({
@@ -746,12 +829,15 @@ function Item({
   thread,
   entity,
   metadata,
+  commandId,
 }: ItemProps) {
-  return (
+  const item = (
     <Command.Item
       className={styles.item}
       forceMount={entity}
       data-palette-entity={entity ? "" : undefined}
+      data-favorite-command={commandId}
+      data-favorite-title={commandId ? children : undefined}
       onSelect={onSelect}
       value={value ?? children}
       {...(thread ? { "data-palette-thread": "" } : {})}
@@ -768,5 +854,12 @@ function Item({
       {badge ? <span className={styles.current}>{badge}</span> : null}
       {shortcut ? <kbd>{shortcut}</kbd> : null}
     </Command.Item>
+  );
+  return commandId ? (
+    <FavoriteToggle target={{ kind: "command", id: commandId, workspaceId: null }} title={children}>
+      {item}
+    </FavoriteToggle>
+  ) : (
+    item
   );
 }
