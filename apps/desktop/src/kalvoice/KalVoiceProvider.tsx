@@ -47,7 +47,7 @@ import { usePermissions } from "../surfaces/permissions/index.ts";
 import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
 import { useOptionalThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { combineAbortSignals } from "./abortSignals.ts";
-import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
+import { type AssistantState, doneSettleMs, INITIAL_STATE, reduce } from "./assistantState.ts";
 import { composerForThread, setListeningComposer, waitForComposer } from "./composerRegistry.ts";
 import {
   type DictationTarget,
@@ -149,6 +149,11 @@ interface KalVoiceValue {
   /** Undo a spoken command: type the words into the box that had focus instead. */
   typeInstead: () => Promise<void>;
   canTypeInstead: boolean;
+  /**
+   * The widget reports how its finished result is shown: held while the person points at it or it
+   * has keyboard focus, and whether its action ("Type it instead") is on screen.
+   */
+  showResult: (shown: { held: boolean; actionShown: boolean }) => void;
   dismiss: () => void;
   updatePreferences: (patch: KalVoicePreferencesPatch) => Promise<KalVoiceStatus>;
   downloads: Record<string, DownloadProgress>;
@@ -202,8 +207,6 @@ const TERMINAL_SUBMIT_REFUSED = "KalVoice never presses Enter in a terminal. Pre
 const TERMINAL_CLEAR_REFUSED = "KalVoice doesn't edit a terminal's line. Nothing was changed.";
 
 const KalVoiceContext = createContext<KalVoiceValue | null>(null);
-
-const DONE_SETTLE_MS = 4000;
 
 function useWindowWidth(): number {
   const [width, setWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -1678,12 +1681,20 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     await refreshStatus();
   }, [refreshStatus]);
 
-  // Done is shown briefly, then the widget returns to Ready on its own.
+  // Done is shown briefly, then the widget returns to Ready on its own: never while the person is
+  // pointing at or focused on the result, and longer when the result offers an action.
+  const [resultShown, setResultShown] = useState({ held: false, actionShown: false });
+  const showResult = useCallback(
+    (shown: { held: boolean; actionShown: boolean }) =>
+      setResultShown((now) => (now.held === shown.held && now.actionShown === shown.actionShown ? now : shown)),
+    [],
+  );
+  const settleMs = state.phase === "done" ? doneSettleMs(resultShown.held, resultShown.actionShown) : null;
   useEffect(() => {
-    if (state.phase !== "done") return;
-    const timer = setTimeout(() => dispatch({ type: "settle" }), DONE_SETTLE_MS);
+    if (settleMs === null) return;
+    const timer = setTimeout(() => dispatch({ type: "settle" }), settleMs);
     return () => clearTimeout(timer);
-  }, [state.phase]);
+  }, [settleMs]);
 
   const cancel = useCallback(async () => {
     const now = stateRef.current;
@@ -1969,6 +1980,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       cancel,
       typeInstead,
       canTypeInstead,
+      showResult,
       dismiss,
       updatePreferences,
       downloads,
@@ -2006,6 +2018,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       cancel,
       typeInstead,
       canTypeInstead,
+      showResult,
       dismiss,
       updatePreferences,
       downloads,
