@@ -15,7 +15,6 @@ import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
-import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
 import { beginLiveResize } from "../panes/liveResize.ts";
@@ -209,22 +208,8 @@ function AgentList({ sections, now }: { sections: AgentSections; now: number }) 
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group
-        title="Needs you"
-        tone="waiting"
-        threads={sections.needsYou}
-        now={now}
-        onOpen={open}
-        {...rowActions}
-      />
-      <Group
-        title="Failed"
-        tone="failed"
-        threads={sections.failed}
-        now={now}
-        onOpen={open}
-        {...rowActions}
-      />
+      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} {...rowActions} />
+      <Group title="Failed" tone="failed" threads={sections.failed} now={now} onOpen={open} {...rowActions} />
       <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} />
       <Group title="Waiting" tone="muted" threads={sections.blocked} now={now} onOpen={open} />
       {sections.idle.length > 0 ? (
