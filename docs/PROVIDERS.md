@@ -254,9 +254,10 @@ intercept").
 
 ### Codex (headless threads, PROVIDERS-2)
 
-Every turn passes `exec --json --ignore-rules --ignore-user-config`, disables connected tools and
-web search, clears inherited MCP registrations, bounds the child environment, and adds the exact
-native permission pair below:
+Every turn passes `exec --json`, the small policy config in `codex::argv::POLICY_CONFIG`, and the
+exact native permission pair below. Codex keeps its native tools, the person's own config (MCP
+servers, web search, plugins, shell environment) and their execpolicy `.rules`, as in a native
+terminal (AGENTS.md "Permanent provider tool capability rule"):
 
 | KalCode | Codex flags | Fidelity | Notes |
 | --- | --- | --- | --- |
@@ -273,8 +274,11 @@ native meaning instead of introducing a KalCode approval layer. `web_search='dis
 empty MCP map prevent connected capabilities from appearing independently of the selected mode.
 `shell_environment_policy.inherit='core'`
 keeps provider keys (`OPENAI_*`, `CODEX_*`) out of the commands Codex runs (Codex keeps variables
-named `*KEY*`/`*TOKEN*` by default). `--ignore-rules` means a repository's execpolicy `.rules`
-never grant anything (K4); it also skips the user's own rules, which is noted as a gap below.
+named `*KEY*`/`*TOKEN*` by default). `--ignore-rules` is never passed: the person's own
+execpolicy rules (`~/.codex/rules`) apply, and Codex itself loads a project's `.codex/rules` only
+for a project the person trusted (verified 2026-10-04, codex-cli 0.160.0: a user `forbidden` rule
+rejected the command without the flag and was skipped with it; an untrusted checkout's project
+rule was not loaded), so a repository's rules still never grant anything on their own (K4).
 `--skip-git-repo-check` appears only in Plan. The message is sent on stdin (`-`), never on the
 command line. Resume repeats the same sandbox and approval pair before `resume <thread id> -`.
 
@@ -288,7 +292,7 @@ the selected pair (`codex::argv` unit tests and `turns_pipeline` against the fak
 
 | Enforced by | Guarantee |
 | --- | --- |
-| KalCode (launch flags) | Exact native sandbox/approval pair for the selected mode; connected tools and web search disabled; inherited MCP registrations cleared; repository execpolicy rules and user configuration ignored; provider keys excluded from model-run commands; provider-process credential scoping (§3). |
+| KalCode (launch flags) | Exact native sandbox/approval pair for the selected mode; the person's own Codex tools, config and execpolicy rules kept as in a native terminal; provider-process credential scoping (§3). |
 | Codex | Every execution decision inside its native sandbox and every native approval prompt. KalCode records status but does not answer the prompt. |
 
 Gaps (honest): Codex has **no deny-rule flag** KalCode can pass per turn, so there is no Codex
@@ -298,8 +302,8 @@ equivalent of Claude Code's deny floor: reads of credential files the selected s
 Codex's selected native mode rather than by a KalCode rule. Codex permission
 profiles support `deny` read rules [18], but they don't compose with `--sandbox` (a
 `sandbox_mode` anywhere in the loaded config silently wins), so using them safely needs a verified
-precedence and is planned with the app-server adapter (§8.8). `--ignore-rules` also drops the
-user's own `forbidden` rules. KalCode's permission engine does not judge Codex tool calls per
+precedence and is planned with the app-server adapter (§8.8). The user's own `forbidden`
+execpolicy rules do apply. KalCode's permission engine does not judge Codex tool calls per
 action (`hostApprovals: false`). Approve and Custom may require a native provider decision that a
 headless process cannot display through KalCode; interactive panes are the normal surface for
 that prompt.
