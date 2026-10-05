@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyChanges } from "./classify.mjs";
+import { isCheckOutput } from "./gate-evidence.mjs";
 import { runGatePool } from "./gate-pool.mjs";
 import { matchAny } from "./policy.mjs";
 import { stateDir, writeJsonAtomic } from "./status.mjs";
@@ -339,12 +340,27 @@ export function gateForWorktree(
 }
 
 /**
+ * Why the tree no longer matches the gated commit, or null. The same rule as the per-check evidence guard:
+ * HEAD must be unchanged and no tracked SOURCE file may differ; outputs the checks write into the checkout
+ * (refreshed QA screenshots, untracked reports) never count. Gate 37374586446 passed every check and was then
+ * refused here because the visual suite had refreshed tracked screenshots.
+ */
+export function receiptDrift(git, g) {
+  if (git.rev("HEAD") !== g.head) return "HEAD moved";
+  const changed = git
+    .diff("HEAD", null)
+    .map(({ path }) => path)
+    .filter((path) => !isCheckOutput(path));
+  return changed.length ? `tracked source changed: ${changed.slice(0, 8).join(", ")}` : null;
+}
+
+/**
  * A PASS receipt bound to HEAD, only for a clean tree (the checks ran against exactly that commit) and only for
  * the full gate: an `--only` subset never counts as the gate passing.
  */
 export function recordGate(git, g, outcome, { platform = process.platform, now = Date.now } = {}) {
   if (outcome.status !== "PASS" || !g.clean || !g.head || g.partial) return null;
-  if (git.rev("HEAD") !== g.head || git.diff("HEAD", null).length || git.untracked().length) return null;
+  if (receiptDrift(git, g)) return null;
   const required = g.plan.filter((gate) => gate.state === "selected").map((gate) => gate.id);
   if (
     outcome.results.length !== g.plan.length ||

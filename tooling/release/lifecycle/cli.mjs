@@ -9,7 +9,7 @@
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyRange, renderClassify } from "./classify.mjs";
-import { gateConcurrency, gateForWorktree, gatePortOffset, recordGate, runGates } from "./gate.mjs";
+import { gateConcurrency, gateForWorktree, gatePortOffset, receiptDrift, recordGate, runGates } from "./gate.mjs";
 import { captureToolchain, prepareCheckEvidence } from "./gate-evidence.mjs";
 import { createGateCapacity } from "./gate-pressure.mjs";
 import { createGateReport } from "./gate-report.mjs";
@@ -131,7 +131,8 @@ export async function lifecycleMain(argv, io = {}) {
     const receipt = recordGate(git, g, outcome);
     if (outcome.status === "PASS" && g.clean && !g.partial && !receipt) {
       outcome.status = "FAIL";
-      log("gate FAIL: source identity changed or required check evidence is incomplete");
+      const drift = receiptDrift(git, g);
+      log(`gate FAIL: ${drift ? `source identity changed (${drift})` : "required check evidence is incomplete"}`);
     }
     if (opts.json) log(JSON.stringify({ status: outcome.status, results: outcome.results, receipt }, null, 2));
     log(
