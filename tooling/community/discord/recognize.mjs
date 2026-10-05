@@ -143,6 +143,7 @@ export async function recognize({
   ledger.days ??= {};
   ledger.threadAuthors ??= {};
   ledger.announced ??= {};
+  ledger.granted ??= {}; // every badge this tool ever granted, so a removal by a person is respected
   const firstRun = !ledger.initialized;
 
   const me = await api.get("/users/@me");
@@ -279,13 +280,19 @@ export async function recognize({
   }));
 
   // Decide, then grant (additive), then announce.
-  const awards = decideAwards({ members: people, activeDays: ledger.days, threads, featured, roleIds, now });
+  // A badge this tool granted before but the member no longer holds was removed by a person on
+  // purpose: never give it back.
+  const awards = decideAwards({ members: people, activeDays: ledger.days, threads, featured, roleIds, now }).filter(
+    (a) => !(ledger.granted[a.userId] ?? []).includes(a.badge.key),
+  );
   for (const a of awards) {
     const role = S.ROLES.find((r) => r.key === a.badge.role).name;
     log(`${dryRun ? "[plan] " : ""}+ ${role} → ${a.userId}`);
     report.granted.push({ userId: a.userId, badge: a.badge.key });
     if (!dryRun) {
       await api.put(`/guilds/${guildId}/members/${a.userId}/roles/${roleIds[a.badge.role]}`);
+      ledger.granted[a.userId] ??= [];
+      ledger.granted[a.userId].push(a.badge.key);
       const p = people.find((x) => x.id === a.userId);
       if (p) p.roles = [...p.roles, roleIds[a.badge.role]];
     }

@@ -247,6 +247,18 @@ describe("recognize (end to end)", () => {
     );
   });
 
+  it("never re-grants a badge a person removed", async () => {
+    const { s, api } = await setup();
+    const ledger = {};
+    await recognize({ api, ledger, now });
+    const regular = s.roles.find((r) => r.name === "Regular").id;
+    assert.ok(s.members.alice.roles.includes(regular));
+    s.members.alice.roles = s.members.alice.roles.filter((r) => r !== regular); // removed by the team
+    const again = await recognize({ api, ledger, now });
+    assert.ok(!s.members.alice.roles.includes(regular), "the removal stands");
+    assert.ok(!again.granted.some((g) => g.userId === "alice" && g.badge === "regular"));
+  });
+
   it("plans without writing", async () => {
     const { s, api } = await setup();
     const before = s.requests.length;
