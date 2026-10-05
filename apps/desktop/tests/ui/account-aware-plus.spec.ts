@@ -102,16 +102,14 @@ test("Code + immediately offers multiple Codex accounts, signs Work in inline an
   const work = accounts.filter({ hasText: "Work" });
   await work.click();
   await expect(work).toHaveAttribute("aria-selected", "true");
-  await expect(dialog.getByRole("button", { name: "Sign in to Work" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Reconnect" })).toBeVisible();
   await page.screenshot({ path: fileURLToPath(new URL("agent-picker-1040x760.png", OUT)) });
   await expectNoSeriousA11yViolations(page, '[role="dialog"]');
 
-  await dialog.getByRole("button", { name: "Sign in to Work" }).click();
-  await expect(dialog.getByRole("button", { name: "Sign in to Work" })).toHaveCount(0);
-  await expect(work).toHaveAttribute("aria-selected", "true");
-  await expect(dialog.getByRole("option", { selected: true })).toContainText("Work");
-  await expect(dialog.getByRole("button", { name: "Launch Codex agent" })).toBeEnabled();
-  await dialog.getByRole("button", { name: "Launch Codex agent" }).click();
+  await dialog.getByRole("button", { name: "Reconnect" }).click();
+  // Reconnection continues the preserved launch automatically, without another submit.
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
 
   await expect(pane(page)).toHaveAttribute("aria-label", "Codex, Codex agent, account Work");
   await expect(pane(page).locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
@@ -166,9 +164,8 @@ test("empty-account + flows add and sign in without leaving either agent or thre
   await expect(surface.getByRole("button", { name: "Launch Claude Code agent" })).toBeDisabled();
   await surface.getByLabel("Account name").fill("Studio");
   await surface.getByRole("button", { name: "Add Claude Code account" }).click();
-  await expect(surface.getByText(/^Studio(?: · Default)?$/)).toBeVisible();
-  await expect(surface.getByRole("button", { name: "Launch Claude Code agent" })).toBeEnabled();
-  await surface.getByRole("button", { name: "Launch Claude Code agent" }).click();
+  await expect(surface).not.toBeVisible();
+  await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
   await expect(pane(page)).toHaveAttribute("aria-label", "Claude Code, Claude Code agent, account Studio");
 
   await openThreads(page);

@@ -1,7 +1,7 @@
 import type { ProviderAccount } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { type ReactNode, StrictMode, useEffect, useRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import { useProviderAccounts } from "./useProviderAccounts.ts";
@@ -19,6 +19,52 @@ function deferred<T>() {
 }
 
 describe("provider authentication runtime isolation", () => {
+  it("preserves a requested login through StrictMode effect replay without starting it twice", async () => {
+    const account = {
+      id: "account-b",
+      providerId: "gemini-cli",
+      displayName: "Coding B",
+      authenticationState: "not_authenticated",
+    } as ProviderAccount;
+    const connected = { ...account, authenticationState: "authenticated" as const };
+    const start = deferred<{ loginHandle: string }>();
+    const wait = deferred<ProviderAccount>();
+    runtime.client = {
+      startGeminiLogin: vi.fn(() => start.promise),
+      waitForGeminiLogin: vi.fn(() => wait.promise),
+      cancelGeminiLogin: vi.fn(async () => undefined),
+    } as unknown as KalCodeClient;
+    let completion!: Promise<ProviderAccount | null>;
+    const { result } = renderHook(
+      () => {
+        const state = useProviderAccounts(false);
+        const requested = useRef(false);
+        useEffect(() => {
+          if (requested.current) return;
+          requested.current = true;
+          completion = state.signInAuth(account);
+        }, [state.signInAuth]);
+        return state;
+      },
+      {
+        wrapper: ({ children }) => (
+          <StrictMode>
+            <ToastProvider>{children}</ToastProvider>
+          </StrictMode>
+        ),
+      },
+    );
+    await act(async () => {
+      start.resolve({ loginHandle: "requested-login" });
+      wait.resolve(connected);
+      expect(await completion).toEqual(connected);
+    });
+    expect(result.current.accounts).toEqual([connected]);
+    expect(runtime.client.startGeminiLogin).toHaveBeenCalledTimes(1);
+    expect(runtime.client.waitForGeminiLogin).toHaveBeenCalledTimes(1);
+    expect(runtime.client.cancelGeminiLogin).not.toHaveBeenCalled();
+  });
+
   it.each(["start", "wait", "cursor"])(
     "discards old-client %s authentication after runtime replacement",
     async (stage) => {

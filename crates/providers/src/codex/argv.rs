@@ -286,7 +286,7 @@ mod tests {
                     .filter(|pair| pair[0] == "-c")
                     .filter_map(|pair| pair[1].to_str())
                     .filter(|value| value.starts_with("agents.max_concurrent_threads_per_session="))
-                    .last();
+                    .next_back();
                 assert_eq!(
                     effective,
                     Some("agents.max_concurrent_threads_per_session=10")

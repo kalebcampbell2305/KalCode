@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -67,16 +67,16 @@ describe("AccountOnboarding", () => {
       return article;
     };
     expect(card("Free")).toHaveTextContent("TRY");
-    expect(card("Free")).toHaveTextContent("25 KalVoice Requests a month");
+    expect(within(card("Free")).getByText("25 KalVoice", { exact: true })).toBeInTheDocument();
     expect(card("Free")).toHaveTextContent("$0No checkout");
     expect(card("Free")).not.toHaveTextContent("per year");
     expect(screen.getByRole("radio", { name: "Monthly" })).toBeChecked();
     expect(card("Pro")).toHaveTextContent("$10per month");
     expect(card("Pro")).not.toHaveTextContent("per year");
-    expect(card("Pro")).toHaveTextContent("150 KalVoice Requests a month");
+    expect(within(card("Pro")).getByText("150 KalVoice", { exact: true })).toBeInTheDocument();
     expect(card("MAX")).toHaveTextContent("ORCHESTRATE");
     expect(card("MAX")).toHaveTextContent("$25per month");
-    expect(card("MAX 2X")).toHaveTextContent("1,000 KalVoice Requests a month");
+    expect(within(card("MAX 2X")).getByText("1,000 KalVoice", { exact: true })).toBeInTheDocument();
     expect(card("MAX 2X")).toHaveTextContent("$50per month");
 
     await userEvent.click(screen.getByRole("button", { name: "Choose MAX" }));

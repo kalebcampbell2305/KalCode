@@ -142,13 +142,19 @@ export function useProviderAccounts(enabled: boolean) {
   const activeLoginRef = useRef<ActiveLogin | null>(null);
   const mounted = useRef(true);
   const loginGeneration = useRef(0);
+  const loginClient = useRef(client);
   activeLoginRef.current = activeLogin;
 
   useEffect(() => {
+    // StrictMode replays mount effects with the same runtime. Preserve that pending login;
+    // only a different runtime invalidates its generation. Real unmount remains guarded below.
+    if (loginClient.current !== client) {
+      loginClient.current = client;
+      loginGeneration.current += 1;
+    }
     mounted.current = true;
     return () => {
       mounted.current = false;
-      loginGeneration.current += 1;
       const login = activeLoginRef.current;
       if (login) {
         // Navigating away intentionally cancels the browser flow. Mark it before the native
