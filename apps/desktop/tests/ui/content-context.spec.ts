@@ -70,7 +70,7 @@ test("selected provider output goes to that workspace's agent as an unsubmitted 
   await page.getByRole("menuitem", { name: "Ask Agent", exact: true }).click();
   await expect(page.getByText("Context added to the agent's prompt", { exact: true })).toBeVisible();
   await expect(output).toContainText("Help me investigate this context");
-  await expect(pane).toHaveAttribute("aria-label", "New agent, Claude Code agent, account Personal");
+  await expect(pane).toHaveAttribute("aria-label", "Claude Code, Claude Code agent, account Personal");
   const threadId = await pane.getAttribute("data-provider-pane");
   const text = await page.evaluate(
     (id) =>
