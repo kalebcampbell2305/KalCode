@@ -9,7 +9,7 @@ import {
   afterLaunch,
   answerApproval,
   chooseAccount,
-  closeTab,
+  closeOverlays,
   EFFORTS,
   focusAgent,
   focusTab,
@@ -19,14 +19,23 @@ import {
   launch,
   MAX_AGENTS_PER_LAUNCH,
   MODELS,
+  type Mode,
+  navStep,
+  navTo,
+  newLikeThis,
   nudge,
   openBrowser,
   openLauncher,
   openOperationsContext,
   openTerminal,
   openWidget,
+  PROVIDER_NAME,
   type ProviderId,
   promptAgent,
+  recordVisit,
+  requestClose,
+  resolveClose,
+  runCommand,
   runShell,
   runVoice,
   type State,
@@ -82,6 +91,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
   // ── Render ────────────────────────────────────────────────────────────────────────────────
 
   function render() {
+    recordVisit(state);
     const scroll = new Map<string, number>();
     for (const el of host.querySelectorAll<HTMLElement>("[data-scroll-key]"))
       scroll.set(el.dataset.scrollKey ?? "", el.scrollTop);
@@ -124,6 +134,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
       pendingFocus = null;
     }
     adaptiveCanvas.afterRender();
+    placeAnchored();
     if (state.tour !== null) placeTour();
     root.dataset.surface = state.surface;
   }
@@ -132,11 +143,36 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     pendingFocus = selector;
   }
 
+  /** Popovers that belong to an element inside a pane (the header account picker) sit under it. */
+  function placeAnchored() {
+    const app = host.firstElementChild as HTMLElement | null;
+    for (const pop of host.querySelectorAll<HTMLElement>("[data-anchor]")) {
+      const anchor = host.querySelector<HTMLElement>(pop.dataset.anchor ?? "");
+      if (!app || !anchor || state.mobile) {
+        pop.style.removeProperty("left");
+        pop.style.removeProperty("top");
+        pop.dataset.placed = String(state.mobile);
+        continue;
+      }
+      const box = app.getBoundingClientRect();
+      const rect = anchor.getBoundingClientRect();
+      const width = pop.offsetWidth || 320;
+      const height = pop.offsetHeight || 240;
+      const left = Math.min(Math.max(8, rect.left - box.left), box.width - width - 8);
+      let top = rect.bottom - box.top + 6;
+      if (top + height > box.height - 8) top = Math.max(8, rect.top - box.top - height - 6);
+      pop.style.left = `${left}px`;
+      pop.style.top = `${top}px`;
+      pop.dataset.placed = "true";
+    }
+  }
+
   // ── Actions ───────────────────────────────────────────────────────────────────────────────
 
   function closeMenus() {
     state.menu = null;
     state.voice.open = false;
+    state.picker = null;
   }
 
   function act(action: string, el?: HTMLElement) {
@@ -159,7 +195,9 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
         const menu = arg as State["menu"];
         const wasOpen = state.menu === menu;
         state.voice.open = false;
+        state.picker = null;
         state.menu = wasOpen ? null : menu;
+        if (menu === "notifications" && !wasOpen) state.unread = 0;
         if (menu === "palette" && !wasOpen) {
           state.palette = { q: "", sel: 0 };
           focusSoon("[data-palette]");
@@ -184,7 +222,66 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
         focusTab(state, arg);
         break;
       case "close":
-        closeTab(state, arg);
+        requestClose(state, arg);
+        if (state.closing) focusSoon('[data-do="close-keep"]');
+        break;
+      case "close-cancel":
+      case "close-keep":
+      case "close-stop": {
+        const tab = state.closing;
+        resolveClose(state, name === "close-keep" ? "keep" : name === "close-stop" ? "stop" : "cancel");
+        if (name === "close-cancel" && tab) focusSoon(`[data-do="close:${tab}"]`);
+        break;
+      }
+      case "picker": {
+        const open = state.picker?.agent === arg;
+        closeMenus();
+        state.picker = open ? null : { agent: arg, choice: null };
+        if (!open) focusSoon(".lk-pop--picker [aria-pressed='true']");
+        break;
+      }
+      case "picker-pick":
+        if (state.picker) state.picker.choice = arg;
+        break;
+      case "picker-start": {
+        const picker = state.picker;
+        state.picker = null;
+        if (picker?.choice) {
+          const created = newLikeThis(state, picker.agent, picker.choice);
+          const agent = created ? state.agents[created] : undefined;
+          if (agent) {
+            const account = state.accounts.find((a) => a.id === agent.account)?.name ?? "that account";
+            toast(state, `Started a fresh ${PROVIDER_NAME[agent.provider]} session on ${account}.`, "info", agent.id);
+            focusSoon(`[data-key="in-${agent.id}"]`);
+          }
+        }
+        break;
+      }
+      case "mode":
+        if (arg === "bypass" || arg === "plan") {
+          state.mode = arg as Mode;
+          toast(state, `New agents start in ${arg === "bypass" ? "Bypass" : "Plan"}.`, "done");
+        }
+        state.menu = null;
+        break;
+      case "nav":
+        closeMenus();
+        if (!navStep(state, arg === "back" ? -1 : 1)) return;
+        break;
+      case "nav-to":
+        closeMenus();
+        navTo(state, Number(arg));
+        break;
+      case "rail-idle":
+        state.idleOpen = !state.idleOpen;
+        break;
+      case "fav": {
+        const saved = state.favorites.find((f) => f.key === arg);
+        if (saved) act(saved.act);
+        return;
+      }
+      case "fav-run":
+        runCommand(state, arg);
         break;
       case "maximize":
         state.focus = arg;
@@ -214,9 +311,12 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
         const created = launch(state);
         if (created.length) {
           const first = state.agents[created[0] as string];
+          const provider = first ? PROVIDER_NAME[first.provider] : "coding";
           toast(
             state,
-            `Launched ${created.length === 1 ? first?.name : `${created.length} agents`} in Code`,
+            created.length === 1
+              ? `Launched a ${provider} agent in Code`
+              : `Launched ${created.length} ${provider} agents in Code`,
             "info",
             created[0],
           );
@@ -459,7 +559,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
       state.focus = frame.dataset.doFocus ?? state.focus;
       changed = true;
     }
-    if (state.menu && !target.closest(".lk-menu, .lk-pop, .lk-palette")) {
+    if ((state.menu || state.picker) && !target.closest(".lk-menu, .lk-pop, .lk-palette")) {
       closeMenus();
       changed = true;
     }
@@ -539,7 +639,15 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
       }
     }
     if (event.key === "Escape") {
-      if (state.launcher) {
+      if (state.closing) {
+        const tab = state.closing;
+        resolveClose(state, "cancel");
+        focusSoon(`[data-do="close:${tab}"]`);
+      } else if (state.picker) {
+        const agent = state.picker.agent;
+        state.picker = null;
+        focusSoon(`[data-picker-for="${agent}"]`);
+      } else if (state.launcher) {
         state.launcher = null;
         focusSoon('[data-tour="new-agent"]');
       } else if (state.menu || state.voice.open) closeMenus();
@@ -556,8 +664,13 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
       act("menu:palette");
       return;
     }
-    if (state.launcher && target.closest("[data-dialog]") && /^[1-4]$/.test(event.key)) {
-      state.launcher.count = Number(event.key);
+    if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight") && !target.matches("input")) {
+      event.preventDefault();
+      act(`nav:${event.key === "ArrowLeft" ? "back" : "forward"}`);
+      return;
+    }
+    if (state.launcher && target.closest("[data-dialog]") && /^[0-9]$/.test(event.key) && !target.matches("input")) {
+      state.launcher.count = event.key === "0" ? MAX_AGENTS_PER_LAUNCH : Number(event.key);
       render();
       return;
     }
@@ -582,8 +695,11 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
 
   // Contextual hints: one floating tooltip for every [data-hint].
   let tipFor: HTMLElement | null = null;
+  let clicked: HTMLElement | null = null;
   function showTip(el: HTMLElement) {
-    if (!tip || state.tour !== null) return;
+    // No hint over an open menu or dialog, and none for the control the visitor just used.
+    if (!tip || state.tour !== null || el === clicked) return;
+    if (state.menu || state.launcher || state.picker || state.closing || state.voice.open) return;
     tipFor = el;
     tip.textContent = el.dataset.hint ?? "";
     tip.dataset.on = "true";
@@ -603,6 +719,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
   host.addEventListener("pointerover", (event) => {
     const el = (event.target as HTMLElement).closest<HTMLElement>("[data-hint]");
     if (el === tipFor) return;
+    if (el !== clicked) clicked = null;
     window.clearTimeout(hoverTimer);
     if (!el || event.pointerType === "touch") return hideTip();
     hoverTimer = window.setTimeout(() => showTip(el), 380);
@@ -616,7 +733,11 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     if (el && (event.target as HTMLElement).matches(":focus-visible")) showTip(el);
     else hideTip();
   });
-  host.addEventListener("pointerdown", hideTip);
+  host.addEventListener("pointerdown", (event) => {
+    clicked = (event.target as HTMLElement).closest<HTMLElement>("[data-hint]");
+    window.clearTimeout(hoverTimer);
+    hideTip();
+  });
 
   // Phones: swipe the pane left or right to move between panes.
   let swipeX = 0;
@@ -707,6 +828,8 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
         return;
       }
       if (state.tour !== null) endTour();
+      // A page control changes the demo: whatever floated over the old screen goes away first.
+      closeOverlays(state);
       for (const a of action.split(",")) act(a.trim());
       if (action.startsWith("launcher"))
         host.querySelector<HTMLElement>('[data-dialog] [aria-checked="true"]')?.focus({ preventScroll: true });

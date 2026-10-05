@@ -103,14 +103,25 @@ test.describe("download page", () => {
     await expect(page.locator(notes.hash)).toBeVisible();
   });
 
-  test("on desktop, every note stacks under the build details, clear of the download button", async ({ page }) => {
+  // Two columns on desktop: what the file is (details) and what to do with it (notes, then the button).
+  test("on desktop, every note stacks in the action column, above and clear of the download button", async ({
+    page,
+  }) => {
     test.skip(RELEASES.latest === null, "no published release, so there are no build notes");
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/download");
     for (const platform of await page.locator('.platform[data-state="available"]').all()) {
       const details = await platform.locator(".platform__meta").boundingBox();
+      const button = await platform.locator(".platform__action .button").boundingBox();
+      const side = await platform.locator(".platform__side").boundingBox();
+      const notes = await platform.locator(".platform__notes").boundingBox();
+      expect(details && side && side.x >= details.x + details.width, "the action column sits beside the details").toBe(
+        true,
+      );
       for (const note of await platform.locator(".platform__note").all()) {
-        expect((await note.boundingBox())?.x, "note starts in the details column").toBe(details?.x);
+        const box = await note.boundingBox();
+        expect(box?.x, "note starts in the action column").toBe(notes?.x);
+        expect(box && button && box.y + box.height <= button.y, "note ends above the download button").toBe(true);
       }
     }
   });

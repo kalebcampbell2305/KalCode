@@ -1,8 +1,10 @@
 ---
+import Backdrop from "../components/Backdrop.astro";
+import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { RELEASES, buildStatus, releaseCopy, servedStableRelease, signedStableRelease } from "../lib/releases";
-import { CONTACT_EMAIL, GEMINI_AVAILABILITY, getPage } from "../lib/site";
+import { RELEASES, buildStatus, servedStableRelease, signedStableRelease } from "../lib/releases";
+import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/security");
 const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
@@ -10,167 +12,362 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 // (B9 536efd7: Authenticode-signed NSIS installer, Developer ID signed and notarized app, minisign
 // update signatures checked by apps/desktop/src-tauri/src/updater_commands and crates/updater).
 const signedBuilds = signedStableRelease(RELEASES) !== null;
+
+const commitments = [
+  {
+    label: "local-first",
+    title: "Your work stays on your device",
+    body: "Projects, threads, events, settings and memory are stored on your device. Current builds send no user data off the device. Your KalCode account holds only your sign-in, plan and KalVoice Request counts.",
+  },
+  {
+    label: "no telemetry",
+    title: "No telemetry",
+    body: "Current builds include no telemetry or analytics of any kind.",
+  },
+  {
+    label: "ipc allow-list",
+    title: "An interface that can't overreach",
+    body: "The app's interface can call only an explicit allow-list of KalCode commands, each of which validates its input natively. The interface cannot pass file paths, shell arguments or SQL to the native side, and generic file-system, shell and HTTP plugins are not available to it.",
+  },
+  {
+    label: "content policy",
+    title: "Strict content policy",
+    body: "The app's interface runs under a strict Content-Security-Policy: no remote scripts, no remote content, and no eval. Developer tools are disabled in release builds.",
+  },
+  {
+    label: "credentials",
+    title: "Where credentials are kept",
+    body: "Your KalCode account session is kept in your operating system's credential store (Windows Credential Manager or macOS Keychain). Provider sign-ins are kept by each provider's own CLI, separately for every provider account through its own KalCode-managed profile; KalCode never reads or copies them. Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted file, never in plaintext; Gemini derives that file's key from your computer and user names, so it keeps the sign-in out of plaintext but not away from other programs running as your user. KalCode's own secret values are redacted from debug output, cleared from memory when dropped, and never written to the database, logs, events or interface.",
+  },
+  {
+    label: "logs",
+    title: "Redacted local logs",
+    body: "Logs stay local and pass through a redaction step for credential patterns before anything is written.",
+  },
+  {
+    label: "database",
+    title: "Safe database handling",
+    body: "Parameterized SQL only, checksummed migrations, a backup before each upgrade, and a refusal to downgrade.",
+  },
+  {
+    label: "native code",
+    title: "Memory-safe native code",
+    body: "Unsafe Rust is denied by default across KalCode's workspace crates. The only exceptions are operating-system integration points, each explicitly allowed for a single module or function. The vendored terminal library (portable-pty, which KalCode patches for Windows job objects and macOS terminal handling) sits outside that lint.",
+  },
+  {
+    label: "containment",
+    title: "Workspace containment",
+    body: "A path counts as inside your workspace only when it still lands inside the workspace folder after .., symlinks and junctions are resolved. Paths KalCode cannot resolve safely, such as device paths and alternate data streams, are treated as outside.",
+  },
+  {
+    label: "providers",
+    title: "Your real environment, KalCode's secrets kept out",
+    body: "Each coding agent starts the way it would in your own terminal: with your environment, such as your SSH agent, GH_TOKEN, cloud credentials and the variables your MCP servers use. KalCode leaves out only its own internal variables and, for a managed account, the few variables that would sign that provider in as a different account. Every provider session runs in its own supervised process, so one failing never takes the others down.",
+  },
+  ...(signedBuilds
+    ? [
+        {
+          label: "signed builds",
+          title: "Signed installers and updates",
+          body: "The Windows installer is Authenticode-signed, and the Mac app is signed with an Apple Developer ID and notarized by Apple. Updates are signed: before installing one, KalCode checks its SHA-256 checksum and its update signature, and on Windows the installer's Authenticode signature too.",
+        },
+      ]
+    : []),
+  {
+    label: "supply chain",
+    title: "Supply chain",
+    body: "Lockfiles are committed, and dependency audits run in continuous integration.",
+  },
+];
+const planned = signedBuilds ? [] : ["Code-signed installers and signed updates."];
 ---
-<Base title={page.title} description={page.description} path={page.path}>
+<Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
+    backdrop="vault"
     title="Security"
     lead="KalCode controls powerful tools on your machine, so security is part of its architecture, not a feature added later."
     status={buildStatus()}
+    statusKind="built"
   >
-    <p class="status-line">This page lists the controls in current builds and the ones still planned.</p>
+    <p class="status-line">This page lists the controls in current builds{planned.length > 0 ? " and the ones still planned" : ""}.</p>
   </PageHead>
-  <section class="section">
-    <div class="container prose">
-      <h2>Commitments in current builds</h2>
-      <dl>
-        <div>
-          <dt>Local-first</dt>
-          <dd>
-            Projects, threads, events and settings are stored on your device. Current builds send
-            no user data off the device.
-          </dd>
-        </div>
-        <div>
-          <dt>No telemetry</dt>
-          <dd>Current builds include no telemetry or analytics of any kind.</dd>
-        </div>
-        <div>
-          <dt>IPC allow-list</dt>
-          <dd>
-            The app's interface can call only an explicit allow-list of KalCode commands, each of
-            which validates its input natively. The interface cannot pass file paths, shell
-            arguments or SQL to the native side, and generic file-system, shell and HTTP plugins
-            are not available to it.
-          </dd>
-        </div>
-        <div>
-          <dt>Strict content policy</dt>
-          <dd>
-            The app's interface runs under a strict Content-Security-Policy: no remote scripts, no
-            remote content, and no <code>eval</code>. Developer tools are disabled in release builds.
-          </dd>
-        </div>
-        <div>
-          <dt>Where credentials are kept</dt>
-          <dd>
-            Your KalCode account session is kept in your operating system's credential store
-            (Windows Credential Manager or macOS Keychain). Provider sign-ins are kept by each
-            provider's own CLI, separately for every provider account through its own KalCode-managed
-            profile; KalCode never reads or copies them. Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted
-            file, never in plaintext. Gemini derives that file's key from your computer and user
-            names, so it keeps the sign-in out of plaintext but not away from other programs running
-            as your user. KalCode's own secret values are redacted from debug output, cleared from
-            memory when dropped, and never written to the database, logs, events or interface.
-          </dd>
-        </div>
-        <div>
-          <dt>Redacted local logs</dt>
-          <dd>Logs stay local and pass through a redaction step for credential patterns.</dd>
-        </div>
-        <div>
-          <dt>Safe database handling</dt>
-          <dd>
-            Parameterized SQL only, checksummed migrations, a backup before each upgrade, and a
-            refusal to downgrade.
-          </dd>
-        </div>
-        <div>
-          <dt>Memory-safe native code</dt>
-          <dd>
-            Unsafe Rust is denied by default across KalCode's workspace crates. The only exceptions
-            are operating-system integration points (Windows, macOS and Unix system interfaces),
-            each explicitly allowed for a single module or function. The vendored terminal library
-            (portable-pty, which KalCode patches for Windows job objects and macOS terminal
-            handling) sits outside that lint.
-          </dd>
-        </div>
-        <div>
-          <dt>Workspace containment</dt>
-          <dd>
-            A path counts as inside your workspace only when it still lands inside the workspace
-            folder after <code>..</code>, symlinks and junctions are resolved. Paths KalCode cannot
-            resolve safely, such as device paths and alternate data streams, are treated as outside.
-          </dd>
-        </div>
-        <div>
-          <dt>Provider isolation</dt>
-          <dd>
-            Each provider's CLI starts with a sanitized environment: only the variables the operating
-            system and that CLI need, plus that provider's own. A Claude Code process never sees an
-            OpenAI key, and no KalCode-internal variable reaches any provider.
-          </dd>
-        </div>
+
+  <section class="world-section sec" aria-labelledby="commitments-title">
+    <Backdrop variant="deep" intensity="low" />
+    <div class="container">
+      <div class="sec__head">
+        <h2 id="commitments-title" class="sec__title">Commitments in current builds</h2>
+        <p>Each one is how the shipped app behaves today, not a promise for later.</p>
+      </div>
+      <ul class="sec-grid" role="list">
         {
-          signedBuilds && (
-            <div>
-              <dt>Signed installers and updates</dt>
-              <dd>
-                The Windows installer is Authenticode-signed, and the Mac app is signed with an Apple
-                Developer ID and notarized by Apple. Updates are signed: before installing one,
-                KalCode checks its SHA-256 checksum and its update signature, and on Windows the
-                installer's Authenticode signature too.
-              </dd>
-            </div>
-          )
+          commitments.map((item, index) => (
+            <li class="sec-card">
+              <span class="sec-card__label">
+                <span class="sec-card__index">{String(index + 1).padStart(2, "0")}</span>
+                {item.label}
+              </span>
+              <h3 class="sec-card__title">{item.title}</h3>
+              <p>{item.body}</p>
+            </li>
+          ))
         }
-        <div>
-          <dt>Supply chain</dt>
-          <dd>Lockfiles are committed, and dependency audits run in continuous integration.</dd>
-        </div>
-      </dl>
-
-      <h2>Zero company AI cost: your provider, your account</h2>
-      <p>
-        KalCode connects Claude Code and Codex through their documented integration methods,
-        using your own accounts; Codex runs on personal ChatGPT plans (Free, Go, Plus and Pro).
-        {releaseCopy(GEMINI_AVAILABILITY.short, RELEASES)} Model usage is billed by each provider under your
-        account. KalCode holds no company provider credentials for your use, does not charge for,
-        resell or meter provider usage, and never falls back to a KalCode-paid service. Your
-        provider sign-ins stay with each provider's own CLI, separately for every account you add.
-      </p>
-
-      <h2>Local voice</h2>
-      <p>
-        {kalvoiceShipped ? "KalVoice" : "KalVoice, in development,"} transcribes dictation with a speech model that runs on your own
-        computer. Audio is held in memory only while it is transcribed, then discarded: it is not
-        stored and not uploaded. KalCode downloads its default speech model by itself from its signed
-        component catalog and verifies the signature and SHA-256 checksum before using it; if you
-        remove the model, it is not downloaded again on its own. Once speech is ready, KalCode also
-        downloads its on-device interpreter (about 850 MB) from the same signed catalog. Turn off
-        Prepare local intelligence automatically in Settings › KalVoice to download it yourself
-        instead. These downloads send no audio or text. Events record that a dictation or request
-        happened, never its words.
-      </p>
-
-      <h2>The permission model</h2>
-      <p>
-        KalCode's permission engine checks every action an AI agent wants to take against the
-        permission mode you choose: Plan, Approve or Auto.
-        Providers and their output are treated as untrusted input. KalVoice is not above the model:
-        it cannot raise its own authority or enable Bypass. Consequential decisions are recorded in an
-        audit log. Read the <a href="/docs/permissions">permission documentation</a> for details.
-      </p>
-
-      <h2>Planned</h2>
-      <ul>
-        {!signedBuilds && <li>Code-signed installers and signed updates.</li>}
-        <li>Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.</li>
       </ul>
+    </div>
+  </section>
 
-      <h2>This website</h2>
-      <p>
-        kalcoded.com is served with a strict Content-Security-Policy, HSTS, and headers that block
-        framing, MIME sniffing and access to your camera, microphone and location. The early-access
-        endpoint accepts only small JSON requests, validates every field, and is rate-limited. It
-        stores only the email addresses people submit; see the <a href="/privacy">privacy notice</a>.
-      </p>
+  <section class="world-section sec" aria-labelledby="model-title">
+    <Backdrop variant="gravity" intensity="low" />
+    <div class="container">
+      <h2 id="model-title" class="visually-hidden">How KalCode handles providers, voice and permissions</h2>
+      <div class="sec-pair">
+        <article class="sec-panel" aria-labelledby="providers-title">
+          <span class="sec-panel__icon"><Icon name="key" /></span>
+          <h3 id="providers-title" class="sec-panel__title">Zero company AI cost: your provider, your account</h3>
+          <p>
+            KalCode connects Claude Code, Codex, Cursor and Gemini CLI through each provider's own
+            CLI and official sign-in, using your own accounts. Model usage is billed by each provider
+            under your account. KalCode holds no company provider credentials for your use, does not
+            charge for, resell or meter provider usage, and never falls back to a KalCode-paid
+            service. Your provider sign-ins stay with each provider's own CLI, separately for every
+            account you add.
+          </p>
+        </article>
+        <article class="sec-panel" aria-labelledby="voice-title">
+          <span class="sec-panel__icon"><Icon name="prompt" /></span>
+          <h3 id="voice-title" class="sec-panel__title">Local voice</h3>
+          <p>
+            {kalvoiceShipped ? "KalVoice" : "KalVoice, in development,"} transcribes dictation with a speech model that runs on your own
+            computer. Audio is held in memory only while it is transcribed, then discarded: it is not
+            stored and not uploaded. KalCode downloads its default speech model by itself from its
+            signed component catalog and verifies the signature and SHA-256 checksum before using it;
+            if you remove the model, it is not downloaded again on its own. Once speech is ready,
+            KalCode also downloads its on-device interpreter (about 850 MB) from the same signed
+            catalog. Turn off Prepare local intelligence automatically in Settings › KalVoice to
+            download it yourself instead. These downloads send no audio or text. Events record that a
+            dictation or request happened, never its words.
+          </p>
+        </article>
+        <article class="sec-panel" aria-labelledby="permissions-title">
+          <span class="sec-panel__icon"><Icon name="lock" /></span>
+          <h3 id="permissions-title" class="sec-panel__title">The permission model</h3>
+          <p>
+            New coding agents start in Bypass: edits, commands, tests, builds, Git, pushes and dev
+            servers run without approval prompts, and access to credentials and secrets still asks.
+            Plan is the read-only alternative. Every permission mode is on every plan, so plans never
+            differ by safety controls. Providers and their output are treated as untrusted input,
+            KalVoice cannot raise its own authority, and consequential decisions are recorded in a
+            local audit log. Read the <a href="/docs/permissions">permission documentation</a>.
+          </p>
+        </article>
+        <article class="sec-panel" aria-labelledby="website-title">
+          <span class="sec-panel__icon"><Icon name="system" /></span>
+          <h3 id="website-title" class="sec-panel__title">This website</h3>
+          <p>
+            kalcoded.com is served with a strict Content-Security-Policy, HSTS, and headers that
+            block framing, MIME sniffing and access to your camera, microphone and location. Account
+            sessions use a secure, HttpOnly cookie, and checkout runs on Stripe's hosted pages. The
+            early-access endpoint accepts only small JSON requests, validates every field, and is
+            rate-limited; see the <a href="/privacy">privacy notice</a>.
+          </p>
+        </article>
+      </div>
 
-      <h2>Reporting a vulnerability</h2>
-      <p>
-        If you find a security issue in KalCode or this site, email
-        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> with the details and
-        steps to reproduce. Please give us a chance to fix it before sharing it publicly.
-      </p>
+      {
+        planned.length > 0 && (
+          <div class="sec-planned">
+            <h3 class="sec-panel__title">Planned</h3>
+            <ul>
+              {planned.map((item) => (
+                <li>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )
+      }
+
+      <div class="sec-report" aria-labelledby="report-title">
+        <div>
+          <h3 id="report-title" class="sec-report__title">Reporting a vulnerability</h3>
+          <p>
+            If you find a security issue in KalCode or this site, email
+            <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> with the details and steps to
+            reproduce. Please give us a chance to fix it before sharing it publicly.
+          </p>
+        </div>
+        <a class="button button--primary" href={`mailto:${CONTACT_EMAIL}`}>Email a report <Icon name="arrow-right" /></a>
+      </div>
     </div>
   </section>
 </Base>
+
+<style>
+  .sec__head {
+    display: grid;
+    gap: var(--space-3);
+    margin-bottom: clamp(1.75rem, 1.25rem + 1.5vw, 2.75rem);
+  }
+
+  .sec__head p {
+    max-width: 52ch;
+    color: var(--color-text-secondary);
+  }
+
+  .sec__title {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-type-headline);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 1.05;
+  }
+
+  /* Cards pack in columns, so a short commitment never leaves a hole beside a long one. */
+  .sec-grid {
+    columns: 20rem 3;
+    column-gap: var(--space-4);
+  }
+
+  .sec-card {
+    display: grid;
+    align-content: start;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+    break-inside: avoid;
+    padding: clamp(1.25rem, 1rem + 0.8vw, 1.75rem);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: var(--leading-relaxed);
+  }
+
+  .sec-card__label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-accent-text);
+    font-family: var(--font-mono);
+    font-size: var(--site-text-xs);
+  }
+
+  .sec-card__index {
+    color: var(--color-text-faint);
+  }
+
+  .sec-card__title {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+  }
+
+  .sec-pair {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 56rem) {
+    .sec-pair {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .sec-panel {
+    display: grid;
+    align-content: start;
+    gap: var(--space-4);
+    padding: clamp(1.5rem, 1rem + 1.5vw, 2.25rem);
+    border-radius: var(--radius-xl);
+    background:
+      radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.07), transparent 60%),
+      var(--world-panel);
+    box-shadow: var(--world-panel-edge);
+    color: var(--color-text-secondary);
+    line-height: var(--leading-relaxed);
+  }
+
+  .sec-panel a,
+  .sec-report a:not(.button) {
+    color: var(--color-accent-text);
+    text-underline-offset: 0.2em;
+  }
+
+  .sec-panel__icon {
+    display: inline-grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--radius-lg);
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+    color: var(--color-accent-text);
+  }
+
+  .sec-panel__icon :global(svg) {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .sec-panel__title {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-type-title);
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+  }
+
+  .sec-planned {
+    margin-top: var(--space-4);
+    padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+    border-radius: var(--radius-xl);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+    color: var(--color-text-secondary);
+  }
+
+  .sec-planned ul {
+    margin-top: var(--space-3);
+    padding-left: 1.25rem;
+  }
+
+  .sec-report {
+    display: grid;
+    gap: var(--space-5);
+    align-items: center;
+    margin-top: var(--space-4);
+    padding: clamp(1.5rem, 1rem + 1.5vw, 2.25rem);
+    border-radius: var(--radius-xl);
+    background:
+      radial-gradient(90% 140% at 100% 0%, rgb(var(--world-blue) / 0.16), transparent 60%),
+      var(--world-panel);
+    box-shadow: var(--world-panel-lit);
+    color: var(--color-text-secondary);
+  }
+
+  .sec-report__title {
+    margin-bottom: var(--space-2);
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-type-title);
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.025em;
+  }
+
+  .sec-report p {
+    max-width: 60ch;
+  }
+
+  .sec-report .button {
+    justify-self: start;
+  }
+
+  @media (min-width: 52rem) {
+    .sec-report {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+  }
+</style>

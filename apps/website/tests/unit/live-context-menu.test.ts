@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { canvasAction, canvasState, visibleCanvasFrames } from "../../src/lib/live/canvas";
-import { frameOfTab, initialState, tabOfAgent } from "../../src/lib/live/model";
+import { agentState, frameOfTab, initialState, isSaved, tabOfAgent } from "../../src/lib/live/model";
 import { applyDemoContextAction, demoContextItems } from "../../src/scripts/live/contextMenus";
 
 describe("live demo context actions", () => {
-  it("duplicates the clicked agent's configuration into a fresh coding session", () => {
+  it("New like this starts a fresh coding session with the clicked agent's configuration", () => {
     const state = initialState();
+    expect(
+      demoContextItems(state, { kind: "tab", id: "t-a2" }).find((item) => item.action === "duplicate")?.label,
+    ).toBe("New like this");
     const source = state.agents.a2;
     if (!source) throw new Error("Missing sample Codex agent");
     const original = JSON.stringify(source);
@@ -13,11 +16,12 @@ describe("live demo context actions", () => {
     const copy = state.agents[state.order.at(-1) ?? ""];
     if (!copy) throw new Error("Missing duplicate agent");
     expect(copy.id).not.toBe(source.id);
-    expect([copy.provider, copy.account, copy.model, copy.effort]).toEqual([
+    expect([copy.provider, copy.account, copy.model, copy.effort, copy.mode]).toEqual([
       source.provider,
       source.account,
       source.model,
       source.effort,
+      source.mode,
     ]);
     expect(copy.status).toBe("starting");
     expect(state.tabs[tabOfAgent(state, copy.id) ?? ""]?.kind).toBe("agent");
@@ -55,10 +59,10 @@ describe("live demo context actions", () => {
     expect(state.frames[1]?.active).toBe(browser.id);
     expect(frameOfTab(state, browser.id)).not.toBe(frameOfTab(state, "t-a1"));
   });
-  it("stops and closes only the selected object and hides Stop once idle", () => {
+  it("stops and closes only the selected object and hides Stop once stopped", () => {
     const state = initialState();
     applyDemoContextAction(state, { kind: "tab", id: "t-a1" }, "stop");
-    expect(state.agents.a1?.status).toBe("idle");
+    expect(agentState(state.agents.a1 ?? ({} as never))).toBe("stopped");
     expect(state.agents.a2?.status).toBe("testing");
     expect(demoContextItems(state, { kind: "tab", id: "t-a1" }).map((item) => item.action)).not.toContain("stop");
     applyDemoContextAction(state, { kind: "tab", id: "t-a1" }, "close");
@@ -84,6 +88,22 @@ describe("live demo context actions", () => {
     ]);
     expect(demoContextItems(state, { kind: "tab", id: "t-a1" }).map((item) => item.action)).not.toContain("copy");
     applyDemoContextAction(state, { kind: "output", id: "t-a1" }, "stop");
-    expect(state.agents.a1?.status).toBe("working");
+    expect(agentState(state.agents.a1 ?? ({} as never))).toBe("working");
+  });
+  it("adds and removes favorites and global pins from a pane's menu", () => {
+    const state = initialState();
+    const labels = () => demoContextItems(state, { kind: "tab", id: "t-a2" }).map((item) => item.label);
+    expect(labels()).toEqual(expect.arrayContaining(["Add Favorite", "Pin globally"]));
+    applyDemoContextAction(state, { kind: "tab", id: "t-a2" }, "pin");
+    expect(isSaved(state, "pin", "t-a2")).toBe(true);
+    expect(labels()).toContain("Unpin globally");
+    applyDemoContextAction(state, { kind: "tab", id: "t-a2" }, "pin");
+    expect(isSaved(state, "pin", "t-a2")).toBe(false);
+  });
+  it("closes active work through Smart Close instead of ending it outright", () => {
+    const state = initialState();
+    applyDemoContextAction(state, { kind: "tab", id: "t-a2" }, "close");
+    expect(state.closing).toBe("t-a2");
+    expect(state.tabs["t-a2"]).toBeDefined();
   });
 });

@@ -1,5 +1,9 @@
 ---
-/** Provider-published identity mark. Always place it beside the provider's visible name. */
+/**
+ * Provider-published identity mark. Always place it beside the provider's visible name.
+ * Providers without a published mark in @kalcode/ui (Cursor) get the app's lettered hexagon
+ * (packages/ui/src/components/ProviderMark.tsx), so the site never invents a provider logo.
+ */
 import claudeSpark from "@kalcode/ui/brand/providers/claude-spark.svg?url";
 import geminiCliIcon from "@kalcode/ui/brand/providers/gemini-cli.png?url";
 import openAiBlossom from "@kalcode/ui/brand/providers/openai-blossom.svg?url";
@@ -16,9 +20,12 @@ const kind =
       ? "codex"
       : provider === "gemini" || provider === "gemini-cli"
         ? "gemini"
-        : "generic";
+        : provider === "cursor"
+          ? "cursor"
+          : "generic";
 const source = kind === "claude" ? claudeSpark : kind === "codex" ? openAiBlossom : kind === "gemini" ? geminiCliIcon : null;
-const brandSources = { claude: "anthropic", codex: "openai", gemini: "google-gemini-cli", generic: null };
+const brandSources = { claude: "anthropic", codex: "openai", gemini: "google-gemini-cli", cursor: null, generic: null };
+const letter = kind === "cursor" ? "C" : null;
 ---
 
 <span class="provider-glyph" data-provider={kind} aria-hidden="true">
@@ -30,6 +37,11 @@ const brandSources = { claude: "anthropic", codex: "openai", gemini: "google-gem
         alt=""
         data-brand-source={brandSources[kind]}
       />
+    ) : letter ? (
+      <svg class="provider-glyph__mark provider-glyph__hex" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 1.5 13.6 4.75v6.5L8 14.5 2.4 11.25v-6.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+        <text x="8" y="10.6" text-anchor="middle" fill="currentColor" font-size="7" font-weight="700">{letter}</text>
+      </svg>
     ) : (
       <span class="provider-glyph__fallback">?</span>
     )
@@ -51,6 +63,11 @@ const brandSources = { claude: "anthropic", codex: "openai", gemini: "google-gem
 
   :global([data-theme="light"]) .provider-glyph[data-provider="codex"] .provider-glyph__mark {
     filter: none;
+  }
+
+  .provider-glyph__hex {
+    color: var(--color-text);
+    font-family: var(--font-sans);
   }
 
   .provider-glyph__fallback {

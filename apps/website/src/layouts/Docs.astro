@@ -1,4 +1,5 @@
 ---
+import Backdrop from "../components/Backdrop.astro";
 import { RELEASES, releaseCopy, servedStableRelease } from "../lib/releases";
 import { DOCS_NAV, type PagePath, getPage } from "../lib/site";
 import Base from "./Base.astro";
@@ -12,38 +13,79 @@ const { path, heading, lead } = Astro.props;
 const page = getPage(path);
 // Once a Stable release is served the docs describe it; before then they describe the design.
 const stable = servedStableRelease(RELEASES);
+
+// "On this page": the article's section heads, read from the rendered slot at build time. Each
+// h2 gets a stable id so the column (and any shared link) can jump to it.
+const slug = (text: string) =>
+  text
+    .replace(/<[^>]+>/g, "")
+    .replace(/&[a-z#0-9]+;/gi, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+const sections: { id: string; title: string }[] = [];
+const body = (await Astro.slots.render("default")).replace(/<h2>([\s\S]*?)<\/h2>/g, (_, inner: string) => {
+  const title = inner
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;|&apos;/g, "'")
+    .trim();
+  let id = slug(inner) || "section";
+  while (sections.some((section) => section.id === id)) id = `${id}-${sections.length}`;
+  sections.push({ id, title });
+  return `<h2 id="${id}">${inner}</h2>`;
+});
 ---
-<Base title={page.title} description={releaseCopy(page.description, RELEASES)} path={page.path}>
-  <div class="container docs">
-    <nav class="docs__nav" aria-label="Documentation">
-      <h2>Documentation</h2>
-      <ul role="list">
-        {
-          DOCS_NAV.map((item) => (
-            <li>
-              <a href={item.href} aria-current={item.href === path ? "page" : undefined}>
-                {item.label}
-              </a>
-            </li>
-          ))
-        }
-      </ul>
-    </nav>
-    <article class="docs__content">
-      <header class="docs__head">
-        <h1 class="h1">{heading}</h1>
-        <p class="lead">{lead}</p>
-        {
-          stable ? (
-            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span></p>
-          ) : (
-            <p class="status-line"><span class="chip chip--dev">Describes the design</span> Details may change before release.</p>
-          )
-        }
-      </header>
-      <div class="prose">
-        <slot />
-      </div>
-    </article>
+<Base title={page.title} description={releaseCopy(page.description, RELEASES)} path={page.path} world>
+  <div class="docs-shell">
+    <Backdrop variant="deep" intensity="low" />
+    <div class="container docs">
+      <nav class="docs__nav" aria-label="Documentation">
+        <h2>Documentation</h2>
+        <ul role="list">
+          {
+            DOCS_NAV.map((item) => (
+              <li>
+                <a href={item.href} aria-current={item.href === path ? "page" : undefined}>
+                  {item.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+      <article class="docs__content">
+        <header class="docs__head">
+          <h1 class="h1">{heading}</h1>
+          <p class="lead">{lead}</p>
+          {
+            stable ? (
+              <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span></p>
+            ) : (
+              <p class="status-line"><span class="chip chip--dev">Describes the design</span> Details may change before release.</p>
+            )
+          }
+        </header>
+        <div class="docs__body">
+          <div class="docs__sheet">
+            <div class="prose" set:html={body} />
+          </div>
+          {
+            sections.length > 1 && (
+              <nav class="docs__toc" aria-label="On this page">
+                <p class="docs__toc-title">On this page</p>
+                <ul role="list">
+                  {sections.map((section) => (
+                    <li>
+                      <a href={`#${section.id}`}>{section.title}</a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            )
+          }
+        </div>
+      </article>
+    </div>
   </div>
 </Base>

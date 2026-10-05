@@ -1,8 +1,7 @@
 ---
 import {
   CORE_LIMITS,
-  PLANS,
-  PLAN_FEATURE_GROUPS,
+  type PlanFeature,
   formatCoreLimit,
   formatKalVoiceAllowance,
   getPlan,
@@ -16,16 +15,17 @@ import Icon from "../components/Icon.astro";
 import PageStyles from "../components/PageStyles.astro";
 import PlanStrip from "../components/PlanStrip.astro";
 import ProviderGlyph from "../components/ProviderGlyph.astro";
+import StageSlot from "../components/StageSlot.astro";
 import LiveKalCode from "../components/live/LiveKalCode.astro";
 import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
-import { type Agent, accountLabel, initialState } from "../lib/live/model";
-import { accountCard, agentPane, glyph, icon, sampleApp, statusChip } from "../lib/live/render";
-import { RELEASES, downloadCta, releaseCopy, servedStableRelease } from "../lib/releases";
+import { icon, sampleApp } from "../lib/live/render";
+import { TOUR } from "../lib/live/tour";
+import { RELEASES, downloadCta, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
-import { ACCOUNT_PAGE, GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage } from "../lib/site";
-import { hasStage } from "../lib/stage";
-import StageSlot from "../components/StageSlot.astro";
+import { ACCOUNT_PAGE, KALVOICE, PROVIDERS, PROVIDER_LINE, getPage } from "../lib/site";
+import { AGENT_STATES, SAMPLE_AGENTS, SAMPLE_AGENT_STATE_LABEL, hasStage } from "../lib/stage";
+import AgentWorkspace from "../components/stage/parts/AgentWorkspace.astro";
 import homeCss from "../styles/home.css?url";
 
 const page = getPage("/");
@@ -33,58 +33,90 @@ const cta = downloadCta();
 // Paid plans open with the account page's strict checkout build flag (docs/BILLING.md §9).
 const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 // KalVoice is described as shipped only while /download serves a signed Stable release.
-const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
+const stable = servedStableRelease(RELEASES);
+const kalvoiceShipped = stable !== null;
+const freeLimits = getPlan("free").limits;
 
-// The story's product visuals are drawn by the demo's own renderer, from the demo's sample workspace,
-// so every section shows exactly what the demo (and the app) shows.
-const sample = initialState();
-const claudeA = sample.agents.a1 as Agent;
-const codexA = sample.agents.a2 as Agent;
-const fleet = Object.values(sample.agents);
+const AGENTS = SAMPLE_AGENTS;
+const STATE_LABEL = SAMPLE_AGENT_STATE_LABEL;
+const providerName = (id: string) => PROVIDERS.find((p) => p.id === id)?.name ?? id;
+/** Sample provider accounts for the accounts beat (fictional): label, plan, usage left. */
+const ACCOUNTS = [
+  { provider: "claude", name: "Personal", plan: "Claude Max", window: "5-hour", left: 64 },
+  { provider: "claude", name: "Work", plan: "Claude Pro", window: "5-hour", left: 8 },
+  { provider: "codex", name: "Work", plan: "ChatGPT Business", window: "Weekly", left: 73 },
+] as const;
 
-/** The roadmap, straight from the canonical plan catalog: what ships today and what is next. */
-const roadmap = PLAN_FEATURE_GROUPS.map((group) => ({
-  title: group.title.replace(" — every plan", ""),
-  available: group.features.filter((f) => f.status === "available"),
-  soon: group.features.filter((f) => f.status === "coming_soon"),
-}));
-const availableCount = roadmap.reduce((n, g) => n + g.available.length, 0);
-const soonCount = roadmap.reduce((n, g) => n + g.soon.length, 0);
-const fleetFeature = getPlanFeature("agent-fleet");
-const agentsLimit = CORE_LIMITS[0];
+/** What shipped recently, each card tied to its catalog entry (Available, or Coming soon). */
+const fresh: { feature: PlanFeature; title: string; text: string; visual: string }[] = [
+  {
+    feature: getPlanFeature("quick-switcher"),
+    title: "Go anywhere, instantly",
+    text: "Back and Forward, breadcrumbs and one quick switcher for workspaces, agents, terminals, files, accounts, settings and commands.",
+    visual: "switcher",
+  },
+  {
+    feature: getPlanFeature("terminal-basics"),
+    title: "Smart Close and New like this",
+    text: "Closing a busy terminal asks first: keep it running or stop it. New like this opens a fresh agent with the same provider, account and model.",
+    visual: "close",
+  },
+  {
+    feature: getPlanFeature("account-hub"),
+    title: "The right account, every time",
+    text: "Pick the account in any terminal's header. When one runs low, KalCode suggests another you've connected, and never switches on its own.",
+    visual: "account",
+  },
+  {
+    feature: getPlanFeature("native-parity"),
+    title: "Native tools, unchanged",
+    text: "Web search, your MCP servers, plugins, slash commands, CLAUDE.md and Codex rules work exactly as in your own terminal.",
+    visual: "tools",
+  },
+  {
+    feature: getPlanFeature("terminal-status"),
+    title: "One agent state, everywhere",
+    text: "The same state in panes, Agent Fleet, Needs You and KalVoice, for every provider: “3 agents working”, never guesswork.",
+    visual: "states",
+  },
+  {
+    feature: getPlanFeature("appearance"),
+    title: "The graphite look",
+    text: "A calmer, sharper KalCode, with Contrast and Text size under Settings → Appearance.",
+    visual: "appearance",
+  },
+];
+const planTag = (feature: PlanFeature) =>
+  feature.status !== "available" ? "Coming soon" : feature.from === "free" ? "Every plan" : `${getPlan(feature.from).name} and up`;
 
 const qnas = [
   {
     q: "What is a coding agent?",
-    a: "An AI that works in your project: it reads files, edits code and runs commands. In KalCode, every agent is the real Claude Code or Codex running in its own terminal pane in Code. Start six agents and you get six terminals.",
+    a: "An AI that works in your project: it reads files, edits code and runs commands. In KalCode, every agent is the real Claude Code, Codex, Cursor or Gemini CLI running in its own terminal pane in Code. Start six agents and you get six terminals.",
   },
   {
     q: "What is a workspace?",
-    a: "A project folder. Its terminals, agents and threads gather there, and your files stay exactly where they are on your computer.",
+    a: "A project folder. Its terminals, agents and Threads gather there, and your files stay exactly where they are on your computer.",
   },
   {
-    q: "How do I connect Claude Code?",
-    a: "Install Claude Code on your computer. In KalCode, open Providers, then Accounts, add an account and choose Sign in: Claude Code opens its own browser sign-in. Add more accounts the same way.",
+    q: "How do I connect my coding providers?",
+    a: "Install the provider's CLI: Claude Code, Codex, Cursor Agent or Gemini CLI. In KalCode, open Providers, then Accounts, add an account and choose Sign in: the provider opens its own sign-in. Add personal and work accounts the same way.",
   },
   {
-    q: "How do I connect Codex?",
-    a: "The same way: Providers, then Accounts, add a Codex account and choose Sign in. Codex runs on personal ChatGPT plans (Free, Go, Plus and Pro).",
+    q: "Do agents ask before every command?",
+    a: "No. New coding agents start in Bypass: edits, commands, tests, builds, Git, pushes and dev servers just run. Choose Plan for a read-only pass. Access to credentials and secrets always asks, on every plan.",
   },
   {
     q: "What does KalVoice do?",
-    a: `Hold ${KALVOICE.pushToTalkKey} and speak. In a terminal your words are typed into the focused agent; anywhere else KalVoice runs the command, like “Open Dashboard”. KalVoice interprets commands on your device, and dictation is never counted.`,
+    a: `Hold ${KALVOICE.pushToTalkKey} (Fn on a Mac) and speak. In a terminal your words are typed into the focused agent; anywhere else KalVoice runs the command, like “Open Dashboard”. Dictation runs on your device and is never counted.`,
   },
   {
     q: "How do I open another coding agent?",
-    a: "Click New agent in Code, or + in any pane. Pick the account, the model, the effort and how many agents, then Launch. Each agent opens in its own terminal.",
-  },
-  {
-    q: "How do I use Live Browser?",
-    a: "Choose + → Browser in any pane, or Live Browser in the New agent launcher. KalCode finds your local dev server by itself, so your app opens next to the agent building it.",
+    a: "Click New agent in Code, or + in any pane. Pick the provider, account, model, effort and how many agents, up to ten at once, then Launch. Each agent opens in its own terminal.",
   },
   {
     q: "What does Needs You mean?",
-    a: "An agent is waiting on you: it wants approval to run something, or it's asking you a question. The Needs You count is always in the top bar; click it to jump straight to that agent.",
+    a: "An agent is waiting on you: it's asking a question, it needs a sign-in, or it wants access to a credential or secret. The Needs You count is always in the top bar; click it to jump straight to that agent.",
   },
   {
     q: "How do updates work?",
@@ -92,7 +124,7 @@ const qnas = [
   },
   {
     q: "Is the demo the Free plan?",
-    a: `No. The demo above is a temporary sample workspace in your browser: nothing you do there is saved. The Free plan is a real KalCode account (${formatCoreLimit(getPlan("free").limits, agentsLimit)}, ${formatKalVoiceAllowance(getPlan("free").limits)} KalVoice Requests a month) with your own projects and providers.`,
+    a: `No. The demo above is a temporary sample workspace in your browser: nothing you do there is saved. The Free plan is a real KalCode account (${formatCoreLimit(freeLimits, CORE_LIMITS[0])}, ${formatKalVoiceAllowance(freeLimits)} KalVoice Requests a month) with your own projects and providers.`,
   },
 ];
 ---
@@ -123,25 +155,18 @@ const qnas = [
     ))
   }
 
-  <!-- Hero: the orb world, one promise, two actions. The workspace rises beneath it. -->
-  <section class="hero" data-theme="dark" aria-labelledby="hero-title">
+  <!-- Hero: the orb world, one promise, two actions. -->
+  <section class="hero hero--one" data-theme="dark" aria-labelledby="hero-title">
     <HeroOrbSlot />
-    <p class="hero__aside hero__aside--left" aria-hidden="true">
-      <span>Code</span><span>Reason</span><span>Automate</span><span>Create</span><span>Together.</span>
-    </p>
-    <p class="hero__aside hero__aside--right" aria-hidden="true">
-      <span>Built for a</span><span>brighter</span><span>tomorrow.</span>
-    </p>
     <div class="container hero__content">
       <div class="hero__lockup">
         <span class="hero__wordmark-glow" aria-hidden="true"><span class="hero__wordmark"></span></span>
-        <p class="hero__tagline">Code the Future</p>
       </div>
       <h1 id="hero-title" class="hero__statement">
-        <span class="visually-hidden">KalCode: </span>AI engineering. <span class="hero__accent">One workspace.</span>
+        <span class="visually-hidden">KalCode: </span>Every coding agent. <span class="hero__accent">One workspace.</span>
       </h1>
-      <p class="hero__line hero__line--steps">
-        <span>Run Claude Code and Codex.</span> <span>Manage coding agents.</span> <span>Control your workspace.</span> <span>Ship faster.</span>
+      <p class="hero__line">
+        Claude Code, Codex, Cursor and Gemini CLI in real terminals, side by side, on your own accounts.
       </p>
       <div class="button-row hero__actions">
         <a class="button button--primary button--lg" href="#try" data-live-do="">
@@ -186,7 +211,7 @@ const qnas = [
         <div class="try__modes" role="group" aria-label="How do you want to start?">
           <button type="button" class="try__mode try__mode--tour" data-live-do="tour">
             <span class="try__mode-icon" aria-hidden="true"><Fragment set:html={icon("play")} /></span>
-            <span><strong>Take the 2-minute tour</strong><small>Ten short steps through the essentials</small></span>
+            <span><strong>Take the 2-minute tour</strong><small>{TOUR.length} short steps through the essentials</small></span>
           </button>
           <button type="button" class="try__mode" data-live-do="menus-close">
             <span class="try__mode-icon" aria-hidden="true"><Fragment set:html={icon("sparkles")} /></span>
@@ -200,34 +225,29 @@ const qnas = [
     </div>
   </section>
 
-  <!-- Providers: the names you already use, with honest adapter status. -->
-  <section class="providers" aria-labelledby="providers-title">
+  <!-- Providers: the names you already use. -->
+  <section class="providers works" aria-labelledby="providers-title">
     <div class="container">
       <h2 id="providers-title" class="providers__title">Works with the coding agents you already use</h2>
-      <ul class="providers__list" role="list" aria-labelledby="providers-title">
+      <ul class="works__list" role="list" aria-labelledby="providers-title">
         {
           PROVIDERS.map((provider) => (
-            <li class="providers__item">
-              <span class="providers__name">
+            <li class="works__item">
+              <span class="works__name">
                 <ProviderGlyph provider={provider.id} />
                 {provider.name}
               </span>
-              <span class="providers__status">
-                <span
-                  class:list={["status-dot", provider.state === "built" ? "status-dot--built" : "status-dot--idle"]}
-                  aria-hidden="true"
-                />
-                {releaseCopy(provider.status, RELEASES)}
+              <span class="works__status">
+                <span class="status-dot status-dot--built" aria-hidden="true" />
+                {provider.status}
               </span>
             </li>
           ))
         }
-        <li class="providers__item providers__item--more">
-          <span class="providers__name">And more providers</span>
-          <span class="providers__status">Through the same runtime</span>
-        </li>
       </ul>
-      <p class="providers__note">{releaseCopy(GEMINI_AVAILABILITY.notice, RELEASES)}</p>
+      <p class="works__line">
+        {PROVIDER_LINE} <a class="text-link" href="/docs/providers">How providers work <Icon name="arrow-right" /></a>
+      </p>
     </div>
   </section>
 
@@ -236,44 +256,18 @@ const qnas = [
     <Backdrop variant="nebula" intensity="low" />
     <span class="story__route" aria-hidden="true"></span>
 
-    <!-- 01 Why -->
-    <section class="beat beat--why" id="why" aria-labelledby="why-title">
+    <!-- 01 Code: every agent is a real terminal -->
+    <section class="beat beat--why" id="agents" aria-labelledby="agents-title">
       <div class="container container--wide beat__grid">
         <div class="beat__copy" data-reveal>
-          <p class="beat__num">01 · Why KalCode</p>
-          <h2 id="why-title" class="h2">Your AI coding, finally in one place.</h2>
+          <p class="beat__num">01 · Code</p>
+          <h2 id="agents-title" class="h2">Every agent is a real coding terminal.</h2>
           <p class="body-lg">
-            Terminals in one window, Claude Code in another, Codex somewhere else, a browser tab for the
-            app, another for usage limits. KalCode brings all of it into one workspace you control.
+            No more juggling windows. In KalCode an agent is the provider's own CLI running in its own
+            terminal pane, not a chat thread. Launch one and a terminal opens in Code. Launch ten at once
+            and you get ten.
           </p>
-          <ul class="beat__points" role="list">
-            <li><Icon name="check" /> Every agent in its own terminal pane, all in one window</li>
-            <li><Icon name="check" /> One place to see what's working, waiting or done</li>
-            <li><Icon name="check" /> Your own Claude Code and Codex accounts. KalCode never meters your AI.</li>
-          </ul>
-        </div>
-        <div class="beat__visual why-visual" data-reveal aria-hidden="true" inert>
-          <div class="why-visual__win why-visual__win--1"><span><Fragment set:html={glyph("claude")} /> Claude Code</span><i></i><i></i><i></i></div>
-          <div class="why-visual__win why-visual__win--2"><span><Fragment set:html={glyph("codex")} /> Codex</span><i></i><i></i></div>
-          <div class="why-visual__win why-visual__win--3"><span><Fragment set:html={icon("terminal")} /> PowerShell</span><i></i><i></i><i></i></div>
-          <div class="why-visual__win why-visual__win--4"><span><Fragment set:html={icon("globe")} /> localhost:3000</span><i></i><i></i></div>
-          <div class="why-visual__win why-visual__win--5"><span><Fragment set:html={icon("users")} /> Usage</span><i></i></div>
-          <div class="why-visual__frame"><span class="why-visual__brand"></span></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 02 Code and agents -->
-    <section class="beat" id="agents" aria-labelledby="agents-title">
-      <div class="container container--wide beat__grid">
-        <div class="beat__copy" data-reveal>
-          <p class="beat__num">02 · Code</p>
-          <h2 id="agents-title" class="h2">An agent is a real coding terminal.</h2>
-          <p class="body-lg">
-            In KalCode, an agent is the actual Claude Code or Codex running in its own terminal pane, not a
-            chat thread. Launch one and a new terminal opens in Code. Launch six and you get six.
-          </p>
-          <ol class="beat__steps" role="list">
+          <ol class="beat__steps" role="list" aria-label="New agent">
             <li><span>1</span>Provider</li>
             <li><span>2</span>Account</li>
             <li><span>3</span>Model</li>
@@ -285,28 +279,25 @@ const qnas = [
           </button>
         </div>
         <div class="beat__visual" data-reveal aria-hidden="true" inert>
-          <div class="mini mini--panes">
-            <div class="lk-frame mini__pane" data-focused="true"><div class="lk-frame__tabs"><span class="mini__tab"><Fragment set:html={glyph("claude")} /> {claudeA.name} <span class="lk-dot" data-tone="working"></span></span></div><Fragment set:html={agentPane(sample, claudeA)} /></div>
-            <div class="lk-frame mini__pane mini__pane--b"><div class="lk-frame__tabs"><span class="mini__tab"><Fragment set:html={glyph("codex")} /> {codexA.name} <span class="lk-dot" data-tone="working"></span></span></div><Fragment set:html={agentPane(sample, codexA)} /></div>
-          </div>
+          <AgentWorkspace />
         </div>
       </div>
     </section>
 
-    <!-- 03 Accounts -->
+    <!-- 02 Accounts -->
     <section class="beat beat--flip" id="accounts" aria-labelledby="accounts-title">
       <div class="container container--wide beat__grid">
         <div class="beat__copy" data-reveal>
-          <p class="beat__num">03 · Provider accounts</p>
+          <p class="beat__num">02 · Provider accounts</p>
           <h2 id="accounts-title" class="h2">Every account you use. Usage at a glance.</h2>
           <p class="body-lg">
-            Connect several Claude Code and Codex accounts, personal and work. KalCode shows how much each
-            one has left before you launch, and every agent shows exactly which account it runs on.
+            Connect personal and work accounts for every provider. See how much each has left before you
+            launch, switch a terminal's account from its header, and get a suggestion when one runs low.
+            KalCode never switches on its own.
           </p>
           <p class="beat__fine">
-            Claude Code and Codex run on your own accounts: sign in to each from KalCode, with a separate managed
-            profile for every account. {releaseCopy(GEMINI_AVAILABILITY.short, RELEASES)} Usage appears when your
-            provider reports it.
+            Each account signs in with the provider's own sign-in, in its own profile. KalCode never pays
+            for, resells or meters your provider usage. Usage shows when your provider reports it.
           </p>
           <button type="button" class="button button--secondary" data-live-do="menu:accounts">
             Open Accounts &amp; usage <Icon name="arrow-right" />
@@ -315,27 +306,48 @@ const qnas = [
         <div class="beat__visual" data-reveal aria-hidden="true" inert>
           <div class="mini mini--accounts">
             <p class="mini__title"><strong>Accounts &amp; usage</strong><small>Your providers, at a glance</small></p>
-            {sample.accounts.map((account) => <Fragment set:html={accountCard(account)} />)}
+            <ul class="acct" role="list">
+              {
+                ACCOUNTS.map((account) => (
+                  <li class="acct__row" data-low={String(account.left < 20)}>
+                    <ProviderGlyph provider={account.provider} />
+                    <span class="acct__name"><b>{account.name}</b><small>{providerName(account.provider)} · {account.plan}</small></span>
+                    <span class="acct__usage">
+                      <small>{account.window}</small>
+                      <span class="acct__bar"><i data-level={String(account.left)}></i></span>
+                      <b>{account.left}% left</b>
+                    </span>
+                  </li>
+                ))
+              }
+            </ul>
+            <div class="suggest">
+              <span class="suggest__icon"><Fragment set:html={icon("users")} /></span>
+              <p><strong>Work has 8% left in its 5-hour limit.</strong><small>Personal · 64% left</small></p>
+              <span class="suggest__action">Continue with Personal?</span>
+            </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 04 KalVoice -->
+    <!-- 03 KalVoice -->
     <section class="beat beat--voice" id="kalvoice" aria-labelledby="kalvoice-title">
       <div class="container container--wide beat__grid">
         <div class="beat__copy" data-reveal>
-          <p class="beat__num">{kalvoiceShipped ? "04 · KalVoice" : "04 · KalVoice · in development"}</p>
+          <p class="beat__num">{kalvoiceShipped ? "03 · KalVoice" : "03 · KalVoice · in development"}</p>
           <h2 id="kalvoice-title" class="h2">Speak it. See it done.</h2>
           <p class="body-lg">
-            Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. In a terminal, your words land in the focused
-            agent. Anywhere else, say a command and KalCode does it. KalVoice interprets commands on your
-            device, and dictation is unlimited on every plan.
+            Hold {KALVOICE.pushToTalkKey}, or Fn on a Mac, to talk to KalVoice. In a terminal, your words land
+            in the focused agent. Anywhere else, say a command and KalCode does it. Dictation runs on your
+            device and is unlimited on every plan.
           </p>
-          <button type="button" class="button button--secondary" data-live-do="voice:open">
-            Try KalVoice in the demo <Icon name="arrow-right" />
-          </button>
-          <a class="text-link" href="/kalvoice">Meet KalVoice <Icon name="arrow-right" /></a>
+          <div class="beat__actions">
+            <button type="button" class="button button--secondary" data-live-do="voice:open">
+              Try KalVoice in the demo <Icon name="arrow-right" />
+            </button>
+            <a class="text-link" href="/kalvoice">Meet KalVoice <Icon name="arrow-right" /></a>
+          </div>
         </div>
         <div class="beat__visual" data-reveal aria-hidden="true" inert>
           <div class="voice-visual">
@@ -343,17 +355,17 @@ const qnas = [
             <span class="voice-visual__ring"></span>
             <span class="voice-visual__ring voice-visual__ring--2"></span>
             <div class="voice-visual__bubble"><small>Listening…</small><span class="lk-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>“Open Dashboard”</div>
-            <kbd class="voice-visual__key">{KALVOICE.pushToTalkKey}</kbd>
+            <span class="voice-visual__keys"><kbd class="voice-visual__key">{KALVOICE.pushToTalkKey}</kbd><kbd class="voice-visual__key voice-visual__key--fn">fn</kbd></span>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 05 Live Browser -->
+    <!-- 04 Live Browser -->
     <section class="beat beat--flip" id="browser" aria-labelledby="browser-title">
       <div class="container container--wide beat__grid">
         <div class="beat__copy" data-reveal>
-          <p class="beat__num">05 · Live Browser</p>
+          <p class="beat__num">04 · Live Browser</p>
           <h2 id="browser-title" class="h2">See what your agents are building.</h2>
           <p class="body-lg">
             Open your app in a Browser pane, right next to the agent working on it. KalCode notices your dev
@@ -372,11 +384,11 @@ const qnas = [
       </div>
     </section>
 
-    <!-- 06 Operations -->
+    <!-- 05 Operations -->
     <section class="beat" id="operations" aria-labelledby="operations-title">
       <div class="container container--wide beat__grid">
         <div class="beat__copy" data-reveal>
-          <p class="beat__num">06 · Operations</p>
+          <p class="beat__num">05 · Operations</p>
           <h2 id="operations-title" class="h2">Everything running, in one view.</h2>
           <p class="body-lg">
             Runs, Queue, Services, Environments and Activity. Every task your agents run becomes one record,
@@ -393,8 +405,8 @@ const qnas = [
             <div class="lk-runs">
               {
                 [
-                  ["bot", "Dashboard redesign", "{claudeA.name}", "Running"],
-                  ["bot", "Tests", "{codexA.name}", "Running"],
+                  ["bot", AGENTS[0]?.name ?? "", `${providerName("claude")} · ${AGENTS[0]?.account}`, "Running"],
+                  ["bot", AGENTS[1]?.name ?? "", `${providerName("codex")} · ${AGENTS[1]?.account}`, "Running"],
                   ["package", "Build", "pnpm build · 1m 12s", "Succeeded"],
                   ["server", "Frontend dev server", "localhost:3000", "Running"],
                 ].map(([ic, name, meta, st]) => (
@@ -407,18 +419,19 @@ const qnas = [
       </div>
     </section>
 
-    <!-- 07 Control: permission modes and local-first -->
+    <!-- 06 Control: permissions and local-first -->
     <section class="beat beat--flip" id="control" aria-labelledby="control-title">
       <div class="container container--wide beat__grid">
         <div class="beat__copy" data-reveal>
-          <p class="beat__num">07 · Control</p>
-          <h2 id="control-title" class="h2">You set the rules. Agents follow them.</h2>
+          <p class="beat__num">06 · Control</p>
+          <h2 id="control-title" class="h2">Agents just work. Secrets still ask.</h2>
           <p class="body-lg">
-            Plan, Approve and Auto on every plan. Anything outside your rules waits for you in Needs You, and
-            projects, threads and settings stay on your device.
+            New coding agents start in Bypass: edits, commands, tests, builds, Git, pushes and dev servers
+            run without approval prompts. Choose Plan for a read-only pass. Access to credentials and
+            secrets always asks, on every plan.
           </p>
           <ul class="beat__points" role="list">
-            <li><Icon name="check" /> Local database, on your device</li>
+            <li><Icon name="check" /> Projects and settings in a local database, on your device</li>
             <li><Icon name="check" /> Nothing proxied through KalCode</li>
             <li><Icon name="check" /> No telemetry in current builds</li>
           </ul>
@@ -434,40 +447,35 @@ const qnas = [
       </div>
     </section>
 
-    <!-- 08 Workflow: from one agent to a fleet -->
+    <!-- 07 Agent Fleet -->
     <section class="beat beat--fleet" id="fleet" aria-labelledby="fleet-title">
       <div class="container container--wide">
         <header class="beat__copy beat__copy--center" data-reveal>
-          <p class="beat__num">08 · Agent Fleet</p>
-          <h2 id="fleet-title" class="h2">From one agent to a fleet.</h2>
+          <p class="beat__num">07 · Agent Fleet</p>
+          <h2 id="fleet-title" class="h2">Every agent. One state. One view.</h2>
           <p class="body-lg">
-            Start with one agent. Add more as you grow: Agent Fleet shows every one of them, what it's doing
-            and what needs you, and a click opens its terminal.
+            Agent Fleet shows every agent you run, on every provider, with the same state you see in its
+            pane, and a click opens its terminal. Agents you start, start now: KalCode never holds them back
+            for CPU load.
           </p>
         </header>
         <div class="fleet-row" data-reveal aria-hidden="true" inert>
           {
-            fleet.map((agent) => (
-              <div class="lk-card" data-tone={agent.status === "permission_required" ? "waiting" : "muted"} data-needs={String(agent.status === "permission_required")}>
-                <p class="lk-card__top"><strong>{accountLabel(sample, agent.account)}</strong><Fragment set:html={statusChip(agent)} /></p>
-                <p class="lk-card__name">{agent.name}</p>
-                <p class="lk-card__meta"><Fragment set:html={glyph(agent.provider)} />{agent.provider === "claude" ? "Claude Code" : "Codex"} · {agent.model === "Default" ? "Default model" : agent.model}</p>
-                <p class="lk-card__activity">{agent.activity}</p>
+            AGENTS.map((agent) => (
+              <div class="fleet-card" data-state={agent.state}>
+                <p class="fleet-card__top">
+                  <span>{agent.account}</span>
+                  <span class="agent-chip" data-state={agent.state}>{STATE_LABEL[agent.state]}</span>
+                </p>
+                <p class="fleet-card__name">{agent.name}</p>
+                <p class="fleet-card__meta"><ProviderGlyph provider={agent.provider} />{providerName(agent.provider)} · {agent.model}</p>
+                <p class="fleet-card__activity">{agent.activity}</p>
               </div>
             ))
           }
         </div>
-        <ol class="ladder" role="list" data-reveal>
-          {
-            PLANS.map((plan) => (
-              <li class:list={["ladder__step", { "ladder__step--popular": plan.popular }]}>
-                <span class="ladder__stage">{plan.stage}</span>
-                <strong>{plan.name}</strong>
-                <span>{formatCoreLimit(plan.limits, agentsLimit)} in parallel</span>
-                {fleetFeature.values?.[plan.id] ? <small>Agent Fleet · {fleetFeature.values[plan.id]}</small> : <small>Every core feature</small>}
-              </li>
-            ))
-          }
+        <ol class="states" role="list" aria-label="Agent states" data-reveal>
+          {AGENT_STATES.map((state) => <li data-state={state.toLowerCase().replace(" ", "-")}>{state}</li>)}
         </ol>
         <p class="beat__cta-row">
           <button type="button" class="button button--secondary" data-live-do="go:dashboard">
@@ -477,76 +485,111 @@ const qnas = [
       </div>
     </section>
 
-    <!-- 08 Available now vs coming soon: the canonical roadmap. -->
-    <section class="beat beat--roadmap" id="roadmap" aria-labelledby="roadmap-title">
+    <!-- 08 New: shipped and in the app today, each card from its catalog entry. -->
+    <section class="beat beat--new" id="new" aria-labelledby="new-title">
       <div class="container container--wide">
         <header class="beat__copy beat__copy--center" data-reveal>
-          <p class="beat__num">09 · What you get</p>
-          <h2 id="roadmap-title" class="h2">Available now. And what's next.</h2>
-          <p class="body-lg">
-            Everything marked Available is in the KalCode you download today. Coming soon is on the roadmap
-            and assigned to its plan. It turns Available only once it has shipped and been verified.
-          </p>
+          <p class="beat__num">08 · New in KalCode{stable ? ` ${stable.version}` : ""}</p>
+          <h2 id="new-title" class="h2">Shipped, and in the app today.</h2>
+          <p class="body-lg">Recent builds made KalCode faster to move around and closer to your own terminal.</p>
         </header>
-        <div class="roadmap" data-reveal>
-          <div class="roadmap__col">
-            <p class="roadmap__head"><span class="roadmap__badge roadmap__badge--live">Available now</span><span>{availableCount} features</span></p>
-            {
-              roadmap
-                .filter((g) => g.available.length)
-                .map((g) => (
-                  <div class="roadmap__group">
-                    <p class="roadmap__title">{g.title}</p>
-                    <ul role="list">
-                      {g.available.map((f) => (
-                        <li><Icon name="check" /> {f.label}</li>
-                      ))}
+        <ul class="fresh" role="list" data-reveal>
+          {
+            fresh.map((item) => (
+              <li class="fresh__card" data-visual={item.visual}>
+                <div class="fresh__visual" aria-hidden="true">
+                  {item.visual === "switcher" && (
+                    <div class="fv-switch">
+                      <p class="fv-switch__bar"><span class="fv-nav"><Fragment set:html={icon("back")} /><Fragment set:html={icon("forward")} /></span><span class="fv-switch__input"><Fragment set:html={icon("search")} />dash</span><kbd>Ctrl K</kbd></p>
+                      <p class="fv-row" data-on><Fragment set:html={icon("bot")} /><b>Dashboard Tests</b><small>Agent</small></p>
+                      <p class="fv-row"><Fragment set:html={icon("dashboard")} /><b>Dashboard</b><small>Surface</small></p>
+                      <p class="fv-row"><Fragment set:html={icon("code")} /><b>src/pages/Dashboard.tsx</b><small>File</small></p>
+                    </div>
+                  )}
+                  {item.visual === "close" && (
+                    <div class="fv-close">
+                      <div class="fv-menu">
+                        <p data-on><Fragment set:html={icon("copy")} />New like this<span>›</span></p>
+                        <p><Fragment set:html={icon("pen")} />Rename</p>
+                        <p><Fragment set:html={icon("close")} />Close</p>
+                      </div>
+                      <div class="fv-dialog">
+                        <b>Close active work?</b>
+                        <small>Dashboard Redesign is still working.</small>
+                        <span class="fv-btns"><span>Cancel</span><span>Keep Running</span><span data-primary>Stop and Close</span></span>
+                      </div>
+                    </div>
+                  )}
+                  {item.visual === "account" && (
+                    <div class="fv-account">
+                      <p class="fv-account__head"><ProviderGlyph provider="claude" /><b>Dashboard Redesign</b><span class="fv-account__pick">Personal<small>64% left</small><Fragment set:html={icon("chevron")} /></span></p>
+                      <div class="fv-account__list">
+                        <p data-on><span>Personal</span><i data-level="64"></i><small>64%</small></p>
+                        <p><span>Work</span><i data-level="8"></i><small>8%</small></p>
+                      </div>
+                    </div>
+                  )}
+                  {item.visual === "tools" && (
+                    <ul class="fv-tools">
+                      <li>Web search</li>
+                      <li>MCP servers</li>
+                      <li>Slash commands</li>
+                      <li>Plugins</li>
+                      <li>CLAUDE.md</li>
+                      <li>Codex rules</li>
                     </ul>
-                  </div>
-                ))
-            }
-          </div>
-          <div class="roadmap__col roadmap__col--soon">
-            <p class="roadmap__head"><span class="roadmap__badge">Coming soon</span><span>{soonCount} on the roadmap</span></p>
-            {
-              roadmap
-                .filter((g) => g.soon.length)
-                .map((g) => (
-                  <div class="roadmap__group">
-                    <p class="roadmap__title">{g.title}</p>
-                    <ul role="list">
-                      {g.soon.map((f) => (
-                        <li><span class="roadmap__dot" aria-hidden="true" /> {f.label}<small>{getPlan(f.from).name}{f.from !== "max2x" ? "+" : ""}</small></li>
-                      ))}
+                  )}
+                  {item.visual === "states" && (
+                    <ul class="fv-states">
+                      <li data-state="working">3 working</li>
+                      <li data-state="needs">1 needs you</li>
+                      <li data-state="ready">1 ready</li>
+                      <li data-state="done">2 done</li>
                     </ul>
-                  </div>
-                ))
-            }
-          </div>
-        </div>
-        <p class="beat__cta-row"><a class="text-link" href="/pricing">See every feature by plan <Icon name="arrow-right" /></a></p>
+                  )}
+                  {item.visual === "appearance" && (
+                    <div class="fv-look">
+                      <p><span>Contrast</span><span class="fv-seg"><i>System</i><i data-on>Standard</i><i>High</i></span></p>
+                      <p><span>Text size</span><span class="fv-seg"><i data-on>Default</i><i>Large</i><i>Larger</i></span></p>
+                    </div>
+                  )}
+                </div>
+                <div class="fresh__copy">
+                  <p class="fresh__tag" data-available={String(item.feature.status === "available")}>{planTag(item.feature)}</p>
+                  <h3 class="fresh__title">{item.title}</h3>
+                  <p class="fresh__text">{item.text}</p>
+                </div>
+              </li>
+            ))
+          }
+        </ul>
+        <p class="beat__cta-row"><a class="text-link" href="/updates">Read what changed in each build <Icon name="arrow-right" /></a></p>
       </div>
     </section>
   </div>
 
-  <!-- Pricing: the four plans over a lit horizon (components/PlanStrip.astro). -->
+  <!-- Pricing: the four plans, each showing what makes it different (components/PlanStrip.astro). -->
   <section class="world-section pricing-band" id="plans" aria-labelledby="plans-title">
     <Backdrop variant="deep" />
-    <Backdrop variant="horizon" rocks={false} />
     <div class="container container--wide">
-      <div class="pricing-band__grid">
-        <header class="pricing-band__copy" data-reveal>
-          <p class="eyebrow">Simple pricing</p>
-          <h2 id="plans-title" class="h2">Bring your AI accounts.</h2>
-          <p class="body-lg">
-            Unlimited local coding agents and terminals on every plan. KalCode handles the workflow.
-            Upgrade for scale, orchestration and autonomy. Provider and hardware limits still apply.
+      <header class="plans-head" data-reveal>
+        <div>
+          <p class="eyebrow">Pricing</p>
+          <h2 id="plans-title" class="h2">Bring your AI accounts. KalCode handles the workflow.</h2>
+        </div>
+        <div class="plans-head__side">
+          <p>
+            Unlimited local coding agents + terminals on every plan. Upgrade for more workspaces, accounts,
+            KalVoice and orchestration. Your provider subscriptions, their rate and concurrency limits, and
+            your computer's hardware still apply.
           </p>
-          <a class="button button--secondary" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
-          <p class="pricing-band__note">{checkoutOpen ? "Paid plans are open, monthly or yearly." : "Plans open at launch. Nothing is for sale today."}</p>
-        </header>
-        <PlanStrip />
-      </div>
+          <p class="plans-head__actions">
+            <a class="button button--secondary" href="/pricing">Compare all features <Icon name="arrow-right" /></a>
+            <span class="pricing-band__note">{checkoutOpen ? "Paid plans are open, monthly or yearly." : "Plans open at launch. Nothing is for sale today."}</span>
+          </p>
+        </div>
+      </header>
+      <PlanStrip />
     </div>
   </section>
 

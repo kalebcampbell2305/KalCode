@@ -1,56 +1,77 @@
 ---
+import Backdrop from "../../components/Backdrop.astro";
+import Icon from "../../components/Icon.astro";
 import Base from "../../layouts/Base.astro";
-import { RELEASES, releaseCopy, servedStableRelease } from "../../lib/releases";
-import { DOCS_NAV, PAGES, getPage } from "../../lib/site";
+import { RELEASES, servedStableRelease } from "../../lib/releases";
+import { DOCS_NAV, getPage } from "../../lib/site";
 
 const page = getPage("/docs");
 // Once a Stable release is served the docs describe it; before then they describe the design.
 const stable = servedStableRelease(RELEASES);
-const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item) => ({
+/** What each topic answers, in one line (the pages' own leads say the rest). */
+const SUMMARIES: Record<string, string> = {
+  "/docs/permissions":
+    "New coding agents start in Bypass and only access to credentials and secrets asks; Plan is read-only. Every mode is on every plan.",
+  "/docs/providers":
+    "Claude Code, Codex, Cursor and Gemini CLI as real native terminals, on your own accounts, with their own tools, MCP servers and settings.",
+  "/docs/kalvoice":
+    "Push to talk (Fn on a Mac, F8 anywhere), on-device dictation, commands and how KalVoice Requests are counted.",
+  "/docs/local-first":
+    "What stays on your device, where secrets live, and exactly what KalCode sends: your account, updates and signed components.",
+};
+const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item, index) => ({
   ...item,
-  description: releaseCopy(PAGES.find((candidate) => candidate.path === item.href)?.description ?? "", RELEASES),
+  index: String(index + 1).padStart(2, "0"),
+  description: SUMMARIES[item.href] ?? "",
 }));
 ---
-<Base title={page.title} description={page.description} path={page.path}>
-  <div class="container docs">
-    <nav class="docs__nav" aria-label="Documentation">
-      <h2>Documentation</h2>
-      <ul role="list">
-        {
-          DOCS_NAV.map((item) => (
-            <li>
-              <a href={item.href} aria-current={item.href === "/docs" ? "page" : undefined}>
-                {item.label}
-              </a>
-            </li>
-          ))
-        }
-      </ul>
-    </nav>
-    <div class="docs__content">
-      <header class="docs__head">
-        <h1 class="h1">Documentation</h1>
-        <p class="lead">{stable ? "How KalCode works, one topic at a time." : "How KalCode is designed to work, one topic at a time."}</p>
-        {
-          stable ? (
-            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span> These pages describe the current release.</p>
-          ) : (
-            <p class="status-line"><span class="chip chip--dev">Describes the design</span> These pages describe KalCode as designed; details may change.</p>
-          )
-        }
-      </header>
-      <ul class="doc-index" role="list">
-        {
-          entries.map((entry) => (
-            <li>
-              <a href={entry.href}>
-                <span class="doc-index__title">{entry.label}</span>
-                <span>{entry.description}</span>
-              </a>
-            </li>
-          ))
-        }
-      </ul>
+<Base title={page.title} description={page.description} path={page.path} world>
+  <div class="docs-shell">
+    <Backdrop variant="deep" intensity="low" />
+    <div class="container docs">
+      <nav class="docs__nav" aria-label="Documentation">
+        <h2>Documentation</h2>
+        <ul role="list">
+          {
+            DOCS_NAV.map((item) => (
+              <li>
+                <a href={item.href} aria-current={item.href === "/docs" ? "page" : undefined}>
+                  {item.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+      <div class="docs__content">
+        <header class="docs__head">
+          <h1 class="h1">Documentation</h1>
+          <p class="lead">{stable ? "How KalCode works, one topic at a time." : "How KalCode is designed to work, one topic at a time."}</p>
+          {
+            stable ? (
+              <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span> These pages describe the current release.</p>
+            ) : (
+              <p class="status-line"><span class="chip chip--dev">Describes the design</span> These pages describe KalCode as designed; details may change.</p>
+            )
+          }
+        </header>
+        <ul class="doc-cards" role="list">
+          {
+            entries.map((entry) => (
+              <li>
+                <a class="doc-card" href={entry.href}>
+                  <span class="doc-card__index">{entry.index}</span>
+                  <span class="doc-card__title">{entry.label}</span>
+                  <span>{entry.description}</span>
+                  <span class="doc-card__more" aria-hidden="true">
+                    Read <Icon name="arrow-right" />
+                  </span>
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
     </div>
   </div>
 </Base>

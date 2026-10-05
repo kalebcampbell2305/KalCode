@@ -63,7 +63,7 @@ describe("provider docs sign-in", () => {
     expect(copy).toContain("Claude Code and Codex open their browser sign-in");
     expect(copy).toContain("Gemini CLI opens Google sign-in in your browser");
     expect(copy).toMatch(
-      /Signing a CLI in from a separate terminal signs in a different profile that KalCode threads don't use/,
+      /Signing a CLI in from a separate terminal signs in a different profile that KalCode doesn't use/,
     );
   });
 
@@ -76,10 +76,8 @@ describe("provider docs sign-in", () => {
 describe("home and product provider summaries", () => {
   it("say sign-in happens from KalCode", async () => {
     expect(text(await render(Home, "/"))).toContain(
-      "run on your own accounts: sign in to each from KalCode, with a separate managed profile for every account",
+      "Each account signs in with the provider's own sign-in, in its own profile.",
     );
-    expect(text(await render(Product, "/product"))).toContain(
-      "each provider's own sign-in, run from KalCode for your account.",
-    );
+    expect(text(await render(Product, "/product"))).toContain("KalCode uses each provider's own sign-in");
   });
 });
