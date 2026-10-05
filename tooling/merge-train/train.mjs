@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// KalCode's shared merge train (AGENTS.md "Permanent parallel integration rule"). Every agent, Claude Code or
+// KalCode's shared merge train (AGENTS.md "high-concurrency merge + release architecture"). Every agent, Claude Code or
 // Codex, lands work on main only through this train:
 //
 //   node tooling/merge-train/train.mjs submit <pr>       queue a validated PR (adds the `merge-queue` label)
-//   node tooling/merge-train/train.mjs build             merge the queue onto one main snapshot, push the candidate
+//   node tooling/merge-train/train.mjs plan [--json]     partition the queue into independent lanes on today's main
+//   node tooling/merge-train/train.mjs build             build every lane as stacked exact candidates (they gate concurrently)
 //   node tooling/merge-train/train.mjs land <branch>     fast-forward main to a candidate whose exact SHA gated green
-//   node tooling/merge-train/train.mjs run               build -> wait for the gate -> land, until the queue is done
+//   node tooling/merge-train/train.mjs run               one coordinator: build all lanes, land the deepest green level, repeat
 //   node tooling/merge-train/train.mjs status [--json]   queue, candidates and their gate state
 //
 // Shared state lives only on GitHub: the queue is the open, non-draft, same-repository PRs labelled
@@ -23,6 +24,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -116,6 +118,168 @@ export function mergeMessage(pr, base, resolvedBy = null) {
   return `${lines.join("\n")}\n`;
 }
 
+// ------------------------------------------------------------------------------------------- lanes
+// Owner rule 2026-10-05 (AGENTS.md "high-concurrency merge + release architecture"): no single global queue.
+// Ready PRs are partitioned into independent lanes; each lane builds and gates its own exact candidate on the
+// same captured main SHA, so the gate pool validates them concurrently and a conflict blocks only its lane.
+
+/**
+ * Risky zones: two PRs that touch the same zone integrate in the same group even when git would merge them
+ * cleanly, because their combination needs one validation (shared state, schema, CI, dependencies).
+ */
+export const RISK_ZONES = [
+  ["ci", /^\.github\/workflows\//],
+  ["lockfile", /(^|\/)(pnpm-lock\.yaml|Cargo\.lock|package-lock\.json)$/],
+  ["migrations", /(^|\/)migrations?\/|\.sql$/],
+  ["protocol", /^packages\/protocol\/src\/generated\//],
+  ["agent-state", /^crates\/contracts\/src\/(agent_state|threads|resources)\.rs$|^crates\/threads\/src\/runtime\.rs$/],
+  ["provider-session", /^crates\/providers\/src\/(interactive|registry)/],
+  ["resource-governor", /^crates\/resources\/|^apps\/desktop\/src-tauri\/src\/resource_commands/],
+  ["merge-train", /^tooling\/(merge-train|runners)\//],
+];
+
+export function riskZones(path) {
+  return RISK_ZONES.filter(([, pattern]) => pattern.test(path)).map(([zone]) => zone);
+}
+
+/** Files gate.yml never gates (its pull_request paths filter): a base delta of only these changes no check. */
+export function isUngatedPath(path) {
+  if (path.startsWith("docs/releases/")) return false;
+  return path.endsWith(".md") || path.startsWith("docs/") || path.startsWith("marketing/");
+}
+
+/**
+ * Partitions queued PRs (queue order; each { number, head, files, ancestors }) into independent lanes.
+ * Same lane when: one stacks on the other, they share a risky zone, or they touch a common file and
+ * `conflicts(a, b)` (a real `git merge-tree` of both heads) reports a conflict. Everything else is independent.
+ */
+export async function planLanes(prs, { conflicts = async () => false } = {}) {
+  const parent = new Map(prs.map((pr) => [pr.number, pr.number]));
+  const find = (n) => {
+    while (parent.get(n) !== n) {
+      parent.set(n, parent.get(parent.get(n)));
+      n = parent.get(n);
+    }
+    return n;
+  };
+  const union = (a, b) => {
+    const [ra, rb] = [find(a), find(b)];
+    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb));
+  };
+  const reasons = [];
+  for (let i = 0; i < prs.length; i++) {
+    for (let j = i + 1; j < prs.length; j++) {
+      const [a, b] = [prs[i], prs[j]];
+      if (a.ancestors?.has(b.head) || b.ancestors?.has(a.head)) {
+        union(a.number, b.number);
+        reasons.push({ pair: [a.number, b.number], why: "stacked" });
+        continue;
+      }
+      const zonesA = new Set(a.files.flatMap(riskZones));
+      const zone = b.files.flatMap(riskZones).find((z) => zonesA.has(z));
+      if (zone) {
+        union(a.number, b.number);
+        reasons.push({ pair: [a.number, b.number], why: `risk:${zone}` });
+        continue;
+      }
+      const filesA = new Set(a.files);
+      if (b.files.some((f) => filesA.has(f)) && (await conflicts(a, b))) {
+        union(a.number, b.number);
+        reasons.push({ pair: [a.number, b.number], why: "conflict" });
+      }
+    }
+  }
+  const lanes = new Map();
+  for (const pr of prs) {
+    const root = find(pr.number);
+    if (!lanes.has(root)) lanes.set(root, []);
+    lanes.get(root).push(pr.number);
+  }
+  return {
+    lanes: [...lanes.values()].map((numbers) => ({
+      id: laneId(prs.filter((p) => numbers.includes(p.number))),
+      numbers,
+    })),
+    reasons,
+  };
+}
+
+/** A lane's id: the exact PR heads it groups, so every coordinator names the same lane the same way. */
+export function laneId(prs) {
+  return createHash("sha1")
+    .update(
+      [...prs]
+        .sort((a, b) => a.number - b.number)
+        .map((p) => `${p.number}:${p.head ?? ""}`)
+        .join(","),
+    )
+    .digest("hex")
+    .slice(0, 8);
+}
+
+/** Paths every release lands on main (the website's release record and release notes). */
+export function isReleaseRecordPath(path) {
+  return path === "apps/website/src/data/releases.json" || path.startsWith("docs/releases/");
+}
+
+/**
+ * Whether a main move of `deltaFiles` leaves a lane's gate evidence valid: every moved file is a release
+ * record or a path gate.yml never gates, and the lane itself touches none of the gates those files feed
+ * (the website and release notes). Then the lane's selected checks and all their inputs are unchanged.
+ */
+export function deltaPreservesEvidence(deltaFiles, laneFiles) {
+  if (!deltaFiles.length) return true;
+  if (!deltaFiles.every((f) => isReleaseRecordPath(f) || isUngatedPath(f))) return false;
+  return !laneFiles.some((f) => f.startsWith("apps/website/") || f.startsWith("docs/releases/"));
+}
+
+const buildNumber = (version) => {
+  const m = /\+(\d+)$/.exec(version ?? "");
+  return m ? Number(m[1]) : -1;
+};
+
+/**
+ * Mechanical resolver for the release record: when both sides changed apps/website/src/data/releases.json,
+ * take the side whose `latest.version` build is higher (the newest published record). Refuses (null) when
+ * anything else conflicts or either side changed more than the release record (`latest`).
+ */
+export const releaseRecordResolver = {
+  name: "release-record",
+  async resolve({ git, tip, pr, files, conflictTree, writeTree }) {
+    const path = "apps/website/src/data/releases.json";
+    if (files.length !== 1 || files[0] !== path || !conflictTree || !writeTree) return null;
+    const read = async (ref) => {
+      const r = await git(["show", `${ref}:${path}`], { allowFail: true });
+      if (r.code !== 0) return null;
+      try {
+        return { text: r.stdout, json: JSON.parse(r.stdout) };
+      } catch {
+        return null;
+      }
+    };
+    const [ours, theirs] = [await read(tip), await read(pr.head)];
+    if (!ours || !theirs) return null;
+    const rest = ({ latest: _latest, ...other }) => JSON.stringify(other);
+    if (rest(ours.json) !== rest(theirs.json)) return null;
+    const winner = buildNumber(theirs.json.latest?.version) > buildNumber(ours.json.latest?.version) ? pr.head : tip;
+    const blob = (await git(["rev-parse", `${winner}:${path}`])).stdout.trim();
+    return writeTree(conflictTree, [{ path, blob }]);
+  },
+};
+
+/** Per-PR pipeline states reported by `status --json`. */
+export const PR_STATES = [
+  "BUILDING",
+  "READY FOR INTEGRATION",
+  "MERGE GROUP",
+  "GATING",
+  "GREEN",
+  "LANDING",
+  "MERGED",
+  "SUPERSEDED",
+  "FAILED",
+];
+
 /** Exclusive, short-lived local lock file. Stale after staleMs (a crashed holder never blocks forever). */
 export async function withLock(path, fn, { staleMs = 120_000, waitMs = 60_000, sleep, now = Date.now } = {}) {
   if (!path) return fn();
@@ -177,7 +341,55 @@ export function createTrain({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   hooks = {},
   abandonAfterMs = 20 * 60_000,
+  leaseMs = 5 * 60_000,
+  isProcessAlive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error.code === "EPERM";
+    }
+  },
 }) {
+  // Pipeline state (timings, lane membership, supersession): local and advisory. Landing decisions never
+  // depend on it except the docs-only evidence equivalence, which it records and land() re-verifies.
+  const statePath = lanesDir && join(lanesDir, "merge-train", "state.json");
+  let memoryState = { prs: {}, candidates: {} };
+  const loadState = () => {
+    if (!statePath) return memoryState;
+    try {
+      return JSON.parse(readFileSync(statePath, "utf8"));
+    } catch {
+      return { prs: {}, candidates: {} };
+    }
+  };
+  const saveState = (state) => {
+    if (!statePath) {
+      memoryState = state;
+      return;
+    }
+    mkdirSync(dirname(statePath), { recursive: true });
+    writeFileSync(
+      statePath,
+      `${JSON.stringify(state, null, 2)}
+`,
+    );
+  };
+  const updateState = (fn) => {
+    const state = loadState();
+    state.prs ??= {};
+    state.candidates ??= {};
+    fn(state);
+    saveState(state);
+    return state;
+  };
+  const prEvent = (state, number, event, at = now()) => {
+    state.prs[number] ??= {};
+    const pr = state.prs[number];
+    pr[event] ??= at;
+    pr.last = event;
+    pr.lastAt = at;
+  };
   const lines = async (args) =>
     (await git(args)).stdout
       .split(/\r?\n/)
@@ -253,10 +465,12 @@ export function createTrain({
       if (!prField || parentList.length !== 2 || !/^\d+$/.test(prField) || !SHA.test(baseField)) return null;
       claimed ??= baseField;
       if (baseField !== claimed) return null;
-      included.unshift({ number: Number(prField), head: parentList[1] });
+      included.unshift({ number: Number(prField), head: parentList[1], merge: commit });
     }
     if (!base || included.length === 0 || !base.startsWith(m[1])) return null;
-    return { branch, sha, base, included };
+    // The first-parent chain: a stacked lane level's lower levels are commits on it, so after one of them
+    // lands, main is on this chain and the candidate still fast-forwards with its exact gated tree.
+    return { branch, sha, base, included, chain: included.map((i) => i.merge) };
   }
 
   async function mergeTrees(tip, head) {
@@ -265,8 +479,41 @@ export function createTrain({
     });
     const parts = r.stdout.split("\0").filter(Boolean);
     if (r.code === 0) return { tree: parts[0] };
-    if (r.code === 1) return { conflicts: [...new Set(parts.slice(1))].sort() };
+    if (r.code === 1) return { conflicts: [...new Set(parts.slice(1))].sort(), conflictTree: parts[0] };
     throw new GitError(`git merge-tree ${short(tip)} ${short(head)}: ${r.stderr.trim()}`);
+  }
+
+  /** A tree equal to `tree` with some paths replaced by existing blobs (a private index; no worktree). */
+  async function writeTree(tree, entries) {
+    const index = join(lanesDir ?? repo, `.merge-train-index-${process.pid}-${randomBytes(4).toString("hex")}`);
+    mkdirSync(dirname(index), { recursive: true });
+    const scoped = makeGit(repo, { env: { GIT_INDEX_FILE: index } });
+    try {
+      await scoped(["read-tree", tree]);
+      for (const { path, blob } of entries) await scoped(["update-index", "--cacheinfo", `100644,${blob},${path}`]);
+      return (await scoped(["write-tree"])).stdout.trim();
+    } finally {
+      try {
+        unlinkSync(index);
+      } catch {}
+    }
+  }
+
+  /** Applies registered mechanical resolvers to a conflicted merge; returns { tree, resolvedBy } or null. */
+  async function resolveConflict({ base, tip, pr, merged }) {
+    for (const resolver of resolvers) {
+      const tree = await resolver.resolve({
+        git,
+        base,
+        tip,
+        pr,
+        files: merged.conflicts,
+        conflictTree: merged.conflictTree,
+        writeTree,
+      });
+      if (tree) return { tree, resolvedBy: resolver.name };
+    }
+    return null;
   }
 
   async function changedFiles(base, head) {
@@ -316,10 +563,24 @@ export function createTrain({
       (i) => !active.has(i.number) || (active.get(i.number).head && active.get(i.number).head !== i.head),
     );
 
-  async function retire(candidate, reason) {
-    log(`retiring ${candidate.branch}: ${reason}`);
+  async function retire(candidate, reason, { supersededBy = null } = {}) {
+    log(`${supersededBy ? "superseding" : "retiring"} ${candidate.branch}: ${reason}`);
     await provider.cancelGates?.(candidate.sha, candidate.branch);
     await deleteRemote(candidate.branch, candidate.sha);
+    updateState((state) => {
+      state.candidates[candidate.branch] = {
+        ...state.candidates[candidate.branch],
+        sha: candidate.sha,
+        retiredAt: now(),
+        reason,
+        supersededBy,
+      };
+      if (supersededBy)
+        for (const i of candidate.included ?? []) {
+          state.prs[i.number] ??= {};
+          state.prs[i.number].supersededFrom = candidate.branch;
+        }
+    });
   }
 
   async function eject(candidate) {
@@ -351,11 +612,19 @@ export function createTrain({
     };
   }
 
-  async function build() {
+  /**
+   * Builds (or reuses) one candidate on the current main. With `lane`, only that lane's queued PRs and the
+   * candidates made entirely of them are considered: other lanes' candidates are never touched, so lanes
+   * prepare, gate and fail independently.
+   */
+  async function build({ lane = null } = {}) {
     return withNamespace(async (ns) => {
       const snap = await snapshot(ns);
       const { base } = snap;
-      const queue = await provider.listQueue();
+      const fullQueue = await provider.listQueue();
+      const queue = lane ? fullQueue.filter((pr) => lane.has(pr.number)) : fullQueue;
+      if (lane)
+        snap.candidates = snap.candidates.filter((c) => !c.invalid && c.included.every((i) => lane.has(i.number)));
       await fetchHeads(ns, queue);
       const active = new Map(queue.map((pr) => [pr.number, pr]));
 
@@ -369,6 +638,20 @@ export function createTrain({
         }
       }
       for (const c of current) c.gate = await provider.gateStatus(c.sha, c.branch);
+
+      // A lane that grew since a candidate was built integrates as one group: a still-unverified candidate
+      // covering only the old part is SUPERSEDED. A green one is kept; it can land first at no extra cost.
+      if (lane) {
+        const recorded = loadState().candidates;
+        for (const c of [...current]) {
+          const builtFor = recorded[c.branch]?.lane;
+          const grown = builtFor && [...lane].some((n) => active.get(n)?.head && !builtFor.includes(n));
+          if (grown && c.gate.state !== "success" && fresh(c, active)) {
+            await retire(c, `lane grew to ${[...lane].map((n) => `#${n}`).join(", ")}`, { supersededBy: "lane" });
+            current.splice(current.indexOf(c), 1);
+          }
+        }
+      }
 
       // A candidate whose gate never started (or was cancelled) is re-pushed so the push trigger fires again.
       for (const c of current) {
@@ -506,12 +789,11 @@ export function createTrain({
         }
         let merged = await mergeTrees(tip, pr.head);
         let resolvedBy = null;
-        for (const resolver of merged.conflicts ? resolvers : []) {
-          const tree = await resolver.resolve({ git, base, tip, pr, files: merged.conflicts });
-          if (tree) {
-            merged = { tree };
-            resolvedBy = resolver.name;
-            break;
+        if (merged.conflicts) {
+          const resolved = await resolveConflict({ base, tip, pr, merged });
+          if (resolved) {
+            merged = { tree: resolved.tree };
+            resolvedBy = resolved.resolvedBy;
           }
         }
         if (merged.conflicts) {
@@ -583,7 +865,8 @@ export function createTrain({
         const theirs = raced && (await parseCandidate(branch, raced));
         if (
           !theirs ||
-          JSON.stringify(theirs.included) !== JSON.stringify(included.map(({ number, head }) => ({ number, head })))
+          JSON.stringify(theirs.included.map(({ number, head }) => ({ number, head }))) !==
+            JSON.stringify(included.map(({ number, head }) => ({ number, head })))
         ) {
           throw new GitError(`could not push ${branch}: ${push.stderr.trim() || push.stdout.trim()}`);
         }
@@ -594,6 +877,20 @@ export function createTrain({
       }
 
       const manifest = manifestFor(candidate, "built", skipped);
+      updateState((state) => {
+        state.candidates[branch] = {
+          sha: tip,
+          base,
+          builtAt: now(),
+          lane: lane ? [...lane].sort((a, b) => a - b) : null,
+        };
+        for (const i of included) prEvent(state, i.number, "groupedAt");
+        for (const sk of skipped)
+          if (sk.reason.startsWith("conflicts")) {
+            state.prs[sk.number] ??= {};
+            state.prs[sk.number].conflictSince ??= now();
+          }
+      });
       const path = writeManifest(manifest);
       log(`built ${branch} (${short(tip)}) on main ${short(base)}: ${prList(included)}; skipped ${prList(skipped)}`);
       if (path) log(`manifest: ${path}`);
@@ -606,6 +903,279 @@ export function createTrain({
         );
       }
       return manifest;
+    });
+  }
+
+  /** The lane plan for the queued PRs on one captured main SHA (inside an existing ref namespace). */
+  async function planIn(ns, snap) {
+    const queue = await provider.listQueue();
+    await fetchHeads(ns, queue);
+    const prs = [];
+    const byNumber = new Map();
+    for (const pr of queue) {
+      byNumber.set(pr.number, pr);
+      if (!pr.head) continue;
+      if (await isAncestor(pr.head, snap.base)) continue;
+      prs.push({
+        number: pr.number,
+        title: pr.title,
+        headRef: pr.headRef,
+        head: pr.head,
+        files: await changedFiles(snap.base, pr.head),
+        ancestors: new Set(await lines(["rev-list", pr.head, `^${snap.base}`])),
+      });
+    }
+    const conflicts = async (a, b) => Boolean((await mergeTrees(a.head, b.head)).conflicts);
+    const { lanes, reasons } = await planLanes(prs, { conflicts });
+    return { queue, byNumber, prs, lanes, reasons };
+  }
+
+  async function plan() {
+    return withNamespace(async (ns) => {
+      const snap = await snapshot(ns);
+      const planned = await planIn(ns, snap);
+      return { base: snap.base, lanes: planned.lanes, reasons: planned.reasons, candidates: snap.candidates };
+    });
+  }
+
+  const headsKey = (items) => items.map((i) => `${i.number}:${i.head}`).join(",");
+
+  /**
+   * One round for every lane at once, as speculative stacked levels on ONE captured main SHA:
+   *   level 1 = main + lane 1,  level 2 = level 1 + lane 2,  ...
+   * Every level is an exact candidate pushed in this round, so the gate pool validates all of them
+   * concurrently. The deepest green level lands in one fast-forward (compatible lanes batch); when a lower
+   * level lands, the deeper ones still fast-forward with their exact gated trees (main is on their chain).
+   * A lane's conflict skips only its own PRs; a red level is attributed to its own lane (see run()).
+   */
+  async function buildAll() {
+    return withNamespace(async (ns) => {
+      const snap = await snapshot(ns);
+      const main = snap.base;
+      const planned = await planIn(ns, snap);
+      const state = loadState();
+      const bisect = state.bisect ?? {};
+      const valid = new Map();
+      const onMain = (c) => !c.invalid && (c.base === main || c.chain?.includes(main));
+      for (const c of snap.candidates) if (onMain(c)) valid.set(c.branch, c);
+      const allOnMain = new Map(valid);
+
+      // Speculative evidence: green levels from an older main, for minimum refresh of identical lanes.
+      const greenOld = [];
+      for (const c of snap.candidates) {
+        if (c.invalid || onMain(c)) continue;
+        if ((await provider.gateStatus(c.sha, c.branch)).state === "success") greenOld.push(c);
+      }
+
+      // A stack still gating from an earlier main (a lower level of it already landed, so main is on its
+      // chain) keeps its original base: new lanes extend it with the same Merge-Train-Base trailer, so every
+      // level stays one exact, parseable candidate that fast-forwards from today's main.
+      let stackBase = main;
+      let tip = main;
+      let included = [];
+      const anchor = [...valid.values()]
+        .filter((c) => c.base !== main)
+        .sort((a, b) => b.included.length - a.included.length)[0];
+      if (anchor) {
+        stackBase = anchor.base;
+        included = anchor.included
+          .slice(0, anchor.chain.indexOf(main) + 1)
+          .map(({ number, head }) => ({ number, head, title: "" }));
+        for (const [branch, c] of valid) if (c.base !== stackBase) valid.delete(branch);
+      } else {
+        for (const [branch, c] of valid) if (c.base !== main) valid.delete(branch);
+      }
+      const levels = [];
+      const skipped = [];
+      const deltaCache = new Map();
+      for (const lane of planned.lanes) {
+        const lanePrs = planned.prs.filter((p) => lane.numbers.includes(p.number));
+        const ordered = [];
+        const pending = [...lanePrs];
+        while (pending.length) {
+          const next = pending.findIndex((pr) =>
+            pending.every((other) => other === pr || !pr.ancestors.has(other.head)),
+          );
+          ordered.push(...pending.splice(next < 0 ? 0 : next, 1));
+        }
+        const limit = bisect[headsKey(ordered)]?.limit ?? ordered.length;
+        const added = [];
+        for (const pr of ordered.slice(0, limit)) {
+          if (included.some((i) => i.number === pr.number)) continue;
+          const missingParent = lanePrs.find(
+            (other) => other !== pr && pr.ancestors.has(other.head) && !included.some((i) => i.number === other.number),
+          );
+          if (missingParent) {
+            skipped.push({
+              number: pr.number,
+              head: pr.head,
+              reason: "dependency-unavailable",
+              files: [],
+              conflictsWith: [missingParent.number],
+            });
+            continue;
+          }
+          let merged = await mergeTrees(tip, pr.head);
+          let resolvedBy = null;
+          if (merged.conflicts) {
+            const resolved = await resolveConflict({ base: main, tip, pr, merged });
+            if (resolved) {
+              merged = { tree: resolved.tree };
+              resolvedBy = resolved.resolvedBy;
+            }
+          }
+          if (merged.conflicts) {
+            const alone = await mergeTrees(main, pr.head);
+            skipped.push({
+              number: pr.number,
+              head: pr.head,
+              reason: alone.conflicts ? "conflicts-with-main" : "conflicts-with-batch",
+              files: alone.conflicts ?? merged.conflicts,
+              conflictsWith: alone.conflicts ? [] : included.map((i) => i.number),
+            });
+            continue;
+          }
+          // Reuse the existing commit for this exact prefix, so levels chain on SHAs other coordinators and
+          // the gate pool already know (a fresh commit-tree would differ only in its timestamp).
+          const want = [...included, { number: pr.number, head: pr.head }];
+          const existing = [...valid.values()].find(
+            (c) => c.included.length >= want.length && headsKey(c.included.slice(0, want.length)) === headsKey(want),
+          );
+          if (existing) tip = existing.chain[want.length - 1];
+          else {
+            const message = mergeMessage(pr, stackBase, resolvedBy);
+            tip = (
+              await git(["commit-tree", merged.tree, "-p", tip, "-p", pr.head, "-F", "-"], { input: message })
+            ).stdout.trim();
+          }
+          included = [...included, { number: pr.number, head: pr.head, title: pr.title ?? "" }];
+          added.push(pr.number);
+        }
+        if (!added.length) continue;
+        const branch = candidateBranch(stackBase, included);
+        const level = {
+          branch,
+          sha: tip,
+          base: stackBase,
+          included: [...included],
+          lane: lane.id,
+          laneNumbers: lane.numbers,
+          added,
+        };
+        if (valid.get(branch)?.sha === tip) level.action = "reused";
+        else {
+          const workflow = await git(["show", `${tip}:.github/workflows/gate.yml`], { allowFail: true });
+          assertCandidateWorkflow(workflow.code === 0 ? workflow.stdout : "");
+          await hooks.beforePush?.(level);
+          const push = await git(
+            ["push", "--porcelain", remote, `${tip}:refs/heads/${branch}`, `--force-with-lease=refs/heads/${branch}:`],
+            { allowFail: true },
+          );
+          if (push.code !== 0) {
+            const raced = (await fetchRetry([`+refs/heads/${branch}:${ns}/race`])) && (await rev(`${ns}/race`));
+            const theirs = raced && (await parseCandidate(branch, raced));
+            if (!theirs || headsKey(theirs.included) !== headsKey(included)) {
+              throw new GitError(`could not push ${branch}: ${push.stderr.trim() || push.stdout.trim()}`);
+            }
+            tip = theirs.sha;
+            level.sha = theirs.sha;
+            level.action = "reused";
+          } else level.action = "built";
+        }
+        levels.push(level);
+        valid.delete(branch);
+        // Minimum refresh: an identical stack (same PR heads) that was green on an older main may land on
+        // that evidence when main moved only by release records / ungated paths this lane's gates ignore.
+        const prior = greenOld.find((c) => headsKey(c.included) === headsKey(included));
+        if (prior && level.action === "built") {
+          if (!deltaCache.has(prior.base)) {
+            deltaCache.set(
+              prior.base,
+              (await isAncestor(prior.base, main))
+                ? (await git(["diff", "--name-only", "-z", prior.base, main])).stdout.split("\0").filter(Boolean)
+                : null,
+            );
+          }
+          const delta = deltaCache.get(prior.base);
+          const laneFiles = planned.prs
+            .filter((p) => included.some((i) => i.number === p.number))
+            .flatMap((p) => p.files);
+          if (delta && deltaPreservesEvidence(delta, laneFiles)) {
+            updateState((st) => {
+              st.candidates[branch] = {
+                ...st.candidates[branch],
+                equivalentTo: {
+                  branch: prior.branch,
+                  sha: prior.sha,
+                  base: prior.base,
+                  included: included.map(({ number, head }) => ({ number, head })),
+                },
+              };
+            });
+            log(`${branch}: main moved only by release records / ungated paths; reusing ${short(prior.sha)}'s gate`);
+          }
+        }
+      }
+
+      // Anything on main that no level is (an older plan, an obsolete head) stops gating: SUPERSEDED, unless
+      // it is green and still exact, in which case it may land first.
+      const used = new Set(levels.map((l) => l.branch));
+      for (const c of allOnMain.values()) {
+        if (used.has(c.branch)) continue;
+        const gate = await provider.gateStatus(c.sha, c.branch);
+        const position = c.base === main ? 0 : c.chain.indexOf(main) + 1;
+        const stillExact = c.included.slice(position).every((i) => planned.byNumber.get(i.number)?.head === i.head);
+        if (gate.state === "success" && stillExact) {
+          levels.unshift({
+            branch: c.branch,
+            sha: c.sha,
+            base: c.base,
+            included: c.included,
+            lane: "carried",
+            laneNumbers: [],
+            added: [],
+            action: "reused",
+          });
+          continue;
+        }
+        await retire(c, "superseded by the current lane plan", { supersededBy: "plan" });
+      }
+      // Candidates on an older main can never land; retire them (green ones were remembered above).
+      for (const c of snap.candidates)
+        if (!c.invalid && !onMain(c) && (await isAncestor(c.base, main))) await retire(c, "main advanced");
+
+      updateState((st) => {
+        for (const level of levels) {
+          st.candidates[level.branch] = {
+            ...st.candidates[level.branch],
+            sha: level.sha,
+            base: level.base,
+            lane: level.laneNumbers,
+            builtAt: st.candidates[level.branch]?.builtAt ?? now(),
+          };
+          for (const i of level.included) prEvent(st, i.number, "groupedAt");
+        }
+        for (const sk of skipped) {
+          st.prs[sk.number] ??= {};
+          if (sk.reason.startsWith("conflicts")) st.prs[sk.number].conflictSince ??= now();
+        }
+      });
+      for (const sk of skipped) {
+        if (sk.reason === "dependency-unavailable") continue;
+        const why =
+          sk.reason === "conflicts-with-main"
+            ? `conflicts with main ${short(main)}; rebase or merge main into the PR (the label stays, so it retries automatically after your push)`
+            : `conflicts with ${sk.conflictsWith.map((n) => `#${n}`).join(", ")} in an earlier lane level; only this PR waits, every other lane proceeds`;
+        await commentOnce(
+          sk.number,
+          `skip:${short(main)}:${short(sk.head)}`,
+          `Merge train skipped this PR at head ${short(sk.head)}: it ${why}.\n\nConflicting files:\n${sk.files.map((f) => `- \`${f}\``).join("\n")}`,
+        );
+      }
+      log(
+        `lanes on ${short(main)}: ${planned.lanes.map((l) => `[${l.numbers.map((n) => `#${n}`).join(" ")}]`).join(" ") || "none"}; levels ${levels.map((l) => `${l.branch}(${l.action})`).join(", ") || "none"}`,
+      );
+      return { schema: MANIFEST_SCHEMA, base: main, lanes: planned.lanes, levels, skipped, reasons: planned.reasons };
     });
   }
 
@@ -624,8 +1194,37 @@ export function createTrain({
       };
 
       const gate = await provider.gateStatus(sha, branch);
-      if (gate.state !== "success") return refuse("gate-not-green", `${GATE_JOB} for ${short(sha)} is ${gate.state}`);
-      for (const i of c.included) {
+      let evidence = gate.state === "success" ? "gate" : null;
+      if (!evidence) {
+        // Minimum refresh: re-verify the recorded equivalence (same PR heads, prior exact candidate green,
+        // and the bases differ only by release records / ungated paths this lane's gates never read).
+        const from = loadState().candidates[branch]?.equivalentTo;
+        if (
+          from?.sha &&
+          SHA.test(from.sha) &&
+          SHA.test(from.base ?? "") &&
+          headsKey(from.included ?? []) === headsKey(c.included)
+        ) {
+          const prior = await provider.gateStatus(from.sha, from.branch);
+          if (prior.state === "success" && (await isAncestor(from.base, c.base))) {
+            const delta = (await git(["diff", "--name-only", "-z", from.base, c.base])).stdout
+              .split("\0")
+              .filter(Boolean);
+            const laneFiles = [];
+            for (const i of c.included) laneFiles.push(...(await changedFiles(c.base, i.head)));
+            if (deltaPreservesEvidence(delta, laneFiles)) evidence = `equivalent:${short(from.sha)}`;
+          }
+        }
+      }
+      if (!evidence) return refuse("gate-not-green", `${GATE_JOB} for ${short(sha)} is ${gate.state}`);
+      // main is the candidate's base, or a lower level of the same stack that already landed: either way the
+      // update is a fast-forward to the exact tree that was gated.
+      const position = main === c.base ? 0 : c.chain.indexOf(main) + 1;
+      if (position === 0 && main !== c.base) {
+        return refuse("main-moved", `main is ${short(main)}, candidate base ${short(c.base)}`);
+      }
+      if (position === c.included.length) return refuse("already-landed", `main is already ${short(sha)}`);
+      for (const i of c.included.slice(position)) {
         const pr = await provider.getPr(i.number);
         if (
           !pr?.open ||
@@ -641,22 +1240,45 @@ export function createTrain({
           );
         }
       }
-      if (main !== c.base) return refuse("main-moved", `main is ${short(main)}, candidate base ${short(c.base)}`);
 
-      // The lease is the atomic compare-and-swap: main moves to the candidate only if it is still BASE.
-      const push = await pushMain(sha, c.base, c);
+      updateState((state) => {
+        for (const i of c.included.slice(position)) prEvent(state, i.number, "landingAt");
+      });
+      // The lease is the atomic compare-and-swap: main moves to the candidate only if it is still what we saw.
+      const push = await pushMain(sha, main, c);
       if (push.code !== 0) return refuse("main-moved", "main changed during landing; the lease refused the update");
       await deleteRemote(branch, sha);
-      writeManifest({ ...manifestFor(c, "landed"), main: sha });
-      return afterLanding({ main: sha, base: c.base, branch, included: c.included });
+      const landedHere = c.included.slice(position);
+      writeManifest({ ...manifestFor(c, "landed"), main: sha, evidence, lockMs: push.lockMs });
+      // Every other candidate whose PRs main now contains is SUPERSEDED: cancel its gate and drop it.
+      const contained = new Set(c.included.map((i) => `${i.number}:${i.head}`));
+      const others = await snapshot(ns).catch(() => ({ candidates: [] }));
+      for (const other of others.candidates) {
+        if (other.invalid || other.branch === branch) continue;
+        if (other.included.every((i) => contained.has(`${i.number}:${i.head}`))) {
+          await retire(other, `contained in landed ${branch}`, { supersededBy: branch });
+        }
+      }
+      updateState((state) => {
+        for (const i of landedHere) prEvent(state, i.number, "mergedAt");
+        state.candidates[branch] = { ...state.candidates[branch], sha, landedAt: now(), main: sha, evidence };
+        for (const key of Object.keys(state.bisect ?? {}))
+          if (landedHere.some((i) => key.includes(`${i.number}:${i.head}`))) delete state.bisect[key];
+      });
+      return afterLanding({ main: sha, base: main, branch, included: landedHere, evidence, lockMs: push.lockMs });
     });
   }
 
-  /** The atomic main update: main moves to `sha` only if it is still `base`. */
-  function pushMain(sha, base, context) {
-    return withLock(
+  /**
+   * The atomic main update: main moves to `sha` only if it is still `base`. The lock covers this one push and
+   * nothing else (no fetch, no gate query); how long it was held is measured and logged.
+   */
+  async function pushMain(sha, base, context) {
+    let heldAt = 0;
+    const result = await withLock(
       lanesDir && join(lanesDir, "main-update.lock"),
       async () => {
+        heldAt = now();
         await hooks.beforeLandPush?.(context);
         return git(
           [
@@ -671,6 +1293,9 @@ export function createTrain({
       },
       { sleep, now },
     );
+    const lockMs = Math.max(0, now() - heldAt);
+    log(`main lock held ${lockMs} ms`);
+    return { ...result, lockMs };
   }
 
   async function afterLanding(event) {
@@ -754,23 +1379,132 @@ export function createTrain({
     }
   }
 
-  async function run({ maxRounds = 12, timeoutMs, pollMs } = {}) {
-    const landed = [];
-    for (let round = 1; round <= maxRounds; round++) {
-      const built = await build();
-      if (built.action === "idle") return { status: "idle", landed, skipped: built.skipped };
-      const gate = await waitForGate(built.candidate, { branch: built.branch, timeoutMs, pollMs });
-      if (gate.timedOut) return { status: "timeout", landed, branch: built.branch, candidate: built.candidate };
-      if (gate.state !== "success") continue; // the next build bisects or re-triggers it
-      const result = await land(built.branch);
-      if (result.landed) landed.push(result);
-      else if (!["main-moved", "stale-pr", "gate-not-green", "missing-candidate"].includes(result.reason)) {
-        return { status: "refused", landed, result };
-      }
+  /**
+   * One coordinator per machine, many lanes. A second `run` refuses instead of racing (two rogue loops once
+   * re-pushed stale candidates for hours). The lease carries a heartbeat; a dead or silent holder is replaced.
+   */
+  function acquireLease() {
+    const noop = Object.assign(() => {}, { beat: () => {} });
+    if (!lanesDir) return noop;
+    const path = join(lanesDir, "coordinator.lock");
+    mkdirSync(dirname(path), { recursive: true });
+    let held = null;
+    try {
+      held = JSON.parse(readFileSync(path, "utf8"));
+    } catch {}
+    if (held && held.pid !== process.pid && isProcessAlive(held.pid) && now() - Number(held.heartbeatAt) < leaseMs) {
+      throw new Error(`coordinator already running (pid ${held.pid}, since ${new Date(held.startedAt).toISOString()})`);
     }
-    return { status: "max-rounds", landed };
+    const lease = { pid: process.pid, startedAt: now(), heartbeatAt: now() };
+    writeFileSync(path, `${JSON.stringify(lease)}\n`);
+    const release = () => {
+      try {
+        if (JSON.parse(readFileSync(path, "utf8")).pid === process.pid) unlinkSync(path);
+      } catch {}
+    };
+    return Object.assign(release, {
+      beat: () => writeFileSync(path, `${JSON.stringify({ ...lease, heartbeatAt: now() })}\n`),
+    });
   }
 
+  /**
+   * Advances every lane at once: build or reuse all stacked levels (they gate concurrently), land the deepest
+   * green level (it supersedes the levels below it), and attribute a red level to its own lane only:
+   * bisect a multi-PR lane, eject a single PR. Never re-pushes a candidate whose base is no longer main.
+   */
+  async function run({ maxRounds = 24, timeoutMs = 150 * 60_000, pollMs = 30_000 } = {}) {
+    const release = acquireLease();
+    const landed = [];
+    const start = now();
+    try {
+      for (let round = 1; round <= maxRounds; round++) {
+        release.beat();
+        const all = await buildAll();
+        if (!all.levels.length) return { status: "idle", landed, skipped: all.skipped };
+        const gates = [];
+        for (const level of all.levels) gates.push(await provider.gateStatus(level.sha, level.branch));
+        updateState((state) => {
+          all.levels.forEach((level, k) => {
+            for (const i of level.included) {
+              if (gates[k].state === "pending") prEvent(state, i.number, "gateStartedAt");
+              if (gates[k].state === "success") prEvent(state, i.number, "greenAt");
+            }
+          });
+        });
+
+        // Attribute a red level to its own lane when everything below it is green (or it is the bottom).
+        let attributed = false;
+        for (let k = 0; k < all.levels.length && !attributed; k++) {
+          if (gates[k].state !== "failure") continue;
+          if (k > 0 && gates[k - 1].state !== "success") break;
+          attributed = true;
+          const level = all.levels[k];
+          const lanePrs = level.included.filter((i) => level.added.includes(i.number));
+          if (lanePrs.length === 1) {
+            await ejectPr(lanePrs[0], level);
+          } else {
+            updateState((state) => {
+              state.bisect ??= {};
+              const laneKey = headsKey(
+                level.laneNumbers
+                  .map((n) => ({ number: n, head: level.included.find((i) => i.number === n)?.head }))
+                  .filter((i) => i.head),
+              );
+              const limit = Math.ceil(lanePrs.length / 2);
+              state.bisect[laneKey] = { limit, at: now() };
+              log(`bisecting lane [${level.laneNumbers.map((n) => `#${n}`).join(" ")}]: trying the first ${limit}`);
+            });
+          }
+          // Every level built on the red one is now pointless: SUPERSEDED.
+          for (const above of all.levels.slice(k))
+            await retire(above, `built on red ${level.branch}`, { supersededBy: "bisect" });
+        }
+        if (attributed) continue;
+
+        const green = all.levels
+          .map((level, k) => ({ level, gate: gates[k] }))
+          .filter((g) => g.gate.state === "success");
+        const deepest = green.at(-1)?.level;
+        if (deepest) {
+          const result = await land(deepest.branch);
+          if (result.landed) {
+            landed.push(result);
+            continue; // levels above it still fast-forward from the new main without re-gating
+          }
+          if (
+            !["main-moved", "stale-pr", "gate-not-green", "missing-candidate", "already-landed"].includes(result.reason)
+          ) {
+            return { status: "refused", landed, result };
+          }
+          continue;
+        }
+        if (now() - start >= timeoutMs) return { status: "timeout", landed, levels: all.levels };
+        await sleep(pollMs);
+      }
+      return { status: "max-rounds", landed };
+    } finally {
+      release();
+    }
+  }
+
+  async function ejectPr(item, level) {
+    log(
+      `gate failed for ${level.branch} with only #${item.number} new in its lane; removing #${item.number} from the queue`,
+    );
+    await commentOnce(
+      item.number,
+      `eject:${short(level.sha)}`,
+      `Removed from the merge queue: the gate failed for merge-train candidate \`${level.branch}\` (${short(level.sha)}), where this PR (head ${short(item.head)}) was the only new change on a green base.\n\nFix the failure, then resubmit with \`node tooling/merge-train/train.mjs submit ${item.number}\`.`,
+    );
+    try {
+      await provider.removeLabel(item.number);
+    } catch (error) {
+      log(`warning: could not unlabel #${item.number}: ${error.message}`);
+    }
+    updateState((state) => prEvent(state, item.number, "failedAt"));
+  }
+
+  /** Queue, candidates, and every PR's pipeline state with its timings (ms). */
   async function status() {
     return withNamespace(async (ns) => {
       const snap = await snapshot(ns);
@@ -779,11 +1513,49 @@ export function createTrain({
       for (const c of snap.candidates) {
         candidates.push({
           ...c,
-          current: c.base === snap.base,
+          current: !c.invalid && (c.base === snap.base || c.chain?.includes(snap.base)),
           gate: c.invalid ? null : await provider.gateStatus(c.sha, c.branch),
         });
       }
-      return { main: snap.base, queue, candidates };
+      const state = loadState();
+      const span = (a, b) => (a && b ? b - a : null);
+      const seen = new Set([...queue.map((p) => p.number), ...Object.keys(state.prs).map(Number)]);
+      const prs = [];
+      for (const number of [...seen].sort((a, b) => a - b)) {
+        const events = state.prs[number] ?? {};
+        const queued = queue.find((p) => p.number === number);
+        const candidate = candidates.find(
+          (c) =>
+            !c.invalid &&
+            c.current &&
+            c.included.some((i) => i.number === number && (!queued?.head || i.head === queued.head)),
+        );
+        let name;
+        if (events.mergedAt && !queued) name = "MERGED";
+        else if (events.landingAt && !events.mergedAt) name = "LANDING";
+        else if (candidate?.gate?.state === "success") name = "GREEN";
+        else if (candidate?.gate?.state === "failure") name = "FAILED";
+        else if (candidate?.gate?.state === "pending") name = "GATING";
+        else if (candidate) name = `MERGE GROUP ${candidate.branch.slice(BRANCH_PREFIX.length)}`;
+        else if (events.supersededFrom && !queued) name = "SUPERSEDED";
+        else if (queued) name = "READY FOR INTEGRATION";
+        else name = "BUILDING";
+        const queuedAt = queued?.queuedAt ? Date.parse(queued.queuedAt) : null;
+        prs.push({
+          number,
+          state: name,
+          head: queued?.head ?? null,
+          candidate: candidate?.branch ?? null,
+          supersededFrom: events.supersededFrom ?? null,
+          timings: {
+            queueWaitMs: span(queuedAt, events.groupedAt),
+            conflictWaitMs: span(events.conflictSince, events.groupedAt),
+            gateMs: span(events.gateStartedAt ?? events.groupedAt, events.greenAt ?? events.failedAt),
+            toLandMs: span(queuedAt ?? events.groupedAt, events.mergedAt),
+          },
+        });
+      }
+      return { main: snap.base, queue, candidates, prs };
     });
   }
 
@@ -808,7 +1580,7 @@ export function createTrain({
     return { number, position, head: pr.head };
   }
 
-  return { submit, build, land, landPr, run, status, waitForGate, parseCandidate };
+  return { submit, build, buildAll, plan, land, landPr, run, status, waitForGate, parseCandidate, acquireLease };
 }
 
 // ---------------------------------------------------------------------------------------------- CLI
@@ -836,9 +1608,9 @@ export function parseArgs(argv) {
     } else if (a.startsWith("--")) throw new Error(`unknown option ${a}`);
     else opts.positional.push(a);
   }
-  const need = { submit: 1, land: opts.pr ? 0 : 1, build: 0, run: 0, status: 0 }[command];
+  const need = { submit: 1, land: opts.pr ? 0 : 1, build: 0, plan: 0, run: 0, status: 0 }[command];
   if (need === undefined || opts.positional.length !== need || (opts.pr && command !== "land")) {
-    throw new Error("usage: train.mjs submit <pr> | build | land <merge-train/branch> | run | status [--json]");
+    throw new Error("usage: train.mjs submit <pr> | plan | build | land <merge-train/branch> | run | status [--json]");
   }
   return opts;
 }
@@ -862,6 +1634,7 @@ async function main(argv) {
     lanesDir,
     mergeLog: join(lanesDir, "merge-log.md"),
     onLanded,
+    resolvers: [releaseRecordResolver],
   });
   if (opts.command === "submit") {
     const n = Number(opts.positional[0].replace(/^#/, ""));
@@ -869,8 +1642,17 @@ async function main(argv) {
     await train.submit(n);
     return 0;
   }
+  if (opts.command === "plan") {
+    const p = await train.plan();
+    if (opts.json)
+      process.stdout.write(`${JSON.stringify({ base: p.base, lanes: p.lanes, reasons: p.reasons }, null, 2)}\n`);
+    else
+      for (const lane of p.lanes)
+        process.stdout.write(`lane ${lane.id}: ${lane.numbers.map((n) => `#${n}`).join(" ")}\n`);
+    return 0;
+  }
   if (opts.command === "build") {
-    const m = await train.build();
+    const m = await train.buildAll();
     if (opts.json) process.stdout.write(`${JSON.stringify(m, null, 2)}\n`);
     return 0;
   }
