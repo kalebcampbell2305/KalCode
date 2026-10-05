@@ -17,11 +17,11 @@ function Assert-Plain([string]$Path) {
 }
 function Get-HookEnvironment([string]$Text,[string]$Pool) {
     foreach ($entry in @(@{key='ACTIONS_RUNNER_HOOK_JOB_STARTED';phase='before'},@{key='ACTIONS_RUNNER_HOOK_JOB_COMPLETED';phase='after'})) {
-        $old=$entry.key+'='+(Join-Path $Pool ($entry.phase+'.cmd'))
+        $old=$entry.key+'='+(Join-Path $Pool ($entry.phase+'.ps1'))
         $matchesFound=@([regex]::Matches($Text,'(?m)^'+$entry.key+'=[^\r\n]*'))
         if ($matchesFound.Count -ne 1 -or $matchesFound[0].Value -cne $old) { throw 'Unexpected existing hook entry.' }
         $match=$matchesFound[0]
-        $replacement=$entry.key+'='+(Join-Path $Pool ($entry.phase+'.ps1'))
+        $replacement=$entry.key+'='+(Join-Path $Pool ($entry.phase+'.js'))
         $Text=$Text.Substring(0,$match.Index)+$replacement+$Text.Substring($match.Index+$match.Length)
     }
     return $Text
@@ -47,6 +47,14 @@ try {
         $path=Join-Path $pool $name; Assert-Plain $path
         if ((Get-FileHash -LiteralPath $path).Hash -ne $expected[$name]) { Refuse 'protected_hook_source_changed' }
     }
+    $replacementHashes=@{
+        'gate-worker-job-hook.js'='BF15CF4A2C18BA1BECBC876B08DD639370EB0CD99FF69ED22082E55A62623568'
+        'gate-worker-pool.psm1'='3D0304D8D130D927AF40C3BF1825EFB7EC077F6C4BCC31F86F30545072031070'
+    }
+    foreach ($name in $replacementHashes.Keys) {
+        $path=Join-Path $PSScriptRoot $name; Assert-Plain $path
+        if ((Get-FileHash -LiteralPath $path).Hash -ne $replacementHashes[$name]) { Refuse 'replacement_source_changed' }
+    }
     $originalName='actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate'
     $original=Get-CimInstance Win32_Service -Filter "Name='$originalName'"
     if ($original.State -ne 'Running' -or $original.StartName -ne '.\kalcode-ci' -or $original.ProcessId -ne 10400) { Refuse 'original_service_changed' }
@@ -68,20 +76,27 @@ try {
         $text=[IO.File]::ReadAllText($environment)
         if (@([regex]::Matches($text,'(?m)^KALCODE_GATE_SLOT='+$slot+'\r?$')).Count -ne 1) { Refuse 'slot_environment_changed' }
         $updated=Get-HookEnvironment $text $pool
-        $plans += @{slot=$slot;name=$serviceName;root=$runnerRoot;environment=$environment;beforeHash=(Get-FileHash -LiteralPath $environment).Hash;text=$updated}
+        $account=Get-LocalUser -Name "kalcode-ci-w$slot" -ErrorAction Stop
+        $member=@(Get-LocalGroupMember -SID 'S-1-5-32-558'|Where-Object {$_.SID.Value -eq $account.SID.Value}).Count -eq 1
+        $plans += @{slot=$slot;name=$serviceName;root=$runnerRoot;environment=$environment;beforeHash=(Get-FileHash -LiteralPath $environment).Hash;text=$updated;account=$account;performanceReader=$member}
     }
     foreach ($phase in @('Before','After')) {
-        $path=Join-Path $pool ($phase.ToLowerInvariant()+'.ps1'); Assert-Plain $path
+        $path=Join-Path $pool ($phase.ToLowerInvariant()+'.js'); Assert-Plain $path
         if (Test-Path -LiteralPath $path) { Refuse 'replacement_wrapper_already_exists' }
-        @('$ErrorActionPreference = ''Stop''',('& (Join-Path $PSScriptRoot ''gate-worker-hook.ps1'') -Phase '+$phase),'exit $LASTEXITCODE') | Set-Content -LiteralPath $path -Encoding ascii
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gate-worker-job-hook.js') -Destination $path
+        if ((Get-FileHash -LiteralPath $path).Hash -ne $replacementHashes['gate-worker-job-hook.js']) { Refuse 'installed_wrapper_changed' }
     }
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gate-worker-pool.psm1') -Destination (Join-Path $pool 'gate-worker-pool.psm1')
+    if ((Get-FileHash -LiteralPath (Join-Path $pool 'gate-worker-pool.psm1')).Hash -ne $replacementHashes['gate-worker-pool.psm1']) { Refuse 'installed_sampler_changed' }
     foreach ($plan in $plans) {
         Assert-Idle $plan.root
         if ((Get-FileHash -LiteralPath $plan.environment).Hash -ne $plan.beforeHash) { Refuse 'environment_changed_during_repair' }
         [IO.File]::WriteAllText($plan.environment,$plan.text,[Text.Encoding]::ASCII)
+        if (-not $plan.performanceReader) { Add-LocalGroupMember -SID 'S-1-5-32-558' -Member $plan.account }
+        if (@(Get-LocalGroupMember -SID 'S-1-5-32-558'|Where-Object {$_.SID.Value -eq $plan.account.SID.Value}).Count -ne 1) { Refuse 'performance_read_membership_unconfirmed' }
         Restart-Service -Name $plan.name
         (Get-Service -Name $plan.name).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
-        $result.workers += @{slot=$plan.slot;service=$plan.name;state='Running';beforeHash=$plan.beforeHash;afterHash=(Get-FileHash -LiteralPath $plan.environment).Hash}
+        $result.workers += @{slot=$plan.slot;service=$plan.name;state='Running';beforeHash=$plan.beforeHash;afterHash=(Get-FileHash -LiteralPath $plan.environment).Hash;performanceReadGroup='S-1-5-32-558';performanceReadMembershipAdded=(-not $plan.performanceReader)}
     }
     $after=Get-CimInstance Win32_Service -Filter "Name='$originalName'"
     $result.originalPreserved=$after.State -eq $original.State -and $after.StartName -eq $original.StartName -and $after.ProcessId -eq $original.ProcessId

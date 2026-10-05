@@ -51,17 +51,17 @@ $repairAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScri
 $rewrite=$repairAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HookEnvironment'},$false)
 Invoke-Expression $rewrite.Extent.Text
 $fixturePool='C:\ProgramData\KalCodeGatePool'
-$fixtureLines=@('KALCODE_GATE_SLOT=1','PATH=preserve this literal path','ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\ProgramData\KalCodeGatePool\before.cmd','ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ProgramData\KalCodeGatePool\after.cmd','UNRELATED=ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\ProgramData\KalCodeGatePool\before.cmd')
+$fixtureLines=@('KALCODE_GATE_SLOT=1','PATH=preserve this literal path','ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\ProgramData\KalCodeGatePool\before.ps1','ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ProgramData\KalCodeGatePool\after.ps1','UNRELATED=ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\ProgramData\KalCodeGatePool\before.ps1')
 $environmentText=($fixtureLines -join "`r`n")+"`r`n"
-$expectedLines=$fixtureLines.Clone(); $expectedLines[2]=$expectedLines[2].Replace('before.cmd','before.ps1'); $expectedLines[3]=$expectedLines[3].Replace('after.cmd','after.ps1')
+$expectedLines=$fixtureLines.Clone(); $expectedLines[2]=$expectedLines[2].Replace('before.ps1','before.js'); $expectedLines[3]=$expectedLines[3].Replace('after.ps1','after.js')
 Assert-Equal (Get-HookEnvironment $environmentText $fixturePool) (($expectedLines -join "`r`n")+"`r`n") 'Only two exact hook lines change; all other bytes remain'
-foreach ($bad in @($environmentText+$fixtureLines[2],$environmentText.Replace('before.cmd','unexpected.ps1'))) {
+foreach ($bad in @($environmentText+$fixtureLines[2],$environmentText.Replace('before.ps1','unexpected.ps1'))) {
     $rejected=$false; try {Get-HookEnvironment $bad $fixturePool|Out-Null} catch {$rejected=$true}
     Assert-Equal $rejected $true 'Unknown or duplicate hooks are refused'
 }
 $installerText=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'setup-gate-worker-pool.ps1'))
 foreach ($phase in @('before','after')) {
-    if ($installerText -notmatch ('ACTIONS_RUNNER_HOOK_JOB_(?:STARTED|COMPLETED)=.*'+$phase+'\.ps1') -or $installerText -match ('ACTIONS_RUNNER_HOOK_JOB_(?:STARTED|COMPLETED)=.*'+$phase+'\.cmd')) { throw 'Installer hooks must use a runner-supported .ps1 extension.' }
+    if ($installerText -notmatch ('ACTIONS_RUNNER_HOOK_JOB_(?:STARTED|COMPLETED)=.*'+$phase+'\.js') -or $installerText -match ('ACTIONS_RUNNER_HOOK_JOB_(?:STARTED|COMPLETED)=.*'+$phase+'\.(?:cmd|ps1)')) { throw 'Installer hooks must use a runner-supported .js extension.' }
 }
 $wrapperAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'invoke-gate-worker-pool-install.ps1'),[ref]$tokens,[ref]$parseErrors)
 foreach ($name in @('Assert-OrdinaryToolPath','Read-ApprovedCargoTools','Read-ApprovedServiceState')) {

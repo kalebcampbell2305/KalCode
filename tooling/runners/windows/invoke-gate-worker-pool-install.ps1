@@ -76,9 +76,9 @@ try {
     if ([Environment]::MachineName -ne 'DESKTOP-KOOB7VV') { Refuse 'wrong_host' }
     $result.phase='manifest'; Save-Result
     if ((Get-FileHash -LiteralPath $SourceManifest -Algorithm SHA256).Hash -ne $SourceManifestSha256) { Refuse 'manifest_hash_changed' }
-    $allowed = @('setup-gate-worker-pool.ps1','gate-worker-pool.psm1','gate-worker-hook.ps1','test-gate-worker-pool.ps1')
+    $allowed = @('setup-gate-worker-pool.ps1','gate-worker-pool.psm1','gate-worker-hook.ps1','gate-worker-job-hook.js','test-gate-worker-pool.ps1')
     # Windows PowerShell 5.1 preserves a JSON array as one pipeline object. Assign directly;
-    # wrapping the pipeline in @() would turn four source records into one nested array.
+    # wrapping the pipeline in @() would turn the source records into one nested array.
     $sources = Get-Content -LiteralPath $SourceManifest -Raw | ConvertFrom-Json
     if ($null -eq $sources -or $sources.Count -ne $allowed.Count) { Refuse 'source_inventory_count' }
     $result.phase='sources'; Save-Result

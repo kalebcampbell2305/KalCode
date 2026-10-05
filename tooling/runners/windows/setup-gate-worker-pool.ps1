@@ -289,10 +289,9 @@ $originalSid = (Get-LocalUser -Name 'kalcode-ci' -ErrorAction Stop).SID.Value
 if ($LASTEXITCODE) { throw 'Original worker heavy-lease ACL failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gate-worker-pool.psm1') -Destination $pool
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gate-worker-hook.ps1') -Destination $pool
-@('$ErrorActionPreference = ''Stop''','& (Join-Path $PSScriptRoot ''gate-worker-hook.ps1'') -Phase Before','exit $LASTEXITCODE') |
-    Set-Content -LiteralPath (Join-Path $pool 'before.ps1') -Encoding ascii
-@('$ErrorActionPreference = ''Stop''','& (Join-Path $PSScriptRoot ''gate-worker-hook.ps1'') -Phase After','exit $LASTEXITCODE') |
-    Set-Content -LiteralPath (Join-Path $pool 'after.ps1') -Encoding ascii
+foreach ($name in @('before.js','after.js')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gate-worker-job-hook.js') -Destination (Join-Path $pool $name)
+}
 } else {
     # Root-only read/traverse, with no inheritance into other workers' private trees.
     & icacls $workerContainer /grant "*$($serviceState.accountSid):RX" | Out-Null
@@ -355,6 +354,7 @@ try {
         $secure = ConvertTo-SecureString $password -AsPlainText -Force
         New-LocalUser -Name $plan.Account -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -Description 'KalCode main-PC optional gate worker' | Out-Null
         $sid = (Get-LocalUser -Name $plan.Account).SID.Value
+        Add-LocalGroupMember -SID 'S-1-5-32-558' -Member (Get-LocalUser -Name $plan.Account)
         & icacls $workerContainer /grant "*${sid}:RX" | Out-Null
         if ($LASTEXITCODE) { throw 'Worker parent traversal ACL failed.' }
         $runner = Join-Path $plan.Root 'runner'; $workerHome = Join-Path $plan.Root 'home'; $temp = Join-Path $workerHome 'tmp'
@@ -380,8 +380,8 @@ try {
             "KALCODE_E2E_PORT=$($plan.E2ePort)", "KALCODE_E2E_MAIL_PORT=$($plan.MailPort)"
             "KALCODE_E2E_INSPECTOR_PORT=$($plan.InspectorPort)", "KALCODE_UI_TEST_PORT=$($plan.UiPort)"
             "KALCODE_E2E_CDP_PORT=$($plan.CdpPort)"
-            "ACTIONS_RUNNER_HOOK_JOB_STARTED=$(Join-Path $pool 'before.ps1')"
-            "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$(Join-Path $pool 'after.ps1')"
+            "ACTIONS_RUNNER_HOOK_JOB_STARTED=$(Join-Path $pool 'before.js')"
+            "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$(Join-Path $pool 'after.js')"
             "PATH=$(Join-Path $toolCargo 'bin');$npm;C:\Program Files\nodejs;C:\Program Files\Git\cmd;C:\Program Files\Git\usr\bin;C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0"
             'GIT_CONFIG_NOSYSTEM=1'
         ) | Set-Content -LiteralPath (Join-Path $runner '.env') -Encoding ascii

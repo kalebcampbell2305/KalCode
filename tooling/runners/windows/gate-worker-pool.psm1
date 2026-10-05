@@ -41,7 +41,12 @@ function Get-GateWorkerResources {
     $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction Stop
     $memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop
     $disk = Get-CimInstance Win32_PerfFormattedData_PerfDisk_LogicalDisk -Filter "Name='_Total'" -ErrorAction Stop
-    if ($null -eq $cpu -or $null -eq $memory -or $null -eq $disk) { return $null }
+    $missing=@()
+    if ($null -eq $cpu -or $null -eq $cpu.PercentProcessorTime) { $missing+='PerfOS_Processor.PercentProcessorTime' }
+    if ($null -eq $memory -or $null -eq $memory.AvailableMBytes) { $missing+='PerfOS_Memory.AvailableMBytes' }
+    if ($null -eq $memory -or $null -eq $memory.PercentCommittedBytesInUse) { $missing+='PerfOS_Memory.PercentCommittedBytesInUse' }
+    if ($null -eq $disk -or $null -eq $disk.CurrentDiskQueueLength) { $missing+='PerfDisk_LogicalDisk.CurrentDiskQueueLength' }
+    if ($missing.Count) { Write-Host ('Gate resource counters unavailable: '+($missing -join ', ')); return $null }
     [pscustomobject]@{ Cpu = [double]$cpu.PercentProcessorTime; FreeGiB = [double]$memory.AvailableMBytes / 1024
         CommitPercent = [double]$memory.PercentCommittedBytesInUse; DiskQueue = [double]$disk.CurrentDiskQueueLength }
 }
