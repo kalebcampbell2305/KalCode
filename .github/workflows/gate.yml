@@ -198,7 +198,7 @@ jobs:
           set -euo pipefail
           export TAURI_CONFIG="$(node -e 'const config = JSON.parse(process.env.TAURI_CONFIG); config.bundle = { externalBin: [] }; process.stdout.write(JSON.stringify(config));')"
           host_target="$(rustc -vV | awk '/^host: / { print $2 }')"
-          cargo build --locked --target "$host_target" -p kalcode-desktop --bin kalcode-update-helper
+          cargo build --locked --target "$host_target" -p kalcode-update-helper --bin kalcode-update-helper
           cargo build --locked --target "$host_target" -p kalcode-providers --bin kalcode-provider-guardian
           cargo build --locked --target "$host_target" -p kalcode-hook-bridge --bin kalcode-hook --no-default-features
           helper_dir="apps/desktop/src-tauri/binaries"

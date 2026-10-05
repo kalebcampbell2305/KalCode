@@ -13,9 +13,10 @@ export const MACOS_UPDATE_HELPER_IDENTIFIER = "com.kalcode.desktop.update-helper
 export const MACOS_HELPERS = Object.freeze([
   Object.freeze({
     name: MACOS_UPDATE_HELPER,
-    packageName: "kalcode-desktop",
+    // Its own crate (crates/update-helper): building it never compiles the desktop library.
+    packageName: "kalcode-update-helper",
     identifier: MACOS_UPDATE_HELPER_IDENTIFIER,
-    includeReleaseFeatures: true,
+    includeReleaseFeatures: false,
     noDefaultFeatures: false,
   }),
   Object.freeze({
