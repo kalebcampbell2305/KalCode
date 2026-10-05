@@ -39,7 +39,8 @@ const codeNav = (page: Page) =>
   page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true });
 const panes = (page: Page) => page.locator("[data-pane-id]:not([hidden])");
 const pane = (page: Page, n: number) => panes(page).nth(n);
-const divider = (page: Page) => page.getByRole("separator").first();
+// The pane splitter ("Resize pane 1 and pane 2"), not other separators in the shell.
+const divider = (page: Page) => page.getByRole("separator", { name: /^Resize / }).first();
 
 async function shot(page: Page, name: string) {
   const dir = fileURLToPath(new URL("../../qa/screenshots/", import.meta.url));
@@ -92,6 +93,11 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "w1-panes" })).toBeVisible();
     await expect(panes(page)).toHaveCount(1);
+    // Room for the keyboard resize: the gate's service desktop clamps the 1360 px window toward its
+    // 960 px minimum, where the rail and sidebar leave a ~612 px canvas and two 320 px minimum panes
+    // cannot move at all. With the sidebar collapsed the canvas keeps room at any allowed size.
+    await page.keyboard.press("Control+B");
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
 
     // Pane 1: a real shell.
     await page.getByRole("button", { name: /^New .+ terminal$/ }).click();
