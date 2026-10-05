@@ -138,3 +138,53 @@ test("selected-check outputs use Actions-compatible bytes on Windows PowerShell"
     assert.equal(readFileSync(output, "utf8").trim().replaceAll("\r\n", "\n"), expected);
   }
 });
+
+test("checkout keeps the warm target: clean:false, exact-SHA reset, orphans stopped before and after", () => {
+  const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? step.split("\n")[0]);
+  const checkout = steps.findIndex((step) => step.startsWith("uses: actions/checkout@"));
+  const before = names.indexOf("Stop this worker's orphaned processes");
+  const reset = names.indexOf("Reset to the exact event SHA, keeping warm caches");
+  const plan = names.indexOf("Plan change-based gate");
+  const after = names.indexOf("Stop processes this job left behind");
+  // Gate 37362947496: checkout's git clean -ffdx failed on DLLs an orphan held in the warm target.
+  assert.match(steps[checkout], /^ {10}clean: false$/m);
+  assert.ok(before >= 0 && before < checkout, "orphans stop before checkout");
+  assert.ok(checkout < reset && reset < plan, "the exact-SHA reset runs before any check is planned");
+  assert.equal(after, steps.length - 1, "the post-job orphan stop is the last step");
+  assert.match(steps[after], /^ {8}if: always\(\)$/m);
+  assert.match(script(steps[reset]), /gate-workspace-hygiene\.ps1 -Phase Reset/);
+  assert.match(script(steps[after]), /gate-workspace-hygiene\.ps1 -Phase Stop/);
+  // The inline pre-checkout stop is scoped to this worker's _work and never stops the live job.
+  const inline = script(steps[before]);
+  assert.match(inline, /RUNNER_WORKSPACE/);
+  assert.match(inline, /_work/);
+  assert.match(inline, /Runner\\.\(Worker\|Listener\)/);
+  assert.match(inline, /taskkill\.exe \/T \/F/);
+  const hygiene = readFileSync(new URL("../.github/scripts/gate-workspace-hygiene.ps1", import.meta.url), "utf8");
+  assert.match(hygiene, /git reset --hard --quiet \$env:GITHUB_SHA/);
+  assert.match(hygiene, /git clean -ffdxq -e target\/ -e node_modules\//);
+  assert.match(hygiene, /Checkout does not match the immutable event SHA/);
+  assert.match(hygiene, /gate-evidence\.json/);
+});
+
+test("the workspace hygiene script parses and refuses a non-_work root", { skip: process.platform !== "win32" }, () => {
+  const path = new URL("../.github/scripts/gate-workspace-hygiene.ps1", import.meta.url);
+  const parse = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      `$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('${decodeURIComponent(path.pathname.slice(1)).replaceAll("/", "\\")}',[ref]$null,[ref]$e); if ($e) { $e | Out-String; exit 1 }`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  assert.equal(parse.status, 0, parse.stdout + parse.stderr);
+  const dir = mkdtempSync(join(tmpdir(), "kc-hygiene-"));
+  const refused = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", decodeURIComponent(path.pathname.slice(1)), "-Phase", "Stop"],
+    { encoding: "utf8", windowsHide: true, env: { ...process.env, RUNNER_WORKSPACE: join(dir, "repo") } },
+  );
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stdout + refused.stderr, /Refusing to clean outside a runner _work directory/);
+});

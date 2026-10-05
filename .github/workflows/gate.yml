@@ -82,12 +82,39 @@ jobs:
           } catch {
             Write-Output "::warning::Could not look up merge-train gate evidence ($($_.Exception.Message)); gating."
           }
+      # A cancelled or killed earlier job can leave test binaries/rustc running under this worker's
+      # _work directory, holding DLLs in the warm target (gate 37362947496 then failed in checkout).
+      # Inline because the repository is not checked out yet; same rule as
+      # .github/scripts/gate-workspace-hygiene.ps1 -Phase Stop. Own-account processes only.
+      - name: Stop this worker's orphaned processes
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $root = ([IO.Path]::GetFullPath((Split-Path -Parent $env:RUNNER_WORKSPACE))).TrimEnd('\') + '\'
+          if ($root -notmatch '\\_work\\$') { throw "Refusing to clean outside a runner _work directory: $root" }
+          $all = @(Get-CimInstance Win32_Process); $byId = @{}; foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
+          $keep = @{}; $c = $byId[[int]$PID]; for ($i = 0; $i -lt 16 -and $null -ne $c; $i++) { $keep[[int]$c.ProcessId] = $true; $c = $byId[[int]$c.ParentProcessId] }
+          foreach ($p in $all) {
+            if ($keep.ContainsKey([int]$p.ProcessId) -or $p.Name -match '^(Runner\.(Worker|Listener)|RunnerService)\.exe$' -or -not $p.ExecutablePath) { continue }
+            $cmd = [string]$p.CommandLine
+            if ($p.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or ($cmd -and $cmd.IndexOf($root.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+              Write-Output "Stopping orphan $($p.ProcessId) $($p.Name)"; & taskkill.exe /T /F /PID $p.ProcessId 2>&1 | Out-Null
+            }
+          }
+          exit 0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.reuse.outputs.reused != 'true'
         with:
           fetch-depth: 0
           # Leave no GitHub token in the checkout for the code under test.
           persist-credentials: false
+          # The default clean (git clean -ffdx) wipes the worker's warm Cargo target and fails on files a
+          # leftover process holds; the next step resets to the exact SHA and cleans everything else.
+          clean: false
+      - name: Reset to the exact event SHA, keeping warm caches
+        if: steps.reuse.outputs.reused != 'true'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: .github/scripts/gate-workspace-hygiene.ps1 -Phase Reset
       - name: Plan change-based gate
         if: steps.reuse.outputs.reused != 'true'
         id: plan
@@ -225,6 +252,12 @@ jobs:
           name: gate-evidence-${{ github.sha }}-${{ github.run_attempt }}
           path: target/gate-evidence.json
           if-no-files-found: ignore
+      # Nothing this job started may outlive it and hold the warm target open for the next job.
+      - name: Stop processes this job left behind
+        if: always()
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          if (Test-Path -LiteralPath '.github/scripts/gate-workspace-hygiene.ps1') { .github/scripts/gate-workspace-hygiene.ps1 -Phase Stop }
 
   macos:
     name: Gate (macOS, Rust)
