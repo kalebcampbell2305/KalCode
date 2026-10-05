@@ -46,7 +46,7 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
         managed: true,
       },
     ],
-    members: { [BOT_ID]: { roles: ["500"] }, [ownerId]: { roles: [] } },
+    members: { [BOT_ID]: { roles: ["500"], bot: true }, [ownerId]: { roles: [], joined_at: "2026-09-29T00:00:00Z" } },
     channels: [
       { id: "10", name: "Text Channels", type: 4, position: 0, parent_id: null, permission_overwrites: [] },
       { id: "11", name: "Voice Channels", type: 4, position: 1, parent_id: null, permission_overwrites: [] },
@@ -58,6 +58,9 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
     automod: [],
     onboarding: { prompts: [], default_channel_ids: [], enabled: false, mode: 0 },
     welcome: null,
+    emojis: [],
+    reactions: {},
+    membersIntent: true,
     invites: [],
     webhooks: [],
     requests: [],
@@ -65,7 +68,7 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
   const err = (status, message) => ({ status, body: { message, code: 50035 } });
   const chan = (cid) => s.channels.find((c) => c.id === cid) ?? s.threads.find((t) => t.id === cid);
 
-  function route(method, path, body) {
+  function route(method, path, body, query) {
     const p = path.replace(/^\/api\/v10/, "");
     let m;
     if (method === "GET" && p === "/users/@me") return { id: BOT_ID, username: "KalCode", bot: true };
@@ -112,10 +115,16 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
       s.roles = s.roles.filter((x) => x.id !== m[1]);
       return null;
     }
-    m = /^\/guilds\/\d+\/members\/(\d+)$/.exec(p);
+    m = /^\/guilds\/\d+\/members\/([^/]+)$/.exec(p);
     if (m && method === "GET")
-      return s.members[m[1]] ? { user: { id: m[1] }, roles: s.members[m[1]].roles } : err(404, "Unknown Member");
-    m = /^\/guilds\/\d+\/members\/(\d+)\/roles\/(\d+)$/.exec(p);
+      return s.members[m[1]]
+        ? {
+            user: { id: m[1], bot: Boolean(s.members[m[1]].bot) },
+            roles: s.members[m[1]].roles,
+            joined_at: s.members[m[1]].joined_at ?? "2026-10-05T00:00:00Z",
+          }
+        : err(404, "Unknown Member");
+    m = /^\/guilds\/\d+\/members\/([^/]+)\/roles\/(\d+)$/.exec(p);
     if (m && method === "PUT") {
       s.members[m[1]].roles.push(m[2]);
       return null;
@@ -126,6 +135,7 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
         if ((body.type === 5 || body.type === 15) && !s.guild.features.includes("COMMUNITY"))
           return err(400, "This channel type needs the Community feature");
         const c = { id: id(), position: s.channels.length, parent_id: null, permission_overwrites: [], ...body };
+        if (c.available_tags) c.available_tags = c.available_tags.map((t) => ({ id: t.id ?? id(), ...t }));
         s.channels.push(c);
         return c;
       }
@@ -143,6 +153,7 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
       if (method === "PATCH") {
         if (body.type === 5 && !s.guild.features.includes("COMMUNITY")) return err(400, "Needs Community");
         Object.assign(c, body);
+        if (body.available_tags) c.available_tags = c.available_tags.map((t) => ({ id: t.id ?? id(), ...t }));
         if ("locked" in body || "archived" in body)
           c.thread_metadata = { ...(c.thread_metadata ?? {}), locked: body.locked, archived: body.archived ?? false };
         return c;
@@ -166,13 +177,48 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
       Object.assign(r, body);
       return r;
     }
+    if (/^\/guilds\/\d+\/emojis$/.test(p)) {
+      if (method === "GET") return s.emojis;
+      if (method === "POST") {
+        const e = { id: id(), name: body.name };
+        s.emojis.push(e);
+        return e;
+      }
+    }
+    m = /^\/guilds\/\d+\/emojis\/(\d+)$/.exec(p);
+    if (m && method === "DELETE") {
+      s.emojis = s.emojis.filter((e) => e.id !== m[1]);
+      return null;
+    }
+    if (/^\/guilds\/\d+\/members$/.test(p) && method === "GET") {
+      if (!s.membersIntent) return err(403, "Missing Access");
+      return Object.entries(s.members).map(([uid, mem]) => ({
+        user: { id: uid, bot: Boolean(mem.bot) },
+        roles: mem.roles,
+        joined_at: mem.joined_at ?? "2026-10-05T00:00:00Z",
+      }));
+    }
+    m = /^\/channels\/\d+\/messages\/(\d+)\/reactions\/([^/]+)$/.exec(p);
+    if (m && method === "GET")
+      return (s.reactions[`${m[1]}:${decodeURIComponent(m[2])}`] ?? []).map((uid) => ({ id: uid }));
     m = /^\/channels\/(\d+)\/messages$/.exec(p);
     if (m) {
       s.messages[m[1]] ??= [];
       const list = s.messages[m[1]];
-      if (method === "GET") return [...list].reverse();
+      if (method === "GET") {
+        // Like Discord: `after` returns the oldest messages after that id; either way, newest first.
+        const after = query?.get("after");
+        const limit = Number(query?.get("limit") ?? 50);
+        const sorted = [...list].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+        if (after)
+          return sorted
+            .filter((x) => BigInt(x.id) > BigInt(after))
+            .slice(0, limit)
+            .reverse();
+        return sorted.slice(-limit).reverse();
+      }
       if (method === "POST") {
-        const msg = { id: id(), channel_id: m[1], author: { id: BOT_ID }, ...body };
+        const msg = { id: id(), channel_id: m[1], type: 0, author: { id: BOT_ID, bot: true }, ...body };
         list.push(msg);
         return msg;
       }
@@ -248,7 +294,7 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
     // Like Discord: ids in a path must be snowflakes (catches a dry run reading a channel it only planned).
     const out = /\/planned-/.test(u.pathname)
       ? { status: 400, body: { message: "Value is not snowflake.", code: 50035 } }
-      : route(method, u.pathname, body);
+      : route(method, u.pathname, body, u.searchParams);
     const isErr = out && typeof out === "object" && "status" in out && "body" in out && Object.keys(out).length === 2;
     const status = isErr ? out.status : out === null ? 204 : 200;
     const payload = isErr ? out.body : out;

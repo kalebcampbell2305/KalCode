@@ -6,6 +6,9 @@
 //   node tooling/community/discord/kc-discord.mjs invite-url [app-id]  the link that adds the bot to the server
 //   node tooling/community/discord/kc-discord.mjs changelog <id> [--post]   preview / post one release (e.g. 0.1.9+1738)
 //   node tooling/community/discord/kc-discord.mjs roadmap              preview #roadmap
+//   node tooling/community/discord/kc-discord.mjs badges               render the badge artwork
+//   node tooling/community/discord/kc-discord.mjs recognize [--dry-run]  grant earned badges and post shout-outs
+//   node tooling/community/discord/kc-discord.mjs schedule             run recognize every 15 minutes (Windows)
 // Secrets: see secrets.mjs. The token is read from DISCORD_BOT_TOKEN or ~/.kalcode/discord/bot-token and is never printed.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -30,7 +33,8 @@ import { validateServer } from "./validate.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..", "..");
-const plansPath = join(repoRoot, "packages", "protocol", "src", "plans.ts");
+// KC_PLANS points at another checkout of the plan catalog (e.g. an unmerged catalog fix).
+const plansPath = process.env.KC_PLANS ?? join(repoRoot, "packages", "protocol", "src", "plans.ts");
 const STATE_FILE = join(SECRET_DIR, "state.json");
 const SEED_COUNT = 9;
 
@@ -165,11 +169,74 @@ async function main() {
       for (const m of messages) for (const e of m.embeds) out(`── ${e.title} ──\n${e.description}\n`);
       return;
     }
+    case "badges": {
+      const { writeBadges } = await import("./badges.mjs");
+      const files = writeBadges(join(repoRoot, "assets", "branding", "discord", "badges"));
+      out(`Rendered ${files.length} badge images into assets/branding/discord/badges/.`);
+      return;
+    }
+    case "recognize": {
+      const token = loadToken();
+      if (!token) bail(`No bot token in ${TOKEN_FILE}.`);
+      const { recognize } = await import("./recognize.mjs");
+      const ledgerFile = join(SECRET_DIR, "recognition.json");
+      const ledger = existsSync(ledgerFile) ? JSON.parse(readFileSync(ledgerFile, "utf8")) : {};
+      const dryRun = flag("dry-run");
+      const report = await recognize({
+        api: createClient({ token, reason: "KalCode badges (kc-discord recognize)" }),
+        ledger,
+        dryRun,
+        log: (l) => out(`${new Date().toISOString()} ${l}`),
+      });
+      if (!dryRun) {
+        mkdirSync(SECRET_DIR, { recursive: true });
+        writeFileSync(ledgerFile, `${JSON.stringify(ledger)}\n`, "utf8");
+      }
+      out(
+        `${new Date().toISOString()} ${dryRun ? "Plan" : "Done"}: ${report.granted.length} badge(s) granted, ${report.shouted.length} shout-out(s).`,
+      );
+      for (const w of report.warnings) out(`  note: ${w}`);
+      return;
+    }
+    case "schedule": {
+      // Runs `recognize` every 15 minutes, hidden, logging to ~/.kalcode/discord/recognize.log.
+      if (process.platform !== "win32")
+        bail(
+          "On macOS, add a launchd agent that runs `node <repo>/tooling/community/discord/kc-discord.mjs recognize` every 15 minutes.",
+        );
+      const { execFileSync } = await import("node:child_process");
+      mkdirSync(SECRET_DIR, { recursive: true });
+      const script = fileURLToPath(import.meta.url);
+      const logFile = join(SECRET_DIR, "recognize.log");
+      const vbs = join(SECRET_DIR, "recognize-hidden.vbs");
+      // `cmd /s /c "<command>"` strips exactly one outer pair of quotes, so quoted paths with spaces
+      // (C:\Program Files\nodejs) survive. Chr(34) keeps the VBScript readable.
+      const quoted = (s) => `q & "${s}" & q`;
+      writeFileSync(
+        vbs,
+        [
+          "' Runs KalCode Discord badge recognition without a console window (created by kc-discord.mjs schedule).",
+          'Set sh = CreateObject("WScript.Shell")',
+          "q = Chr(34)",
+          `sh.Run "cmd /s /c " & q & ${quoted(process.execPath)} & " " & ${quoted(script)} & " recognize >> " & ${quoted(logFile)} & " 2>&1" & q, 0, False`,
+          "",
+        ].join("\r\n"),
+        "utf8",
+      );
+      const task = "KalCode Discord badges";
+      execFileSync(
+        "schtasks",
+        ["/Create", "/F", "/SC", "MINUTE", "/MO", "15", "/TN", task, "/TR", `wscript.exe "${vbs}"`],
+        { stdio: "ignore", windowsHide: true },
+      );
+      out(`Scheduled "${task}" every 15 minutes. Log: ${logFile}. Remove with: schtasks /Delete /TN "${task}" /F`);
+      return;
+    }
     default:
       out(
         readFileSync(fileURLToPath(import.meta.url), "utf8")
           .split("\n")
-          .slice(1, 10)
+          .slice(1, 14)
           .join("\n")
           .replace(/^\/\/ ?/gm, ""),
       );

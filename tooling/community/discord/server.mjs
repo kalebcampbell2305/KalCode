@@ -121,10 +121,109 @@ export const ROLES = [
     permissions: perms(MODERATION, P.BAN_MEMBERS, P.MENTION_EVERYONE, P.MANAGE_EVENTS, P.CREATE_EVENTS),
   },
   { key: "moderator", name: "Moderator", color: 0x6fa2ff, hoist: true, mentionable: true, permissions: MODERATION },
+  // Badge roles, by prestige: Discord shows the icon of a member's highest badge next to their name, and
+  // lists every badge on their profile. Badge roles carry no permissions and are never hoisted.
   { key: "contributor", name: "Contributor", color: 0x8db6ff, hoist: false, mentionable: false, permissions: 0n },
+  { key: "veteran", name: "Veteran", color: 0, hoist: false, mentionable: false, permissions: 0n },
+  { key: "shipped", name: "Idea Shipped", color: 0, hoist: false, mentionable: false, permissions: 0n },
+  { key: "bughunter", name: "Bug Hunter", color: 0, hoist: false, mentionable: false, permissions: 0n },
+  { key: "helper", name: "Helper", color: 0, hoist: false, mentionable: false, permissions: 0n },
+  { key: "showcase", name: "Showcase", color: 0, hoist: false, mentionable: false, permissions: 0n },
+  { key: "regular", name: "Regular", color: 0, hoist: false, mentionable: false, permissions: 0n },
   { key: "early", name: "Early Adopter", color: 0xb7cdf2, hoist: false, mentionable: false, permissions: 0n },
   { key: "member", name: "Member", color: 0, hoist: false, mentionable: false, permissions: 0n },
 ];
+
+// ── Badges ─────────────────────────────────────────────────────────────────────────────────────
+// Earned by making KalCode better, never by message volume. `recognize` grants them (only ever adds;
+// a badge is never taken away automatically) and posts a short shout-out with the badge artwork.
+// Artwork: badges.mjs → assets/branding/discord/badges/. Accents come from the KalCode tokens.
+
+export const BADGES = [
+  {
+    key: "contributor",
+    role: "contributor",
+    glyph: "code-xml",
+    accent: "#e6edf8",
+    tier: "top",
+    earn: { kind: "staff" },
+    how: "Granted by the team for merged code, docs or a significant fix",
+    shout: () => "contributed to KalCode itself",
+  },
+  {
+    key: "veteran",
+    role: "veteran",
+    glyph: "medal",
+    accent: "#f2b544",
+    tier: "top",
+    earn: { kind: "activity", activeDays: 30, memberDays: 90 },
+    how: "Active on 30 different days, and a member for 90+ days",
+    shout: () => "has been part of the community for the long haul",
+  },
+  {
+    key: "shipped",
+    role: "shipped",
+    glyph: "rocket",
+    accent: "#4c8dff",
+    earn: { kind: "forum-tag", forum: "features", tags: ["Shipped"] },
+    how: "A feature you requested shipped in KalCode",
+    shout: (r) => `requested ${r.title ? `"${r.title}"` : "a feature"}, and it shipped`,
+  },
+  {
+    key: "bughunter",
+    role: "bughunter",
+    glyph: "bug",
+    accent: "#3ccf8e",
+    earn: { kind: "forum-tag", forum: "bugs", tags: ["Confirmed", "Fixed"] },
+    how: "A bug you reported was confirmed by the team",
+    shout: (r) => `reported ${r.title ? `"${r.title}"` : "a bug"}, and the team confirmed it`,
+  },
+  {
+    key: "helper",
+    role: "helper",
+    glyph: "life-buoy",
+    accent: "#a9c8ff",
+    earn: { kind: "resolved-help", forum: "support", tags: ["Resolved"], count: 3 },
+    how: "Helped answer 3 support posts that were resolved",
+    shout: (r) => `helped resolve ${r.count ?? 3} support posts`,
+  },
+  {
+    key: "showcase",
+    role: "showcase",
+    glyph: "star",
+    accent: "#8db6ff",
+    earn: { kind: "staff-reaction", channel: "showcase", emoji: "⭐" },
+    how: "A team member featured your {#showcase} post with ⭐",
+    shout: () => "built something the team featured in showcase",
+  },
+  {
+    key: "regular",
+    role: "regular",
+    glyph: "chevrons-up",
+    accent: "#8db6ff",
+    earn: { kind: "activity", activeDays: 7 },
+    how: "Active on 7 different days",
+    shout: () => "is now a regular here",
+  },
+  {
+    key: "early",
+    role: "early",
+    glyph: "sparkles",
+    accent: "#a9c8ff",
+    earn: { kind: "joined-before", before: "2027-01-01T00:00:00Z" },
+    how: "Joined the KalCode Discord during the 0.1 era (before 2027)",
+    shout: () => "joined early",
+    quiet: true, // granted to everyone who joins early: no shout-out, it would flood #general
+  },
+];
+
+/** Recognition settings: where activity counts, where shout-outs go, and how loud a run may be. */
+export const RECOGNITION = {
+  shoutChannel: "general",
+  maxShoutsPerRun: 8,
+  /** Channels whose messages never count toward activity (staff and read-only channels are always excluded). */
+  ignoreChannels: [],
+};
 /** Roles that may see the staff category and are exempt from community AutoMod limits. */
 export const STAFF_ROLES = ["owner", "team", "moderator"];
 

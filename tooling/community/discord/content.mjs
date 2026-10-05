@@ -1,7 +1,7 @@
 // The messages the KalCode bot keeps in the server. Each is identified by its channel and embed title,
 // so `apply` edits the existing message instead of posting a duplicate. Channel mentions use
 // `{#key}` placeholders that `apply` resolves to real channel ids.
-import { EMBED_COLOR, LINKS } from "./server.mjs";
+import { BADGES, EMBED_COLOR, LINKS, ROLES } from "./server.mjs";
 
 export const SIGNOFF = "Refactor the workflow. Code the future.";
 
@@ -106,6 +106,24 @@ export const MESSAGES = [
   },
 ];
 
+/** The badges guide in #welcome, generated from BADGES so it can never drift from the rules. */
+const roleName = (key) => ROLES.find((r) => r.key === key).name;
+MESSAGES.push({
+  key: "badges",
+  channel: "welcome",
+  embeds: [
+    embed({
+      title: "Earn badges",
+      description: [
+        "Badges are earned by making KalCode better, never by message count. They show on your profile, and the team gives you a shout-out in {#general} when you earn one.",
+        "",
+        ...BADGES.map((b) => `{:${b.key}} **${roleName(b.role)}** · ${b.how}`),
+      ].join("\n"),
+      footer: { text: SIGNOFF },
+    }),
+  ],
+});
+
 /**
  * A pinned "start here" post in each forum, so the template is one click away and copyable.
  * Discord forums have no native post template; the guidelines (channel topic) plus this post are it.
@@ -195,19 +213,28 @@ export const FORUM_GUIDES = [
 ];
 
 /** Replaces `{#key}` with `<#id>`. Throws on an unknown key so a typo can never ship. */
-export function resolveMentions(text, channelIds) {
-  return text.replace(/\{#([a-z_]+)\}/g, (_, key) => {
-    const id = channelIds[key];
-    if (!id) throw new Error(`unknown channel placeholder {#${key}}`);
-    return `<#${id}>`;
-  });
+/** The custom emoji name for a badge (uploaded by `apply`). */
+export const badgeEmojiName = (key) => `kc_${key}`;
+
+/**
+ * Replaces `{#key}` with `<#channel>` and `{:badge}` with the badge's custom emoji. Throws on an unknown
+ * channel so a typo can never ship; an emoji not uploaded yet (a dry run) falls back to nothing.
+ */
+export function resolveMentions(text, channelIds, emojiIds = {}) {
+  return text
+    .replace(/\{#([a-z_]+)\}/g, (_, key) => {
+      const id = channelIds[key];
+      if (!id) throw new Error(`unknown channel placeholder {#${key}}`);
+      return `<#${id}>`;
+    })
+    .replace(/\{:([a-z_]+)\} ?/g, (_, key) => (emojiIds[key] ? `<:${badgeEmojiName(key)}:${emojiIds[key]}> ` : ""));
 }
 
 /** Deep-resolves every string in a message payload. */
-export function resolvePayload(value, channelIds) {
-  if (typeof value === "string") return resolveMentions(value, channelIds);
-  if (Array.isArray(value)) return value.map((v) => resolvePayload(v, channelIds));
+export function resolvePayload(value, channelIds, emojiIds = {}) {
+  if (typeof value === "string") return resolveMentions(value, channelIds, emojiIds);
+  if (Array.isArray(value)) return value.map((v) => resolvePayload(v, channelIds, emojiIds));
   if (value && typeof value === "object")
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolvePayload(v, channelIds)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolvePayload(v, channelIds, emojiIds)]));
   return value;
 }

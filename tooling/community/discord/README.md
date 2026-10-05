@@ -119,3 +119,34 @@ Plan roles (Free, Pro, Max, Max 2X) are intentionally **not** created. When they
 3. **Grant roles.** Discord grants roles whose requirements match, for example "Pro: `plan_tier ≥ 1`".
 4. **Keep it current.** On a plan change, the entitlement webhook re-writes the role connection with the stored Discord refresh token (encrypted at rest), and the role follows automatically.
 5. **Never exposed:** Stripe ids, emails, invoices or payment state. Discord only ever sees the tier number.
+
+## Badges
+
+Badges are earned by making KalCode better, **never by message count**. Each badge is a role; the rules live in `server.mjs` (`BADGES`).
+
+| Badge | Earned when |
+| --- | --- |
+| Contributor | Granted by the team (merged code, docs or a significant fix) |
+| Veteran | Active on 30 different days, and a member for 90+ days |
+| Idea Shipped | A feature you requested is tagged **Shipped** in `#feature-requests` |
+| Bug Hunter | A bug you reported is tagged **Confirmed** or **Fixed** in `#bug-reports` |
+| Helper | You replied in 3 support posts that were marked **Resolved**. The asker and the team don't count. |
+| Showcase | A team member stars your `#showcase` post with ⭐ |
+| Regular | Active on 7 different days |
+| Early Adopter | Joined during the 0.1 era (before 2027). It's quiet: no shout-out. |
+
+**How badges show:**
+
+- **Custom emoji** (`:kc_bughunter:` and so on) on any server: in the `#welcome` guide, in shout-outs, and as reactions.
+- **Role icons** next to names, once the server reaches boost level 2. `apply` sets them automatically. Discord shows the icon of a member's *highest* badge, which is why the roles are ordered by prestige.
+- The artwork comes from `badges.mjs` (rebuild it with `kc-discord.mjs badges`), stored in `assets/branding/discord/badges/`.
+
+**Recognition** (`kc-discord.mjs recognize`, scheduled every 15 minutes by `kc-discord.mjs schedule`):
+
+- **Reads only what's new.** It reads messages since its last run, records which days each member was active and who replied in which forum post, then grants earned badges.
+- **Additive only.** A badge is never removed automatically.
+- **Shout-outs.** Each new badge gets one in `#general`, mentioning only that member, with at most 8 per run; the rest follow on the next run.
+- **First run.** The first run records badges people already hold instead of announcing them.
+- **Local state only.** It keeps a small ledger in `~/.kalcode/discord/recognition.json`: cursors, active days and badge state. **No message content is stored.**
+- **Server Members Intent.** Turn on the **Server Members Intent** (Developer Portal › Bot) so join dates can be read for everyone. Without it, only people the bot sees acting are checked.
+- **Remove the schedule:** `schtasks /Delete /TN "KalCode Discord badges" /F`.

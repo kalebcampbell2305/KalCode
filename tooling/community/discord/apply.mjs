@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { changelogPost, changelogTitle, readRelease } from "./changelog.mjs";
-import { FORUM_GUIDES, MESSAGES, resolvePayload } from "./content.mjs";
+import { badgeEmojiName, FORUM_GUIDES, MESSAGES, resolvePayload } from "./content.mjs";
 import { roadmapMessages } from "./roadmap.mjs";
 import * as S from "./server.mjs";
 
@@ -215,6 +215,14 @@ export async function applyServer({
     const botNow = Math.max(...roles.filter((r) => botMember.roles.includes(r.id)).map((r) => r.position));
     const positions = S.ROLES.map((r, i) => ({ id: roleIds[r.key], position: Math.max(1, botNow - 1 - i) }));
     await write("role order", "updated", () => api.patch(`/guilds/${guildId}/roles`, positions));
+    // Discord can apply a large reorder only partly (seen live when many roles are new): check and
+    // repeat until the order holds.
+    for (let attempt = 0; !dryRun && attempt < 3; attempt++) {
+      roles = await api.get(`/guilds/${guildId}/roles`);
+      const now = S.ROLES.map((r) => roles.find((x) => x.id === roleIds[r.key])).filter(Boolean);
+      if (now.every((r, i) => i === 0 || now[i - 1].position > r.position)) break;
+      await api.patch(`/guilds/${guildId}/roles`, positions);
+    }
   } else same("role order");
 
   // The owner wears the Owner role.
@@ -228,6 +236,57 @@ export async function applyServer({
   } catch (error) {
     report.warnings.push(`Couldn't give the owner the Owner role: ${error.message}`);
   }
+
+  // ── Badges: custom emoji (any server) and role icons (boost level 2) ──────────────────────────
+  // Emoji make badges visible from day one (the #welcome guide, shout-outs, reactions). Discord can't
+  // replace an emoji's image, so new art means delete + re-create; messages are re-resolved below.
+  const emojiIds = {};
+  const badgeArt = (key) => join(repoRoot, "assets", "branding", "discord", "badges", `${key}-256.png`);
+  state.emojiSha ??= {};
+  const emojis = await api.get(`/guilds/${guildId}/emojis`);
+  for (const b of S.BADGES) {
+    const name = badgeEmojiName(b.key);
+    const file = badgeArt(b.key);
+    if (!existsSync(file)) {
+      report.warnings.push(`Badge art missing for ${b.key}: run kc-discord.mjs badges`);
+      continue;
+    }
+    const sha = sha256(readFileSync(file));
+    const have = emojis.find((e) => e.name === name);
+    if (have && (state.emojiSha[b.key] ?? sha) === sha) {
+      emojiIds[b.key] = have.id;
+      state.emojiSha[b.key] = sha;
+      same(`emoji :${name}:`);
+      continue;
+    }
+    if (have)
+      await write(`replace emoji :${name}: (new art)`, "updated", () =>
+        api.delete(`/guilds/${guildId}/emojis/${have.id}`),
+      );
+    const created = await write(`emoji :${name}:`, "created", () =>
+      api.post(`/guilds/${guildId}/emojis`, { name, image: dataUri(file), roles: [] }),
+    );
+    emojiIds[b.key] = created.id;
+    if (!dryRun) state.emojiSha[b.key] = sha;
+  }
+  if (guild.features.includes("ROLE_ICONS")) {
+    state.roleIconSha ??= {};
+    for (const b of S.BADGES) {
+      const file = badgeArt(b.key);
+      if (!existsSync(file) || !roleIds[b.role]) continue;
+      const sha = sha256(readFileSync(file));
+      const label = `role icon ${S.ROLES.find((r) => r.key === b.role).name}`;
+      if (state.roleIconSha[b.key] === sha) {
+        same(label);
+        continue;
+      }
+      await write(label, "updated", () =>
+        api.patch(`/guilds/${guildId}/roles/${roleIds[b.role]}`, { icon: dataUri(file) }),
+      );
+      if (!dryRun) state.roleIconSha[b.key] = sha;
+    }
+  } else
+    report.skipped.push("role icons: need server boost level 2 (badge art is ready; badges show as emoji until then)");
 
   // ── Categories and channels ────────────────────────────────────────────────────────────────
   const channelIds = {};
@@ -497,7 +556,7 @@ export async function applyServer({
     );
   const upsertMessage = async (channelKey, title, payload, { publish = false } = {}) => {
     const channelId = channelIds[channelKey];
-    const body = resolvePayload({ ...payload, allowed_mentions: { parse: [] } }, channelIds);
+    const body = resolvePayload({ ...payload, allowed_mentions: { parse: [] } }, channelIds, emojiIds);
     delete body._meta;
     const existing = (await botMessages(channelId)).find((m) => m.embeds?.[0]?.title === title);
     if (!existing) {
@@ -519,7 +578,7 @@ export async function applyServer({
 
   // #roadmap: generated; reposted in full when its shape changes (it's the bot's own read-only channel).
   if (plansGroups) {
-    const wanted = roadmapMessages(plansGroups).map((m) => resolvePayload({ embeds: m.embeds }, channelIds));
+    const wanted = roadmapMessages(plansGroups).map((m) => resolvePayload({ embeds: m.embeds }, channelIds, emojiIds));
     const existing = [...(await botMessages(channelIds.roadmap))].reverse(); // oldest first
     const sameShape =
       existing.length === wanted.length && existing.every((m, i) => m.embeds?.length === wanted[i].embeds.length);
@@ -553,7 +612,7 @@ export async function applyServer({
   let threads = null;
   for (const g of FORUM_GUIDES) {
     const forumId = channelIds[g.channel];
-    const embeds = resolvePayload(g.embeds, channelIds);
+    const embeds = resolvePayload(g.embeds, channelIds, emojiIds);
     if (!forumId || String(forumId).startsWith("planned-")) {
       await write(`guide "${g.title}"`, "created", async () => ({}));
       continue;
