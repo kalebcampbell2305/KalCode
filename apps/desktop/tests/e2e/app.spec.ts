@@ -149,7 +149,8 @@ test("a database from a newer KalCode is refused with a clear explanation", asyn
 // (Claude version detection and `codex login status`); it never sends a prompt or signs in.
 test("the Providers page detects the installed Claude Code CLI", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
-  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-provider-detection-"));
+  // Under the home folder so the detected path shows as ~…; a gate worker's TEMP is outside its home.
+  const root = mkdtempSync(join(homedir(), "kalcode-e2e-provider-detection-"));
   const bin = join(root, "bin");
   mkdirSync(bin);
   expect(existsSync(FAKE), "build:e2e must build the fake provider").toBe(true);
@@ -201,7 +202,8 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
 
 test("the Threads surface runs on the native thread runtime", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
-  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-thread-options-"));
+  // Under the home folder so the detected path shows as ~…; a gate worker's TEMP is outside its home.
+  const root = mkdtempSync(join(homedir(), "kalcode-e2e-thread-options-"));
   try {
     const bin = join(root, "bin");
     mkdirSync(bin);

@@ -108,7 +108,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await page.keyboard.press("Control+Alt+d");
     await expect(panes(page)).toHaveCount(2);
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
