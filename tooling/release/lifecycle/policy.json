@@ -314,7 +314,7 @@
       "when": { "targets": ["desktop"] },
       "builtin": "desktop-dist-placeholder",
       "envByPlatform": { "linux": { "KALCODE_SKIP_OS_KEYCHAIN_TEST": "1" } },
-      "timeoutMs": 1500000,
+      "timeoutMs": 3600000,
       "exclusive": ["cargo-build", "desktop-dist"],
       "run": [
         "cargo fmt --all -- --check",

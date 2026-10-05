@@ -30,7 +30,10 @@ env:
   CARGO_TERM_COLOR: always
   # Each physical worker assigns isolated ports below. Bound nested check fan-out.
   KALCODE_GATE_JOBS: "2"
-  CARGO_BUILD_JOBS: "2"
+  # Rust compiles need real parallelism: at most three heavy gates hold a Rust slot at once (heavy
+  # tokens) and run at below-normal priority, so 8 jobs each keeps the owner's UI and agents first
+  # while a cold first build still fits (2 jobs could not, gate 37345525181).
+  CARGO_BUILD_JOBS: "8"
   VITEST_MAX_WORKERS: "2"
   KALCODE_UI_TEST_WORKERS: "2"
 
