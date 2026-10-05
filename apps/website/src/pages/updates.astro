@@ -32,6 +32,58 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
 // "Pro, MAX and MAX 2X": the plans that can be bought, named from PLANS.
 const paidPlanNames = PLANS.filter((plan) => plan.price.monthlyUsd > 0).map((plan) => plan.name);
 const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].filter(Boolean).join(" and ");
+
+/**
+ * Builds of 0.1.9 since it went Stable, newest first: user-facing highlights from
+ * docs/releases/0.1.9+<build>.md, published when that build's releases.json was deployed. A build
+ * is listed only once /download serves it or a later build, so the page never runs ahead of it.
+ */
+const BUILDS_019 = [
+  {
+    build: 1738,
+    publishedAt: "2026-10-05T12:44:09.206Z",
+    title: "One agent state everywhere, faster terminals, favorites and pins.",
+    points: [
+      "Every coding agent, on any provider, shows the same state in the Dashboard, the agent rail, Code and KalVoice: starting, working, waiting, needs you, ready, done or failed.",
+      "Faster terminals: output is batched and written off the main thread, so busy agents and long builds stay smooth.",
+      "When an account is limited, KalCode suggests another account you connected. It switches only when you choose to.",
+      "Pin your favorite workspaces and destinations and reach them from anywhere.",
+      "Agents keep their task names across restarts, Codex can use up to ten sub-agents, and your Codex rules files apply.",
+      "Scheduled background sessions wait while your computer is busy, so the agents you start come first.",
+    ],
+  },
+  {
+    build: 1658,
+    publishedAt: "2026-10-05T06:35:41.191Z",
+    title: "Coding agents keep their native tools, in a new graphite look.",
+    points: [
+      "Claude Code and Codex search and fetch the web (in Plan mode too), use your own MCP servers, and run their shell, file and repo-search tools.",
+      "Your setup follows every account: your SSH agent, GH_TOKEN and cloud credentials, plus CLAUDE.md, AGENTS.md and GEMINI.md, skills, plugins and commands.",
+      "Codex uses your own config.toml and project trust, and Business, Enterprise and Edu accounts work. Gemini CLI runs in your real workspace with your MCP servers.",
+      "A busy CPU never holds an agent you start. KalCode waits only when your computer genuinely can't run it, says why, and offers Start Anyway.",
+      "A refined graphite design, with new Contrast and Text size settings under Appearance.",
+      "The Providers page lists each provider's tools as native, needs setup or not offered.",
+    ],
+  },
+  {
+    build: 1565,
+    publishedAt: "2026-10-04T22:55:23.122Z",
+    title: "Go anywhere fast, and unlimited local agents on every plan.",
+    points: [
+      "Back and Forward retrace surfaces, workspaces and panes, and keep live terminals and Browser panes running.",
+      "A universal quick switcher finds workspaces, Threads, agents, files, providers, accounts, settings, terminals, commands and releases.",
+      "Breadcrumbs, recent navigation and consistent keyboard shortcuts.",
+      "Every coding terminal header opens Account & usage. Choosing another account starts a fresh session and keeps the original.",
+      "Smart Close protects active work, and New like this starts a fresh terminal with the same launch settings.",
+      "Every plan supports unlimited local coding agents and terminals, subject to real provider and hardware limits.",
+    ],
+  },
+] as const;
+// The build /download serves, from its pinned file path (".../0.1.9+1738/...").
+const servedBuild = Number(
+  stable019?.platforms.map((platform) => platform.pinnedUrl.match(/\+(\d+)\//)?.[1]).find(Boolean) ?? 0,
+);
+const builds019 = BUILDS_019.filter((entry) => entry.build <= servedBuild);
 ---
 <Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
@@ -51,7 +103,7 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
 
   <section class="section updates" aria-labelledby="updates-heading">
     <div class="container">
-      <h2 class="sr-only" id="updates-heading">KalCode product updates</h2>
+      <h2 class="visually-hidden" id="updates-heading">KalCode product updates</h2>
       <div class="updates-feed">
         {stable019 && (
           <article class="update update--featured" id="release-0-1-9" aria-labelledby="release-0-1-9-title">
@@ -60,24 +112,43 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
               <p class="update__edition">KalCode 0.1.9</p>
               <p><time datetime={stable019.publishedAt}>{formatReleaseDate(stable019.publishedAt)}</time></p>
               <p class="chip chip--built">Stable · Windows and macOS</p>
+              {builds019[0] && <p class="update__build">Build {builds019[0].build}</p>}
             </header>
             <div class="update__story">
               <p class="update__kicker">What's working, what needs you, what's shipping</p>
               <h2 id="release-0-1-9-title">KalCode 0.1.9 puts every agent, account and terminal in one command deck.</h2>
               <p class="update__lead">
                 The Command Deck, Agent Fleet, the Provider Dock and KalVoice control of your workspace and
-                agents, plus KalTidy, the Account Hub, a new account list and plan limits that count across
-                KalCode.
+                agents, plus KalTidy and the Account Hub. Every build since installs when you close KalCode.
               </p>
+              {
+                builds019.length > 0 && (
+                  <section class="builds" aria-labelledby="builds-0-1-9-title">
+                    <h3 id="builds-0-1-9-title" class="builds__title">New in 0.1.9 builds</h3>
+                    <ol class="builds__list" role="list">
+                      {builds019.map((entry, index) => (
+                        <li class:list={["build", { "build--latest": index === 0 }]} id={`build-${entry.build}`}>
+                          <div class="build__meta">
+                            <span class="build__number">Build {entry.build}</span>
+                            <time datetime={entry.publishedAt}>{formatReleaseDate(entry.publishedAt)}</time>
+                            {index === 0 && <span class="build__latest">Latest</span>}
+                          </div>
+                          <div class="build__body">
+                            <p class="build__title">{entry.title}</p>
+                            <ul class="build__points">
+                              {entry.points.map((point) => (
+                                <li>{point}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                )
+              }
+              <h3 class="update__subhead">The 0.1.9 release</h3>
               <div class="update__groups">
-                <section>
-                  <h3>Smart Duplicate Terminal</h3>
-                  <ul>
-                    <li>Choose New like this to start an independent terminal or coding agent beside the original.</li>
-                    <li>Keep the workspace, directory, shell, selected account, model and effort. Custom names get a quiet copy suffix, and KalCode remembers your pane or tab preference.</li>
-                    <li>Provider agents start fresh live sessions. Temporary environment secrets and conversation history are not copied.</li>
-                  </ul>
-                </section>
                 <section>
                   <h3>Moving to 0.1.9</h3>
                   <ul>
@@ -124,20 +195,20 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
                   <ul>
                     <li>KalTidy stops idle terminals in one click and never stops agents, services, Operations work or the focused terminal.</li>
                     <li>Closing a terminal or agent pane now ends it.</li>
+                    <li>Choose New like this to start an independent terminal or coding agent beside the original, with the same workspace, account, model and effort.</li>
                     <li>F8 push to talk works again right after you switch back to KalCode on Windows.</li>
                   </ul>
                 </section>
                 <section>
                   <h3>Plans</h3>
                   <ul>
-                    <li>Plan limits now count across KalCode: open terminals, workspaces, provider accounts and parallel agents. Reaching a limit never closes anything.</li>
+                    <li>Every plan has unlimited local coding agents and terminals. Reaching a workspace or account limit never closes anything.</li>
                     <li>{paidPlans} can be bought monthly or yearly in the app.</li>
                   </ul>
                 </section>
                 <section>
                   <h3>Known issues</h3>
                   <ul>
-                    <li>Gemini CLI is still unavailable in KalCode. Claude Code and Codex are unaffected.</li>
                     <li>Codex agents can't commit inside their own worktree; use Commit changes on the agent's card.</li>
                   </ul>
                 </section>
@@ -471,27 +542,42 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
 </Base>
 
 <style>
+  /* A release timeline: one lit rail, a node per entry, graphite cards. The current release is
+     lit; older ones stay quiet. Every colour comes from @kalcode/ui tokens. */
+
   .updates-index {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.55rem;
+    gap: var(--space-2);
     max-width: 48rem;
   }
 
   .updates-index a {
-    padding: 0.55rem 0.85rem;
-    border: 1px solid color-mix(in srgb, var(--color-border) 76%, var(--color-brand));
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-full);
+    background: var(--world-glass);
+    box-shadow: inset 0 0 0 1px var(--color-border-strong);
     color: var(--color-text-secondary);
     font-size: var(--site-text-small);
     text-decoration: none;
+    -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+
+  .updates-index a:first-child {
+    box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+    color: var(--color-text);
   }
 
   .updates-index a:hover,
   .updates-index a:focus-visible {
-    border-color: var(--color-brand);
+    box-shadow: inset 0 0 0 1px var(--color-border-lit);
     color: var(--color-text);
   }
 
@@ -500,86 +586,104 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
   }
 
   .updates-feed {
-    --signal-x: 0.7rem;
+    --signal-x: 0.6rem;
     position: relative;
     display: grid;
     gap: clamp(1.25rem, 2vw, 2rem);
-    padding-left: 2.5rem;
+    padding-left: 1.75rem;
   }
 
   .updates-feed::before {
     position: absolute;
-    top: 1.5rem;
+    top: 0.5rem;
     bottom: 1.5rem;
     left: var(--signal-x);
     width: 1px;
-    background: linear-gradient(180deg, transparent, var(--color-brand), var(--color-border) 80%, transparent);
+    background: linear-gradient(180deg, var(--color-accent), var(--color-border-strong) 18%, var(--color-border) 80%, transparent);
     content: "";
-    opacity: 0.62;
   }
 
   .update {
     position: relative;
     display: grid;
-    gap: clamp(1.5rem, 3vw, 3rem);
-    padding: clamp(1.4rem, 2.5vw, 2.4rem);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    background:
-      linear-gradient(145deg, color-mix(in srgb, var(--color-surface) 88%, var(--color-brand) 12%), var(--color-surface) 42%),
-      var(--color-surface);
-    box-shadow: 0 1.25rem 4rem rgb(0 0 0 / 18%);
+    gap: clamp(1.25rem, 2.5vw, 2.5rem);
+    padding: clamp(1.25rem, 2.5vw, 2.5rem);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
   }
 
   .update--featured {
-    border-color: color-mix(in srgb, var(--color-brand) 54%, var(--color-border));
-    box-shadow: 0 1.5rem 5rem rgb(0 74 173 / 16%);
+    background:
+      radial-gradient(70% 60% at 100% 0%, rgb(var(--world-blue) / 0.12), transparent 70%),
+      var(--world-panel);
+    box-shadow: var(--world-panel-lit);
   }
 
   .update--quiet {
-    background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+    background: color-mix(in srgb, var(--color-surface-1) 70%, transparent);
   }
 
   .update__signal {
     position: absolute;
-    top: 2rem;
-    left: calc(-2.5rem + var(--signal-x));
+    top: clamp(1.75rem, 3vw, 3rem);
+    left: calc(-1.75rem + var(--signal-x));
     width: 1px;
     height: 1px;
   }
 
   .update__signal span {
     position: absolute;
-    width: 0.7rem;
-    height: 0.7rem;
-    border: 2px solid var(--color-brand);
+    width: 0.625rem;
+    height: 0.625rem;
+    border: 2px solid var(--color-border-strong);
     border-radius: 50%;
     background: var(--color-bg);
-    box-shadow: 0 0 0 0.3rem rgb(48 137 255 / 11%), 0 0 1.5rem rgb(48 137 255 / 40%);
     transform: translate(-50%, -50%);
   }
 
+  .update--featured .update__signal span {
+    border-color: var(--color-accent);
+    box-shadow:
+      0 0 0 0.25rem var(--color-accent-soft),
+      0 0 1.25rem var(--color-glow);
+  }
+
   .update__meta {
-    display: grid;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     align-content: start;
-    justify-items: start;
-    gap: 0.55rem;
+    gap: var(--space-2) var(--space-3);
     color: var(--color-text-muted);
     font-size: var(--site-text-small);
   }
 
   .update__edition,
   .update__kicker,
-  .update__groups h3 {
-    font-family: var(--font-display);
-    font-weight: var(--weight-semibold);
-    letter-spacing: 0.08em;
+  .update__groups h3,
+  .update__subhead,
+  .builds__title {
+    font-family: var(--font-wider);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.2em;
     text-transform: uppercase;
   }
 
   .update__edition {
     color: var(--color-text);
-    font-size: 0.78rem;
+    font-size: var(--type-label);
+  }
+
+  .update__meta .chip {
+    max-width: 100%;
+    font-family: var(--font-sans);
+  }
+
+  .update__build {
+    color: var(--color-accent-text);
+    font-family: var(--font-mono);
+    font-size: var(--site-text-xs);
   }
 
   .update__story {
@@ -587,78 +691,210 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
   }
 
   .update__kicker {
-    margin-bottom: 0.7rem;
-    color: var(--color-brand);
-    font-size: 0.72rem;
+    margin-bottom: var(--space-3);
+    color: var(--color-accent-text);
+    font-size: var(--type-label);
   }
 
   .update__story > h2 {
-    max-width: 22ch;
+    max-width: 24ch;
+    color: var(--color-text);
     font-family: var(--font-display);
-    font-size: clamp(1.75rem, 1.35rem + 1.7vw, 3.1rem);
-    line-height: 1.04;
-    letter-spacing: -0.045em;
+    font-size: clamp(1.625rem, 1.25rem + 1.5vw, 2.75rem);
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.04em;
+    text-wrap: balance;
+  }
+
+  .update:not(.update--featured) .update__story > h2 {
+    font-size: clamp(1.375rem, 1.15rem + 0.9vw, 2rem);
   }
 
   .update__lead {
     max-width: 62ch;
-    margin-top: 1.1rem;
+    margin-top: var(--space-4);
     color: var(--color-text-secondary);
     font-size: var(--site-text-lead);
-    line-height: 1.62;
+    line-height: 1.55;
   }
 
-  .update__groups {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-    gap: 1.5rem;
+  /* ---------- Builds of the current release ---------- */
+
+  .builds {
     margin-top: clamp(1.5rem, 3vw, 2.5rem);
   }
 
+  .builds__title,
+  .update__subhead {
+    color: var(--color-text-muted);
+    font-size: var(--type-label);
+  }
+
+  .update__subhead {
+    margin-top: clamp(2rem, 3vw, 3rem);
+  }
+
+  .builds__list {
+    display: grid;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  .build {
+    display: grid;
+    gap: var(--space-3) var(--space-6);
+    padding: var(--space-5);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-bg-sunken) 70%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+  }
+
+  .build--latest {
+    background:
+      linear-gradient(90deg, var(--color-accent-soft), transparent 55%),
+      color-mix(in srgb, var(--color-bg-sunken) 70%, transparent);
+    box-shadow:
+      inset 0 0 0 1px var(--color-border-lit-soft),
+      inset 2px 0 0 var(--color-accent);
+  }
+
+  .build__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    align-content: start;
+    gap: var(--space-1) var(--space-3);
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+  }
+
+  .build__number {
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: var(--site-text-small);
+  }
+
+  .build__latest {
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--radius-full);
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+    color: var(--color-accent-text);
+    font-size: 0.6875rem;
+    font-weight: var(--weight-medium);
+  }
+
+  .build__title {
+    color: var(--color-text);
+    font-size: 1.0625rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.01em;
+    line-height: 1.35;
+  }
+
+  .build__points {
+    display: grid;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    padding-left: 1.1rem;
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: 1.55;
+  }
+
+  .build__points li::marker {
+    color: var(--color-accent-text);
+  }
+
+  @media (min-width: 52rem) {
+    .build {
+      grid-template-columns: 9rem minmax(0, 1fr);
+    }
+
+    .build__meta {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .build__points {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: var(--space-8);
+    }
+  }
+
+  /* ---------- Release sections ---------- */
+
+  /* Sections pack like cards on a board (columns), so short ones never leave holes. */
+  .update__groups {
+    columns: 16rem 3;
+    column-gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
   .update__groups--compact {
-    grid-template-columns: minmax(0, 1fr);
+    columns: auto 1;
     max-width: 42rem;
   }
 
   .update__groups section {
-    padding-top: 1rem;
-    border-top: 1px solid var(--color-border);
+    display: inline-block;
+    width: 100%;
+    margin-bottom: var(--space-3);
+    padding: var(--space-4) var(--space-5) var(--space-5);
+    border-radius: var(--radius-lg);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+    break-inside: avoid;
   }
 
   .update__groups h3 {
     color: var(--color-text);
-    font-size: 0.74rem;
+    font-size: var(--type-label);
   }
 
   .update__groups ul {
     display: grid;
-    gap: 0.55rem;
-    margin-top: 0.8rem;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
     padding-left: 1.1rem;
     color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
     line-height: 1.55;
   }
 
   .update__groups li::marker {
-    color: var(--color-brand);
+    color: var(--color-accent-text);
+  }
+
+  .update__groups a,
+  .build__points a {
+    color: var(--color-accent-text);
   }
 
   .update__action {
-    margin-top: clamp(1.5rem, 3vw, 2.5rem);
+    margin-top: clamp(1.5rem, 3vw, 2.25rem);
   }
 
-  @media (min-width: 52rem) {
+  @media (min-width: 64rem) {
     .updates-feed {
       --signal-x: 1rem;
-      padding-left: 3.75rem;
+      padding-left: 3.25rem;
     }
 
     .update {
-      grid-template-columns: minmax(10rem, 0.3fr) minmax(0, 1fr);
+      grid-template-columns: 13rem minmax(0, 1fr);
+    }
+
+    .update__meta {
+      position: sticky;
+      top: calc(var(--site-header-h) + var(--space-6));
+      align-self: start;
+      flex-direction: column;
+      align-items: flex-start;
     }
 
     .update__signal {
-      left: calc(-3.75rem + var(--signal-x));
+      left: calc(-3.25rem + var(--signal-x));
     }
   }
 
@@ -670,23 +906,26 @@ const paidPlans = [paidPlanNames.slice(0, -1).join(", "), paidPlanNames.at(-1)].
     }
 
     .updates-index a {
+      justify-content: center;
+      padding-inline: var(--space-2);
       text-align: center;
     }
 
     .updates-feed {
-      padding-left: 1.6rem;
-    }
-
-    .updates-feed::before {
-      left: 0.3rem;
+      --signal-x: 0.35rem;
+      padding-left: 1.25rem;
     }
 
     .update {
-      padding: 1.25rem;
+      padding: var(--space-5) var(--space-4);
     }
 
     .update__signal {
-      left: -1.3rem;
+      left: calc(-1.25rem + var(--signal-x));
+    }
+
+    .build {
+      padding: var(--space-4);
     }
   }
 </style>

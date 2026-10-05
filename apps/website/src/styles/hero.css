@@ -570,3 +570,29 @@
     transition: none;
   }
 }
+
+/* ======================================================================================
+ * Home hero, one message: the wordmark, one headline and one line. The copy starts a little
+ * lower so the mascot's feet clear the wordmark, and the side annotations are gone.
+ * ====================================================================================== */
+
+.hero--one {
+  --hero-text-top: calc(var(--hero-orb-center-y) + 0.27 * var(--hero-orb-max));
+}
+
+.hero--one .hero__statement {
+  max-width: 22ch;
+  margin-top: clamp(1.25rem, 0.8rem + 1vw, 1.75rem);
+  font-size: clamp(2.125rem, 1.2rem + 2.6vw, 3.5rem);
+  letter-spacing: -0.04em;
+}
+
+.hero--one .hero__line {
+  max-width: 46ch;
+}
+
+@media (max-width: 47.99rem) {
+  .hero--one {
+    --hero-text-top: calc(var(--hero-orb-center-y) + 0.3 * var(--hero-orb-max));
+  }
+}

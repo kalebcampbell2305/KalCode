@@ -77,14 +77,16 @@ export const KALVOICE = {
   status: "In development",
   /**
    * One push-to-talk key: hold it, speak, release. KalVoice decides from context whether the words
-   * are dictation (typed into the focused input) or a command. Configurable to another function
-   * key, Pause, Scroll Lock or Insert; the app refuses Caps Lock and Fn
-   * (crates/kalvoice/src/shortcuts.rs). The key is held only while KalCode is the foreground app.
+   * are dictation (typed into the focused input) or a command. On a Mac, Fn also works (0.1.7);
+   * F8 is the fallback everywhere and the key on Windows, where most keyboards don't report Fn.
+   * Configurable to another function key, Pause, Scroll Lock or Insert; Caps Lock and Fn can't be
+   * chosen as the custom key (crates/kalvoice/src/shortcuts.rs). The key is held only while KalCode
+   * is the foreground app.
    */
   pushToTalkKey: "F8",
   /** Says the key can be changed and when it works. Offers only keys the app accepts. */
   keyNote:
-    "F8 is the default. Choose another function key, Pause, Scroll Lock or Insert instead. The key works while KalCode is the active window, so other apps keep it otherwise.",
+    "Hold Fn on a Mac, or F8 on any keyboard. Choose another function key, Pause, Scroll Lock or Insert instead. The key works while KalCode is the active window, so other apps keep it otherwise.",
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
 
@@ -119,21 +121,21 @@ export const OWNER_PAGE = {
 export const PAGES = [
   {
     path: "/",
-    title: "KalCode — AI Coding Workspace for Claude Code & Codex",
+    title: "KalCode — AI Coding Workspace for Claude Code, Codex & More",
     description:
-      "KalCode brings Claude Code and Codex into one AI coding workspace. Run agents in real terminals, preview your app and use KalVoice. Explore the official site.",
+      "Run Claude Code, Codex, Cursor and Gemini CLI side by side in one AI coding workspace: real agent terminals, Agent Fleet, Live Browser, Operations and KalVoice.",
   },
   {
     path: "/product",
     title: "AI Coding Workspace Features — KalCode",
     description:
-      "Explore KalCode's AI coding workspace: agent terminals, provider threads, Dashboard, KalVoice and local-first storage. See available features and the roadmap.",
+      "Explore KalCode's AI coding workspace: native coding-agent terminals, Agent Fleet, Operations, Unified Memory, Live Browser, accounts and KalVoice. See what ships today and what's next.",
   },
   {
     path: "/kalvoice",
     title: "KalVoice: Voice Commands for AI Coding — KalCode",
     description:
-      "KalVoice is the voice layer in KalCode: hold F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace. In development.",
+      "KalVoice is the voice layer in KalCode: hold Fn on a Mac or F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace. In development.",
   },
   {
     path: "/pricing",
@@ -156,13 +158,13 @@ export const PAGES = [
     path: "/docs/permissions",
     title: "Permissions — KalCode Docs",
     description:
-      "How KalCode permission modes decide what agents and KalVoice may do: threads in 0.1.6 run in Plan, Approve or Auto; Bypass and Custom are planned.",
+      "How KalCode permissions work: coding agents start in Bypass and run without approval prompts, Plan is read-only, and access to credentials and secrets always asks.",
   },
   {
     path: "/docs/providers",
     title: "Providers — KalCode Docs",
     description:
-      "How KalCode connects Claude Code and Codex through documented integration methods using your own accounts, on every plan, and why Gemini CLI is unavailable in 0.1.6.",
+      "How KalCode runs Claude Code, Codex, Cursor and Gemini CLI as native terminals on your own accounts, on every plan, with their own tools, MCP servers and settings.",
   },
   {
     path: "/docs/kalvoice",
@@ -277,31 +279,57 @@ export const DOCS_NAV = FOOTER_NAV.docs;
 export const TAGLINE = "One intelligence. A brighter tomorrow.";
 
 /**
- * Honest provider status on the Stable app (B4 8d6c133: crates/providers/src/catalog.rs marks all
- * three adapters Implemented; apps/desktop/src-tauri/src/thread_commands.rs starts every thread in
- * the account's managed profile). Access is the in-app sign-in each provider account supports:
- * Claude Code `auth login --claudeai`, Codex ChatGPT login on personal plans (organization plans
- * are refused), Gemini CLI "Sign in with Google". Managed launches strip provider API-key
- * variables, so no API-key path is claimed. Provider panes are gated off Stable and not claimed.
+ * The coding providers KalCode runs today, all on every plan, on the user's own accounts
+ * (crates/providers/src/catalog.rs: all four adapters Implemented). Each agent is the provider's
+ * real CLI in its own terminal with native parity (0.1.9+1658): its own tools, MCP servers,
+ * slash commands, plugins and settings, in the user's real environment. Gemini CLI since
+ * 0.1.9+1450, Cursor since 0.1.9+1502.
  */
 export const PROVIDERS = [
-  { id: "claude", name: "Claude Code", access: "Claude account sign-in", status: "Adapter built", state: "built" },
-  { id: "codex", name: "Codex", access: "ChatGPT sign-in (personal plans)", status: "Adapter built", state: "built" },
-  { id: "gemini", name: "Gemini CLI", access: "Google sign-in", status: "Unavailable in 0.1.6", state: "unavailable" },
+  {
+    id: "claude",
+    name: "Claude Code",
+    access: "Your Claude account",
+    runs: "Claude Code's own terminal, with its MCP servers, plugins, slash commands and CLAUDE.md",
+    status: "Native terminal",
+    state: "built",
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    access: "Your ChatGPT account, personal or work",
+    runs: "Codex's own terminal, with its config.toml, project trust, rules files and sub-agents",
+    status: "Native terminal",
+    state: "built",
+  },
+  {
+    id: "cursor",
+    name: "Cursor",
+    access: "Your Cursor account",
+    runs: "Cursor Agent in an interactive terminal, with the models your account offers",
+    status: "Native terminal",
+    state: "built",
+  },
+  {
+    id: "gemini",
+    name: "Gemini CLI",
+    access: "Your Google account",
+    runs: "Gemini CLI in your real workspace, with your MCP servers",
+    status: "Native terminal",
+    state: "built",
+  },
 ] as const;
 
+/** One short, accurate line about how providers run (home provider band, product page). */
+export const PROVIDER_LINE =
+  "Real provider terminals on your own accounts. Native tools, MCP servers, slash commands and settings work exactly as in your own terminal.";
+
 /**
- * Gemini CLI availability in KalCode 0.1.6 (unchanged since B5 65be519). On June 18, 2026 Google stopped serving
- * Gemini CLI "Login with Google" for Gemini Code Assist for individuals, Google AI Pro and Ultra
- * (developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals); Standard and
- * Enterprise licenses are unaffected but need a Google Cloud project, which 0.1.6 cannot pass:
- * managed launches keep only the base environment (crates/providers/src/env.rs BASE_ALLOW,
- * managed.rs launch_env) and ignore local .env files (gemini/managed_policy.rs floor_settings).
- * B5 reports "Signed in" from the credential file alone (gemini_account_auth.rs credential_state),
- * so a refused personal account still looks signed in. No Antigravity support is claimed.
+ * Gemini CLI in KalCode, for pages that still render a Gemini note. Since 0.1.9+1658 Gemini CLI runs
+ * in the real workspace with the user's environment and MCP servers, like every other provider.
  */
 export const GEMINI_AVAILABILITY = {
-  short: "Gemini CLI is unavailable in KalCode 0.1.6.",
+  short: "Gemini CLI runs in your real workspace with your own MCP servers.",
   notice:
-    "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra. KalCode 0.1.6 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode. A personal Google account can still finish sign-in and show as signed in, but its threads fail. Claude Code and Codex are unaffected. Updates will say when Gemini CLI can be used in KalCode again.",
+    "Gemini CLI runs in KalCode as it does in your own terminal: in your real workspace, signed in with your Google account, with your MCP servers and settings. Google's own account and licence rules for Gemini CLI still apply.",
 } as const;

@@ -99,6 +99,28 @@ it("states that KalVoice interpretation does not reach connected providers on th
   expect(copy).toContain(
     "It never uses the AI providers you connected, or KalCode's servers, to understand what you said.",
   );
+  // Every coding provider KalCode runs (packages/protocol/src/plans.ts, "provider-terminals").
+  expect(copy).toContain(
+    "Words you dictate into a coding agent (Claude Code, Codex, Cursor or Gemini CLI), and coding tasks you send to it, go to that provider under your own account",
+  );
+  expect(copy).not.toMatch(/\bthread\b/i);
+});
+
+it("describes KalCode accounts on the privacy page instead of claiming early access is all it collects", async () => {
+  const copy = text(await render(Privacy, "/privacy"));
+  expect(copy).not.toContain("This site collects one thing");
+  expect(copy).not.toContain("when KalCode accounts arrive at launch");
+  expect(copy).not.toContain("We set no cookies.");
+  for (const fact of [
+    // apps/api/migrations/0002_kalvoice_requests.sql: only an opaque id and a time per request.
+    "a random request ID and the time it was recorded, never audio, transcripts or what you asked",
+    // apps/api/worker/lib/account-store.ts softDeleteAccount.
+    "Deleting your account replaces your email address with a placeholder, removes your display name and signs out every session",
+    // apps/api/worker/lib/auth.ts sessionCookie: __Host- cookie, Max-Age 30 days.
+    "HttpOnly session cookie that expires after 30 days",
+  ]) {
+    expect(copy).toContain(fact);
+  }
 });
 
 /** KalVoice copy that is true only until a signed Stable build is served from /download. */
@@ -175,9 +197,9 @@ it("keeps the in-development metadata for the KalVoice page while /download serv
   expect(html.match(/<meta name="description" content="([^"]*)"/)?.[1]).toMatch(/In development\.$/);
 });
 
-// The desktop app offers F1-F24 (except KalCode's reserved F5, F7 and F12), Pause, Scroll Lock and
-// Insert as the push-to-talk key, and refuses Caps Lock and Fn (crates/kalvoice/src/shortcuts.rs,
-// apps/desktop/src/kalvoice/shortcutModel.ts). The key is registered only while KalCode is the
+// Hold Fn on a Mac (detected separately, docs/KALVOICE.md); the configurable fallback key is F1-F24
+// (except KalCode's reserved F5, F7 and F12), Pause, Scroll Lock or Insert, never Caps Lock
+// (crates/kalvoice/src/shortcuts.rs, apps/desktop/src/kalvoice/shortcutModel.ts). The key is registered only while KalCode is the
 // foreground app (apps/desktop/src-tauri/src/kalvoice_talk_key.rs).
 describe.each([
   { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
@@ -186,10 +208,12 @@ describe.each([
   it.each([false, true])("offers only the keys the app accepts (Stable %s)", async (stable) => {
     if (stable) selectSignedStable();
     const copy = text(await render(component, path));
-    expect(copy).toContain("F8 is the default.");
+    // Fn on a Mac shipped in 0.1.7 (docs/KALVOICE.md); F8 stays the fallback key everywhere.
+    expect(copy).toMatch(/Hold Fn on a Mac/);
+    expect(copy).toMatch(/F8 is the fallback/);
     expect(copy).toContain("another function key, Pause, Scroll Lock or Insert");
     expect(copy).not.toMatch(/Caps Lock/i);
-    expect(copy).not.toMatch(/\bFn\b/);
+    expect(copy).not.toContain("F8 is the default.");
   });
 
   it.each([false, true])("says the key works while KalCode is the active window (Stable %s)", async (stable) => {

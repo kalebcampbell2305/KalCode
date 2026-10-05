@@ -17,14 +17,9 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 
 import DownloadPlatforms from "../../src/components/DownloadPlatforms.astro";
 import { assertManifest, buildStatus, downloadCta, platformRows, signedStableRelease } from "../../src/lib/releases";
-import DocsIndex from "../../src/pages/docs/index.astro";
-import DocsPermissions from "../../src/pages/docs/permissions.astro";
-import DocsProviders from "../../src/pages/docs/providers.astro";
 import Download from "../../src/pages/download.astro";
 import Home from "../../src/pages/index.astro";
-import Pricing from "../../src/pages/pricing.astro";
 import Product from "../../src/pages/product.astro";
-import Security from "../../src/pages/security.astro";
 import Updates from "../../src/pages/updates.astro";
 
 const NEVER_PUBLIC = ["0.1.2", "0.1.3", "0.1.4", "0.1.5"] as const;
@@ -360,88 +355,25 @@ describe("release-scoped copy with a signed Stable 0.1.7 manifest", () => {
     /not available in 0\.1\.6/,
     /KalCode 0\.1\.6 (also|still)/,
   ];
+  // Download, pricing, security and the docs no longer carry release-scoped Gemini or permission-mode
+  // copy (Gemini CLI works since 0.1.9+1658; agents start in Bypass), so only pages that still do are listed.
+  // Home and Product describe the product as it ships today (every provider native, nothing
+  // "unavailable in <version>"), so no served manifest may surface a version-scoped provider caveat.
   const pages = [
-    {
-      name: "home page",
-      component: Home,
-      path: "/",
-      says: ["Gemini CLI is unavailable in KalCode 0.1.7.", "Unavailable in 0.1.7"],
-    },
-    {
-      name: "product page",
-      component: Product,
-      path: "/product",
-      says: [
-        "KalCode 0.1.7 also can't set the Google Cloud project",
-        "Gemini CLI is unavailable in 0.1.7 after Google",
-      ],
-    },
-    {
-      name: "download page",
-      component: Download,
-      path: "/download",
-      says: ["Gemini CLI is unavailable in 0.1.7 after Google"],
-    },
-    {
-      name: "pricing page",
-      component: Pricing,
-      path: "/pricing",
-      says: ["In 0.1.7, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned."],
-    },
-    {
-      name: "security page",
-      component: Security,
-      path: "/security",
-      says: ["Gemini CLI is unavailable in KalCode 0.1.7."],
-    },
-    {
-      name: "docs index",
-      component: DocsIndex,
-      path: "/docs",
-      says: ["threads in 0.1.7 run in Plan, Approve or Auto", "why Gemini CLI is unavailable in 0.1.7."],
-    },
-    {
-      name: "providers docs",
-      component: DocsProviders,
-      path: "/docs/providers",
-      says: [
-        "Gemini CLI is unavailable in 0.1.7",
-        "KalCode 0.1.7 still includes its Gemini CLI adapter",
-        "why Gemini CLI is unavailable in 0.1.7.",
-      ],
-    },
-    {
-      name: "permissions docs",
-      component: DocsPermissions,
-      path: "/docs/permissions",
-      says: [
-        "In KalCode 0.1.7, threads start in Plan, Approve or Auto, on every plan. Bypass and Custom are planned and not available in 0.1.7.",
-        "threads in 0.1.7 run in Plan, Approve or Auto",
-      ],
-    },
+    { name: "home page", component: Home, path: "/" },
+    { name: "product page", component: Product, path: "/product" },
   ];
+  const VERSION_CAVEAT = /(unavailable|not available) in (KalCode )?\d+\.\d+\.\d+/i;
 
-  it.each(pages)("the $name names 0.1.7, not 0.1.6", async ({ component, path, says }) => {
-    select(signedStable("0.1.7"));
-    const html = await render(component, path);
-    const copy = text(html).replace(/&quot;/g, '"');
-    for (const phrase of says) expect(html.includes(phrase) || copy.includes(phrase), phrase).toBe(true);
-    for (const stale of STALE_016) expect(copy).not.toMatch(stale);
+  it.each(pages)("the $name carries no stale version-scoped provider caveat", async ({ component, path }) => {
+    for (const version of ["0.1.6", "0.1.7"]) {
+      select(signedStable(version));
+      const copy = text(await render(component, path)).replace(/&quot;/g, '"');
+      expect(copy, version).not.toMatch(VERSION_CAVEAT);
+      for (const stale of STALE_016) expect(copy, version).not.toMatch(stale);
+      for (const provider of ["Claude Code", "Codex", "Cursor", "Gemini CLI"]) expect(copy).toContain(provider);
+    }
   });
-
-  it.each(pages)(
-    "the $name keeps its 0.1.6 wording for the committed 0.1.6 manifest",
-    async ({ component, path, says }) => {
-      select(signedStable("0.1.6"));
-      const html = await render(component, path);
-      const copy = text(html);
-      for (const phrase of says) {
-        const old = phrase.replaceAll("0.1.7", "0.1.6");
-        expect(html.includes(old) || copy.includes(old), old).toBe(true);
-      }
-      for (const phrase of says) expect(copy).not.toContain(phrase);
-    },
-  );
 });
 
 describe("pages rendered from a signed Stable 0.1.7 manifest", () => {

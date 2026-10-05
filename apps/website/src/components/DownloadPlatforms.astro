@@ -4,6 +4,9 @@
  * download button only when it is in `latest.platforms`; otherwise the manifest's own reason is
  * shown and there is no link. The row matching the visitor's system is marked by
  * scripts/platform.ts (progressive enhancement; nothing depends on it).
+ *
+ * An available row has two columns on wide screens: what the file is (version, name, size,
+ * SHA-256, signature) and what to do with it: the notes to read first, then the download.
  */
 import { type ReleaseManifest, RELEASES, formatBytes, formatReleaseDate, platformRows } from "../lib/releases";
 import Icon from "./Icon.astro";
@@ -37,72 +40,90 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
   {
     rows.map((row) => (
       <li class="platform" id={row.os} data-os={row.os} data-state={row.state}>
-        <div class="platform__head">
-          <h3 class="platform__name">{row.name}</h3>
+        <div class="platform__info">
+          <div class="platform__head">
+            <h3 class="platform__name">{row.name}</h3>
+            {row.state === "available" && latest ? (
+              <span class="chip chip--built">
+                {releaseLabel} {latest.version}
+              </span>
+            ) : (
+              <span class="chip">Not yet available</span>
+            )}
+            <span class="chip chip--live platform__you">Your system</span>
+          </div>
           {row.state === "available" && latest ? (
-            <span class="chip chip--built">
-              {releaseLabel} {latest.version}
-            </span>
+            <>
+              <p class="platform__state">{row.build.label}</p>
+              <dl class="platform__meta">
+                <div>
+                  <dt>Version</dt>
+                  <dd>
+                    {latest.version} · published <time datetime={latest.publishedAt}>{formatReleaseDate(latest.publishedAt)}</time>
+                  </dd>
+                </div>
+                <div>
+                  <dt>File</dt>
+                  <dd class="mono">{row.build.file}</dd>
+                </div>
+                <div>
+                  <dt>Size</dt>
+                  <dd>{formatBytes(row.build.size)}</dd>
+                </div>
+                <div>
+                  <dt>SHA-256</dt>
+                  <dd class="mono" data-sha256>{row.build.sha256}</dd>
+                </div>
+                <div>
+                  <dt>Signature</dt>
+                  <dd>{signatureLabel(row.os, row.build.signed)}</dd>
+                </div>
+              </dl>
+            </>
           ) : (
-            <span class="chip">Not yet available</span>
+            row.state === "unavailable" && (
+              <p class="platform__state">
+                {row.reason}
+                {row.label !== row.name && <span class="platform__req"> Target: {row.label}.</span>}
+              </p>
+            )
           )}
-          <span class="chip chip--live platform__you">Your system</span>
         </div>
-        {row.state === "available" && latest ? (
-          <>
-            <p class="platform__state">{row.build.label}</p>
-            <dl class="platform__meta">
-              <div>
-                <dt>Version</dt>
-                <dd>
-                  {latest.version} · published <time datetime={latest.publishedAt}>{formatReleaseDate(latest.publishedAt)}</time>
-                </dd>
-              </div>
-              <div>
-                <dt>File</dt>
-                <dd class="mono">{row.build.file}</dd>
-              </div>
-              <div>
-                <dt>Size</dt>
-                <dd>{formatBytes(row.build.size)}</dd>
-              </div>
-              <div>
-                <dt>SHA-256</dt>
-                <dd class="mono" data-sha256>{row.build.sha256}</dd>
-              </div>
-              <div>
-                <dt>Signature</dt>
-                <dd>{signatureLabel(row.os, row.build.signed)}</dd>
-              </div>
-            </dl>
-            {!row.build.signed && (
+        {row.state === "available" && latest && (
+          <div class="platform__side">
+            <div class="platform__notes">
+              {!row.build.signed && (
+                <p class="platform__note" data-tone="warn">
+                  {row.os === "windows" ? (
+                    <>This {releaseNoun} is not code-signed, so Windows SmartScreen may warn you. Verify its SHA-256 before opening it.</>
+                  ) : row.os === "macos" ? (
+                    <>This {releaseNoun} is not code-signed or notarized. Verify its SHA-256 before opening it. KalCode does not ask you to bypass Gatekeeper.</>
+                  ) : (
+                    <>This {releaseNoun} is not code-signed. Verify its SHA-256 before opening it.</>
+                  )}
+                </p>
+              )}
               <p class="platform__note">
-                {row.os === "windows" ? (
-                  <>This {releaseNoun} is not code-signed, so Windows SmartScreen may warn you. Verify its SHA-256 before opening it.</>
-                ) : row.os === "macos" ? (
-                  <>This {releaseNoun} is not code-signed or notarized. Verify its SHA-256 before opening it. KalCode does not ask you to bypass Gatekeeper.</>
-                ) : (
-                  <>This {releaseNoun} is not code-signed. Verify its SHA-256 before opening it.</>
-                )}
+                <span class="platform__note-title">Checksum</span>
+                Verify the downloaded file with <code>{checksumCommand(row.os, row.build.file)}</code> and compare it with the SHA-256 above.
               </p>
-            )}
-            <p class="platform__note">
-              Verify the downloaded file with <code>{checksumCommand(row.os, row.build.file)}</code> and compare it with the SHA-256 above.
-            </p>
-            {row.os === "macos" && (
-              <p class="platform__note">
-                On a standard Mac account, open the DMG and copy <code>KalCode.app</code> to <code>~/Applications</code> before launching it. Create an <code>Applications</code> folder in your home folder if needed. This per-user location supports in-app updates and rollback. The DMG&apos;s <code>Applications</code> shortcut points to the system <code>/Applications</code> folder, which requires administrator access; a standard-user install there requires an administrator to replace the app manually for later versions.
-              </p>
-            )}
-            {row.os === "windows" && latest.version === "0.1.6" && (
-              <p class="platform__note" data-windows-update-note>
-                Windows: in-app Update and Restore previous version don&apos;t work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.
-              </p>
-            )}{row.os === "windows" && (latest.version === "0.1.7" || latest.version === "0.1.8" || latest.version === "0.1.9") && (
-              <p class="platform__note" data-windows-update-note>
-                Windows: 0.1.6 can&apos;t update itself. If you have 0.1.6, download this installer and run it once — your data is kept. On macOS, 0.1.6 updates in the app.
-              </p>
-            )}
+              {row.os === "macos" && (
+                <p class="platform__note">
+                  <span class="platform__note-title">Install</span>
+                  On a standard Mac account, open the DMG and copy <code>KalCode.app</code> to <code>~/Applications</code> before launching it. Create an <code>Applications</code> folder in your home folder if needed. This per-user location supports in-app updates and rollback.
+                  <span class="platform__note-fine">The DMG&apos;s <code>Applications</code> shortcut points to the system <code>/Applications</code> folder, which requires administrator access; a standard-user install there requires an administrator to replace the app manually for later versions.</span>
+                </p>
+              )}
+              {row.os === "windows" && latest.version === "0.1.6" && (
+                <p class="platform__note" data-windows-update-note>
+                  Windows: in-app Update and Restore previous version don&apos;t work in 0.1.6. When 0.1.7 is available, download it from this page and run the installer — your data is kept.
+                </p>
+              )}{row.os === "windows" && (latest.version === "0.1.7" || latest.version === "0.1.8" || latest.version === "0.1.9") && (
+                <p class="platform__note" data-windows-update-note>
+                  Windows: 0.1.6 can&apos;t update itself. If you have 0.1.6, download this installer and run it once — your data is kept. On macOS, 0.1.6 updates in the app.
+                </p>
+              )}
+            </div>
             <div class="platform__action button-row">
               <a class="button button--primary button--lg" href={row.build.url} download={row.build.file}>
                 <Icon name="download" />
@@ -110,18 +131,11 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
               </a>
               <a class="text-link" href={notesUrl}>Release notes</a>
             </div>
-            <p class="muted small">
+            <p class="platform__terms">
               By downloading or using KalCode you agree to the{" "}
               <a href={terms.href}>{terms.label}</a>.
             </p>
-          </>
-        ) : (
-          row.state === "unavailable" && (
-            <p class="platform__state">
-              {row.reason}
-              {row.label !== row.name && <span class="platform__req"> Target: {row.label}.</span>}
-            </p>
-          )
+          </div>
         )}
       </li>
     ))

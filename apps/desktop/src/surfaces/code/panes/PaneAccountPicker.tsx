@@ -9,7 +9,7 @@ import { accountProviderName } from "../../../shell/accountCommands.ts";
 import { AccountUsageDetails, UsageMeter } from "../../providers/AccountUsageBadge.tsx";
 import { accountName, accountSessionState, sortAccounts } from "../../providers/accountIdentity.ts";
 import { usageForAccount } from "../../providers/accountSuggestions.ts";
-import { limitingWindow, resetsIn } from "../../providers/accountUsage.ts";
+import { resetsIn, weeklyWindow } from "../../providers/accountUsage.ts";
 import { useOptionalProviderAccountSessions } from "../../providers/ProviderAccountSessions.tsx";
 import styles from "./PaneAccountPicker.module.css";
 import { type PaneAccountIdentity, paneAccountLabel } from "./PaneParts.tsx";
@@ -141,7 +141,7 @@ export function PaneAccountPicker({ thread, account, onContinue, suggestion }: P
                 sessions?.validationErrors.get(item.id),
               );
               const usage = usageFor(item.id);
-              const window = usage.status === "fresh" || usage.status === "stale" ? limitingWindow(usage) : null;
+              const window = weeklyWindow(usage);
               return (
                 <button
                   key={item.id}

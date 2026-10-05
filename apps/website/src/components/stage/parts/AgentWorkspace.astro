@@ -1,0 +1,324 @@
+---
+/**
+ * The KalCode workspace as a picture: the Command Deck over four provider terminals (Claude Code,
+ * Codex, Cursor, Gemini CLI), each with its account, model and one agent state, drawn from the
+ * sample fleet in lib/stage.ts. Decorative (the page's copy says what it shows).
+ */
+import { PROVIDERS } from "../../../lib/site";
+import { SAMPLE_AGENTS, SAMPLE_AGENT_STATE_LABEL, inlineIcon as icon } from "../../../lib/stage";
+import ProviderGlyph from "../../ProviderGlyph.astro";
+
+interface Props {
+  /** flat: no resting tilt (product page). */
+  flat?: boolean;
+}
+const { flat = false } = Astro.props;
+const providerName = (id: string) => PROVIDERS.find((p) => p.id === id)?.name ?? id;
+const working = SAMPLE_AGENTS.filter((a) => a.state === "working" || a.state === "testing").length;
+const needs = SAMPLE_AGENTS.filter((a) => a.state === "needs").length;
+---
+<div class:list={["ws", { "ws--flat": flat }]} aria-hidden="true" inert>
+  <div class="ws__deck">
+    <span class="ws__brand"></span>
+    <span class="ws__chip"><Fragment set:html={icon("folder")} />sample-app <small>main</small></span>
+    <span class="ws__search"><Fragment set:html={icon("search")} />Go to anything<kbd>Ctrl K</kbd></span>
+    <span class="ws__count" data-tone="working"><i></i>{working} working</span>
+    <span class="ws__count" data-tone="needs"><i></i>{needs} needs you</span>
+  </div>
+  <div class="ws__grid">
+    {
+      SAMPLE_AGENTS.map((agent) => (
+        <div class="ws__pane" data-state={agent.state}>
+          <p class="ws__head">
+            <ProviderGlyph provider={agent.provider} />
+            <span class="ws__title">
+              <strong>{agent.name}</strong>
+              <small>{providerName(agent.provider)} · {agent.account}{agent.model !== "Account default" && ` · ${agent.model}`}</small>
+            </span>
+            <span class="agent-chip" data-state={agent.state}>{SAMPLE_AGENT_STATE_LABEL[agent.state]}</span>
+          </p>
+          <div class="ws__term">
+            {agent.lines.map((line) => (
+              <p data-kind={line.kind}>{line.text}</p>
+            ))}
+          </div>
+        </div>
+      ))
+    }
+  </div>
+</div>
+
+<style>
+  .ws {
+    overflow: hidden;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg);
+    background-image: var(--app-backdrop);
+    box-shadow:
+      0 50px 100px -48px rgb(0 0 0 / 0.95),
+      0 0 90px -36px var(--color-glow);
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    transform: perspective(1800px) rotateY(-6deg) rotateX(3deg);
+    transition: transform 900ms var(--ease-expo);
+  }
+  .ws:hover {
+    transform: perspective(1800px) rotateY(0) rotateX(0);
+  }
+  .ws__deck {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding: 0.375rem 0.625rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-1);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+  .ws__brand {
+    flex: none;
+    width: 4.5rem;
+    height: 0.625rem;
+    margin-right: 0.25rem;
+    background: var(--color-text);
+    mask: url("/assets/brand/kalcode-wordmark.png") left center / contain no-repeat;
+  }
+  .ws__chip,
+  .ws__search,
+  .ws__count {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    height: 1.625rem;
+    padding: 0 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+  }
+  .ws__chip small {
+    color: var(--color-text-faint);
+  }
+  .ws__chip :global(svg),
+  .ws__search :global(svg) {
+    width: 0.8125rem;
+    height: 0.8125rem;
+  }
+  .ws__search {
+    flex: 1;
+    min-width: 0;
+    color: var(--color-text-faint);
+  }
+  .ws__search kbd {
+    margin-left: auto;
+    color: var(--color-text-faint);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+  }
+  .ws__count i {
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 50%;
+    background: var(--status-working);
+  }
+  .ws__count[data-tone="needs"] {
+    border-color: var(--status-waiting-line);
+    color: var(--status-waiting-text);
+  }
+  .ws__count[data-tone="needs"] i {
+    background: var(--status-waiting);
+    box-shadow: 0 0 8px var(--status-waiting);
+  }
+  .ws__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+  .ws__pane {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-width: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-code-bg);
+  }
+  .ws__pane[data-state="working"] {
+    border-color: var(--color-border-lit);
+    box-shadow: 0 0 30px -14px var(--color-glow);
+  }
+  .ws__pane[data-state="needs"] {
+    border-color: var(--status-waiting-line);
+  }
+  .ws__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0.5rem 0.625rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+  .ws__title {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+  .ws__title strong,
+  .ws__title small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws__title strong {
+    color: var(--color-text);
+    font-size: 0.75rem;
+  }
+  .ws__title small {
+    color: var(--color-text-faint);
+    font-size: 0.625rem;
+  }
+  .ws__term {
+    display: grid;
+    align-content: start;
+    gap: 0.25rem;
+    min-height: 7.25rem;
+    padding: 0.625rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1.45;
+    color: var(--color-text-secondary);
+  }
+  .ws__term p {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws__term p::before {
+    display: inline-block;
+    width: 1.1em;
+    color: var(--color-text-faint);
+  }
+  .ws__term [data-kind="in"] {
+    color: var(--color-text);
+  }
+  .ws__term [data-kind="in"]::before {
+    content: "›";
+    color: var(--color-accent-text);
+  }
+  .ws__term [data-kind="tool"]::before {
+    content: "●";
+    color: var(--color-accent);
+  }
+  .ws__term [data-kind="ok"]::before {
+    content: "✓";
+    color: var(--status-working);
+  }
+  .ws__term [data-kind="ok"] {
+    color: var(--status-working-text);
+  }
+  .ws__term [data-kind="dim"] {
+    color: var(--color-text-faint);
+  }
+  .ws__term [data-kind="dim"]::before {
+    content: "◌";
+  }
+  .ws__term [data-kind="warn"] {
+    color: var(--status-waiting-text);
+  }
+  .ws__term [data-kind="warn"]::before {
+    content: "!";
+    color: var(--status-waiting);
+  }
+  .ws__pane[data-state="working"] .ws__term [data-kind="dim"]:last-child::after {
+    content: "";
+    display: inline-block;
+    width: 0.45em;
+    height: 1em;
+    margin-left: 0.3em;
+    vertical-align: -0.15em;
+    background: var(--color-accent-text);
+    animation: ws-caret 1.1s steps(2) infinite;
+  }
+  @keyframes ws-caret {
+    50% {
+      opacity: 0;
+    }
+  }
+
+
+  .agent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+    flex: none;
+    padding: 0.0625rem 0.4375rem;
+    border: 1px solid var(--status-muted-line);
+    border-radius: var(--radius-full);
+    background: var(--status-muted-soft);
+    color: var(--status-muted-text);
+    font-size: 0.625rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .agent-chip::before {
+    content: "";
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .agent-chip[data-state="working"],
+  .agent-chip[data-state="testing"] {
+    border-color: var(--status-working-line);
+    background: var(--status-working-soft);
+    color: var(--status-working-text);
+  }
+  .agent-chip[data-state="needs"] {
+    border-color: var(--status-waiting-line);
+    background: var(--status-waiting-soft);
+    color: var(--status-waiting-text);
+  }
+  .agent-chip[data-state="ready"] {
+    border-color: var(--status-recovering-line);
+    background: var(--status-recovering-soft);
+    color: var(--status-recovering-text);
+  }
+  .ws--flat {
+    transform: none;
+  }
+  @media (max-width: 60rem) {
+    .ws {
+      transform: none;
+    }
+  }
+  @media (max-width: 36rem) {
+    .ws__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .ws__pane:nth-child(n + 3) {
+      display: none;
+    }
+    .ws__chip,
+    .ws__count[data-tone="working"],
+    .ws__search kbd {
+      display: none;
+    }
+    .ws__term {
+      min-height: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ws {
+      transition: none;
+    }
+    .ws__pane .ws__term p::after {
+      animation: none;
+    }
+  }
+</style>

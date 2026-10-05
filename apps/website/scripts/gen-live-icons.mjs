@@ -62,6 +62,15 @@ export const LIVE_ICONS = {
   shield: "shield",
   play: "circle-play",
   user: "user-round",
+  shieldAlert: "shield-alert",
+  pin: "pin",
+  star: "star",
+  history: "rotate-ccw-clock",
+  chevronRight: "chevron-right",
+  copy: "copy",
+  pen: "pen-line",
+  stop: "square",
+  accountCog: "user-round-cog",
 };
 
 function attrs(props) {
