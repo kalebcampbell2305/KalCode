@@ -327,8 +327,15 @@ describe("merge train", { concurrency: true }, () => {
       const env = setup();
       const head = openPr(env, 1, { "one.txt": "one" });
       let moved = false;
+      // A virtual clock that only advances while the train sleeps: the poll deadline below then counts
+      // polls, not wall-clock time, so slow git under CPU load can never time out the first poll before
+      // the move happens (the move is triggered from that poll's sleep).
+      const epoch = Date.now();
+      let elapsed = 0;
       const train = makeTrain(env, cloneOf(env, "agent"), {
-        sleep: async () => {
+        now: () => epoch + elapsed,
+        sleep: async (ms) => {
+          elapsed += ms;
           if (moved) return;
           moved = true;
           if (change === "main") bypassPush(env, { "other.txt": "new main" });
@@ -339,7 +346,7 @@ describe("merge train", { concurrency: true }, () => {
       env.provider.gates.set(candidate.candidate, "pending");
       const result = await train.waitForGate(candidate.candidate, {
         branch: candidate.branch,
-        pollMs: 1,
+        pollMs: 1_000,
         timeoutMs: 10_000,
       });
       assert.equal(result.state, "stale");
