@@ -78,8 +78,9 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(shown(page).getByText("Opened Settings.")).toBeVisible();
     // Nothing had focus, so there's nowhere to type it instead.
     await expect(widget(page).getByRole("button", { name: "Type it instead" })).toHaveCount(0);
-    // The result collapses back to Ready on its own.
-    await expectState(page, "Ready");
+    // The result collapses back to Ready on its own after its settle timer (4 s), however busy the
+    // machine is.
+    await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(shown(page).getByText("Opened Settings.")).toHaveCount(0);
 
     await openKalVoicePage(page);

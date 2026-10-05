@@ -1,6 +1,16 @@
 import type { KalVoiceResponse, ReservedShortcut } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { announcement, formatBytes, INITIAL_STATE, reduce, STATE_LABELS, usageLine } from "./assistantState.ts";
+import {
+  announcement,
+  DONE_ACTION_SETTLE_MS,
+  DONE_SETTLE_MS,
+  doneSettleMs,
+  formatBytes,
+  INITIAL_STATE,
+  reduce,
+  STATE_LABELS,
+  usageLine,
+} from "./assistantState.ts";
 import {
   createOrderedInputQueue,
   DictationDeliveryError,
@@ -544,5 +554,21 @@ describe("assistant state", () => {
     );
     expect(formatBytes(147_964_211)).toBe("148 MB");
     expect(formatBytes(1_533_763_059)).toBe("1.5 GB");
+  });
+});
+
+describe("a finished result's settle timer", () => {
+  it("returns a plain result to Ready after 4 s", () => {
+    expect(doneSettleMs(false, false)).toBe(DONE_SETTLE_MS);
+  });
+
+  it("keeps a result whose “Type it instead” is on screen long enough to use it", () => {
+    expect(doneSettleMs(false, true)).toBe(DONE_ACTION_SETTLE_MS);
+    expect(DONE_ACTION_SETTLE_MS).toBeGreaterThanOrEqual(15_000);
+  });
+
+  it("never settles while the person points at or focuses the result", () => {
+    expect(doneSettleMs(true, true)).toBeNull();
+    expect(doneSettleMs(true, false)).toBeNull();
   });
 });

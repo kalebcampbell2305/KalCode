@@ -40,6 +40,7 @@ beforeEach(() => {
     retryConnection: vi.fn().mockResolvedValue(undefined),
     dismiss: vi.fn(),
     canTypeInstead: false,
+    showResult: () => undefined,
   };
 });
 
