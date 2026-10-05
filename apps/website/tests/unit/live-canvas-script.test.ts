@@ -150,11 +150,14 @@ it("shows live magnetic placement and commits a pane move only on drop", () => {
   document.elementFromPoint = () => target;
   const canvas = mountAdaptiveCanvas(host, { getState: () => state, render: vi.fn() });
   try {
+    expect(canvas.dragging()).toBe(false);
     grip.dispatchEvent(new MouseEvent("pointerdown", { button: 0, clientX: 20, clientY: 20, bubbles: true }));
+    expect(canvas.dragging()).toBe(true);
     window.dispatchEvent(new MouseEvent("pointermove", { clientX: 580, clientY: 100 }));
     expect(target.dataset.canvasSnap).toBe("after");
     expect(state.frames.map((frame) => frame.id)).toEqual(["f1", "f2", "f3"]);
     window.dispatchEvent(new MouseEvent("pointerup"));
+    expect(canvas.dragging()).toBe(false);
     expect(state.frames.map((frame) => frame.id)).toEqual(["f2", "f1", "f3"]);
     expect(target.hasAttribute("data-canvas-snap")).toBe(false);
   } finally {

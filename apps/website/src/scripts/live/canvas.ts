@@ -215,6 +215,8 @@ export function mountAdaptiveCanvas(host: HTMLElement, hooks: Hooks) {
   window.addEventListener("pointercancel", cancel, options);
   return {
     act,
+    /** A pane is held by its grip: the workspace must not re-render it out from under the pointer. */
+    dragging: () => gesture !== null,
     afterRender() {
       const state = hooks.getState();
       if (currentState !== state) {
