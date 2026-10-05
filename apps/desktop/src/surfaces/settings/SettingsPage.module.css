@@ -6,9 +6,9 @@
   display: flex;
   gap: var(--space-1);
   margin: 0 0 var(--space-4);
-  /* One row: narrow windows scroll it sideways rather than stacking chips. */
-  overflow-x: auto;
-  scrollbar-width: none;
+  /* Every section stays visible: narrow windows wrap the chips onto a second row instead of
+     clipping the last ones off the edge. */
+  flex-wrap: wrap;
   padding: var(--space-1-5);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-card);
