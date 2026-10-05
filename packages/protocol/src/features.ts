@@ -17,7 +17,7 @@ import type { EntitlementTier } from "./plans.ts";
 
 export const FEATURE_PLACEMENT = {
   provider_health: "free",
-  provider_profiles: "pro",
+  provider_profiles: "free",
   context_drop: "free",
   utility_dock: "free",
   resource_governor: "free",

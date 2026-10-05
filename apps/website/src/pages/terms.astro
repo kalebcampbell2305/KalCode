@@ -1,4 +1,5 @@
 ---
+import { PLANS } from "@kalcode/protocol/plans";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
 import { RELEASES, servedStableRelease } from "../lib/releases";
@@ -19,9 +20,14 @@ const description = stable ? page.description.replace(/ preview app\.$/, " app."
 // (docs/BILLING.md §9). Closed, §2 renders byte-identical to before (hence the "\n" endings).
 const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 const noSale = " Nothing on the site is an offer to sell, and no\n        purchase can be made through it today.\n";
+// Plan names come from the catalog (packages/protocol/src/plans.ts), never from this page.
+const paidPlanNames = PLANS.filter((plan) => plan.price.monthlyUsd > 0).map((plan) => plan.name);
+const paidPlanList = `${paidPlanNames.slice(0, -1).join(", ")} and ${paidPlanNames.at(-1)}`;
 const paidPlans =
-  " Paid plans (Pro, MAX and MAX 2X) are monthly or yearly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically at the end of each billing period (every month or every year) until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.\n";
-const updated = checkoutOpen ? "October 1, 2026" : stable ? "September 29, 2026" : "September 24, 2026";
+  ` Paid plans (${paidPlanList}) are monthly or yearly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically at the end of each billing period (every month or every year) until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.\n`;
+// One date for every mode: the October 5, 2026 corrections (catalog plan names, Cursor in
+// section 6) change the text in each of them.
+const updated = "October 5, 2026";
 ---
 <Base title={page.title} description={description} path={page.path}>
   <PageHead
@@ -115,8 +121,8 @@ const updated = checkoutOpen ? "October 1, 2026" : stable ? "September 29, 2026"
       <p>
         KalCode, KalVoice, the KalCode wordmark, the KalCode symbol and the KalVoice orb are
         ours. You may not use them in a way that suggests endorsement or affiliation
-        without permission. Claude Code, Codex and Gemini CLI are products and trademarks of their
-        respective owners; naming them describes compatibility and does not imply endorsement.
+        without permission. Claude Code, Codex, Cursor and Gemini CLI are products and trademarks of
+        their respective owners; naming them describes compatibility and does not imply endorsement.
       </p>
 
       <h2>7. No warranty</h2>

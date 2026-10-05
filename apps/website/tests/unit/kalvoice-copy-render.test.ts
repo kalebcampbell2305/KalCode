@@ -99,6 +99,28 @@ it("states that KalVoice interpretation does not reach connected providers on th
   expect(copy).toContain(
     "It never uses the AI providers you connected, or KalCode's servers, to understand what you said.",
   );
+  // Every coding provider KalCode runs (packages/protocol/src/plans.ts, "provider-terminals").
+  expect(copy).toContain(
+    "Words you dictate into a coding agent (Claude Code, Codex, Cursor or Gemini CLI), and coding tasks you send to it, go to that provider under your own account",
+  );
+  expect(copy).not.toMatch(/\bthread\b/i);
+});
+
+it("describes KalCode accounts on the privacy page instead of claiming early access is all it collects", async () => {
+  const copy = text(await render(Privacy, "/privacy"));
+  expect(copy).not.toContain("This site collects one thing");
+  expect(copy).not.toContain("when KalCode accounts arrive at launch");
+  expect(copy).not.toContain("We set no cookies.");
+  for (const fact of [
+    // apps/api/migrations/0002_kalvoice_requests.sql: only an opaque id and a time per request.
+    "a random request ID and the time it was recorded, never audio, transcripts or what you asked",
+    // apps/api/worker/lib/account-store.ts softDeleteAccount.
+    "Deleting your account replaces your email address with a placeholder, removes your display name and signs out every session",
+    // apps/api/worker/lib/auth.ts sessionCookie: __Host- cookie, Max-Age 30 days.
+    "HttpOnly session cookie that expires after 30 days",
+  ]) {
+    expect(copy).toContain(fact);
+  }
 });
 
 /** KalVoice copy that is true only until a signed Stable build is served from /download. */

@@ -135,7 +135,7 @@ export const PAGES = [
     path: "/kalvoice",
     title: "KalVoice: Voice Commands for AI Coding — KalCode",
     description:
-      "KalVoice is the voice layer in KalCode: hold Fn on a Mac or F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace.",
+      "KalVoice is the voice layer in KalCode: hold Fn on a Mac or F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace. In development.",
   },
   {
     path: "/pricing",

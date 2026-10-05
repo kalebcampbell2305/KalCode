@@ -391,6 +391,14 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       { id: "core-browser", label: "Integrated Browser", from: "free", status: "available", verifiedIn: LIVE },
       {
+        id: "live-browser",
+        label: "Live Browser pane beside your coding agents",
+        detail: "Open local, preview and production pages beside an agent; send the page, an element, errors or a screenshot to it.",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1450",
+      },
+      {
         id: "external-integrations",
         label: "External API / MCP integrations",
         from: "free",
