@@ -1989,6 +1989,7 @@ fn required_push_to_talk_commands_run_without_the_local_interpreter() {
     };
     let permission = KalVoiceIntent::WhichSessions {
         state: kalcode_contracts::sessions::SessionAttention::WaitingForPermission,
+        scope: kalcode_contracts::sessions::SessionScope::Agents,
     };
     let cases = [
         ("Open settings", &settings),

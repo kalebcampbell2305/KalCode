@@ -3,5 +3,9 @@
 /**
  * A state KalVoice can look sessions up by ("focus the one waiting for permission",
  * "which agent failed?").
+ *
+ * For coding agents ([`SessionScope::Agents`]) every state is read from the shared agent-state
+ * model ([`Self::matches_agent`]), the same for every provider; for chat threads
+ * ([`SessionScope::Threads`]) from the thread's own status ([`Self::matches`]).
  */
 export type SessionAttention = "waiting_for_permission" | "waiting_for_you" | "failed" | "stuck";

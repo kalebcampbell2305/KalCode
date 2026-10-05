@@ -349,16 +349,27 @@ fn session_effect(intent: Value, target: Target, world: &World) -> Stage {
                 },
             }
         }
-        // No fixture thread is failed, stuck or waiting: "No thread has failed."
+        // No fixture agent or thread is failed, stuck or waiting: "No agent has failed."
         Some("focus_by_state") => Stage::Rejected {
             code: "session_not_found",
         },
-        // The readback's visible part: the approvals panel or the Dashboard filter.
+        // The readback's visible part: for coding agents (the default scope) the Agents tab
+        // group that holds them; for chat threads the approvals panel or nothing.
         Some("which_sessions") => Stage::Fast {
-            intent: match intent["state"].as_str() {
-                Some("waiting_for_permission") => json!({ "kind": "show_approvals" }),
-                Some("stuck") => intent,
-                _ => json!({ "kind": "filter_dashboard", "chip": "waiting_for_you" }),
+            intent: match (intent["scope"].as_str(), intent["state"].as_str()) {
+                (Some("threads"), Some("waiting_for_permission")) => {
+                    json!({ "kind": "show_approvals" })
+                }
+                (Some("threads"), _) => intent,
+                (_, state) => json!({
+                    "kind": "filter_agents",
+                    "filter": match state {
+                        Some("failed") => "failed",
+                        Some("stuck") => "waiting",
+                        _ => "needs_you",
+                    },
+                    "providerId": null,
+                }),
             },
             target: Target::None,
         },

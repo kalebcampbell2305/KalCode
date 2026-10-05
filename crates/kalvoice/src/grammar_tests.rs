@@ -1613,7 +1613,7 @@ fn account_commands_never_run_negated_or_compound() {
 
 // ---- 0.1.5 terminal-aware KalVoice ----
 
-use kalcode_contracts::sessions::SessionAttention;
+use kalcode_contracts::sessions::{SessionAttention, SessionScope};
 
 fn talk(text: &str) -> Parsed {
     understand_talk(text)
@@ -1876,53 +1876,96 @@ fn go_back_is_the_previous_session_and_a_page_is_in_the_browser() {
 
 #[test]
 fn sessions_can_be_found_by_state() {
-    let by_state = |state| KalVoiceIntent::FocusByState { state };
-    for (text, state) in [
-        ("open the one that failed", SessionAttention::Failed),
-        ("show me the failed thread", SessionAttention::Failed),
-        ("focus the agent that is stuck", SessionAttention::Stuck),
+    use SessionAttention as A;
+    use SessionScope::{Agents, Threads};
+    let by_state = |state, scope| KalVoiceIntent::FocusByState { state, scope };
+    for (text, state, scope) in [
+        // Agent words, and phrases that name nothing, are about coding agents.
+        ("open the one that failed", A::Failed, Agents),
+        ("focus the one that failed", A::Failed, Agents),
+        ("focus the agent that is stuck", A::Stuck, Agents),
+        ("focus the agent that needs me", A::WaitingForYou, Agents),
+        (
+            "focus the agent that needs my attention",
+            A::WaitingForYou,
+            Agents,
+        ),
+        ("show me the failed agent", A::Failed, Agents),
+        ("open the stuck one", A::Stuck, Agents),
         (
             "open the terminal waiting for permission",
-            SessionAttention::WaitingForPermission,
+            A::WaitingForPermission,
+            Agents,
         ),
+        (
+            "take me to the agent that needs permission",
+            A::WaitingForPermission,
+            Agents,
+        ),
+        ("focus the one waiting for me", A::WaitingForYou, Agents),
+        // Thread and session words keep reading chat threads.
+        ("show me the failed thread", A::Failed, Threads),
         (
             "take me to the thread that needs permission",
-            SessionAttention::WaitingForPermission,
+            A::WaitingForPermission,
+            Threads,
         ),
-        (
-            "focus the one waiting for me",
-            SessionAttention::WaitingForYou,
-        ),
+        ("open the session that is stuck", A::Stuck, Threads),
+        ("focus the thread waiting for me", A::WaitingForYou, Threads),
     ] {
         let (understood, confidence) = understand_with_confidence(text);
-        assert_eq!(understood, Understood::intent(by_state(state)), "{text}");
+        assert_eq!(
+            understood,
+            Understood::intent(by_state(state, scope)),
+            "{text}"
+        );
         assert_eq!(confidence, Confidence::High, "{text}");
     }
-    let which = |state| KalVoiceIntent::WhichSessions { state };
-    for (text, state) in [
-        ("which agent is stuck", SessionAttention::Stuck),
-        ("Which one failed?", SessionAttention::Failed),
-        (
-            "what needs permission",
-            SessionAttention::WaitingForPermission,
-        ),
-        (
-            "What needs permission?",
-            SessionAttention::WaitingForPermission,
-        ),
-        (
-            "which provider is waiting on me",
-            SessionAttention::WaitingForYou,
-        ),
-        ("which threads failed", SessionAttention::Failed),
-        ("is anything stuck", SessionAttention::Stuck),
+    let which = |state, scope| KalVoiceIntent::WhichSessions { state, scope };
+    for (text, state, scope) in [
+        ("which agent is stuck", A::Stuck, Agents),
+        ("which agents are stuck", A::Stuck, Agents),
+        ("which one is stuck", A::Stuck, Agents),
+        ("Which one failed?", A::Failed, Agents),
+        ("what needs permission", A::WaitingForPermission, Agents),
+        ("What needs permission?", A::WaitingForPermission, Agents),
+        ("which provider is waiting on me", A::WaitingForYou, Agents),
+        ("is anything stuck", A::Stuck, Agents),
+        ("what is stuck", A::Stuck, Agents),
+        ("what's stuck", A::Stuck, Agents),
+        ("what failed", A::Failed, Agents),
+        ("who needs permission", A::WaitingForPermission, Agents),
         (
             "which agents are waiting for permission",
-            SessionAttention::WaitingForPermission,
+            A::WaitingForPermission,
+            Agents,
         ),
+        (
+            "is any agent waiting for permission",
+            A::WaitingForPermission,
+            Agents,
+        ),
+        ("which threads failed", A::Failed, Threads),
+        ("which thread is stuck", A::Stuck, Threads),
+        ("which sessions are stuck", A::Stuck, Threads),
+        (
+            "which threads are waiting for permission",
+            A::WaitingForPermission,
+            Threads,
+        ),
+        ("is any thread stuck", A::Stuck, Threads),
+        ("what failed threads are there", A::Failed, Threads),
     ] {
-        assert_eq!(intent(text), which(state), "{text}");
+        assert_eq!(intent(text), which(state, scope), "{text}");
     }
+    // Plural agent questions the shared agent filters already answer keep their intent.
+    assert_eq!(
+        intent("which agents failed"),
+        KalVoiceIntent::WhichAgents {
+            filter: kalcode_contracts::agent_state::AgentFilter::Failed,
+            provider_id: None,
+        }
+    );
     // The approvals panel and the Dashboard filters keep their phrases.
     for text in [
         "what needs my approval",
@@ -2253,23 +2296,27 @@ fn agent_questions_read_back_coding_agents_of_every_provider() {
             provider_id: Some(ProviderId::new(ProviderId::CURSOR)),
         }
     );
-    // Session questions that aren't about an agent status keep their meaning.
+    // Attention questions narrower than an agent filter read coding agents (never chat
+    // threads); a thread phrase keeps reading threads.
     assert_eq!(
         intent("which agents are waiting for permission"),
         KalVoiceIntent::WhichSessions {
             state: SessionAttention::WaitingForPermission,
+            scope: SessionScope::Agents,
         }
     );
     assert_eq!(
         intent("which agent is stuck"),
         KalVoiceIntent::WhichSessions {
             state: SessionAttention::Stuck,
+            scope: SessionScope::Agents,
         }
     );
     assert_eq!(
         intent("show me the failed thread"),
         KalVoiceIntent::FocusByState {
             state: SessionAttention::Failed,
+            scope: SessionScope::Threads,
         }
     );
     assert!(is_reasoning("which agents don't need me"));
