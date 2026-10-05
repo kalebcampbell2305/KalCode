@@ -24,7 +24,13 @@ import { noteTerminalInput, noteTerminalOutput } from "./kaltidy/activity.ts";
 import { suppressReplayQueries } from "./replayQueries.ts";
 import { isTerminalShortcut } from "./shortcuts.ts";
 import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "./terminalImages.ts";
-import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "./terminalTheme.ts";
+import {
+  cursorStyle,
+  invalidateMonoFontFamily,
+  MINIMUM_CONTRAST,
+  monoFontFamily,
+  TERMINAL_THEMES,
+} from "./terminalTheme.ts";
 
 const FONT_SIZE = 13;
 
@@ -449,7 +455,13 @@ export function TerminalView({
       context={{ kind: "output", label: `${label} output`, text: "" }}
       getContext={(target, keyboard) => terminalContext(termRef.current, target, label, keyboard)}
     >
-      <div ref={hostRef} className={styles.xtermHost} data-terminal-id={terminalId} data-selectable />
+      <div
+        ref={hostRef}
+        className={styles.xtermHost}
+        style={cursorStyle(theme)}
+        data-terminal-id={terminalId}
+        data-selectable
+      />
     </ContentContextMenu>
   );
 }

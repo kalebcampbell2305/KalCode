@@ -24,7 +24,13 @@ import { useCodeShown } from "../codeShown.ts";
 import { suppressReplayQueries } from "../replayQueries.ts";
 import { isTerminalShortcut } from "../shortcuts.ts";
 import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "../terminalImages.ts";
-import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "../terminalTheme.ts";
+import {
+  cursorStyle,
+  invalidateMonoFontFamily,
+  MINIMUM_CONTRAST,
+  monoFontFamily,
+  TERMINAL_THEMES,
+} from "../terminalTheme.ts";
 import styles from "./Panes.module.css";
 import type { PaneChannel } from "./paneChannel.ts";
 import { lastPersonInputAt } from "./personInput.ts";
@@ -565,7 +571,13 @@ export const PaneTerminal = memo(function PaneTerminal({
         context={{ kind: "output", label: `${label} output`, text: "" }}
         getContext={(target, keyboard) => terminalContext(termRef.current, target, label, keyboard)}
       >
-        <div ref={hostRef} className={codeStyles.xtermHost} data-pane-terminal={threadId} data-selectable />
+        <div
+          ref={hostRef}
+          className={codeStyles.xtermHost}
+          style={cursorStyle(theme)}
+          data-pane-terminal={threadId}
+          data-selectable
+        />
       </ContentContextMenu>
       {connectError ? (
         <ContentContextMenu

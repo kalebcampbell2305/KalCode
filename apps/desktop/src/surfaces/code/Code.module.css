@@ -465,6 +465,32 @@
   outline: none;
 }
 
+/* The focused terminal's blinking bar cursor. xterm.js blinks it by animating box-shadow, which
+   restyles and repaints on the main thread every frame (most of Code's idle CPU with a terminal
+   focused). The same 1px bar blinking with opacity on its own layer looks identical and runs on
+   the compositor. --terminal-cursor is the theme's cursor colour, set on the host. */
+.xtermHost :global(.xterm .xterm-rows.xterm-focus .xterm-cursor.xterm-cursor-blink.xterm-cursor-bar) {
+  position: relative;
+  box-shadow: none;
+  animation: none;
+}
+
+.xtermHost :global(.xterm .xterm-rows.xterm-focus .xterm-cursor.xterm-cursor-blink.xterm-cursor-bar)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: 1px 0 0 var(--terminal-cursor) inset;
+  pointer-events: none;
+  will-change: opacity;
+  animation: terminal-cursor-blink 1s step-end infinite;
+}
+
+@keyframes terminal-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 /* A shell that exited: one refined footer row; the words truncate, the buttons stay aligned. */
 .endedBar {
   display: flex;
