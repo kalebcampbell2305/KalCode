@@ -19,6 +19,7 @@ import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts
 import { OutputScheduler } from "../../shell/panes/outputScheduler.ts";
 import { useTextScale } from "../../shell/useTextScale.ts";
 import styles from "./Code.module.css";
+import { useCodeShown } from "./codeShown.ts";
 import { noteTerminalInput, noteTerminalOutput } from "./kaltidy/activity.ts";
 import { suppressReplayQueries } from "./replayQueries.ts";
 import { isTerminalShortcut } from "./shortcuts.ts";
@@ -54,7 +55,18 @@ interface TerminalViewProps {
  * xterm.js generates while replaying are not sent back, because the shell already had them
  * answered when the output was first shown.
  */
-export function TerminalView({ terminal, label, visible, focusRequest, theme, throttled = false }: TerminalViewProps) {
+export function TerminalView({
+  terminal,
+  label,
+  visible: paneVisible,
+  focusRequest,
+  theme,
+  throttled: paneThrottled = false,
+}: TerminalViewProps) {
+  // Code's own visibility arrives from a store, so hiding Code never re-renders pane chrome.
+  const codeShown = useCodeShown();
+  const visible = paneVisible && codeShown;
+  const throttled = paneThrottled || !codeShown;
   const { client } = useRuntime();
   const { lastSize } = useWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);

@@ -20,6 +20,7 @@ import { terminalContext } from "../../../shell/context/terminalContext.ts";
 import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
+import { useCodeShown } from "../codeShown.ts";
 import { suppressReplayQueries } from "../replayQueries.ts";
 import { isTerminalShortcut } from "../shortcuts.ts";
 import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "../terminalImages.ts";
@@ -76,10 +77,14 @@ export const PaneTerminal = memo(function PaneTerminal({
   label,
   running,
   focusRequest,
-  visible = true,
+  visible: paneVisible = true,
   theme,
-  throttled = false,
+  throttled: paneThrottled = false,
 }: PaneTerminalProps) {
+  // Code's own visibility arrives from a store, so hiding Code never re-renders pane chrome.
+  const codeShown = useCodeShown();
+  const visible = paneVisible && codeShown;
+  const throttled = paneThrottled || !codeShown;
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
