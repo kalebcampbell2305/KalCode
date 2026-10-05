@@ -23,14 +23,20 @@ function Test-GateWorkerAdmission {
     # The original slot0 participates through future workflows; its current job stays untouched.
     # Native checks additionally need one of the workflow's three machine-wide heavy leases.
     if ($Active -ge 6) { return 'worker_slots_busy' }
+    # Missing or unreadable telemetry never deadlocks the pool: with no other gate running, one gate
+    # always runs (as the single-runner gate did). Only extra concurrent gates need real readings.
+    $unreadable = $null
     if ($null -eq $Sample -or $null -eq $Sample.Cpu -or $null -eq $Sample.FreeGiB -or
-        $null -eq $Sample.CommitPercent -or $null -eq $Sample.DiskQueue) { return 'resource_data_unavailable' }
-    foreach ($value in @($Sample.Cpu,$Sample.FreeGiB,$Sample.CommitPercent,$Sample.DiskQueue)) {
-        if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { return 'resource_data_invalid' }
+        $null -eq $Sample.CommitPercent -or $null -eq $Sample.DiskQueue) { $unreadable = 'resource_data_unavailable' }
+    else {
+        foreach ($value in @($Sample.Cpu,$Sample.FreeGiB,$Sample.CommitPercent,$Sample.DiskQueue)) {
+            if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { $unreadable = 'resource_data_invalid' }
+        }
+        if (-not $unreadable -and ($Sample.Cpu -lt 0 -or $Sample.Cpu -gt 100 -or
+            $Sample.FreeGiB -lt 0 -or $Sample.CommitPercent -lt 0 -or $Sample.CommitPercent -gt 100 -or
+            $Sample.DiskQueue -lt 0)) { $unreadable = 'resource_data_invalid' }
     }
-    if ($Sample.Cpu -lt 0 -or $Sample.Cpu -gt 100 -or
-        $Sample.FreeGiB -lt 0 -or $Sample.CommitPercent -lt 0 -or $Sample.CommitPercent -gt 100 -or
-        $Sample.DiskQueue -lt 0) { return 'resource_data_invalid' }
+    if ($unreadable) { if ($Active -eq 0) { return 'allowed_without_telemetry' } else { return $unreadable } }
     if ($Sample.FreeGiB -lt (16 + 2 * $Active) -or $Sample.CommitPercent -ge 85) { return 'memory_pressure' }
     if ($Sample.Cpu -ge 85) { return 'cpu_pressure' }
     if ($Sample.DiskQueue -ge 8) { return 'disk_pressure' }

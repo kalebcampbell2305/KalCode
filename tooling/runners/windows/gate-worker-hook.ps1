@@ -55,9 +55,12 @@ do {
             }
             if ($Phase -eq 'After') { exit 0 }
             $sample = $null
-            try { $sample = Get-GateWorkerResources } catch { Write-Warning 'Resource sampling unavailable; gate remains queued.' }
+            try { $sample = Get-GateWorkerResources } catch { Write-Warning 'Resource sampling unavailable.' }
             $reason = Test-GateWorkerAdmission -Sample $sample -Active $active
-            if ($reason -eq 'allowed') {
+            if ($reason -eq 'allowed_without_telemetry') {
+                Write-Warning "Gate slot ${Slot}: resource telemetry is unreadable; admitting the only active gate without it."
+            }
+            if ($reason -eq 'allowed' -or $reason -eq 'allowed_without_telemetry') {
                 if (Test-Path -LiteralPath $leasePath) { throw 'Worker already has a different active job.' }
                 [ordered]@{ slot = $Slot; pid = $owner.ProcessId; started = $started
                     admitted = [DateTime]::UtcNow.ToString('o'); sample = $sample

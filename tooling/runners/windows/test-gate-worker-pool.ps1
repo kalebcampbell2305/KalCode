@@ -21,7 +21,9 @@ $healthy = @{Cpu=10.0;FreeGiB=32.0;CommitPercent=40.0;DiskQueue=0.0}
 foreach ($active in 0..5) { Assert-Equal (Test-GateWorkerAdmission $healthy $active) 'allowed' 'Six workers fit healthy host' }
 Assert-Equal (Test-GateWorkerAdmission $healthy 6) 'worker_slots_busy' 'Additional jobs queue without cancelling others'
 Assert-Equal (Get-GateWorkerPlan 0).Account 'kalcode-ci' 'Original worker identity is preserved'
-Assert-Equal (Test-GateWorkerAdmission $null) 'resource_data_unavailable' 'Unknown readings never fabricate capacity'
+Assert-Equal (Test-GateWorkerAdmission $null 0) 'allowed_without_telemetry' 'Unreadable telemetry never deadlocks the only gate'
+Assert-Equal (Test-GateWorkerAdmission $null 1) 'resource_data_unavailable' 'Unknown readings never fabricate capacity for a concurrent gate'
+Assert-Equal (Test-GateWorkerAdmission $null 6) 'worker_slots_busy' 'Slot cap still applies without telemetry'
 foreach ($case in @(
     @{key='Cpu';value=85;reason='cpu_pressure'},
     @{key='FreeGiB';value=15;reason='memory_pressure'},
@@ -32,11 +34,16 @@ foreach ($case in @(
     @{key='CommitPercent';value=[double]::PositiveInfinity;reason='resource_data_invalid'}
 )) {
     $sample=$healthy.Clone();$sample[$case.key]=$case.value
-    Assert-Equal (Test-GateWorkerAdmission $sample) $case.reason "Pressure:$($case.key)"
+    Assert-Equal (Test-GateWorkerAdmission $sample 1) $case.reason "Pressure:$($case.key)"
+    if ($case.reason -eq 'resource_data_invalid') {
+        Assert-Equal (Test-GateWorkerAdmission $sample 0) 'allowed_without_telemetry' "Invalid telemetry never deadlocks the only gate:$($case.key)"
+    } else {
+        Assert-Equal (Test-GateWorkerAdmission $sample 0) $case.reason "Real pressure still holds even the only gate:$($case.key)"
+    }
 }
 $reserved=$healthy.Clone();$reserved.FreeGiB=19
 Assert-Equal (Test-GateWorkerAdmission $reserved 2) 'memory_pressure' 'Reserve headroom for newly admitted jobs and user agents'
-foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-worker-pool.ps1','invoke-gate-worker-pool-install.ps1','diagnose-gate-worker-pool.ps1','add-gate-workers.ps1','repair-gate-worker-hooks.ps1')) {
+foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-worker-pool.ps1','invoke-gate-worker-pool-install.ps1','diagnose-gate-worker-pool.ps1','add-gate-workers.ps1','repair-gate-worker-hooks.ps1','install-gate-pool-hooks.ps1')) {
     $tokens=$null;$parseErrors=$null
     $fileAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file),[ref]$tokens,[ref]$parseErrors)
     if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
