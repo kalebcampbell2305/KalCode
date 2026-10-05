@@ -180,9 +180,10 @@ test.describe("KalVoice thread composer target", () => {
     await choices(page)
       .getByRole("button", { name: `${OAUTH} · Claude Code · Personal` })
       .click();
+    // The pointer is still on the widget, so the result stays while it's read.
+    await expect(widget(page).getByText(`Sent to “${OAUTH}”.`, { exact: true }).first()).toBeVisible();
     await expect(detail(page).getByRole("heading", { name: OAUTH })).toBeVisible();
     await expect(conversation(page)).toContainText("update the changelog");
-    await expect(widget(page).getByText(`Sent to “${OAUTH}”.`, { exact: true }).first()).toBeVisible();
   });
 
   test("“Type it instead” lands in the thread that was focused, not the one on screen", async ({ page }) => {
