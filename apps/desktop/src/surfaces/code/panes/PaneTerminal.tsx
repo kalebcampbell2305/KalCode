@@ -26,6 +26,7 @@ import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey
 import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "../terminalTheme.ts";
 import styles from "./Panes.module.css";
 import type { PaneChannel } from "./paneChannel.ts";
+import { lastPersonInputAt } from "./personInput.ts";
 
 const FONT_SIZE = 13;
 const RESIZE_DEBOUNCE_MS = 80;
@@ -520,15 +521,22 @@ export const PaneTerminal = memo(function PaneTerminal({
   // Focus on request, and again when a resumed agent's new instance recreates the terminal while
   // this pane had focus (the old xterm took the keyboard focus with it).
   // A request stays pending until it lands: a new agent's instance id often arrives right after
-  // its focus request, and re-running this effect must not drop that request.
+  // its focus request, and re-running this effect must not drop that request. But once the person
+  // has pressed a key or pointed anywhere since the request, they have moved on: a late-arriving
+  // instance must not take focus back (a terminal becoming ready never steals focus).
   const focusSeen = useRef(0);
   const focusPending = useRef(false);
+  const focusRequestedAt = useRef(0);
   useEffect(() => {
     void instanceId;
     if (focusSeen.current !== focusRequest) {
       focusSeen.current = focusRequest;
-      if (focusRequest !== 0) focusPending.current = true;
+      if (focusRequest !== 0) {
+        focusPending.current = true;
+        focusRequestedAt.current = performance.now();
+      }
     }
+    if (focusPending.current && lastPersonInputAt() > focusRequestedAt.current) focusPending.current = false;
     if (focusRequest === 0 || !visible) return;
     if (!focusPending.current) {
       const active = document.activeElement;
@@ -536,8 +544,10 @@ export const PaneTerminal = memo(function PaneTerminal({
         active === null || active === document.body || (hostRef.current?.contains(active) ?? false);
       if (throttledRef.current || !lostWithOldTerminal) return;
     }
+    const pending = focusPending.current;
     const frame = requestAnimationFrame(() => {
       focusPending.current = false;
+      if (pending && lastPersonInputAt() > focusRequestedAt.current) return;
       termRef.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
