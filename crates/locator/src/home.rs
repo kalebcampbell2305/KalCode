@@ -188,8 +188,8 @@ pub fn live_lists(
             .collect::<Vec<_>>()
     };
     (
-        pick(&|t| is_working(t.status)),
-        pick(&|t| needs_you(t.status)),
+        pick(&|t| is_working(t)),
+        pick(&|t| needs_you(t)),
         pick(&is_resumable),
     )
 }

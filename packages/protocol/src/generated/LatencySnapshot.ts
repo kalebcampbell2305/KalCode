@@ -2,7 +2,7 @@
 import type { StagePercentiles } from "./StagePercentiles.ts";
 import type { StageTimings } from "./StageTimings.ts";
 
-export type LatencySnapshot = { stages: Array<StagePercentiles>,
+export type LatencySnapshot = { stages: Array<StagePercentiles>, 
 /**
  * Most recent interactions, newest first (for the waterfall view).
  */

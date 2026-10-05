@@ -120,7 +120,7 @@ test.describe("KalVoice terminal destinations", () => {
     const pane = page.locator("[data-provider-pane]").first();
     const terminal = pane.locator("[data-pane-terminal]");
     await expect(terminal.locator("textarea")).toBeFocused();
-    await expect(pane.locator("[data-pane-status]")).toHaveText("IDLE");
+    await expect(pane.locator("[data-pane-status]")).toHaveText(/^(READY|IDLE)$/);
     await expect(pane.getByText(/Limited status.*approvals in Claude Code/)).toBeVisible();
     const threadId = await pane.getAttribute("data-provider-pane");
     const before = await runningProcesses(page);
@@ -148,13 +148,13 @@ test.describe("KalVoice terminal destinations", () => {
     await terminal.locator(".xterm-screen").click();
     await page.keyboard.type("run git push origin main");
     await page.keyboard.press("Enter");
-    await expect(pane.locator("[data-pane-status]")).toHaveText("WAITING FOR YOU");
+    await expect(pane.locator("[data-pane-status]")).toHaveText("NEEDS YOU");
     await expect(terminal.locator(".xterm-rows")).toContainText("Allow Bash? (y/n)");
 
     await talk(page);
 
     await expectVoiceState(page, "Error");
     await expect(terminal.locator(".xterm-rows")).not.toContainText("yes approve everything");
-    await expect(pane.locator("[data-pane-status]")).toHaveText("WAITING FOR YOU");
+    await expect(pane.locator("[data-pane-status]")).toHaveText("NEEDS YOU");
   });
 });

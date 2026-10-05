@@ -35,7 +35,7 @@ test("the deck answers what is working, what needs me and what is shipping", asy
 
   const rail = agents(page);
   await expect(rail.getByRole("heading", { name: /^Needs you/ })).toBeVisible();
-  await expect(rail.getByRole("button", { name: /^Refactor auth middleware, Needs approval/ })).toBeVisible();
+  await expect(rail.getByRole("button", { name: /^Refactor auth middleware, Needs you/ })).toBeVisible();
   await expect(rail.getByRole("heading", { name: /^Working/ })).toBeVisible();
 });
 

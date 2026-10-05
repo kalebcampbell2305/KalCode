@@ -127,13 +127,20 @@ export function PaneAccountChip({ account }: { account: PaneAccountIdentity }) {
 }
 
 /**
- * The display status: glyph + UPPERCASE words, tone as a reinforcement only. `qualifier` replaces
- * the shared one when the pane knows more (a held launch's real reason: "memory is critically low").
+ * The shared agent state: glyph + UPPERCASE words, tone as a reinforcement only. `qualifier`
+ * replaces the shared one when the pane knows more (a held launch's real reason: "memory is
+ * critically low").
  */
-export function PaneStatusChip({ status, qualifier }: { status: ThreadStatus; qualifier?: string | null }) {
-  const view = paneStatus(status);
+export function PaneStatusChip({
+  thread,
+  qualifier,
+}: {
+  thread: Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals">;
+  qualifier?: string | null;
+}) {
+  const view = paneStatus(thread);
   const shownQualifier = qualifier ?? view.qualifier;
-  const Icon = ICONS[status];
+  const Icon = ICONS[thread.status];
   const tone: StatusTone = view.tone;
   return (
     <span className={styles.statusGroup}>

@@ -21,7 +21,7 @@ async function openWorkspace(page: Page, shell = false) {
     .getByRole("button", { name: "Launch Claude Code agent" })
     .click();
   const pane = page.locator("[data-provider-pane]").first();
-  await expect(pane.locator("[data-pane-status]")).toHaveText("IDLE");
+  await expect(pane.locator("[data-pane-status]")).toHaveText(/^(READY|IDLE)$/);
   const id = await pane.getAttribute("data-provider-pane");
   if (!id) throw new Error("Missing coding-agent identity");
   return { pane, id, tab: page.locator(`[role="tab"][data-content-key="agent:${id}"]`) };

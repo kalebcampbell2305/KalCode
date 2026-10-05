@@ -6,11 +6,11 @@ import type { ThreadStatus } from "./ThreadStatus.ts";
  * One open thread a query resolved to, or one choice in a clarification. Carries only what
  * may be shown or spoken: never a credential, an email or a provider identity.
  */
-export type SessionCandidate = { threadId: string, name: string, providerId: ProviderId, providerName: string,
+export type SessionCandidate = { threadId: string, name: string, providerId: ProviderId, providerName: string, 
 /**
  * The thread's provider-account label ("Gemini B"); `null` for threads without one.
  */
-accountLabel: string | null, workspaceId: string, workspaceName: string, status: ThreadStatus,
+accountLabel: string | null, workspaceId: string, workspaceName: string, status: ThreadStatus, 
 /**
  * "Name · Provider · Account" (the account part is left out when the thread has none).
  */

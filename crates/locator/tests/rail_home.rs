@@ -258,8 +258,8 @@ fn rail_counts_threads_per_provider_and_badges() {
     assert_eq!(entry.threads, 4, "archived threads are not counted");
     assert_eq!(entry.working, 1);
     assert_eq!(
-        entry.needs_you, 2,
-        "permission required and failed need you"
+        entry.needs_you, 1,
+        "permission required needs you; a failure is a decision, not a question (shared agent state)"
     );
     let claude = entry
         .providers
@@ -275,7 +275,7 @@ fn rail_counts_threads_per_provider_and_badges() {
         .iter()
         .find(|p| p.provider_id.as_str() == "codex")
         .unwrap();
-    assert_eq!((codex.threads, codex.working, codex.needs_you), (2, 0, 1));
+    assert_eq!((codex.threads, codex.working, codex.needs_you), (2, 0, 0));
     assert_eq!(codex.items.len(), 2);
     locator.shutdown();
 }

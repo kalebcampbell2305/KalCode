@@ -11,15 +11,15 @@ import type { PolicyDecision } from "./PolicyDecision.ts";
  * CA-1 from Z4's `ApprovalView` (now an alias of this type); they default when absent so older
  * stored or cached JSON still deserializes.
  */
-export type ApprovalRequest = { id: string, action: NormalizedAction, decision: PolicyDecision, permissionMode: PermissionMode, status: ApprovalStatus, resolvedDecision: ApprovalDecision | null, resolvedAt: string | null,
+export type ApprovalRequest = { id: string, action: NormalizedAction, decision: PolicyDecision, permissionMode: PermissionMode, status: ApprovalStatus, resolvedDecision: ApprovalDecision | null, resolvedAt: string | null, 
 /**
  * The answers the user may give (only `deny` for requests that cannot be approved).
  */
-allowedDecisions: Array<ApprovalDecision>,
+allowedDecisions: Array<ApprovalDecision>, 
 /**
  * What "Allow for thread / workspace" would cover ("changing any file in this workspace").
  */
-grantCoverage: string, context: ApprovalContext | null, createdAt: string,
+grantCoverage: string, context: ApprovalContext | null, createdAt: string, 
 /**
  * Why an expired request expired: `thread_stopped`, `superseded`, `mode_changed`,
  * `process_restarted` or `answered_in_provider` (the v4 `expire_reason` CHECK values).

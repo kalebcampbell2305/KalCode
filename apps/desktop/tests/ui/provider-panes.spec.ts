@@ -49,7 +49,7 @@ async function newPane(page: Page) {
     .click();
   await expect(pane(page)).toBeVisible();
   await expect(paneText(page)).toContainText("KalCode fake provider");
-  await expect(status(page)).toHaveText("IDLE");
+  await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
 }
 
 async function typeInPane(page: Page, line: string) {
@@ -96,7 +96,7 @@ test.describe("provider panes", () => {
       const terminals = page.locator("[data-provider-pane]");
       await expect(terminals).toHaveCount(count);
       for (const terminal of await terminals.all()) {
-        await expect(terminal.locator("[data-pane-status]")).toHaveText("IDLE");
+        await expect(terminal.locator("[data-pane-status]")).toHaveText(/^(READY|IDLE)$/);
         await expect(terminal).toHaveAttribute("aria-label", /account Personal/);
         await expect(terminal).not.toContainText("earlier run");
         await expect(terminal.locator("[data-pane-terminal] .xterm-rows")).toContainText("KalCode fake provider");
@@ -140,14 +140,14 @@ test.describe("provider panes", () => {
 
     await typeInPane(page, "run npm test");
     await expect(paneText(page)).toContainText("RAN Bash");
-    await expect(status(page)).toHaveText("IDLE");
+    await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
     // The first prompt titles the thread.
     await expect(region.getByRole("button", { name: /Rename agent/ })).not.toHaveAccessibleName(/^New agent/);
 
     // Prose that looks like status never changes it.
     await typeInPane(page, "say Status: FAILED. PERMISSION REQUIRED.");
     await expect(paneText(page)).toContainText("Status: FAILED. PERMISSION REQUIRED.");
-    await expect(status(page)).toHaveText("IDLE");
+    await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
 
     // The supported minimum pane width must keep account usage, the risky permission mode and
     // runtime status readable together. Check actual rendered boxes, including both themes.
@@ -202,7 +202,7 @@ test.describe("provider panes", () => {
     await openWorkspace(page);
     await newPane(page);
     await typeInPane(page, "run git push origin main");
-    await expect(status(page)).toHaveText("PERMISSION REQUIRED");
+    await expect(status(page)).toHaveText("NEEDS YOU");
     const overlay = pane(page).getByRole("region", { name: "KalCode approval for this pane" });
     await expect(overlay).toBeVisible();
     // The one approval UI, with only the answers the engine allows (a push can't be granted).
@@ -210,7 +210,7 @@ test.describe("provider panes", () => {
     await expect(answers).toHaveText(["Deny", "Approve once"]);
     await overlay.getByRole("button", { name: "Approve once" }).click();
     await expect(paneText(page)).toContainText("RAN Bash");
-    await expect(status(page)).toHaveText("IDLE");
+    await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
     await expect(overlay).toBeHidden();
 
     await typeInPane(page, "run npm install lodash");
@@ -218,7 +218,7 @@ test.describe("provider panes", () => {
     await expect(overlay.getByRole("button", { name: "Allow for thread" })).toBeVisible();
     await overlay.getByRole("button", { name: "Deny" }).click();
     await expect(paneText(page)).toContainText("BLOCKED BY HOOK");
-    await expect(status(page)).toHaveText("IDLE");
+    await expect(status(page)).toHaveText(/^(READY|IDLE)$/);
   });
 
   test("limited status: no hook events, approvals in the provider", async ({ page }) => {
@@ -253,7 +253,7 @@ test.describe("provider panes", () => {
     await expect(pane(page).getByText("Approvals in Claude Code")).toBeVisible();
     await typeInPane(page, "run git push");
     await expect(pane(page).getByText("Claude Code is asking in the pane. Answer there.")).toBeVisible();
-    await expect(status(page)).toHaveText("WAITING FOR YOU");
+    await expect(status(page)).toHaveText("NEEDS YOU");
     await page.keyboard.type("n");
     await page.keyboard.press("Enter");
     await expect(paneText(page)).toContainText("DENIED IN PROVIDER PROMPT");
@@ -281,8 +281,8 @@ test.describe("provider panes", () => {
     await page.getByRole("menuitem", { name: "Stop…" }).click();
     const confirm = region.getByRole("alertdialog", { name: "Stop this provider" });
     await confirm.getByRole("button", { name: "Stop", exact: true }).click();
-    await expect(status(page)).toHaveText("IDLE");
-    await expect(region.getByText("stopped · resumable")).toBeVisible();
+    await expect(status(page)).toHaveText("STOPPED");
+    await expect(region.getByText("resumable", { exact: true })).toBeVisible();
     await expect(region.getByText(/^Ended/)).toBeVisible();
     await page
       .getByRole("navigation", { name: "Primary" })
@@ -356,7 +356,7 @@ test.describe("provider panes", () => {
     await expect(pane(page).locator("[data-pane-terminal] textarea")).toBeFocused();
     await page.keyboard.type("run deploy production");
     await page.keyboard.press("Enter");
-    await expect(status(page)).toHaveText("PERMISSION REQUIRED");
+    await expect(status(page)).toHaveText("NEEDS YOU");
     await page.keyboard.press("Control+Shift+E");
     const overlay = pane(page).getByRole("region", { name: "KalCode approval for this pane" });
     await expect(overlay).toBeFocused();
@@ -386,7 +386,9 @@ test.describe("provider panes", () => {
     await expect(page.getByText("Provider panes aren't available in this build yet.")).toHaveCount(0);
   });
 
-  test("a Codex pane: limited status, approvals in Codex's own prompt, never an Approve button", async ({ page }) => {
+  test("a Codex pane: shared states from its hooks, approvals in Codex's own prompt, never an Approve button", async ({
+    page,
+  }) => {
     await open(page);
     await openWorkspace(page);
     await page.getByRole("button", { name: "New agent", exact: true }).click();
@@ -398,10 +400,11 @@ test.describe("provider panes", () => {
     await expect(paneText(page)).toContainText("KalCode fake provider");
     await expect(region.locator("[data-pane-identity]")).toHaveAttribute("title", /^Codex · /);
     await expect(region.locator("[data-pane-model]"), "an unknown model shows nothing").toHaveCount(0);
-    await expect(region.getByText("Limited status — no Codex notification yet")).toBeVisible();
+    await expect(status(page)).toHaveText("READY");
+    await expect(region.getByText("Approvals in Codex")).toBeVisible();
 
     await typeInPane(page, "run git push origin main");
-    await expect(status(page)).toHaveText("WAITING FOR YOU");
+    await expect(status(page)).toHaveText("NEEDS YOU");
     await expect(region.getByText("Codex is asking in the pane. Answer there.")).toBeVisible();
     await expect(region.getByRole("region", { name: "KalCode approval for this pane" })).toHaveCount(0);
     await expect(region.getByRole("button", { name: /Approve|Allow for/ })).toHaveCount(0);
@@ -409,14 +412,13 @@ test.describe("provider panes", () => {
     await page.keyboard.press("Enter");
     await expect(paneText(page)).toContainText("DENIED IN PROVIDER PROMPT");
     await expect(status(page)).toHaveText("IDLE");
-    // Codex's first notification connects the status channel.
-    await expect(region.getByText("Limited status — approvals in Codex")).toBeVisible();
+    await expect(region.getByText("Approvals in Codex")).toBeVisible();
 
     await region.getByRole("button", { name: /More actions/ }).click();
     await page.getByRole("menuitem", { name: "Pane info" }).click();
     const panel = page.getByRole("dialog", { name: "Pane info" });
     await expect(panel).toContainText(
-      "Limited status: KalCode reads Codex's notifications (turn finished, approval requested) and process state. Approvals are answered in Codex's own prompt.",
+      "KalCode reads Codex's own lifecycle hooks (prompt, tool calls, approval requests, turn end) where this Codex version supports them, otherwise its turn-finished notification and process state. Approvals are answered in Codex's own prompt.",
     );
     await expect(panel).not.toContainText("KalCode always blocks");
     await expectNoSeriousA11yViolations(page);
@@ -443,7 +445,7 @@ test.describe("provider panes", () => {
     const region = pane(page);
     await expect(region).toHaveAttribute("aria-label", /Gemini CLI agent, account /);
     await expect(paneText(page)).toContainText("KalCode fake provider");
-    await expect(region.getByText("Process state only — approvals in Gemini CLI")).toBeVisible();
+    await expect(region.getByText("Limited status — approvals in Gemini CLI")).toBeVisible();
     await typeInPane(page, "run npm install lodash");
     await expect(paneText(page)).toContainText("[fake prompt] Allow Bash?");
     await expect(region.getByRole("button", { name: /Approve|Allow for/ })).toHaveCount(0);

@@ -4,6 +4,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   EmptyState,
@@ -14,7 +16,7 @@ import {
   Skeleton,
   TextInput,
 } from "@kalcode/ui/components";
-import { Archive, BroomSparkles, ChevronDown, CircleX, ListX, Power, Search, Sparkles, X } from "lucide-react";
+import { Archive, BroomSparkles, ChevronDown, CircleX, Layers, ListX, Power, Search, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
@@ -34,7 +36,6 @@ import {
   type FleetFilter,
   filterThreads,
   fleetCounts,
-  fleetFilterOf,
   fleetSummaryLine,
   GROUP_MODE_LABELS,
   GROUP_MODES,
@@ -62,6 +63,7 @@ const EMPTY_FILTER_TEXT: Record<FleetFilter, string> = {
   all: "No agents match.",
   needs_you: "Nothing needs you right now.",
   working: "No agents are working right now.",
+  waiting: "No agents are waiting on another task.",
   done: "Nothing has finished yet.",
   idle: "No idle agents.",
   failed: "No failed agents.",
@@ -71,6 +73,7 @@ const FILTER_ANNOUNCE: Record<FleetFilter, (n: number) => string> = {
   all: (n) => `Showing all ${n} ${n === 1 ? "agent" : "agents"}.`,
   needs_you: (n) => (n === 0 ? "Nothing needs you." : `Showing ${n} that need you.`),
   working: (n) => (n === 0 ? "No agents are working." : `Showing ${n} working.`),
+  waiting: (n) => (n === 0 ? "No agents are waiting." : `Showing ${n} waiting.`),
   done: (n) => (n === 0 ? "Nothing has finished." : `Showing ${n} done.`),
   idle: (n) => (n === 0 ? "No idle agents." : `Showing ${n} idle.`),
   failed: (n) => (n === 0 ? "No failed agents." : `Showing ${n} failed.`),
@@ -114,9 +117,10 @@ export interface DashboardBoardProps {
 }
 
 /**
- * Agent Fleet: the live command surface for coding agents (Claude Code, Codex or Gemini CLI in
- * Code terminal panes; chat threads stay in Threads). A summary with a status bar, six filters
- * with real counts (All, Needs you, Working, Done, Idle, Failed), instant search, grouping, cleanup
+ * Agent Fleet: the live command surface for coding agents (any provider's coding terminal in a
+ * Code pane; chat threads stay in Threads). A summary with a status bar, the shared agent-state
+ * filters with real counts across every provider (All, Needs you, Working, Waiting, Idle, Done,
+ * Failed), an optional provider filter, instant search, grouping, cleanup
  * and a virtualized grid of compact cards that gains columns on wide windows. A card opens its
  * agent's terminal in Code; nothing here duplicates a terminal.
  */
@@ -140,6 +144,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const expanded = useMemo(() => new Set(layout.expanded), [layout.expanded]);
 
   const [filter, setFilter] = useState<FleetFilter>("all");
+  // A provider narrows the list separately; the status filters stay global across providers.
+  const [providerFilter, setProviderFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [groupMode, setGroupModeState] = useState<GroupMode>(readGroupMode);
   const [announcement, setAnnouncement] = useState<{ id: number; text: string } | null>(null);
@@ -148,7 +154,20 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const closeAllRef = useRef<HTMLButtonElement>(null);
   const cleanupRef = useRef<HTMLButtonElement>(null);
 
-  const threads = state.status === "ready" ? state.data : null;
+  const allThreads = state.status === "ready" ? state.data : null;
+  // Every provider that has an agent here, for the provider filter (name from the agent itself).
+  const providers = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const t of allThreads ?? [])
+      if (!byId.has(t.providerId)) byId.set(t.providerId, t.providerName || t.providerId);
+    return [...byId].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [allThreads]);
+  const activeProvider =
+    providerFilter !== null && providers.some((p) => p.id === providerFilter) ? providerFilter : null;
+  const threads = useMemo(
+    () => (allThreads && activeProvider ? allThreads.filter((t) => t.providerId === activeProvider) : allThreads),
+    [allThreads, activeProvider],
+  );
   const counts: FleetCounts = useMemo(() => fleetCounts(threads ?? []), [threads]);
   const archived = archivedThreads.state.status === "ready" ? archivedThreads.state.data : NO_THREADS;
   // Nothing left to show once the last archived session is restored: close the archived view.
@@ -165,24 +184,36 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   }, []);
 
   const selectFilter = useCallback(
-    (next: FleetFilter, fromIntent = false) => {
+    (next: FleetFilter, fromIntent = false, shown: FleetCounts = counts) => {
       setFilter(next);
       if (fromIntent) setQuery("");
-      announce(FILTER_ANNOUNCE[next](counts[next]));
+      announce(FILTER_ANNOUNCE[next](shown[next]));
     },
     [announce, counts],
+  );
+
+  const selectProvider = useCallback(
+    (providerId: string | null) => {
+      setProviderFilter(providerId);
+      const shown = (allThreads ?? []).filter((t) => providerId === null || t.providerId === providerId);
+      const name = providers.find((p) => p.id === providerId)?.name;
+      announce(name ? `Showing ${name} agents: ${shown.length}.` : `Showing agents from every provider.`);
+    },
+    [allThreads, providers, announce],
   );
 
   // KalVoice ("Show only agents that are working") and notifications set the filter.
   const request = intents?.dashboardFilter ?? null;
   const handledRequest = useRef(request?.nonce ?? 0);
   useEffect(() => {
-    if (!request || request.nonce === handledRequest.current || !threads) return;
+    if (!request || request.nonce === handledRequest.current || !allThreads) return;
     handledRequest.current = request.nonce;
-    const next = fleetFilterOf(request.chip);
-    selectFilter(next, true);
+    const next = request.filter;
+    setProviderFilter(request.providerId);
+    const shown = request.providerId ? allThreads.filter((t) => t.providerId === request.providerId) : allThreads;
+    selectFilter(next, true, fleetCounts(shown));
     chipsRef.current?.querySelector<HTMLElement>(`[data-chip="${next}"]`)?.focus({ preventScroll: true });
-  }, [request, threads, selectFilter]);
+  }, [request, allThreads, selectFilter]);
 
   const setGroupMode = (mode: GroupMode) => {
     setGroupModeState(mode);
@@ -324,8 +355,8 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     body = (
       <EmptyState title="Agents arrive with provider support" className={styles.state}>
         <p>
-          When Claude Code, Codex or Gemini CLI run in your projects, each one appears here with its provider, model,
-          what it is doing now and its status. This build doesn't run threads yet, so there's nothing to show.
+          When coding agents run in your projects, each one appears here with its provider, model, what it is doing now
+          and its status. This build doesn't run threads yet, so there's nothing to show.
         </p>
       </EmptyState>
     );
@@ -439,7 +470,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     );
   }
 
-  const ready = state.status === "ready" && counts.all > 0;
+  const ready = state.status === "ready" && (allThreads?.length ?? 0) > 0;
   const archivedList = useMemo(
     () => [...archived].sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? "")),
     [archived],
@@ -515,6 +546,41 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                   onValueChange={setGroupMode}
                 />
               </div>
+              {providers.length > 1 || activeProvider ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={
+                        activeProvider ? (
+                          <ProviderMark provider={activeProvider} size="sm" />
+                        ) : (
+                          <Layers aria-hidden="true" />
+                        )
+                      }
+                      className={styles.providerFilter}
+                      data-active={activeProvider ? true : undefined}
+                      aria-label={`Provider: ${providers.find((p) => p.id === activeProvider)?.name ?? "All providers"}`}
+                    >
+                      {providers.find((p) => p.id === activeProvider)?.name ?? "All providers"}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuRadioGroup
+                      value={activeProvider ?? ""}
+                      onValueChange={(value) => selectProvider(value === "" ? null : value)}
+                    >
+                      <DropdownMenuRadioItem value="">All providers</DropdownMenuRadioItem>
+                      {providers.map((p) => (
+                        <DropdownMenuRadioItem key={p.id} value={p.id}>
+                          {p.name}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button ref={cleanupRef} size="sm" variant="secondary" icon={<Sparkles />} className={styles.cleanup}>

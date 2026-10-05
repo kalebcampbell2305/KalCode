@@ -372,15 +372,30 @@ fn registrations_reject_records_from_the_other_provider_channel() {
         })
         .to_string(),
     );
+    // Claude-only events never travel on a Codex registration, and Codex turn ids never on a
+    // Claude one.
     send_raw(
         &server,
         &codex,
-        &serde_json::json!({"event": "PreToolUse", "toolName": "Bash"}).to_string(),
+        &serde_json::json!({"event": "Notification", "notificationType": "permission_prompt"})
+            .to_string(),
+    );
+    send_raw(
+        &server,
+        &claude,
+        &serde_json::json!({"event": "Stop", "codexTurnId": "turn-1"}).to_string(),
     );
     send_raw(
         &server,
         &claude,
         &serde_json::json!({"event": "Stop"}).to_string(),
+    );
+    // Codex's own observing hooks are accepted on its registration.
+    send_raw(
+        &server,
+        &codex,
+        &serde_json::json!({"event": "PreToolUse", "toolName": "Bash", "codexTurnId": "turn-1"})
+            .to_string(),
     );
     send_raw(
         &server,
@@ -394,8 +409,8 @@ fn registrations_reject_records_from_the_other_provider_channel() {
         .to_string(),
     );
 
-    assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(server.stats().rejected_malformed, 2);
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(server.stats().rejected_malformed, 3);
 }
 
 #[test]

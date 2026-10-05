@@ -95,19 +95,20 @@ test("a pane's permission request and completion reach the notification center, 
       .click();
     await expect(pane(page)).toBeVisible({ timeout: 30_000 });
     await expectPaneText(page, FAKE_BANNER, 30_000); // safety gate: the fake, not a real provider
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    // A fresh session at its prompt is READY (shared agent state); IDLE once it has worked.
+    await expect(pane(page).locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
 
     // Bypass runs routine coding without prompts, but credential access still asks.
     await expect(pane(page).locator("[data-pane-mode]")).toHaveAttribute("data-pane-mode", "bypass");
     await typeInPane(page, "run printenv");
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("PERMISSION REQUIRED", { timeout: 30_000 });
+    await expect(pane(page).locator("[data-pane-status]")).toContainText("NEEDS YOU", { timeout: 30_000 });
     await expect(bell(page)).toHaveAccessibleName("Notifications, 1 unread", { timeout: 15_000 });
 
     // The Dashboard shows the pane's thread as ACTION NEEDED with the inline approval.
     await nav(page, "Dashboard").click();
     const board = page.getByRole("region", { name: "Agents", exact: true });
     const card = board.getByRole("article").first();
-    await expect(card.getByText("Needs approval", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(card.getByText("Needs you", { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(card.getByRole("button", { name: "Approve once" })).toBeVisible();
     await shot(page, "e2e-dashboard-action-needed");
 
@@ -119,12 +120,12 @@ test("a pane's permission request and completion reach the notification center, 
     await permission.getByRole("button", { name: /needs your permission$/ }).click();
     await expect(page.getByRole("heading", { level: 1, name: "notify-site" })).toBeVisible();
     await expect(pane(page)).toBeVisible();
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("PERMISSION REQUIRED");
+    await expect(pane(page).locator("[data-pane-status]")).toContainText("NEEDS YOU");
     await expect(bell(page)).toHaveAccessibleName("Notifications, none unread");
 
     await page.getByRole("button", { name: "Approve once" }).first().click();
     await expectPaneText(page, "RAN Bash");
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(pane(page).locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
 
     // The provider exits: the thread completes and the center says so.
     await typeInPane(page, "exit");

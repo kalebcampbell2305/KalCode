@@ -40,12 +40,23 @@ pub enum HookChannel {
 }
 
 impl HookChannel {
-    fn accepts(self, event: HookEvent) -> bool {
+    fn accepts(self, record: &HookRecord) -> bool {
+        let Some(event) = record.event() else {
+            return false;
+        };
         match self {
-            Self::Claude => HookEvent::CLAUDE.contains(&event),
-            Self::Codex => event == HookEvent::CodexNotify,
+            // Codex correlation ids never travel on a Claude registration.
+            Self::Claude => HookEvent::CLAUDE.contains(&event) && record.codex_turn_id.is_none(),
+            // `notify`, plus Codex's own observing hooks.
+            Self::Codex => event == HookEvent::CodexNotify || HookEvent::CODEX.contains(&event),
             Self::Cursor => event == HookEvent::Cursor,
         }
+    }
+
+    /// Whether a record on this channel waits for a KalCode decision. Only Claude Code's
+    /// `PreToolUse` does; Codex's hooks only observe, so they share the status rate limit.
+    fn blocking(self, record: &HookRecord) -> bool {
+        self == Self::Claude && record.event().is_some_and(HookEvent::is_blocking)
     }
 }
 
@@ -544,8 +555,8 @@ async fn read_frame<R: AsyncRead + Unpin, T: for<'de> serde::Deserialize<'de>>(
 }
 
 /// The fail-safe reply when a handler can't answer.
-fn fallback(record: &HookRecord, gate: HookGate) -> HookReply {
-    match (record.event.is_some_and(HookEvent::is_blocking), gate) {
+fn fallback(channel: HookChannel, record: &HookRecord, gate: HookGate) -> HookReply {
+    match (channel.blocking(record), gate) {
         (true, HookGate::Decide) => HookReply::Ask {
             reason: "KalCode couldn't decide in time; answer in the provider.".into(),
         },
@@ -621,13 +632,13 @@ async fn serve<C: AsyncRead + AsyncWrite + Unpin>(
         stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
         return;
     }
-    if !record.event().is_some_and(|event| channel.accepts(event)) {
+    if !channel.accepts(&record) {
         stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
         tracing::warn!(event = "hook_bridge.wrong_channel");
         return;
     }
-    let safe = fallback(&record, gate);
-    let rate_limited = !record.event().is_some_and(HookEvent::is_blocking)
+    let safe = fallback(channel, &record, gate);
+    let rate_limited = !channel.blocking(&record)
         && !status_rate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -12,43 +12,43 @@ import type { SpeechModelInfo } from "./SpeechModelInfo.ts";
 /**
  * Everything the KalVoice UI needs to render.
  */
-export type KalVoiceStatus = { usage: KalVoiceUsage, preferences: KalVoicePreferences, models: Array<SpeechModelInfo>, localReasoning?: LocalReasoningStatus,
+export type KalVoiceStatus = { usage: KalVoiceUsage, preferences: KalVoicePreferences, models: Array<SpeechModelInfo>, localReasoning?: LocalReasoningStatus, 
 /**
  * Safe reason code while local reasoning is `waiting` or `failed` (never a path or message).
  */
-localReasoningIssue?: string,
+localReasoningIssue?: string, 
 /**
  * The model dictation will use (the selected one, or another installed one).
  */
-activeModel: string | null,
+activeModel: string | null, 
 /**
  * Whether this build includes the on-device speech engine.
  */
-speechEngine: boolean,
+speechEngine: boolean, 
 /**
  * Whether this platform build can capture from a microphone.
  */
-microphoneSupported: boolean,
+microphoneSupported: boolean, 
 /**
  * Whether the OS voice is available for spoken replies.
  */
-voiceOutputAvailable: boolean,
+voiceOutputAvailable: boolean, 
 /**
  * Connected coding providers available as action targets, never as a reasoning fallback.
  */
-providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>,
+providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>, 
 /**
  * Keys that can be the push-to-talk key on this system.
  */
-talkKeys: Array<string>,
+talkKeys: Array<string>, 
 /**
  * Whether the push-to-talk key is registered right now (only while KalCode is focused).
  */
-talkKeyActive: boolean, shortcutIssues: Array<ShortcutIssue>,
+talkKeyActive: boolean, shortcutIssues: Array<ShortcutIssue>, 
 /**
  * The session listening right now, if any.
  */
-listening: ListeningSession | null,
+listening: ListeningSession | null, 
 /**
  * Component downloads in progress or pending (automatic first-run provisioning and manual
  * downloads), so the UI never claims "Ready" early.

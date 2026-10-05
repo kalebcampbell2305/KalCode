@@ -58,6 +58,14 @@ pub const MANAGED_VERSIONS: VersionWindow = VersionWindow {
     ],
 };
 
+/// Codex release lines whose session-flag hooks KalCode verified end to end: the `-c hooks.*`
+/// overrides, the session-flags trust key and hash, the Claude-shaped payloads and the
+/// observe-only semantics ([`kalcode_hook_bridge::codex`]). Another line keeps `notify` status
+/// until it is verified, so an unverified trust format can never surface Codex's hook review.
+pub(crate) fn observing_hooks_verified(version: &Version) -> bool {
+    version.major == 0 && version.minor == 160
+}
+
 fn managed_version_supported(version: &Version) -> bool {
     MANAGED_VERSIONS.supports(version)
 }
@@ -266,12 +274,21 @@ pub(crate) fn usable_executable(
     spec: &DetectionSpec,
     env: &DetectEnv,
 ) -> Result<std::path::PathBuf, ProviderError> {
+    usable_executable_and_version(spec, env).map(|(executable, _)| executable)
+}
+
+/// [`usable_executable`], plus the version detection reported (if it parsed).
+pub(crate) fn usable_executable_and_version(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+) -> Result<(std::path::PathBuf, Option<Version>), ProviderError> {
     let detected = detect(spec, env);
     match (detected.detection.state, detected.executable) {
         (DetectionState::Installed, Some(exe))
             if detected.detection.auth != AuthState::NotAuthenticated =>
         {
-            Ok(exe)
+            let version = detected.detection.version.as_deref().and_then(Version::parse);
+            Ok((exe, version))
         }
         (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
         (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),
@@ -293,6 +310,15 @@ pub(crate) fn managed_executable(
     env: &DetectEnv,
     guardian: &crate::guardian::ProviderProbeGuardian,
 ) -> Result<std::path::PathBuf, ProviderError> {
+    managed_executable_and_version(spec, env, guardian).map(|(executable, _)| executable)
+}
+
+/// [`managed_executable`], plus the verified version.
+pub(crate) fn managed_executable_and_version(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+    guardian: &crate::guardian::ProviderProbeGuardian,
+) -> Result<(std::path::PathBuf, Version), ProviderError> {
     let detected = detect_guarded(spec, env, guardian);
     match (detected.detection.state, detected.executable) {
         (DetectionState::Installed, Some(executable))
@@ -307,7 +333,7 @@ pub(crate) fn managed_executable(
                     ProviderError::Start("Codex did not report a version KalCode can verify".into())
                 })?;
             require_managed_version(&version)?;
-            Ok(executable)
+            Ok((executable, version))
         }
         (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
         (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),

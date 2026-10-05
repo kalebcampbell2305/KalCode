@@ -21,9 +21,9 @@
  * to …", "go back") mirror the 0.1.5 TK-3 grammar closely enough for UI tests.
  */
 import type {
+  AgentFilter,
   CommandRequest,
   ComponentProvisioning,
-  DashboardChip,
   EventPayload,
   IpcError,
   KalVoiceMode,
@@ -379,51 +379,149 @@ function browserCommand(original: string, t: string): Parsed | null {
   }
 }
 
-const AGENTS = "(?:agents?|threads?|work|tasks|sessions)";
+/** Plural things the Agents tab lists (native `grammar_agents::LISTED`). */
+const LISTED = "(?:agents|coding agents|threads|sessions|tasks|work)";
+/** Coding agents, for questions about them (native `grammar_agents::AGENT`). */
+const AGENT = "(?:agents?|coding agents?)";
+const DET = "(?:(?:all|all the|all of the|all my|all of my|every|the|my) )?";
 const SHOW = "(?:show|display|list|filter|give)(?: me)?(?: only| just)?";
+const MAYBE_PROVIDER = "(?:(claude code|claude|codex|cursor|gemini cli|gemini) )?";
+const NEEDS_ME = "(?:me|you|my attention|attention|my input|input|an answer|my answer|a reply|my reply)";
 
-/** Dashboard filter phrases (Z7-W3), mirroring `dashboard_filter_patterns` in the native grammar. */
-const DASHBOARD_FILTERS: readonly [DashboardChip, RegExp][] = [
+/** Status words of each agent filter, before ("working agents") and after ("agents that are working") the noun. */
+const FILTER_WORDS: readonly [Exclude<AgentFilter, "all">, string | null, string][] = [
+  [
+    "needs_you",
+    null,
+    `(?:(?:that |which |who )?(?:need|needs|needing) ${NEEDS_ME}|(?:(?:that|which) (?:are|is) )?(?:currently |still )?waiting (?:for|on) ${NEEDS_ME})`,
+  ],
   [
     "working",
-    new RegExp(
-      `^(?:${SHOW}(?: the| my)? (?:working|running|active|busy) ${AGENTS}|${SHOW}(?: the| my)? ${AGENTS} (?:that are|which are|currently) (?:working|running|busy)|only (?:show|display|list)(?: me)?(?: the| my)? (?:working|running|active|busy) ${AGENTS}|(?:which|what) ${AGENTS} (?:are|is) (?:working|running|busy))$`,
-    ),
+    "(?:working|running|active|busy)",
+    "(?:(?:that are|which are|that is|which is|currently) )?(?:currently |still )?(?:working|running|busy)",
   ],
   [
-    "waiting_for_you",
-    new RegExp(
-      `^(?:${SHOW} (?:everything|all|anything|what)(?: that is| that are)? (?:waiting(?: for| on)?(?: me)?|(?:that needs?|needing) me)|${SHOW}(?: the| my)? ${AGENTS} (?:(?:that are |which are )?waiting(?: for| on)?(?: me)?|(?:that needs?|which needs?|needing) me)|${SHOW}(?: the| my)? ${AGENTS}(?: that| which)? needs?(?: my)? attention)$`,
-    ),
+    "waiting",
+    "(?:waiting|blocked)",
+    "(?:(?:that are|which are|that is|which is|currently) )?(?:currently |still )?(?:waiting|blocked)",
   ],
+  ["idle", "idle", "(?:(?:that are|which are|that is|which is|currently) )?(?:currently |still )?idle"],
   [
     "done",
-    new RegExp(
-      `^(?:${SHOW}(?: the| my| all)?(?: the)? (?:completed|finished|done) ${AGENTS}|${SHOW}(?: the| my)? ${AGENTS} (?:that are|which are|that have|which have|that|which) (?:completed|finished|done)|only (?:show|display|list)(?: me)?(?: the| my)? (?:completed|finished|done) ${AGENTS})$`,
-    ),
+    "(?:completed|finished|done)",
+    "(?:(?:that are|which are|that have|which have|that|which|that is) )?(?:already )?(?:completed|finished|done)",
   ],
   [
-    "idle",
-    new RegExp(
-      `^(?:${SHOW}(?: the| my| all)?(?: the)? idle ${AGENTS}|${SHOW}(?: the| my)? ${AGENTS} (?:that are|which are) idle)$`,
-    ),
-  ],
-  [
-    "all",
-    new RegExp(
-      `^(?:(?:show|display|list)(?: me)? (?:all|every|all the|all of the|all my|all of my) ${AGENTS}|(?:clear|reset|remove)(?: the| my)?(?: dashboard)? filters?)$`,
-    ),
+    "failed",
+    "(?:failed|failing|errored|crashed|broken)",
+    "(?:(?:that have|which have|that|which|that are|which are) )?(?:failed|errored|crashed|broken)",
   ],
 ];
 
-/** Neutral summaries, as native says them when it can't count (the double has no thread runtime). */
-const FILTER_SUMMARY: Record<DashboardChip, string> = {
-  all: "Showing every agent on the Dashboard.",
-  working: "Showing working agents on the Dashboard.",
-  waiting_for_you: "Showing what's waiting for you on the Dashboard.",
-  done: "Showing completed work on the Dashboard.",
-  idle: "Showing idle agents on the Dashboard.",
+/** A question's predicate per filter ("which agents *are working*"), as native `grammar_agents::asked`. */
+const ASKED: readonly [Exclude<AgentFilter, "all">, string][] = [
+  [
+    "needs_you",
+    `(?:(?:need|needs|want|wants) ${NEEDS_ME}|(?:are|is) (?:currently |still )?waiting (?:for|on) ${NEEDS_ME})`,
+  ],
+  ["working", "(?:are|is) (?:currently |still )?(?:working|running|busy|active)"],
+  ["waiting", "(?:are|is) (?:currently |still )?(?:waiting|blocked)"],
+  ["idle", "(?:are|is) (?:currently |still )?idle"],
+  [
+    "done",
+    "(?:(?:are|is) (?:already )?(?:done|finished|complete|completed)|(?:have|has) (?:already )?(?:finished|completed)|(?:just )?(?:finished|completed))",
+  ],
+  ["failed", "(?:(?:have|has) )?(?:failed|crashed|errored)|(?:are|is) (?:failed|broken)"],
+];
+
+const PROVIDER_FROM_WORDS: Record<string, string> = {
+  claude: "claude-code",
+  "claude code": "claude-code",
+  codex: "codex",
+  cursor: "cursor",
+  gemini: "gemini-cli",
+  "gemini cli": "gemini-cli",
 };
+
+/** Native `agent_filter_summary` without a thread runtime (the double has none to count). */
+function filterSummary(filter: AgentFilter, providerId: string | null): string {
+  const named = providerId ? `${PROVIDER_NAMES[providerId] ?? providerId} ` : "";
+  if (filter === "all") return `Showing every ${named}agent.`;
+  if (filter === "needs_you") return `Showing ${named}agents that need you.`;
+  return `Showing ${filter} ${named}agents.`;
+}
+
+type AgentPhrase =
+  | { kind: "filter_agents" | "count_agents" | "which_agents"; filter: AgentFilter; providerId: string | null }
+  | { kind: "open_finished_agent" | "close_idle_agents"; providerId: string | null };
+
+/**
+ * Coding agents by status, mirroring native `grammar_agents` (crates/kalvoice/src/grammar_agents.rs):
+ * the same shared agent filters for every provider, and a provider only when one is named.
+ */
+function agentPhrase(t: string): AgentPhrase | null {
+  const provider = (words: string | undefined) => (words ? (PROVIDER_FROM_WORDS[words] ?? null) : null);
+  const finished = t.match(
+    new RegExp(
+      `^(?:open|focus|focus on|show|show me|go to|take me to|switch to|jump to|bring up|pull up) (?:me )?(?:(?:the|my) )?${MAYBE_PROVIDER}(?:agent|coding agent|one|terminal|session) (?:(?:that|which|who) )?(?:(?:just|recently) )?(?:finished|completed|got done|is done|was done)$`,
+    ),
+  );
+  if (finished) return { kind: "open_finished_agent", providerId: provider(finished[1]) };
+  const close = t.match(
+    new RegExp(
+      `^(?:close|stop|kill|end|terminate|shut down|clear|clean up|tidy up|tidy) ${DET}${MAYBE_PROVIDER}(?:idle ${MAYBE_PROVIDER}(?:agents?|coding agents|sessions)|(?:agents?|coding agents|sessions) (?:that are|which are) idle)$`,
+    ),
+  );
+  if (close) return { kind: "close_idle_agents", providerId: provider(close[1] ?? close[2]) };
+  for (const [filter, predicate] of ASKED) {
+    const asked = t.match(
+      new RegExp(`^(which|what|how many) (?:of )?(?:(?:the|my) )?${MAYBE_PROVIDER}${AGENT} (?:${predicate})$`),
+    );
+    if (asked) {
+      return {
+        kind: asked[1] === "how many" ? "count_agents" : "which_agents",
+        filter,
+        providerId: provider(asked[2]),
+      };
+    }
+  }
+  const total = t.match(new RegExp(`^how many ${MAYBE_PROVIDER}${AGENT}(?: (?:are there|do i have|are open))?$`));
+  if (total) return { kind: "count_agents", filter: "all", providerId: provider(total[1]) };
+  for (const [filter, before, after] of FILTER_WORDS) {
+    const verb = `(?:${SHOW}|only (?:show|display|list)(?: me)?)`;
+    const match =
+      (before ? t.match(new RegExp(`^${verb} ${DET}${MAYBE_PROVIDER}${before} ${MAYBE_PROVIDER}${LISTED}$`)) : null) ??
+      t.match(new RegExp(`^${verb} ${DET}${MAYBE_PROVIDER}${LISTED} (?:${after})$`));
+    if (match) return { kind: "filter_agents", filter, providerId: provider(match[1] ?? match[2]) };
+  }
+  const all = t.match(
+    new RegExp(
+      `^(?:show|display|list)(?: me)? (?:all|every|all the|all of the|all my|all of my) ${MAYBE_PROVIDER}${LISTED}$`,
+    ),
+  );
+  if (all) return { kind: "filter_agents", filter: "all", providerId: provider(all[1]) };
+  // "Show Cursor agents": a provider alone, every status ("show agents" stays navigation).
+  const named = t.match(
+    /^(?:show|display|list)(?: me)? (?:(?:the|my) )?(claude code|claude|codex|cursor|gemini cli|gemini) (?:agents|coding agents)$/,
+  );
+  if (named) return { kind: "filter_agents", filter: "all", providerId: provider(named[1]) };
+  return null;
+}
+
+/** Filter phrases without an agent noun, tried after approvals (native `late_filter_rules`). */
+const LATE_FILTERS: readonly [AgentFilter, RegExp][] = [
+  [
+    "needs_you",
+    new RegExp(
+      `^(?:${SHOW} (?:everything|all|anything|what)(?: that is| that are)? (?:waiting(?: for| on)?(?: me)?|(?:that needs?|needing) ${NEEDS_ME})|only (?:show|display|list)(?: me)? (?:everything|what)(?: that is| that are)? waiting(?: for| on)?(?: me)?)$`,
+    ),
+  ],
+  ["done", new RegExp(`^${SHOW}(?: me)? what (?:is|has) (?:completed|finished|done)$`)],
+  [
+    "all",
+    /^(?:(?:show|display|list)(?: me)? everything on the dashboard|(?:clear|reset|remove)(?: the| my)?(?: dashboard| agent| agents)? filters?)$/,
+  ],
+];
 
 /** A small subset of the native grammar (crates/kalvoice/src/grammar.rs), enough for UI tests. */
 function understand(text: string): Parsed | null {
@@ -437,6 +535,45 @@ function understand(text: string): Parsed | null {
   const pane = paneCommand(t);
   if (pane) return pane;
   if (/\b(and|then)\b/.test(t)) return null;
+  const agents = agentPhrase(t.replace(/\bthat's\b/g, "that is").replace(/ (?:right )?now$/, ""));
+  if (agents) {
+    if (agents.kind === "filter_agents") {
+      return {
+        kind: "filter_agents",
+        high: true,
+        outcome: { kind: "completed", summary: filterSummary(agents.filter, agents.providerId) },
+        directive: { kind: "filter_agents", filter: agents.filter, providerId: agents.providerId },
+      };
+    }
+    if (agents.kind === "close_idle_agents") {
+      return {
+        kind: "close_idle_agents",
+        high: true,
+        outcome: { kind: "completed", summary: "Closing idle agents with KalTidy." },
+        directive: { kind: "close_idle_agents", providerId: agents.providerId },
+      };
+    }
+    if (agents.kind === "which_agents") {
+      return {
+        kind: "which_agents",
+        high: true,
+        outcome: { kind: "completed", summary: "No agents yet (test double)." },
+        directive: { kind: "filter_agents", filter: agents.filter, providerId: agents.providerId },
+      };
+    }
+    if (agents.kind === "count_agents") {
+      return { kind: "count_agents", high: true, outcome: { kind: "completed", summary: "No agents are open." } };
+    }
+    return {
+      kind: "open_finished_agent",
+      high: true,
+      outcome: {
+        kind: "failed",
+        code: "finished_agent_not_found",
+        message: `No ${agents.providerId ? `${PROVIDER_NAMES[agents.providerId] ?? agents.providerId} ` : ""}agent has finished yet.`,
+      },
+    };
+  }
   const navigate = (surface: SurfaceId, high: boolean): Parsed => ({
     kind: "navigate",
     high,
@@ -455,10 +592,12 @@ function understand(text: string): Parsed | null {
   ) {
     return { kind: "create_threads", high: true, consequential: true };
   }
+  // A narrower state ("stop all idle agents") is never "stop everything" (native RUNNING_STATE).
   if (
-    /^(pause|resume|stop|halt|kill) (all |every |the )?(active |running |paused )?(threads?|agents?|sessions?|everything)$/.test(
+    /^(pause|stop|halt|kill) (all |every |the )?(active |running |current |open |working |busy )?(threads?|agents?|sessions?|everything)$/.test(
       t,
-    )
+    ) ||
+    /^(resume) (all |every |the )?(paused |stopped |current |open )?(threads?|agents?|sessions?|everything)$/.test(t)
   ) {
     const verb = t.split(" ")[0];
     return {
@@ -480,13 +619,13 @@ function understand(text: string): Parsed | null {
   if (/^(pending )?approvals$/.test(t)) return { ...approvals, high: false };
   // "for me" is trailing filler natively; "that's" expands to "that is".
   const filterText = t.replace(/\bthat's\b/g, "that is").replace(/ for me$/, "");
-  for (const [chip, pattern] of DASHBOARD_FILTERS) {
+  for (const [filter, pattern] of LATE_FILTERS) {
     if (pattern.test(filterText)) {
       return {
-        kind: "filter_dashboard",
+        kind: "filter_agents",
         high: true,
-        outcome: { kind: "completed", summary: FILTER_SUMMARY[chip] },
-        directive: { kind: "filter_dashboard", chip },
+        outcome: { kind: "completed", summary: filterSummary(filter, null) },
+        directive: { kind: "filter_agents", filter, providerId: null },
       };
     }
   }

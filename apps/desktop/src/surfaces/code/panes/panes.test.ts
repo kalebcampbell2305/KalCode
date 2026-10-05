@@ -3,9 +3,11 @@ import type {
   PaneInfo,
   PermissionMode,
   ProviderAccount,
+  ThreadStatus,
   ThreadSummary,
   Workspace,
 } from "@kalcode/protocol";
+import { READY_ACTIVITY } from "@kalcode/protocol";
 import { render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -53,23 +55,40 @@ function info(partial: Partial<PaneInfo>): PaneInfo {
 }
 
 describe("pane labels", () => {
-  it("maps statuses through the shared display mapping, never colour alone", () => {
-    expect(paneStatus("waiting_for_permission")).toMatchObject({ label: "PERMISSION REQUIRED", tone: "waiting" });
-    expect(paneStatus("running_command")).toMatchObject({ label: "WORKING", tone: "working" });
-    expect(paneStatus("interrupted")).toMatchObject({ label: "IDLE", qualifier: "stopped · resumable" });
-    expect(paneStatus("paused").tone).toBe("paused");
-    expect(paneStatus("completed").label).toBe("DONE");
+  it("maps agents through the shared agent-state model, never colour alone", () => {
+    const agent = (status: ThreadStatus, more: Partial<ThreadSummary> = {}) => ({
+      status,
+      currentActivity: null,
+      pendingApprovals: 0,
+      ...more,
+    });
+    expect(paneStatus(agent("waiting_for_permission"))).toMatchObject({ label: "NEEDS YOU", tone: "waiting" });
+    expect(paneStatus(agent("running_command"))).toMatchObject({ label: "WORKING", tone: "working" });
+    expect(paneStatus(agent("testing"))).toMatchObject({ label: "TESTING", tone: "working" });
+    expect(paneStatus(agent("interrupted"))).toMatchObject({ label: "STOPPED", qualifier: "resumable" });
+    expect(paneStatus(agent("waiting_for_dependency"))).toMatchObject({ label: "WAITING" });
+    expect(paneStatus(agent("idle", { currentActivity: READY_ACTIVITY })).label).toBe("READY");
+    expect(paneStatus(agent("idle", { pendingApprovals: 1 })).label).toBe("NEEDS YOU");
+    expect(paneStatus(agent("paused"))).toMatchObject({ label: "IDLE", qualifier: "paused" });
+    expect(paneStatus(agent("completed")).label).toBe("DONE");
   });
 
   it("never labels an agent whose process hasn't started IDLE: launching is STARTING, a hold is WAITING", () => {
-    expect(paneStatus("starting")).toMatchObject({ label: "STARTING" });
-    expect(paneStatus("waiting_for_dependency")).toMatchObject({
+    const agent = (status: ThreadStatus) => ({ status, currentActivity: null, pendingApprovals: 0 });
+    expect(paneStatus(agent("starting"))).toMatchObject({ label: "STARTING" });
+    // WAITING is "on hold" (muted), never the amber of NEEDS YOU.
+    expect(paneStatus(agent("waiting_for_dependency"))).toMatchObject({
       label: "WAITING",
-      tone: "waiting",
+      tone: "muted",
       qualifier: "waiting on another task",
     });
     // A resource hold shows its real reason in place of the shared qualifier.
-    render(createElement(PaneStatusChip, { status: "waiting_for_dependency", qualifier: "memory is critically low" }));
+    render(
+      createElement(PaneStatusChip, {
+        thread: agent("waiting_for_dependency"),
+        qualifier: "memory is critically low",
+      }),
+    );
     expect(screen.getByText("WAITING")).toBeInTheDocument();
     expect(screen.getByText("memory is critically low")).toBeInTheDocument();
     expect(screen.queryByText("waiting on another task")).toBeNull();
@@ -96,25 +115,28 @@ describe("pane labels", () => {
     expect(channelNote(null)).toBeNull();
   });
 
-  it("says Codex and Gemini CLI panes have limited status and answer approvals in their own prompt", () => {
+  it("words the channel from the session's state, the same for every provider", () => {
     const codex = info({ providerId: "codex", decisionRouting: "provider_prompt", kalcodeAnswersApprovals: false });
     expect(channelNote({ ...codex, hookChannel: "waiting" })).toEqual({
-      text: "Limited status — no Codex notification yet",
-      tone: "limited",
+      text: "Connecting to Codex…",
+      tone: "neutral",
     });
-    expect(channelNote(codex)?.text).toBe("Limited status — approvals in Codex");
+    expect(channelNote(codex)?.text).toBe("Approvals in Codex");
     expect(
       channelNote(info({ providerId: "gemini-cli", hookChannel: "limited", kalcodeAnswersApprovals: false })),
     ).toEqual({
-      text: "Process state only — approvals in Gemini CLI",
+      text: "Limited status — approvals in Gemini CLI",
       tone: "limited",
     });
+    expect(channelNote({ ...codex, providerId: "cursor", hookChannel: "limited" })?.text).toBe(
+      "Limited status — approvals in Cursor",
+    );
     expect(channelNote({ ...codex, running: false, hookChannel: "ended", exitCode: 1 })?.text).toBe("Ended (exit 1)");
   });
 
   it("describes what KalCode sees in each provider's pane, never claiming checks it can't do", () => {
     expect(paneInfoCopy("codex", null).summary).toBe(
-      "Limited status: KalCode reads Codex's notifications (turn finished, approval requested) and process state. Approvals are answered in Codex's own prompt.",
+      "KalCode reads Codex's own lifecycle hooks (prompt, tool calls, approval requests, turn end) where this Codex version supports them, otherwise its turn-finished notification and process state. Approvals are answered in Codex's own prompt.",
     );
     expect(paneInfoCopy("gemini-cli", null).summary).toBe(
       "Process state only: KalCode can't see Gemini CLI's tool calls yet. Approvals are answered in Gemini CLI's own prompt.",
@@ -213,7 +235,9 @@ describe("pane labels", () => {
   });
 
   it("renders the status chip as glyph + words that never shrink into each other", () => {
-    const { container } = render(createElement(PaneStatusChip, { status: "idle" }));
+    const { container } = render(
+      createElement(PaneStatusChip, { thread: { status: "idle", currentActivity: null, pendingApprovals: 0 } }),
+    );
     const chip = container.querySelector("[data-pane-status]");
     expect(chip).toHaveTextContent(/^IDLE$/);
     expect(chip?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
@@ -438,7 +462,7 @@ describe("in-memory provider panes", () => {
     });
   });
 
-  it("runs Codex with approvals in its own prompt and status from notify only", async () => {
+  it("runs Codex with approvals in its own prompt and the shared states from its hooks", async () => {
     const { transport, channel, workspace } = await setup();
     const client = new KalCodeClient(transport);
     const providerAccountId = "0192f3c4-0000-7000-8000-000000000201";
@@ -457,7 +481,8 @@ describe("in-memory provider panes", () => {
     const chunks: string[] = [];
     await channel.attach(thread.id, (bytes) => chunks.push(new TextDecoder().decode(bytes)));
     await settle();
-    expect(await channel.info(thread.id)).toMatchObject({ hookChannel: "waiting", kalcodeAnswersApprovals: false });
+    expect(await channel.info(thread.id)).toMatchObject({ hookChannel: "active", kalcodeAnswersApprovals: false });
+    expect(await client.getThread(thread.id)).toMatchObject({ status: "idle", currentActivity: READY_ACTIVITY });
 
     await channel.write(thread.id, "run git push origin main\r");
     await settle();

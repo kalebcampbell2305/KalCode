@@ -2,12 +2,13 @@
 //!
 //! A thread the person creates can run the provider's real, unmodified CLI in a PTY pane. KalCode
 //! does not imitate the TUI. What KalCode knows about the session comes only from structured
-//! channels the CLI officially supports (Claude Code hooks through `kalcode-hook`, Codex `notify`
-//! and OSC 9) and from process state. Model prose is never parsed.
+//! channels the CLI officially supports (Claude Code hooks through `kalcode-hook`, Codex hooks and
+//! `notify`, Cursor plugin hooks) and from process state. Model prose is never parsed.
 //!
 //! - [`claude`]: launch mapping, deny floor and the session settings file (hooks).
 //! - [`codex`]: read-only-first launch mapping and the OSC 9 scanner.
-//! - [`cli_pane`]: Codex (notify + OSC 9) and Gemini CLI (process state only) panes.
+//! - [`cli_pane`]: Codex (hooks + notify), Cursor (plugin hooks) and Gemini CLI (process state
+//!   only) panes.
 //! - [`session`]: [`session::InteractiveSession`], an `AgentSession` over a PTY whose hook calls
 //!   become `AgentEvent`s for the one Z3 status machine.
 //! - [`provider`]: the Claude Code interactive provider, the per-thread runtime router and the
@@ -59,9 +60,13 @@ mod native_permission_tests {
     }
 }
 
-/// Gemini CLI: hooks exist but a per-session way to inject KalCode's without writing user or
-/// project settings is unverified (not installed on the verification machine). Process state
-/// only, approvals in the provider.
+/// Gemini CLI: process state only ("limited status"), approvals in the provider. Gemini CLI
+/// 0.61 has hooks, but no per-session way to add KalCode's without writing the user's or the
+/// project's settings or hiding the user's own (verified 2026-10-04): there is no settings flag;
+/// `GEMINI_CLI_HOME` replaces the user's whole home; the system settings and system-defaults
+/// paths load only files owned by Administrators/SYSTEM, which a per-user KalCode install can't
+/// provide; extensions load only from the user's `~/.gemini/extensions`; and settings-file hooks
+/// run only in trusted folders.
 pub fn gemini_interactive_support() -> InteractiveSupport {
     use kalcode_contracts::agent::{MappingFidelity, PermissionMapping};
     use kalcode_contracts::permissions::PermissionMode;

@@ -1,4 +1,4 @@
-import type { DashboardChip } from "@kalcode/protocol";
+import type { AgentFilter, DashboardChip } from "@kalcode/protocol";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
@@ -31,9 +31,19 @@ export interface PaneFocusRequest {
   nonce: number;
 }
 
+/**
+ * Which agents the Agents tab should show: one shared status filter (every provider) and, only
+ * when asked, one provider. A provider never replaces the status filter.
+ */
 export interface DashboardFilterRequest {
-  chip: DashboardChip;
+  filter: AgentFilter;
+  providerId: string | null;
   nonce: number;
+}
+
+/** A Dashboard chip (older notifications and directives) as the agent filter that shows it. */
+export function agentFilterOfChip(chip: DashboardChip): AgentFilter {
+  return chip === "waiting_for_you" ? "needs_you" : chip;
 }
 
 export interface UiIntents {
@@ -43,6 +53,8 @@ export interface UiIntents {
   registerFocusHandler: (handler: FocusHandler) => () => void;
   /** Ask the Dashboard to show one filter chip (KalVoice, notifications). */
   filterDashboard: (chip: DashboardChip) => void;
+  /** Ask the Agents tab to show one status filter, optionally for one provider (KalVoice). */
+  filterAgents: (filter: AgentFilter, providerId?: string | null) => void;
   dashboardFilter: DashboardFilterRequest | null;
   /** The latest unhandled request for a provider pane to take focus. */
   paneFocus: PaneFocusRequest | null;
@@ -108,16 +120,17 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
     };
   }, [lifetime]);
 
-  const filterDashboard = useCallback(
-    (chip: DashboardChip) => {
+  const filterAgents = useCallback(
+    (filter: AgentFilter, providerId: string | null = null) => {
       if (!isLive()) return;
       const nonce = ++focusGeneration.current;
       setPaneState(null);
       live.current.navigate("dashboard");
-      setFilterState({ owner: session, request: { chip, nonce } });
+      setFilterState({ owner: session, request: { filter, providerId, nonce } });
     },
     [isLive, session],
   );
+  const filterDashboard = useCallback((chip: DashboardChip) => filterAgents(agentFilterOfChip(chip)), [filterAgents]);
 
   const registerFocusHandler = useCallback(
     (handler: FocusHandler) => {
@@ -285,12 +298,22 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
       focus,
       registerFocusHandler,
       filterDashboard,
+      filterAgents,
       dashboardFilter,
       paneFocus,
       consumePaneFocus,
       focusPrevious,
     }),
-    [focus, registerFocusHandler, filterDashboard, dashboardFilter, paneFocus, consumePaneFocus, focusPrevious],
+    [
+      focus,
+      registerFocusHandler,
+      filterDashboard,
+      filterAgents,
+      dashboardFilter,
+      paneFocus,
+      consumePaneFocus,
+      focusPrevious,
+    ],
   );
   return <UiIntentsContext.Provider value={value}>{children}</UiIntentsContext.Provider>;
 }

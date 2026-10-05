@@ -244,13 +244,15 @@ describe("AgentCard Fleet controls", () => {
     expect(onAction).toHaveBeenCalledWith(failed, "retry");
   });
 
-  it("names its state in words: working, needs your reply, stopped, done", () => {
+  it("names its state in the shared agent-state words: working, needs you, stopped, done", () => {
     const cases: [ThreadSummary["status"], string][] = [
       ["running_command", "Working"],
-      ["waiting_for_user", "Needs your reply"],
+      ["testing", "Testing"],
+      ["waiting_for_user", "Needs you"],
       ["interrupted", "Stopped"],
       ["completed", "Done"],
-      ["waiting_for_permission", "Needs approval"],
+      ["waiting_for_permission", "Needs you"],
+      ["waiting_for_dependency", "Waiting"],
     ];
     for (const [status, label] of cases) {
       const { unmount } = mount({ ...thread(null), status });

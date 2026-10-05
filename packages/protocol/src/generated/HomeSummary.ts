@@ -5,35 +5,35 @@ import type { WorkspaceRailEntry } from "./WorkspaceRailEntry.ts";
 /**
  * The returning-user home, derived from real state only (ADVANCED.md §16.4).
  */
-export type HomeSummary = {
+export type HomeSummary = { 
 /**
  * Chosen natively from a fixed pool; never one of the last five shown.
  */
-greeting: string,
+greeting: string, 
 /**
  * Settings `profile.displayName`; `null` ⇒ the greeting is "Welcome back.".
  */
-displayName: string | null,
+displayName: string | null, 
 /**
  * Nothing has happened yet (no workspace and no thread).
  */
-firstRun: boolean,
+firstRun: boolean, 
 /**
  * What was I working on: threads and workspaces active in the previous session.
  */
-lastSession: Array<RecentWorkItem>,
+lastSession: Array<RecentWorkItem>, 
 /**
  * What's running now (most recent first, at most 8; `running_count` is the full number).
  */
-running: Array<RecentWorkItem>, runningCount: number,
+running: Array<RecentWorkItem>, runningCount: number, 
 /**
  * What needs me: permission required, waiting for me, failed (at most 8).
  */
-needsYou: Array<RecentWorkItem>, needsYouCount: number,
+needsYou: Array<RecentWorkItem>, needsYouCount: number, 
 /**
  * What finished since my last visit (`home.lastSeenSeq`).
  */
-finishedSinceLastVisit: Array<RecentWorkItem>,
+finishedSinceLastVisit: Array<RecentWorkItem>, 
 /**
  * What can I resume: stopped or paused threads the provider can resume.
  */

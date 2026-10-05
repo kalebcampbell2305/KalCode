@@ -82,8 +82,10 @@ const NEW_SESSION_NOTICE: &str = "Started a new provider session. The earlier co
 pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting to start";
 /// Activity of a thread whose bounded wait for system resources ended without starting.
 pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were too low";
-/// Activity of an idle thread whose last turn reported failure.
-pub const LAST_TURN_FAILED_ACTIVITY: &str = "Last turn failed";
+/// Activity of an idle thread whose last turn reported failure (the shared agent-state marker).
+pub use kalcode_contracts::agent_state::LAST_TURN_FAILED_ACTIVITY;
+/// Activity of a session that just came up at its prompt with no work yet (agent state READY).
+pub use kalcode_contracts::agent_state::READY_ACTIVITY;
 /// Activity of an idle thread whose session ended because it was archived.
 pub const ARCHIVED_ACTIVITY: &str = "Archived";
 
@@ -2156,6 +2158,21 @@ fn never_delivered(error: &ProviderError) -> bool {
     )
 }
 
+/// Whether the last running tool call finishing returns the agent to WORKING (`Active`): it was
+/// running that tool (any provider's classified tool status), or waiting on the person in the
+/// provider's own prompt for it (the tool ran, so it was answered). Idle, finished, paused and
+/// runtime-owned states are never changed by a late tool completion.
+fn returns_to_active_after_tool(status: ThreadStatus) -> bool {
+    matches!(
+        status,
+        ThreadStatus::RunningTool
+            | ThreadStatus::RunningCommand
+            | ThreadStatus::Editing
+            | ThreadStatus::Testing
+            | ThreadStatus::WaitingForUser
+    )
+}
+
 /// Statuses a provider may report. The rest belong to the runtime (lifecycle, approvals,
 /// pause) and are never taken from a provider.
 fn provider_settable(status: ThreadStatus) -> bool {
@@ -2665,8 +2682,8 @@ impl Inner {
         }
         match input {
             Some(input) => self.deliver_locked(live, state, input, None)?,
-            // The session is up and no turn is running: the thread waits for input.
-            None => self.transition(ctx, ThreadStatus::Idle, None)?,
+            // The session is up and no turn is running: the thread waits for input (READY).
+            None => self.transition(ctx, ThreadStatus::Idle, Some(READY_ACTIVITY))?,
         }
         Ok(())
     }
@@ -3193,7 +3210,7 @@ impl Inner {
                             Some(other) => {
                                 store::set_activity(tx, id, Some(&other.summary), &now)?;
                             }
-                            None if store::status(tx, id)? == ThreadStatus::RunningTool => {
+                            None if returns_to_active_after_tool(store::status(tx, id)?) => {
                                 let from =
                                     store::set_status(tx, id, ThreadStatus::Active, None, &now)?;
                                 events.extend(ctx.status_changed(

@@ -70,8 +70,8 @@ describe("agentSections", () => {
     );
     expect(sections.needsYou.map((t) => t.name)).toEqual(["reply"]);
     expect(sections.failed.map((t) => t.name)).toEqual(["failed-new", "failed-old"]);
-    // A recent failure still shows as just finished; old ones age out of the rail.
-    expect(sections.finished.map((t) => t.name)).toEqual(["done", "failed-new"]);
+    // Failures have their own section (the shared FAILED state); just finished is done/stopped.
+    expect(sections.finished.map((t) => t.name)).toEqual(["done"]);
     expect(needsYouCount(sections.needsYou, [])).toBe(1);
     // Failed agents have stopped: they aren't running.
     expect(runningAgentCount(sections)).toBe(1);

@@ -3,11 +3,11 @@ import type { ProviderId } from "./ProviderId.ts";
 import type { RecentWorkKind } from "./RecentWorkKind.ts";
 import type { ThreadStatus } from "./ThreadStatus.ts";
 
-export type RecentWorkItem = { kind: RecentWorkKind,
+export type RecentWorkItem = { kind: RecentWorkKind, 
 /**
  * Thread or workspace id; for files, the workspace-relative path.
  */
-id: string, title: string, workspaceId: string | null, workspaceName: string | null, providerId: ProviderId | null, providerName: string | null,
+id: string, title: string, workspaceId: string | null, workspaceName: string | null, providerId: ProviderId | null, providerName: string | null, 
 /**
  * Threads only.
  */

@@ -124,7 +124,7 @@ export const ProviderPane = memo(function ProviderPane({
   const moreRef = useRef<HTMLButtonElement>(null);
   const confirmTextId = useId();
   const identity = providerIdentity(thread.providerId, thread.providerName);
-  const status = paneStatus(thread.status);
+  const status = paneStatus(thread);
   const note = channelNote(info);
   const running = info?.running ?? false;
   // Capability, not provider identity: only a session whose adapter reports that KalCode answers
@@ -588,7 +588,7 @@ function PaneHeader({
             <span>{MODE_LABELS[thread.permissionMode]}</span>
           </span>
           <PaneToolChip status={thread.status} activity={thread.currentActivity} />
-          <PaneStatusChip status={thread.status} qualifier={waitingReason(thread)} />
+          <PaneStatusChip thread={thread} qualifier={waitingReason(thread)} />
           {onHandOff ? (
             <Button
               size="sm"

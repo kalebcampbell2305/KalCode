@@ -1,9 +1,13 @@
 //! Codex in a pane with the selected provider-native sandbox and approval policy
-//! (docs/PROVIDER_PANES.md §3). Approvals stay in Codex's own prompt; KalCode's status comes
-//! from Codex's `notify` program (a structured JSON payload with a `type`), plus process state.
-//! Terminal escape sequences are untrusted output and cannot change canonical status. Codex
-//! hooks need persisted hook trust, and KalCode never passes `--dangerously-bypass-hook-trust`,
-//! so no Codex hook decides anything.
+//! (docs/PROVIDER_PANES.md §3). Approvals stay in Codex's own prompt. KalCode's status comes
+//! from Codex's own hooks (UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
+//! Interrupt; asynchronous, so Codex never waits for KalCode), added for this session only with
+//! `-c` overrides and trusted for this session only ([`kalcode_hook_bridge::codex`]), and from
+//! Codex's `notify` program (turn completion with the thread id), plus process state. The hooks observe: the helper exits 0 with
+//! no output, so they never block, approve or deny. Codex's hook feature is on in panes, so the
+//! user's own hooks run as they do in a native terminal. KalCode never passes
+//! `--dangerously-bypass-hook-trust`: other hooks keep Codex's own trust review. Terminal escape
+//! sequences are untrusted output and cannot change canonical status.
 //!
 //! Verified on 2026-10-03 against the installed `codex --help` (codex-cli 0.160.0; supported
 //! minimum 0.155.1): `-C/--cd`,
@@ -66,6 +70,9 @@ pub struct CodexArgs<'a> {
     pub hook_prefix_args: &'a [String],
     pub endpoint: &'a str,
     pub session: &'a str,
+    /// Add KalCode's observing Codex hooks (a Codex line verified for them,
+    /// [`crate::codex::observing_hooks_verified`]). Without them status is `notify` only.
+    pub observe_hooks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -107,8 +114,27 @@ pub fn interactive_args_with_overrides(
     out.push("-C".into());
     out.push(args.workspace.as_os_str().to_owned());
     out.extend(permission_args(args.mode).into_iter().map(OsString::from));
+    let program = args
+        .hook_program
+        .to_str()
+        .ok_or(CodexArgsError::UnsafePath)?;
+    let hooks = if args.observe_hooks {
+        // A path the shell can't take safely keeps `notify`-only status rather than failing.
+        kalcode_hook_bridge::codex::session_overrides(
+            program,
+            args.hook_prefix_args,
+            args.endpoint,
+            args.session,
+        )
+        .inspect_err(|error| tracing::warn!(event = "pane.codex_hooks_unavailable", %error))
+        .ok()
+    } else {
+        None
+    };
+    // Codex's hook feature stays as the person configured it, as in a native terminal (never
+    // forced on or off): KalCode's observing hooks run wherever Codex runs hooks at all.
     for value in crate::codex::argv::POLICY_CONFIG {
-        out.extend([OsString::from("-c"), OsString::from(value)]);
+        out.extend([OsString::from("-c"), OsString::from(*value)]);
     }
     out.extend_from_slice(overrides);
     out.extend([
@@ -129,10 +155,6 @@ pub fn interactive_args_with_overrides(
         out.push("-c".into());
         out.push(format!("model_reasoning_effort='{effort}'").into());
     }
-    let program = args
-        .hook_program
-        .to_str()
-        .ok_or(CodexArgsError::UnsafePath)?;
     let mut notify_argv: Vec<&str> = vec![program];
     notify_argv.extend(args.hook_prefix_args.iter().map(String::as_str));
     notify_argv.extend(["codex-notify", args.endpoint, args.session]);
@@ -143,7 +165,10 @@ pub fn interactive_args_with_overrides(
         "tui.notifications=['approval-requested']".to_owned(),
         "tui.notification_method='osc9'".to_owned(),
         "tui.notification_condition='always'".to_owned(),
-    ] {
+    ]
+    .into_iter()
+    .chain(hooks.into_iter().flatten())
+    {
         out.push("-c".into());
         out.push(config.into());
     }
@@ -153,6 +178,8 @@ pub fn interactive_args_with_overrides(
     Ok(out)
 }
 
+/// What a Codex pane reports through: its own hooks (on a verified Codex line), `notify`, and the
+/// process.
 pub fn interactive_support() -> InteractiveSupport {
     InteractiveSupport {
         launch_mappings: [
@@ -167,13 +194,17 @@ pub fn interactive_support() -> InteractiveSupport {
             mode,
             fidelity: MappingFidelity::ApproximateStricter,
             provider_setting: permission_args(mode).join(" "),
-            notes:
-                "Approvals are answered in Codex's own prompt. KalCode receives turn completion \
-                    notifications but cannot reliably detect a pending approval prompt."
-                    .into(),
+            notes: "Approvals are answered in Codex's own prompt. KalCode observes Codex's own \
+                    hooks (prompt, tool start and end, approval prompt, stop) and turn completion \
+                    notifications; they never decide anything."
+                .into(),
         })
         .collect(),
-        status_channels: vec![StatusChannel::Notify, StatusChannel::ProcessOnly],
+        status_channels: vec![
+            StatusChannel::Hooks,
+            StatusChannel::Notify,
+            StatusChannel::ProcessOnly,
+        ],
         kalcode_answers_approvals: false,
         resume: Some("codex resume <session id>".into()),
     }
@@ -308,6 +339,7 @@ mod tests {
             hook_prefix_args: &[],
             endpoint: r"\\.\pipe\kalcode-hook-0123",
             session: "abcd",
+            observe_hooks: true,
         })
         .expect("args")
         .into_iter()
@@ -374,6 +406,7 @@ mod tests {
             hook_prefix_args: &[],
             endpoint: "e",
             session: "s",
+            observe_hooks: true,
         });
         assert_eq!(bad, Err(CodexArgsError::UnsafePath));
     }
@@ -448,10 +481,65 @@ mod tests {
     }
 
     #[test]
+    fn observing_hooks_are_session_flags_that_never_bypass_trust() {
+        let argv = args(PermissionMode::Approve, None);
+        // The person's own hook setting is kept: never forced on, never stripped.
+        assert!(!argv.iter().any(|a| a.starts_with("features.hooks=")));
+        assert!(!argv.iter().any(|a| a.contains("bypass_hook_trust")));
+        for event in kalcode_hook_bridge::HookEvent::CODEX {
+            assert_eq!(
+                argv.iter()
+                    .any(|a| a.starts_with(&format!("hooks.{}=[", event.as_str()))),
+                kalcode_hook_bridge::codex::pane_plan(event).is_some(),
+                "{event:?}"
+            );
+        }
+        assert!(
+            argv.iter()
+                .filter(|a| a.starts_with("hooks.") && !a.starts_with("hooks.state"))
+                .all(|a| a.contains("async=true")),
+            "Codex never waits for KalCode's hooks"
+        );
+        let state = argv
+            .iter()
+            .find(|a| a.starts_with("hooks.state={"))
+            .expect("trust for KalCode's own hooks");
+        assert_eq!(
+            state.matches("<session-flags>").count(),
+            kalcode_hook_bridge::HookEvent::CODEX
+                .into_iter()
+                .filter(|event| kalcode_hook_bridge::codex::pane_plan(*event).is_some())
+                .count()
+        );
+
+        // Without verified hooks the pane keeps the policy floor and `notify` only.
+        let notify_only = interactive_args(&CodexArgs {
+            mode: PermissionMode::Approve,
+            workspace: Path::new("C:/w"),
+            model: None,
+            effort: None,
+            resume_session_id: None,
+            hook_program: Path::new("C:/kalcode-hook.exe"),
+            hook_prefix_args: &[],
+            endpoint: "endpoint",
+            session: "session",
+            observe_hooks: false,
+        })
+        .expect("args")
+        .into_iter()
+        .map(|a| a.into_string().expect("utf8"))
+        .collect::<Vec<_>>();
+        assert!(!notify_only.iter().any(|a| a.starts_with("features.hooks=")));
+        assert!(!notify_only.iter().any(|a| a.starts_with("hooks.")));
+        assert!(notify_only.iter().any(|a| a.starts_with("notify=")));
+    }
+
+    #[test]
     fn support_keeps_approval_decisions_in_codex() {
         let support = interactive_support();
         assert!(!support.kalcode_answers_approvals);
-        assert!(!support.status_channels.contains(&StatusChannel::Hooks));
+        assert!(support.status_channels.contains(&StatusChannel::Hooks));
+        assert!(support.status_channels.contains(&StatusChannel::Notify));
         let disclosed: Vec<(PermissionMode, &str)> = support
             .launch_mappings
             .iter()
@@ -516,6 +604,7 @@ mod tests {
             hook_prefix_args: &[],
             endpoint: "endpoint",
             session: "session",
+            observe_hooks: false,
         };
         let overrides = [
             OsString::from("-c"),

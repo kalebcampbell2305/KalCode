@@ -7,11 +7,11 @@ import type { ProviderId } from "./ProviderId.ts";
 /**
  * How the free text was understood, so the UI can show it as removable filter chips.
  */
-export type LocatorInterpretation = {
+export type LocatorInterpretation = { 
 /**
  * The words searched for (after filter words were taken out).
  */
-terms: Array<string>,
+terms: Array<string>, 
 /**
  * Extra words searched because they mean the same thing ("auth" → "login", "sign in").
  */

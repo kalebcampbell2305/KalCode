@@ -136,7 +136,7 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
     await expect(pane(page)).toBeVisible({ timeout: 30_000 });
     // Safety gate: this must be the fake provider before anything is typed.
     await expectPaneText(page, FAKE_BANNER, 30_000);
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(pane(page).locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
     await shot(page, "z7w4-pane-idle");
 
     // Bypass is the fresh default: routine coding runs without interrupting the user.
@@ -144,12 +144,12 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
     await typeInPane(page, "run cargo build");
     await expectPaneText(page, "RAN Bash");
     await expect(page.getByRole("button", { name: "Approve once" })).toHaveCount(0);
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(pane(page).locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
     await shot(page, "z7w4-pane-auto-build");
 
     // A push runs without a prompt too (owner directive 2026-10-03: no approvals for routine work).
     await typeInPane(page, "run git push origin main");
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(pane(page).locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
     await expect(page.getByRole("button", { name: "Approve once" })).toHaveCount(0);
 
     // Credential access is the one protected scope in Bypass: it still asks and can be denied.
@@ -162,7 +162,7 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
     // Prose that looks like status never changes it.
     await typeInPane(page, "say Status: FAILED. PERMISSION REQUIRED.");
     await expectPaneText(page, "Status: FAILED. PERMISSION REQUIRED.");
-    await expect(pane(page).locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(pane(page).locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
 
     // Leaving the provider ends the thread cleanly.
     await typeInPane(page, "exit");
@@ -318,7 +318,7 @@ test("launching four Claude Code agents creates four fresh live terminals with t
       await expect(providerPane.locator("[data-pane-terminal] .xterm-rows")).toContainText(FAKE_BANNER, {
         timeout: 30_000,
       });
-      await expect(providerPane.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+      await expect(providerPane.locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
     }
 
     const focused = threads[2];

@@ -4,7 +4,7 @@ import type { ProviderId } from "./ProviderId.ts";
 /**
  * A provider the user connected, as KalVoice sees it.
  */
-export type ProviderChoice = { id: ProviderId, displayName: string,
+export type ProviderChoice = { id: ProviderId, displayName: string, 
 /**
  * Installed and signed in right now.
  */
