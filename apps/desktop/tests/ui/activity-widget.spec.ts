@@ -9,7 +9,7 @@ for (const width of [1440, 1024]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/?scenario=code");
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
-    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText(/health: unknown/).first()).toBeVisible();
     const rows = activity.locator("li");
