@@ -668,6 +668,22 @@
   background: color-mix(in srgb, var(--status-failed) 6%, var(--color-surface-2));
 }
 
+.endedBar[data-tone="waiting"] {
+  border-top-color: var(--status-waiting-line);
+  background: color-mix(in srgb, var(--status-waiting) 6%, var(--color-surface-2));
+}
+
+.endedBar[data-tone="waiting"] .endedText {
+  white-space: normal;
+}
+
+.heldIcon {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--status-waiting);
+}
+
 .endedDot {
   flex: none;
   width: 0.5rem;

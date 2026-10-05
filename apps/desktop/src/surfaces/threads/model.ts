@@ -68,11 +68,37 @@ export function threadErrorKind(thread: Pick<ThreadSummary, "error">): ThreadErr
   return thread.error ? threadErrorKindOf(thread.error.code) : null;
 }
 
-/** The Resource Governor is holding this thread's launch or turn; KalCode re-checks on its own. */
+/**
+ * The Resource Governor is holding this thread's launch or turn. Only genuine hard pressure
+ * (critically low memory, a full disk, the OS refusing another process) or the person's own Custom
+ * limit holds a coding agent — never CPU load. KalCode re-checks on its own; Start Anyway skips it.
+ */
 export function isWaitingForResources(thread: ThreadState): boolean {
   return (
     thread.status === "waiting_for_dependency" &&
     threadErrorKind({ error: thread.error ?? null }) === "waiting_for_resources"
+  );
+}
+
+/** The runtime's activity prefix while a launch is held (`WAITING_FOR_RESOURCES_ACTIVITY`). */
+export const WAITING_TO_START_ACTIVITY = "Waiting to start";
+
+/**
+ * The real reason a held launch is waiting, from the runtime's activity ("memory is critically
+ * low (412 MB free)"); null when it isn't held or the activity doesn't say.
+ */
+export function waitingReason(thread: ThreadState): string | null {
+  if (!isWaitingForResources(thread)) return null;
+  const prefix = `${WAITING_TO_START_ACTIVITY}: `;
+  const activity = thread.currentActivity ?? "";
+  return activity.startsWith(prefix) ? activity.slice(prefix.length) : null;
+}
+
+/** The person may skip a hold with Start Anyway: while it waits, or once its wait ran out. */
+export function canStartAnyway(thread: ThreadState): boolean {
+  return (
+    isWaitingForResources(thread) ||
+    (thread.status === "interrupted" && threadErrorKind({ error: thread.error ?? null }) === "resources_unavailable")
   );
 }
 
@@ -85,7 +111,7 @@ export function isWaitingForResources(thread: ThreadState): boolean {
 export function presentThread(thread: ThreadState): StatusPresentation {
   const base = STATUS[thread.status];
   if (isWaitingForResources(thread)) {
-    return { ...base, label: "Waiting for system resources", tone: "waiting" };
+    return { ...base, label: "Waiting to start", tone: "waiting" };
   }
   const kind = threadErrorKind({ error: thread.error ?? null });
   if (thread.status === "interrupted" && kind === "resources_unavailable") {
@@ -105,8 +131,8 @@ export interface ProblemPresentation {
 }
 
 const PROBLEM_TITLES: Record<ThreadErrorKind, string> = {
-  waiting_for_resources: "Waiting for system resources",
-  resources_unavailable: "Not started: system resources were busy",
+  waiting_for_resources: "Waiting to start",
+  resources_unavailable: "Not started: system resources were too low",
   provider_start_failed: "The provider couldn't start",
   provider_process_exited: "The provider stopped unexpectedly",
   auth_required: "Sign-in needed",
@@ -121,9 +147,11 @@ const PROBLEM_TITLES: Record<ThreadErrorKind, string> = {
 export function presentProblem(thread: ThreadState & Pick<ThreadSummary, "error">): ProblemPresentation | null {
   const kind = threadErrorKind(thread);
   if (!kind) return null;
-  if (kind === "waiting_for_resources" || kind === "resources_unavailable") {
-    return { title: PROBLEM_TITLES[kind], tone: "waiting" };
+  if (kind === "waiting_for_resources") {
+    const reason = waitingReason(thread);
+    return { title: reason ? `${PROBLEM_TITLES[kind]}: ${reason}` : PROBLEM_TITLES[kind], tone: "waiting" };
   }
+  if (kind === "resources_unavailable") return { title: PROBLEM_TITLES[kind], tone: "waiting" };
   // The state leads; the runtime's message says precisely what happened and what to do.
   if (thread.status === "failed") return { title: "This thread failed", tone: "danger" };
   if (thread.status === "idle" && thread.currentActivity === LAST_TURN_FAILED_ACTIVITY) {
@@ -177,6 +205,8 @@ export interface ThreadActions {
   stop: boolean;
   resume: boolean;
   archive: boolean;
+  /** Start Anyway: skip a resource hold (only hard pressure or the person's own limit holds one). */
+  startAnyway: boolean;
   /** What the composer does: send to the live session, resume the thread with the message, or nothing. */
   compose: "send" | "resume" | "blocked";
 }
@@ -194,7 +224,7 @@ export function threadActions(thread: ThreadState, archived = false): ThreadActi
   const terminal = TERMINAL.has(status);
   const working = STATUS[status].working;
   if (archived) {
-    return { interrupt: false, stop: false, resume: false, archive: false, compose: "blocked" };
+    return { interrupt: false, stop: false, resume: false, archive: false, startAnyway: false, compose: "blocked" };
   }
   const waitingForResources = isWaitingForResources(thread);
   return {
@@ -202,6 +232,7 @@ export function threadActions(thread: ThreadState, archived = false): ThreadActi
     stop: working || status === "waiting_for_permission" || status === "paused" || status === "waiting_for_dependency",
     resume: terminal || status === "paused",
     archive: terminal || QUIET.has(status),
+    startAnyway: canStartAnyway(thread),
     compose:
       terminal || status === "paused"
         ? "resume"

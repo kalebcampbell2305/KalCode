@@ -19,7 +19,7 @@
   color: var(--color-text);
   background: var(--panel-sheen), var(--color-surface-3);
   border: 1px solid var(--color-border-lit-soft);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   box-shadow: 0 24px 80px rgb(0 0 0 / 48%);
   overflow: hidden;
 }
@@ -35,14 +35,14 @@
 
 .title {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 
 .description,
 .note {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .description {
@@ -61,7 +61,7 @@
   padding: 20px;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.65;
   tab-size: 2;
 }

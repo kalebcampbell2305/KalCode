@@ -3,7 +3,8 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const OUT = new URL("../../qa/screenshots/", import.meta.url);
 
-async function open(page: Page, scenario = "account-ready-pro") {
+// Agent handoff is a MAX feature (packages/protocol/src/features.ts).
+async function open(page: Page, scenario = "account-ready-max") {
   await page.goto(`/?scenario=${scenario}`);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
@@ -197,7 +198,7 @@ test.describe("agent handoff", () => {
     const source = page.locator("[data-provider-pane]").first();
     await source.getByRole("button", { name: /Hand off work from/ }).click();
     const dialog = handoffDialog(page);
-    await expect(dialog.getByText("Agent handoff is included with Pro and above.")).toBeVisible();
+    await expect(dialog.getByText("Agent handoff is included with MAX and above.")).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Prepare handoff" })).toBeDisabled();
     await dialog.getByRole("button", { name: "View plans" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();

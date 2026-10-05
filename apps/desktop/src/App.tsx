@@ -8,7 +8,7 @@ import { KalCodeClient } from "./ipc/client.ts";
 import { toKalCodeError } from "./ipc/errors.ts";
 import { resolveTransport } from "./ipc/transport.ts";
 import { RuntimeProvider } from "./runtime/RuntimeProvider.tsx";
-import { applyAppearance, systemPrefersDark } from "./shell/appearance.ts";
+import { applyAppearance, systemPrefersDark, systemPrefersMoreContrast } from "./shell/appearance.ts";
 import { Mark } from "./shell/Brand.tsx";
 import { Shell } from "./shell/Shell.tsx";
 import { NoRuntime } from "./surfaces/startup/NoRuntime.tsx";
@@ -44,7 +44,9 @@ export function App() {
       if (cancelled) return;
       // Apply the saved appearance before the first real render so the window never flashes
       // the wrong theme.
-      if (next.kind === "ready") applyAppearance(document.documentElement, next.settings, systemPrefersDark());
+      if (next.kind === "ready") {
+        applyAppearance(document.documentElement, next.settings, systemPrefersDark(), systemPrefersMoreContrast());
+      }
       setResult(next);
     });
     return () => {

@@ -408,6 +408,13 @@ fn acquisition_capacity_error(decision: AdmissionDecision) -> ComponentManagerEr
             }
             _ => None,
         }),
+        AdmissionReason::HardPressure { pressure } => Some(match pressure {
+            kalcode_resources::HardPressure::MemoryCritical { .. }
+            | kalcode_resources::HardPressure::CommitExhausted { .. } => {
+                ComponentCapacityReason::Memory
+            }
+            kalcode_resources::HardPressure::DiskFull { .. } => ComponentCapacityReason::DiskSpace,
+        }),
         AdmissionReason::CapacityUnavailable => None,
     });
     reason.map_or(

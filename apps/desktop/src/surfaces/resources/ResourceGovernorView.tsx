@@ -6,6 +6,7 @@ import { Page } from "../../shell/Page.tsx";
 import styles from "./ResourceGovernorView.module.css";
 import {
   admissionSummary,
+  backgroundAdmissionSummary,
   formatBytes,
   freshnessSummary,
   pressureSummary,
@@ -71,10 +72,11 @@ export function ResourceGovernorContent({
   const pressure = pressureSummary(report.snapshot.pressure);
   const freshness = freshnessSummary(report.freshness);
   const admission = admissionSummary(report.admission);
+  const background = backgroundAdmissionSummary(report.backgroundAdmission);
   const status = governorStatus(report);
   const metrics = metricRows(report.snapshot);
-  const selectedMode = report.admission.mode ?? report.snapshot.mode;
-  const modePending = report.admission.reasons.some((reason) => reason.kind === "snapshot_mode_mismatch");
+  const selectedMode = report.backgroundAdmission.mode ?? report.admission.mode ?? report.snapshot.mode;
+  const modePending = report.backgroundAdmission.reasons.some((reason) => reason.kind === "snapshot_mode_mismatch");
 
   return (
     <div className={styles.stack}>
@@ -102,12 +104,16 @@ export function ResourceGovernorContent({
 
         <aside className={styles.controlColumn} aria-label="Resource controls and admission">
           <Panel
-            title="Background work"
-            description="CPU pressure pauses background work. Coding terminals only wait for hard resource pressure or your explicit limits."
+            title="New work"
+            description="Coding agents you start come first; optional background work yields under load."
           >
             <div className={styles.admission} data-tone={admission.tone}>
               <strong>{admission.label}</strong>
               <span>{admission.detail}</span>
+            </div>
+            <div className={styles.admission} data-tone={background.tone}>
+              <strong>{background.label}</strong>
+              <span>{background.detail}</span>
               <span className={styles.continuity}>
                 Running work continues. Local controls, sign-in and recovery stay available.
               </span>

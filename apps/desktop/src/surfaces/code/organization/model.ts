@@ -23,11 +23,21 @@ import type {
   ThreadSummary,
 } from "@kalcode/protocol";
 import type { ProcessInfo } from "../../../ipc/utilities.ts";
+import { isWaitingForResources, waitingReason } from "../../threads/model.ts";
 import { STOPPED_SERVICE, shellRoot, UNFINISHED, workUnderShell } from "../kaltidy/classify.ts";
 
 // ---- Status badges ----
 
-export type OrgBadge = "starting" | "ready" | "working" | "testing" | "waiting" | "failed" | "done" | "idle";
+export type OrgBadge =
+  | "starting"
+  | "ready"
+  | "working"
+  | "testing"
+  | "needs_you"
+  | "waiting"
+  | "failed"
+  | "done"
+  | "idle";
 
 /** Label and contract tone of each badge (status is always tone + glyph + word, never colour alone). */
 export const BADGES: Record<OrgBadge, { label: string; tone: StatusTone }> = {
@@ -35,6 +45,7 @@ export const BADGES: Record<OrgBadge, { label: string; tone: StatusTone }> = {
   ready: { label: "Ready", tone: "recovering" },
   working: { label: "Working", tone: "working" },
   testing: { label: "Testing", tone: "working" },
+  needs_you: { label: "Needs you", tone: "waiting" },
   waiting: { label: "Waiting", tone: "waiting" },
   failed: { label: "Failed", tone: "failed" },
   done: { label: "Done", tone: "done" },
@@ -147,18 +158,29 @@ const AGENT_WORKING = new Set<ThreadStatus>([
 /**
  * An agent's badge from its thread status, pane process and approvals. Done and Failed come only
  * from the thread status (never from the CLI's exit code). An agent whose process has ended is not
- * Working: it is Idle unless its status says Done or Failed.
+ * Working: it is Idle unless its status says Done or Failed. An agent whose process hasn't started
+ * is never Idle: it is Starting, or Waiting with the real reason (owner directive 2026-10-04).
  */
 export function agentBadge(thread: ThreadSummary, info: PaneInfo | null): BadgeView {
   const { status } = thread;
   if (status === "failed") return { badge: "failed", detail: "The run failed" };
   if (status === "completed") return { badge: "done", detail: "Finished" };
   if (thread.pendingApprovals > 0 || status === "waiting_for_permission") {
-    return { badge: "waiting", detail: "Needs your approval" };
+    return { badge: "needs_you", detail: "Needs your approval" };
   }
-  if (status === "waiting_for_user") return { badge: "waiting", detail: "Waiting for your reply" };
+  if (status === "waiting_for_user") return { badge: "needs_you", detail: "Waiting for your reply" };
+  // Held before its process starts: hard resource pressure (the real reason) or another task.
+  if (status === "waiting_for_dependency") {
+    const reason = waitingReason(thread);
+    if (reason) return { badge: "waiting", detail: reason.charAt(0).toUpperCase() + reason.slice(1) };
+    return { badge: "waiting", detail: isWaitingForResources(thread) ? "Waiting to start" : "Waiting on another task" };
+  }
   if (info === null) return { badge: "starting", detail: "Connecting to its terminal" };
   const live = info.running;
+  // Launching: the provider process hasn't started yet (no exit either).
+  if (!live && info.exitCode === null && (status === "starting" || status === "recovering")) {
+    return { badge: "starting", detail: "Starting" };
+  }
   if (!live) return { badge: "idle", detail: info.exitCode === null ? "Ended" : `Ended (exit ${info.exitCode})` };
   if (status === "starting" || status === "recovering") return { badge: "starting", detail: "Starting" };
   if (status === "testing") return { badge: "testing", detail: thread.currentActivity ?? "Running tests" };
@@ -166,7 +188,6 @@ export function agentBadge(thread: ThreadSummary, info: PaneInfo | null): BadgeV
   if (status === "idle") return { badge: "ready", detail: "Ready for your next prompt" };
   if (status === "paused") return { badge: "idle", detail: "Paused" };
   if (status === "interrupted") return { badge: "idle", detail: "Stopped · resumable" };
-  if (status === "waiting_for_dependency") return { badge: "idle", detail: "Waiting on another task" };
   return { badge: "idle", detail: "Offline" };
 }
 
@@ -319,15 +340,16 @@ export interface StackGroup {
 }
 
 const STACK_ORDER: Record<OrgBadge | "unknown", number> = {
-  waiting: 0,
+  needs_you: 0,
   failed: 1,
-  working: 2,
-  testing: 3,
-  starting: 4,
-  ready: 5,
-  unknown: 6,
-  done: 7,
-  idle: 8,
+  waiting: 2,
+  working: 3,
+  testing: 4,
+  starting: 5,
+  ready: 6,
+  unknown: 7,
+  done: 8,
+  idle: 9,
 };
 
 const isFinished = (item: OrgItem) => item.status?.badge === "done" || item.status?.badge === "idle";
@@ -364,7 +386,7 @@ export function organize(items: readonly OrgItem[], prefs: OrgPrefs, focusedKey:
       finished: members.filter((item) => !keep(item)),
       counts: {
         working: members.filter((i) => i.status?.badge === "working" || i.status?.badge === "testing").length,
-        waiting: members.filter((i) => i.status?.badge === "waiting").length,
+        waiting: members.filter((i) => i.status?.badge === "needs_you").length,
         failed: members.filter((i) => i.status?.badge === "failed").length,
         done: members.filter((i) => i.status?.badge === "done").length,
       },

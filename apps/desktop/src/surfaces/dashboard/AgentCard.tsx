@@ -94,9 +94,9 @@ export function startedText(createdAt: string, now: number): string | null {
 export function stateLabel(thread: ThreadSummary, ready: boolean): string {
   if (ready) return "Ready to merge";
   const shown = presentThread(thread);
-  if (shown.label === "Waiting for system resources" || shown.label === "Last turn failed") return shown.label;
+  if (shown.label === "Waiting to start" || shown.label === "Last turn failed") return shown.label;
   if (thread.status === "interrupted") return shown.label === "Not started" ? "Not started" : "Stopped";
-  if (thread.status === "waiting_for_dependency") return "Blocked";
+  if (thread.status === "waiting_for_dependency") return "Waiting";
   if (thread.status === "completed") return "Done";
   const display = displayStatusOf(thread.status).status;
   if (display === "working") return "Working";

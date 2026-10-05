@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-start-anyway"
+description = "Enables the thread_start_anyway command without any pre-configured scope."
+commands.allow = ["thread_start_anyway"]
+
+[[permission]]
+identifier = "deny-thread-start-anyway"
+description = "Denies the thread_start_anyway command without any pre-configured scope."
+commands.deny = ["thread_start_anyway"]

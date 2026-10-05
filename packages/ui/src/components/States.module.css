@@ -31,11 +31,13 @@
   position: relative;
   padding: var(--space-6) var(--space-6);
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-panel);
+  border: 1px solid var(--empty-well-border);
+  border-radius: var(--radius-card);
+  /* The deep-space field: faint stars under a blue wash (both off in high contrast). */
   background:
     radial-gradient(26rem 12rem at 0% 0%, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 70%),
-    var(--color-bg-sunken);
+    var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--empty-well-bg);
 }
 
 /* A blue-lit hairline along the top edge: the one accent a quiet state carries. */
@@ -51,7 +53,8 @@
 .framed[data-align="center"] {
   background:
     radial-gradient(30rem 14rem at 50% 0%, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 72%),
-    var(--color-bg-sunken);
+    var(--atmosphere-stars) 0 0 / var(--atmosphere-stars-size),
+    var(--empty-well-bg);
 }
 
 .framed[data-align="center"]::before {
@@ -123,9 +126,9 @@
 
 .errorFramed {
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--status-failed-line);
-  border-radius: var(--radius-panel);
-  background: linear-gradient(90deg, var(--status-failed-soft), transparent 70%), var(--color-surface-1);
+  border: 1px solid var(--error-line);
+  border-radius: var(--radius-card);
+  background: linear-gradient(90deg, var(--error-surface), transparent 70%), var(--color-surface-1);
 }
 
 .errorIcon {
@@ -151,14 +154,10 @@
 .skeleton {
   display: block;
   border-radius: var(--radius-xs);
-  background: linear-gradient(
-    90deg,
-    var(--color-surface-hover) 0%,
-    var(--color-surface-active) 40%,
-    var(--color-surface-hover) 80%
-  );
-  background-size: 300% 100%;
-  animation: shimmer 1.6s linear infinite;
+  background:
+    linear-gradient(90deg, transparent 0%, var(--skeleton-highlight) 40%, transparent 80%) 0 0 / 300% 100%,
+    var(--skeleton-base);
+  animation: shimmer var(--dur-shimmer) linear infinite;
 }
 
 @keyframes shimmer {

@@ -13,6 +13,7 @@ import type { ProcessInfo } from "../../../ipc/utilities.ts";
 import {
   agentBadge,
   agentDisplayName,
+  BADGES,
   DEFAULT_PREFS,
   happening,
   isCustomTerminalTitle,
@@ -204,10 +205,35 @@ describe("agentBadge", () => {
     });
   });
 
-  it("marks approvals and replies as Waiting before anything else", () => {
-    expect(agentBadge(thread("active", { pendingApprovals: 1 }), info()).badge).toBe("waiting");
-    expect(agentBadge(thread("waiting_for_permission"), info()).badge).toBe("waiting");
-    expect(agentBadge(thread("waiting_for_user"), info()).badge).toBe("waiting");
+  it("marks approvals and replies as Needs you before anything else", () => {
+    expect(agentBadge(thread("active", { pendingApprovals: 1 }), info()).badge).toBe("needs_you");
+    expect(agentBadge(thread("waiting_for_permission"), info()).badge).toBe("needs_you");
+    expect(agentBadge(thread("waiting_for_user"), info()).badge).toBe("needs_you");
+    expect(BADGES.needs_you.label).toBe("Needs you");
+  });
+
+  it("never shows an agent whose process hasn't started as Idle", () => {
+    // Launching: no process yet, no exit.
+    expect(agentBadge(thread("starting"), info({ running: false, exitCode: null }))).toEqual({
+      badge: "starting",
+      detail: "Starting",
+    });
+    // Held by genuine hard pressure: Waiting, with the runtime's real reason (never "CPU busy").
+    const held = thread("waiting_for_dependency", {
+      currentActivity: "Waiting to start: memory is critically low (412 MB free)",
+      error: { code: "waiting_for_resources", message: "Memory is critically low (412 MB free)." },
+    });
+    expect(agentBadge(held, info({ running: false, exitCode: null }))).toEqual({
+      badge: "waiting",
+      detail: "Memory is critically low (412 MB free)",
+    });
+    expect(agentBadge(held, null).badge).toBe("waiting");
+    expect(BADGES.waiting.label).toBe("Waiting");
+    // Waiting on another task: Waiting too, never Idle.
+    expect(agentBadge(thread("waiting_for_dependency"), info({ running: false, exitCode: null }))).toEqual({
+      badge: "waiting",
+      detail: "Waiting on another task",
+    });
   });
 
   it("maps live statuses", () => {

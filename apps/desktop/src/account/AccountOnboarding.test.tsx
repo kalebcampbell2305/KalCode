@@ -67,16 +67,18 @@ describe("AccountOnboarding", () => {
       return article;
     };
     expect(card("Free")).toHaveTextContent("TRY");
-    expect(card("Free")).toHaveTextContent("25 KalVoice Requests a month");
+    expect(card("Free")).toHaveTextContent("Unlimited local agents");
+    expect(card("Free")).toHaveTextContent("Unlimited local terminals");
+    expect(card("Free")).toHaveTextContent("25 KalVoice");
     expect(card("Free")).toHaveTextContent("$0No checkout");
     expect(card("Free")).not.toHaveTextContent("per year");
     expect(screen.getByRole("radio", { name: "Monthly" })).toBeChecked();
     expect(card("Pro")).toHaveTextContent("$10per month");
     expect(card("Pro")).not.toHaveTextContent("per year");
-    expect(card("Pro")).toHaveTextContent("150 KalVoice Requests a month");
+    expect(card("Pro")).toHaveTextContent("150 KalVoice");
     expect(card("MAX")).toHaveTextContent("ORCHESTRATE");
     expect(card("MAX")).toHaveTextContent("$25per month");
-    expect(card("MAX 2X")).toHaveTextContent("1,000 KalVoice Requests a month");
+    expect(card("MAX 2X")).toHaveTextContent("1,000 KalVoice");
     expect(card("MAX 2X")).toHaveTextContent("$50per month");
 
     await userEvent.click(screen.getByRole("button", { name: "Choose MAX" }));

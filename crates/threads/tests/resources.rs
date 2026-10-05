@@ -1,7 +1,9 @@
-//! A provider launch or turn the Resource Governor holds: the thread waits truthfully, re-checks
-//! on the governor's cadence, proceeds when admitted, and ends in a resumable
-//! `resources_unavailable` state when the bounded wait runs out. Real start failures keep their
-//! provider-specific errors. Deterministic: holds are scripted on the fake provider (no load).
+//! A provider launch or turn the Resource Governor holds (only genuine hard pressure or an
+//! explicit Custom limit can hold a user-requested agent; CPU load never does): the thread waits
+//! truthfully with the real reason, re-checks on the governor's cadence, proceeds when admitted
+//! or when the person chooses Start Anyway, and ends in a resumable `resources_unavailable` state
+//! when the bounded wait runs out. Real start failures keep their provider-specific errors.
+//! Deterministic: holds are scripted on the fake provider (no load).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -26,10 +28,17 @@ const RETRY: Duration = Duration::from_millis(15);
 
 fn hold(kind: LaunchHoldKind, wait_limit: Duration) -> ProviderError {
     let counts = matches!(kind, LaunchHoldKind::ConcurrencyLimit).then_some((4, 4));
+    let evidence = matches!(
+        kind,
+        LaunchHoldKind::MemoryCritical | LaunchHoldKind::DiskFull
+    )
+    .then_some((412, 634));
     ProviderError::ResourcesHeld(LaunchHold {
         kind,
         running: counts.map(|(running, _)| running),
         limit: counts.map(|(_, limit)| limit),
+        free_mb: evidence.map(|(free, _)| free),
+        floor_mb: evidence.map(|(_, floor)| floor),
         retry_after: RETRY,
         wait_limit,
     })
@@ -63,13 +72,15 @@ fn failed_events(h: &Harness, id: &str) -> usize {
         .count()
 }
 
-/// (B)(G) High CPU holds the launch: the thread waits (not failed), then starts on its own
-/// once admission passes, delivering the task exactly once.
+/// (B)(G) Critically low memory holds the launch: the thread waits (not failed) with the real
+/// reason, then starts on its own once admission passes, delivering the task exactly once.
 #[test]
 fn a_held_launch_waits_then_starts_when_resources_free_up() {
     let h = Harness::new();
-    h.provider
-        .fail_starts_with(3, hold(LaunchHoldKind::CpuBusy, Duration::from_secs(10)));
+    h.provider.fail_starts_with(
+        3,
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
+    );
 
     let thread = h
         .runtime
@@ -78,14 +89,21 @@ fn a_held_launch_waits_then_starts_when_resources_free_up() {
     assert_eq!(thread.status, ThreadStatus::WaitingForDependency);
     assert_eq!(
         thread.current_activity.as_deref(),
-        Some("Waiting for system resources (CPU busy)")
+        Some("Waiting to start: memory is critically low (412 MB free)")
     );
     assert_eq!(
         error_kind(&thread),
         Some(ThreadErrorKind::WaitingForResources)
     );
     let message = &thread.error.as_ref().unwrap().message;
-    assert!(message.contains("CPU busy"), "{message}");
+    assert!(
+        message.starts_with("Memory is critically low (412 MB free)."),
+        "{message}"
+    );
+    assert!(message.contains("Run KalTidy"), "{message}");
+    assert!(message.contains("Start Anyway"), "{message}");
+    assert!(!message.contains("CPU"), "{message}");
+    assert!(!message.contains("every few seconds"), "{message}");
     assert!(!message.contains("terminal"), "{message}");
     // The task is visible while it waits.
     assert_eq!(user_messages(&h, &thread.id), ["refactor the parser"]);
@@ -104,24 +122,97 @@ fn a_held_launch_waits_then_starts_when_resources_free_up() {
     assert_eq!(failed_events(&h, &thread.id), 0);
 }
 
-/// (C) Memory pressure names memory, never the provider.
+/// (C) Each hard-pressure hold names its real reason, never the provider and never CPU.
 #[test]
-fn memory_pressure_waits_with_the_memory_reason() {
+fn hard_pressure_waits_with_the_real_reason() {
+    for (kind, activity) in [
+        (
+            LaunchHoldKind::DiskFull,
+            "Waiting to start: the disk is almost full (412 MB free)",
+        ),
+        (
+            LaunchHoldKind::ProcessLimit,
+            "Waiting to start: the system couldn't create another process",
+        ),
+    ] {
+        let h = Harness::new();
+        h.provider
+            .fail_starts_with(1_000, hold(kind, Duration::from_secs(10)));
+        let thread = h
+            .runtime
+            .create(h.request("index the repo"))
+            .expect("create");
+        assert_eq!(thread.status, ThreadStatus::WaitingForDependency);
+        assert_eq!(thread.current_activity.as_deref(), Some(activity));
+        h.runtime.stop(&thread.id).expect("stop");
+    }
+}
+
+/// Start Anyway re-checks a held launch at once (the host has granted its governor the
+/// override), without waiting for the governor's cadence, and delivers the task exactly once.
+#[test]
+fn start_anyway_starts_a_held_launch_immediately() {
     let h = Harness::new();
+    // A slow cadence: only Start Anyway can make this start within the test.
     h.provider.fail_starts_with(
-        1_000,
-        hold(LaunchHoldKind::MemoryLow, Duration::from_secs(10)),
+        1,
+        ProviderError::ResourcesHeld(LaunchHold {
+            retry_after: Duration::from_secs(60),
+            ..LaunchHold::new(
+                LaunchHoldKind::MemoryCritical,
+                Duration::from_secs(60),
+                Duration::from_secs(90),
+            )
+        }),
     );
     let thread = h
         .runtime
-        .create(h.request("index the repo"))
+        .create(h.request("fix the build"))
         .expect("create");
     assert_eq!(thread.status, ThreadStatus::WaitingForDependency);
+    assert_eq!(h.provider.started_sessions(), 0);
+
+    let started = h
+        .runtime
+        .retry_held_launch(&thread.id)
+        .expect("start anyway");
+    assert_eq!(started.status, ThreadStatus::Active);
+    assert_eq!(started.error, None);
+    assert_eq!(h.provider.started_sessions(), 1);
     assert_eq!(
-        thread.current_activity.as_deref(),
-        Some("Waiting for system resources (memory low)")
+        h.provider.last_session().calls(),
+        [Call::Send("fix the build".into())]
     );
-    h.runtime.stop(&thread.id).expect("stop");
+    assert_eq!(user_messages(&h, &thread.id), ["fix the build"]);
+
+    // On a thread that isn't held it changes nothing.
+    let again = h.runtime.retry_held_launch(&thread.id).expect("no-op");
+    assert_eq!(again.status, ThreadStatus::Active);
+    assert_eq!(h.provider.started_sessions(), 1);
+}
+
+/// Start Anyway on a launch whose wait already ran out resumes it.
+#[test]
+fn start_anyway_resumes_a_launch_whose_wait_ran_out() {
+    let h = Harness::new();
+    h.provider.fail_starts_with(
+        1_000,
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_millis(60)),
+    );
+    let thread = h.runtime.create(h.request("lint")).expect("create");
+    wait_until("bound", || {
+        get(&h, &thread.id).status == ThreadStatus::Interrupted
+    });
+    h.provider.admit_starts();
+    let started = h
+        .runtime
+        .retry_held_launch(&thread.id)
+        .expect("start anyway");
+    assert_eq!(started.status, ThreadStatus::Active);
+    assert_eq!(
+        h.provider.last_session().calls(),
+        [Call::Send("lint".into())]
+    );
 }
 
 /// (D)(E) A stale snapshot or an unavailable sampler that doesn't recover within the bound ends
@@ -129,10 +220,7 @@ fn memory_pressure_waits_with_the_memory_reason() {
 /// message kept, and Resume delivers it once admission passes.
 #[test]
 fn a_hold_that_outlasts_the_bound_ends_resumable_and_resume_delivers_the_task() {
-    for kind in [
-        LaunchHoldKind::TelemetryStale,
-        LaunchHoldKind::TelemetryUnavailable,
-    ] {
+    for kind in [LaunchHoldKind::MemoryCritical, LaunchHoldKind::DiskFull] {
         let h = Harness::new();
         h.provider
             .fail_starts_with(1_000, hold(kind, Duration::from_millis(120)));
@@ -161,6 +249,7 @@ fn a_hold_that_outlasts_the_bound_ends_resumable_and_resume_delivers_the_task() 
             "{}",
             error.message
         );
+        assert!(error.message.contains("Start Anyway"), "{}", error.message);
         assert_ne!(ended.status, ThreadStatus::Failed);
         assert_eq!(failed_events(&h, &thread.id), 0);
         assert_eq!(h.provider.started_sessions(), 0);
@@ -189,11 +278,11 @@ fn a_concurrency_hold_names_the_limit_and_suggests_stopping_a_thread() {
     let thread = h.runtime.create(h.request("audit deps")).expect("create");
     assert_eq!(
         thread.current_activity.as_deref(),
-        Some("Waiting for system resources (4 of 4 threads are already working)")
+        Some("Waiting to start: 4 of 4 agents are already working (your Custom limit)")
     );
     let waiting = thread.error.expect("waiting error").message;
     assert!(
-        waiting.contains("stop a thread you're not using"),
+        waiting.contains("Stop an agent you're not using"),
         "{waiting}"
     );
 
@@ -201,26 +290,22 @@ fn a_concurrency_hold_names_the_limit_and_suggests_stopping_a_thread() {
         get(&h, &thread.id).status == ThreadStatus::Interrupted
     });
     let ended = get(&h, &thread.id).error.expect("error").message;
-    assert!(ended.contains("Stop a thread you're not using"), "{ended}");
+    assert!(ended.contains("Stop an agent you're not using"), "{ended}");
 
-    // A CPU hold never suggests stopping threads.
-    let cpu = Harness::new();
-    cpu.provider.fail_starts_with(
+    // A hard-pressure hold never suggests stopping agents; it offers KalTidy.
+    let memory = Harness::new();
+    memory.provider.fail_starts_with(
         1_000,
-        hold(LaunchHoldKind::CpuBusy, Duration::from_secs(10)),
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
     );
-    let thread = cpu
+    let thread = memory
         .runtime
-        .create(cpu.request("audit deps"))
+        .create(memory.request("audit deps"))
         .expect("create");
-    assert!(
-        !thread
-            .error
-            .expect("error")
-            .message
-            .contains("stop a thread")
-    );
-    cpu.runtime.stop(&thread.id).expect("stop");
+    let message = thread.error.expect("error").message;
+    assert!(!message.contains("Stop an agent"), "{message}");
+    assert!(message.contains("Run KalTidy"), "{message}");
+    memory.runtime.stop(&thread.id).expect("stop");
 }
 
 /// A turn on a live session that is held waits the same way and is delivered once admitted.
@@ -232,7 +317,10 @@ fn a_held_turn_waits_and_is_delivered_once_admitted() {
     session.emit(AgentEvent::TurnCompleted { ok: true });
     wait_until("idle", || get(&h, &id).status == ThreadStatus::Idle);
 
-    session.fail_sends_with(2, hold(LaunchHoldKind::CpuBusy, Duration::from_secs(10)));
+    session.fail_sends_with(
+        2,
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
+    );
     let held = h.runtime.send(&id, "second").expect("send is accepted");
     assert_eq!(held.status, ThreadStatus::WaitingForDependency);
     assert_code(h.runtime.send(&id, "third"), "thread_waiting_for_resources");
@@ -250,8 +338,10 @@ fn a_held_turn_waits_and_is_delivered_once_admitted() {
 #[test]
 fn stopping_a_waiting_thread_cancels_the_wait_and_keeps_the_task() {
     let h = Harness::new();
-    h.provider
-        .fail_starts_with(2, hold(LaunchHoldKind::CpuBusy, Duration::from_secs(10)));
+    h.provider.fail_starts_with(
+        2,
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
+    );
     let id = h.runtime.create(h.request("migrate")).expect("create").id;
     let stopped = h.runtime.stop(&id).expect("stop");
     assert_eq!(stopped.status, ThreadStatus::Interrupted);
@@ -383,7 +473,7 @@ fn idle_threads_archive_and_waiting_threads_must_be_stopped() {
 
     h.provider.fail_starts_with(
         1_000,
-        hold(LaunchHoldKind::CpuBusy, Duration::from_secs(10)),
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
     );
     let waiting = h.runtime.create(h.request("held")).expect("create").id;
     assert_code(h.runtime.archive(&waiting), "thread_running");
@@ -399,8 +489,10 @@ fn idle_threads_archive_and_waiting_threads_must_be_stopped() {
 #[test]
 fn shutdown_ends_waits_and_starts_nothing_afterwards() {
     let h = Harness::new();
-    h.provider
-        .fail_starts_with(3, hold(LaunchHoldKind::CpuBusy, Duration::from_secs(10)));
+    h.provider.fail_starts_with(
+        3,
+        hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
+    );
     let id = h.runtime.create(h.request("nightly")).expect("create").id;
     h.runtime.shutdown_checked().expect("shutdown");
     let thread = get(&h, &id);
@@ -443,7 +535,7 @@ fn a_crash_while_waiting_recovers_without_phantom_waits() {
         .expect("runtime");
         provider.fail_starts_with(
             1_000,
-            hold(LaunchHoldKind::MemoryLow, Duration::from_secs(10)),
+            hold(LaunchHoldKind::MemoryCritical, Duration::from_secs(10)),
         );
         let id = runtime.create(request).expect("create").id;
         assert_eq!(

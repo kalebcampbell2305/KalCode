@@ -333,8 +333,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 376);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 376);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 381);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 381);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -344,7 +344,7 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
 
   // These are established coverage floors, not ceilings: adding regressions must
   // not fail inventory validation. Exact disjoint coverage is checked below.
-  assert.ok(functional.size >= 376);
+  assert.ok(functional.size >= 381);
   assert.ok(visual.size >= 56);
   assert.equal(established.size, functional.size + visual.size);
   assert.deepEqual(

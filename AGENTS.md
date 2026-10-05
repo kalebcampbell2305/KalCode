@@ -463,6 +463,18 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
 - Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
 
+## Permanent Resource Governor rule (owner directive 2026-10-04)
+
+**KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
+
+- **Priority, throttled from the bottom:** 1 KalCode UI, 2 user-requested coding agents, 3 builds/tests the user started, 4 important active services, 5 optional/background work, 6 indexing/maintenance/analytics.
+- **Hard pressure only:** critically low available memory, disk effectively full, the OS cannot create another process, or severe exhaustion likely to crash. Then show the real reason (for example "Memory is critically low.") with actions such as [Run KalTidy] / [Start Anyway] where safe. Never a generic "CPU busy".
+- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies.
+- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started.
+- **Provider-agnostic:** applies equally to Claude Code, Codex, Cursor, Gemini and future providers, and to every launch path (panes, New agent, KalVoice, user-initiated Squads and Handoffs).
+- This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.
+- Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
+
 ## Permanent parallel integration rule: the shared merge train (owner directive 2026-10-04)
 
 > "KALCODE USES PARALLEL INTEGRATION. Any coding agent may finish and submit work for merge. Ready changes prepare, rebase, validate and form merge groups in parallel. Only the final atomic update to main is serialized. Compatible PRs are batched against the same main snapshot. One conflicting PR must not block unrelated completed work. Claude Code and Codex use the same merge queue. No agent may bypass it. Test the actual merge candidate, land it quickly, then ship immediately."
@@ -864,9 +876,3 @@ This policy is authoritative for BOTH Claude Code and Codex (`CLAUDE.md` imports
 When ten child agents are active, wait for one to finish/close and reuse the available slot before spawning another. Apply the same rule to orchestration, implementation, research, parallel review, testing, manager/worker structures, KalVoice-triggered Codex work and Codex sub-agents used by Squads or Handoffs. This is not a KalCode subscription entitlement: top-level local coding agents and terminals remain unlimited on every plan.
 
 Use the supported Codex `agents.max_concurrent_threads_per_session = 10` setting (which excludes the primary thread; legacy alias `agents.max_threads`). KalCode's interactive and headless Codex launch paths share the canonical override in `crates/providers/src/codex/argv.rs`, including resumed sessions. Preserve provider-native sub-agent capabilities and unrelated user configuration. A running external tool host may expose fewer slots; report that actual host constraint truthfully rather than claiming the setting changes an already-running session. Do not persist the host's temporary constraint as a lower policy.
-
-## Permanent resource governor responsiveness (owner directive 2026-10-04)
-
-**KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
-
-Priority is KalCode UI > user-requested coding agents > builds/tests the user started > important active services > optional/background work > indexing/maintenance/analytics. Throttle from the bottom. Hard pressure means critically low memory, full disk, an OS process-creation failure, or exhaustion likely to crash. Show the actual cause with Run KalTidy / Start Anyway where safe; never a generic CPU-busy wait loop. Report truthful STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE or FAILED states, never IDLE for a process that has not started. Apply uniformly across providers. This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.

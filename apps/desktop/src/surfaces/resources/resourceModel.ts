@@ -1,5 +1,10 @@
 import type { PressureLevel, PressureSummary, Reading, ResourceKind } from "@kalcode/protocol";
-import type { ResourceAdmissionDecision, ResourceAdmissionReason, ResourceFreshness } from "../../ipc/resources.ts";
+import type {
+  ResourceAdmissionDecision,
+  ResourceAdmissionReason,
+  ResourceFreshness,
+  ResourceHardPressure,
+} from "../../ipc/resources.ts";
 
 export type ResourceTone = "neutral" | "success" | "warning" | "danger";
 
@@ -85,6 +90,13 @@ export function freshnessSummary(freshness: ResourceFreshness): { label: string;
   }
 }
 
+/** Above this, `additional` means "no count limit applies" (the governor reports u32::MAX). */
+const UNLIMITED = 1_000_000;
+
+/**
+ * Coding agents you start: they start immediately unless genuine hard pressure (critically low
+ * memory, a full disk) or your own Custom limit holds them. CPU load never does.
+ */
 export function admissionSummary(decision: ResourceAdmissionDecision): {
   label: string;
   detail: string;
@@ -92,18 +104,47 @@ export function admissionSummary(decision: ResourceAdmissionDecision): {
 } {
   if (decision.state === "allowed") {
     return {
-      label: "Background work can start",
-      detail: `${decision.additional} additional ${decision.additional === 1 ? "task" : "tasks"} fit the current limits.`,
+      label: "New coding agents start immediately",
+      detail:
+        decision.additional < UNLIMITED
+          ? `${decision.additional} more ${decision.additional === 1 ? "agent fits" : "agents fit"} your Custom limit.`
+          : "CPU load never delays an agent you start; KalCode slows optional background work instead.",
       tone: "success",
     };
   }
-
-  const reason = prioritizedReason(decision.reasons);
+  const hard = decision.reasons.find((reason) => reason.kind === "hard_pressure");
   return {
-    label: "Background work is paused",
-    detail: admissionReasonText(reason),
+    label: "New coding agents are waiting",
+    detail: hard ? hardPressureText(hard.pressure) : admissionReasonText(prioritizedReason(decision.reasons)),
     tone: "warning",
   };
+}
+
+/** Optional background work (local models, downloads): it yields first under load. */
+export function backgroundAdmissionSummary(decision: ResourceAdmissionDecision): {
+  label: string;
+  detail: string;
+  tone: ResourceTone;
+} {
+  if (decision.state === "allowed") {
+    return { label: "Background work can run", detail: "Local models and downloads can start.", tone: "success" };
+  }
+  return {
+    label: "Background work is yielding",
+    detail: admissionReasonText(prioritizedReason(decision.reasons)),
+    tone: "warning",
+  };
+}
+
+function hardPressureText(pressure: ResourceHardPressure): string {
+  switch (pressure.kind) {
+    case "memory_critical":
+      return `Memory is critically low (${pressure.availableMb} MB free). Start Anyway is available on each waiting agent.`;
+    case "commit_exhausted":
+      return `Memory is critically low (${pressure.remainingMb} MB of commit left). Start Anyway is available on each waiting agent.`;
+    case "disk_full":
+      return `The disk is almost full (${pressure.freeMb} MB free on ${pressure.mount}). Start Anyway is available on each waiting agent.`;
+  }
 }
 
 function prioritizedReason(reasons: readonly ResourceAdmissionReason[]): ResourceAdmissionReason | undefined {
@@ -115,6 +156,7 @@ function prioritizedReason(reasons: readonly ResourceAdmissionReason[]): Resourc
     "governor_not_ready",
     "required_telemetry_unknown",
     "required_telemetry_unavailable",
+    "hard_pressure",
     "capacity",
     "capacity_unavailable",
   ];
@@ -137,7 +179,9 @@ function admissionReasonText(reason: ResourceAdmissionReason | undefined): strin
     case "required_telemetry_unavailable":
       return `${resourceLabel(reason.resource)} telemetry is unavailable for this workload.`;
     case "capacity":
-      return "Current pressure or concurrency limits leave no room for another provider task.";
+      return "CPU or memory headroom, pressure or your Custom limit leave no room right now.";
+    case "hard_pressure":
+      return hardPressureText(reason.pressure);
     case "capacity_unavailable":
     case undefined:
       return "Capacity cannot be verified right now.";

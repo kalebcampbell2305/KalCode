@@ -86,8 +86,9 @@ impl ThreadStatus {
     ];
 
     /// The normalized display status (ADVANCED.md §16.3), a pure function of the runtime status.
-    /// `interrupted` and `waiting_for_dependency` show as IDLE with a qualifier (there is no
-    /// STOPPED or BLOCKED display status). Mirrored by `displayStatusOf` in `packages/protocol`.
+    /// `interrupted` shows as IDLE with a qualifier (there is no STOPPED display status).
+    /// `waiting_for_dependency` shows as WAITING, never IDLE: its provider process has not
+    /// started (owner directive 2026-10-04). Mirrored by `displayStatusOf` in `packages/protocol`.
     pub fn display(self) -> (DisplayStatus, Option<DisplayQualifier>) {
         use DisplayStatus as D;
         match self {
@@ -102,7 +103,7 @@ impl ThreadStatus {
             Self::WaitingForPermission => (D::PermissionRequired, None),
             Self::WaitingForUser => (D::WaitingForYou, None),
             Self::Idle => (D::Idle, None),
-            Self::WaitingForDependency => (D::Idle, Some(DisplayQualifier::WaitingOnDependency)),
+            Self::WaitingForDependency => (D::Waiting, Some(DisplayQualifier::WaitingOnDependency)),
             Self::Interrupted => (D::Idle, Some(DisplayQualifier::StoppedResumable)),
             Self::Paused => (D::Paused, None),
             Self::Completed => (D::Done, None),
@@ -120,6 +121,7 @@ impl ThreadStatus {
             | DisplayStatus::Working
             | DisplayStatus::Testing
             | DisplayStatus::Reviewing
+            | DisplayStatus::Waiting
             | DisplayStatus::Recovering => DashboardChip::Working,
             DisplayStatus::PermissionRequired
             | DisplayStatus::WaitingForYou
@@ -517,9 +519,9 @@ mod tests {
             ),
             (
                 WaitingForDependency,
-                D::Idle,
+                D::Waiting,
                 Some(Q::WaitingOnDependency),
-                DashboardChip::Idle,
+                DashboardChip::Working,
             ),
             (Paused, D::Paused, None, DashboardChip::Idle),
             (Completed, D::Done, None, DashboardChip::Done),
@@ -540,7 +542,7 @@ mod tests {
             assert_eq!(status.display(), (display, qualifier), "{status:?}");
             assert_eq!(status.chip(), chip, "{status:?}");
         }
-        // Every one of the 12 display statuses is reachable.
+        // Every one of the 13 display statuses is reachable.
         let reached: std::collections::HashSet<_> =
             ThreadStatus::ALL.iter().map(|s| s.display().0).collect();
         assert_eq!(reached.len(), DisplayStatus::ALL.len());

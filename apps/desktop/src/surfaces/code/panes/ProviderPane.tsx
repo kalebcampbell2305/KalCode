@@ -9,12 +9,15 @@ import {
   IconButton,
 } from "@kalcode/ui/components";
 import {
+  BrushCleaning,
   Handshake,
+  Hourglass,
   Info,
   MessageCircleQuestion,
   MoreHorizontal,
   PenLine,
   Play,
+  Rocket,
   RotateCcw,
   ShieldAlert,
   Square,
@@ -27,6 +30,8 @@ import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import { AccountUsageBadge } from "../../providers/AccountUsageBadge.tsx";
+import { canStartAnyway, isWaitingForResources, waitingReason } from "../../threads/model.ts";
+import { useKalTidy } from "../kaltidy/kalTidyContext.ts";
 import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPicker.tsx";
 import { PaneAccountSuggestion } from "./PaneAccountSuggestion.tsx";
 import {
@@ -111,6 +116,8 @@ export const ProviderPane = memo(function ProviderPane({
   const [stopError, setStopError] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const [startingAnyway, setStartingAnyway] = useState(false);
+  const kalTidy = useKalTidy();
   const [overlayDismissed, setOverlayDismissed] = useState<string | null>(null);
   const [localFocus, setLocalFocus] = useState(0);
   const overlayRef = useRef<HTMLElement>(null);
@@ -131,6 +138,10 @@ export const ProviderPane = memo(function ProviderPane({
     !request && (thread.status === "waiting_for_permission" || isAnswerInProvider(thread.currentActivity));
   const accountLabel = account ? paneAccountLabel(account) : null;
   const resumable = canResumePane(thread.status, running);
+  // Held before its process starts: only genuine hard pressure or the person's own Custom limit
+  // holds a coding agent, never CPU load. The real reason is the runtime's message.
+  const held = isWaitingForResources(thread);
+  const startAnywayOffered = canStartAnyway(thread);
   const tone = showOverlay ? "waiting" : status.tone;
 
   // A new run clears the last run's resume error.
@@ -170,6 +181,19 @@ export const ProviderPane = memo(function ProviderPane({
       setResumeError(toKalCodeError(error).message);
     } finally {
       setResuming(false);
+    }
+  };
+
+  const startAnyway = async () => {
+    setStartingAnyway(true);
+    setResumeError(null);
+    try {
+      onChanged?.(await client.startThreadAnyway(thread.id));
+      focusTerminal();
+    } catch (error) {
+      setResumeError(toKalCodeError(error).message);
+    } finally {
+      setStartingAnyway(false);
     }
   };
 
@@ -310,6 +334,37 @@ export const ProviderPane = memo(function ProviderPane({
           {identity.name} is asking in the pane. Answer there.
         </div>
       ) : null}
+      {held ? (
+        <div className={styles.endedBar} data-pane-held data-tone="waiting">
+          <Hourglass className={styles.heldIcon} aria-hidden="true" />
+          <span className={styles.endedCopy}>
+            <span className={styles.endedText} role="status">
+              {thread.error?.message ?? `${identity.name} is waiting to start.`}
+            </span>
+            {resumeError ? (
+              <span className={styles.endedError} role="alert">
+                Couldn't start: {resumeError}
+              </span>
+            ) : null}
+          </span>
+          <span className={styles.endedActions}>
+            {kalTidy ? (
+              <Button size="sm" variant="ghost" icon={<BrushCleaning />} onClick={() => kalTidy.openReview()}>
+                Run KalTidy
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<Rocket />}
+              busy={startingAnyway}
+              onClick={() => void startAnyway()}
+            >
+              Start Anyway
+            </Button>
+          </span>
+        </div>
+      ) : null}
       {resumable ? (
         <div className={styles.endedBar} data-pane-ended data-tone={thread.status === "failed" ? "failed" : "muted"}>
           <span className={styles.endedDot} aria-hidden="true" />
@@ -331,6 +386,17 @@ export const ProviderPane = memo(function ProviderPane({
             <Button size="sm" variant="primary" icon={<Play />} busy={resuming} onClick={() => void resume()}>
               {resumeError ? "Try again" : "Resume"}
             </Button>
+            {startAnywayOffered ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Rocket />}
+                busy={startingAnyway}
+                onClick={() => void startAnyway()}
+              >
+                Start Anyway
+              </Button>
+            ) : null}
             {onClose ? (
               <Button size="sm" variant="ghost" onClick={onClose}>
                 Close
@@ -522,7 +588,7 @@ function PaneHeader({
             <span>{MODE_LABELS[thread.permissionMode]}</span>
           </span>
           <PaneToolChip status={thread.status} activity={thread.currentActivity} />
-          <PaneStatusChip status={thread.status} />
+          <PaneStatusChip status={thread.status} qualifier={waitingReason(thread)} />
           {onHandOff ? (
             <Button
               size="sm"

@@ -3,7 +3,7 @@
   color: var(--color-text);
   background: var(--color-surface-1, var(--color-surface));
   border: 1px solid var(--color-border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   margin-bottom: var(--space-5);
 }
@@ -22,24 +22,24 @@
 }
 .identity h2 {
   margin: 0;
-  font-size: 21px;
+  font-size: 1.3125rem;
   letter-spacing: -0.025em;
   font-weight: 650;
 }
 .identity p {
   margin: 5px 0 0;
   color: var(--color-text-secondary);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .emblem {
   display: grid;
   place-items: center;
   width: 44px;
   height: 44px;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   color: var(--color-accent-text);
   background: var(--color-accent-soft);
-  box-shadow: 0 0 8px rgb(76 141 255 / 0.12);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 12%, transparent);
   flex: none;
 }
 .security {
@@ -49,7 +49,7 @@
   padding: 11px 28px;
   background: var(--color-surface-raised);
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-xs);
   border-block: 1px solid var(--color-border-subtle);
 }
 .security svg {
@@ -75,7 +75,7 @@
 }
 .listHeading h3,
 .sectionHeading h3 {
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
   margin: 0;
 }
@@ -90,7 +90,7 @@
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -107,7 +107,7 @@
   gap: 11px;
   padding: 15px 10px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   color: var(--color-text);
   background: transparent;
   cursor: pointer;
@@ -128,14 +128,14 @@
 }
 .connectionText strong {
   display: block;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 .connectionText small {
   display: block;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   margin-top: 5px;
 }
 .serviceIcon {
@@ -143,7 +143,7 @@
   place-items: center;
   width: 35px;
   height: 35px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-surface-raised);
   color: var(--color-text-secondary);
   flex: none;
@@ -153,7 +153,7 @@
   align-items: center;
   gap: 6px;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
 }
 .health i {
@@ -164,15 +164,15 @@
   flex: none;
 }
 .health[data-health="healthy"] {
-  color: var(--color-success, #6bdaa9);
+  color: var(--color-success);
 }
 .health[data-health="healthy"] i {
-  box-shadow: 0 0 6px rgb(107 218 169 / 0.35);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 35%, transparent);
 }
 .health[data-health="auth_expired"],
 .health[data-health="error"],
 .health[data-health="offline"] {
-  color: var(--color-warning, #efbd78);
+  color: var(--status-waiting-text);
 }
 .intro {
   display: flex;
@@ -192,14 +192,14 @@
 }
 .intro h3 {
   margin: 12px 0 8px;
-  font-size: 19px;
+  font-size: 1.1875rem;
   font-weight: 550;
   letter-spacing: -0.02em;
 }
 .intro > p {
   max-width: 43ch;
   color: var(--color-text-secondary);
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.7;
 }
 .introNote {
@@ -208,7 +208,7 @@
   text-align: left;
   max-width: 40ch;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1.6;
   margin-top: 28px;
 }
@@ -230,10 +230,10 @@
 .empty h3 {
   color: var(--color-text);
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-lg);
 }
 .empty p {
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.65;
   max-width: 36ch;
   margin: 0;
@@ -248,7 +248,7 @@
   flex-direction: column;
   gap: 7px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .hub input:not([type="checkbox"]),
 .hub select,
@@ -261,10 +261,10 @@
   color: var(--color-text);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 9px 11px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .hub input::placeholder,
 .hub textarea::placeholder,
@@ -291,21 +291,21 @@
 }
 .endpoint {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
   margin: 12px 0;
 }
 .help {
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.65;
   margin: 12px 0;
   max-width: 72ch;
 }
 .checked {
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   margin: 9px 0 16px;
 }
 .actions {
@@ -321,7 +321,7 @@
   padding-top: 22px;
   border-top: 1px solid var(--color-border-subtle);
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .sectionHeading h3 {
   color: var(--color-text);
@@ -332,7 +332,7 @@
 }
 .tool {
   border-bottom: 1px solid var(--color-border-subtle);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .tool summary {
   display: flex;
@@ -359,7 +359,7 @@
 }
 .risk {
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 0.625rem;
   flex: none;
 }
 .tool pre,
@@ -373,7 +373,7 @@
   color: var(--color-text-secondary);
   padding: 12px;
   background: var(--color-surface-raised);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .toolChoices {
   display: flex;
@@ -395,7 +395,7 @@
   accent-color: var(--color-accent);
 }
 .toolChoices small {
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 .grants {
   margin-top: 16px;
@@ -407,7 +407,7 @@
   gap: 10px;
   padding: 12px 0;
   border-top: 1px solid var(--color-border-subtle);
-  font-size: 12px;
+  font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 .grants small {
@@ -419,7 +419,7 @@
   color: var(--color-accent-text);
   background: transparent;
   border: 0;
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 .connectForm {
@@ -436,7 +436,7 @@
   grid-column: 1 / -1;
 }
 .optional {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--color-text-muted);
 }
 .schemaLabel {
@@ -448,10 +448,10 @@
 }
 .schemaLabel small {
   line-height: 1.6;
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .advanced {
-  font-size: 12px;
+  font-size: var(--text-xs);
   margin: 18px 0;
   color: var(--color-text-secondary);
 }
@@ -467,9 +467,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.6;
-  background: var(--color-danger-soft, rgb(245 104 104 / 0.1));
+  background: var(--color-danger-soft);
   color: var(--color-text);
   overflow-wrap: anywhere;
 }
@@ -493,7 +493,7 @@
 }
 .workbench h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 .query {
   display: flex;
@@ -513,15 +513,15 @@
   margin: 14px 0;
   padding: 16px;
   background: var(--color-surface-raised);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .approval p {
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .config {
   margin-top: 14px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
 }
 .config summary {

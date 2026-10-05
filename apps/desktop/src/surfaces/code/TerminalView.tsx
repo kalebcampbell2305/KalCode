@@ -17,6 +17,7 @@ import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
 import { terminalContext } from "../../shell/context/terminalContext.ts";
 import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../shell/panes/outputScheduler.ts";
+import { useTextScale } from "../../shell/useTextScale.ts";
 import styles from "./Code.module.css";
 import { noteTerminalInput, noteTerminalOutput } from "./kaltidy/activity.ts";
 import { suppressReplayQueries } from "./replayQueries.ts";
@@ -25,6 +26,11 @@ import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey
 import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "./terminalTheme.ts";
 
 const FONT_SIZE = 13;
+
+/** Terminal font size for an interface text scale, in whole pixels so glyph cells stay crisp. */
+export function terminalFontSize(scale: number): number {
+  return Math.round(FONT_SIZE * scale);
+}
 const RESIZE_DEBOUNCE_MS = 80;
 /** Rendered output is acknowledged to native in steps of this many bytes. */
 const ACK_EVERY_BYTES = 64 * 1024;
@@ -57,6 +63,10 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
   const runningRef = useRef(running);
   runningRef.current = running;
   const initialTheme = useRef(theme);
+  // Terminal text follows the interface text size (Settings → Appearance → Text size).
+  const fontSize = terminalFontSize(useTextScale());
+  const initialFontSize = useRef(fontSize);
+  const fitRef = useRef<(() => void) | null>(null);
   const terminalId = terminal.id;
   const terminalStartedAtRef = useRef(terminal.startedAt);
   terminalStartedAtRef.current = terminal.startedAt;
@@ -73,7 +83,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     let disposed = false;
     const term = new Terminal({
       fontFamily: monoFontFamily(),
-      fontSize: FONT_SIZE,
+      fontSize: initialFontSize.current,
       lineHeight: 1.25,
       cursorBlink: true,
       cursorStyle: "bar",
@@ -238,6 +248,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       }
       if (sizePending) sendSize();
     };
+    fitRef.current = fitNow;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(fitNow);
@@ -245,7 +256,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     observer.observe(host);
     // Re-measure once the monospace font has loaded, so cells match the real glyphs.
     const fontFamily = monoFontFamily();
-    void document.fonts?.load(`${FONT_SIZE}px ${fontFamily}`).then(() => {
+    void document.fonts?.load(`${initialFontSize.current}px ${fontFamily}`).then(() => {
       if (disposed) return;
       term.options.fontFamily = monoFontFamily();
       fitNow();
@@ -325,6 +336,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
 
     return () => {
       disposed = true;
+      fitRef.current = null;
       unregisterImageTarget();
       observer.disconnect();
       cancelAnimationFrame(frame);
@@ -391,6 +403,14 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     const term = termRef.current;
     if (term) term.options.theme = TERMINAL_THEMES[theme];
   }, [theme]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || term.options.fontSize === fontSize) return;
+    // A new cell size changes how many rows and columns fit; refit so the PTY is resized to match.
+    term.options.fontSize = fontSize;
+    fitRef.current?.();
+  }, [fontSize]);
 
   useEffect(() => {
     writerRef.current?.setThrottled(throttled);

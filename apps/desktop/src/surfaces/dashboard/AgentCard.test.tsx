@@ -145,19 +145,20 @@ describe("AgentCard archived (read-only)", () => {
 describe("AgentCard waiting states", () => {
   const WAITING: Partial<ThreadSummary> = {
     status: "waiting_for_dependency",
-    currentActivity: "Waiting for system resources (CPU busy)",
+    currentActivity: "Waiting to start: memory is critically low (412 MB free)",
     error: {
       code: "waiting_for_resources",
       message:
-        "KalCode is waiting for system resources (CPU busy). Codex starts when they free up; KalCode checks again every few seconds.",
+        "Memory is critically low (412 MB free). KalCode is holding Codex so your system stays usable; it starts as soon as this clears. Run KalTidy to free resources, or choose Start Anyway.",
     },
   };
 
-  it("a launch held for system resources says so, not 'waiting on another task'", () => {
+  it("a launch held by hard pressure says so with the real reason, not 'waiting on another task'", () => {
     mount({ ...thread(null), ...WAITING });
     const card = screen.getByRole("article", { name: "Research" });
-    expect(card.textContent).toContain("Waiting for system resources");
-    expect(card.textContent).toContain("CPU busy");
+    expect(card.textContent).toContain("Waiting to start");
+    expect(card.textContent).toContain("memory is critically low");
+    expect(card.textContent).not.toContain("CPU busy");
     expect(card.textContent).not.toMatch(/waiting on another task/i);
     expect(card.textContent).not.toMatch(/\bIdle\b/);
     expect(card.getAttribute("data-tone")).toBe("waiting");
@@ -166,7 +167,7 @@ describe("AgentCard waiting states", () => {
   it("without an activity, the held launch reads the runtime's own message", () => {
     mount({ ...thread(null), ...WAITING, currentActivity: null });
     const card = screen.getByRole("article", { name: "Research" });
-    expect(card.textContent).toContain("KalCode is waiting for system resources (CPU busy).");
+    expect(card.textContent).toContain("Memory is critically low (412 MB free).");
     expect(card.textContent).not.toMatch(/waiting on another task/i);
   });
 

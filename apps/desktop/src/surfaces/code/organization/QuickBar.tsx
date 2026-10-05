@@ -192,7 +192,7 @@ export function AgentCounters({
             data-tone="waiting"
             aria-label={`${needsYou.count} needs you`}
             onClick={() => {
-              if (!showFirst(controller, items, ["waiting"], "agent")) openApprovals?.(true);
+              if (!showFirst(controller, items, ["needs_you"], "agent")) openApprovals?.(true);
             }}
           >
             <Hand aria-hidden="true" />

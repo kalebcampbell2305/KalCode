@@ -1,4 +1,5 @@
 import {
+  FEATURE_PLACEMENT,
   featureIncluded,
   type HandoffCompletion,
   type HandoffPreview,
@@ -23,7 +24,7 @@ import {
 import { Dialog } from "radix-ui";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useOptionalAccount } from "../../account/AccountProvider.tsx";
-import { planTier } from "../../ipc/account.ts";
+import { planTier, tierName } from "../../ipc/account.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
@@ -73,6 +74,9 @@ const STATUS_TONE: Record<HandoffStatus, "neutral" | "accent" | "success" | "wai
 /** Handoffs that can still change on their own (delivery, the receiver's progress). */
 const LIVE_STATUSES: ReadonlySet<HandoffStatus> = new Set(["queued", "delivered", "working", "needs_you"]);
 const POLL_MS = 2_500;
+/** The lowest plan that includes handoff, from the single placement table (never hard-coded copy). */
+const HANDOFF_PLAN = tierName(FEATURE_PLACEMENT.provider_handoff);
+const HANDOFF_PLAN_BOUNDARY = `Agent handoff is included with ${HANDOFF_PLAN} and above.`;
 
 /** What went wrong plus the most useful next step. */
 interface DialogError {
@@ -210,7 +214,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
   const prepareCurrent = () => {
     if (!featureAvailable) {
-      setError({ message: "Agent handoff is included with Pro and above." });
+      setError({ message: HANDOFF_PLAN_BOUNDARY });
       return;
     }
     if (!selectedTarget) {
@@ -333,8 +337,8 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
           {!featureAvailable ? (
             <div className={styles.planGate} role="note">
               <span>
-                <Badge tone="accent">Pro</Badge>
-                Agent handoff is included with Pro and above.
+                <Badge tone="accent">{HANDOFF_PLAN}</Badge>
+                {HANDOFF_PLAN_BOUNDARY}
               </span>
               <Button
                 size="sm"

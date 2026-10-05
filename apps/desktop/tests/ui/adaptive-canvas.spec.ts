@@ -109,7 +109,8 @@ test("workspace switching restores selected tabs, sizes and the focused pane", a
   await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
   await page.getByRole("button", { name: /^Workspace\s/ }).click();
   await page.getByRole("menuitemradio", { name: /kalcode-site/ }).click();
-  await expect(page.locator("[data-pane-id][data-focused]")).toHaveAttribute("data-pane-id", id);
+  // Visited workspaces stay mounted (hidden) so their terminals survive; api-server keeps its own focus.
+  await expect(page.locator("[data-pane-id][data-focused]:visible")).toHaveAttribute("data-pane-id", id);
   await expect(
     page.locator(`[data-pane-id="${id}"]`).getByRole("tab", { name: "Dashboard", exact: true }),
   ).toHaveAttribute("aria-selected", "true");

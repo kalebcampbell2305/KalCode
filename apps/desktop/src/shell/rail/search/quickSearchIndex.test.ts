@@ -29,6 +29,23 @@ describe("quick switcher local index", () => {
     ]);
   });
 
+  it("ranks the named workspace first when the query leads with an intent like 'switch to'", () => {
+    const index = new QuickSearchIndex<string>();
+    const workspace = (id: string, label: string) => ({
+      ...item(id, label, id),
+      kind: "Workspace",
+      keywords: "switch to workspace project folder",
+    });
+    index.add(workspace("active", "kalcoded.com"));
+    index.add(workspace("named", "kalcode"));
+    // The active workspace's own bonus never outranks an exact name typed after the intent words.
+    expect(index.search("switch to kalcode", "active", new Map()).map((entry) => entry.id)).toEqual([
+      "named",
+      "active",
+    ]);
+    expect(index.search("switch to kalcoded.com", "named", new Map()).map((entry) => entry.id)).toEqual(["active"]);
+  });
+
   it("matches path fragments, diacritics and metadata while keeping duplicate names distinct", () => {
     const index = new QuickSearchIndex<string>();
     index.add(item("one", "Resume.ts", "one", "src/accounts/Cafe"));

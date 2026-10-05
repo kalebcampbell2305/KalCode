@@ -187,7 +187,8 @@
   content: "";
 }
 
-/* Waiting work is marked: an amber edge, so it is found without reading every row. */
+/* Work that needs you or is waiting is marked: an amber edge, found without reading every row. */
+.item[data-badge="needs_you"]:not([data-focused])::before,
 .item[data-badge="waiting"]:not([data-focused])::before {
   position: absolute;
   top: 6px;

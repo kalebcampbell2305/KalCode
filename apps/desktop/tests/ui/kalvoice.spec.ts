@@ -279,8 +279,10 @@ test.describe("Push to talk (fake recognizer)", () => {
   test("the monthly limit stops requests before any work; dictation keeps working", async ({ page }) => {
     await open(page, "?scenario=kalvoice-limit&transcript=go%20to%20settings");
     await talk(page);
-    await expect(shown(page).getByText("You've used this month's KalVoice Requests.", { exact: false })).toBeVisible();
-    await expect(shown(page).getByText("Dictation keeps working.", { exact: false })).toBeVisible();
+    await expect(
+      shown(page).getByText("You've used this month's KalVoice cloud requests.", { exact: false }),
+    ).toBeVisible();
+    await expect(shown(page).getByText("Local commands and dictation keep working.", { exact: false })).toBeVisible();
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   });
 });
@@ -333,11 +335,12 @@ test.describe("Commands that open other parts of KalCode", () => {
   });
 });
 
-/** The bottom edge of the Command Deck's top bar: the widget never covers it. */
+/** Where the Command Deck's body starts, below the top bar and the navigation bar: the widget never covers them. */
 async function deckTop(page: Page): Promise<number> {
   const bar = await page.getByRole("banner").boundingBox();
-  if (!bar) throw new Error("no top bar");
-  return bar.y + bar.height;
+  const nav = await page.getByRole("navigation", { name: "Breadcrumb" }).locator("..").boundingBox();
+  if (!bar || !nav) throw new Error("no top bar");
+  return Math.max(bar.y + bar.height, nav.y + nav.height);
 }
 
 test.describe("KalVoice voice widget", () => {
