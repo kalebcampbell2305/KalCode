@@ -24,8 +24,8 @@ use kalcode_context::{
     RenderedPackage, WorkspaceRoot,
 };
 use kalcode_contracts::agent::{
-    AgentEvent, AgentInput, AgentSession, FileChange, ModelInfo, ProviderError, ProviderId,
-    SessionConfig,
+    AgentEvent, AgentInput, AgentSession, FileChange, LaunchOrigin, ModelInfo, ProviderError,
+    ProviderId, SessionConfig,
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
@@ -215,6 +215,9 @@ struct LiveState {
     turn_failed: bool,
     /// The user interrupted or paused the current turn: its failed completion is not a failure.
     halted: bool,
+    /// Who asked for the current session: the Operations scheduler's launches are background
+    /// work and yield first; a person's Resume makes it theirs again.
+    origin: LaunchOrigin,
 }
 
 /// A message on its way to the provider.
@@ -296,6 +299,7 @@ struct NewThread<'a> {
     /// Prepares the folder the session runs in instead of the workspace root (a thread's own
     /// Git worktree). Runs after every other check, just before the thread is recorded.
     cwd: Option<PrepareFolder<'a>>,
+    origin: LaunchOrigin,
 }
 
 /// See [`NewThread::cwd`].
@@ -1135,7 +1139,7 @@ impl ThreadRuntime {
     /// before the thread exists).
     pub fn create_with_id(&self, thread_id: &str, request: CreateThread) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_reviewed_with_id(request, None, Some(thread_id), None)
+        self.create_reviewed_with_id(request, None, Some(thread_id), None, LaunchOrigin::User)
     }
 
     /// Inspects a create prompt without starting a provider or writing thread state.
@@ -1159,12 +1163,14 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
-        self.create_reviewed_with_id(request, review_id, None, None)
+        self.create_reviewed_with_id(request, review_id, None, None, LaunchOrigin::User)
     }
 
     /// Creates a reviewed Operations thread using the scheduler's durable operation id. The
     /// Operations ledger reserves this exact id before calling the provider, so a restart can
-    /// correlate the two records without replaying work or relying on process memory.
+    /// correlate the two records without replaying work or relying on process memory. The
+    /// scheduler starts it on the person's behalf, so its session is background work for the
+    /// Resource Governor ([`LaunchOrigin::Background`]): it yields to their agents first.
     pub fn create_reviewed_for_operation(
         &self,
         operation_id: &str,
@@ -1172,7 +1178,13 @@ impl ThreadRuntime {
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(operation_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(operation_id), None)
+        self.create_reviewed_with_id(
+            request,
+            review_id,
+            Some(operation_id),
+            None,
+            LaunchOrigin::Background,
+        )
     }
 
     /// Creates a reviewed thread with a caller-chosen id whose session runs in `cwd` (an
@@ -1190,7 +1202,13 @@ impl ThreadRuntime {
         prepare: impl FnOnce() -> Result<PathBuf>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(thread_id), Some(Box::new(prepare)))
+        self.create_reviewed_with_id(
+            request,
+            review_id,
+            Some(thread_id),
+            Some(Box::new(prepare)),
+            LaunchOrigin::User,
+        )
     }
 
     /// Lets the runtime re-attach and release threads' own worktrees. Set once; later calls are
@@ -1205,6 +1223,7 @@ impl ThreadRuntime {
         review_id: Option<&str>,
         thread_id: Option<&str>,
         cwd: Option<PrepareFolder<'_>>,
+        origin: LaunchOrigin,
     ) -> Result<ThreadSummary> {
         let prompt = validate::prompt(&request.prompt)?;
         let target = create_prompt_target(&request)?;
@@ -1238,6 +1257,7 @@ impl ThreadRuntime {
                     "automatic"
                 },
                 cwd,
+                origin,
             },
             Some(AdmittedPrompt {
                 text: prompt,
@@ -1317,6 +1337,7 @@ impl ThreadRuntime {
                     "default"
                 },
                 cwd: cwd.map(|path| Box::new(move || Ok(path)) as PrepareFolder<'_>),
+                origin: LaunchOrigin::User,
             },
             None,
             thread_id,
@@ -2506,6 +2527,7 @@ impl Inner {
         tracing::info!(event = "thread.created", thread_id = %id, provider_id = %provider_id);
 
         let row = self.row(&id)?;
+        self.live_thread(&row).lock().origin = request.origin;
         self.start_session(&row, &entry, None, prompt, None, None)?;
         self.summary(&id)
     }
@@ -2626,6 +2648,7 @@ impl Inner {
             permission_mode: row.permission_mode,
             resume_session_id: resume_session_id.clone(),
             secret_ref: entry.secret_ref.clone(),
+            launch_origin: state.origin,
         };
         let provider_name = entry.provider.display_name().to_owned();
         let session: Arc<dyn AgentSession> = match entry
@@ -4156,6 +4179,8 @@ impl Inner {
         } else {
             None
         };
+        // The person resumed it: whatever started it first, it is their agent now.
+        self.live_thread(&row).lock().origin = LaunchOrigin::User;
         self.start_session(&row, &entry, resume_id, text, notice, redeliver)
     }
 

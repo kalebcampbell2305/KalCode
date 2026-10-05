@@ -107,6 +107,7 @@ user started, important active services, optional background work, indexing/main
 | --- | --- | --- |
 | User-requested coding agent — any provider, any launch path (pane, New agent, KalVoice, user-initiated Squad or Handoff); its launch and each turn | `evaluate_user_agent_admission` (`admission.rs`), desktop `ResourceGovernorState::reserve_provider_task` | **Only** genuine hard pressure on a current sample (`hard.rs`) or an explicit Custom count limit. Never CPU utilisation, CPU/memory headroom, pressure levels, KalCode's memory share, or missing/stale telemetry. |
 | Optional background work (local model inference and acquisition) | `evaluate_admission` + capacity projection, `reserve_local_task` | Fail-closed: every capacity constraint above, current telemetry, and the unmeasured budgets of agents that just started. It yields first. |
+| Background provider session — one the Operations scheduler starts (`SessionConfig.launch_origin` = `background`, set by `create_reviewed_for_operation`); its launch and each turn | `background_provider_admission` in `reserve_provider_task` | The same fail-closed projected policy as local model work, plus the provider's per-agent budget. Held as `background_yield` ("background work waits while the system is busy, so your agents come first") unless hard pressure is the reason. Start Anyway on that thread, or the person resuming it, admits it under the user-requested policy. |
 
 Hard pressure (`hard.rs`), the only machine condition that delays a user-requested agent:
 

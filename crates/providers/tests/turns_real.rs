@@ -62,6 +62,7 @@ fn two_turns(provider: &dyn AgentProvider) {
                 permission_mode: PermissionMode::Plan,
                 resume_session_id: None,
                 secret_ref: None,
+                launch_origin: Default::default(),
             },
             Box::new(move |e: AgentEvent| {
                 let _ = tx.send(e);

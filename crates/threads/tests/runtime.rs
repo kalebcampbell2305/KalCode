@@ -15,7 +15,7 @@ use kalcode_context::{
     PackageOptions, PromptReview, RenderedPackage, TextOnlyDefaults, WorkspaceRoot,
 };
 use kalcode_contracts::agent::{
-    AgentEvent, FileChange, ModelInfo, ProviderError, ProviderId, Usage,
+    AgentEvent, FileChange, LaunchOrigin, ModelInfo, ProviderError, ProviderId, Usage,
 };
 use kalcode_contracts::events::EventPayload;
 use kalcode_contracts::ids::new_id;
@@ -169,6 +169,40 @@ fn claude_full_model_id_is_preserved_with_a_nonempty_alias_catalog() {
     assert_eq!(
         claude.last_session().config.model.as_deref(),
         Some("claude-sonnet-5")
+    );
+}
+
+/// Owner directive (2026-10-04): a session the Operations scheduler starts is background work
+/// for the Resource Governor, while a thread the person creates, or one they resume (whatever
+/// started it), is theirs. The origin reaches the provider wrapper through `SessionConfig`.
+#[test]
+fn operation_sessions_are_background_and_a_resume_makes_them_the_persons() {
+    let h = Harness::new();
+    h.runtime
+        .create(h.request("the person's own agent"))
+        .expect("create");
+    assert_eq!(
+        h.provider.last_session().config.launch_origin,
+        LaunchOrigin::User
+    );
+
+    let operation_id = new_id();
+    let thread = h
+        .runtime
+        .create_reviewed_for_operation(&operation_id, h.request("scheduled work"), None)
+        .expect("create operation thread");
+    assert_eq!(
+        h.provider.last_session().config.launch_origin,
+        LaunchOrigin::Background
+    );
+
+    h.runtime.stop(&thread.id).expect("stop");
+    h.runtime.resume(&thread.id, None).expect("resume");
+    assert_eq!(h.provider.session_count(), 3);
+    assert_eq!(
+        h.provider.last_session().config.launch_origin,
+        LaunchOrigin::User,
+        "the person resumed it"
     );
 }
 

@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{
     AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, AuthState, DetectionState,
-    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    LaunchOrigin, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::permissions::{ApprovalDecision, PermissionMode};
 use kalcode_contracts::resources::{
@@ -1056,6 +1057,7 @@ fn session_config() -> SessionConfig {
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     }
 }
 
@@ -1874,6 +1876,60 @@ fn cpu_busy_still_throttles_background_work() {
         AdmissionState::Held
     );
     drop(agents);
+    governor.shutdown();
+}
+
+/// Owner directive (2026-10-04), launch origin: under the same CPU load, a session the
+/// Operations scheduler starts (`LaunchOrigin::Background`) yields with its own reason before
+/// anything spawns, while the coding agent the person starts at that moment starts at once — for
+/// every provider. Start Anyway on the held background thread starts it.
+#[test]
+fn cpu_busy_automation_yields_while_a_user_launch_starts() {
+    let governor = cpu_saturated_governor();
+    for provider in [
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::CURSOR,
+        ProviderId::GEMINI_CLI,
+        "future-provider",
+    ] {
+        let adapter = governed(&governor, provider);
+        let automation = SessionConfig {
+            launch_origin: LaunchOrigin::Background,
+            ..session_config()
+        };
+        let Err(ProviderError::ResourcesHeld(hold)) = adapter
+            .provider
+            .start_session(automation.clone(), Box::new(|_: AgentEvent| {}))
+        else {
+            panic!("{provider}: a scheduled session must yield to CPU load");
+        };
+        assert_eq!(hold.kind, LaunchHoldKind::BackgroundYield);
+        assert!(
+            !hold.kind.is_hard_pressure(),
+            "never framed as hard pressure"
+        );
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 0, "nothing spawned");
+
+        let started = Instant::now();
+        let user = adapter
+            .provider
+            .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+            .unwrap_or_else(|error| panic!("{provider}: the person's agent was held: {error}"));
+        user.send(text("work"))
+            .unwrap_or_else(|error| panic!("{provider}: the person's turn was held: {error}"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 1);
+
+        governor.grant_start_anyway(&automation.thread_id);
+        let overridden = adapter
+            .provider
+            .start_session(automation, Box::new(|_: AgentEvent| {}))
+            .expect("Start Anyway starts the held background session");
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 2);
+        drop((user, overridden));
+        assert_eq!(governor.running_work_for_test().agents, 0);
+    }
     governor.shutdown();
 }
 

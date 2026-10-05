@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
+use kalcode_contracts::agent::{AgentProvider, LaunchOrigin, ProviderId, SessionConfig};
 use kalcode_contracts::app::{FeatureId, SurfaceId};
 use kalcode_contracts::kalvoice::{KalVoiceMode, KalVoiceOutcome};
 use kalcode_contracts::permissions::PermissionMode;
@@ -888,6 +888,8 @@ fn account_bound_session_config(
         permission_mode: PermissionMode::Plan,
         resume_session_id: None,
         secret_ref: None,
+        // KalVoice reasoning answers the person's own request.
+        launch_origin: LaunchOrigin::User,
     }
 }
 

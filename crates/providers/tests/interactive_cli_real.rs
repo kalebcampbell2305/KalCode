@@ -67,6 +67,7 @@ fn real_codex_interactive_smoke() {
         permission_mode: PermissionMode::Plan,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     };
     let thread = config.thread_id.clone();
     let (tx, rx) = mpsc::channel();
