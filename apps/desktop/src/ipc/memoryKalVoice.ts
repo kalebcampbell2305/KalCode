@@ -548,7 +548,11 @@ export interface MemoryKalVoice {
   handlers: Record<string, (args: Record<string, unknown>) => unknown>;
   subscribe(onSignal: (signal: KalVoiceSignal) => void): void;
   /** Test hooks: what the fake recognizer hears next. */
-  controls: { setTranscript(text: string): void };
+  controls: {
+    setTranscript(text: string): void;
+    /** Explicit cloud test operation; never routed from a local command or production IPC. */
+    cloudRequest(requestId: string): KalVoiceResponse;
+  };
   /** Wires spoken session names to the transport's `session_resolve`. */
   setSessionResolver(resolver: MemorySessionResolver): void;
   /** KalVoice does not own approval requests; always returns `undefined`. */
@@ -566,7 +570,8 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
   // Like native: automatic (zero-setup) downloads report their phase as `provisioning` items.
   const automatic = new Map<string, ComponentProvisioning>();
   const downloading = new Map<string, ReturnType<typeof setInterval>>();
-  const counted = new Map<string, string>();
+  const handled = new Map<string, string>();
+  const cloudRequests = new Set<string>();
   let used = scenario === "kalvoice-limit" ? FREE_KALVOICE_ALLOWANCE : 0;
   let listening: {
     sessionId: string;
@@ -785,22 +790,14 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     directive: UiDirective | null = null,
   ): KalVoiceResponse => ({ requestId, intent: kind, outcome, usage: usage(), counted: wasCounted, directive });
 
-  // Like native: a command the UI runs itself takes one Request, and a retried id never two.
+  // Like native: local commands retain execution fences without consuming cloud quota.
   const meterUiCommand = (request: UiCommandRequest): KalVoiceResponse => {
     const { requestId } = request;
     const kind = `ui_${request.command}`;
-    if (counted.has(requestId)) return respond(requestId, kind, { kind: "completed", summary: "" }, false);
-    if (used >= FREE_KALVOICE_ALLOWANCE) {
-      emit({
-        type: "kalvoice.limit_reached",
-        payload: { allowance: FREE_KALVOICE_ALLOWANCE, resetsAt: usage().resetsAt },
-      });
-      return respond(requestId, kind, { kind: "limit_reached", resetsAt: usage().resetsAt }, false);
-    }
-    counted.set(requestId, kind);
-    used += 1;
+    if (handled.has(requestId)) return respond(requestId, kind, { kind: "completed", summary: "" }, false);
+    handled.set(requestId, kind);
     emit({ type: "kalvoice.command_executed", payload: { requestId, intent: kind } }, { correlation: { requestId } });
-    return respond(requestId, kind, { kind: "completed", summary: "" }, true);
+    return respond(requestId, kind, { kind: "completed", summary: "" }, false);
   };
 
   const handleRequest = async (
@@ -808,18 +805,13 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     target: TalkRequest["target"] = "none",
   ): Promise<KalVoiceResponse> => {
     const { requestId } = request;
-    if (counted.has(requestId)) {
+    if (handled.has(requestId)) {
       return respond(
         requestId,
         null,
         { kind: "failed", code: "duplicate_request", message: "KalVoice already handled this request." },
         false,
       );
-    }
-    const allowance = FREE_KALVOICE_ALLOWANCE;
-    if (used >= allowance) {
-      emit({ type: "kalvoice.limit_reached", payload: { allowance, resetsAt: usage().resetsAt } });
-      return respond(requestId, null, { kind: "limit_reached", resetsAt: usage().resetsAt }, false);
     }
     emit(
       { type: "kalvoice.request_started", payload: { requestId, input: request.input } },
@@ -905,8 +897,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       }
     }
     if (parsed.outcome?.kind === "failed") return failed(parsed.outcome.code, parsed.outcome.message, parsed.kind);
-    used += 1;
-    counted.set(requestId, parsed.kind);
+    handled.set(requestId, parsed.kind);
     signal({ kind: "request_stage", requestId, stage: "executing" });
     await wait(slow ? 1500 : 30);
     emit(
@@ -918,7 +909,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       requestId,
       parsed.kind,
       parsed.outcome ?? { kind: "completed", summary: "Done." },
-      true,
+      false,
       parsed.directive ?? null,
     );
   };
@@ -1062,9 +1053,8 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     kalvoice_talk: (args) => talk(args.request as TalkRequest),
     kalvoice_type_instead: (args) => {
       const id = String(args.requestId);
-      if (counted.get(id) !== "navigate") return false;
-      counted.delete(id);
-      used = Math.max(0, used - 1);
+      if (handled.get(id) !== "navigate") return false;
+      handled.set(id, "typed_instead");
       emit({ type: "kalvoice.request_failed", payload: { requestId: id, code: "typed_instead" } });
       return true;
     },
@@ -1136,6 +1126,20 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     handlers,
     decideApproval,
     controls: {
+      cloudRequest(requestId) {
+        if (cloudRequests.has(requestId))
+          return respond(
+            requestId,
+            "cloud_test",
+            { kind: "completed", summary: "Cloud test request completed." },
+            false,
+          );
+        if (used >= FREE_KALVOICE_ALLOWANCE)
+          return respond(requestId, "cloud_test", { kind: "limit_reached", resetsAt: usage().resetsAt }, false);
+        cloudRequests.add(requestId);
+        used += 1;
+        return respond(requestId, "cloud_test", { kind: "completed", summary: "Cloud test request completed." }, true);
+      },
       setTranscript(text: string) {
         transcript = text;
       },

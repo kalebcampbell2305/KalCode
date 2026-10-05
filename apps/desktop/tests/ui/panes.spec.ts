@@ -25,9 +25,9 @@ async function openCode(page: Page, query = "?scenario=code") {
 }
 
 const canvas = (page: Page) => page.getByRole("group", { name: /^Panes in / });
-const panes = (page: Page) => page.locator("[data-pane-id]:not([hidden])");
+const panes = (page: Page) => canvas(page).locator("[data-pane-id]:not([hidden])");
 const pane = (page: Page, n: number) => panes(page).nth(n);
-const focusedPane = (page: Page) => page.locator("[data-pane-id][data-focused]");
+const focusedPane = (page: Page) => canvas(page).locator("[data-pane-id][data-focused]");
 const separators = (page: Page) => page.getByRole("separator");
 const terminalText = (scope: Locator) => scope.locator('[role="tabpanel"] .xterm-rows');
 
@@ -446,55 +446,50 @@ test.describe("persistence", () => {
 test.describe("scale", () => {
   test("24 panes: every pane renders, offscreen views are suspended, processes keep running", async ({ page }) => {
     await openCode(page);
-    const id = await workspaceId(page);
     const keys = await pane(page, 0)
       .getByRole("tab")
       .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("data-content-key") ?? ""));
-    const terminals = keys.map((k) => ({ kind: "terminal", terminalId: k.split(":")[1] }));
-    const leaf = (n: number, tabs: unknown[] = []) => ({
-      kind: "leaf",
-      paneId: `p${n}`,
-      tabs,
-      activeTab: 0,
-      collapsed: false,
-    });
-    const row = (start: number, withTabs: boolean) => ({
-      kind: "split",
-      axis: "horizontal",
-      ratios: [167, 167, 167, 167, 166, 166],
-      children: Array.from({ length: 6 }, (_, i) =>
-        leaf(start + i, withTabs && i < terminals.length ? [terminals[i]] : []),
-      ),
-    });
-    const layout = {
-      schemaVersion: 1,
-      root: {
-        kind: "split",
-        axis: "vertical",
-        ratios: [250, 250, 250, 250],
-        children: [row(0, true), row(6, false), row(12, false), row(18, false)],
-      },
-      maximizedPaneId: null,
-      dock: [],
-    };
+    // Workspace canvases stay mounted. Build and save the scale fixture through the UI instead
+    // of replacing disk state and assuming a workspace switch destroys the live canvas.
+    await page.keyboard.press("Control+Alt+6");
+    await expect(panes(page)).toHaveCount(6);
+    // Three occupied panes make view suspension observable. Original tabs stay together;
+    // the two additional shells use the same real UI creation path as local terminals.
+    for (const index of [1, 2]) {
+      await pane(page, index)
+        .getByRole("button", { name: /^Actions for pane/ })
+        .click();
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "New terminal", exact: true }).click();
+      await expect(pane(page, index).getByRole("tab")).toHaveCount(1);
+    }
     const running = await memory(page, (m) => m.runningProcessCount());
-    // The default layout is saved first. Code stays mounted across pages, so the seed (a layout
-    // from a previous run) is written while another workspace is open, and loads on switching back.
-    await expect.poll(() => memory(page, (m) => m.layouts.saves())).toBeGreaterThan(0);
-    await page.getByRole("button", { name: /^Workspace\s/ }).click();
-    await page.getByRole("menuitemradio", { name: /api-server/ }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
-    await page.evaluate(
-      ([w, l]) => (window as unknown as { __kalcodeMemory: Memory }).__kalcodeMemory.layouts.seed(w as string, l),
-      [id, layout] as const,
+    const initialPanes = await panes(page).evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-pane-id")),
     );
+    for (const id of initialPanes) {
+      await canvas(page)
+        .locator(`[data-pane-id="${id}"]`)
+        .getByRole("button", { name: /^Actions for pane/ })
+        .click();
+      await page.keyboard.press("Escape");
+      for (let split = 0; split < 3; split++) await page.keyboard.press("Control+Alt+d");
+    }
+    await expect(panes(page)).toHaveCount(24);
+    await page.getByRole("button", { name: "Layout", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Save this layout…" }).click();
+    await page.getByRole("textbox", { name: "Layout name" }).fill("Twenty-four panes");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.keyboard.press("Control+Alt+6");
+    await expect(panes(page)).toHaveCount(6);
+    await page.getByRole("button", { name: "Layout", exact: true }).click();
     const started = Date.now();
-    await page.getByRole("button", { name: /^Workspace\s/ }).click();
-    await page.getByRole("menuitemradio", { name: /kalcode-site/ }).click();
+    await page.getByRole("menuitem", { name: /^Twenty-four panes/ }).click();
     await expect(panes(page)).toHaveCount(24);
     expect(Date.now() - started).toBeLessThan(3000);
     // Only the terminals in front have a view; the one ended shell has none running.
-    await expect(page.locator(".xterm")).toHaveCount(terminals.length);
+    await expect(canvas(page).getByRole("tab")).toHaveCount(keys.length + 2);
+    await expect(page.locator(".xterm")).toHaveCount(3);
     expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
     await expect(page.getByText("24 panes")).toBeVisible();
     // Maximizing one suspends the other views; restoring brings them back.
@@ -502,7 +497,7 @@ test.describe("scale", () => {
     await page.keyboard.press("Control+Alt+Enter");
     await expect(page.locator(".xterm:visible")).toHaveCount(1);
     await page.keyboard.press("Control+Alt+Enter");
-    await expect(page.locator(".xterm:visible")).toHaveCount(terminals.length);
+    await expect(page.locator(".xterm:visible")).toHaveCount(3);
     expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
   });
 });
