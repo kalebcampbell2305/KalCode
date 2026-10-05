@@ -26,8 +26,13 @@
   }
 }
 
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .spin {
+  :root:not([data-motion="full"]) .spin {
     animation: none;
   }
+}
+
+:root[data-motion="reduced"] .spin {
+  animation: none;
 }
