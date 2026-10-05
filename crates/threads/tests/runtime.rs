@@ -649,6 +649,78 @@ fn tool_calls_are_recorded_with_their_outcome() {
     );
 }
 
+/// Bug B: a classified tool status (RUNNING COMMAND, EDITING, TESTING) or the provider's own
+/// prompt for that tool (WAITING FOR YOU) stuck after the tool finished, because only
+/// `RunningTool` returned to WORKING.
+#[test]
+fn a_finished_tool_returns_its_tool_or_prompt_status_to_working() {
+    let h = Harness::new();
+    let id = started(&h, "work");
+    let session = h.provider.last_session();
+
+    for (index, status) in [
+        ThreadStatus::RunningCommand,
+        ThreadStatus::Editing,
+        ThreadStatus::Testing,
+        ThreadStatus::WaitingForUser,
+        ThreadStatus::RunningTool,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let call = format!("t{index}");
+        session.emit(AgentEvent::ToolRequested {
+            tool_call_id: call.clone(),
+            tool: "Bash".into(),
+            summary: "Run it".into(),
+        });
+        session.emit(AgentEvent::ToolStarted {
+            tool_call_id: call.clone(),
+        });
+        session.emit(AgentEvent::Status {
+            status,
+            detail: Some("Answer in Codex".into()),
+        });
+        wait_status(&h, &id, status);
+        session.emit(AgentEvent::ToolCompleted {
+            tool_call_id: call,
+            ok: true,
+            summary: None,
+        });
+        wait_status(&h, &id, ThreadStatus::Active);
+    }
+
+    // A tool that completes after its turn ended never wakes an idle agent.
+    session.emit(AgentEvent::ToolRequested {
+        tool_call_id: "late".into(),
+        tool: "Bash".into(),
+        summary: "Run it".into(),
+    });
+    session.emit(AgentEvent::ToolStarted {
+        tool_call_id: "late".into(),
+    });
+    session.emit(AgentEvent::Status {
+        status: ThreadStatus::RunningCommand,
+        detail: Some("Run it".into()),
+    });
+    wait_status(&h, &id, ThreadStatus::RunningCommand);
+    session.emit(AgentEvent::TurnCompleted { ok: true });
+    wait_status(&h, &id, ThreadStatus::Idle);
+    session.emit(AgentEvent::ToolCompleted {
+        tool_call_id: "late".into(),
+        ok: true,
+        summary: None,
+    });
+    wait_until("late call recorded", || {
+        h.runtime
+            .tool_calls(&id, 50)
+            .unwrap()
+            .iter()
+            .all(|call| call.completed_at.is_some())
+    });
+    assert_eq!(status(&h, &id), ThreadStatus::Idle);
+}
+
 #[test]
 fn file_changes_and_usage_are_recorded() {
     let h = Harness::new();
@@ -1925,7 +1997,11 @@ fn crash_recovery_interrupts_threads_left_running() {
         ThreadStatus::Idle,
         "resumed and waiting for input"
     );
-    assert_eq!(resumed.current_activity, None);
+    // The relaunched session is at its prompt with no task yet: READY.
+    assert_eq!(
+        resumed.current_activity.as_deref(),
+        Some(kalcode_threads::runtime::READY_ACTIVITY)
+    );
     let messages = runtime.messages(&running, 10, None).unwrap();
     assert_eq!(messages[0].content, "running", "history survived the crash");
 }

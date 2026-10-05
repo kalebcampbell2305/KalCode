@@ -170,6 +170,9 @@ fn valid_local_grounding(intent: &KalVoiceIntent) -> bool {
             | KalVoiceIntent::ShowApprovals
             | KalVoiceIntent::StatusReport
             | KalVoiceIntent::FilterDashboard { .. }
+            | KalVoiceIntent::FilterAgents { .. }
+            | KalVoiceIntent::CountAgents { .. }
+            | KalVoiceIntent::WhichAgents { .. }
             | KalVoiceIntent::FocusByState { .. }
             | KalVoiceIntent::FocusPrevious
             | KalVoiceIntent::WhichSessions { .. }
@@ -366,6 +369,14 @@ pub(crate) fn validate_action(
         KalVoiceIntent::FocusByState { .. }
         | KalVoiceIntent::FocusPrevious
         | KalVoiceIntent::WhichSessions { .. } => true,
+        KalVoiceIntent::FilterAgents { provider_id, .. }
+        | KalVoiceIntent::CountAgents { provider_id, .. }
+        | KalVoiceIntent::WhichAgents { provider_id, .. }
+        | KalVoiceIntent::OpenFinishedAgent { provider_id } => {
+            provider_id.as_ref().is_none_or(valid_provider)
+        }
+        // Closing agents ends real provider processes: only the deterministic grammar may ask.
+        KalVoiceIntent::CloseIdleAgents { .. } => false,
         // Anything that sends or removes prompt text comes only from the deterministic
         // grammar: an interpreted guess must never put words into a provider session.
         KalVoiceIntent::SubmitFocused
@@ -500,7 +511,7 @@ fn valid_workspace_name(name: &str) -> bool {
 fn valid_provider(provider: &ProviderId) -> bool {
     matches!(
         provider.as_str(),
-        ProviderId::CLAUDE_CODE | ProviderId::CODEX | ProviderId::GEMINI_CLI
+        ProviderId::CLAUDE_CODE | ProviderId::CODEX | ProviderId::CURSOR | ProviderId::GEMINI_CLI
     )
 }
 

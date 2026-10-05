@@ -1,12 +1,12 @@
 /**
- * The Command Deck's right rail: every coding agent (Claude Code, Codex or Gemini CLI in a Code
- * terminal pane), grouped by what it needs — agents waiting on the person first, then working,
- * then blocked; idle agents fold away and the last few that finished stay briefly. Each row opens
+ * The Command Deck's right rail: every coding agent (any provider's coding terminal in Code),
+ * grouped by the shared agent state — agents that need the person first, then failed, working and
+ * waiting; idle agents fold away and the last few that finished stay briefly. Each row opens
  * the agent's terminal in Code. Chat threads live in Threads, not here. Collapses to a narrow
  * strip of live counts: on its own while no agent runs and nothing needs the person, or when the
  * person collapses it.
  */
-import type { ThreadSummary } from "@kalcode/protocol";
+import { AGENT_STATE_TEXT, AGENT_STATE_TONE, agentStateOf, isAgentBusy, type ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
 import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw, X } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -15,7 +15,6 @@ import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useArchivedCodingAgents, useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
-import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
@@ -141,7 +140,8 @@ function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: ()
   const counts = [
     { tone: "waiting", value: sections.needsYou.length, label: "need you" },
     { tone: "working", value: sections.working.length, label: "working" },
-    { tone: "muted", value: sections.blocked.length, label: "blocked" },
+    { tone: "muted", value: sections.blocked.length, label: "waiting" },
+    { tone: "failed", value: sections.failed.length, label: "failed" },
   ].filter((c) => c.value > 0);
   return (
     <div className={styles.stripCounts}>
@@ -203,16 +203,20 @@ function AgentList({
     else navigate("code");
   };
 
-  if (running === 0 && sections.needsYou.length === 0 && sections.finished.length === 0 && sections.idle.length === 0) {
+  if (
+    running === 0 &&
+    sections.needsYou.length === 0 &&
+    sections.failed.length === 0 &&
+    sections.finished.length === 0 &&
+    sections.idle.length === 0
+  ) {
     return (
       <div className={styles.empty}>
         <span className={styles.emptyArt} aria-hidden="true">
           <Bot />
         </span>
         <p className={styles.emptyTitle}>No agents running</p>
-        <p className={styles.emptyText}>
-          Launch a Claude Code or Codex agent in Code and it shows up here while it works.
-        </p>
+        <p className={styles.emptyText}>Launch a coding agent in Code and it shows up here while it works.</p>
         <Button size="sm" variant="secondary" icon={<Plus />} onClick={launchAgent}>
           Launch an agent
         </Button>
@@ -232,8 +236,17 @@ function AgentList({
         handles={handles}
         {...rowActions}
       />
+      <Group
+        title="Failed"
+        tone="failed"
+        threads={sections.failed}
+        now={now}
+        onOpen={open}
+        handles={handles}
+        {...rowActions}
+      />
       <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} handles={handles} />
-      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
+      <Group title="Waiting" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
       {sections.idle.length > 0 ? (
         <section className={styles.group}>
           <button
@@ -329,11 +342,13 @@ function AgentRow({
   /** Present for agents whose session is over: the row's X clears them. */
   onDismiss?: (t: ThreadSummary) => void;
 }) {
-  const meta = STATUS_META[thread.status];
+  const state = agentStateOf(thread);
+  const tone = AGENT_STATE_TONE[state];
+  const label = AGENT_STATE_TEXT[state];
   const since = Date.parse(thread.lastActivityAt);
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
-  const live = meta.group === "working";
-  const detail = meta.group === "working" && thread.currentActivity ? thread.currentActivity : meta.label;
+  const live = isAgentBusy(state);
+  const detail = live && thread.currentActivity ? `${label} · ${thread.currentActivity}` : label;
   const dismissible = onDismiss !== undefined && isClearableAgent(thread);
   const isLeaving = leaving?.has(thread.id) ?? false;
   return (
@@ -346,10 +361,11 @@ function AgentRow({
       <button
         type="button"
         className={styles.row}
-        data-tone={meta.tone}
-        data-group={meta.group}
+        data-tone={tone}
+        data-group={state === "needs_you" ? "attention" : state}
+        data-state={state}
         onClick={() => onOpen(thread)}
-        aria-label={`${thread.name}, ${meta.label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
+        aria-label={`${thread.name}, ${label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
       >
         <span className={styles.rowGlyph} aria-hidden="true">
           <ProviderGlyph provider={thread.providerId} size="sm" />

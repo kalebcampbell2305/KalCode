@@ -1,13 +1,16 @@
-import type { ThreadSummary } from "@kalcode/protocol";
+import { agentStateOf, type ThreadSummary } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PaneAttention } from "../../shell/panes/contentRegistry.ts";
 
-/** Shared lifecycle facts only: chat sessions and archived agents never request pane attention. */
+/**
+ * The shared agent state only (every provider alike): chat sessions and archived agents never
+ * request pane attention.
+ */
 export function agentAttention(thread: ThreadSummary): PaneAttention | null {
   if (thread.runtimeKind !== "interactive_pty" || thread.archivedAt !== null) return null;
-  if (thread.pendingApprovals > 0 || thread.status === "waiting_for_permission" || thread.status === "waiting_for_user")
-    return "needs-you";
-  return thread.status === "completed" ? "completed" : null;
+  const state = agentStateOf(thread);
+  if (state === "needs_you") return "needs-you";
+  return state === "done" ? "completed" : null;
 }
 
 interface AttentionRecord {

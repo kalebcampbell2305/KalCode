@@ -13,6 +13,7 @@
 //! phase 1) and `workspace_ui` (Z7 display statuses and pane layouts).
 
 pub mod agent;
+pub mod agent_state;
 pub mod app;
 pub mod context;
 pub mod events;

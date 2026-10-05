@@ -1,5 +1,5 @@
 /** Compact Projects view over canonical workspaces and the native rail's persistent pins. */
-import type { ThreadSummary } from "@kalcode/protocol";
+import { agentStateOf, isAgentBusy, type ThreadSummary } from "@kalcode/protocol";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,7 +13,6 @@ import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, FolderX, MoreHorizontal, 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
-import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
 import { useNavigation } from "../navigation.tsx";
 import { useRail } from "../rail/RailProvider.tsx";
 import { useDeckUi } from "./DeckUi.tsx";
@@ -27,11 +26,11 @@ function countsByWorkspace(threads: readonly ThreadSummary[]): Map<string, Count
   const map = new Map<string, Counts>();
   for (const thread of threads) {
     if (thread.archivedAt !== null) continue;
-    const group = STATUS_META[thread.status].group;
-    if (group !== "working" && group !== "attention") continue;
+    const state = agentStateOf(thread);
+    if (!isAgentBusy(state) && state !== "needs_you") continue;
     const counts = map.get(thread.workspaceId) ?? { working: 0, needsYou: 0 };
-    if (group === "working") counts.working += 1;
-    else counts.needsYou += 1;
+    if (state === "needs_you") counts.needsYou += 1;
+    else counts.working += 1;
     map.set(thread.workspaceId, counts);
   }
   return map;

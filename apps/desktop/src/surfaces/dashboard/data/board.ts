@@ -1,4 +1,12 @@
 import {
+  AGENT_FILTER_LABEL,
+  AGENT_FILTERS,
+  AGENT_STATE_TEXT,
+  type AgentCounts,
+  type AgentFilter,
+  agentCounts,
+  agentFilterOf,
+  agentStateOf,
   type DashboardChip,
   type DisplayStatus,
   displayStatusOf,
@@ -52,44 +60,33 @@ export function summaryLine(counts: ChipCounts): string {
   return [head, ...parts].join(" · ");
 }
 
-// ---- Agent Fleet groups (owner request 2026-10-03) ----
+// ---- Agent Fleet groups (owner directives 2026-10-03, 2026-10-04) ----
 //
-// The Fleet shows six filters: ALL, NEEDS YOU, WORKING, DONE, IDLE and FAILED. They partition the
-// agents exactly (every agent is in one group), so the summary adds up. They follow the contract
-// chips, except that FAILED is its own group: a failed run needs a decision (retry or clear), not
-// an answer, and hundreds of old failures must never bury the agents that are waiting on a reply.
+// The Fleet's status filters are the shared agent-state filters (`@kalcode/protocol`
+// agent-state): ALL, NEEDS YOU, WORKING, WAITING, IDLE, DONE and FAILED. They partition the agents
+// of every provider exactly (every agent is in one group), so the summary adds up. A provider
+// filter narrows the list separately and never replaces them.
 
-export type FleetGroupId = "needs_you" | "working" | "done" | "idle" | "failed";
-export type FleetFilter = "all" | FleetGroupId;
+export type FleetGroupId = Exclude<AgentFilter, "all">;
+export type FleetFilter = AgentFilter;
 
-export const FLEET_FILTERS: readonly FleetFilter[] = ["all", "needs_you", "working", "done", "idle", "failed"];
+export const FLEET_FILTERS: readonly FleetFilter[] = AGENT_FILTERS;
 /** Status groups in board order: what needs the person first, history last. */
-export const FLEET_GROUPS: readonly FleetGroupId[] = ["needs_you", "working", "done", "idle", "failed"];
+export const FLEET_GROUPS: readonly FleetGroupId[] = ["needs_you", "working", "waiting", "done", "idle", "failed"];
 
-export const FLEET_FILTER_LABELS: Record<FleetFilter, string> = {
-  all: "All",
-  needs_you: "Needs you",
-  working: "Working",
-  done: "Done",
-  idle: "Idle",
-  failed: "Failed",
-};
+export const FLEET_FILTER_LABELS: Record<FleetFilter, string> = AGENT_FILTER_LABEL;
 
-export type FleetCounts = Record<FleetFilter, number>;
+export type FleetCounts = AgentCounts;
 
-export function fleetGroupOf(status: ThreadStatus): FleetGroupId {
-  if (status === "failed") return "failed";
-  const chip = chipOf(status);
-  return chip === "waiting_for_you" ? "needs_you" : chip === "all" ? "idle" : chip;
+type AgentFacts = Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals">;
+
+/** The agent's status group, from the shared agent-state model (never from its provider). */
+export function fleetGroupOf(agent: AgentFacts): FleetGroupId {
+  return agentFilterOf(agent);
 }
 
-export function fleetCounts(threads: readonly ThreadSummary[]): FleetCounts {
-  const counts: FleetCounts = { all: 0, needs_you: 0, working: 0, done: 0, idle: 0, failed: 0 };
-  for (const thread of threads) {
-    counts.all += 1;
-    counts[fleetGroupOf(thread.status)] += 1;
-  }
-  return counts;
+export function fleetCounts(threads: readonly AgentFacts[]): FleetCounts {
+  return agentCounts(threads);
 }
 
 /** "27 agents · 1 working · 2 need you · 9 done · 15 idle": real counts, zero groups left out. */
@@ -98,6 +95,7 @@ export function fleetSummaryLine(counts: FleetCounts): string {
   const parts = [
     counts.working ? `${counts.working} working` : null,
     counts.needs_you ? `${counts.needs_you} ${counts.needs_you === 1 ? "needs" : "need"} you` : null,
+    counts.waiting ? `${counts.waiting} waiting` : null,
     counts.done ? `${counts.done} done` : null,
     counts.idle ? `${counts.idle} idle` : null,
     counts.failed ? `${counts.failed} failed` : null,
@@ -105,13 +103,13 @@ export function fleetSummaryLine(counts: FleetCounts): string {
   return [head, ...parts.filter(Boolean)].join(" · ");
 }
 
-/** A Dashboard chip request (KalVoice, notifications) as the Fleet filter that shows it. */
+/** A Dashboard chip request (notifications) as the Fleet filter that shows it. */
 export function fleetFilterOf(chip: DashboardChip): FleetFilter {
   return chip === "waiting_for_you" ? "needs_you" : chip;
 }
 
 function searchFields(thread: ThreadSummary, extra: readonly (string | undefined)[]): string[] {
-  const group = fleetGroupOf(thread.status);
+  const group = fleetGroupOf(thread);
   return [
     thread.name,
     thread.workspaceName,
@@ -122,7 +120,7 @@ function searchFields(thread: ThreadSummary, extra: readonly (string | undefined
     thread.effort,
     thread.currentActivity,
     FLEET_FILTER_LABELS[group],
-    group === "needs_you" ? "waiting" : null,
+    AGENT_STATE_TEXT[agentStateOf(thread)],
     thread.error?.message,
     ...extra,
   ]
@@ -159,8 +157,11 @@ export function filterThreads(
   filter: FleetFilter,
   query: string,
   extraFields?: (thread: ThreadSummary) => readonly (string | undefined)[],
+  providerId: string | null = null,
 ): ThreadSummary[] {
-  const inFilter = filter === "all" ? [...threads] : threads.filter((t) => fleetGroupOf(t.status) === filter);
+  const inFilter = threads.filter(
+    (t) => (filter === "all" || fleetGroupOf(t) === filter) && (providerId === null || t.providerId === providerId),
+  );
   const q = query.trim().toLowerCase().replace(/\s+/g, " ");
   if (!q) return inFilter;
   const extra = (t: ThreadSummary) => extraFields?.(t) ?? [];
@@ -185,8 +186,8 @@ export const GROUP_MODE_LABELS: Record<GroupMode, string> = {
  */
 export const GROUP_MODES: readonly GroupMode[] = ["status", "project", "provider"];
 
-/** Urgency within the board: needs you, working, failed (a decision), done, idle. */
-const GROUP_RANK: Record<FleetGroupId, number> = { needs_you: 0, working: 1, failed: 2, done: 3, idle: 4 };
+/** Urgency within the board: needs you, working, failed (a decision), waiting, done, idle. */
+const GROUP_RANK: Record<FleetGroupId, number> = { needs_you: 0, working: 1, failed: 2, waiting: 3, done: 4, idle: 5 };
 
 /** Within a chip: the display statuses that need the person most come first. */
 const DISPLAY_RANK: Record<DisplayStatus, number> = {
@@ -214,7 +215,7 @@ export function compareThreads(a: ThreadSummary, b: ThreadSummary): number {
   const da = displayStatusOf(a.status);
   const db = displayStatusOf(b.status);
   return (
-    GROUP_RANK[fleetGroupOf(a.status)] - GROUP_RANK[fleetGroupOf(b.status)] ||
+    GROUP_RANK[fleetGroupOf(a)] - GROUP_RANK[fleetGroupOf(b)] ||
     DISPLAY_RANK[da.status] - DISPLAY_RANK[db.status] ||
     time(b.lastActivityAt) - time(a.lastActivityAt) ||
     a.name.localeCompare(b.name) ||
@@ -240,7 +241,7 @@ function makeGroup(key: string, label: string, mode: GroupMode, threads: ThreadS
   let needsYou = 0;
   let working = 0;
   for (const t of threads) {
-    const group = fleetGroupOf(t.status);
+    const group = fleetGroupOf(t);
     if (group === "needs_you") needsYou += 1;
     if (group === "working") working += 1;
   }
@@ -255,7 +256,7 @@ export function groupThreads(threads: readonly ThreadSummary[], mode: GroupMode)
   if (mode === "status") {
     const buckets = new Map<FleetGroupId, ThreadSummary[]>();
     for (const t of threads) {
-      const group = fleetGroupOf(t.status);
+      const group = fleetGroupOf(t);
       const list = buckets.get(group) ?? [];
       list.push(t);
       buckets.set(group, list);

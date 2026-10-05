@@ -12,8 +12,11 @@
 //! needs the Session Locator feature (gated on Stable), so both are refused before anything is
 //! counted.
 //!
-//! Z7-W3: `filter_dashboard` only changes what the Dashboard shows; its summary counts the
-//! runtime's non-archived threads by Dashboard chip (`ThreadStatus::chip`).
+//! Agent status (owner directive 2026-10-04): `filter_agents`, `count_agents`, `which_agents`,
+//! `open_finished_agent` and `close_idle_agents` read coding agents only (interactive provider
+//! panes, never chat threads) through the shared `AgentState` model, so every provider's agents
+//! are counted, filtered, opened and closed alike. `filter_agents` only changes what the Agents
+//! tab shows; `close_idle_agents` hands KalTidy's canonical idle-agent close to the UI.
 //!
 //! 0.1.5 switch accounts: `rebind_thread_account` only resolves the thread and account and asks
 //! the person to confirm KalCode's Rebind dialog (`confirm_thread_rebind`); KalVoice never
@@ -33,6 +36,7 @@
 use std::sync::Arc;
 
 use kalcode_contracts::agent::{AuthState, ProviderId};
+use kalcode_contracts::agent_state::{AgentFilter, AgentState};
 use kalcode_contracts::app::{FeatureId, SurfaceId};
 use kalcode_contracts::context::PromptReview;
 use kalcode_contracts::kalvoice::{
@@ -414,44 +418,126 @@ fn launch_retry_groups_text(
     Some(format!("retry launch groups {encoded}"))
 }
 
-/// What KalVoice says after filtering the Dashboard. `count` is the number of non-archived
-/// threads under `chip` (and `total` all of them) when the thread runtime is available.
-fn filter_summary(chip: DashboardChip, counts: Option<(usize, usize)>) -> String {
+/// The agent filter that shows a legacy Dashboard chip (older `filter_dashboard` payloads).
+fn agent_filter_of_chip(chip: DashboardChip) -> AgentFilter {
+    match chip {
+        DashboardChip::All => AgentFilter::All,
+        DashboardChip::WaitingForYou => AgentFilter::NeedsYou,
+        DashboardChip::Working => AgentFilter::Working,
+        DashboardChip::Done => AgentFilter::Done,
+        DashboardChip::Idle => AgentFilter::Idle,
+    }
+}
+
+/// An agent's state in the shared model: the same facts give the same state for every provider.
+fn agent_state(agent: &ThreadSummary) -> AgentState {
+    AgentState::of(
+        agent.status,
+        agent.current_activity.as_deref(),
+        agent.pending_approvals,
+    )
+}
+
+/// Whether KalTidy's idle-agent close takes this agent: idle at its prompt (ready, or idle after
+/// work), exactly the Fleet's Close idle. A paused or offline agent keeps its session, and an
+/// agent whose last turn failed is a failed agent (KalTidy's Clear failed).
+fn idle_closable(agent: &ThreadSummary) -> bool {
+    agent.status == ThreadStatus::Idle && agent_state(agent).filter() == AgentFilter::Idle
+}
+
+/// "agents" / "1 agent" / "Codex agents": the provider only when the person named one.
+fn agents_noun(count: usize, provider: Option<&ProviderId>) -> String {
+    let noun = if count == 1 { "agent" } else { "agents" };
+    match provider {
+        Some(provider) => format!("{} {noun}", provider_display_name(provider)),
+        None => noun.to_owned(),
+    }
+}
+
+/// "3 agents working", "1 agent needs you", "No Codex agents have failed": one provider-neutral
+/// sentence for how many agents are in `filter` (without the final period).
+fn agents_in_state(count: usize, filter: AgentFilter, provider: Option<&ProviderId>) -> String {
+    let noun = agents_noun(count, provider);
+    if count == 0 {
+        return match filter {
+            AgentFilter::All => format!("No {noun} are open"),
+            AgentFilter::NeedsYou => format!("No {noun} need you"),
+            AgentFilter::Working => format!("No {noun} are working"),
+            AgentFilter::Waiting => format!("No {noun} are waiting"),
+            AgentFilter::Idle => format!("No {noun} are idle"),
+            AgentFilter::Done => format!("No {noun} are done"),
+            AgentFilter::Failed => format!("No {noun} have failed"),
+        };
+    }
+    match filter {
+        AgentFilter::All => format!("{count} {noun}"),
+        AgentFilter::NeedsYou if count == 1 => format!("1 {noun} needs you"),
+        filter => format!("{count} {noun} {}", filter.words()),
+    }
+}
+
+/// What KalVoice says after filtering the Agents tab. `counts` is (agents in `filter`, all
+/// agents) of the named provider, or of every provider, when the thread runtime is available.
+fn agent_filter_summary(
+    filter: AgentFilter,
+    provider: Option<&ProviderId>,
+    counts: Option<(usize, usize)>,
+) -> String {
     let Some((count, total)) = counts else {
-        return match chip {
-            DashboardChip::All => "Showing every agent on the Dashboard.".into(),
-            DashboardChip::Working => "Showing working agents on the Dashboard.".into(),
-            DashboardChip::WaitingForYou => {
-                "Showing what's waiting for you on the Dashboard.".into()
-            }
-            DashboardChip::Done => "Showing completed work on the Dashboard.".into(),
-            DashboardChip::Idle => "Showing idle agents on the Dashboard.".into(),
+        let noun = agents_noun(2, provider);
+        return match filter {
+            AgentFilter::All => format!("Showing every {}.", agents_noun(1, provider)),
+            AgentFilter::NeedsYou => format!("Showing {noun} that need you."),
+            filter => format!("Showing {} {noun}.", filter.words()),
         };
     };
-    match chip {
-        DashboardChip::All if total == 0 => "There are no agents yet.".into(),
-        DashboardChip::All => format!("Showing all {}.", plural(total, "agent", "agents")),
-        DashboardChip::Working if count == 0 => "No agents are working right now.".into(),
-        DashboardChip::Working => format!(
-            "Showing {count} working {}.",
-            if count == 1 { "agent" } else { "agents" }
-        ),
-        DashboardChip::WaitingForYou if count == 0 => "Nothing is waiting for you.".into(),
-        DashboardChip::WaitingForYou => format!(
-            "{} waiting for you.",
-            plural(count, "agent is", "agents are")
-        ),
-        DashboardChip::Done if count == 0 => "No agents have completed yet.".into(),
-        DashboardChip::Done => format!(
-            "Showing {count} completed {}.",
-            if count == 1 { "agent" } else { "agents" }
-        ),
-        DashboardChip::Idle if count == 0 => "No agents are idle.".into(),
-        DashboardChip::Idle => format!(
-            "Showing {count} idle {}.",
-            if count == 1 { "agent" } else { "agents" }
+    match filter {
+        AgentFilter::All if total == 0 => format!("There are no {} yet.", agents_noun(2, provider)),
+        AgentFilter::All => format!("Showing all {total} {}.", agents_noun(total, provider)),
+        _ if count == 0 => format!("{}.", agents_in_state(0, filter, provider)),
+        AgentFilter::NeedsYou => format!("{}.", agents_in_state(count, filter, provider)),
+        filter => format!(
+            "Showing {count} {} {}.",
+            filter.words(),
+            agents_noun(count, provider)
         ),
     }
+}
+
+/// "5 agents: 1 needs you, 2 working, 2 idle." over agents of every provider (or one).
+fn agents_breakdown(agents: &[ThreadSummary], provider: Option<&ProviderId>) -> String {
+    if agents.is_empty() {
+        return format!("{}.", agents_in_state(0, AgentFilter::All, provider));
+    }
+    let parts: Vec<String> = AgentFilter::ALL
+        .into_iter()
+        .filter(|filter| *filter != AgentFilter::All)
+        .filter_map(|filter| {
+            let count = agents
+                .iter()
+                .filter(|agent| filter.matches(agent_state(agent)))
+                .count();
+            (count > 0).then(|| match filter {
+                AgentFilter::NeedsYou if count == 1 => "1 needs you".to_owned(),
+                filter => format!("{count} {}", filter.words()),
+            })
+        })
+        .collect();
+    format!(
+        "{} {}: {}.",
+        agents.len(),
+        agents_noun(agents.len(), provider),
+        parts.join(", ")
+    )
+}
+
+/// When an agent last changed, for "the agent that just finished". Unreadable times sort first.
+fn activity_time(agent: &ThreadSummary) -> Option<time::OffsetDateTime> {
+    time::OffsetDateTime::parse(
+        &agent.last_activity_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok()
 }
 
 /// "Paused 3 threads." / "Paused 2 of 3 threads. <first reason>" / "No threads were working…".
@@ -1260,6 +1346,14 @@ impl DesktopExecutor {
     }
 
     fn status_report(&self) -> Result<Executed, ExecError> {
+        // Agents are the coding terminals of every provider, in the shared agent states.
+        let agents = self.coding_agents()?;
+        if !agents.is_empty() {
+            return Ok(Executed {
+                summary: agents_breakdown(&agents, None),
+                directive: None,
+            });
+        }
         let summary = self
             .threads()?
             .status_summary()
@@ -1288,6 +1382,106 @@ impl DesktopExecutor {
             summary: text,
             directive: None,
         })
+    }
+}
+
+impl DesktopExecutor {
+    /// Open coding agents of every provider: interactive provider panes (the durable pane
+    /// marker), never chat threads. The store listing's order: most recent first.
+    fn coding_agents(&self) -> Result<Vec<ThreadSummary>, ExecError> {
+        let sessions = self.core.paths().data_dir.join("sessions");
+        let mut agents = self
+            .threads()?
+            .list(None, false)
+            .map_err(|e| from_core(&e))?;
+        agents.retain(|thread| {
+            kalcode_providers::interactive::provider::marked_interactive(&sessions, &thread.id)
+        });
+        Ok(agents)
+    }
+
+    /// [`Self::coding_agents`] of one provider when the person named one, else of every provider.
+    fn agents_of(&self, provider: Option<&ProviderId>) -> Result<Vec<ThreadSummary>, ExecError> {
+        let mut agents = self.coding_agents()?;
+        agents.retain(|agent| provider.is_none_or(|provider| agent.provider_id == *provider));
+        Ok(agents)
+    }
+
+    /// "Show me all agents that need me": the Agents tab filtered, with a count when the thread
+    /// runtime can be read (the filter itself never needs it).
+    fn filter_agents(&self, filter: AgentFilter, provider: Option<&ProviderId>) -> Executed {
+        let counts = self
+            .threads
+            .as_ref()
+            .and_then(|_| self.agents_of(provider).ok())
+            .map(|agents| {
+                let count = agents
+                    .iter()
+                    .filter(|agent| filter.matches(agent_state(agent)))
+                    .count();
+                (count, agents.len())
+            });
+        Executed {
+            summary: agent_filter_summary(filter, provider, counts),
+            directive: Some(UiDirective::FilterAgents {
+                filter,
+                provider_id: provider.cloned(),
+            }),
+        }
+    }
+
+    /// "Which agents need me?": up to three names (current workspace first), the rest counted,
+    /// and the Agents tab showing them.
+    fn which_agents(
+        &self,
+        filter: AgentFilter,
+        provider: Option<&ProviderId>,
+        ctx: &ExecContext,
+    ) -> Result<Executed, ExecError> {
+        let mut found = self.agents_of(provider)?;
+        found.retain(|agent| filter.matches(agent_state(agent)));
+        let workspace = ctx.workspace_id.as_deref();
+        found.sort_by_key(|agent| workspace.is_none_or(|w| agent.workspace_id != w));
+        let refs: Vec<&ThreadSummary> = found.iter().collect();
+        let shown = &refs[..refs.len().min(3)];
+        let summary = if found.is_empty() {
+            format!("{}.", agents_in_state(0, filter, provider))
+        } else {
+            let mut names = spoken_labels(shown);
+            let more = found.len() - shown.len();
+            if more > 0 {
+                names.push(format!("{more} more"));
+            }
+            format!(
+                "{}: {}.",
+                agents_in_state(found.len(), filter, provider),
+                and_list(&names)
+            )
+        };
+        Ok(Executed {
+            summary,
+            directive: Some(UiDirective::FilterAgents {
+                filter,
+                provider_id: provider.cloned(),
+            }),
+        })
+    }
+
+    /// "The agent that just finished": the coding agent, of any provider (or the named one),
+    /// whose work most recently finished: done, or back at its prompt after a turn. A provider
+    /// pane rarely reaches `completed` (its session stays open between turns), so an agent idle
+    /// after work counts; one that is only ready, stopped or failed does not.
+    fn finished_agent(&self, provider: Option<&ProviderId>) -> Result<ThreadSummary, ExecError> {
+        self.agents_of(provider)?
+            .into_iter()
+            .filter(|agent| matches!(agent_state(agent), AgentState::Done | AgentState::Idle))
+            .max_by_key(activity_time)
+            .ok_or_else(|| {
+                ExecError::new(
+                    "finished_agent_not_found",
+                    format!("No {} has finished yet.", agents_noun(1, provider)),
+                )
+            })
     }
 }
 
@@ -1504,23 +1698,6 @@ impl DesktopExecutor {
         verb: &str,
     ) -> Result<ThreadSummary, ExecError> {
         let threads = self.sessions_for_query(query)?;
-        if use_ == TargetUse::Open && query == "cursor agent that just finished" {
-            let workspace = self.target_workspace(ctx.workspace_id.as_deref())?;
-            return threads
-                .into_iter()
-                .find(|thread| {
-                    thread.provider_id.as_str() == ProviderId::CURSOR
-                        && thread.workspace_id == workspace.id
-                        && thread.runtime_kind == Some(ThreadRuntimeKind::InteractivePty)
-                        && thread.status == ThreadStatus::Completed
-                })
-                .ok_or_else(|| {
-                    ExecError::new(
-                        "completed_agent_not_found",
-                        "No completed Cursor coding terminal was found in the current workspace.",
-                    )
-                });
-        }
         // "There" points at the session in front, like "it".
         let query = if query.trim().eq_ignore_ascii_case("there") {
             "it"
@@ -1776,10 +1953,17 @@ impl DesktopExecutor {
             SessionAttention::WaitingForPermission if self.permissions.is_some() => {
                 Some(UiDirective::ShowApprovals)
             }
-            SessionAttention::WaitingForPermission
-            | SessionAttention::WaitingForYou
-            | SessionAttention::Failed => Some(UiDirective::FilterDashboard {
-                chip: DashboardChip::WaitingForYou,
+            // The Agents tab group that holds them: Needs you, or Failed (never hidden in
+            // Needs you, which doesn't show failed agents).
+            SessionAttention::WaitingForPermission | SessionAttention::WaitingForYou => {
+                Some(UiDirective::FilterAgents {
+                    filter: AgentFilter::NeedsYou,
+                    provider_id: None,
+                })
+            }
+            SessionAttention::Failed => Some(UiDirective::FilterAgents {
+                filter: AgentFilter::Failed,
+                provider_id: None,
             }),
             SessionAttention::Stuck => None,
         };
@@ -1805,6 +1989,9 @@ impl DesktopExecutor {
             KalVoiceIntent::ClearFocused => self.focused_thread(ctx).map(|_| ()),
             KalVoiceIntent::FocusByState { state } => {
                 self.prepare_focus_by_state(*state, ctx).map(|_| ())
+            }
+            KalVoiceIntent::OpenFinishedAgent { provider_id } => {
+                self.finished_agent(provider_id.as_ref()).map(|_| ())
             }
             KalVoiceIntent::RebindThreadAccount {
                 thread_query,
@@ -2373,7 +2560,11 @@ impl Executor for DesktopExecutor {
             | KalVoiceIntent::ClearFocused
             | KalVoiceIntent::DirectPrompt { .. }
             | KalVoiceIntent::FocusByState { .. }
-            | KalVoiceIntent::WhichSessions { .. } => self.threads().map(|_| ()),
+            | KalVoiceIntent::WhichSessions { .. }
+            | KalVoiceIntent::CountAgents { .. }
+            | KalVoiceIntent::WhichAgents { .. }
+            | KalVoiceIntent::OpenFinishedAgent { .. }
+            | KalVoiceIntent::CloseIdleAgents { .. } => self.threads().map(|_| ()),
             KalVoiceIntent::ConfigureRecentLaunch { .. } => self.threads().map(|_| ()),
             KalVoiceIntent::RequestPermissionMode { thread_query, .. } => {
                 self.threads()?;
@@ -2778,32 +2969,71 @@ impl Executor for DesktopExecutor {
             }
             KalVoiceIntent::StatusReport => self.status_report(),
             KalVoiceIntent::Search { query } => self.search(query),
+            KalVoiceIntent::FilterAgents {
+                filter,
+                provider_id,
+            } => Ok(self.filter_agents(*filter, provider_id.as_ref())),
             KalVoiceIntent::FilterDashboard { chip } => {
-                // Counting is best effort: the filter works even without the thread runtime. The
-                // Fleet shows coding agents (provider panes), not chat threads, so only those count.
-                let sessions = self.core.paths().data_dir.join("sessions");
-                let counts = self
-                    .threads
-                    .as_ref()
-                    .and_then(|runtime| runtime.list(None, false).ok())
-                    .map(|threads| {
-                        let agents: Vec<_> = threads
-                            .iter()
-                            .filter(|t| {
-                                kalcode_providers::interactive::provider::marked_interactive(
-                                    &sessions, &t.id,
-                                )
-                            })
-                            .collect();
+                Ok(self.filter_agents(agent_filter_of_chip(*chip), None))
+            }
+            KalVoiceIntent::CountAgents {
+                filter,
+                provider_id,
+            } => {
+                let provider = provider_id.as_ref();
+                let agents = self.agents_of(provider)?;
+                Ok(Executed {
+                    summary: if *filter == AgentFilter::All {
+                        agents_breakdown(&agents, provider)
+                    } else {
                         let count = agents
                             .iter()
-                            .filter(|t| *chip == DashboardChip::All || t.status.chip() == *chip)
+                            .filter(|agent| filter.matches(agent_state(agent)))
                             .count();
-                        (count, agents.len())
-                    });
+                        format!("{}.", agents_in_state(count, *filter, provider))
+                    },
+                    directive: None,
+                })
+            }
+            KalVoiceIntent::WhichAgents {
+                filter,
+                provider_id,
+            } => self.which_agents(*filter, provider_id.as_ref(), ctx),
+            KalVoiceIntent::OpenFinishedAgent { provider_id } => {
+                let agent = self.finished_agent(provider_id.as_ref())?;
                 Ok(Executed {
-                    summary: filter_summary(*chip, counts),
-                    directive: Some(UiDirective::FilterDashboard { chip: *chip }),
+                    summary: format!("Opened \u{201c}{}\u{201d}.", agent.name),
+                    directive: Some(UiDirective::OpenAgent {
+                        agent_id: agent.id,
+                        workspace_id: agent.workspace_id,
+                    }),
+                })
+            }
+            KalVoiceIntent::CloseIdleAgents { provider_id } => {
+                let provider = provider_id.as_ref();
+                let idle = self
+                    .agents_of(provider)?
+                    .iter()
+                    .filter(|agent| idle_closable(agent))
+                    .count();
+                Ok(if idle == 0 {
+                    Executed {
+                        summary: format!(
+                            "{}, so nothing was closed.",
+                            agents_in_state(0, AgentFilter::Idle, provider)
+                        ),
+                        directive: None,
+                    }
+                } else {
+                    Executed {
+                        summary: format!(
+                            "Closing {idle} idle {} with KalTidy.",
+                            agents_noun(idle, provider)
+                        ),
+                        directive: Some(UiDirective::CloseIdleAgents {
+                            provider_id: provider_id.clone(),
+                        }),
+                    }
                 })
             }
             KalVoiceIntent::Reasoning { .. } => {
@@ -3515,46 +3745,88 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_filters_need_no_runtime_and_count_when_it_runs() {
+    fn agent_filters_need_no_runtime_and_count_when_it_runs() {
         let dir = tempfile::tempdir().expect("data");
         let executor = executor(dir.path());
-        let intent = KalVoiceIntent::FilterDashboard {
-            chip: DashboardChip::Working,
+        let intent = KalVoiceIntent::FilterAgents {
+            filter: AgentFilter::Working,
+            provider_id: None,
         };
         assert!(executor.check(&intent).is_ok());
         let done = executor.execute(&intent, &ctx()).expect("filter");
         assert_eq!(
             done.directive,
-            Some(UiDirective::FilterDashboard {
-                chip: DashboardChip::Working
+            Some(UiDirective::FilterAgents {
+                filter: AgentFilter::Working,
+                provider_id: None,
             })
         );
-        assert_eq!(done.summary, "Showing working agents on the Dashboard.");
+        assert_eq!(done.summary, "Showing working agents.");
+        // Older `filter_dashboard` payloads run as the agent filter that shows the chip.
+        let legacy = executor
+            .execute(
+                &KalVoiceIntent::FilterDashboard {
+                    chip: DashboardChip::WaitingForYou,
+                },
+                &ctx(),
+            )
+            .expect("legacy filter");
+        assert_eq!(
+            legacy.directive,
+            Some(UiDirective::FilterAgents {
+                filter: AgentFilter::NeedsYou,
+                provider_id: None,
+            })
+        );
+        assert_eq!(legacy.summary, "Showing agents that need you.");
 
-        assert_eq!(
-            filter_summary(DashboardChip::Working, Some((2, 21))),
-            "Showing 2 working agents."
-        );
-        assert_eq!(
-            filter_summary(DashboardChip::WaitingForYou, Some((0, 21))),
-            "Nothing is waiting for you."
-        );
-        assert_eq!(
-            filter_summary(DashboardChip::WaitingForYou, Some((1, 21))),
-            "1 agent is waiting for you."
-        );
-        assert_eq!(
-            filter_summary(DashboardChip::Done, Some((3, 21))),
-            "Showing 3 completed agents."
-        );
-        assert_eq!(
-            filter_summary(DashboardChip::All, Some((21, 21))),
-            "Showing all 21 agents."
-        );
-        assert_eq!(
-            filter_summary(DashboardChip::Idle, Some((1, 4))),
-            "Showing 1 idle agent."
-        );
+        let codex = ProviderId::new(ProviderId::CODEX);
+        for (filter, provider, counts, said) in [
+            (
+                AgentFilter::Working,
+                None,
+                (2, 21),
+                "Showing 2 working agents.",
+            ),
+            (AgentFilter::NeedsYou, None, (0, 21), "No agents need you."),
+            (AgentFilter::NeedsYou, None, (1, 21), "1 agent needs you."),
+            (AgentFilter::NeedsYou, None, (3, 21), "3 agents need you."),
+            (AgentFilter::Done, None, (3, 21), "Showing 3 done agents."),
+            (
+                AgentFilter::Failed,
+                None,
+                (1, 21),
+                "Showing 1 failed agent.",
+            ),
+            (AgentFilter::Failed, None, (0, 21), "No agents have failed."),
+            (
+                AgentFilter::Waiting,
+                None,
+                (2, 21),
+                "Showing 2 waiting agents.",
+            ),
+            (AgentFilter::All, None, (21, 21), "Showing all 21 agents."),
+            (AgentFilter::All, None, (0, 0), "There are no agents yet."),
+            (AgentFilter::Idle, None, (1, 4), "Showing 1 idle agent."),
+            (
+                AgentFilter::NeedsYou,
+                Some(&codex),
+                (2, 5),
+                "2 Codex agents need you.",
+            ),
+            (
+                AgentFilter::All,
+                Some(&codex),
+                (5, 5),
+                "Showing all 5 Codex agents.",
+            ),
+        ] {
+            assert_eq!(
+                agent_filter_summary(filter, provider, Some(counts)),
+                said,
+                "{filter:?}"
+            );
+        }
     }
 
     #[test]
@@ -4274,36 +4546,6 @@ mod tests {
             "cursor_models_unavailable"
         );
         assert_eq!(f.runtime.list(None, false).unwrap().len(), 4);
-    }
-
-    #[test]
-    fn completed_cursor_voice_target_opens_its_actual_terminal() {
-        let f = accounts_fixture();
-        let account = f.account(ProviderId::CURSOR, "Cursor", AuthState::Authenticated);
-        let terminal = f.named(ProviderId::CURSOR, &account, "Cursor coding agent");
-        kalcode_providers::interactive::provider::mark_interactive(
-            &f.executor.core.paths().data_dir.join("sessions"),
-            &terminal.id,
-        )
-        .unwrap();
-        f.set_status(&terminal, ThreadStatus::Completed);
-        let headless = f.named(ProviderId::CURSOR, &account, "Cursor thread");
-        f.set_status(&headless, ThreadStatus::Completed);
-        let done = f
-            .run(
-                &KalVoiceIntent::Focus {
-                    query: "cursor agent that just finished".into(),
-                },
-                &f.ctx(),
-            )
-            .unwrap();
-        assert_eq!(
-            done.directive,
-            Some(UiDirective::OpenAgent {
-                agent_id: terminal.id,
-                workspace_id: f.workspace_id.clone(),
-            })
-        );
     }
 
     /// "Start a Codex agent" as the first thread operation after launch: provider adapters are
@@ -5434,10 +5676,12 @@ mod tests {
             "{}",
             read.summary
         );
+        // Failed sessions show the Failed group (Needs you never shows failed agents).
         assert_eq!(
             read.directive,
-            Some(UiDirective::FilterDashboard {
-                chip: DashboardChip::WaitingForYou
+            Some(UiDirective::FilterAgents {
+                filter: AgentFilter::Failed,
+                provider_id: None,
             })
         );
         s.f.set_status(&s.research_a, ThreadStatus::WaitingForPermission);
@@ -5461,6 +5705,403 @@ mod tests {
         assert_eq!(stuck.summary, "No threads are stuck.");
         assert_eq!(stuck.directive, None);
         let _ = (&s.release_windows, &s.research_b);
+    }
+
+    // ---- Agent status for every provider (owner directive 2026-10-04) ----
+
+    /// Coding agents of all four providers in every agent state, plus one chat thread that must
+    /// never be counted as an agent.
+    struct Fleet {
+        f: AccountsFixture,
+        claude_working: ThreadSummary,
+        codex_needs_you: ThreadSummary,
+        cursor_idle: ThreadSummary,
+        gemini_failed: ThreadSummary,
+        codex_ready: ThreadSummary,
+        gemini_permission: ThreadSummary,
+        claude_done: ThreadSummary,
+        cursor_last_turn_failed: ThreadSummary,
+        chat_waiting: ThreadSummary,
+    }
+
+    impl AccountsFixture {
+        fn agent(&self, account: &ProviderAccount, name: &str) -> ThreadSummary {
+            let agent = self.named(account.provider_id.as_str(), account, name);
+            kalcode_providers::interactive::provider::mark_interactive(
+                &self.executor.core.paths().data_dir.join("sessions"),
+                &agent.id,
+            )
+            .expect("mark the pane");
+            agent
+        }
+
+        fn set_state(
+            &self,
+            thread: &ThreadSummary,
+            status: ThreadStatus,
+            activity: Option<&str>,
+            at: &str,
+        ) {
+            self.executor
+                .core
+                .transact(|tx| {
+                    kalcode_threads::store::set_status(tx, &thread.id, status, activity, at)?;
+                    Ok(((), Vec::new()))
+                })
+                .expect("status");
+        }
+
+        fn status_of(&self, thread: &ThreadSummary) -> ThreadStatus {
+            self.runtime.get(&thread.id).expect("thread").status
+        }
+    }
+
+    fn fleet() -> Fleet {
+        let f = accounts_fixture();
+        let claude = f.account(ProviderId::CLAUDE_CODE, "Claude", AuthState::Authenticated);
+        let codex = f.account(ProviderId::CODEX, "Codex", AuthState::Authenticated);
+        let cursor = f.account(ProviderId::CURSOR, "Cursor", AuthState::Authenticated);
+        let gemini = f.account(ProviderId::GEMINI_CLI, "Gemini", AuthState::Authenticated);
+        let fleet = Fleet {
+            claude_working: f.agent(&claude, "Claude A"),
+            codex_needs_you: f.agent(&codex, "Codex B"),
+            cursor_idle: f.agent(&cursor, "Cursor C"),
+            gemini_failed: f.agent(&gemini, "Gemini D"),
+            codex_ready: f.agent(&codex, "Codex E"),
+            gemini_permission: f.agent(&gemini, "Gemini F"),
+            claude_done: f.agent(&claude, "Claude G"),
+            cursor_last_turn_failed: f.agent(&cursor, "Cursor I"),
+            chat_waiting: f.named(ProviderId::CODEX, &codex, "Chat H"),
+            f,
+        };
+        let f = &fleet.f;
+        f.set_state(
+            &fleet.claude_working,
+            ThreadStatus::RunningCommand,
+            None,
+            "2026-10-04T12:00:01.000Z",
+        );
+        f.set_state(
+            &fleet.codex_needs_you,
+            ThreadStatus::WaitingForUser,
+            None,
+            "2026-10-04T12:00:02.000Z",
+        );
+        f.set_state(
+            &fleet.claude_done,
+            ThreadStatus::Completed,
+            None,
+            "2026-10-04T12:00:03.000Z",
+        );
+        // Cursor C finished its turn last: back at its prompt after work.
+        f.set_state(
+            &fleet.cursor_idle,
+            ThreadStatus::Idle,
+            None,
+            "2026-10-04T12:00:04.000Z",
+        );
+        f.set_state(
+            &fleet.gemini_failed,
+            ThreadStatus::Failed,
+            None,
+            "2026-10-04T12:00:05.000Z",
+        );
+        // Codex E only came up at its prompt (newer than everything, but it never worked).
+        f.set_state(
+            &fleet.codex_ready,
+            ThreadStatus::Idle,
+            Some(kalcode_contracts::agent_state::READY_ACTIVITY),
+            "2026-10-04T12:00:06.000Z",
+        );
+        f.set_state(
+            &fleet.gemini_permission,
+            ThreadStatus::WaitingForPermission,
+            None,
+            "2026-10-04T12:00:07.000Z",
+        );
+        f.set_state(
+            &fleet.cursor_last_turn_failed,
+            ThreadStatus::Idle,
+            Some(kalcode_contracts::agent_state::LAST_TURN_FAILED_ACTIVITY),
+            "2026-10-04T12:00:08.000Z",
+        );
+        f.set_state(
+            &fleet.chat_waiting,
+            ThreadStatus::WaitingForUser,
+            None,
+            "2026-10-04T12:00:09.000Z",
+        );
+        fleet
+    }
+
+    fn provider(id: &str) -> Option<ProviderId> {
+        Some(ProviderId::new(id))
+    }
+
+    #[test]
+    fn mixed_provider_agents_are_counted_and_named_by_the_shared_agent_state() {
+        let s = fleet();
+        let ctx = s.f.ctx();
+        let count = |filter, provider_id| KalVoiceIntent::CountAgents {
+            filter,
+            provider_id,
+        };
+        for (filter, provider_id, said) in [
+            (AgentFilter::Working, None, "1 agent working."),
+            (AgentFilter::NeedsYou, None, "2 agents need you."),
+            (AgentFilter::Idle, None, "2 agents idle."),
+            (AgentFilter::Failed, None, "2 agents failed."),
+            (AgentFilter::Done, None, "1 agent done."),
+            (AgentFilter::Waiting, None, "No agents are waiting."),
+            (
+                AgentFilter::All,
+                None,
+                "8 agents: 2 need you, 1 working, 2 idle, 1 done, 2 failed.",
+            ),
+            (
+                AgentFilter::NeedsYou,
+                provider(ProviderId::CODEX),
+                "1 Codex agent needs you.",
+            ),
+            (
+                AgentFilter::Failed,
+                provider(ProviderId::CURSOR),
+                "1 Cursor agent failed.",
+            ),
+            (
+                AgentFilter::Working,
+                provider(ProviderId::GEMINI_CLI),
+                "No Gemini agents are working.",
+            ),
+        ] {
+            let done =
+                s.f.run(&count(filter, provider_id.clone()), &ctx)
+                    .expect("count");
+            assert_eq!(done.summary, said, "{filter:?} {provider_id:?}");
+            assert_eq!(done.directive, None);
+        }
+
+        // "Which agents need me?" names agents of every provider, never the chat thread.
+        let which =
+            s.f.run(
+                &KalVoiceIntent::WhichAgents {
+                    filter: AgentFilter::NeedsYou,
+                    provider_id: None,
+                },
+                &ctx,
+            )
+            .expect("which");
+        assert!(
+            which.summary.starts_with("2 agents need you: ")
+                && which.summary.contains("Codex B")
+                && which.summary.contains("Gemini F")
+                && !which.summary.contains("Chat H"),
+            "{}",
+            which.summary
+        );
+        assert_eq!(
+            which.directive,
+            Some(UiDirective::FilterAgents {
+                filter: AgentFilter::NeedsYou,
+                provider_id: None,
+            })
+        );
+        // "Which agent failed?" shows the Failed group, for every provider.
+        let failed =
+            s.f.run(
+                &KalVoiceIntent::WhichAgents {
+                    filter: AgentFilter::Failed,
+                    provider_id: provider(ProviderId::CURSOR),
+                },
+                &ctx,
+            )
+            .expect("which failed");
+        assert_eq!(failed.summary, "1 Cursor agent failed: Cursor I.");
+        assert_eq!(
+            failed.directive,
+            Some(UiDirective::FilterAgents {
+                filter: AgentFilter::Failed,
+                provider_id: provider(ProviderId::CURSOR),
+            })
+        );
+
+        // The filter counts with the same model.
+        let shown =
+            s.f.run(
+                &KalVoiceIntent::FilterAgents {
+                    filter: AgentFilter::NeedsYou,
+                    provider_id: None,
+                },
+                &ctx,
+            )
+            .expect("filter");
+        assert_eq!(shown.summary, "2 agents need you.");
+        let codex =
+            s.f.run(
+                &KalVoiceIntent::FilterAgents {
+                    filter: AgentFilter::All,
+                    provider_id: provider(ProviderId::CODEX),
+                },
+                &ctx,
+            )
+            .expect("codex agents");
+        assert_eq!(codex.summary, "Showing all 2 Codex agents.");
+
+        // "What are my agents doing?" reports the agents, never chat threads.
+        let status =
+            s.f.run(&KalVoiceIntent::StatusReport, &ctx)
+                .expect("status");
+        assert_eq!(
+            status.summary,
+            "8 agents: 2 need you, 1 working, 2 idle, 1 done, 2 failed."
+        );
+    }
+
+    #[test]
+    fn the_agent_that_just_finished_is_the_newest_finished_agent_of_any_provider() {
+        let s = fleet();
+        let ctx = s.f.ctx();
+        let open = |provider_id| KalVoiceIntent::OpenFinishedAgent { provider_id };
+        let opened_agent = |agent: &ThreadSummary| {
+            Some(UiDirective::OpenAgent {
+                agent_id: agent.id.clone(),
+                workspace_id: agent.workspace_id.clone(),
+            })
+        };
+        // Cursor C went back to its prompt after Claude G completed; the Ready Codex E never
+        // worked, and failed agents never "finished".
+        let newest = s.f.run(&open(None), &ctx).expect("newest");
+        assert_eq!(newest.directive, opened_agent(&s.cursor_idle));
+        assert_eq!(newest.summary, "Opened \u{201c}Cursor C\u{201d}.");
+        assert_eq!(
+            s.f.run(&open(provider(ProviderId::CLAUDE_CODE)), &ctx)
+                .expect("claude")
+                .directive,
+            opened_agent(&s.claude_done)
+        );
+        let none =
+            s.f.run(&open(provider(ProviderId::GEMINI_CLI)), &ctx)
+                .expect_err("no gemini agent finished");
+        assert_eq!(none.code, "finished_agent_not_found");
+        assert_eq!(none.message, "No Gemini agent has finished yet.");
+        assert!(
+            s.f.run(&open(provider(ProviderId::CODEX)), &ctx).is_err(),
+            "a Ready agent never finished anything"
+        );
+        // Codex finishes a turn: now it is the one that just finished.
+        s.f.set_state(
+            &s.codex_needs_you,
+            ThreadStatus::Idle,
+            None,
+            "2026-10-04T12:00:30.000Z",
+        );
+        assert_eq!(
+            s.f.run(&open(None), &ctx).expect("codex").directive,
+            opened_agent(&s.codex_needs_you)
+        );
+        // Spoken through the grammar, for every provider.
+        for (text, agent) in [
+            ("open the agent that just finished", &s.codex_needs_you),
+            ("open the cursor agent that just finished", &s.cursor_idle),
+            ("open the claude agent that just finished", &s.claude_done),
+        ] {
+            let kalcode_kalvoice::grammar::Understood::Intent { intent, .. } =
+                kalcode_kalvoice::grammar::understand(text)
+            else {
+                panic!("{text}");
+            };
+            assert_eq!(
+                s.f.run(&intent, &ctx).expect(text).directive,
+                opened_agent(agent),
+                "{text}"
+            );
+        }
+    }
+
+    /// Regression: "stop all idle agents" became `StopThreads { scope: All }` and stopped every
+    /// running session. It now asks KalTidy to close only the idle agents, of every provider,
+    /// and stops nothing natively.
+    #[test]
+    fn stop_all_idle_agents_closes_only_idle_agents_and_never_stops_the_working_ones() {
+        let s = fleet();
+        let ctx = s.f.ctx();
+        for text in [
+            "stop all idle agents",
+            "close all idle agents",
+            "kill all idle agents",
+        ] {
+            let kalcode_kalvoice::grammar::Understood::Intent { intent, .. } =
+                kalcode_kalvoice::grammar::understand(text)
+            else {
+                panic!("{text}");
+            };
+            assert_eq!(
+                intent,
+                KalVoiceIntent::CloseIdleAgents { provider_id: None },
+                "{text}"
+            );
+            let done = s.f.run(&intent, &ctx).expect(text);
+            // Cursor C and Codex E are idle at their prompts; the Cursor agent whose last turn
+            // failed is a failed agent (KalTidy's Clear failed), not an idle one.
+            assert_eq!(
+                done.summary, "Closing 2 idle agents with KalTidy.",
+                "{text}"
+            );
+            assert_eq!(
+                done.directive,
+                Some(UiDirective::CloseIdleAgents { provider_id: None })
+            );
+        }
+        // Nothing was stopped natively: every agent keeps its state.
+        assert_eq!(
+            s.f.status_of(&s.claude_working),
+            ThreadStatus::RunningCommand
+        );
+        assert_eq!(
+            s.f.status_of(&s.codex_needs_you),
+            ThreadStatus::WaitingForUser
+        );
+        assert_eq!(
+            s.f.status_of(&s.gemini_permission),
+            ThreadStatus::WaitingForPermission
+        );
+        assert_eq!(s.f.status_of(&s.cursor_idle), ThreadStatus::Idle);
+
+        let cursor =
+            s.f.run(
+                &KalVoiceIntent::CloseIdleAgents {
+                    provider_id: provider(ProviderId::CURSOR),
+                },
+                &ctx,
+            )
+            .expect("cursor");
+        assert_eq!(cursor.summary, "Closing 1 idle Cursor agent with KalTidy.");
+        assert_eq!(
+            cursor.directive,
+            Some(UiDirective::CloseIdleAgents {
+                provider_id: provider(ProviderId::CURSOR),
+            })
+        );
+        let gemini =
+            s.f.run(
+                &KalVoiceIntent::CloseIdleAgents {
+                    provider_id: provider(ProviderId::GEMINI_CLI),
+                },
+                &ctx,
+            )
+            .expect("gemini");
+        assert_eq!(
+            gemini.summary,
+            "No Gemini agents are idle, so nothing was closed."
+        );
+        assert_eq!(gemini.directive, None);
+        let _ = (
+            &s.gemini_failed,
+            &s.claude_done,
+            &s.codex_ready,
+            &s.cursor_last_turn_failed,
+            &s.chat_waiting,
+        );
     }
 
     #[test]

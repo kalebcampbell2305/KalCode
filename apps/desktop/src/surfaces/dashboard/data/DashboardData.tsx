@@ -399,7 +399,7 @@ function useAgentsOnly(state: ResourceState<ThreadSummary[]>): ResourceState<Thr
 }
 
 /**
- * Open coding agents only (Claude Code, Codex or Gemini CLI in a Code terminal pane): what the
+ * Open coding agents only (any provider's coding terminal in a Code pane): what the
  * Agents rail, the Agent Fleet and agent counts show. Chat threads stay in Threads.
  */
 export function useCodingAgents() {

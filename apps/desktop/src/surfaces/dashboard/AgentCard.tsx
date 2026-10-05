@@ -1,8 +1,10 @@
 import {
+  AGENT_STATE_TEXT,
+  AGENT_STATE_TONE,
   type ApprovalDecision,
   type ApprovalView,
+  agentStateOf,
   DISPLAY_QUALIFIER_LABEL,
-  DISPLAY_STATUS_TONE,
   displayStatusOf,
   type ThreadSummary,
   type ThreadWorktreeState,
@@ -35,7 +37,6 @@ import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
 import { fleetGroupOf } from "./data/board.ts";
 import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
-import { STATUS_META } from "./data/status.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
@@ -92,17 +93,13 @@ export function startedText(createdAt: string, now: number): string | null {
   return ms < 60_000 ? "Started just now" : `Started ${formatElapsed(ms)} ago`;
 }
 
-/** The card's one status word or phrase, from runtime state only. */
+/**
+ * The card's one status word, from the shared agent-state model (the same word every surface
+ * shows for every provider). Merge readiness is the one refinement: a fact about the worktree.
+ */
 export function stateLabel(thread: ThreadSummary, ready: boolean): string {
   if (ready) return "Ready to merge";
-  const shown = presentThread(thread);
-  if (shown.label === "Waiting to start" || shown.label === "Last turn failed") return shown.label;
-  if (thread.status === "interrupted") return shown.label === "Not started" ? "Not started" : "Stopped";
-  if (thread.status === "waiting_for_dependency") return "Waiting";
-  if (thread.status === "completed") return "Done";
-  const display = displayStatusOf(thread.status).status;
-  if (display === "working") return "Working";
-  return STATUS_META[thread.status].label;
+  return AGENT_STATE_TEXT[agentStateOf(thread)];
 }
 
 /** What the thread is doing, from structured runtime state only (never model prose). */
@@ -164,8 +161,9 @@ export const AgentCard = memo(function AgentCard({
   const display = displayStatusOf(thread.status);
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
   const ready = !archived && readiness?.ready === true;
-  const tone = ready ? "working" : (resourceWait?.tone ?? DISPLAY_STATUS_TONE[display.status]);
-  const group = fleetGroupOf(thread.status);
+  const agentState = agentStateOf(thread);
+  const tone = ready ? "working" : (resourceWait?.tone ?? AGENT_STATE_TONE[agentState]);
+  const group = fleetGroupOf(thread);
   // The provider account the agent runs on (text, never a credential), e.g. "Claude A".
   // SEAM(kalcode-e4): show this account's usage via useAccountUsage(thread.providerAccountId) once it lands.
   const accountLabel = thread.accountLabel?.trim() || null;
@@ -233,6 +231,7 @@ export const AgentCard = memo(function AgentCard({
       data-thread-id={thread.id}
       data-tone={tone}
       data-status={display.status}
+      data-state={agentState}
       data-group={group}
       data-changed={changed || undefined}
       data-archived={archived || undefined}

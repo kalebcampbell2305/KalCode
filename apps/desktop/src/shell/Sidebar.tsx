@@ -167,7 +167,7 @@ function DashboardNavItemCount({ collapsed }: { collapsed: boolean }) {
     <NavItem
       id="dashboard"
       collapsed={collapsed}
-      count={{ value: waiting, description: `${waiting} ${waiting === 1 ? "session needs" : "sessions need"} you` }}
+      count={{ value: waiting, description: `${waiting} ${waiting === 1 ? "agent needs" : "agents need"} you` }}
     />
   );
 }

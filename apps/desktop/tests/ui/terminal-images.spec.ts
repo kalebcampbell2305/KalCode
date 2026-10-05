@@ -77,13 +77,13 @@ for (const provider of ["Claude Code", "Codex", "Gemini CLI"]) {
     await launcher.getByRole("button", { name: `Launch ${provider} agent`, exact: true }).click();
     const providerPane = page.locator("[data-provider-pane]").first();
     await expect(providerPane.locator(".xterm-rows")).toContainText("KalCode fake provider");
-    await expect(providerPane.locator("[data-pane-status]")).toHaveText("IDLE");
+    await expect(providerPane.locator("[data-pane-status]")).toHaveText(/^(READY|IDLE)$/);
     const activePane = providerPane.locator("xpath=ancestor::*[@data-pane-id][1]");
     const chooser = page.waitForEvent("filechooser");
     await activePane.getByRole("button", { name: "Attach image", exact: true }).click();
     await (await chooser).setFiles({ name: "agent.png", mimeType: "image/png", buffer: await imageBytes(page) });
     await expect(providerPane.locator(".xterm-rows")).toContainText("/ui-test-only/terminal-images/");
-    await expect(providerPane.locator("[data-pane-status]")).toHaveText("IDLE");
+    await expect(providerPane.locator("[data-pane-status]")).toHaveText(/^(READY|IDLE)$/);
   });
 }
 

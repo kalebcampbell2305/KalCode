@@ -1,5 +1,50 @@
 # KalCode agent policy
 
+## Permanent optimization rule (owner directive 2026-10-04)
+
+"KALCODE MUST BE CONTINUOUSLY OPTIMIZED FOR REAL-WORLD SPEED, RELIABILITY, RESOURCE EFFICIENCY, AND SIMPLICITY.
+
+MEASURE REAL BOTTLENECKS.
+KEEP THE UI THREAD FREE.
+USE ONE CANONICAL STATE MODEL.
+KEEP PROVIDER ADAPTERS THIN.
+PRIORITIZE THE CODE TAB.
+REUSE EXPENSIVE RESOURCES SAFELY.
+CONTROL RESOURCE PRESSURE.
+KEEP AGENT LIFECYCLES CLEAN.
+RETRIEVE ONLY RELEVANT MEMORY.
+PARALLELIZE MERGING AND SHIPPING.
+CLEAN SAFE STORAGE BLOAT.
+RECOVER FROM FAILURES AUTOMATICALLY WHERE SAFE.
+REMOVE UNNECESSARY USER STEPS.
+PROFILE REAL PRODUCTION WORKLOADS.
+
+FAST, BEAUTIFUL, RELIABLE, AND SIMPLE IS THE STANDARD."
+
+- **Measure first.** Optimize measured bottlenecks (p50/p95, render counts, CPU/RAM), never guesses; record before/after numbers and keep the measurement scripts re-runnable. Profile realistic workloads (1, 4, 10, 20+ agents, several providers and accounts, large output, long sessions) and the release build, not only dev.
+- **UI thread.** Click → immediate visual response → background work continues → state updates in place. Git scans, indexing, provider health/usage, network, model discovery, Browser init, memory retrieval, telemetry and log processing never block a menu or pane from opening.
+- **One canonical state.** Each truth (coding agents, terminals, accounts, usage, models, Runs, Queue, services, environments, Needs You, workspaces, Browser, entitlements, memory) has one shared source every surface reads; no surface keeps a conflicting copy. One agent's change must not rerender every pane.
+- **Thin provider adapters.** Provider differences live in adapter/capability layers; adding a provider never requires rewriting the Fleet, KalVoice, Runs, Queue, KalTidy, memory, Code, account UI or orchestration.
+- **Resources.** Reuse expensive resources safely (warm workers, WebViews, cached account/model/workspace metadata, progressive restore) without leaks. The Resource Governor protects UI responsiveness under CPU/RAM/disk pressure, lowers non-urgent background work and says what it is doing; it never silently kills active work and is never plan gating.
+- **Polling.** Prefer events, backoff, caching, dedupe, batching and refresh-on-focus over constant polling.
+- **Visual performance.** Beautiful never means heavy: smooth animation, working reduced motion, no animation that delays an action.
+- No needless rewrites: preserve good architecture and fix the highest-impact measured issues first.
+
+## Permanent provider-agnostic agent status rule (owner directive 2026-10-04)
+
+"KALCODE AGENT STATUS IS PROVIDER-AGNOSTIC.
+
+WORKING, IDLE, NEEDS YOU, WAITING, DONE, FAILED, TESTING, AND OTHER AGENT STATES APPLY TO ALL REAL CODING AGENTS REGARDLESS OF PROVIDER.
+
+NO CORE AGENT UI OR STATUS LOGIC SHOULD BE HARD-CODED TO CLAUDE CODE.
+
+ALL CURRENT AND FUTURE PROVIDERS MAP INTO ONE SHARED KALCODE AGENT-STATE MODEL."
+
+- **One model.** Provider session → canonical KalCode agent state → every surface. The states are STARTING, READY, WORKING, TESTING, WAITING, NEEDS YOU, IDLE, DONE, FAILED and STOPPED. They are defined once in `crates/contracts/src/agent_state.rs` (`AgentState::of`) and mirrored by `packages/protocol/src/agent-state.ts` (`agentStateOf`), and a test keeps the two identical. The Agents tab, Agent Fleet, Code, What's Happening, Needs You, Runs, Queue, KalTidy, counters, filters, completion badges, the locator and KalVoice all read it. Never add a per-surface or per-provider status mapping.
+- **Real state only.** Each provider adapter maps its native session events (hooks, notify, process lifecycle) into the shared runtime status. Status never comes from the provider's name, a timer or terminal prose. Where a provider exposes no signal, say so truthfully instead of guessing.
+- **Filters.** Global status filters (All, Needs you, Working, Waiting, Idle, Done, Failed) include agents from every provider. A provider filter is separate and optional and never replaces them.
+- **Copy.** Counts are provider-neutral ("3 agents working"). Provider and account identity appear on the individual agents ("Claude A · WORKING", "Codex B · NEEDS YOU").
+
 ## Permanent Unified Memory definition (owner directive 2026-10-04)
 
 **UNIFIED MEMORY IS KALCODE'S SHARED, PROVIDER-INDEPENDENT PROJECT MEMORY.** It preserves useful

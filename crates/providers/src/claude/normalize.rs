@@ -261,7 +261,16 @@ impl Normalizer {
         for block in blocks {
             if let Block::ToolUse { id, name, input } = block {
                 let (action, summary) = classify(&name, &input, &self.working_directory);
-                let tool_state = tool_status(&name, &action);
+                let tool_state = match tool_status(&name, &action) {
+                    // The shared classifier recognises test runs (same as interactive panes).
+                    ThreadStatus::RunningCommand
+                        if crate::tool_status::classify("Bash", Some(&input))
+                            == ThreadStatus::Testing =>
+                    {
+                        ThreadStatus::Testing
+                    }
+                    other => other,
+                };
                 events.push(AgentEvent::ToolRequested {
                     tool_call_id: id.clone(),
                     tool: name.clone(),
