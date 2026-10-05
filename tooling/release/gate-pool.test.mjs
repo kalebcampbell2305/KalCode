@@ -357,3 +357,17 @@ test("a check that ends before running still logs why it failed", async () => {
   assert.equal(outcome.status, "FAIL");
   assert.ok(lines.includes("FAIL rust: source changed before check"), lines.join("\n"));
 });
+
+test("a gate whose checks refreshed tracked QA screenshots still gets its receipt", async () => {
+  const { receiptDrift } = await import("./lifecycle/gate.mjs");
+  const head = "a".repeat(40);
+  const git = (diff) => ({ rev: () => head, diff: () => diff, untracked: () => ["test-results/report.json"] });
+  const g = { head };
+  // Gate 37374586446: every check passed, then the receipt was refused over refreshed screenshots.
+  assert.equal(receiptDrift(git([{ path: "apps/desktop/qa/screenshots/w0/dashboard-dark.png" }]), g), null);
+  assert.match(
+    receiptDrift(git([{ path: "apps/desktop/src/App.tsx" }]), g),
+    /tracked source changed: apps\/desktop\/src\/App\.tsx/,
+  );
+  assert.equal(receiptDrift({ ...git([]), rev: () => "b".repeat(40) }, g), "HEAD moved");
+});
