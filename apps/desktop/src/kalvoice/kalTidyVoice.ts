@@ -1,4 +1,9 @@
+import { agentFilterOf, type ThreadSummary } from "@kalcode/protocol";
+import { type AgentRemovalClient, removeAgent } from "../surfaces/code/kaltidy/agents.ts";
 import type { KalTidyApi } from "../surfaces/code/kaltidy/kalTidyContext.ts";
+import { isCodingAgent } from "../surfaces/dashboard/data/agents.ts";
+import { providerName } from "../surfaces/dashboard/data/format.ts";
+import { cleanupSteps, cleanupSummary } from "../surfaces/dashboard/fleet/agentCleanup.ts";
 import type { DirectiveReport } from "./voiceDirectives.ts";
 
 /**
@@ -170,4 +175,57 @@ export async function runKalTidyCommand(
   } catch {
     report({ ok: false, message: "KalTidy couldn't finish. Some idle terminals may still be running." });
   }
+}
+
+/** The ports the idle-agent close needs (a `KalCodeClient` satisfies them). */
+export interface IdleAgentClient extends AgentRemovalClient {
+  listThreads: () => Promise<ThreadSummary[]>;
+}
+
+/**
+ * The idle coding agents "close all idle agents" closes, of every provider or of `providerId`:
+ * the Fleet's Close idle selection (`cleanupSteps(…, "idle")`, agents idle at their prompt; a
+ * paused or blocked agent keeps its turn), in the shared agent state's Idle group (ready or idle
+ * after work; an agent whose last turn failed is a failed agent, for Clear failed).
+ */
+export function idleAgentsToClose(
+  threads: readonly ThreadSummary[],
+  providerId: string | null,
+): readonly ThreadSummary[] {
+  const agents = threads.filter(
+    (thread) =>
+      isCodingAgent(thread) && thread.archivedAt === null && (!providerId || thread.providerId === providerId),
+  );
+  return cleanupSteps(agents, "idle")
+    .map((step) => step.thread)
+    .filter((agent) => agentFilterOf(agent) === "idle");
+}
+
+/**
+ * "Close all idle agents" (native `close_idle_agents` directive): KalTidy's canonical idle-agent
+ * close. Each idle agent is removed through KalTidy's `removeAgent` (its session ends, so no
+ * provider process is orphaned, and its pane closes); nothing working, waiting or needing the
+ * person is touched, whichever provider runs it. Reads the agents fresh, so an agent that started
+ * working since KalVoice counted is kept. Never throws.
+ */
+export async function closeIdleAgents(
+  client: IdleAgentClient,
+  providerId: string | null,
+  report: (result: DirectiveReport) => void,
+): Promise<void> {
+  let targets: readonly ThreadSummary[];
+  try {
+    targets = idleAgentsToClose(await client.listThreads(), providerId);
+  } catch {
+    report({ ok: false, message: "KalTidy couldn't read your agents. Nothing was closed." });
+    return;
+  }
+  if (targets.length === 0) {
+    const which = providerId ? `idle ${providerName(providerId)} agents` : "idle agents";
+    report({ ok: true, message: `No ${which} to close.` });
+    return;
+  }
+  const results = await Promise.allSettled(targets.map((agent) => removeAgent(client, agent)));
+  const failed = results.filter((result) => result.status === "rejected").length;
+  report({ ok: failed === 0, message: cleanupSummary("idle", { done: results.length - failed, failed }) });
 }

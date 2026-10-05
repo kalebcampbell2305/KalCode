@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::agent::ProviderId;
+use crate::agent_state::AgentFilter;
 use crate::app::SurfaceId;
 use crate::permissions::PermissionMode;
 use crate::sessions::SessionAttention;
@@ -313,8 +314,9 @@ pub enum KalVoiceIntent {
         thread_query: Option<String>,
     },
     // ---- Added in Z7-W3 ----
-    /// Filter the Dashboard by chip ("show only agents that are working"). UI-only: it never
-    /// changes a thread.
+    /// Legacy: filter the Dashboard by chip. The grammar now says [`Self::FilterAgents`]; this
+    /// still decodes (older payloads, the local interpreter) and runs as the agent filter that
+    /// shows the chip. UI-only: it never changes a thread.
     FilterDashboard {
         chip: DashboardChip,
     },
@@ -362,6 +364,38 @@ pub enum KalVoiceIntent {
     WhichSessions {
         state: SessionAttention,
     },
+    // ---- Added 2026-10-04 (provider-agnostic agent state). Every status below is the shared
+    // `AgentState` model, identical for Claude Code, Codex, Cursor, Gemini CLI and any future
+    // provider; `provider_id` only narrows the agents when the person named a provider. ----
+    /// "Show me all agents that need me", "show my Codex agents that need me": the Agents tab
+    /// filtered by status (and provider). UI-only: it never changes an agent.
+    FilterAgents {
+        filter: AgentFilter,
+        provider_id: Option<ProviderId>,
+    },
+    /// "How many agents are working?": read back as a provider-neutral count ("3 agents
+    /// working"). Read-only.
+    CountAgents {
+        filter: AgentFilter,
+        provider_id: Option<ProviderId>,
+    },
+    /// "Which agents need me?": up to three coding-agent names, and the Agents tab filtered to
+    /// them. Read-only.
+    WhichAgents {
+        filter: AgentFilter,
+        provider_id: Option<ProviderId>,
+    },
+    /// "Open the agent that just finished": the newest coding agent whose work finished (done,
+    /// or back at its prompt after a turn), of any provider unless one was named.
+    OpenFinishedAgent {
+        provider_id: Option<ProviderId>,
+    },
+    /// "Close all idle agents": KalTidy's canonical idle-agent close, across every provider
+    /// unless one was named. Only idle agents (ready or idle at their prompt) are closed; an
+    /// agent that is working, waiting or needs the person is never touched.
+    CloseIdleAgents {
+        provider_id: Option<ProviderId>,
+    },
 }
 
 impl KalVoiceIntent {
@@ -400,6 +434,11 @@ impl KalVoiceIntent {
             Self::FocusByState { .. } => "focus_by_state",
             Self::FocusPrevious => "focus_previous",
             Self::WhichSessions { .. } => "which_sessions",
+            Self::FilterAgents { .. } => "filter_agents",
+            Self::CountAgents { .. } => "count_agents",
+            Self::WhichAgents { .. } => "which_agents",
+            Self::OpenFinishedAgent { .. } => "open_finished_agent",
+            Self::CloseIdleAgents { .. } => "close_idle_agents",
         }
     }
 
@@ -577,6 +616,20 @@ mod tests {
             KalVoiceIntent::WhichSessions {
                 state: SessionAttention::Failed,
             },
+            KalVoiceIntent::FilterAgents {
+                filter: AgentFilter::NeedsYou,
+                provider_id: None,
+            },
+            KalVoiceIntent::CountAgents {
+                filter: AgentFilter::Working,
+                provider_id: None,
+            },
+            KalVoiceIntent::WhichAgents {
+                filter: AgentFilter::Failed,
+                provider_id: Some(ProviderId::new(ProviderId::CURSOR)),
+            },
+            KalVoiceIntent::OpenFinishedAgent { provider_id: None },
+            KalVoiceIntent::CloseIdleAgents { provider_id: None },
         ]
     }
 
@@ -736,6 +789,34 @@ mod tests {
             which,
             KalVoiceIntent::WhichSessions {
                 state: SessionAttention::WaitingForPermission
+            }
+        );
+    }
+
+    #[test]
+    fn agent_status_intents_carry_the_shared_filter_and_an_optional_provider() {
+        let filter = serde_json::to_value(KalVoiceIntent::FilterAgents {
+            filter: AgentFilter::NeedsYou,
+            provider_id: Some(ProviderId::new(ProviderId::CODEX)),
+        })
+        .expect("json");
+        assert_eq!(
+            filter,
+            serde_json::json!({ "kind": "filter_agents", "filter": "needs_you", "providerId": "codex" })
+        );
+        let any: KalVoiceIntent = serde_json::from_value(serde_json::json!({
+            "kind": "close_idle_agents"
+        }))
+        .expect("a missing provider is every provider");
+        assert_eq!(any, KalVoiceIntent::CloseIdleAgents { provider_id: None });
+        let legacy: KalVoiceIntent = serde_json::from_value(serde_json::json!({
+            "kind": "filter_dashboard", "chip": "waiting_for_you"
+        }))
+        .expect("older payloads still decode");
+        assert_eq!(
+            legacy,
+            KalVoiceIntent::FilterDashboard {
+                chip: DashboardChip::WaitingForYou
             }
         );
     }

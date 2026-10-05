@@ -79,9 +79,11 @@ const SCENES: Scene[] = [
     run: async (page, theme) => {
       await open(page, "threads", theme);
       await nav(page, "Threads");
+      // The thread row itself, not its "Pin globally: …" favorite button (#235).
       await page
         .getByRole("list", { name: "Threads" })
-        .getByRole("button", { name: /Add Dark Mode Toggle/ })
+        .locator("[data-thread-row]")
+        .filter({ hasText: "Add Dark Mode Toggle" })
         .click();
       await expect(page.getByText("Waiting for 1 permission decision")).toBeVisible();
     },

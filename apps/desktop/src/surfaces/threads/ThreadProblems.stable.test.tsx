@@ -12,6 +12,9 @@ import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.js
 import { Shell } from "../../shell/Shell.tsx";
 import { resetAccountIntentForTests } from "./accountIntent.ts";
 
+/** A thread row by name, never its "Pin globally: <name>" favorite action (#235). */
+const threadRow = (name: string) => new RegExp(`^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*${name}`);
+
 // How the Threads surface shows a launch held for system resources, a wait that ran out, and an
 // idle thread whose last turn failed (Stable). The runtime states are the native ones
 // (crates/threads/src/runtime.rs); the memory transport's summaries are patched to them.
@@ -124,7 +127,7 @@ async function mountStable() {
 
 async function openThread(user: ReturnType<typeof userEvent.setup>, name: string) {
   const list = await screen.findByRole("list", { name: "Threads" });
-  await user.click(await within(list).findByRole("button", { name: new RegExp(name) }));
+  await user.click(await within(list).findByRole("button", { name: threadRow(name) }));
   await screen.findByRole("heading", { name, level: 2 });
   return screen.getByRole("article");
 }
@@ -133,7 +136,7 @@ describe("thread problems on Stable", () => {
   it("a held launch shows the real reason, never CPU busy or a provider failure, and offers Start Anyway", async () => {
     const user = await mountStable();
     const list = await screen.findByRole("list", { name: "Threads" });
-    expect(within(list).getByRole("button", { name: /Codex held/ })).toHaveTextContent("Waiting to start");
+    expect(within(list).getByRole("button", { name: threadRow("Codex held") })).toHaveTextContent("Waiting to start");
     const detail = await openThread(user, "Codex held");
     const notice = within(detail).getByRole("status", { name: "" });
     expect(notice).toHaveTextContent("Waiting to start: memory is critically low (412 MB free)");

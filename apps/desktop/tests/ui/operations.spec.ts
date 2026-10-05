@@ -2,6 +2,9 @@ import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
+/** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
+const NOT_FAVORITE = ":not([data-favorite-action])";
+
 const SCREENSHOTS = new URL("../../qa/screenshots/operations/", import.meta.url);
 mkdirSync(SCREENSHOTS, { recursive: true });
 
@@ -45,7 +48,10 @@ test("Operations connects real run evidence, queue transitions, services, enviro
   const history = page.getByRole("region", { name: "Execution history" });
   await expect(history.getByText("Frontend dev server", { exact: true })).toBeVisible();
   await expect(history.getByText("Publish preview build", { exact: true })).toBeVisible();
-  await history.getByRole("button", { name: /Publish preview build/ }).click();
+  await history
+    .getByRole("button", { name: /Publish preview build/ })
+    .and(page.locator(NOT_FAVORITE))
+    .click();
 
   const detail = page.getByRole("complementary", { name: "Run details" });
   await expect(detail.getByRole("heading", { name: "Publish preview build" })).toBeVisible();
@@ -100,7 +106,10 @@ test("Operations connects real run evidence, queue transitions, services, enviro
 
   await tab(page, "Runs");
   await expect(page.getByRole("region", { name: "Execution history" }).getByText("Typecheck desktop")).toBeVisible();
-  await history.getByRole("button", { name: /Typecheck desktop/ }).click();
+  await history
+    .getByRole("button", { name: /Typecheck desktop/ })
+    .and(page.locator(NOT_FAVORITE))
+    .click();
   await detail.getByRole("button", { name: "Cancel run" }).click();
   await expect(detail).toContainText("Cancelled by you.");
   await expect(detail.getByRole("button", { name: "Cancel run" })).toHaveCount(0);
@@ -145,6 +154,7 @@ test("Operations connects real run evidence, queue transitions, services, enviro
   await tab(page, "Runs");
   await history
     .getByRole("button", { name: /Frontend dev server/ })
+    .and(page.locator(NOT_FAVORITE))
     .filter({ hasText: "Cancelled" })
     .click();
   await expect(detail.getByRole("region", { name: "Run services" })).toContainText("Historical execution");
@@ -217,6 +227,7 @@ test("@screenshots Operations rich evidence in dark and light themes", async ({ 
   await page
     .getByRole("region", { name: "Execution history" })
     .getByRole("button", { name: /Publish preview build/ })
+    .and(page.locator(NOT_FAVORITE))
     .click();
   await expect(
     page.getByRole("complementary", { name: "Run details" }).getByRole("region", { name: "Run environments" }),

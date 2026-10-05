@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   invoke: vi.fn(async () => undefined),
 }));
 vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
+  useOptionalWorkspaces: () => ({ active: { id: "other" } }),
   useWorkspaces: () => ({ activate: state.activate, active: { id: "other" } }),
 }));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({
@@ -102,7 +103,7 @@ describe("workspace context actions", () => {
   it("pins the clicked workspace directly", async () => {
     mount();
     fireEvent.contextMenu(screen.getByRole("button", { name: "Workspace row" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pin workspace in rail" }));
     expect(state.update).toHaveBeenCalledWith({ workspaceId: "clicked", pinned: true });
   });
   it("saves actual settings on the clicked workspace", async () => {

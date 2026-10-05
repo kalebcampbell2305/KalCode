@@ -1227,3 +1227,56 @@ fn program_launch_requires_an_absolute_existing_program() {
     let missing = std::env::temp_dir().join("kalcode-no-such-program.exe");
     assert!(PtySession::spawn_program(spec(&missing.to_string_lossy()), |_| {}).is_err());
 }
+
+#[test]
+fn end_of_output_hands_a_coalesced_tail_over_at_once_and_keeps_detach_exact() {
+    // A view whose timer would hold buffered output for ten seconds: only the release at the
+    // end of the output can deliver the tail promptly.
+    let delivered = Arc::new(Mutex::new(Vec::new()));
+    let sink = delivered.clone();
+    let coalescer = OutputCoalescer::new(
+        CoalesceConfig {
+            interval: Duration::from_secs(10),
+            max_bytes: 1 << 20,
+        },
+        move |bytes| {
+            sink.lock().expect("lock").extend_from_slice(&bytes);
+            true
+        },
+    );
+    let exit = Arc::new(Mutex::new(None));
+    let exit_sink = exit.clone();
+    let session = PtySession::spawn(
+        command_spec(if cfg!(windows) {
+            "ping -n 2 127.0.0.1 >nul & echo coalesced-tail-marker"
+        } else {
+            "sleep 1; echo coalesced-tail-marker"
+        }),
+        move |info| *exit_sink.lock().expect("lock") = Some(info),
+    )
+    .expect("spawn");
+    let responder = session.clone();
+    let id = session.attach(move |chunk| {
+        for _ in 0..chunk.windows(4).filter(|w| *w == b"\x1b[6n").count() {
+            let _ = responder.write(b"\x1b[1;1R");
+        }
+        coalescer.push(chunk)
+    });
+    assert!(
+        wait_until(Duration::from_secs(8), || String::from_utf8_lossy(
+            &delivered.lock().expect("lock")
+        )
+        .contains("coalesced-tail-marker")),
+        "the tail waited for the timer: {:?}",
+        String::from_utf8_lossy(&delivered.lock().expect("lock"))
+    );
+    assert!(wait_until(Duration::from_secs(5), || exit
+        .lock()
+        .expect("lock")
+        .is_some()));
+    assert!(
+        session.detach(id),
+        "a released listener still detaches once"
+    );
+    assert!(!session.detach(id));
+}

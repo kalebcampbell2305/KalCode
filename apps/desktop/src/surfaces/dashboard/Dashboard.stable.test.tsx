@@ -131,7 +131,7 @@ describe("Stable Dashboard", () => {
     const nav = dashboardNav();
     await waitFor(() => expect(nav.textContent).toBe(`Dashboard${count}`));
     expect(nav).toHaveAccessibleName("Dashboard");
-    expect(nav).toHaveAccessibleDescription(`${count} sessions need you`);
+    expect(nav).toHaveAccessibleDescription(`${count} agents need you`);
     // Every card shows how long its agent has run.
     for (const card of agents.getAllByRole("article")) {
       expect(card.querySelector('time[data-kind="elapsed"]')?.textContent).toMatch(/^Running time /);

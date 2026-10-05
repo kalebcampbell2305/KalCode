@@ -35,7 +35,7 @@ test("the deck answers what is working, what needs me and what is shipping", asy
 
   const rail = agents(page);
   await expect(rail.getByRole("heading", { name: /^Needs you/ })).toBeVisible();
-  await expect(rail.getByRole("button", { name: /^Refactor auth middleware, Needs approval/ })).toBeVisible();
+  await expect(rail.getByRole("button", { name: /^Refactor auth middleware, Needs you/ })).toBeVisible();
   await expect(rail.getByRole("heading", { name: /^Working/ })).toBeVisible();
 });
 
@@ -83,7 +83,7 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
   await toOperations(page);
   await agents(page).getByRole("button", { name: /^Idle/ }).click();
   await agents(page)
-    .getByRole("button", { name: /^New agent, .*Claude Code in deck-agent\. Open agent$/ })
+    .getByRole("button", { name: /^Claude Code, .*Claude Code in deck-agent\. Open agent$/ })
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "deck-agent" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);

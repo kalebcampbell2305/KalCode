@@ -19,6 +19,43 @@ function invoke(memory: ReturnType<typeof createMemoryKalVoice>, name: string, a
 }
 
 describe("memory KalVoice browser parity", () => {
+  it("cloud requests alone consume the allowance and exhaustion leaves local commands and dictation usable", async () => {
+    const events: unknown[] = [];
+    const memory = createMemoryKalVoice((event) => events.push(event), "");
+    for (let index = 0; index < 25; index++) {
+      const cloud = memory.controls.cloudRequest(`cloud-${index}`);
+      expect(cloud.counted).toBe(true);
+      expect(cloud.usage.used).toBe(index + 1);
+    }
+    expect(memory.controls.cloudRequest("cloud-0")).toMatchObject({ counted: false, usage: { used: 25 } });
+    expect(memory.controls.cloudRequest("cloud-over-limit")).toMatchObject({
+      counted: false,
+      outcome: { kind: "limit_reached" },
+      usage: { used: 25, allowance: 25 },
+    });
+    const local = request("go to settings");
+    const response = (await invoke(memory, "kalvoice_request", { request: local })) as KalVoiceResponse;
+    expect(response).toMatchObject({ counted: false, outcome: { kind: "completed" }, usage: { used: 25 } });
+    expect(response.directive).toMatchObject({ kind: "navigate", surface: "settings" });
+    expect(await invoke(memory, "kalvoice_request", { request: local })).toMatchObject({
+      outcome: { kind: "failed", code: "duplicate_request" },
+    });
+    const ui = { requestId: "local-ui", command: "scene", input: "voice" };
+    expect(invoke(memory, "kalvoice_meter_ui_command", { request: ui })).toMatchObject({
+      counted: false,
+      outcome: { kind: "completed" },
+      usage: { used: 25 },
+    });
+    invoke(memory, "kalvoice_meter_ui_command", { request: ui });
+    expect(events.filter((event) => (event as { type: string }).type === "kalvoice.command_executed")).toHaveLength(2);
+    const dictated = await invoke(memory, "kalvoice_talk", {
+      request: { ...request("write the release notes"), target: "field" },
+    });
+    expect(dictated).toMatchObject({ route: "dictation", response: null });
+    expect(invoke(memory, "kalvoice_type_instead", { requestId: local.requestId })).toBe(true);
+    expect(invoke(memory, "kalvoice_status", {})).toMatchObject({ usage: { used: 25 } });
+  });
+
   it("late exact cancellation leaves a successor microphone session alone", () => {
     const memory = createMemoryKalVoice(() => undefined, "");
     const first = invoke(memory, "kalvoice_listen_start", {});
@@ -39,7 +76,7 @@ describe("memory KalVoice browser parity", () => {
     })) as KalVoiceResponse;
 
     expect(response.intent).toBe("control_browser");
-    expect(response.counted).toBe(true);
+    expect(response.counted).toBe(false);
     expect(response.directive).toEqual({
       kind: "control_browser",
       workspaceId: "0192f3c4-0000-7000-8000-00000000000a",
@@ -166,5 +203,57 @@ describe("memory KalVoice composer and session commands (TK-3 subset)", () => {
       choices: [],
       followUp: { kind: "compose", text: "Bump the version.", submit: true },
     });
+  });
+});
+
+describe("memory KalVoice agent status (mirrors native grammar_agents)", () => {
+  async function ask(text: string) {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    return (await invoke(memory, "kalvoice_request", { request: request(text) })) as KalVoiceResponse;
+  }
+
+  it.each([
+    ["show me all agents that need me", "needs_you", null],
+    ["show working agents", "working", null],
+    ["show me all the idle agents", "idle", null],
+    ["show done agents", "done", null],
+    ["show me the failed agents", "failed", null],
+    ["show waiting agents", "waiting", null],
+    ["show me the agents waiting for me", "needs_you", null],
+    ["show all agents", "all", null],
+    ["show my codex agents that need me", "needs_you", "codex"],
+    ["show cursor agents", "all", "cursor"],
+    ["show everything waiting for me", "needs_you", null],
+  ])("%j filters the Agents tab", async (text, filter, providerId) => {
+    const response = await ask(text);
+    expect(response.intent).toBe("filter_agents");
+    expect(response.directive).toEqual({ kind: "filter_agents", filter, providerId });
+  });
+
+  it.each([
+    ["which agents need me", "which_agents", { kind: "filter_agents", filter: "needs_you", providerId: null }],
+    ["which agent failed", "which_agents", { kind: "filter_agents", filter: "failed", providerId: null }],
+    ["how many agents are working", "count_agents", null],
+    ["close all idle agents", "close_idle_agents", { kind: "close_idle_agents", providerId: null }],
+    ["stop all idle agents", "close_idle_agents", { kind: "close_idle_agents", providerId: null }],
+    ["kill all idle cursor agents", "close_idle_agents", { kind: "close_idle_agents", providerId: "cursor" }],
+  ])("%j is %s", async (text, intent, directive) => {
+    const response = await ask(text);
+    expect(response.intent).toBe(intent);
+    expect(response.directive).toEqual(directive);
+  });
+
+  it("never reads a narrower state as stop everything", async () => {
+    for (const text of ["stop all idle agents", "stop the paused threads", "pause all idle agents"]) {
+      expect((await ask(text)).intent).not.toMatch(/^(stop|pause|resume)_threads$/);
+    }
+    expect((await ask("stop all running agents")).intent).toBe("stop_threads");
+  });
+
+  it("opens the agent that just finished for any provider (native finds it)", async () => {
+    const any = await ask("open the agent that just finished");
+    expect(any.intent).toBe("open_finished_agent");
+    const cursor = await ask("open the cursor agent that just finished");
+    expect(cursor.outcome).toMatchObject({ kind: "failed", message: "No Cursor agent has finished yet." });
   });
 });

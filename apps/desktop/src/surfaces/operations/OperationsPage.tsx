@@ -76,6 +76,7 @@ import {
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { HUB_SECTIONS } from "../../shell/AccountHub.tsx";
 import { accountProviderName } from "../../shell/accountCommands.ts";
+import { FavoriteButton, FavoriteToggle } from "../../shell/favorites/FavoriteActions.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
 import { PERMISSION_MODE_HINTS, PERMISSION_MODE_LABELS } from "../dashboard/data/format.ts";
@@ -722,35 +723,47 @@ function RunsView({
         ) : null}
         <div className={styles.runList} hidden={shownRuns.length === 0}>
           {shownRuns.map((run) => (
-            <button
+            <FavoriteToggle
               key={run.id}
-              type="button"
-              className={styles.runRow}
-              data-operations-run-id={run.id}
-              data-selected={selected === run.id || undefined}
-              onClick={() => onSelect(run.id)}
+              target={{ kind: "run", id: run.id, workspaceId: run.spec.workspaceId }}
+              title={run.spec.name}
             >
-              <span className={styles.kindIcon} data-kind={run.spec.kind} aria-hidden="true">
-                {kindIcon(run.spec.kind)}
-              </span>
-              <span className={styles.runMain}>
-                <span className={styles.runTitle}>{run.spec.name}</span>
-                <span className={styles.runContext}>
-                  {run.workspaceName}
-                  {run.branch ? ` · ${run.branch}` : ""}
-                  {boundAccount(run) ? ` · ${boundAccount(run)}` : ""}
-                </span>
-                <span className={styles.runAction}>
-                  {run.currentAction ??
-                    run.outcome ??
-                    (run.status === "unknown" ? "Execution details unavailable" : "No current action reported")}
-                </span>
-              </span>
-              <span className={styles.runStatus}>
-                {status(run, true)}
-                <span>{operationDurationLabel(run)}</span>
-              </span>
-            </button>
+              <div className={styles.favoriteRunRow}>
+                <button
+                  type="button"
+                  className={styles.runRow}
+                  data-operations-run-id={run.id}
+                  data-selected={selected === run.id || undefined}
+                  onClick={() => onSelect(run.id)}
+                >
+                  <span className={styles.kindIcon} data-kind={run.spec.kind} aria-hidden="true">
+                    {kindIcon(run.spec.kind)}
+                  </span>
+                  <span className={styles.runMain}>
+                    <span className={styles.runTitle}>{run.spec.name}</span>
+                    <span className={styles.runContext}>
+                      {run.workspaceName}
+                      {run.branch ? ` · ${run.branch}` : ""}
+                      {boundAccount(run) ? ` · ${boundAccount(run)}` : ""}
+                    </span>
+                    <span className={styles.runAction}>
+                      {run.currentAction ??
+                        run.outcome ??
+                        (run.status === "unknown" ? "Execution details unavailable" : "No current action reported")}
+                    </span>
+                  </span>
+                  <span className={styles.runStatus}>
+                    {status(run, true)}
+                    <span>{operationDurationLabel(run)}</span>
+                  </span>
+                </button>
+                <FavoriteButton
+                  className={styles.favoriteRunAction}
+                  target={{ kind: "run", id: run.id, workspaceId: run.spec.workspaceId }}
+                  title={run.spec.name}
+                />
+              </div>
+            </FavoriteToggle>
           ))}
         </div>
         {hiddenRuns > 0 ? (
@@ -1485,103 +1498,113 @@ function ServicesView({
               const stopped = service.status !== "running";
               const tone = service.status === "running" ? "working" : service.status === "failed" ? "failed" : "muted";
               return (
-                <tr key={service.id} data-operations-service-id={service.id} tabIndex={-1}>
-                  <td>
-                    <strong>{service.name}</strong>
-                  </td>
-                  <td>
-                    <StatusIndicator tone={tone} pulse={service.status === "running"}>
-                      {titleCase(service.status)}
-                    </StatusIndicator>
-                  </td>
-                  <td>
-                    <div className={styles.endpoints}>
-                      {service.urls.map((url) => (
-                        <button
-                          key={url}
-                          type="button"
-                          onClick={() => void mutate(`url:${service.id}`, () => client.openUrl(url))}
-                        >
-                          {url}
-                          <ExternalLink />
-                        </button>
-                      ))}
-                      {service.ports.length > 0 ? (
-                        <span>{service.ports.map((port) => `:${port}`).join(" · ")}</span>
-                      ) : service.urls.length === 0 ? (
-                        <span>Not observed</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    <span className={styles.mono}>
-                      {service.processName}
-                      {service.pid ? ` · PID ${service.pid}` : ""}
-                    </span>
-                  </td>
-                  <td>
-                    {service.uptimeSeconds === null
-                      ? "Unknown"
-                      : durationLabel(new Date(Date.now() - service.uptimeSeconds * 1_000).toISOString(), null)}
-                  </td>
-                  <td>{service.workspaceName}</td>
-                  <td>
-                    <div className={styles.serviceActions}>
-                      {service.urls[0] ? (
+                <FavoriteToggle
+                  key={service.id}
+                  target={{ kind: "service", id: service.id, workspaceId: service.workspaceId }}
+                  title={service.name}
+                >
+                  <tr data-operations-service-id={service.id} tabIndex={-1}>
+                    <td>
+                      <strong>{service.name}</strong>
+                    </td>
+                    <td>
+                      <StatusIndicator tone={tone} pulse={service.status === "running"}>
+                        {titleCase(service.status)}
+                      </StatusIndicator>
+                    </td>
+                    <td>
+                      <div className={styles.endpoints}>
+                        {service.urls.map((url) => (
+                          <button
+                            key={url}
+                            type="button"
+                            onClick={() => void mutate(`url:${service.id}`, () => client.openUrl(url))}
+                          >
+                            {url}
+                            <ExternalLink />
+                          </button>
+                        ))}
+                        {service.ports.length > 0 ? (
+                          <span>{service.ports.map((port) => `:${port}`).join(" · ")}</span>
+                        ) : service.urls.length === 0 ? (
+                          <span>Not observed</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={styles.mono}>
+                        {service.processName}
+                        {service.pid ? ` · PID ${service.pid}` : ""}
+                      </span>
+                    </td>
+                    <td>
+                      {service.uptimeSeconds === null
+                        ? "Unknown"
+                        : durationLabel(new Date(Date.now() - service.uptimeSeconds * 1_000).toISOString(), null)}
+                    </td>
+                    <td>{service.workspaceName}</td>
+                    <td>
+                      <div className={styles.serviceActions}>
+                        <FavoriteButton
+                          target={{ kind: "service", id: service.id, workspaceId: service.workspaceId }}
+                          title={service.name}
+                        />
+                        {service.urls[0] ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              void mutate(`url:${service.id}`, () => client.openUrl(service.urls[0] as string))
+                            }
+                          >
+                            Open in Browser
+                          </Button>
+                        ) : null}
                         <Button
                           size="sm"
                           variant="ghost"
+                          disabled={!service.runId && !service.terminalId}
+                          onClick={() => (service.runId ? onRun(service.runId) : void onTerminal(service))}
+                        >
+                          Logs
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => void onTerminal(service)}>
+                          <TerminalSquare /> Open terminal
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={!service.canRestart || busy !== null}
+                          title={
+                            !service.canRestart
+                              ? (service.actionReason ?? "Restart is unavailable for this process.")
+                              : undefined
+                          }
                           onClick={() =>
-                            void mutate(`url:${service.id}`, () => client.openUrl(service.urls[0] as string))
+                            void mutate(`restart:${service.id}`, () => client.serviceAction(service.id, "restart"))
                           }
                         >
-                          Open in Browser
+                          <RotateCcw /> Restart
                         </Button>
-                      ) : null}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={!service.runId && !service.terminalId}
-                        onClick={() => (service.runId ? onRun(service.runId) : void onTerminal(service))}
-                      >
-                        Logs
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => void onTerminal(service)}>
-                        <TerminalSquare /> Open terminal
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={!service.canRestart || busy !== null}
-                        title={
-                          !service.canRestart
-                            ? (service.actionReason ?? "Restart is unavailable for this process.")
-                            : undefined
-                        }
-                        onClick={() =>
-                          void mutate(`restart:${service.id}`, () => client.serviceAction(service.id, "restart"))
-                        }
-                      >
-                        <RotateCcw /> Restart
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        disabled={!service.canStop || stopped || busy !== null}
-                        title={
-                          !service.canStop
-                            ? (service.actionReason ?? "Stop is unavailable for this process.")
-                            : undefined
-                        }
-                        onClick={() =>
-                          void mutate(`stop:${service.id}`, () => client.serviceAction(service.id, "stop"))
-                        }
-                      >
-                        <Square /> Stop
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          disabled={!service.canStop || stopped || busy !== null}
+                          title={
+                            !service.canStop
+                              ? (service.actionReason ?? "Stop is unavailable for this process.")
+                              : undefined
+                          }
+                          onClick={() =>
+                            void mutate(`stop:${service.id}`, () => client.serviceAction(service.id, "stop"))
+                          }
+                        >
+                          <Square /> Stop
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                </FavoriteToggle>
               );
             })}
           </tbody>

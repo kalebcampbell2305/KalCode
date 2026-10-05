@@ -62,7 +62,7 @@ import {
 } from "./dictation.ts";
 import { type DictationCapture, type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { explicitlyRequestsIntegrations, routesToIntegrations, runVoiceIntegration } from "./integrationRouting.ts";
-import { parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
+import { closeIdleAgents, parseKalTidyCommand, runKalTidyCommand } from "./kalTidyVoice.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import {
   type LocalReasoningState,
@@ -665,9 +665,16 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "show_approvals":
           permissions.setPanelOpen(true);
           break;
-        case "filter_dashboard":
-          // Z7-W3: "Show only agents that are working" and friends.
-          intents.filterDashboard(directive.chip);
+        case "filter_agents":
+          // "Show me all agents that need me", "show my Codex agents": one shared status filter
+          // for every provider, and a provider only when the person named one.
+          intents.filterAgents(directive.filter, directive.providerId);
+          break;
+        case "close_idle_agents":
+          // "Close all idle agents": KalTidy's canonical idle-agent close, every provider.
+          void closeIdleAgents(client, directive.providerId, (result) => {
+            if (!scope.signal.aborted) scope.report(result);
+          });
           break;
         case "search":
           // Z7-W2: KalVoice already read back the names; the palette shows the results.

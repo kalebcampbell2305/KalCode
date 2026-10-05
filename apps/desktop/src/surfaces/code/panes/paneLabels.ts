@@ -1,8 +1,7 @@
 import {
-  DISPLAY_QUALIFIER_LABEL,
-  DISPLAY_STATUS_LABEL,
-  DISPLAY_STATUS_TONE,
-  displayStatusOf,
+  AGENT_STATE_LABEL,
+  AGENT_STATE_TONE,
+  agentStateOf,
   type PaneInfo,
   type StatusTone,
   type ThreadStatus,
@@ -42,15 +41,26 @@ export interface PaneStatusView {
   display: string;
 }
 
-/** The display status of a thread, through the one shared mapping (packages/protocol). */
-export function paneStatus(status: ThreadStatus): PaneStatusView {
-  const { status: display, qualifier } = displayStatusOf(status);
-  return {
-    label: DISPLAY_STATUS_LABEL[display],
-    qualifier: qualifier ? DISPLAY_QUALIFIER_LABEL[qualifier] : null,
-    tone: DISPLAY_STATUS_TONE[display],
-    display,
-  };
+type AgentFacts = Pick<ThreadSummary, "status" | "currentActivity" | "pendingApprovals">;
+
+/**
+ * The agent's state, through the one shared agent-state model (packages/protocol): the same words
+ * for every provider ("Codex B · NEEDS YOU"). The qualifier adds the one observed fact the word
+ * can't carry.
+ */
+export function paneStatus(agent: AgentFacts): PaneStatusView {
+  const state = agentStateOf(agent);
+  const qualifier =
+    agent.status === "waiting_for_dependency"
+      ? "waiting on another task"
+      : agent.status === "interrupted"
+        ? "resumable"
+        : agent.status === "paused"
+          ? "paused"
+          : agent.status === "offline"
+            ? "offline"
+            : null;
+  return { label: AGENT_STATE_LABEL[state], qualifier, tone: AGENT_STATE_TONE[state], display: state };
 }
 
 /** What the header says about who answers approvals and how much KalCode can see. */
@@ -60,21 +70,7 @@ export function channelNote(info: PaneInfo | null): { text: string; tone: "neutr
     return { text: info.exitCode === null ? "Ended" : `Ended (exit ${info.exitCode})`, tone: "ended" };
   }
   const name = providerIdentity(info.providerId).name;
-  // Codex: notifications and process state; approvals always in Codex's own prompt.
-  if (info.providerId === "codex") {
-    return info.hookChannel === "waiting"
-      ? { text: "Limited status — no Codex notification yet", tone: "limited" }
-      : { text: "Limited status — approvals in Codex", tone: "limited" };
-  }
-  // Gemini CLI: process state only.
-  if (info.providerId === "cursor") {
-    return info.hookChannel === "active"
-      ? { text: "Connected to Cursor", tone: "neutral" }
-      : { text: "Cursor lifecycle hooks unavailable", tone: "limited" };
-  }
-  if (info.providerId === "gemini-cli") {
-    return { text: `Process state only — approvals in ${name}`, tone: "limited" };
-  }
+  // From the session's real channel state, never the provider's name: every provider reads the same.
   if (info.hookChannel === "limited") return { text: `Limited status — approvals in ${name}`, tone: "limited" };
   if (info.hookChannel === "waiting") return { text: `Connecting to ${name}…`, tone: "neutral" };
   if (!info.kalcodeAnswersApprovals) return { text: `Approvals in ${name}`, tone: "neutral" };
@@ -110,7 +106,7 @@ export function paneInfoCopy(providerId: string, info: PaneInfo | null, provider
     const codex = providerId === "codex";
     return {
       summary: codex
-        ? "Limited status: KalCode reads Codex's notifications (turn finished, approval requested) and process state. Approvals are answered in Codex's own prompt."
+        ? "KalCode reads Codex's own lifecycle hooks (prompt, tool calls, approval requests, turn end) where this Codex version supports them, otherwise its turn-finished notification and process state. Approvals are answered in Codex's own prompt."
         : "Process state only: KalCode can't see Gemini CLI's tool calls yet. Approvals are answered in Gemini CLI's own prompt.",
       limitsTitle: "KalCode doesn't check in this pane:",
       limits: [

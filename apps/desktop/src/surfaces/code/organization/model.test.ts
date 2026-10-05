@@ -8,6 +8,7 @@ import type {
   ThreadStatus,
   ThreadSummary,
 } from "@kalcode/protocol";
+import { READY_ACTIVITY } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import type { ProcessInfo } from "../../../ipc/utilities.ts";
 import {
@@ -244,9 +245,11 @@ describe("agentBadge", () => {
       detail: "Running npm test",
     });
     expect(agentBadge(thread("testing"), info()).badge).toBe("testing");
-    expect(agentBadge(thread("idle"), info()).badge).toBe("ready");
+    expect(agentBadge(thread("idle", { currentActivity: READY_ACTIVITY }), info()).badge).toBe("ready");
+    expect(agentBadge(thread("idle"), info()).badge).toBe("idle");
     expect(agentBadge(thread("paused"), info()).badge).toBe("idle");
-    expect(agentBadge(thread("interrupted"), info()).badge).toBe("idle");
+    expect(agentBadge(thread("interrupted"), info()).badge).toBe("stopped");
+    expect(agentBadge(thread("completed"), null).badge).toBe("done");
   });
 });
 
@@ -280,10 +283,11 @@ describe("names and purposes", () => {
     expect(serviceSide("postgres")).toBeNull();
   });
 
-  it("puts the call sign before an agent's name, and alone for the placeholder", () => {
-    expect(agentDisplayName(thread("idle", { name: "Dashboard" }), "Claude A")).toBe("Claude A - Dashboard");
-    expect(agentDisplayName(thread("idle"), "Claude A")).toBe("Claude A");
-    expect(agentDisplayName(thread("idle", { name: "Dashboard" }), undefined)).toBe("Dashboard");
+  it("shows the persisted task or manual name without inventing a call sign", () => {
+    expect(agentDisplayName(thread("idle", { name: "Fix Dashboard Layout" }))).toBe("Fix Dashboard Layout");
+    expect(agentDisplayName(thread("idle", { name: "My Manual Name" }))).toBe("My Manual Name");
+    expect(agentDisplayName(thread("idle", { name: "New agent", providerName: "Claude Code" }))).toBe("New agent");
+    expect(agentDisplayName(thread("idle", { name: "", providerName: "Codex" }))).toBe("Codex");
   });
 
   it("numbers repeated names", () => {
@@ -309,9 +313,15 @@ const item = (key: string, badge: OrgItem["status"], group: OrgItem["group"] = "
 const b = (badge: NonNullable<OrgItem["status"]>["badge"]) => ({ badge, detail: "" });
 
 describe("organize", () => {
-  it("keeps active work visible, marks waiting first, and collapses finished work", () => {
+  it("keeps active work visible, marks needs-you first, and collapses finished work", () => {
     const [group] = organize(
-      [item("a", b("done")), item("b", b("working")), item("c", b("waiting")), item("d", b("ready")), item("e", null)],
+      [
+        item("a", b("done")),
+        item("b", b("working")),
+        item("c", b("needs_you")),
+        item("d", b("ready")),
+        item("e", null),
+      ],
       DEFAULT_PREFS,
       null,
     );

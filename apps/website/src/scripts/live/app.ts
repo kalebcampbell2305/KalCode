@@ -216,7 +216,7 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
           const first = state.agents[created[0] as string];
           toast(
             state,
-            `Launched ${created.length === 1 ? first?.sign : `${created.length} agents`} in Code`,
+            `Launched ${created.length === 1 ? first?.name : `${created.length} agents`} in Code`,
             "info",
             created[0],
           );
@@ -659,6 +659,8 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     if (!visible || document.hidden) return;
     timer = window.setInterval(
       () => {
+        // A held pane stays put: agent output would re-render and reflow the canvas under the pointer.
+        if (adaptiveCanvas.dragging()) return;
         tick(state);
         render();
       },

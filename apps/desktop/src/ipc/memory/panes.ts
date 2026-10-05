@@ -28,8 +28,9 @@ import type {
   ThreadStatus,
   ThreadSummary,
 } from "@kalcode/protocol";
+import { READY_ACTIVITY } from "@kalcode/protocol";
 import type { PermissionMemory } from "./permissions.ts";
-import { nameFromPrompt, type ThreadsMemory } from "./threads.ts";
+import type { ThreadsMemory } from "./threads.ts";
 
 type Handler = (args: Record<string, unknown>) => unknown;
 export type PaneCommand =
@@ -164,8 +165,8 @@ export function createPanesMemory(options: {
   const status = (p: Pane, to: ThreadStatus, activity: string | null = null, pendingApprovals?: number) => {
     // Without hook events (limited status) KalCode only sees the process.
     if (p.hookChannel === "limited" && to !== "completed" && to !== "failed") return;
-    // Codex: only notify (turn finished), OSC 9 (approval requested) and the process.
-    if (p.kind === "codex" && !["idle", "waiting_for_user", "completed", "failed"].includes(to)) return;
+    // Codex reports prompt, tool, approval and turn-end through its own lifecycle hooks (0.160+),
+    // like Claude Code: the same shared states.
     threads.setPaneStatus(p.thread.id, to, activity, pendingApprovals);
   };
 
@@ -186,9 +187,9 @@ export function createPanesMemory(options: {
     prompt(p);
   };
 
-  /** Codex's `notify` reports a finished turn: the first one activates the channel. */
+  /** A finished turn (Codex: its Stop hook / notify) keeps the channel active. */
   const turnFinished = (p: Pane) => {
-    if (p.kind === "codex" && p.hookChannel === "waiting") p.hookChannel = "active";
+    if (p.hookChannel === "waiting") p.hookChannel = "active";
   };
 
   const runCommand = (p: Pane, command: string) => {
@@ -242,12 +243,7 @@ export function createPanesMemory(options: {
     }
     if (!p.titled) {
       p.titled = true;
-      const current = threads.handlers.thread_get({ threadId: p.thread.id }) as ThreadSummary;
-      if (current.name === "New agent" || current.name === "New thread")
-        p.thread = threads.handlers.thread_rename({
-          threadId: p.thread.id,
-          name: nameFromPrompt(line),
-        }) as ThreadSummary;
+      p.thread = threads.autoNamePane(p.thread.id, line);
     }
     status(p, "active");
     if (line.startsWith("run ")) {
@@ -311,7 +307,7 @@ export function createPanesMemory(options: {
           model: source.model,
           effort: source.effort,
           permissionMode: source.permissionMode,
-          name: `${[...source.name].slice(0, 73).join("")} (copy)`,
+          name: null,
         };
       }
       const kind = args.providerId as PaneKind;
@@ -346,15 +342,14 @@ export function createPanesMemory(options: {
         kind === "gemini-cli" || kind === "cursor" || (kind === "claude-code" && config.hookChannel === "limited");
       later(p, 40, () => {
         print(p, `${MEMORY_PANE_BANNER}\r\n> `);
-        if (kind === "codex") {
-          // No notify until Codex finishes a turn: the channel stays waiting.
-          threads.setPaneStatus(thread.id, "idle", null);
-        } else if (limited) {
+        // The session is up at its prompt with no work yet: READY for every provider (the runtime's
+        // spawn marker; session-start hooks report the same).
+        if (limited) {
           p.hookChannel = "limited";
-          threads.setPaneStatus(thread.id, "idle", null);
+          threads.setPaneStatus(thread.id, "idle", READY_ACTIVITY);
         } else {
           p.hookChannel = "active";
-          status(p, "idle");
+          status(p, "idle", READY_ACTIVITY);
         }
       });
       return thread;

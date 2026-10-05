@@ -84,7 +84,8 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
 
     // Pin alpha-app; rename beta-service in the rail; make a rail folder and file beta into it.
     await item(page, /^alpha-app/).click({ button: "right" });
-    await page.getByRole("menuitem", { name: "Pin" }).click();
+    // #235 added "Pin globally" next to the rail's own pin.
+    await page.getByRole("menuitem", { name: "Pin workspace in rail", exact: true }).click();
     await expect(item(page, /^Pinned, 1$/)).toBeVisible();
     await item(page, /^beta-service/).focus();
     await page.keyboard.press("F2");

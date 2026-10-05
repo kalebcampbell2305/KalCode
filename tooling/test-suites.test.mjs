@@ -27,18 +27,20 @@ const inventory = loadTestSuiteInventory();
 test("the registered Rust release gate includes the production speech engine and exact target ignore counts", () => {
   const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
-  // The official Cursor installation probe is intentionally opt-in on every platform.
+  // The official Cursor installation probe is intentionally opt-in on every platform; so are the
+  // real-Codex hook probes (AI quota) and the PTY/process-scan benchmarks (#238, #239).
   for (const [platform, expected] of [
-    ["win32", 28],
-    ["darwin", 28],
+    // The netstat CPU benchmark only compiles on Windows.
+    ["win32", 35],
+    ["darwin", 34],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 25],
+    ["linux", 31],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 28);
+  assert.equal(inventory.rustIntentionalIgnores.length, 35);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
@@ -342,9 +344,11 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 381);
-  assert.equal(visual.size, 56);
-  assert.equal(established.size, 437);
+  // These are established coverage floors, not ceilings: adding regressions must
+  // not fail inventory validation. Exact disjoint coverage is checked below.
+  assert.ok(functional.size >= 381);
+  assert.ok(visual.size >= 56);
+  assert.equal(established.size, functional.size + visual.size);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

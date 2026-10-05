@@ -31,6 +31,8 @@ kalcode-integrations = { path = "../../../crates/integrations" }
 kalcode-integration-openai = { path = "../../../crates/integration-openai" }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
 kalcode-native-core = { path = "../../../crates/native-core" }
+# Terminal output coalescing for the per-view channels (`kalcode_pty::OutputCoalescer`).
+kalcode-pty = { path = "../../../crates/pty" }
 kalcode-providers = { path = "../../../crates/providers" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }
 kalcode-entitlements = { path = "../../../crates/entitlements" }

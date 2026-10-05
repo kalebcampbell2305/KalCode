@@ -4,10 +4,12 @@
 //! the person answers in the provider's own prompt.
 //!
 //! - **Codex**: `codex -C <ws> -s <sandbox> -a on-request … -c notify=[kalcode-hook …]
-//!   -c tui.notifications=['approval-requested'] -c tui.notification_method='osc9'`
-//!   ([`super::codex::interactive_args`]). Status: `notify` (`agent-turn-complete`, with the
-//!   thread id for resume) through the authenticated hook bridge. Terminal escape sequences
-//!   never change canonical status; a tool can print the same bytes as a provider prompt.
+//!   -c hooks.<Event>=[…kalcode-hook codex <Event>…] -c hooks.state={…}`
+//!   ([`super::codex::interactive_args`]). Status: Codex's own observing hooks (on a verified
+//!   Codex line: prompt → WORKING, tool → RUNNING COMMAND / EDITING / TESTING, approval prompt →
+//!   NEEDS YOU, Stop → IDLE) and `notify` (`agent-turn-complete`, with the thread id for resume)
+//!   through the authenticated hook bridge. Terminal escape sequences never change canonical
+//!   status; a tool can print the same bytes as a provider prompt.
 //! - **Gemini CLI**: `gemini --approval-mode <mapping> [--model] [--resume]`; process and PTY
 //!   state only ("limited status"), because a per-session way to add KalCode's hooks without
 //!   writing the user's or the project's settings is unverified.
@@ -31,7 +33,10 @@ use crate::catalog;
 use crate::claude::actions::ActionContext;
 use crate::claude::argv::working_directory;
 use crate::codex::managed_policy::CloudConfigEligibility;
-use crate::codex::{managed_executable as managed_codex_executable, usable_executable};
+use crate::codex::{
+    managed_executable_and_version as managed_codex_executable, observing_hooks_verified,
+    usable_executable_and_version,
+};
 use crate::detect::{DetectEnv, DetectionSpec, detect, detect_guarded};
 use crate::gemini::managed_policy::ManagedGeminiLaunch;
 use crate::launch::{LaunchKind, resolve};
@@ -81,14 +86,17 @@ impl PaneCli {
     fn profile(self) -> PaneProfile {
         match self {
             Self::Codex => PaneProfile {
+                name: "Codex",
                 answer_in: "Answer in Codex",
                 kalcode_answers: false,
             },
             Self::Gemini => PaneProfile {
+                name: "Gemini CLI",
                 answer_in: "Answer in Gemini CLI",
                 kalcode_answers: false,
             },
             Self::Cursor => PaneProfile {
+                name: "Cursor",
                 answer_in: "Answer in Cursor",
                 kalcode_answers: false,
             },
@@ -103,6 +111,7 @@ pub struct InteractiveCliProvider {
     managed_profiles: Option<ManagedProfiles>,
     codex_cloud_config: Option<Arc<CodexCloudConfigResolver>>,
     integrations: Option<Arc<super::integrations::IntegrationConnector>>,
+    titles: Option<Arc<dyn super::TitleSink>>,
     /// Codex `notify` reaches KalCode through the bridge; Gemini CLI panes don't use it.
     bridge: Option<Arc<BridgeServer>>,
     config: InteractiveConfig,
@@ -123,6 +132,7 @@ impl InteractiveCliProvider {
             managed_profiles: None,
             codex_cloud_config: None,
             integrations: None,
+            titles: None,
             bridge,
             config,
             panes,
@@ -136,8 +146,13 @@ impl InteractiveCliProvider {
         self
     }
 
-    /// Supplies the authoritative account result used by Codex's managed policy. Missing or
-    /// unknown results fail closed because enterprise cloud configuration cannot be disabled.
+    pub fn with_titles(mut self, titles: Arc<dyn super::TitleSink>) -> Self {
+        self.titles = Some(titles);
+        self
+    }
+
+    /// Supplies optional account plan metadata. Native Codex retains its own cloud
+    /// configuration; unavailable metadata cannot prevent an authenticated session.
     pub fn with_codex_cloud_config_resolver<F>(mut self, resolver: F) -> Self
     where
         F: Fn(&str) -> Result<CloudConfigEligibility, ProviderError> + Send + Sync + 'static,
@@ -198,6 +213,7 @@ impl InteractiveCliProvider {
         let mut gemini_args = None;
         let mut integration_lifetime = None;
         let mut lease: Option<ProfileLease> = None;
+        let mut version = None;
         let (executable, mut env, cwd) = match (self.managed_profiles.as_ref(), account_id) {
             (Some(profiles), Some(account_id)) => match self.cli {
                 PaneCli::Cursor => {
@@ -218,13 +234,11 @@ impl InteractiveCliProvider {
                 }
                 PaneCli::Codex => {
                     let probe_guardian = profiles.probe_guardian()?;
-                    let resolve_cloud_config = self.codex_cloud_config.as_ref().ok_or_else(|| {
-                            ProviderError::Start(
-                                "Codex managed sessions require authoritative cloud-config eligibility"
-                                    .into(),
-                            )
-                        })?;
-                    let eligibility = resolve_cloud_config(account_id)?;
+                    let eligibility = self
+                        .codex_cloud_config
+                        .as_ref()
+                        .and_then(|resolve| resolve(account_id).ok())
+                        .unwrap_or(CloudConfigEligibility::Unknown);
                     let prepared = crate::codex::managed_policy::prepare_session(
                         profiles,
                         &self.env,
@@ -232,8 +246,9 @@ impl InteractiveCliProvider {
                         &workspace,
                         eligibility,
                     )?;
-                    let executable =
+                    let (executable, verified) =
                         managed_codex_executable(&spec, &prepared.detect_env, &probe_guardian)?;
+                    version = Some(verified);
                     codex_overrides = prepared.cli_overrides;
                     lease = Some(prepared.lease);
                     (executable, prepared.env, workspace.clone())
@@ -274,11 +289,15 @@ impl InteractiveCliProvider {
                     (executable, env, cwd)
                 }
             },
-            (None, None) => (
-                usable_executable(&spec, &self.env)?,
-                self.env.provider_env(&spec.env_policy),
-                workspace.clone(),
-            ),
+            (None, None) => {
+                let (executable, detected) = usable_executable_and_version(&spec, &self.env)?;
+                version = detected;
+                (
+                    executable,
+                    self.env.provider_env(&spec.env_policy),
+                    workspace.clone(),
+                )
+            }
             _ => unreachable!("managed account validation is exhaustive"),
         };
         for (name, value) in [
@@ -315,7 +334,7 @@ impl InteractiveCliProvider {
             provider_session_id: config.resume_session_id.clone().unwrap_or_default(),
             limits: self.config.limits,
             expiry: None,
-            titles: None,
+            titles: self.titles.clone(),
         });
         shared.set_profile(self.cli.profile());
         if config.resume_session_id.is_none() {
@@ -434,11 +453,13 @@ impl InteractiveCliProvider {
                         hook_prefix_args: &self.config.hook_prefix_args,
                         endpoint: bridge.endpoint().as_str(),
                         session: registration.session_id(),
+                        observe_hooks: version.as_ref().is_some_and(observing_hooks_verified),
                     },
                     &codex_overrides,
                 )
                 .map_err(|e| ProviderError::Start(e.to_string()))?;
-                // The notify helper inherits Codex's environment, which holds the session key.
+                // The notify and hook helpers inherit Codex's environment, which holds the
+                // session key (verified: Codex hook commands get the session environment).
                 env.insert(KEY_ENV.into(), registration.key_hex().into());
                 shared.set_registration(registration);
                 args

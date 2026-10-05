@@ -1,12 +1,12 @@
 /**
- * The Command Deck's right rail: every coding agent (Claude Code, Codex or Gemini CLI in a Code
- * terminal pane), grouped by what it needs — agents waiting on the person first, then working,
- * then blocked; idle agents fold away and the last few that finished stay briefly. Each row opens
+ * The Command Deck's right rail: every coding agent (any provider's coding terminal in Code),
+ * grouped by the shared agent state — agents that need the person first, then failed, working and
+ * waiting; idle agents fold away and the last few that finished stay briefly. Each row opens
  * the agent's terminal in Code. Chat threads live in Threads, not here. Collapses to a narrow
  * strip of live counts: on its own while no agent runs and nothing needs the person, or when the
  * person collapses it.
  */
-import type { ThreadSummary } from "@kalcode/protocol";
+import { AGENT_STATE_TEXT, AGENT_STATE_TONE, agentStateOf, isAgentBusy, type ThreadSummary } from "@kalcode/protocol";
 import { Button, IconButton, ProviderGlyph, Skeleton, Tooltip } from "@kalcode/ui/components";
 import { Bot, ChevronRight, PanelRightClose, PanelRightOpen, Plus, RotateCw, X } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -14,9 +14,7 @@ import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
-import { useArchivedCodingAgents, useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
-import { STATUS_META } from "../../surfaces/dashboard/data/status.ts";
-import { fleetHandles } from "../../surfaces/dashboard/fleet/fleetModel.ts";
+import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
 import { beginLiveResize } from "../panes/liveResize.ts";
@@ -29,16 +27,6 @@ export function AgentRail() {
   const { state, reload } = useCodingAgents();
   const now = useNow(30_000);
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
-  const archived = useArchivedCodingAgents().state;
-  // The same call signs as the Fleet (archived agents keep their letters).
-  const handles = useMemo(
-    () =>
-      fleetHandles([
-        ...(state.status === "ready" ? state.data : []),
-        ...(archived.status === "ready" ? archived.data : []),
-      ]),
-    [state, archived],
-  );
   // Until the person pins or collapses it, the rail opens while an agent runs or needs them.
   const active = sections ? runningAgentCount(sections) > 0 || sections.needsYou.length > 0 : null;
   useEffect(() => {
@@ -89,7 +77,7 @@ export function AgentRail() {
                 </Button>
               </div>
             ) : sections ? (
-              <AgentList sections={sections} now={now} handles={handles} />
+              <AgentList sections={sections} now={now} />
             ) : (
               <p className={styles.quiet}>Agents aren't part of this build.</p>
             )}
@@ -141,7 +129,8 @@ function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: ()
   const counts = [
     { tone: "waiting", value: sections.needsYou.length, label: "need you" },
     { tone: "working", value: sections.working.length, label: "working" },
-    { tone: "muted", value: sections.blocked.length, label: "blocked" },
+    { tone: "muted", value: sections.blocked.length, label: "waiting" },
+    { tone: "failed", value: sections.failed.length, label: "failed" },
   ].filter((c) => c.value > 0);
   return (
     <div className={styles.stripCounts}>
@@ -162,15 +151,7 @@ function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: ()
   );
 }
 
-function AgentList({
-  sections,
-  now,
-  handles,
-}: {
-  sections: AgentSections;
-  now: number;
-  handles: ReadonlyMap<string, string>;
-}) {
+function AgentList({ sections, now }: { sections: AgentSections; now: number }) {
   const { navigate } = useNavigation();
   const intents = useOptionalUiIntents();
   const launchAgent = useLaunchAgent();
@@ -203,16 +184,20 @@ function AgentList({
     else navigate("code");
   };
 
-  if (running === 0 && sections.needsYou.length === 0 && sections.finished.length === 0 && sections.idle.length === 0) {
+  if (
+    running === 0 &&
+    sections.needsYou.length === 0 &&
+    sections.failed.length === 0 &&
+    sections.finished.length === 0 &&
+    sections.idle.length === 0
+  ) {
     return (
       <div className={styles.empty}>
         <span className={styles.emptyArt} aria-hidden="true">
           <Bot />
         </span>
         <p className={styles.emptyTitle}>No agents running</p>
-        <p className={styles.emptyText}>
-          Launch a Claude Code or Codex agent in Code and it shows up here while it works.
-        </p>
+        <p className={styles.emptyText}>Launch a coding agent in Code and it shows up here while it works.</p>
         <Button size="sm" variant="secondary" icon={<Plus />} onClick={launchAgent}>
           Launch an agent
         </Button>
@@ -223,17 +208,10 @@ function AgentList({
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group
-        title="Needs you"
-        tone="waiting"
-        threads={sections.needsYou}
-        now={now}
-        onOpen={open}
-        handles={handles}
-        {...rowActions}
-      />
-      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} handles={handles} />
-      <Group title="Blocked" tone="muted" threads={sections.blocked} now={now} onOpen={open} handles={handles} />
+      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} {...rowActions} />
+      <Group title="Failed" tone="failed" threads={sections.failed} now={now} onOpen={open} {...rowActions} />
+      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} />
+      <Group title="Waiting" tone="muted" threads={sections.blocked} now={now} onOpen={open} />
       {sections.idle.length > 0 ? (
         <section className={styles.group}>
           <button
@@ -250,28 +228,13 @@ function AgentList({
           {showIdle ? (
             <ul id={idleId} className={styles.list}>
               {sections.idle.map((thread) => (
-                <AgentRow
-                  key={thread.id}
-                  thread={thread}
-                  now={now}
-                  onOpen={open}
-                  handle={handles.get(thread.id)}
-                  {...rowActions}
-                />
+                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} {...rowActions} />
               ))}
             </ul>
           ) : null}
         </section>
       ) : null}
-      <Group
-        title="Just finished"
-        tone="done"
-        threads={sections.finished}
-        now={now}
-        onOpen={open}
-        handles={handles}
-        {...rowActions}
-      />
+      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} {...rowActions} />
     </>
   );
 }
@@ -282,12 +245,11 @@ interface GroupProps {
   threads: ThreadSummary[];
   now: number;
   onOpen: (thread: ThreadSummary) => void;
-  handles: ReadonlyMap<string, string>;
   leaving?: ReadonlySet<string>;
   onDismiss?: (thread: ThreadSummary) => void;
 }
 
-function Group({ title, tone, threads, now, onOpen, handles, leaving, onDismiss }: GroupProps) {
+function Group({ title, tone, threads, now, onOpen, leaving, onDismiss }: GroupProps) {
   const headingId = useId();
   if (threads.length === 0) return null;
   return (
@@ -298,15 +260,7 @@ function Group({ title, tone, threads, now, onOpen, handles, leaving, onDismiss 
       </h3>
       <ul className={styles.list}>
         {threads.map((thread) => (
-          <AgentRow
-            key={thread.id}
-            thread={thread}
-            now={now}
-            onOpen={onOpen}
-            handle={handles.get(thread.id)}
-            leaving={leaving}
-            onDismiss={onDismiss}
-          />
+          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} leaving={leaving} onDismiss={onDismiss} />
         ))}
       </ul>
     </section>
@@ -317,23 +271,23 @@ function AgentRow({
   thread,
   now,
   onOpen,
-  handle,
   leaving,
   onDismiss,
 }: {
   thread: ThreadSummary;
   now: number;
   onOpen: (t: ThreadSummary) => void;
-  handle?: string;
   leaving?: ReadonlySet<string>;
   /** Present for agents whose session is over: the row's X clears them. */
   onDismiss?: (t: ThreadSummary) => void;
 }) {
-  const meta = STATUS_META[thread.status];
+  const state = agentStateOf(thread);
+  const tone = AGENT_STATE_TONE[state];
+  const label = AGENT_STATE_TEXT[state];
   const since = Date.parse(thread.lastActivityAt);
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
-  const live = meta.group === "working";
-  const detail = meta.group === "working" && thread.currentActivity ? thread.currentActivity : meta.label;
+  const live = isAgentBusy(state);
+  const detail = live && thread.currentActivity ? `${label} · ${thread.currentActivity}` : label;
   const dismissible = onDismiss !== undefined && isClearableAgent(thread);
   const isLeaving = leaving?.has(thread.id) ?? false;
   return (
@@ -346,10 +300,11 @@ function AgentRow({
       <button
         type="button"
         className={styles.row}
-        data-tone={meta.tone}
-        data-group={meta.group}
+        data-tone={tone}
+        data-group={state === "needs_you" ? "attention" : state}
+        data-state={state}
         onClick={() => onOpen(thread)}
-        aria-label={`${thread.name}, ${meta.label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
+        aria-label={`${thread.name}, ${label}, ${thread.providerName} in ${thread.workspaceName}. Open agent`}
       >
         <span className={styles.rowGlyph} aria-hidden="true">
           <ProviderGlyph provider={thread.providerId} size="sm" />
@@ -362,7 +317,7 @@ function AgentRow({
           </span>
           <span className={styles.rowDetail}>{detail}</span>
           <span className={styles.rowMeta}>
-            {handle ?? thread.providerName} · {thread.workspaceName}
+            {thread.providerName} · {thread.workspaceName}
             {thread.pendingApprovals > 0 && thread.status !== "waiting_for_permission" ? (
               <span className={styles.rowFlag}>
                 {thread.pendingApprovals} {thread.pendingApprovals === 1 ? "approval" : "approvals"}

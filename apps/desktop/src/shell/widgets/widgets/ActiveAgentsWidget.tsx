@@ -1,4 +1,4 @@
-import { displayStatusOf, type ThreadSummary } from "@kalcode/protocol";
+import { AGENT_STATE_TEXT, AGENT_STATE_TONE, agentStateOf, isAgentBusy, type ThreadSummary } from "@kalcode/protocol";
 import { ProviderGlyph, Skeleton, StatusChip } from "@kalcode/ui/components";
 import { useMemo } from "react";
 import { useOptionalUiIntents } from "../../../runtime/uiIntents.tsx";
@@ -9,8 +9,9 @@ import { useNow } from "../../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../../navigation.tsx";
 import styles from "./Widgets.module.css";
 
+/** Starting, working or testing agents of every provider (the shared agent state). */
 function working(threads: readonly ThreadSummary[]): ThreadSummary[] {
-  return threads.filter((t) => displayStatusOf(t.status).chip === "working").sort(compareThreads);
+  return threads.filter((t) => isAgentBusy(agentStateOf(t))).sort(compareThreads);
 }
 
 export function useActiveAgentCount(): number | null {
@@ -47,7 +48,7 @@ export function ActiveAgentsWidget() {
   return (
     <ul className={styles.list} aria-label="Working agents">
       {list.map((thread) => {
-        const display = displayStatusOf(thread.status);
+        const state = agentStateOf(thread);
         return (
           <li key={thread.id} className={styles.item}>
             <ProviderGlyph provider={thread.providerId} size="sm" />
@@ -65,7 +66,7 @@ export function ActiveAgentsWidget() {
               </span>
             </span>
             <span className={styles.stack}>
-              <StatusChip status={display.status} variant="dot" size="sm" />
+              <StatusChip tone={AGENT_STATE_TONE[state]} label={AGENT_STATE_TEXT[state]} variant="dot" size="sm" />
               <span className={styles.time}>
                 <span className="visually-hidden">Started </span>
                 {formatElapsed(now - Date.parse(thread.createdAt))}

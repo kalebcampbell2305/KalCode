@@ -579,13 +579,16 @@ fn label(text: &str) -> String {
     }
 }
 
+/// A provider's product name from the provider registry (the same names KalCode shows for every
+/// provider, including any added later). An unregistered id is spoken as it is, bounded.
 fn provider_name(provider_id: &ProviderId) -> String {
-    match provider_id.as_str() {
-        ProviderId::CLAUDE_CODE => "Claude Code".into(),
-        ProviderId::CODEX => "Codex".into(),
-        ProviderId::GEMINI_CLI => "Gemini CLI".into(),
-        other => label(other),
-    }
+    kalcode_providers::catalog::specs()
+        .into_iter()
+        .find(|spec| spec.provider_id == provider_id.as_str())
+        .map_or_else(
+            || label(provider_id.as_str()),
+            |spec| spec.display_name.to_owned(),
+        )
 }
 
 #[cfg(test)]
@@ -1046,6 +1049,37 @@ mod tests {
                 .event(&degraded, &Names, Instant::now())
                 .is_some(),
             "a degraded provider can subsequently become signed out"
+        );
+    }
+
+    /// Every provider is named by the registry, Cursor included (it was spoken as "cursor").
+    #[test]
+    fn provider_sign_outs_use_the_registry_name_of_every_provider() {
+        for (id, said) in [
+            (ProviderId::CLAUDE_CODE, "Claude Code needs you to sign in."),
+            (ProviderId::CODEX, "Codex needs you to sign in."),
+            (ProviderId::CURSOR, "Cursor needs you to sign in."),
+            (ProviderId::GEMINI_CLI, "Gemini CLI needs you to sign in."),
+        ] {
+            let signed_out = event(
+                &format!("signed-out-{id}"),
+                43,
+                EventPayload::ProviderHealthChanged {
+                    provider_id: ProviderId::new(id),
+                    from: HealthState::Healthy,
+                    to: HealthState::Unavailable,
+                    reason: "signed_out".into(),
+                },
+            );
+            let spoken = Policy::default()
+                .event(&signed_out, &Names, Instant::now())
+                .expect("sign-out");
+            assert_eq!(spoken.text, said, "{id}");
+        }
+        assert_eq!(
+            provider_name(&ProviderId::new("future-cli")),
+            "future-cli",
+            "an unregistered provider is still named, never dropped"
         );
     }
 

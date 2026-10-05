@@ -73,17 +73,33 @@ describe("chip counts and the summary line", () => {
 });
 
 describe("Agent Fleet groups", () => {
-  it("partition every agent into exactly one of five groups; FAILED is its own", () => {
+  it("partition every agent into exactly one shared group; FAILED and WAITING are their own", () => {
     const all = (Object.keys(DISPLAY_STATUS_OF) as ThreadStatus[]).map((s) => thread(s));
     const counts = fleetCounts(all);
     expect(counts.all).toBe(18);
-    expect(counts.needs_you + counts.working + counts.done + counts.idle + counts.failed).toBe(18);
+    expect(counts.needs_you + counts.working + counts.waiting + counts.done + counts.idle + counts.failed).toBe(18);
     expect(counts.needs_you).toBe(2);
     expect(counts.failed).toBe(1);
-    expect(fleetGroupOf("failed")).toBe("failed");
-    expect(fleetGroupOf("waiting_for_user")).toBe("needs_you");
-    expect(fleetGroupOf("interrupted")).toBe("idle");
-    expect(fleetGroupOf("completed")).toBe("done");
+    expect(counts.waiting).toBe(1);
+    expect(fleetGroupOf(thread("failed"))).toBe("failed");
+    expect(fleetGroupOf(thread("waiting_for_user"))).toBe("needs_you");
+    expect(fleetGroupOf(thread("waiting_for_dependency"))).toBe("waiting");
+    expect(fleetGroupOf(thread("interrupted"))).toBe("done");
+    expect(fleetGroupOf(thread("completed"))).toBe("done");
+  });
+
+  it("groups agents by state, never by provider", () => {
+    const mixed = [
+      { ...thread("running_tool"), providerId: "claude-code" },
+      { ...thread("editing"), providerId: "codex" },
+      { ...thread("active"), providerId: "cursor" },
+      { ...thread("testing"), providerId: "gemini-cli" },
+    ];
+    const counts = fleetCounts(mixed);
+    expect(counts.working).toBe(4);
+    expect(fleetSummaryLine(counts)).toBe("4 agents · 4 working");
+    expect(filterThreads(mixed, "working", "", undefined, "codex").map((t) => t.providerId)).toEqual(["codex"]);
+    expect(fleetGroupOf({ ...thread("idle"), pendingApprovals: 1 })).toBe("needs_you");
   });
 
   it("summarises like the owner's example, with zeros left out", () => {
@@ -121,7 +137,7 @@ describe("filtering and search", () => {
     expect(filterThreads([a, b, c, d], "all", "zeta")).toEqual([d]);
     expect(filterThreads([a, b, c, d], "all", "failed")).toEqual([d]);
     expect(filterThreads([a, b, c, d], "all", "high")).toEqual([d]);
-    expect(filterThreads([a, b, c, d], "all", "waiting")).toEqual([b]);
+    expect(filterThreads([a, b, c, d], "all", "needs")).toEqual([b]);
     expect(filterThreads([a, b, c, d], "all", "codex b", (t) => (t === a ? ["Codex B"] : []))).toEqual([a]);
     // A phrase that names something exactly wins over loose words ("Claude B", not any "b").
     const e = thread("idle", { name: "Bump billing", accountLabel: "Claude A" });

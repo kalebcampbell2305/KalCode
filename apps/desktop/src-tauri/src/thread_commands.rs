@@ -309,7 +309,10 @@ fn adapter(
         runtime: runtime.clone(),
         test_fixture,
     });
-    let guard = |provider: Arc<dyn AgentProvider>| -> Arc<dyn AgentProvider> {
+    // Pane and headless routes are both coding agents the person asked for, so both get the one
+    // user-requested admission policy (AGENTS.md Resource Governor rule); the router's
+    // interactive flag does not select a different policy.
+    let guard = |provider: Arc<dyn AgentProvider>, _interactive: bool| -> Arc<dyn AgentProvider> {
         let observed = ObservedProvider::wrap(provider, health);
         let governed = ResourceAdmissionProvider::wrap(observed, resources.clone());
         Arc::new(AccountBoundProvider::managed(
@@ -1746,6 +1749,7 @@ mod tests {
             permission_mode: PermissionMode::Approve,
             resume_session_id: None,
             secret_ref: None,
+            launch_origin: Default::default(),
         }
     }
 

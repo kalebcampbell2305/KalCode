@@ -410,6 +410,26 @@ pub fn rename(conn: &Connection, id: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Naming provenance is kept with existing application metadata; prompts are never retained.
+pub fn name_origin(conn: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key = ?1",
+            [format!("thread.name.origin:{id}")],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub fn set_name_origin(conn: &Connection, id: &str, origin: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key,value,updated_at) VALUES (?1,?2,datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+        params![format!("thread.name.origin:{id}"), origin],
+    )?;
+    Ok(())
+}
+
 pub fn archive(conn: &Connection, id: &str, now: &str) -> Result<()> {
     conn.execute(
         "UPDATE threads SET archived_at = ?2 WHERE id = ?1 AND archived_at IS NULL",

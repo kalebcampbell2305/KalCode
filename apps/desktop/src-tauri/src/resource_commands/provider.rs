@@ -10,17 +10,18 @@
 //! an idle persistent process (Claude Code) is measured by the sampler like any other process.
 //! This is admission accounting only; process custody and lifetime are unchanged.
 //!
-//! Every thread provider is a coding agent the person asked for (a pane, New agent, KalVoice, a
-//! user-initiated Squad or Handoff), so admission uses the user-requested policy for all of
-//! them, provider-agnostic: CPU load never holds a launch; only genuine hard pressure, an
-//! explicit Custom limit, or the OS refusing to create the process does, with the real reason and
-//! Start Anyway.
+//! A coding agent the person asked for (a pane, New agent, KalVoice, a user-initiated Squad or
+//! Handoff, Resume) uses the user-requested policy, provider-agnostic: CPU load never holds a
+//! launch; only genuine hard pressure, an explicit Custom limit, or the OS refusing to create the
+//! process does, with the real reason and Start Anyway. A session the Operations scheduler starts
+//! (`SessionConfig::launch_origin` = `Background`) uses the strict background policy instead and
+//! yields to CPU load first (`LaunchHoldKind::BackgroundYield`).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, ProviderCapabilities,
-    ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, LaunchOrigin,
+    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::permissions::ApprovalDecision;
 use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
@@ -82,6 +83,14 @@ impl ProviderAdmission for GovernorAdmission {
                 let (retry_after, wait_limit) = self.hold_timing();
                 match kalcode_resources::launch_hold(&decision, retry_after, wait_limit) {
                     Some(hold) => Err(ProviderError::ResourcesHeld(hold)),
+                    // Background work held by soft load (CPU, headroom, an old sample) yields.
+                    None if launch.origin == LaunchOrigin::Background => {
+                        Err(ProviderError::ResourcesHeld(LaunchHold::new(
+                            LaunchHoldKind::BackgroundYield,
+                            retry_after,
+                            wait_limit,
+                        )))
+                    }
                     // Nothing that may hold a user-requested agent: start it.
                     None => Ok(Box::new(UnaccountedPermit)),
                 }
@@ -331,6 +340,7 @@ impl AgentProvider for ResourceAdmissionProvider {
             AgentLaunch {
                 thread_id: Some(config.thread_id.clone()),
                 workspace_id: Some(config.workspace_id.clone()),
+                origin: config.launch_origin,
             },
             Arc::clone(&self.admission),
         ));

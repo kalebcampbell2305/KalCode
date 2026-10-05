@@ -24,14 +24,15 @@ async function open(page: Page, scenario: string) {
 test("six groups with real counts; old failures fold away and never count as needing you", async ({ page }) => {
   await open(page, "fleet");
   await expect(
-    page.locator("#main").getByText("147 agents · 11 working · 4 need you · 3 done · 8 idle · 121 failed"),
+    page.locator("#main").getByText("147 agents · 10 working · 4 need you · 1 waiting · 5 done · 6 idle · 121 failed"),
   ).toBeVisible();
   for (const [label, count] of [
     ["All", 147],
     ["Needs you", 4],
-    ["Working", 11],
-    ["Done", 3],
-    ["Idle", 8],
+    ["Working", 10],
+    ["Waiting", 1],
+    ["Done", 5],
+    ["Idle", 6],
     ["Failed", 121],
   ] as const) {
     await expect(chip(page, label)).toHaveAccessibleName(`${label}, ${count}`);
@@ -43,16 +44,17 @@ test("six groups with real counts; old failures fold away and never count as nee
   // Groups in board order; folding the live groups shows the history below them.
   for (const name of [
     /^Needs you ?, 4 agents/i,
-    /^Working ?, 11 agents/i,
-    /^Done ?, 3 agents/i,
-    /^Idle ?, 8 agents/i,
+    /^Working ?, 10 agents/i,
+    /^Waiting ?, 1 agent/i,
+    /^Done ?, 5 agents/i,
+    /^Idle ?, 6 agents/i,
   ]) {
     const toggle = board(page).getByRole("button", { name });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
   }
   const headings = board(page).getByRole("heading", { level: 2 });
-  await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Done/, /^Idle/, /^Failed/]);
+  await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Waiting/, /^Done/, /^Idle/, /^Failed/]);
   // 121 failed runs start folded: the live agents stay on top.
   const failed = board(page).getByRole("button", { name: /^Failed ?, 121 agents/i });
   await expect(failed).toHaveAttribute("aria-expanded", "false");
@@ -99,7 +101,8 @@ test("cleanup: the card X, Clear failed, and Close all asks once", async ({ page
   const done = card(page, "Generate API client");
   await done.getByRole("button", { name: "Clear Generate API client" }).click();
   await expect(done).toHaveCount(0);
-  await expect(chip(page, "Done")).toHaveAccessibleName("Done, 2");
+  // Done holds finished and stopped agents (the shared agent state).
+  await expect(chip(page, "Done")).toHaveAccessibleName("Done, 4");
 
   // Clear failed from the group header: every failed agent goes at once.
   await chip(page, "Failed").click();

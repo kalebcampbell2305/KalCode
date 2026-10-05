@@ -79,13 +79,15 @@ export function canDismiss(status: ThreadStatus): boolean {
 export function cleanupSteps(threads: readonly ThreadSummary[], kind: CleanupKind): BulkStep[] {
   switch (kind) {
     case "failed":
-      return threads.filter((t) => t.status === "failed").map((thread) => ({ thread, commands: ["archive"] }));
+      // FAILED in the shared agent state: a failed session, or one idle after a failed turn.
+      return threads.filter((t) => fleetGroupOf(t) === "failed").map((thread) => ({ thread, commands: ["archive"] }));
     case "finished":
       return threads.filter((t) => FINISHED.has(t.status)).map((thread) => ({ thread, commands: ["archive"] }));
     case "idle":
-      // Idle at its prompt: the archive ends the quiet session. Paused or blocked agents keep their turn.
+      // READY or IDLE at its prompt (any provider): the archive ends the quiet session. Paused or
+      // blocked agents keep their turn.
       return threads
-        .filter((t) => fleetGroupOf(t.status) === "idle" && t.status === "idle")
+        .filter((t) => fleetGroupOf(t) === "idle" && t.status === "idle")
         .map((thread) => ({ thread, commands: ["archive"] }));
     case "all":
       return threads.flatMap<BulkStep>((thread) =>

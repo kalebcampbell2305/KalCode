@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
+/** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
+const NOT_FAVORITE = ":not([data-favorite-action])";
+
 /**
  * Threads surface against the in-memory transport: fixture provider detection (Claude Code and
  * Codex installed and signed in, Gemini CLI installed with sign-in unknown), workspaces
@@ -96,7 +99,9 @@ test.describe("threads", () => {
     await form.getByLabel("Task").fill("fix the OAuth callback race in the login flow");
     await form.getByLabel("Task").press(`${MOD}+Enter`);
 
-    const row = list(page).getByRole("button", { name: /Fix OAuth Callback Race/ });
+    const row = list(page)
+      .getByRole("button", { name: /Fix OAuth Callback Race/ })
+      .and(page.locator(NOT_FAVORITE));
     await expect(row).toHaveAttribute("aria-current", "true");
     await expect(detail(page).getByRole("heading", { name: "Fix OAuth Callback Race" })).toBeVisible();
     await expect(detail(page).getByText("Claude Code · opus · Personal")).toBeVisible();
@@ -281,6 +286,7 @@ test.describe("threads", () => {
     await openThreads(page, "threads");
     await list(page)
       .getByRole("button", { name: /Write Unit Tests for Parser Module/ })
+      .and(page.locator(NOT_FAVORITE))
       .click();
     await expect(detail(page).getByLabel("Message")).toBeVisible();
     await expect(detail(page).getByRole("button", { name: "Add context" })).toHaveCount(0);
@@ -290,6 +296,7 @@ test.describe("threads", () => {
     await openThreads(page, "threads-context");
     await list(page)
       .getByRole("button", { name: /Write Unit Tests for Parser Module/ })
+      .and(page.locator(NOT_FAVORITE))
       .click();
 
     const thread = detail(page);
@@ -335,9 +342,15 @@ test.describe("threads", () => {
 
     await detail(page).getByRole("button", { name: "Archive" }).click();
     await expect(page.getByText("Thread archived")).toBeVisible();
-    await expect(list(page).getByRole("button", { name: /Slow Migration/ })).toHaveCount(0);
+    await expect(
+      list(page)
+        .getByRole("button", { name: /Slow Migration/ })
+        .and(page.locator(NOT_FAVORITE)),
+    ).toHaveCount(0);
     await page.getByLabel("Show archived").check();
-    const archived = list(page).getByRole("button", { name: /Slow Migration/ });
+    const archived = list(page)
+      .getByRole("button", { name: /Slow Migration/ })
+      .and(page.locator(NOT_FAVORITE));
     await expect(archived.getByText("Archived")).toBeVisible();
     await archived.click();
     await expect(detail(page).getByLabel("Message")).toBeDisabled();
@@ -354,7 +367,11 @@ test.describe("threads", () => {
     await input.fill("Session race fix");
     await input.press("Enter");
     await expect(detail(page).getByRole("heading", { name: "Session race fix" })).toBeVisible();
-    await expect(list(page).getByRole("button", { name: /Session race fix/ })).toBeVisible();
+    await expect(
+      list(page)
+        .getByRole("button", { name: /Session race fix/ })
+        .and(page.locator(NOT_FAVORITE)),
+    ).toBeVisible();
 
     await detail(page).getByRole("button", { name: "Rename thread" }).click();
     await detail(page).getByLabel("Thread name").fill("Discarded");
@@ -365,7 +382,7 @@ test.describe("threads", () => {
 
   test("the list shows structured status, activity and pending approvals", async ({ page }) => {
     await openThreads(page, "threads");
-    const rows = list(page).getByRole("button");
+    const rows = list(page).getByRole("button").and(page.locator(NOT_FAVORITE));
     await expect(rows).toHaveCount(5);
     const running = rows.filter({ hasText: "Fix OAuth Callback Race" });
     await expect(running.getByText("Running a tool")).toBeVisible();
@@ -388,6 +405,7 @@ test.describe("threads", () => {
     await openThreads(page, "threads");
     await list(page)
       .getByRole("button", { name: /Add Dark Mode Toggle/ })
+      .and(page.locator(NOT_FAVORITE))
       .click();
     await expect(detail(page).getByText("Waiting for 1 permission decision")).toBeVisible();
     await expect(detail(page).getByText("Requested: Run npm install lodash")).toBeVisible();
@@ -398,6 +416,7 @@ test.describe("threads", () => {
     await expect(
       list(page)
         .getByRole("button", { name: /Add Dark Mode Toggle/ })
+        .and(page.locator(NOT_FAVORITE))
         .getByText("1 approval"),
     ).toHaveCount(0);
   });
@@ -439,6 +458,7 @@ test.describe("threads", () => {
     await openThreads(page, "threads");
     await list(page)
       .getByRole("button", { name: /Migrate API to v2/ })
+      .and(page.locator(NOT_FAVORITE))
       .click();
     const alert = detail(page).getByRole("alert");
     await expect(alert.getByText("This thread failed")).toBeVisible();
@@ -458,6 +478,7 @@ test.describe("threads", () => {
     await expect(
       list(page)
         .getByRole("button", { name: /Fix OAuth Callback Race/ })
+        .and(page.locator(NOT_FAVORITE))
         .getByText("Running a tool"),
     ).toBeVisible();
   });
@@ -476,8 +497,12 @@ test.describe("threads", () => {
     const search = page.getByRole("searchbox", { name: "Search threads" });
     await expect(search).toBeFocused();
     await page.keyboard.type("readme");
-    await expect(list(page).getByRole("button")).toHaveCount(1);
-    await expect(list(page).getByRole("button", { name: /Update README/ })).toBeVisible();
+    await expect(list(page).getByRole("button").and(page.locator(NOT_FAVORITE))).toHaveCount(1);
+    await expect(
+      list(page)
+        .getByRole("button", { name: /Update README/ })
+        .and(page.locator(NOT_FAVORITE)),
+    ).toBeVisible();
     await search.fill("nothing like this");
     await expect(page.getByText('No threads match "nothing like this".')).toBeVisible();
   });
@@ -490,11 +515,13 @@ test.describe("threads", () => {
       await expectNoSeriousA11yViolations(page);
       await list(page)
         .getByRole("button", { name: /Add Dark Mode Toggle/ })
+        .and(page.locator(NOT_FAVORITE))
         .click();
       await expect(detail(page).getByText("Waiting for 1 permission decision")).toBeVisible();
       await expectNoSeriousA11yViolations(page);
       await list(page)
         .getByRole("button", { name: /Migrate API to v2/ })
+        .and(page.locator(NOT_FAVORITE))
         .click();
       await expect(detail(page).getByRole("alert")).toBeVisible();
       await expectNoSeriousA11yViolations(page);

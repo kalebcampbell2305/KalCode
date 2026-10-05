@@ -32,9 +32,9 @@ pub(crate) fn is_unmanaged_config(error: &ProviderError) -> bool {
     matches!(error, ProviderError::Start(message) if message == UNMANAGED_CONFIG)
 }
 
-/// Whether the official Codex account result permits a session without an enterprise cloud
-/// config layer. Business, Education, and Enterprise accounts are eligible; missing/unknown
-/// plan data must remain [`Unknown`](Self::Unknown).
+/// Informational classification of the official Codex plan. Native Codex applies its own
+/// organization cloud configuration regardless of this cached value. Missing or unrecognized
+/// plan data remains [`Unknown`](Self::Unknown) and never authorizes or blocks a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudConfigEligibility {
     /// Official account data identifies a consumer Free, Plus, or Pro plan.
@@ -74,7 +74,7 @@ pub struct ManagedAuthLaunch {
 /// Prepares an account session. Every plan launches (native provider parity): the profile's
 /// `config.toml` is the user's native Codex configuration, the user's own project trust applies,
 /// and an organization's cloud configuration applies as it does in a native terminal.
-/// `_cloud_config` is the current official plan verdict; the caller has already required one.
+/// `_cloud_config` is informational; unknown or unavailable plan metadata never blocks a session.
 pub fn prepare_session(
     profiles: &ManagedProfiles,
     source: &DetectEnv,
@@ -104,7 +104,7 @@ fn native_config(profiles: &ManagedProfiles, source: &DetectEnv) -> String {
 
 /// Prepares the isolated Codex app-server used only for account/read and supported sign-in RPCs.
 /// It never starts a thread. The caller must terminate it before releasing `lease`, and must
-/// reject a newly reported enterprise-eligible plan before starting any provider session.
+/// preserve the selected account's authentication and configuration without requiring plan metadata.
 pub fn prepare_auth(
     profiles: &ManagedProfiles,
     source: &DetectEnv,
@@ -784,9 +784,8 @@ mod tests {
             "a stale profile config must be replaced by the native one: {serialized}"
         );
 
-        // Every headless turn argv KalCode builds (`exec --json --ignore-rules
-        // --ignore-user-config`, the policy floor, the managed overrides, each permission mode and
-        // `exec resume`) must parse. `--help` replaces the stdin prompt marker so no turn starts.
+        // Every headless turn argv KalCode builds (`exec --json`, the policy config, the managed
+        // overrides, each permission mode and `exec resume`) must parse. `--help` replaces the stdin prompt marker so no turn starts.
         use kalcode_contracts::permissions::PermissionMode;
         let resume_id = kalcode_contracts::ids::new_id();
         for mode in [

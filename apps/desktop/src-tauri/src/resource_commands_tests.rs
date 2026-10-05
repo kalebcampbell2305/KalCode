@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{
     AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, AuthState, DetectionState,
-    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    LaunchOrigin, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::permissions::{ApprovalDecision, PermissionMode};
 use kalcode_contracts::resources::{
@@ -204,6 +205,88 @@ fn projected(
         estimate.budget(),
         NOW_MS,
     )
+}
+
+// Ported from #236's interactive-terminal policy: one user-agent policy now governs panes and
+// headless routes alike (AGENTS.md Resource Governor rule).
+#[test]
+fn user_agents_ignore_cpu_soft_memory_and_missing_telemetry_but_keep_custom_limits() {
+    let mut snapshot = measured_snapshot();
+    let mut limits = ModeLimits::balanced();
+    let request = kalcode_resources::CapacityRequest::default();
+    let running = kalcode_resources::RunningWork::default();
+    let decide = |snapshot: Option<&ResourceSnapshot>, limits: &ModeLimits| {
+        super::user_agent_admission(snapshot, limits, &running, &request, None, NOW_MS, false)
+    };
+    snapshot.cpu = Reading::Value(CpuReading {
+        total_percent: 100.0,
+        smoothed_percent: 100.0,
+        logical_cores: 4,
+    });
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::Cpu,
+        level: PressureLevel::Critical,
+        signal: Signal::CpuPercent,
+        value: 100.0,
+        threshold: Some(90.0),
+        approaching: false,
+    });
+    assert_eq!(
+        decide(Some(&snapshot), &limits).state,
+        AdmissionState::Allowed
+    );
+    snapshot.cpu = Reading::unknown("not sampled yet");
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::Memory,
+        level: PressureLevel::High,
+        signal: Signal::MemoryUsedPercent,
+        value: 90.0,
+        threshold: Some(88.0),
+        approaching: false,
+    });
+    assert_eq!(
+        decide(Some(&snapshot), &limits).state,
+        AdmissionState::Allowed
+    );
+    assert_eq!(
+        decide(None, &limits).state,
+        AdmissionState::Allowed,
+        "an unfinished startup sampler is not a real resource failure"
+    );
+    limits.kind = kalcode_resources::ModeKind::Custom;
+    limits.max_agents = 0;
+    assert_eq!(
+        decide(None, &limits).state,
+        AdmissionState::Held,
+        "custom count limits do not depend on telemetry"
+    );
+    assert_eq!(
+        decide(Some(&snapshot), &limits).state,
+        AdmissionState::Held,
+        "an explicit custom agent limit still applies"
+    );
+}
+
+#[test]
+fn user_agents_hold_for_a_full_disk_with_the_truthful_reason() {
+    let mut snapshot = measured_snapshot();
+    snapshot.volumes = Reading::Value(vec![VolumeReading {
+        mount: "/".into(),
+        workspace_ids: vec![None],
+        total_bytes: 100 * 1024 * 1024 * 1024,
+        free_bytes: 200 * 1024 * 1024,
+    }]);
+    let decision = super::user_agent_admission(
+        Some(&snapshot),
+        &ModeLimits::balanced(),
+        &kalcode_resources::RunningWork::default(),
+        &kalcode_resources::CapacityRequest::default(),
+        None,
+        NOW_MS,
+        false,
+    );
+    assert_eq!(decision.state, AdmissionState::Held);
+    assert!(kalcode_resources::decision_codes(&decision).contains(&"disk_full"));
 }
 
 #[test]
@@ -980,6 +1063,7 @@ fn session_config() -> SessionConfig {
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     }
 }
 
@@ -1798,6 +1882,60 @@ fn cpu_busy_still_throttles_background_work() {
         AdmissionState::Held
     );
     drop(agents);
+    governor.shutdown();
+}
+
+/// Owner directive (2026-10-04), launch origin: under the same CPU load, a session the
+/// Operations scheduler starts (`LaunchOrigin::Background`) yields with its own reason before
+/// anything spawns, while the coding agent the person starts at that moment starts at once — for
+/// every provider. Start Anyway on the held background thread starts it.
+#[test]
+fn cpu_busy_automation_yields_while_a_user_launch_starts() {
+    let governor = cpu_saturated_governor();
+    for provider in [
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::CURSOR,
+        ProviderId::GEMINI_CLI,
+        "future-provider",
+    ] {
+        let adapter = governed(&governor, provider);
+        let automation = SessionConfig {
+            launch_origin: LaunchOrigin::Background,
+            ..session_config()
+        };
+        let Err(ProviderError::ResourcesHeld(hold)) = adapter
+            .provider
+            .start_session(automation.clone(), Box::new(|_: AgentEvent| {}))
+        else {
+            panic!("{provider}: a scheduled session must yield to CPU load");
+        };
+        assert_eq!(hold.kind, LaunchHoldKind::BackgroundYield);
+        assert!(
+            !hold.kind.is_hard_pressure(),
+            "never framed as hard pressure"
+        );
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 0, "nothing spawned");
+
+        let started = Instant::now();
+        let user = adapter
+            .provider
+            .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+            .unwrap_or_else(|error| panic!("{provider}: the person's agent was held: {error}"));
+        user.send(text("work"))
+            .unwrap_or_else(|error| panic!("{provider}: the person's turn was held: {error}"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 1);
+
+        governor.grant_start_anyway(&automation.thread_id);
+        let overridden = adapter
+            .provider
+            .start_session(automation, Box::new(|_: AgentEvent| {}))
+            .expect("Start Anyway starts the held background session");
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 2);
+        drop((user, overridden));
+        assert_eq!(governor.running_work_for_test().agents, 0);
+    }
     governor.shutdown();
 }
 

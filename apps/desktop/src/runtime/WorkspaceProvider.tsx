@@ -551,3 +551,8 @@ export function useWorkspaces(): WorkspaceValue {
   if (!value) throw new Error("useWorkspaces must be used inside <WorkspaceProvider>");
   return value;
 }
+
+/** Optional scope for object actions that also render outside the workspace shell. */
+export function useOptionalWorkspaces(): WorkspaceValue | null {
+  return useContext(WorkspaceContext);
+}

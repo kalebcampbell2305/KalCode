@@ -1044,6 +1044,9 @@ fn decode_account_state(value: &Value) -> Result<CodexAccountState, CodexAccount
                 }
                 _ => return Err(CodexAccountAuthError::InvalidResponse),
             };
+            // Plan metadata is optional information, not authentication evidence. Preserve
+            // a valid official account result when that field is absent, malformed or new.
+            // Empty maps to Unknown and never becomes a launch requirement.
             let plan_type = object
                 .get("planType")
                 .and_then(Value::as_str)
@@ -1054,7 +1057,7 @@ fn decode_account_state(value: &Value) -> Result<CodexAccountState, CodexAccount
                             .bytes()
                             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                 })
-                .ok_or(CodexAccountAuthError::InvalidResponse)?
+                .unwrap_or_default()
                 .to_owned();
             Some(CodexChatGptAccount { email, plan_type })
         }
@@ -1617,6 +1620,55 @@ mod tests {
             }
             .cloud_config_eligibility(),
             managed_policy::CloudConfigEligibility::Unknown
+        );
+    }
+
+    #[test]
+    fn unavailable_plan_metadata_preserves_the_official_authenticated_account() {
+        for plan in [
+            Value::Null,
+            json!(""),
+            json!(42),
+            json!({}),
+            json!("bad\nplan"),
+        ] {
+            let state = decode_account_state(&json!({
+                "account": {"type": "chatgpt", "email": "work@example.test", "planType": plan},
+                "requiresOpenaiAuth": true
+            }))
+            .expect("account remains valid without readable plan metadata");
+            assert_eq!(
+                state.account.as_ref().unwrap().email.as_deref(),
+                Some("work@example.test")
+            );
+            assert_eq!(
+                state.cloud_config_eligibility(),
+                managed_policy::CloudConfigEligibility::Unknown
+            );
+        }
+        let missing = decode_account_state(&json!({
+            "account": {"type": "chatgpt", "email": "work@example.test"},
+            "requiresOpenaiAuth": true
+        }))
+        .expect("missing plan metadata");
+        assert!(missing.account.is_some());
+        assert_eq!(
+            missing.cloud_config_eligibility(),
+            managed_policy::CloudConfigEligibility::Unknown
+        );
+        assert!(
+            decode_account_state(
+                &json!({"account": {"type": "unexpected"}, "requiresOpenaiAuth": true})
+            )
+            .is_err(),
+            "unknown authentication shapes remain invalid"
+        );
+        assert!(
+            decode_account_state(&json!({"account": null, "requiresOpenaiAuth": true}))
+                .unwrap()
+                .account
+                .is_none(),
+            "official sign-out is still authoritative"
         );
     }
 

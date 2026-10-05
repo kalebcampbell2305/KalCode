@@ -257,15 +257,15 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
         },
       )
       .toBe("active");
-    await expect(pane).toContainText("approvals in Codex", { timeout: 30_000 });
+    await expect(pane).toContainText("Approvals in Codex", { timeout: 30_000 });
     // A tool can print OSC 9 too: visible terminal output must not forge canonical status.
     await typeLine("approve");
     await expect(screen).toContainText("[fake prompt]", { timeout: 30_000 });
-    await expect(pane.locator("[data-pane-status]")).not.toContainText("WAITING FOR YOU");
+    await expect(pane.locator("[data-pane-status]")).not.toContainText("NEEDS YOU");
     await expect(pane.getByRole("button", { name: /Approve/ })).toHaveCount(0);
     await shot(page, "providers2-codex-pane-terminal-prompt");
     await typeLine("y");
-    await expect(pane.locator("[data-pane-status]")).not.toContainText("WAITING FOR YOU", { timeout: 30_000 });
+    await expect(pane.locator("[data-pane-status]")).not.toContainText("NEEDS YOU", { timeout: 30_000 });
 
     await typeLine("exit");
     await expect(pane.locator("[data-pane-status]")).toContainText("DONE", { timeout: 30_000 });

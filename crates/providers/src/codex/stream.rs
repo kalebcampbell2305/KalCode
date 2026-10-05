@@ -53,7 +53,10 @@ fn tool_of(item: &Value, cwd: &str) -> Option<(String, String, ThreadStatus)> {
             Some((
                 "command_execution".into(),
                 summary,
-                ThreadStatus::RunningCommand,
+                crate::tool_status::classify(
+                    "shell",
+                    Some(&serde_json::json!({ "command": command })),
+                ),
             ))
         }
         "mcp_tool_call" => {

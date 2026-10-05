@@ -301,9 +301,18 @@ pub enum UiDirective {
     ClosePane {
         query: Option<String>,
     },
-    /// Shows the Dashboard filtered by a chip (Z7-W3).
-    FilterDashboard {
-        chip: kalcode_contracts::workspace_ui::DashboardChip,
+    /// Shows the Agents tab filtered by one shared status filter (`AgentState`, the same for
+    /// every provider) and, only when the person named one, one provider. Replaced the
+    /// chip-only `filter_dashboard` (2026-10-04), which could not show Failed or Waiting.
+    FilterAgents {
+        filter: kalcode_contracts::agent_state::AgentFilter,
+        provider_id: Option<ProviderId>,
+    },
+    /// Runs KalTidy's canonical idle-agent close in the UI: every idle coding agent (ready or idle
+    /// at its prompt) of every provider, or of `provider_id`, closes through the same removal as
+    /// the Fleet's Close idle. Nothing working, waiting or needing the person is touched.
+    CloseIdleAgents {
+        provider_id: Option<ProviderId>,
     },
     /// Opens search with this query (Session Locator, Z7-W2).
     Search {

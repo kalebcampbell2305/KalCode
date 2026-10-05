@@ -24,6 +24,7 @@ fn unmanaged_codex_rejects_an_explicit_account_before_standalone_detection() {
             permission_mode: PermissionMode::Approve,
             resume_session_id: None,
             secret_ref: None,
+            launch_origin: Default::default(),
         },
         Box::new(|_| {}),
     );
@@ -54,6 +55,7 @@ fn unmanaged_gemini_rejects_an_explicit_account_before_standalone_detection() {
             permission_mode: PermissionMode::Approve,
             resume_session_id: None,
             secret_ref: None,
+            launch_origin: Default::default(),
         },
         Box::new(|_| {}),
     );

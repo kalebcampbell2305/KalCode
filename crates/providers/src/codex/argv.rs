@@ -12,7 +12,11 @@
 //!   the model" — nothing waits for a person KalCode can't reach.
 //! - `sandbox_workspace_write.network_access`, `web_search` and
 //!   `shell_environment_policy.inherit` are documented config keys (config reference).
-//! - `--ignore-rules`: "Do not load user or project execpolicy `.rules` files".
+//! - `--ignore-rules` ("Do not load user or project execpolicy `.rules` files") is never passed:
+//!   the person's own rules (`~/.codex/rules`) apply as in a native terminal, and Codex loads a
+//!   project's `.codex/rules` only for a project the person trusted (verified 2026-10-04 with
+//!   codex-cli 0.160.0: a user `forbidden` rule rejected the command without the flag and was
+//!   skipped with it; an untrusted checkout's project rule was not loaded).
 //! - `--skip-git-repo-check`: allow running outside a Git repository.
 //! - `exec … resume <SESSION_ID> -` continues a thread by the id `thread.started` reported.
 //!
@@ -26,8 +30,13 @@ use kalcode_contracts::permissions::PermissionMode;
 
 use crate::version::Version;
 
+/// Owner policy: ten concurrent child agents for each Codex parent session.
+/// This does not limit KalCode's top-level terminals or coding agents.
+/// https://developers.openai.com/codex/config-reference/
+pub const SUBAGENT_CONFIG: &str = "agents.max_concurrent_threads_per_session=10";
+
 /// The oldest Codex CLI KalCode's headless adapter was verified against (`exec --json`,
-/// `exec resume`, `--ignore-rules`).
+/// `exec resume`).
 #[cfg(not(windows))]
 pub const MINIMUM_VERSION: Version = Version::new(0, 155, 1);
 /// Windows needs the upstream detached-process console suppression fixes shipped in 0.160.
@@ -71,12 +80,15 @@ pub const TOOL_STRIPPING: &[&str] = &[
     "features.apps=false",
     "features.plugins=false",
     "features.hooks=false",
+    "features.skill_mcp_dependency_install=false",
     "features.multi_agent=false",
+    "features.multi_agent_v2=false",
     "features.browser_use=false",
     "features.computer_use=false",
     "features.in_app_browser=false",
     "features.image_generation=false",
     "--ignore-user-config",
+    "--ignore-rules",
 ];
 
 /// Flags and values KalCode never passes to Codex, in any mode.
@@ -90,12 +102,7 @@ pub const FORBIDDEN: &[&str] = &[
 ];
 
 /// Set for every turn, in every mode.
-const COMMON: &[&str] = &[
-    "exec",
-    "--json",
-    // Repository-supplied execpolicy rules never grant anything (K4); see PROVIDERS.md §5.
-    "--ignore-rules",
-];
+const COMMON: &[&str] = &["exec", "--json"];
 
 /// Provider-native sandbox and approval mapping. `Custom` uses the same bounded prompt policy
 /// as `Approve` until custom provider-native controls are part of the contract.
@@ -133,12 +140,15 @@ pub fn sandbox_args(mode: PermissionMode) -> Vec<&'static str> {
 /// the display can't drift from what runs).
 pub fn permission_setting(mode: PermissionMode) -> String {
     let mut parts: Vec<&str> = sandbox_args(mode);
-    parts.extend(COMMON.iter().skip(2).copied());
     for value in POLICY_CONFIG {
         parts.extend(["-c", value]);
     }
     parts.join(" ")
 }
+
+/// Codex keeps the person's own tools, config and rules in every mode (native provider parity).
+const NATIVE: &str =
+    "Your Codex tools, MCP servers, web search and rules work as in your terminal.";
 
 const NOT_ENFORCED: &str = "Codex has no deny-rule flag: KalCode can't stop reads of credential \
                             files that its native sandbox permits.";
@@ -161,22 +171,22 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
         map(
             PermissionMode::Approve,
             format!(
-                "Workspace writes use Codex's native on-request approval prompt; connected tools \
-                 and web search remain disabled. {NOT_ENFORCED}"
+                "Workspace writes use Codex's native on-request approval prompt. {NATIVE} \
+                 {NOT_ENFORCED}"
             ),
         ),
         map(
             PermissionMode::Auto,
             format!(
-                "Workspace writes run without approval prompts inside Codex's native sandbox; \
-                 connected tools and web search remain disabled. {NOT_ENFORCED}"
+                "Workspace writes run without approval prompts inside Codex's native sandbox. \
+                 {NATIVE} {NOT_ENFORCED}"
             ),
         ),
         map(
             PermissionMode::Bypass,
             format!(
-                "Uses Codex's explicit danger-full-access sandbox with approval prompts disabled; \
-                 connected tools and web search remain disabled. {NOT_ENFORCED}"
+                "Uses Codex's explicit danger-full-access sandbox with approval prompts disabled. \
+                 {NATIVE} {NOT_ENFORCED}"
             ),
         ),
     ]
@@ -223,6 +233,8 @@ pub(crate) fn exec_args_with_overrides(
         out.extend([OsString::from("-c"), OsString::from(value)]);
     }
     out.extend_from_slice(overrides);
+    // Apply after inherited profile/project overrides so stale limits cannot win.
+    out.extend([OsString::from("-c"), OsString::from(SUBAGENT_CONFIG)]);
     out.extend(sandbox_args(mode).into_iter().map(OsString::from));
     if let Some(model) = model {
         if !crate::claude::argv::valid_model_name(model) {
@@ -252,6 +264,38 @@ pub(crate) fn exec_args_with_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_subagents_are_ten_for_new_and_resumed_turns() {
+        for resume in [None, Some("01234567-89ab-4cde-8fab-0123456789ab")] {
+            for previous in [3, 15, 30] {
+                let args = exec_args_with_overrides(
+                    PermissionMode::Approve,
+                    None,
+                    None,
+                    resume,
+                    &[
+                        "-c".into(),
+                        format!("agents.max_concurrent_threads_per_session={previous}").into(),
+                    ],
+                )
+                .expect("args");
+                assert!(!args.iter().any(|value| {
+                    value == "features.multi_agent=false"
+                        || value == "features.multi_agent_v2=false"
+                }));
+                let effective = args
+                    .windows(2)
+                    .filter(|pair| pair[0] == "-c")
+                    .filter_map(|pair| pair[1].to_str())
+                    .rfind(|value| value.starts_with("agents.max_concurrent_threads_per_session="));
+                assert_eq!(
+                    effective,
+                    Some("agents.max_concurrent_threads_per_session=10")
+                );
+            }
+        }
+    }
 
     const ALL: [PermissionMode; 5] = [
         PermissionMode::Plan,
@@ -343,7 +387,8 @@ mod tests {
                     "{mode:?} strips a native tool with {stripping}"
                 );
             }
-            assert!(args.iter().any(|a| a == "--ignore-rules"));
+            // The person's own execpolicy rules apply, as in a native terminal.
+            assert!(!args.iter().any(|a| a == "--ignore-rules"), "{mode:?}");
             if mode != PermissionMode::Plan {
                 // Codex's own "is this a Git repository" guard stays on whenever it can write.
                 assert!(!args.iter().any(|a| a == "--skip-git-repo-check"));

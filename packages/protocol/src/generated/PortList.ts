@@ -3,6 +3,6 @@ import type { ListeningPort } from "./ListeningPort.ts";
 
 export type PortList = { ports: Array<ListeningPort>,
 /**
- * The OS tool the listing came from (`netstat`, `lsof`, `ss`).
+ * Where the listing came from (`Windows IP Helper`, or the OS tool: `netstat`, `lsof`, `ss`).
  */
 source: string, sampledAt: string, };

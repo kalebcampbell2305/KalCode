@@ -5,6 +5,7 @@
 //! streams new output to attached listeners, accepts input and resizes, and reports the exit.
 //! [`detect_shells`] lists shells present on this machine without changing anything.
 
+pub mod coalesce;
 mod scrollback;
 mod shells;
 
@@ -22,6 +23,7 @@ use std::time::Duration;
 use portable_pty::{Child, ExitStatus as PortableExitStatus};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+pub use coalesce::{CoalesceConfig, OutputCoalescer};
 pub use scrollback::Scrollback;
 pub use shells::{ShellInfo, detect_shells};
 
@@ -1262,6 +1264,20 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
             }
         }
     }
+    release_listeners_at_end(inner);
+}
+
+/// The output has ended, so no listener will be called again. Release each listener (a view's
+/// [`OutputCoalescer`] then delivers what it still buffers, at once) but keep its id registered
+/// behind a no-op, so `detach` reports exactly what it reported before the end.
+fn release_listeners_at_end(inner: &Inner) {
+    let released: Vec<Listener> = lock(&inner.shared)
+        .listeners
+        .values_mut()
+        .map(|listener| std::mem::replace(listener, Box::new(|_: &[u8]| true)))
+        .collect();
+    // Dropped outside the lock: a release may hand its last bytes to a webview channel.
+    drop(released);
 }
 
 /// Replies to each cursor-position request in `chunk` and returns the chunk without them.

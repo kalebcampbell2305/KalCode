@@ -95,12 +95,7 @@ impl TitleSink for Glue {
         let Ok(runtime) = self.modes.runtime() else {
             return;
         };
-        if runtime
-            .get(thread_id)
-            .is_ok_and(|t| naming::is_placeholder(&t.name))
-        {
-            let _ = runtime.rename(thread_id, &naming::name_from_prompt(prompt));
-        }
+        let _ = runtime.name_from_task(thread_id, prompt);
     }
 }
 
@@ -236,7 +231,7 @@ impl Stack {
         let providers = Arc::new(ProviderRegistry::new());
         let router = RuntimeRouter::new(Arc::new(ClaudeCodeProvider::new(env)), interactive);
         let router = if let Some(admitted) = admitted {
-            router.with_session_guards(|inner| {
+            router.with_session_guards(|inner, _interactive| {
                 Arc::new(HeldProvider {
                     inner,
                     admitted: admitted.clone(),
@@ -556,7 +551,10 @@ fn approvals_round_trip_through_the_engine_and_the_queue() {
     let idle = stack.wait_status(&thread, ThreadStatus::Idle);
     assert_eq!(idle.pending_approvals, 0);
     // The first prompt titled the thread (deterministic namer); the prompt itself isn't stored.
-    assert_eq!(idle.name, naming::name_from_prompt("run cargo build"));
+    assert_eq!(
+        idle.name,
+        naming::task_name_from_prompt("run cargo build").unwrap()
+    );
     assert!(
         stack
             .runtime

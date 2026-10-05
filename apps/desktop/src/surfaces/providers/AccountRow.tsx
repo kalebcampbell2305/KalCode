@@ -14,6 +14,7 @@ import {
 import { ChevronDown, Info, LogIn, LogOut, MoreHorizontal, PenLine, RefreshCw, Star, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { agentsAndThreadsLabel } from "../dashboard/data/agents.ts";
 import { UsageMeter } from "./AccountUsageBadge.tsx";
 import { accountFullLabel, accountName, accountSessionState, accountSignIn } from "./accountIdentity.ts";
@@ -24,6 +25,7 @@ import {
   resetsIn,
   useAccountUsage,
 } from "./accountUsage.ts";
+import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import styles from "./ProviderAccountsView.module.css";
 import { type AccountUsage, canRefreshProviderAuth, isBrowserAuthProvider } from "./useProviderAccounts.ts";
 
@@ -32,7 +34,7 @@ export interface AccountRowActions {
   setDefault: (accountId: string) => Promise<ProviderAccount | null>;
   archive: (accountId: string) => Promise<ProviderAccount | null>;
   refreshAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
-  signInAuth: (account: ProviderAccount) => Promise<void>;
+  signInAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
   cancelLogin: () => Promise<void>;
   logoutAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
 }
@@ -86,13 +88,17 @@ export function AccountRow({
   const keepMenuFocus = useRef(false);
 
   const label = accountName(account);
+  const favoriteTarget = { kind: "account" as const, id: account.id, workspaceId: null };
+  const favoriteItems = useFavoriteMenuItems(favoriteTarget, label);
   const busy = busyKey?.endsWith(account.id) ?? false;
   const browserAuth = isBrowserAuthProvider(account.providerId);
   const canRefreshAuth = canRefreshProviderAuth(account.providerId);
   const signedIn = account.authenticationState === "authenticated";
-  const session = accountSessionState(account, checking, validationError);
+  const canonical = useOptionalProviderAccountSessions()?.states.get(account.id);
+  const session = canonical?.health ?? accountSessionState(account, checking, validationError);
   const signIn = accountSignIn(account);
-  const quota = useAccountUsage(account.id);
+  const fallbackQuota = useAccountUsage(account.id);
+  const quota = canonical?.usage ?? fallbackQuota;
   const detailsId = `${id}-details`;
 
   const startRename = () => {
@@ -188,6 +194,7 @@ export function AccountRow({
         </div>
 
         <div className={styles.cellActions}>
+          <FavoriteButton target={favoriteTarget} title={label} />
           {activeLogin ? (
             <Button
               size="sm"
@@ -247,6 +254,13 @@ export function AccountRow({
                 event.preventDefault();
               }}
             >
+              {favoriteItems.map((item) =>
+                "separator" in item ? null : (
+                  <DropdownMenuItem key={item.id} icon={item.icon} onSelect={item.onSelect}>
+                    {item.label}
+                  </DropdownMenuItem>
+                ),
+              )}
               {canRefreshAuth ? (
                 <DropdownMenuItem
                   icon={<RefreshCw />}

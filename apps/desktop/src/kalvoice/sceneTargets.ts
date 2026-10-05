@@ -1,4 +1,5 @@
 import type { LocatorEntityKind, LocatorResult } from "@kalcode/protocol";
+import { providerName } from "../surfaces/dashboard/data/format.ts";
 
 /**
  * The small, privacy-safe description KalVoice needs to resolve references to UI/runtime
@@ -154,11 +155,11 @@ function namedScore(query: string, target: VoiceSceneTarget): number {
   return words.length > 0 && words.every((word) => names.some((name) => hasWordPrefix(name, word))) ? 1 : 0;
 }
 
+/** The provider's product name (KalCode's one provider-name table), or a readable id for one it doesn't list yet. */
 function readableProvider(providerId: string | null | undefined): string | null {
   if (!providerId) return null;
-  if (providerId === "claude-code") return "Claude Code";
-  if (providerId === "cursor") return "Cursor";
-  if (providerId === "gemini-cli") return "Gemini CLI";
+  const known = providerName(providerId);
+  if (known !== providerId) return known;
   return providerId
     .split(/[-_\s]+/)
     .filter(Boolean)

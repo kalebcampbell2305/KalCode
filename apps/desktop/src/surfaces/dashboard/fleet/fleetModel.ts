@@ -1,51 +1,10 @@
 /**
- * Agent Fleet read model: who each agent is ("Claude A"), what stage it is at, and whether its
+ * Agent Fleet read model: who each agent is, what stage it is at, and whether its
  * worktree is ready to merge — from the thread's runtime state plus its worktree's Git facts.
  * Nothing is inferred beyond those facts: "ready to merge" needs every condition observed.
  */
 import { displayStatusOf, type ThreadSummary, type ThreadWorktreeState } from "@kalcode/protocol";
 import { isLive, needsAttention } from "../data/status.ts";
-
-// ---- Handles ----
-
-const SHORT_PROVIDER: Record<string, string> = {
-  "claude-code": "Claude",
-  codex: "Codex",
-  cursor: "Cursor",
-  "gemini-cli": "Gemini",
-};
-
-function letters(index: number): string {
-  // A, B, … Z, AA, AB, …
-  let n = index;
-  let out = "";
-  do {
-    out = String.fromCharCode(65 + (n % 26)) + out;
-    n = Math.floor(n / 26) - 1;
-  } while (n >= 0);
-  return out;
-}
-
-/**
- * A short, stable call sign per agent: the provider's short name plus a letter in the order the
- * provider's agents were started ("Claude A", "Claude B", "Codex A"). Order is by creation time,
- * then id; callers pass archived agents too, so archiving one never shifts another's letter.
- */
-export function fleetHandles(threads: readonly ThreadSummary[]): Map<string, string> {
-  const byProvider = new Map<string, ThreadSummary[]>();
-  for (const thread of threads) {
-    const list = byProvider.get(thread.providerId) ?? [];
-    list.push(thread);
-    byProvider.set(thread.providerId, list);
-  }
-  const handles = new Map<string, string>();
-  for (const [providerId, list] of byProvider) {
-    const short = SHORT_PROVIDER[providerId] ?? list[0]?.providerName ?? providerId;
-    const ordered = [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-    for (const [index, thread] of ordered.entries()) handles.set(thread.id, `${short} ${letters(index)}`);
-  }
-  return handles;
-}
 
 // ---- Merge readiness ----
 

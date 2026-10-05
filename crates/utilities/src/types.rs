@@ -367,7 +367,7 @@ pub struct ListeningPort {
 #[ts(export)]
 pub struct PortList {
     pub ports: Vec<ListeningPort>,
-    /// The OS tool the listing came from (`netstat`, `lsof`, `ss`).
+    /// Where the listing came from (`Windows IP Helper`, or the OS tool: `netstat`, `lsof`, `ss`).
     pub source: String,
     pub sampled_at: String,
 }

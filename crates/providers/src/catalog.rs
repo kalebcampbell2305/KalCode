@@ -44,8 +44,7 @@ pub fn codex_spec() -> DetectionSpec {
         install_dirs: &[HOMEBREW[0], HOMEBREW[1]],
         appdata_dirs: &["npm"],
         local_appdata_dirs: &[],
-        // The headless adapter (exec --json, exec resume, --ignore-rules) was verified against
-        // codex-cli 0.155.1.
+        // The headless adapter (exec --json, exec resume) was verified against codex-cli 0.155.1.
         minimum_version: Some(crate::codex::argv::MINIMUM_VERSION),
         // "Run `codex login status` to see the active authentication method." Exit codes aren't
         // documented, so only a leading "Logged in" (with exit 0) or "Not logged in" counts;

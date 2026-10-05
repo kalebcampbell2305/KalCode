@@ -70,10 +70,12 @@ describe("AgentCard account label", () => {
     expect(screen.getByTitle("Account: Gemini B")).toBeTruthy();
   });
 
-  it("falls back to the call sign without an account (or with a blank label)", () => {
-    const { unmount } = mount(thread(null), { handle: "Gemini C" });
+  it("keeps the task title and clean provider identity without an account", () => {
+    const { unmount } = mount(thread(null));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
-    expect(screen.getByText("Gemini C")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Research" })).toBeTruthy();
+    expect(screen.getAllByText("Gemini CLI").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Gemini [A-Z]$/)).toBeNull();
     unmount();
     mount(thread("   "));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
@@ -179,13 +181,17 @@ describe("AgentCard waiting states", () => {
   it("a held launch offers Stop, never Pause or Archive", async () => {
     mount({ ...thread(null), ...WAITING });
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Stop…"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Pin globally", "Stop…"]);
   });
 
   it("an idle thread offers Archive, not Stop", async () => {
     mount(thread(null));
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Archive"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Open",
+      "Pin globally",
+      "Archive",
+    ]);
   });
 });
 
@@ -242,13 +248,15 @@ describe("AgentCard Fleet controls", () => {
     expect(onAction).toHaveBeenCalledWith(failed, "retry");
   });
 
-  it("names its state in words: working, needs your reply, stopped, done", () => {
+  it("names its state in the shared agent-state words: working, needs you, stopped, done", () => {
     const cases: [ThreadSummary["status"], string][] = [
       ["running_command", "Working"],
-      ["waiting_for_user", "Needs your reply"],
+      ["testing", "Testing"],
+      ["waiting_for_user", "Needs you"],
       ["interrupted", "Stopped"],
       ["completed", "Done"],
-      ["waiting_for_permission", "Needs approval"],
+      ["waiting_for_permission", "Needs you"],
+      ["waiting_for_dependency", "Waiting"],
     ];
     for (const [status, label] of cases) {
       const { unmount } = mount({ ...thread(null), status });

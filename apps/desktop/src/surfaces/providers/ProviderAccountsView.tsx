@@ -353,7 +353,7 @@ function ConnectAccount({
   providers: readonly ProviderEntry[];
   busy: boolean;
   create: (providerId: string, displayName: string) => Promise<ProviderAccount | null>;
-  signIn: (account: ProviderAccount) => Promise<void>;
+  signIn: (account: ProviderAccount) => Promise<ProviderAccount | null>;
   onDone: () => void;
 }) {
   const id = useId();

@@ -2,7 +2,7 @@ import type { ProviderAccount, ProviderAccountBinding, ThreadSummary, Workspace 
 import { useToast } from "@kalcode/ui/components";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
-import { toKalCodeError } from "../../ipc/errors.ts";
+import { KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { isCodingAgent } from "../dashboard/data/agents.ts";
 import { presentStatus } from "../threads/model.ts";
@@ -140,10 +140,21 @@ export function useProviderAccounts(enabled: boolean) {
   const [activeLogin, setActiveLogin] = useState<ActiveLogin | null>(null);
   const cancelledLogins = useRef(new Set<string>());
   const activeLoginRef = useRef<ActiveLogin | null>(null);
+  const mounted = useRef(true);
+  const loginGeneration = useRef(0);
+  const loginClient = useRef(client);
   activeLoginRef.current = activeLogin;
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode replays mount effects with the same runtime. Preserve that pending login;
+    // only a different runtime invalidates its generation. Real unmount remains guarded below.
+    if (loginClient.current !== client) {
+      loginClient.current = client;
+      loginGeneration.current += 1;
+    }
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       const login = activeLoginRef.current;
       if (login) {
         // Navigating away intentionally cancels the browser flow. Mark it before the native
@@ -154,9 +165,8 @@ export function useProviderAccounts(enabled: boolean) {
           .cancel(login.handle)
           .catch(() => undefined);
       }
-    },
-    [client],
-  );
+    };
+  }, [client]);
 
   // Thread use and workspace defaults are read separately: if they can't load, the accounts (and
   // their sign-in) still can, and the card says the usage is unavailable instead of showing zero.
@@ -300,17 +310,31 @@ export function useProviderAccounts(enabled: boolean) {
   );
 
   const signInAuth = useCallback(
-    async (account: ProviderAccount) => {
-      if (!isBrowserAuthProvider(account.providerId)) return;
+    async (account: ProviderAccount): Promise<ProviderAccount | null> => {
+      if (!isBrowserAuthProvider(account.providerId)) return null;
       const providerId = account.providerId;
+      const generation = loginGeneration.current;
+      const isCurrent = () => mounted.current && loginGeneration.current === generation;
+      const verifyTarget = (connected: ProviderAccount) => {
+        if (connected.id !== account.id || connected.providerId !== providerId) {
+          throw new KalCodeError({
+            category: "authentication",
+            code: "provider_account_mismatch",
+            message: "The connected account did not match this launch. Choose the account again.",
+            retryable: false,
+          });
+        }
+        return connected;
+      };
       if (providerId === "cursor") {
-        await run(
+        const connected = await run(
           `login:${account.id}`,
           "Cursor sign-in failed",
-          async () => (await client.loginCursorAccount(account.id)).account,
+          async () => verifyTarget((await client.loginCursorAccount(account.id)).account),
           account.id,
+          false,
         );
-        return;
+        return connected && isCurrent() ? replace(connected) : null;
       }
       const commands = authCommands(client, providerId);
       const key = `login:${account.id}`;
@@ -320,10 +344,17 @@ export function useProviderAccounts(enabled: boolean) {
       try {
         const started = await commands.start(account.id);
         handle = started.loginHandle;
+        if (!isCurrent()) {
+          await commands.cancel(handle);
+          return null;
+        }
         setActiveLogin({ accountId: account.id, handle, providerId });
         setBusyKey(null);
-        replace(await commands.wait(handle));
+        const connected = await commands.wait(handle);
+        if (!isCurrent() || cancelledLogins.current.delete(handle)) return null;
+        return replace(verifyTarget(connected));
       } catch (error) {
+        if (!isCurrent()) return null;
         if (handle === null || !cancelledLogins.current.delete(handle)) {
           const failure = toKalCodeError(error);
           toast.show({
@@ -332,6 +363,7 @@ export function useProviderAccounts(enabled: boolean) {
             description: failure.message,
           });
         }
+        return null;
       } finally {
         setBusyKey((current) => (current === key ? null : current));
         setActiveLogin((current) => (current?.handle === handle ? null : current));

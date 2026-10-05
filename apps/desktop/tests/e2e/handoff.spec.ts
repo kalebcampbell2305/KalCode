@@ -58,7 +58,7 @@ async function submitLine(page: Page, pane: Locator, line: string): Promise<void
 async function readyAgent(page: Page, pane: Locator): Promise<void> {
   await submitLine(page, pane, "say handoff-ready");
   await expect(paneRows(pane)).toContainText("handoff-ready", { timeout: 30_000 });
-  await expect(pane.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+  await expect(pane.locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
 }
 
 async function listHandoffs(page: Page): Promise<HandoffRecord[]> {
@@ -181,7 +181,7 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
       )
       .toBe(1);
 
-    await expect(target.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(target.locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
     const completed = await invoke<HandoffRecord>(page, "handoff_complete", {
       id: delivered.id,
       outcome: "completed",
@@ -213,7 +213,7 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
     expect(returnedRecord.status).toBe("delivered");
     expect(returnedRecord.returnOfId).toBe(completed.id);
     await expect(paneRows(source)).toContainText(returnMarker, { timeout: 30_000 });
-    await expect(source.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(source.locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
 
     // Pending local input is never overwritten. The durable row stays queued until the owner
     // submits that input and the next authenticated provider-ready boundary is observed.
@@ -242,7 +242,7 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
 
     // Crash with one more locally-blocked queued handoff. A fresh process keeps the audit row
     // but truthfully interrupts it because process-local capsule text is intentionally not replayed.
-    await expect(target.locator("[data-pane-status]")).toContainText("IDLE", { timeout: 30_000 });
+    await expect(target.locator("[data-pane-status]")).toContainText(/READY|IDLE/, { timeout: 30_000 });
     await paneTerminal(target).click();
     await page.keyboard.type("unfinished owner input");
     const restartPreview = await invoke<HandoffPreview>(page, "handoff_preview", {

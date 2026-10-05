@@ -9,6 +9,7 @@
  * soft memory reserve is reached, or because resource telemetry is late; optional background
  * work is throttled for those instead. Only genuine hard pressure (critically low memory, a full
  * disk, the OS refusing another process) or a count limit the person set explicitly in Custom
- * mode may hold one, and every hold offers Start Anyway.
+ * mode may hold one, and every hold offers Start Anyway. `background_yield` is only ever a
+ * background session's hold (one the Operations scheduler started), never a user launch's.
  */
-export type LaunchHoldKind = "memory_critical" | "disk_full" | "process_limit" | "concurrency_limit" | "provider_limit";
+export type LaunchHoldKind = "memory_critical" | "disk_full" | "process_limit" | "concurrency_limit" | "provider_limit" | "background_yield";

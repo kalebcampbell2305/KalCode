@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../../ipc/client.ts";
 import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
 import type { CommandName } from "../../ipc/transport.ts";
+import { FAVORITES_STORAGE_KEY } from "../../shell/favorites/store.ts";
 import { ProviderAccountsView } from "./ProviderAccountsView.tsx";
 import { accountUsage } from "./useProviderAccounts.ts";
 
@@ -102,6 +103,23 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>, row: HTMLEleme
 }
 
 describe("Gemini account row", () => {
+  it("pins and unpins the account without sign-in, default, or account edits", async () => {
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
+    const user = userEvent.setup();
+    mount();
+    const row = await screen.findByRole("region", { name: "Gemini CLI · Personal" });
+    calls = [];
+    await user.click(within(row).getByRole("button", { name: "Pin globally: Personal" }));
+    const saved = JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}");
+    expect(saved.entries).toEqual([
+      expect.objectContaining({ target: expect.objectContaining({ kind: "account" }), scopeId: null }),
+    ]);
+    const menu = await openMenu(user, row, "Personal");
+    await user.click(within(menu).getByRole("menuitem", { name: "Unpin globally" }));
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([]);
+    expect(calls.filter((call) => /login|logout|set_default|rename|archive/.test(call))).toEqual([]);
+  });
+
   it("signs in and out with Gemini's own sign-in, never a provider pane", async () => {
     const user = userEvent.setup();
     mount();

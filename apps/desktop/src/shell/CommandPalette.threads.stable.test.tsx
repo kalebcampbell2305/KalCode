@@ -10,6 +10,7 @@ import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
 import { resetAccountIntentForTests } from "../surfaces/threads/accountIntent.ts";
 import { paletteThreadLabel } from "./CommandPalette.tsx";
+import { FAVORITES_STORAGE_KEY } from "./favorites/store.ts";
 import nativeStableSurfaces from "./fixtures/stable-native-surfaces.json";
 import { Shell } from "./Shell.tsx";
 
@@ -64,6 +65,25 @@ async function openPalette(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("palette threads (Stable)", () => {
+  it("saves a command without executing it or closing the palette", async () => {
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
+    const { user, client } = await mountStable();
+    const create = vi.spyOn(client, "createThread");
+    const palette = await openPalette(user);
+    await user.type(palette.getByRole("combobox"), "New thread");
+    const favorite = await palette.findByRole("button", { name: /^(Add Favorite|Pin globally): New thread$/ });
+    expect(favorite.closest('[role="option"]')).toBeNull();
+    expect(favorite.closest('[role="listbox"]')).toBeNull();
+    await user.click(favorite);
+    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+    expect(create).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([
+      expect.objectContaining({ target: { kind: "command", id: "thread:new", workspaceId: null } }),
+    ]);
+    await user.click(palette.getByRole("button", { name: /^(Remove Favorite|Unpin globally): New thread$/ }));
+    expect(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY) ?? "{}").entries).toEqual([]);
+  });
+
   it("labels a thread Name · Provider · Account", () => {
     expect(paletteThreadLabel({ name: "Research", providerName: "Gemini CLI", accountLabel: "Gemini B" })).toBe(
       "Research · Gemini CLI · Gemini B",

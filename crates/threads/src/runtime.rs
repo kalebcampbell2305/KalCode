@@ -24,8 +24,8 @@ use kalcode_context::{
     RenderedPackage, WorkspaceRoot,
 };
 use kalcode_contracts::agent::{
-    AgentEvent, AgentInput, AgentSession, FileChange, ModelInfo, ProviderError, ProviderId,
-    SessionConfig,
+    AgentEvent, AgentInput, AgentSession, FileChange, LaunchOrigin, ModelInfo, ProviderError,
+    ProviderId, SessionConfig,
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
@@ -82,8 +82,10 @@ const NEW_SESSION_NOTICE: &str = "Started a new provider session. The earlier co
 pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting to start";
 /// Activity of a thread whose bounded wait for system resources ended without starting.
 pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were too low";
-/// Activity of an idle thread whose last turn reported failure.
-pub const LAST_TURN_FAILED_ACTIVITY: &str = "Last turn failed";
+/// Activity of an idle thread whose last turn reported failure (the shared agent-state marker).
+pub use kalcode_contracts::agent_state::LAST_TURN_FAILED_ACTIVITY;
+/// Activity of a session that just came up at its prompt with no work yet (agent state READY).
+pub use kalcode_contracts::agent_state::READY_ACTIVITY;
 /// Activity of an idle thread whose session ended because it was archived.
 pub const ARCHIVED_ACTIVITY: &str = "Archived";
 
@@ -213,6 +215,9 @@ struct LiveState {
     turn_failed: bool,
     /// The user interrupted or paused the current turn: its failed completion is not a failure.
     halted: bool,
+    /// Who asked for the current session: the Operations scheduler's launches are background
+    /// work and yield first; a person's Resume makes it theirs again.
+    origin: LaunchOrigin,
 }
 
 /// A message on its way to the provider.
@@ -290,9 +295,11 @@ struct NewThread<'a> {
     effort: Option<&'a str>,
     permission_mode: PermissionMode,
     name: String,
+    name_origin: &'static str,
     /// Prepares the folder the session runs in instead of the workspace root (a thread's own
     /// Git worktree). Runs after every other check, just before the thread is recorded.
     cwd: Option<PrepareFolder<'a>>,
+    origin: LaunchOrigin,
 }
 
 /// See [`NewThread::cwd`].
@@ -595,6 +602,7 @@ impl ThreadRuntime {
             inner,
             subscription,
         };
+        runtime.inner.restore_default_names()?;
         runtime.inner.recover();
         Ok(runtime)
     }
@@ -1131,7 +1139,7 @@ impl ThreadRuntime {
     /// before the thread exists).
     pub fn create_with_id(&self, thread_id: &str, request: CreateThread) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_reviewed_with_id(request, None, Some(thread_id), None)
+        self.create_reviewed_with_id(request, None, Some(thread_id), None, LaunchOrigin::User)
     }
 
     /// Inspects a create prompt without starting a provider or writing thread state.
@@ -1155,12 +1163,14 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
-        self.create_reviewed_with_id(request, review_id, None, None)
+        self.create_reviewed_with_id(request, review_id, None, None, LaunchOrigin::User)
     }
 
     /// Creates a reviewed Operations thread using the scheduler's durable operation id. The
     /// Operations ledger reserves this exact id before calling the provider, so a restart can
-    /// correlate the two records without replaying work or relying on process memory.
+    /// correlate the two records without replaying work or relying on process memory. The
+    /// scheduler starts it on the person's behalf, so its session is background work for the
+    /// Resource Governor ([`LaunchOrigin::Background`]): it yields to their agents first.
     pub fn create_reviewed_for_operation(
         &self,
         operation_id: &str,
@@ -1168,7 +1178,13 @@ impl ThreadRuntime {
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(operation_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(operation_id), None)
+        self.create_reviewed_with_id(
+            request,
+            review_id,
+            Some(operation_id),
+            None,
+            LaunchOrigin::Background,
+        )
     }
 
     /// Creates a reviewed thread with a caller-chosen id whose session runs in `cwd` (an
@@ -1186,7 +1202,13 @@ impl ThreadRuntime {
         prepare: impl FnOnce() -> Result<PathBuf>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(thread_id), Some(Box::new(prepare)))
+        self.create_reviewed_with_id(
+            request,
+            review_id,
+            Some(thread_id),
+            Some(Box::new(prepare)),
+            LaunchOrigin::User,
+        )
     }
 
     /// Lets the runtime re-attach and release threads' own worktrees. Set once; later calls are
@@ -1201,6 +1223,7 @@ impl ThreadRuntime {
         review_id: Option<&str>,
         thread_id: Option<&str>,
         cwd: Option<PrepareFolder<'_>>,
+        origin: LaunchOrigin,
     ) -> Result<ThreadSummary> {
         let prompt = validate::prompt(&request.prompt)?;
         let target = create_prompt_target(&request)?;
@@ -1224,7 +1247,17 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
+                name_origin: if request
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| !n.trim().is_empty())
+                {
+                    "manual"
+                } else {
+                    "automatic"
+                },
                 cwd,
+                origin,
             },
             Some(AdmittedPrompt {
                 text: prompt,
@@ -1236,7 +1269,7 @@ impl ThreadRuntime {
     }
 
     /// Creates a thread whose session starts without a task; it waits (`idle`) for input. Coding
-    /// agents (provider panes) start this way, so an untitled one is a "New agent".
+    /// agents (provider panes) start this way with their clean provider display name.
     pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
         self.create_idle_inner(request, None, None)
     }
@@ -1271,7 +1304,18 @@ impl ThreadRuntime {
     ) -> Result<ThreadSummary> {
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
-            None => naming::AGENT_FALLBACK_NAME.to_owned(),
+            None => self
+                .inner
+                .providers
+                .get(&ProviderId::new(&request.provider_id))
+                .map(|entry| {
+                    entry
+                        .provider
+                        .display_name()
+                        .trim_end_matches(" CLI")
+                        .to_owned()
+                })
+                .unwrap_or_else(|| request.provider_id.clone()),
         };
         self.inner.create(
             NewThread {
@@ -1283,7 +1327,17 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
+                name_origin: if request
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| !n.trim().is_empty())
+                {
+                    "manual"
+                } else {
+                    "default"
+                },
                 cwd: cwd.map(|path| Box::new(move || Ok(path)) as PrepareFolder<'_>),
+                origin: LaunchOrigin::User,
             },
             None,
             thread_id,
@@ -1515,6 +1569,14 @@ impl ThreadRuntime {
         validate::thread_id(thread_id)?;
         let name = validate::name(name)?;
         self.inner.rename(thread_id, &name)?;
+        self.inner.summary(thread_id)
+    }
+
+    /// Names a submitted user task without storing its text. Manual names always win,
+    /// including a manual rename racing this callback or choosing the provider default.
+    pub fn name_from_task(&self, thread_id: &str, prompt: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.inner.name_from_task(thread_id, prompt)?;
         self.inner.summary(thread_id)
     }
 
@@ -2117,6 +2179,21 @@ fn never_delivered(error: &ProviderError) -> bool {
     )
 }
 
+/// Whether the last running tool call finishing returns the agent to WORKING (`Active`): it was
+/// running that tool (any provider's classified tool status), or waiting on the person in the
+/// provider's own prompt for it (the tool ran, so it was answered). Idle, finished, paused and
+/// runtime-owned states are never changed by a late tool completion.
+fn returns_to_active_after_tool(status: ThreadStatus) -> bool {
+    matches!(
+        status,
+        ThreadStatus::RunningTool
+            | ThreadStatus::RunningCommand
+            | ThreadStatus::Editing
+            | ThreadStatus::Testing
+            | ThreadStatus::WaitingForUser
+    )
+}
+
 /// Statuses a provider may report. The rest belong to the runtime (lifecycle, approvals,
 /// pause) and are never taken from a provider.
 fn provider_settable(status: ThreadStatus) -> bool {
@@ -2439,6 +2516,7 @@ impl Inner {
         };
         self.core.write_with_events(|tx| {
             store::insert_thread(tx, &row)?;
+            store::set_name_origin(tx, &id, request.name_origin)?;
             let ctx = Ctx {
                 thread_id: id.clone(),
                 workspace_id: workspace.id.clone(),
@@ -2449,6 +2527,7 @@ impl Inner {
         tracing::info!(event = "thread.created", thread_id = %id, provider_id = %provider_id);
 
         let row = self.row(&id)?;
+        self.live_thread(&row).lock().origin = request.origin;
         self.start_session(&row, &entry, None, prompt, None, None)?;
         self.summary(&id)
     }
@@ -2569,6 +2648,7 @@ impl Inner {
             permission_mode: row.permission_mode,
             resume_session_id: resume_session_id.clone(),
             secret_ref: entry.secret_ref.clone(),
+            launch_origin: state.origin,
         };
         let provider_name = entry.provider.display_name().to_owned();
         let session: Arc<dyn AgentSession> = match entry
@@ -2625,8 +2705,8 @@ impl Inner {
         }
         match input {
             Some(input) => self.deliver_locked(live, state, input, None)?,
-            // The session is up and no turn is running: the thread waits for input.
-            None => self.transition(ctx, ThreadStatus::Idle, None)?,
+            // The session is up and no turn is running: the thread waits for input (READY).
+            None => self.transition(ctx, ThreadStatus::Idle, Some(READY_ACTIVITY))?,
         }
         Ok(())
     }
@@ -3153,7 +3233,7 @@ impl Inner {
                             Some(other) => {
                                 store::set_activity(tx, id, Some(&other.summary), &now)?;
                             }
-                            None if store::status(tx, id)? == ThreadStatus::RunningTool => {
+                            None if returns_to_active_after_tool(store::status(tx, id)?) => {
                                 let from =
                                     store::set_status(tx, id, ThreadStatus::Active, None, &now)?;
                                 events.extend(ctx.status_changed(
@@ -3737,6 +3817,9 @@ impl Inner {
         let session = state.session.clone().ok_or_else(not_running)?;
         let recorded = match input.record.take() {
             Some(text) => {
+                if let Err(error) = self.name_from_task(&ctx.thread_id, &text) {
+                    tracing::warn!(event = "thread.title_failed", error = %error.diagnostic());
+                }
                 Some(self.persist_message(ctx, MessageRole::User, &text, None, EventSource::Ui)?)
             }
             None => None,
@@ -4096,6 +4179,8 @@ impl Inner {
         } else {
             None
         };
+        // The person resumed it: whatever started it first, it is their agent now.
+        self.live_thread(&row).lock().origin = LaunchOrigin::User;
         self.start_session(&row, &entry, resume_id, text, notice, redeliver)
     }
 
@@ -4165,12 +4250,13 @@ impl Inner {
     }
 
     fn rename(&self, thread_id: &str, name: &str) -> Result<()> {
-        let row = self.row(thread_id)?;
-        if row.name == name {
-            return Ok(());
-        }
-        let ctx = Ctx::from_row(&row);
         self.core.write_with_events(|tx| {
+            let row = store::get(tx, thread_id)?;
+            store::set_name_origin(tx, thread_id, "manual")?;
+            if row.name == name {
+                return Ok(((), Vec::new()));
+            }
+            let ctx = Ctx::from_row(&row);
             store::rename(tx, thread_id, name)?;
             Ok((
                 (),
@@ -4182,6 +4268,64 @@ impl Inner {
                     },
                 )],
             ))
+        })?;
+        Ok(())
+    }
+
+    fn name_from_task(&self, thread_id: &str, prompt: &str) -> Result<()> {
+        // The existing firewall excludes credentials and private injected context from titles.
+        if prompt_firewall().check_user_prompt(prompt).warn {
+            return Ok(());
+        }
+        let Some(name) = naming::task_name_from_prompt(prompt) else {
+            return Ok(());
+        };
+        self.core.write_with_events(|tx| {
+            let row = store::get(tx, thread_id)?;
+            let origin = store::name_origin(tx, thread_id)?;
+            let can_name = origin.as_deref() == Some("default")
+                || (origin.as_deref() == Some("automatic")
+                    && naming::should_update_task(&row.name, prompt));
+            if !can_name || row.name == name {
+                return Ok(((), Vec::new()));
+            }
+            store::rename(tx, thread_id, &name)?;
+            store::set_name_origin(tx, thread_id, "automatic")?;
+            Ok((
+                (),
+                vec![Ctx::from_row(&row).event(
+                    EventSource::Core,
+                    EventPayload::ThreadRenamed {
+                        thread_id: thread_id.to_owned(),
+                        name,
+                    },
+                )],
+            ))
+        })?;
+        Ok(())
+    }
+
+    fn restore_default_names(&self) -> Result<()> {
+        self.core.write_with_events(|tx| {
+            let ids = {
+                let mut statement = tx.prepare("SELECT id FROM threads WHERE name = 'New agent'")?;
+                statement.query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            let mut events = Vec::new();
+            for id in ids {
+                if store::name_origin(tx, &id)?.is_some() { continue; }
+                // A pre-upgrade explicit rename has durable event provenance too.
+                let renamed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE thread_id=?1 AND type='thread.renamed')", [&id], |row| row.get(0))?;
+                if renamed { continue; }
+                let row = store::get(tx, &id)?;
+                let name = row.provider_name.trim_end_matches(" CLI").to_owned();
+                store::rename(tx, &id, &name)?;
+                store::set_name_origin(tx, &id, "default")?;
+                events.push(Ctx::from_row(&row).event(EventSource::Core,
+                    EventPayload::ThreadRenamed { thread_id: id, name }));
+            }
+            Ok(((), events))
         })?;
         Ok(())
     }

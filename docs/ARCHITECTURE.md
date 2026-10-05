@@ -130,16 +130,18 @@ All IPC types are defined in Rust and exported to TypeScript with `ts-rs` into
 | `terminal_create` | `{ workspaceId, shellId?, cols, rows }` | `TerminalInfo` | starts a detected shell in the workspace folder; refused past the plan's open-terminal cap (a total across workspaces) |
 | `terminal_restart` | `{ terminalId, cols, rows }` | `TerminalInfo` | fresh shell in an ended tab |
 | `terminal_close` | `{ terminalId }` | — | ends the shell and programs started in it; forgets the tab |
-| `terminal_write` | `{ terminalId, data }` | — | UTF-8 input, at most 64 KB; queued, never blocks (sync, ordered) |
+| `terminal_write` | `{ terminalId, data }` | — | UTF-8 input, at most 64 KB; queued, never blocks (async; ordered by the view's input queue) |
 | `terminal_resize` | `{ terminalId, cols, rows }` | — | 2..=1000 each (sync) |
 | `terminal_attach` | `{ terminalId }` + `Channel<ArrayBuffer>` | `number \| null` | raw output bytes: replay first, then live; returns the attachment id (null: nothing to show); at most 4 per (webview, terminal); dropped on page reload (sync) |
 | `terminal_ack` | `{ attachmentId, bytes }` | `bool` | flow control: rendered bytes; `false` means the view fell > 4 MB behind, was cut off, and must re-attach (sync) |
 | `terminal_detach` | `{ attachmentId }` | `bool` | only the calling webview's own attachments (sync) |
 | `terminal_set_active` | `{ workspaceId, terminalId }` | — | remembers the tab in front |
 
-Database-backed commands run off the main thread (`#[tauri::command(async)]`). Terminal input,
-resize, attach and detach touch no storage and stay synchronous so they are handled in the order
-the WebView sent them (see `docs/CODE_MODE.md`).
+Database-backed commands run off the main thread (`#[tauri::command(async)]`), and so does
+`terminal_write`, the most frequent command; each view sends a terminal's next write only after
+the previous one resolved, so input keeps its order. Resize, attach and detach touch no storage and
+stay synchronous so they are handled in the order the WebView sent them, including against page
+reloads (see `docs/CODE_MODE.md`).
 
 Errors cross the boundary as `IpcError { category, code, message, retryable }` (see §7). The
 frontend client (`apps/desktop/src/ipc`) is the only module allowed to call `invoke`.

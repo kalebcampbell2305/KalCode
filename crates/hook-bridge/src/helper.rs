@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! kalcode-hook claude <HookEvent> <endpoint> <session> [enforce]   # hook JSON on stdin
+//! kalcode-hook codex <HookEvent> <endpoint> <session>               # Codex hook JSON on stdin
 //! kalcode-hook codex-notify <endpoint> <session> <json>              # Codex appends its JSON
 //! ```
 //!
@@ -13,6 +14,9 @@
 //! Ordinary provider sessions only observe: the provider's own permission system decides every
 //! tool call, so KalCode being slow, busy, restarted or unreachable must never stop a tool. Every
 //! event, `PreToolUse` included, fails open (exit 0, no output) within the short status deadline.
+//! Codex hooks only observe: every `codex` invocation (its `PreToolUse` and `PermissionRequest`
+//! included) exits 0 with no output, so Codex's own sandbox, approvals and the user's hooks
+//! decide everything.
 //!
 //! Only a session whose settings pass the trailing [`ENFORCE_ARG`] (engine routing, where KalCode
 //! itself is the decision point) fails `PreToolUse` closed (exit 2) on every error and on its own
@@ -89,6 +93,7 @@ pub fn is_blocking_invocation(args: &[String]) -> bool {
 pub fn run(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
     match args.first().map(String::as_str) {
         Some("claude") => run_claude(args, stdin, env),
+        Some("codex") => run_codex_hook(args, stdin, env),
         Some("codex-notify") => run_codex_notify(args, env),
         Some("cursor") => run_cursor(args, stdin, env),
         _ => {
@@ -168,6 +173,35 @@ fn run_claude(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendere
         Err(BridgeError::BadReply) => fail("KalCode's answer could not be verified"),
         Err(_) => fail("KalCode is not reachable"),
     }
+}
+
+fn run_codex_hook(args: &[String], stdin: &mut dyn Read, env: &HelperEnv) -> Rendered {
+    // Observe only: never a decision, never output, whatever happens.
+    let (Some(event), Some(endpoint), Some(session), Some(key)) = (
+        args.get(1).and_then(|e| HookEvent::parse(e)),
+        args.get(2).and_then(|e| Endpoint::parse(e)),
+        args.get(3).filter(|s| crate::key::is_hex_of_len(s, 32)),
+        env.key_hex.as_deref().and_then(SessionKey::from_hex),
+    ) else {
+        return Rendered::silent();
+    };
+    let mut bytes = Vec::new();
+    if stdin
+        .take(MAX_STDIN_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .is_ok()
+        && let Ok(record) = record::from_codex_hook_stdin(event, &bytes)
+    {
+        let _ = exchange_within(
+            endpoint,
+            session.clone(),
+            key,
+            record,
+            env.cap(STATUS_DEADLINE),
+            env.cap(STATUS_CONNECT),
+        );
+    }
+    Rendered::silent()
 }
 
 fn run_codex_notify(args: &[String], env: &HelperEnv) -> Rendered {
@@ -345,6 +379,39 @@ mod tests {
             if *event == "beforeSubmitPrompt" {
                 assert_eq!(output["continue"], true);
             }
+        }
+    }
+
+    #[test]
+    fn codex_hooks_never_block_or_print_even_for_tool_events() {
+        let env = HelperEnv {
+            key_hex: Some(SessionKey::generate().expect("key").to_hex()),
+            deadline_ms: Some(200),
+        };
+        let endpoint = Endpoint::generate(Some(&std::env::temp_dir())).expect("endpoint");
+        let session = crate::key::random_id().expect("id");
+        let stdin =
+            br#"{"session_id":"s","turn_id":"t","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        for event in HookEvent::CODEX {
+            let invocation = args(&["codex", event.as_str(), endpoint.as_str(), &session]);
+            assert!(!is_blocking_invocation(&invocation), "{event:?}");
+            // Nobody listens on the endpoint: still a silent no-op.
+            assert_eq!(
+                run(&invocation, &mut stdin.as_slice(), &env),
+                Rendered::silent(),
+                "{event:?}"
+            );
+        }
+        for bad in [
+            args(&["codex", "PreToolUse"]),
+            args(&["codex", "PreToolUse", "not-an-endpoint", "0123"]),
+            args(&["codex", "Bogus", endpoint.as_str(), &session]),
+        ] {
+            assert_eq!(
+                run(&bad, &mut stdin.as_slice(), &HelperEnv::default()),
+                Rendered::silent(),
+                "{bad:?}"
+            );
         }
     }
 

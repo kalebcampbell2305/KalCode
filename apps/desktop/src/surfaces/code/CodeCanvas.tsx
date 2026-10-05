@@ -304,9 +304,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "agent") {
         const thread = paneById.get(content.agentId)?.thread;
         if (!thread) return "Agent";
-        const name = orgItems.get(contentKey(content))?.title ?? thread.name;
-        const account = accountFor(thread);
-        return account ? `${name} · ${paneAccountLabel(account)}` : name;
+        return orgItems.get(contentKey(content))?.title ?? thread.name;
       }
       if (content.kind === "dashboard") return "Dashboard";
       if (content.kind === "thread") return "Thread";
@@ -314,7 +312,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "git") return "Git";
       return "Widget";
     },
-    [terminalById, labels, paneById, accountFor, orgItems],
+    [terminalById, labels, paneById, orgItems],
   );
 
   const smartClose = useSmartClose({
@@ -491,14 +489,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             if (content.kind === "agent") {
               const thread = current.paneById.get(content.agentId)?.thread;
               if (!thread) return [];
-              const account = current.accountFor(thread);
               const effort = voiceThreadEffort(thread);
               return [
                 {
                   ...shared,
                   kind: "agent" as const,
                   entityId: thread.id,
-                  title: account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name,
+                  title: thread.name,
                   aliases: [
                     ...providerPaneAliasesOf(aliases, content),
                     thread.providerName,
@@ -807,10 +804,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           for (const id of created) current.show(agentContent(id), { focus: id === first, placement: "tab" });
         }
       }
-      // Any started agent closes the launcher, so a retry never duplicates them; a failure that
-      // stopped the batch stays visible in the Code toolbar.
+      // Report the completed count so reconnect/retry creates only the unfinished agents.
       if (returnToHandoff && first) setHandoffTargetId(first);
-      return created.length > 0;
+      return created.length;
     },
     [providerPanes],
   );
@@ -1019,11 +1015,11 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "agent") {
         const entry = paneById.get(content.agentId);
         if (!entry) return null;
-        const status = paneStatus(entry.thread.status);
+        const status = paneStatus(entry.thread);
         const account = accountFor(entry.thread);
         const name = orgItems.get(contentKey(content))?.title ?? entry.thread.name;
         return {
-          title: account ? `${name} · ${paneAccountLabel(account)}` : name,
+          title: name,
           glyph: <ProviderGlyph provider={entry.thread.providerId} size="xs" />,
           tone: status.tone,
           statusText: `${entry.thread.providerName}${account ? ` · ${paneAccountLabel(account)}` : ""} · ${status.label}`,
@@ -1179,7 +1175,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     for (const p of providerPanes.panes) {
       const content = agentContent(p.thread.id);
       if (p.info?.running && !shown.has(contentKey(content)))
-        list.push({ content, title: titleOf(content), tone: paneStatus(p.thread.status).tone });
+        list.push({ content, title: titleOf(content), tone: paneStatus(p.thread).tone });
     }
     return list;
   }, [terminals, providerPanes.panes, shown, titleOf]);

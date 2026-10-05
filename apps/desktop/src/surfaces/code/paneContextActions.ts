@@ -14,7 +14,7 @@ export function duplicatePaneInput(thread: ThreadSummary): CreatePaneInput | nul
     model: thread.model,
     effort: thread.effort,
     permissionMode: thread.permissionMode,
-    name: `${[...thread.name].slice(0, 73).join("")} (copy)`,
+    name: null,
   };
 }
 

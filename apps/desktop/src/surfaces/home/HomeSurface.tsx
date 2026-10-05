@@ -36,6 +36,10 @@ import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { FavoriteButton, FavoriteToggle } from "../../shell/favorites/FavoriteActions.tsx";
+import type { FavoriteTarget } from "../../shell/favorites/model.ts";
+import { isVisibleFavorite } from "../../shell/favorites/selection.ts";
+import { useFavorites } from "../../shell/favorites/store.ts";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { badgeLabel, relativeTime } from "../../shell/rail/model.ts";
 import { useOptionalRail } from "../../shell/rail/RailProvider.tsx";
@@ -505,9 +509,20 @@ function ItemLead({ item }: { item: RecentWorkItem }) {
   );
 }
 
-function RecentWorkspaces({ entries }: { entries: WorkspaceRailEntry[] }) {
+function RecentWorkspaces({ entries: allEntries }: { entries: WorkspaceRailEntry[] }) {
   const intents = useUiIntents();
   const scope = useSurfaceScope();
+  const favorites = useFavorites();
+  const { active } = useWorkspaces();
+  const entries = allEntries.filter(
+    (entry) =>
+      !entry.pinned &&
+      !isVisibleFavorite(favorites.entries, active?.id ?? null, {
+        kind: "workspace",
+        id: entry.workspaceId,
+        workspaceId: entry.workspaceId,
+      }),
+  );
   const continueIn = (entry: WorkspaceRailEntry) => {
     void intents.focus({ kind: "workspace", workspaceId: entry.workspaceId });
   };
@@ -522,13 +537,21 @@ function RecentWorkspaces({ entries }: { entries: WorkspaceRailEntry[] }) {
       padding="none"
     >
       {entries.length === 0 ? (
-        <p className={styles.panelEmpty}>No workspaces yet. Open a folder to add one.</p>
+        <p className={styles.panelEmpty}>
+          {allEntries.length
+            ? "Your recent workspaces are already pinned or favorited."
+            : "No workspaces yet. Open a folder to add one."}
+        </p>
       ) : (
         <ul className={styles.workspaces} aria-label="Recent workspaces">
           {entries.map((entry) => (
             <li key={entry.workspaceId} className={styles.workspace} data-active={entry.active || undefined}>
               <div className={styles.workspaceHead}>
                 <span className={styles.workspaceName}>{entry.name}</span>
+                <FavoriteButton
+                  target={{ kind: "workspace", id: entry.workspaceId, workspaceId: entry.workspaceId }}
+                  title={entry.name}
+                />
                 {entry.pinned ? <span className={styles.pinned}>Pinned</span> : null}
                 {entry.available ? null : <span className={styles.missing}>Folder missing</span>}
               </div>
@@ -574,6 +597,8 @@ function RecentWork() {
   const [error, setError] = useState<string | null>(null);
   const open = useOpenItem();
   const scope = useSurfaceScope();
+  const favorites = useFavorites();
+  const { active } = useWorkspaces();
   useEffect(() => {
     let live = true;
     client
@@ -588,7 +613,9 @@ function RecentWork() {
       live = false;
     };
   }, [client, when]);
-  const list = items[when];
+  const list = items[when]?.filter(
+    (item) => !isVisibleFavorite(favorites.entries, active?.id ?? null, recentFavoriteTarget(item)),
+  );
   const now = Date.now();
   return (
     <Panel
@@ -628,22 +655,33 @@ function RecentWork() {
             ) : (
               <ul className={styles.work} aria-label={`Recent work, ${w.label.toLowerCase()}`}>
                 {list.map((item) => (
-                  <li key={`${item.kind}:${item.id}`}>
-                    <button type="button" className={styles.workItem} onClick={() => open(item)}>
-                      <ItemLead item={item} />
-                      <span className={styles.itemText}>
-                        <span className={item.kind === "file" ? styles.fileTitle : styles.itemTitle}>{item.title}</span>
-                        <span className={styles.itemMeta}>
-                          <span>{item.kind === "thread" ? "Thread" : item.kind === "file" ? "File" : "Workspace"}</span>
-                          {item.workspaceName && item.kind !== "workspace" ? <span>{item.workspaceName}</span> : null}
+                  <FavoriteToggle
+                    key={`${item.kind}:${item.id}`}
+                    target={recentFavoriteTarget(item)}
+                    title={item.title}
+                  >
+                    <li className={styles.favoriteRow}>
+                      <button type="button" className={styles.workItem} onClick={() => open(item)}>
+                        <ItemLead item={item} />
+                        <span className={styles.itemText}>
+                          <span className={item.kind === "file" ? styles.fileTitle : styles.itemTitle}>
+                            {item.title}
+                          </span>
+                          <span className={styles.itemMeta}>
+                            <span>
+                              {item.kind === "thread" ? "Thread" : item.kind === "file" ? "File" : "Workspace"}
+                            </span>
+                            {item.workspaceName && item.kind !== "workspace" ? <span>{item.workspaceName}</span> : null}
+                          </span>
                         </span>
-                      </span>
-                      {item.status ? (
-                        <StatusChip status={displayStatusOf(item.status).status} variant="dot" size="sm" />
-                      ) : null}
-                      <span className={styles.time}>{relativeTime(item.lastActivityAt, now)}</span>
-                    </button>
-                  </li>
+                        {item.status ? (
+                          <StatusChip status={displayStatusOf(item.status).status} variant="dot" size="sm" />
+                        ) : null}
+                        <span className={styles.time}>{relativeTime(item.lastActivityAt, now)}</span>
+                      </button>
+                      <FavoriteButton target={recentFavoriteTarget(item)} title={item.title} />
+                    </li>
+                  </FavoriteToggle>
                 ))}
               </ul>
             )}
@@ -652,4 +690,8 @@ function RecentWork() {
       </Tabs>
     </Panel>
   );
+}
+
+function recentFavoriteTarget(item: RecentWorkItem): FavoriteTarget {
+  return { kind: item.kind, id: item.id, workspaceId: item.workspaceId };
 }

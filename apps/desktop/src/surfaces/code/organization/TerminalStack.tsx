@@ -21,6 +21,7 @@ import {
   CircleDashed,
   CircleDot,
   CirclePause,
+  CircleStop,
   CircleX,
   Eye,
   FlaskConical,
@@ -53,6 +54,7 @@ export const BADGE_ICONS: Record<OrgBadge, LucideIcon> = {
   waiting: Hourglass,
   failed: CircleX,
   done: CircleCheck,
+  stopped: CircleStop,
   idle: CirclePause,
 };
 

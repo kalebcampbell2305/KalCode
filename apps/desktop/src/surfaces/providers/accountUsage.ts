@@ -51,9 +51,22 @@ export function notChecked(accountId: string, reason: string | null = null): Acc
 
 /** The window that limits the account right now (lowest remaining), if any. */
 export function limitingWindow(state: AccountUsageState): UsageWindow | null {
+  if (state.status !== "fresh" && state.status !== "stale") return null;
   let best: UsageWindow | null = null;
-  for (const window of state.windows) if (!best || window.remainingPercent < best.remainingPercent) best = window;
+  for (const window of state.windows) {
+    if (!isReportedPercent(window.remainingPercent)) continue;
+    if (!best || window.remainingPercent < best.remainingPercent) best = window;
+  }
   return best;
+}
+
+/** Reject absent/malformed provider values; neither coercion nor clamping proves zero. */
+export function isReportedPercent(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+export function usagePercent(value: number): string {
+  return value > 0 && value < 1 ? "<1" : String(Math.round(value));
 }
 
 export interface UsageSummary {
@@ -66,14 +79,13 @@ export interface UsageSummary {
 
 export function usageSummary(state: AccountUsageState): UsageSummary {
   const window = limitingWindow(state);
-  if ((state.status === "fresh" || state.status === "stale") && window) {
-    const percent = Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
-    const low = percent < LOW_USAGE_PERCENT;
-    return { short: `${percent}% left`, low, tone: low ? "low" : "ok" };
+  if (state.status === "fresh" && window) {
+    const low = window.remainingPercent < LOW_USAGE_PERCENT;
+    return { short: `${usagePercent(window.remainingPercent)}% left`, low, tone: low ? "low" : "ok" };
   }
   if (state.status === "checking") return { short: "Checking usage…", low: false, tone: "muted" };
   if (state.status === "unavailable") return { short: "Usage unavailable", low: false, tone: "muted" };
-  return { short: "Not checked", low: false, tone: "muted" };
+  return { short: "Usage unavailable", low: false, tone: "muted" };
 }
 
 /** "Resets in 2h 14m" from an ISO time, or null. */

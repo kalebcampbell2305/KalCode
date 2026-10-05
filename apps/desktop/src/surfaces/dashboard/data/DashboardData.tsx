@@ -399,7 +399,7 @@ function useAgentsOnly(state: ResourceState<ThreadSummary[]>): ResourceState<Thr
 }
 
 /**
- * Open coding agents only (Claude Code, Codex or Gemini CLI in a Code terminal pane): what the
+ * Open coding agents only (any provider's coding terminal in a Code pane): what the
  * Agents rail, the Agent Fleet and agent counts show. Chat threads stay in Threads.
  */
 export function useCodingAgents() {
@@ -410,8 +410,7 @@ export function useCodingAgents() {
 
 /**
  * Every coding agent, open and archived, when a Dashboard data provider is mounted (the Shell
- * mounts one); null otherwise or until threads load. Code uses it so its call signs ("Claude A")
- * match the Agent Fleet's.
+ * mounts one); null otherwise or until threads load. Used when choosing existing agents.
  */
 export function useOptionalAllCodingAgents(): readonly ThreadSummary[] | null {
   const value = useContext(DashboardDataContext);
@@ -422,7 +421,7 @@ export function useOptionalAllCodingAgents(): readonly ThreadSummary[] | null {
   }, [value]);
 }
 
-/** Archived coding agents (the Fleet's archived view; call signs stay stable across both). */
+/** Archived coding agents, retaining their persisted task or manual names. */
 export function useArchivedCodingAgents() {
   const archived = useArchivedThreads();
   const state = useAgentsOnly(archived.state);

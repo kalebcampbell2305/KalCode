@@ -58,7 +58,12 @@ describe("Waiting thread (Stable)", () => {
     const primary = within(screen.getByRole("navigation", { name: "Primary" }));
     await user.click(primary.getByRole("button", { name: "Threads" }));
     const threads = await screen.findByRole("list", { name: "Threads" });
-    await user.click(await within(threads).findByRole("button", { name: /Add Dark Mode Toggle/ }));
+    // The row, never its "Pin globally: …" favorite action (#235).
+    await user.click(
+      await within(threads).findByRole("button", {
+        name: /^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*Add Dark Mode Toggle/,
+      }),
+    );
 
     expect(await screen.findByText("Waiting for 1 permission decision")).toBeInTheDocument();
     expect(screen.getByText("Requested: Run npm install lodash")).toBeInTheDocument();

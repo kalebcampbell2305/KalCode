@@ -33,6 +33,7 @@ import { AccountUsageBadge } from "../../providers/AccountUsageBadge.tsx";
 import { canStartAnyway, isWaitingForResources, waitingReason } from "../../threads/model.ts";
 import { useKalTidy } from "../kaltidy/kalTidyContext.ts";
 import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPicker.tsx";
+import { PaneAccountSuggestion } from "./PaneAccountSuggestion.tsx";
 import {
   PaneAccountChip,
   type PaneAccountIdentity,
@@ -123,7 +124,7 @@ export const ProviderPane = memo(function ProviderPane({
   const moreRef = useRef<HTMLButtonElement>(null);
   const confirmTextId = useId();
   const identity = providerIdentity(thread.providerId, thread.providerName);
-  const status = paneStatus(thread.status);
+  const status = paneStatus(thread);
   const note = channelNote(info);
   const running = info?.running ?? false;
   // Capability, not provider identity: only a session whose adapter reports that KalCode answers
@@ -240,6 +241,7 @@ export const ProviderPane = memo(function ProviderPane({
         onHandOff={onHandOff}
         onContinue={onContinue}
       />
+      {onContinue ? <PaneAccountSuggestion thread={thread} account={account} onContinue={onContinue} /> : null}
       {confirmStop && !closePending ? (
         <div
           className={styles.confirm}
@@ -586,7 +588,7 @@ function PaneHeader({
             <span>{MODE_LABELS[thread.permissionMode]}</span>
           </span>
           <PaneToolChip status={thread.status} activity={thread.currentActivity} />
-          <PaneStatusChip status={thread.status} qualifier={waitingReason(thread)} />
+          <PaneStatusChip thread={thread} qualifier={waitingReason(thread)} />
           {onHandOff ? (
             <Button
               size="sm"

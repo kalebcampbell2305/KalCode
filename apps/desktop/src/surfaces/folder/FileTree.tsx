@@ -6,6 +6,7 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { ContentContextMenu } from "../../shell/context/ContentContextMenu.tsx";
 import { FilePreview } from "../../shell/context/FilePreview.tsx";
+import { FavoriteButton } from "../../shell/favorites/FavoriteActions.tsx";
 import styles from "./Folder.module.css";
 import { fileSize, splitPath } from "./folderModel.ts";
 
@@ -243,6 +244,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
             <ContentContextMenu
               key={row.key}
               workspaceId={workspaceId}
+              favoriteTarget={entry.isDir ? null : { kind: "file", id: entry.file.displayPath, workspaceId }}
               context={{
                 kind: "file",
                 label: name,
@@ -292,6 +294,9 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
                 {entry.ignored ? <span className={styles.ignored}>ignored</span> : null}
                 {childNote ? <span className={styles.fileNote}>{childNote}</span> : null}
                 {entry.isDir ? null : <span className={styles.fileSize}>{fileSize(entry.bytes)}</span>}
+                {entry.isDir ? null : (
+                  <FavoriteButton target={{ kind: "file", id: entry.file.displayPath, workspaceId }} title={name} />
+                )}
               </div>
             </ContentContextMenu>
           );
