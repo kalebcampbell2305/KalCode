@@ -257,7 +257,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
         },
       )
       .toBe("active");
-    await expect(pane).toContainText("approvals in Codex", { timeout: 30_000 });
+    await expect(pane).toContainText("Approvals in Codex", { timeout: 30_000 });
     // A tool can print OSC 9 too: visible terminal output must not forge canonical status.
     await typeLine("approve");
     await expect(screen).toContainText("[fake prompt]", { timeout: 30_000 });

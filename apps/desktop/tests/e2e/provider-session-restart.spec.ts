@@ -279,12 +279,12 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake
     // provider records no rate limits, so it says so instead of inventing a number.
     await expect(codexARegion.getByText("1 agent", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(codexARegion.getByText("Not checked", { exact: true })).toBeVisible();
+    await expect(codexARegion.getByText("Usage unavailable", { exact: true })).toBeVisible();
     const codexBRegion = app.page.getByRole("region", { name: /Codex B/ });
     // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake
     // provider records no rate limits, so it says so instead of inventing a number.
     await expect(codexBRegion.getByText("1 agent", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(codexBRegion.getByText("Not checked", { exact: true })).toBeVisible();
+    await expect(codexBRegion.getByText("Usage unavailable", { exact: true })).toBeVisible();
   } finally {
     if (app) await closeGracefully(app);
     removeDir(dataDir);
