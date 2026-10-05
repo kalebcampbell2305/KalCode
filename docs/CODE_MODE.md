@@ -57,6 +57,12 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   attach/detach requests can never release another view's stream. A webview holds at most 4
   attachments per terminal (the oldest is released beyond that); a page reload drops all of the
   page's attachments.
+- **Coalescing.** A burst of PTY reads (ConPTY hands `type` of a large file to the reader about
+  128 bytes at a time) becomes at most one channel message per 8 ms per view, or one per 64 KB
+  (`kalcode_pty::OutputCoalescer`), because each message costs the main thread a script
+  evaluation and, above 1 KB, a fetch. Output after a quiet interval (a keystroke echo) is sent at
+  once, the replay is always its own first message, bytes keep their exact order, and when the
+  output ends whatever is buffered is sent immediately.
 - **Flow control.** A view acknowledges the bytes it has rendered (`terminal_ack`, every
   64 KB). A view that falls more than 4 MB behind stops receiving output; its next ack returns
   `false` and it re-attaches, resetting and replaying from the scrollback. Native memory held
@@ -73,8 +79,10 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   never kept in the scrollback, and reports xterm.js generates while replaying are not sent to
   the shell, so a replay never answers a question twice.
 - **Input.** `terminal_write` takes UTF-8 text (at most 64 KB per call; the client splits larger
-  pastes). Writes are queued to a per-session writer thread, so input never blocks the UI thread
-  and keeps its order; a shell that stops reading for a long time gets
+  pastes). The command runs off the main thread and only queues the write for a per-session
+  writer thread, so input never blocks the UI thread. Order is kept end to end: each view sends a
+  terminal's next write only after the previous one resolved (`createOrderedInputQueue`), and the
+  writer thread delivers them in that order; a shell that stops reading for a long time gets
   `terminal/terminal_busy` (retryable). Input to an ended tab gets `terminal/terminal_not_running`.
 - **Resize.** The view fits the terminal to its panel (ResizeObserver → fit addon) and sends the
   new size, debounced by 80 ms. Sizes must be 2–1000 columns and rows (`validation/invalid_size`).
