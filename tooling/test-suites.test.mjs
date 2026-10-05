@@ -31,16 +31,16 @@ test("the registered Rust release gate includes the production speech engine and
   // real-Codex hook probes (AI quota) and the PTY/process-scan benchmarks (#238, #239).
   for (const [platform, expected] of [
     // The netstat CPU benchmark only compiles on Windows.
-    ["win32", 35],
-    ["darwin", 34],
+    ["win32", 36],
+    ["darwin", 35],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 31],
+    ["linux", 32],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 35);
+  assert.equal(inventory.rustIntentionalIgnores.length, 36);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
