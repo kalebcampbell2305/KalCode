@@ -509,6 +509,103 @@ function agentPhrase(t: string): AgentPhrase | null {
   return null;
 }
 
+type Attention = "waiting_for_permission" | "waiting_for_you" | "failed" | "stuck";
+type Scope = "agents" | "threads";
+
+/** The Agents tab group that shows every agent in a state (native `SessionAttention::agent_filter`). */
+const ATTENTION_FILTER: Record<Attention, AgentFilter> = {
+  waiting_for_permission: "needs_you",
+  waiting_for_you: "needs_you",
+  failed: "failed",
+  stuck: "waiting",
+};
+
+const ATTENTION_PHRASES: readonly [Attention, string, string | null][] = [
+  [
+    "waiting_for_permission",
+    "(?:(?:waiting|asking) (?:for|on) (?:my )?(?:permission|approval)|(?:needs|need|needing|wants|want|requires|require) (?:my )?permission|(?:needs|need|needing) approval)",
+    null,
+  ],
+  [
+    "failed",
+    "(?:(?:failed|failing|errored|crashed|broke|broken)|(?:failed|errored|crashed)(?: out)?|(?:hit|got|has) an error|with an error)",
+    "(?:failed|failing|broken|crashed)",
+  ],
+  ["stuck", "stuck", "stuck"],
+  [
+    "waiting_for_you",
+    "(?:waiting|waiting on me|waiting (?:for|on) (?:input|my input|an answer|a reply|my answer)|(?:needs|need|needing) (?:me|input|my input|an answer|my attention))",
+    null,
+  ],
+];
+
+/** Words per scope (native `grammar_sessions`): agent words and unnamed phrases mean coding agents. */
+const SCOPE_WORDS: Record<Scope, { one: string; which: string; anything: string; noun: string; nouns: string }> = {
+  agents: {
+    one: "(?:the one|the agent|the coding agent|the terminal|the provider|the pane|whichever one)",
+    which: "(?:which|what) (?:one|ones|agents?|coding agents?|providers?|terminals?)",
+    anything: "(?:anything|anyone|anybody|any agents?)",
+    noun: "(?:one|agent|coding agent|terminal|pane)",
+    nouns: "(?:agents|coding agents)",
+  },
+  threads: {
+    one: "(?:the thread|the session|the chat|the chat thread)",
+    which: "(?:which|what) (?:threads?|sessions?)",
+    anything: "(?:any threads?|any sessions?)",
+    noun: "(?:thread|session)",
+    nouns: "(?:threads|sessions)",
+  },
+};
+
+const FOCUS_VERB = "(?:open|show|show me|focus|focus on|go to|take me to|switch to|jump to|bring up|pull up|find)";
+const BE = "(?:(?:is|are|has|have|was|were|that is|which is|that are|that|which) )?(?:(?:currently|still) )?";
+
+/**
+ * Sessions by state, mirroring native `grammar_sessions::state_rules`: "which agent is stuck",
+ * "focus the one that failed" and "what needs permission" read coding agents of every provider;
+ * "which thread failed" keeps reading chat threads.
+ */
+function attentionPhrase(
+  t: string,
+): { kind: "focus_by_state" | "which_sessions"; state: Attention; scope: Scope } | null {
+  const text = t.replace(/\bthat's\b/g, "that is").replace(/ (?:for me|please|right now|now)$/, "");
+  for (const scope of ["agents", "threads"] as const) {
+    const w = SCOPE_WORDS[scope];
+    for (const [state, phrase, adjective] of ATTENTION_PHRASES) {
+      const focus =
+        new RegExp(`^${FOCUS_VERB} ${w.one} ${BE}${phrase}$`).test(text) ||
+        (adjective !== null && new RegExp(`^${FOCUS_VERB} (?:me )?the ${adjective} ${w.noun}$`).test(text));
+      if (focus) return { kind: "focus_by_state", state, scope };
+      const which =
+        new RegExp(`^${w.which} ${BE}${phrase}$`).test(text) ||
+        new RegExp(`^(?:is|are|has|have|did) ${w.anything} ${BE}${phrase}$`).test(text) ||
+        (scope === "agents" && new RegExp(`^who ${BE}${phrase}$`).test(text)) ||
+        (adjective !== null &&
+          new RegExp(`^(?:what|which) ${adjective} ${w.nouns}(?: are there| do i have)?$`).test(text));
+      if (which) return { kind: "which_sessions", state, scope };
+    }
+  }
+  const unnamed: readonly [Attention, RegExp][] = [
+    [
+      "waiting_for_permission",
+      /^what (?:(?:needs|need|requires|require|wants) permission|(?:is|are) (?:waiting|asking) (?:for|on) permission)$/,
+    ],
+    ["failed", /^what (?:failed|crashed|broke|errored)$/],
+    ["stuck", /^what (?:is|are) stuck$/],
+  ];
+  for (const [state, pattern] of unnamed) {
+    if (pattern.test(text)) return { kind: "which_sessions", state, scope: "agents" };
+  }
+  return null;
+}
+
+const ATTENTION_WORDS: Record<Attention, readonly [string, string]> = {
+  waiting_for_permission: ["is waiting for permission", "are waiting for permission"],
+  waiting_for_you: ["is waiting for you", "are waiting for you"],
+  failed: ["has failed", "have failed"],
+  stuck: ["is stuck", "are stuck"],
+};
+
 /** Filter phrases without an agent noun, tried after approvals (native `late_filter_rules`). */
 const LATE_FILTERS: readonly [AgentFilter, RegExp][] = [
   [
@@ -575,6 +672,33 @@ function understand(text: string): Parsed | null {
       },
     };
   }
+  const attention = attentionPhrase(t);
+  if (attention) {
+    // The double has no agents or threads: native reads back the matching names.
+    const [one, many] = ATTENTION_WORDS[attention.state];
+    const noun = attention.scope === "agents" ? "agent" : "thread";
+    if (attention.kind === "focus_by_state") {
+      return {
+        kind: "focus_by_state",
+        high: true,
+        outcome: { kind: "failed", code: "session_not_found", message: `No ${noun} ${one}.` },
+      };
+    }
+    return {
+      kind: "which_sessions",
+      high: true,
+      outcome: { kind: "completed", summary: `No ${noun}s ${many}.` },
+      ...(attention.scope === "agents"
+        ? {
+            directive: {
+              kind: "filter_agents",
+              filter: ATTENTION_FILTER[attention.state],
+              providerId: null,
+            } satisfies UiDirective,
+          }
+        : {}),
+    };
+  }
   const navigate = (surface: SurfaceId, high: boolean): Parsed => ({
     kind: "navigate",
     high,
@@ -614,7 +738,7 @@ function understand(text: string): Parsed | null {
     outcome: { kind: "completed", summary: "Nothing is waiting for your approval." },
     directive: { kind: "show_approvals" },
   };
-  if (/^(show approvals|what needs permission|show what is waiting( for me)?|what is waiting( for me)?)$/.test(t)) {
+  if (/^(show approvals|show what is waiting( for me)?|what is waiting( for me)?)$/.test(t)) {
     return { ...approvals, high: true };
   }
   if (/^(pending )?approvals$/.test(t)) return { ...approvals, high: false };

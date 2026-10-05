@@ -20,10 +20,11 @@ import { UsageMeter } from "./AccountUsageBadge.tsx";
 import { accountFullLabel, accountName, accountSessionState, accountSignIn } from "./accountIdentity.ts";
 import {
   type AccountUsageState,
+  isReportedPercent,
   LOW_USAGE_PERCENT,
-  limitingWindow,
   resetsIn,
   useAccountUsage,
+  weeklyWindow,
 } from "./accountUsage.ts";
 import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import styles from "./ProviderAccountsView.module.css";
@@ -503,13 +504,17 @@ function AccountFacts({
 }
 
 /**
- * The line under the meter: when the limiting window resets ("Weekly · resets in 3d 5h"), that a
- * stale reading is old, or why there is no number ("Signed out", "Not reported by Gemini").
+ * The line under the meter: when the weekly window it shows resets ("Weekly · resets in 3d 5h"),
+ * that a stale reading is old, or why there is no number ("Signed out", "Not reported by Gemini").
+ * Every other window (5-hour, model-scoped) is listed, labelled, in the expanded details.
  */
 function usageDetail(usage: AccountUsageState): string {
   if (usage.status === "fresh" || usage.status === "stale") {
-    const window = limitingWindow(usage);
-    if (!window) return "No usage windows reported";
+    const window = weeklyWindow(usage);
+    if (!window) {
+      const others = usage.windows.filter((w) => isReportedPercent(w.remainingPercent)).map((w) => w.label);
+      return others.length > 0 ? `Only ${others.join(", ")} reported` : "No usage windows reported";
+    }
     const reset = resetsIn(window.resetsAt);
     const parts = [window.label, reset ? reset.toLowerCase() : null];
     if (usage.status === "stale" && usage.checkedAt) parts.push(`read ${formatRelative(usage.checkedAt)}`);

@@ -2,12 +2,22 @@
  * The live KalCode demo, drawn. Pure state -> HTML-string functions: Astro renders the first paint
  * at build time, the client re-renders after every action and morphs the DOM (scripts/live/app.ts).
  *
- * Layout and words follow the shipped desktop app: the Command Deck top bar, the stable sidebar
- * (Code, Dashboard, Operations, KalVoice, Threads, Providers), tabbed Code panes, the New agent
- * launcher, the Agents rail. Every interactive element carries `data-do="<action>[:arg]"`.
- * No inline styles (the site's CSP forbids them): dynamic sizes are classes or data attributes.
+ * Layout and words follow the shipped desktop app: the Command Deck top bar, the navigation bar
+ * (Back/Forward, breadcrumbs, Go to anything), favorites and pins, the Stable sidebar, tabbed Code
+ * panes with the terminal-header account picker, Smart Close, the New agent launcher and the Agents
+ * rail. Agent states come from the protocol's one agent-state model. Every interactive element
+ * carries `data-do="<action>[:arg]"`. No inline styles (the site's CSP forbids them): dynamic sizes
+ * are classes or data attributes.
  */
 
+import {
+  AGENT_FILTER_LABEL,
+  AGENT_FILTERS,
+  AGENT_STATE_LABEL,
+  AGENT_STATE_TEXT,
+  AGENT_STATE_TONE,
+  isAgentBusy,
+} from "@kalcode/protocol";
 import { formatKalVoiceAllowance, getPlan, PLANS } from "@kalcode/protocol/plans";
 import { renderAdaptiveCanvas, renderCanvasTools } from "./canvas";
 import type { LiveIcon } from "./icons";
@@ -17,31 +27,42 @@ import {
   type Agent,
   accountLabel,
   accountOf,
+  accountSuggestion,
+  agentState,
+  agentsIn,
   agentsList,
+  canNav,
   counts,
   DEV_URL,
   EFFORTS,
   ENVIRONMENTS,
+  type Favorite,
   type Frame,
-  fleetStage,
+  focusedTab,
   isAvailable,
   isWorking,
   type Line,
+  locationLabel,
   MAX_AGENTS_PER_LAUNCH,
+  MODE_DESCRIPTION,
+  MODE_LABEL,
   MODELS,
+  type Mode,
+  modelLabel,
   needsYou,
   PROVIDER_NAME,
+  PROVIDERS,
   type ProviderId,
   paneCount,
+  promptMark,
   type Run,
   runs,
   type State,
   SURFACES,
-  statusLabel,
-  statusTone,
   type Tab,
   VOICE_PHRASES,
   WORKSPACE,
+  workMark,
 } from "./model";
 import { TOUR } from "./tour";
 
@@ -63,15 +84,23 @@ export function icon(name: LiveIcon, cls = ""): string {
   return `<svg class="lk-i${cls ? ` ${cls}` : ""}" aria-hidden="true" focusable="false"><use href="#lk-${name}"/></svg>`;
 }
 
+/** Provider marks as the app draws them (@kalcode/ui ProviderMark): Cursor uses the generic glyph. */
 export function glyph(provider: ProviderId | "terminal" | "browser" | "widget"): string {
   if (provider === "terminal") return icon("terminal", "lk-glyph-i");
   if (provider === "browser") return icon("globe", "lk-glyph-i");
   if (provider === "widget") return icon("dashboard", "lk-glyph-i");
+  if (provider === "cursor")
+    return `<svg class="lk-glyph lk-glyph--cursor" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 1.5 13.6 4.75v6.5L8 14.5 2.4 11.25v-6.5Z"/><text x="8" y="10.6" text-anchor="middle" fill="currentColor" stroke="none" font-size="7" font-weight="600">C</text></svg>`;
   return `<span class="lk-glyph lk-glyph--${provider}" aria-hidden="true"></span>`;
 }
 
-export function statusChip(agent: Pick<Agent, "status">): string {
-  return `<span class="lk-status" data-tone="${statusTone(agent.status)}"><span class="lk-status__dot" aria-hidden="true"></span>${statusLabel(agent.status)}</span>`;
+/** The pane and card status chip: the protocol's AGENT_STATE_LABEL and tone. */
+export function statusChip(agent: Pick<Agent, "status" | "activity" | "approval">): string {
+  const state = agentState(agent);
+  return `<span class="lk-status" data-tone="${AGENT_STATE_TONE[state]}"><span class="lk-status__dot" aria-hidden="true"></span>${AGENT_STATE_LABEL[state]}</span>`;
+}
+function tone(agent: Agent): string {
+  return AGENT_STATE_TONE[agentState(agent)];
 }
 
 /** A small "Coming soon" tag for any demo surface whose roadmap feature has not shipped. */
@@ -88,33 +117,101 @@ function meter(left: number): string {
   return `<span class="lk-meter" data-low="${left < 20}" aria-hidden="true"><span class="lk-meter__fill" data-w="${step}"></span></span>`;
 }
 
-// ── Top bar ─────────────────────────────────────────────────────────────────────────────────
+function elapsed(minutes: number): string {
+  return minutes ? `${minutes}m` : "now";
+}
+
+// ── Top bar (Command Deck) ──────────────────────────────────────────────────────────────────
+
+/** The account the deck's account chip shows: the focused agent's, else the next launch's. */
+function chipAccount(state: State): Account | undefined {
+  const tab = focusedTab(state);
+  const agent = tab?.agent ? state.agents[tab.agent] : undefined;
+  return (
+    (agent && accountOf(state, agent.account)) ?? state.accounts.find((a) => a.provider === "claude" && a.isDefault)
+  );
+}
 
 function topBar(state: State): string {
   const c = counts(state);
-  const ready = state.accounts.length;
+  const account = chipAccount(state);
+  const left = account?.windows[0]?.left ?? 0;
   return `<header class="lk-top">
   <div class="lk-brand"><span class="lk-brand__mark" aria-hidden="true"></span><span class="lk-wordmark" aria-hidden="true"></span><span class="visually-hidden">KalCode</span><span class="lk-demo"${hint("This is a temporary demo workspace. Reset or reload to start over.")}>Demo</span></div>
   <div class="lk-ctx">
-    <button type="button" class="lk-ctx__chip" data-do="go:code"${hint("The project folder your agents work in.")}>${icon("folder")}<span><small>Workspace</small>${WORKSPACE.name}</span></button>
-    <span class="lk-ctx__chip lk-ctx__chip--static">${icon("branch")}<span><small>Branch</small><span class="lk-mono">${WORKSPACE.branch} ±${WORKSPACE.changed} ↑${WORKSPACE.ahead}</span></span></span>
-    <button type="button" class="lk-ctx__chip" data-do="menu:environment" aria-expanded="${state.menu === "environment"}"${hint("Local, Preview, Staging or Production: where you're looking.")}>${icon("globe")}<span><small>Environment</small><span class="lk-env-dot" data-env="${state.environment}"></span>${state.environment}</span></button>
-    <button type="button" class="lk-ctx__chip" data-do="menu:mode" aria-expanded="${state.menu === "mode"}"${hint("The permission mode new agents start in.")}>${icon("shield")}<span><small>Mode</small>Approve</span>${icon("chevron", "lk-caret")}</button>
+    <button type="button" class="lk-ctx__chip" data-do="go:code"${hint("The project folder your agents work in.")}>${icon("folder")}<span><small>Workspace</small>${WORKSPACE.name}</span>${icon("chevron", "lk-caret")}</button>
+    <span class="lk-ctx__chip lk-ctx__chip--static">${icon("branch")}<span><small>Branch</small><span class="lk-ctx__branch">${WORKSPACE.branch}<em>±${WORKSPACE.changed}</em><em>↑${WORKSPACE.ahead}</em></span></span></span>
+    <button type="button" class="lk-ctx__chip" data-do="menu:environment" aria-expanded="${state.menu === "environment"}"${hint("Local, Preview, Staging or Production: where you're looking.")}>${icon("globe")}<span><small>Environment</small><span><span class="lk-env-dot" data-env="${state.environment}"></span>${state.environment}</span></span></button>
+    <button type="button" class="lk-ctx__chip" data-do="menu:mode" data-tour="mode" aria-expanded="${state.menu === "mode"}" aria-label="Permission mode: ${MODE_LABEL[state.mode]}"${hint("How new agents may act. Bypass: no prompts, secrets still ask.")}>${icon("approvals")}<span><small>Mode</small>${MODE_LABEL[state.mode]}</span>${icon("chevron", "lk-caret")}</button>
   </div>
-  <button type="button" class="lk-search" data-do="menu:palette" data-tour="palette" aria-label="Search or run a command"${hint("Every KalCode action, one search away.")}>${icon("search")}<span>Search or run a command</span><kbd>Ctrl K</kbd></button>
+  <div class="lk-top__center"><button type="button" class="lk-search" data-do="menu:palette" data-tour="palette" aria-label="Search or run a command" aria-keyshortcuts="Control+K Meta+K">${icon("search")}<span>Search or run a command</span><kbd>Ctrl K</kbd></button></div>
   <div class="lk-signals">
-    <button type="button" class="lk-signal" data-tone="working" data-do="go:dashboard"${hint("Coding agents working right now.")}><span class="lk-signal__dot"></span><strong>${c.working}</strong> working</button>
-    <button type="button" class="lk-signal" data-tone="waiting" data-do="needs" data-tour="needs" data-active="${c.needs > 0}"${hint("Agents waiting on you. Click to jump to the first one.")}><span class="lk-signal__dot"></span><strong>${c.needs}</strong> ${c.needs === 1 ? "needs" : "need"} you</button>
+    <button type="button" class="lk-signal" data-tone="${c.working ? "working" : "muted"}" data-do="go:dashboard" aria-label="${c.working} ${c.working === 1 ? "agent" : "agents"} working. Show agents"><span class="lk-signal__dot" aria-hidden="true"></span><strong>${c.working}</strong><span class="lk-signal__word">working</span></button>
+    <button type="button" class="lk-signal" data-tone="${c.needs ? "waiting" : "muted"}" data-do="needs" data-tour="needs" data-active="${c.needs > 0}" aria-label="${c.needs} ${c.needs === 1 ? "thing needs" : "things need"} you"><span class="lk-signal__dot" aria-hidden="true"></span><strong>${c.needs}</strong><span class="lk-signal__word">${c.needs === 1 ? "needs" : "need"} you</span></button>
   </div>
-  <button type="button" class="lk-accounts" data-do="menu:accounts" data-tour="accounts" aria-label="Accounts and usage: ${ready} ready" aria-expanded="${state.menu === "accounts"}"${hint("Connect multiple Claude Code and Codex accounts and see their usage.")}>${icon("users")}<strong>Accounts</strong><small>${ready} ready</small>${icon("chevron", "lk-caret")}</button>
-  <button type="button" class="lk-voice-pill" data-do="voice:toggle" data-tour="voice" aria-label="KalVoice: ${voiceWord(state)}" aria-expanded="${state.voice.open}"${hint("KalVoice: hold F8 and speak. Here, pick a phrase.")}><span class="lk-orb" data-state="${state.voice.state}" aria-hidden="true"></span><span class="lk-voice-pill__word">KalVoice</span><span class="lk-voice-pill__state">${voiceWord(state)}</span></button>
+  <button type="button" class="lk-accounts" data-do="menu:accounts" data-tour="accounts" data-low="${left < 20}" aria-label="Account and usage center" aria-expanded="${state.menu === "accounts"}"${hint("Your provider accounts and what each has left.")}>${icon("users")}<span class="lk-accounts__text"><strong>${esc(account?.name ?? "Accounts")}</strong><small>${left}% left</small></span>${icon("chevron", "lk-caret")}</button>
 </header>`;
 }
+
+// ── Navigation bar and favorites ────────────────────────────────────────────────────────────
 
 function voiceWord(state: State): string {
   return { ready: "Ready", listening: "Listening…", processing: "Processing", executing: "Executing", done: "Done" }[
     state.voice.state
   ];
+}
+
+function navBar(state: State): string {
+  const here = state.nav.entries[state.nav.index] ?? "code";
+  const page = here.startsWith("code:") ? "Code" : locationLabel(state, here);
+  const target = here.startsWith("code:") ? locationLabel(state, here) : "";
+  return `<div class="lk-navbar" data-tour="navbar">
+  <div class="lk-navbar__controls">
+    <button type="button" class="lk-icon-btn" data-do="nav:back" aria-label="Go back" aria-keyshortcuts="Alt+ArrowLeft"${canNav(state, -1) ? "" : " disabled"}${hint("Back (Alt ←)")}>${icon("back")}</button>
+    <button type="button" class="lk-icon-btn" data-do="nav:forward" aria-label="Go forward" aria-keyshortcuts="Alt+ArrowRight"${canNav(state, 1) ? "" : " disabled"}${hint("Forward (Alt →)")}>${icon("forward")}</button>
+    <span class="lk-anchor"><button type="button" class="lk-icon-btn" data-do="menu:history" aria-label="Recent navigation" aria-expanded="${state.menu === "history"}"${state.nav.entries.length < 2 ? " disabled" : ""}>${icon("history")}</button>${state.menu === "history" ? historyMenu(state) : ""}</span>
+  </div>
+  <nav class="lk-crumbs" aria-label="Breadcrumb"><button type="button" data-do="go:code">${WORKSPACE.name}</button>${icon("chevronRight")}<span${target ? "" : ' aria-current="page"'}>${esc(page)}</span>${target ? `${icon("chevronRight")}<span aria-current="page">${esc(target)}</span>` : ""}</nav>
+  <button type="button" class="lk-voice-pill" data-do="voice:toggle" data-tour="voice" aria-label="KalVoice: ${voiceWord(state)}" aria-expanded="${state.voice.open}"${hint("KalVoice: hold F8 and speak. Here, pick a phrase.")}><span class="lk-orb" data-state="${state.voice.state}" aria-hidden="true"></span><span class="lk-voice-pill__word">KalVoice</span><span class="lk-voice-pill__state"><span class="lk-dot" data-tone="${state.voice.state === "ready" ? "muted" : "working"}"></span>${voiceWord(state)}</span></button>
+  <button type="button" class="lk-goto" data-do="menu:palette" data-tour="switcher" aria-label="Open quick switcher">${icon("search")}<span>Go to anything</span><kbd>Ctrl K</kbd></button>
+</div>`;
+}
+
+function historyMenu(state: State): string {
+  const items = state.nav.entries
+    .map((entry, index) => ({ entry, index }))
+    .reverse()
+    .slice(0, 12)
+    .map(({ entry, index }) => {
+      const page = entry.startsWith("code:") ? "Code" : locationLabel(state, entry);
+      return `<button type="button" role="menuitem" class="lk-menu__item" data-do="nav-to:${index}"><span>${esc(locationLabel(state, entry))}<small>${esc(page)}${index === state.nav.index ? " · Current" : ""}</small></span></button>`;
+    })
+    .join("");
+  return `<div class="lk-menu lk-menu--history" role="menu" aria-label="Recent navigation"><p class="lk-label">Recent navigation</p>${items}</div>`;
+}
+
+const FAVORITE_ICON: Record<Favorite["kind"], LiveIcon> = {
+  agent: "bot",
+  terminal: "terminal",
+  browser: "globe",
+  command: "play",
+  account: "user",
+};
+
+function favoritesBar(state: State): string {
+  if (!state.favorites.length) return "";
+  const group = (scope: Favorite["scope"]) => {
+    const list = state.favorites.filter((f) => f.scope === scope);
+    if (!list.length) return "";
+    const pin = scope === "pin";
+    return `<div class="lk-favs__group"><span class="lk-favs__label" title="${pin ? "Global pins" : `${WORKSPACE.name} favorites`}">${icon(pin ? "pin" : "star")}<span>${pin ? "Pins" : "Favorites"}</span></span><ul role="list" class="lk-favs__items" aria-label="${pin ? "Global pins" : "Workspace favorites"}">${list
+      .map(
+        (f) =>
+          `<li><button type="button" class="lk-fav" data-key="fv-${f.key}" data-do="fav:${esc(f.key)}" title="${esc(f.title)} · ${f.kind}">${icon(FAVORITE_ICON[f.kind])}<span>${esc(f.title)}</span></button></li>`,
+      )
+      .join("")}</ul></div>`;
+  };
+  return `<div class="lk-favs" data-tour="favorites">${group("pin")}${group("favorite")}</div>`;
 }
 
 // ── Sidebar and mobile tab bar ──────────────────────────────────────────────────────────────
@@ -127,51 +224,72 @@ function sidebar(state: State): string {
     return `<li><button type="button" class="lk-nav" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-current="${state.surface === s.id ? "page" : "false"}"${hint(s.hint)}>${icon(s.icon as LiveIcon)}<span class="lk-nav__label">${s.label}</span>${badge}</button></li>`;
   }).join("");
   return `<nav class="lk-side" aria-label="KalCode">
-  <ul role="list">${items}</ul>
+  <ul role="list">${items}<li><button type="button" class="lk-nav" data-do="browser"${hint("Live Browser: your app beside your agents.")}>${icon("globe")}<span class="lk-nav__label">Browser</span></button></li></ul>
   <ul role="list" class="lk-side__foot">
     <li><button type="button" class="lk-nav" data-do="needs"${hint("Approvals your agents are waiting for.")}>${icon("approvals")}<span class="lk-nav__label">Approvals</span>${approvals ? `<span class="lk-badge">${approvals}</span>` : ""}</button></li>
+    <li class="lk-anchor"><button type="button" class="lk-nav" data-do="menu:notifications" aria-expanded="${state.menu === "notifications"}">${icon("bell")}<span class="lk-nav__label">Notifications</span>${state.unread ? `<span class="lk-badge">${state.unread}</span>` : ""}</button>${state.menu === "notifications" ? notifications(state) : ""}</li>
     <li><button type="button" class="lk-nav" data-do="go:settings" aria-current="${state.surface === "settings" ? "page" : "false"}">${icon("settings")}<span class="lk-nav__label">Settings</span></button></li>
     <li class="lk-me"><span class="lk-me__avatar" aria-hidden="true">G</span><span class="lk-nav__label"><strong>Guest</strong><small>Demo workspace</small></span></li>
   </ul>
 </nav>`;
 }
 
+function notifications(state: State): string {
+  const rows = state.notes
+    .map(
+      (n) =>
+        `<li data-tone="${n.tone === "done" ? "done" : n.tone === "waiting" ? "waiting" : "muted"}"><span class="lk-dot"></span><span>${esc(n.text)}</span>${n.agent && state.agents[n.agent] ? `<button type="button" class="lk-btn lk-btn--ghost" data-do="agent:${n.agent}">Open</button>` : ""}</li>`,
+    )
+    .join("");
+  return `<div class="lk-menu lk-menu--notes" role="dialog" aria-label="Notifications"><p class="lk-label">Notifications</p><ul role="list" class="lk-notes">${rows || `<li class="lk-empty">You're all caught up.</li>`}</ul></div>`;
+}
+
 function tabBar(state: State): string {
   const c = counts(state);
+  const short: Partial<Record<string, string>> = { operations: "Ops", memory: "Memory" };
   return `<nav class="lk-tabbar" aria-label="KalCode">${SURFACES.map(
     (s) =>
-      `<button type="button" class="lk-tabbar__item" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-label="${s.label}" aria-current="${state.surface === s.id ? "page" : "false"}">${icon(s.icon as LiveIcon)}<span>${s.id === "operations" ? "Ops" : s.id === "memory" ? "Memory" : s.label}</span>${s.id === "dashboard" && c.needs ? `<span class="lk-badge">${c.needs}</span>` : ""}</button>`,
+      `<button type="button" class="lk-tabbar__item" data-do="go:${s.id}" data-tour="nav-${s.id}" aria-label="${s.label}" aria-current="${state.surface === s.id ? "page" : "false"}">${icon(s.icon as LiveIcon)}<span>${short[s.id] ?? s.label}</span>${s.id === "dashboard" && c.needs ? `<span class="lk-badge">${c.needs}</span>` : ""}</button>`,
   ).join("")}</nav>`;
 }
 
 // ── Agents rail ─────────────────────────────────────────────────────────────────────────────
 
+function railRow(a: Agent): string {
+  const s = agentState(a);
+  const explained = isAgentBusy(s) || s === "needs_you" || s === "waiting";
+  const detail =
+    explained && a.activity && a.activity !== AGENT_STATE_TEXT[s]
+      ? `${AGENT_STATE_TEXT[s]} · ${a.activity}`
+      : AGENT_STATE_TEXT[s];
+  return `<button type="button" class="lk-rail__row" data-key="r-${a.id}" data-do="agent:${a.id}" data-tone="${AGENT_STATE_TONE[s]}" data-needs="${s === "needs_you"}" aria-label="${esc(a.name)}, ${AGENT_STATE_TEXT[s]}, ${PROVIDER_NAME[a.provider]} in ${WORKSPACE.name}. Open agent"><span class="lk-rail__glyph">${glyph(a.provider)}<span class="lk-pulse"></span></span><span class="lk-rail__text"><span class="lk-rail__top"><strong>${esc(a.name)}</strong><time>${elapsed(a.minutes)}</time></span><span class="lk-rail__detail">${esc(detail)}</span><small>${PROVIDER_NAME[a.provider]} · ${WORKSPACE.name}</small></span></button>`;
+}
+
 function rail(state: State): string {
-  const list = agentsList(state);
+  const c = counts(state);
   if (!state.railOpen) {
-    const c = counts(state);
+    const pip = (n: number, t: string, label: string) =>
+      n ? `<span class="lk-rail__count" data-tone="${t}" title="${n} ${label}">${n}</span>` : "";
     return `<aside class="lk-rail lk-rail--closed" aria-label="Agents"><button type="button" class="lk-icon-btn" data-do="rail" aria-label="Show the Agents rail">${icon("railOpen")}</button>
-      <span class="lk-rail__count" data-tone="waiting">${c.needs}</span><span class="lk-rail__count" data-tone="working">${c.working}</span><span class="lk-rail__count" data-tone="done">${c.done}</span></aside>`;
+      ${pip(c.needs, "waiting", "need you")}${pip(c.working, "working", "working")}${pip(c.waiting, "muted", "waiting")}${pip(c.failed, "failed", "failed")}</aside>`;
   }
-  const groups: [string, string, Agent[]][] = [
-    ["Needs you", "waiting", list.filter(needsYou)],
-    ["Working", "working", list.filter(isWorking)],
-    ["Just finished", "done", list.filter((a) => a.status === "done")],
-    ["Idle", "muted", list.filter((a) => a.status === "idle")],
-  ];
-  const body = groups
-    .filter(([, , agents]) => agents.length)
-    .map(
-      ([label, tone, agents]) =>
-        `<div class="lk-rail__group"><p class="lk-label" data-tone="${tone}"><span class="lk-dot"></span>${label} <span>${agents.length}</span></p>${agents
-          .map(
-            (a) =>
-              `<button type="button" class="lk-rail__row" data-key="r-${a.id}" data-do="agent:${a.id}" data-tone="${statusTone(a.status)}" data-needs="${needsYou(a)}"><span class="lk-rail__glyph">${glyph(a.provider)}<span class="lk-pulse"></span></span><span class="lk-rail__text"><strong>${esc(a.name)}</strong><span>${esc(needsYou(a) ? fleetStage(a.status) : a.activity)}</span><small>${PROVIDER_NAME[a.provider]} · ${accountLabel(state, a.account)} · ${WORKSPACE.name}</small></span><time>${a.minutes ? `${a.minutes}m` : "now"}</time></button>`,
-          )
-          .join("")}</div>`,
-    )
-    .join("");
-  return `<aside class="lk-rail" aria-label="Agents" data-tour="rail"><div class="lk-rail__head"><h4>Agents <span class="lk-count">${list.length}</span></h4><button type="button" class="lk-icon-btn" data-do="rail" aria-label="Hide the Agents rail">${icon("railClose")}</button></div>${
+  const group = (label: string, t: string, agents: Agent[]) =>
+    agents.length
+      ? `<section class="lk-rail__group" data-tone="${t}"><p class="lk-label" data-tone="${t}"><span class="lk-dot"></span>${label} <span>${agents.length}</span></p>${agents.map((a) => railRow(a)).join("")}</section>`
+      : "";
+  const idle = agentsIn(state, "idle");
+  const idleGroup = idle.length
+    ? `<section class="lk-rail__group"><button type="button" class="lk-rail__fold" data-do="rail-idle" aria-expanded="${state.idleOpen}">${icon("chevronRight")}Idle <span>${idle.length}</span></button>${state.idleOpen ? idle.map((a) => railRow(a)).join("") : ""}</section>`
+    : "";
+  const body = [
+    group("Needs you", "waiting", agentsIn(state, "needs_you")),
+    group("Failed", "failed", agentsIn(state, "failed")),
+    group("Working", "working", agentsIn(state, "working")),
+    group("Waiting", "muted", agentsIn(state, "waiting")),
+    idleGroup,
+    group("Just finished", "done", agentsIn(state, "done")),
+  ].join("");
+  return `<aside class="lk-rail" aria-label="Agents" data-tour="rail"><div class="lk-rail__head"><h4>Agents <span class="lk-count">${c.agents}</span></h4><button type="button" class="lk-icon-btn" data-do="rail" aria-label="Hide the Agents rail">${icon("railClose")}</button></div>${c.working === 0 && c.agents ? `<p class="lk-rail__quiet">Nothing running right now.</p>` : ""}${
     body ||
     `<p class="lk-empty">No agents running<button type="button" class="lk-btn lk-btn--primary" data-do="launcher">Launch an agent</button></p>`
   }</aside>`;
@@ -194,7 +312,7 @@ function tabTitle(state: State, tab: Tab): string {
 function tabTone(state: State, tab: Tab): string {
   if (tab.kind === "agent" && tab.agent) {
     const agent = state.agents[tab.agent];
-    return agent ? statusTone(agent.status) : "muted";
+    return agent ? tone(agent) : "muted";
   }
   if (tab.kind === "terminal") return tab.idle ? "muted" : "working";
   return "none";
@@ -206,15 +324,19 @@ function tabGlyph(state: State, tab: Tab): string {
   return glyph(tab.kind === "agent" ? "claude" : tab.kind);
 }
 
+function modeBadge(mode: Mode): string {
+  return `<span class="lk-pmode" data-risky="${mode === "bypass"}" title="Permission mode: ${MODE_LABEL[mode]}">${mode === "bypass" ? icon("shieldAlert") : ""}<span class="visually-hidden">Permission mode </span><span>${MODE_LABEL[mode]}</span></span>`;
+}
+
 export function agentPane(state: State, agent: Agent): string {
   const account = accountOf(state, agent.account);
   const usage = account?.windows[0];
   const approval = agent.approval
-    ? `<div class="lk-approval" role="group" aria-label="${esc(agent.name)} needs approval"><p class="lk-approval__title">${icon("shield")} ${esc(agent.approval.title)}</p><code>${esc(agent.approval.command)}</code><p class="lk-approval__why">${esc(agent.approval.reason)}</p><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${agent.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${agent.id}">Approve once</button></div></div>`
+    ? `<div class="lk-approval" role="group" aria-label="${esc(agent.name)} needs approval"><p class="lk-approval__title">${icon("approvals")} ${esc(agent.approval.title)}</p><code>${esc(agent.approval.command)}</code><p class="lk-approval__why">${esc(agent.approval.reason)}</p><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${agent.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${agent.id}">Approve once</button></div></div>`
     : "";
   const prompt =
-    agent.prompt && agent.status === "idle"
-      ? `<form class="lk-prompt" data-form="prompt:${agent.id}"><span aria-hidden="true">${agent.provider === "claude" ? ">" : "›"}</span><input name="q" data-key="in-${agent.id}" autocomplete="off" placeholder="Ask ${esc(agent.name)} to build something…" aria-label="Prompt for ${esc(agent.name)}"/><button type="submit" class="lk-icon-btn" aria-label="Send">${icon("send")}</button></form><div class="lk-suggest">${[
+    agent.prompt && agentState(agent) === "ready"
+      ? `<form class="lk-prompt" data-form="prompt:${agent.id}"><span aria-hidden="true">${esc(promptMark(agent.provider))}</span><input name="q" data-key="in-${agent.id}" autocomplete="off" placeholder="Give this agent a task…" aria-label="Prompt for ${esc(agent.name)}"/><button type="submit" class="lk-icon-btn" aria-label="Send">${icon("send")}</button></form><div class="lk-suggest">${[
           "Add a dark mode toggle",
           "Write tests for Login",
           "Fix the failing build",
@@ -222,17 +344,18 @@ export function agentPane(state: State, agent: Agent): string {
           .map((s) => `<button type="button" class="lk-chip" data-do="prompt:${agent.id}:${esc(s)}">${esc(s)}</button>`)
           .join("")}</div>`
       : "";
+  const effort = agent.effort && agent.effort !== "Default" ? agent.effort : "";
+  const pickerOpen = state.picker?.agent === agent.id;
   return `<div class="lk-agent">
   <div class="lk-agent__head">
-    <strong class="lk-agent__title">${esc(agent.name)}</strong>
-    ${statusChip(agent)}
-    <span class="lk-tag"${hint("The provider account this agent runs on.")}>${glyph(agent.provider)}${esc(account?.name ?? "")}</span>
-    <span class="lk-tag lk-mono"${hint("The exact model and effort, fixed when you launched it.")}>${esc(agent.model === "Default" ? "Default model" : agent.model)} · ${esc(agent.effort)}</span>
-    ${usage ? `<span class="lk-tag lk-usage" data-low="${usage.left < 20}">${meter(usage.left)}${usage.left}% left</span>` : ""}
-    <span class="lk-agent__spacer"></span>
-    <span class="lk-agent__mode">Approve</span>
+    <div class="lk-agent__lead">
+      <strong class="lk-agent__title" title="${esc(agent.name)}">${esc(agent.name)}</strong>
+      <span class="lk-ident" title="${esc(`${PROVIDER_NAME[agent.provider]} · ${account?.name ?? ""} · ${modelLabel(agent)}${effort ? ` · ${effort} effort` : ""}`)}"><span class="visually-hidden">${PROVIDER_NAME[agent.provider]}</span><button type="button" class="lk-ident__acct" data-do="picker:${agent.id}" data-picker-for="${agent.id}" aria-expanded="${pickerOpen}" aria-label="${esc(account?.name ?? "Account")}. Switch ${PROVIDER_NAME[agent.provider]} account"${hint("Switch account for a new session")}>${glyph(agent.provider)}<span>${esc(account?.name ?? "Account")}</span>${icon("chevron", "lk-caret")}</button>${agent.provider === "cursor" ? "" : `<span class="lk-ident__seg">${esc(modelLabel(agent))}</span>`}${effort ? `<span class="lk-ident__seg">${esc(effort)}</span>` : ""}</span>
+      ${usage ? `<span class="lk-usage" data-low="${usage.left < 20}" title="${usage.label}: ${usage.left}% left">${meter(usage.left)}${usage.left}%</span>` : ""}
+    </div>
+    <div class="lk-agent__meta">${modeBadge(agent.mode)}${statusChip(agent)}</div>
   </div>
-  <div class="lk-term" tabindex="0" role="log" aria-label="${esc(agent.name)} terminal" data-scroll="bottom">${lines(agent.lines)}${isWorking(agent) ? `<div class="lk-ln lk-ln--cursor" data-k="dim">${agent.provider === "claude" ? "✻" : "•"} ${esc(agent.activity)}…</div>` : ""}</div>
+  <div class="lk-term" tabindex="0" role="log" aria-label="${esc(agent.name)} terminal" data-scroll="bottom">${lines(agent.lines)}${isWorking(agent) ? `<div class="lk-ln lk-ln--cursor" data-k="dim">${esc(workMark(agent.provider))} ${esc(agent.activity)}…</div>` : ""}</div>
   ${approval}${prompt}
 </div>`;
 }
@@ -324,8 +447,8 @@ function plusMenu(frameId: string): string {
   <p class="lk-label">Open here</p>
   ${item("terminal", icon("terminal"), "New PowerShell terminal", "Default shell")}
   ${item("browser", icon("globe"), "Browser")}
-  ${item("launcher:claude", glyph("claude"), "Claude Code agent", "A coding agent: the real Claude Code, checked by KalCode")}
-  ${item("launcher:codex", glyph("codex"), "Codex agent", "A coding agent: the real Codex; approvals in its own prompt")}
+  <p class="lk-label">Coding agents</p>
+  ${PROVIDERS.map((p) => item(`launcher:${p}`, glyph(p), `${PROVIDER_NAME[p]} agent`, `The real ${PROVIDER_NAME[p]}, on your account`)).join("")}
   <p class="lk-label">Widgets</p>
   ${item("widget:approvals", icon("dashboard"), "Needs your approval")}
   ${item("widget:agents", icon("dashboard"), "Active agents")}
@@ -333,25 +456,26 @@ function plusMenu(frameId: string): string {
 }
 
 function codeSurface(state: State): string {
-  const focusedFrame = state.frames.find((f) => f.id === state.focus);
-  const focusedTab = focusedFrame ? state.tabs[focusedFrame.active] : undefined;
+  const tab = focusedTab(state);
   const running = Object.values(state.tabs).filter(
-    (t) => (t.agent && isWorking(state.agents[t.agent] as Agent)) || (t.kind === "terminal" && !t.idle),
+    (t) =>
+      (t.agent && state.agents[t.agent] && isWorking(state.agents[t.agent] as Agent)) ||
+      (t.kind === "terminal" && !t.idle),
   ).length;
   const canvas = renderAdaptiveCanvas(state, frame);
   return `<div class="lk-code">
   <div class="lk-code__head">
     <span class="lk-code__ws"><strong>${WORKSPACE.name}</strong>${icon("chevron", "lk-caret")}<span class="lk-mono">${WORKSPACE.path}</span></span>
     <span class="lk-code__tools">
-      <button type="button" class="lk-btn" data-do="terminal" aria-label="New terminal"${hint("A real shell in your project folder.")}>${icon("terminal")}<span>Terminal</span></button>
-      <span class="lk-split"><button type="button" class="lk-btn" data-do="tidy" data-tour="tidy" aria-label="KalTidy: stop idle terminals"${hint("KalTidy: stop idle terminals in one click.")}>${icon("tidy")}<span>KalTidy</span></button><button type="button" class="lk-btn lk-btn--caret" data-do="menu:tidy" aria-expanded="${state.menu === "tidy"}" aria-label="More KalTidy actions">${icon("chevron")}</button>${state.menu === "tidy" ? tidyMenu() : ""}</span>
-      <span class="lk-context-control"><button type="button" class="lk-btn" data-do="menu:context" aria-expanded="${state.menu === "context"}" aria-label="Context"${hint("Open Browser, runs, services and tests beside your terminals.")}>${icon("operations")}<span>Context</span>${icon("chevron", "lk-caret")}</button>${state.menu === "context" ? contextMenu() : ""}</span>
       <button type="button" class="lk-btn lk-btn--primary" data-do="launcher" data-tour="new-agent"${hint("Choose a provider, account, model and effort: a real coding agent in its own terminal.")}>${icon("bot")}<span>New agent</span></button>
+      <button type="button" class="lk-btn" data-do="terminal" aria-label="New terminal"${hint("A real shell in your project folder.")}>${icon("terminal")}<span>Terminal</span></button>
+      <span class="lk-context-control"><button type="button" class="lk-btn" data-do="menu:context" aria-expanded="${state.menu === "context"}" aria-label="Context"${hint("Open Browser, runs, services and tests beside your terminals.")}>${icon("operations")}<span>Context</span>${icon("chevron", "lk-caret")}</button>${state.menu === "context" ? contextMenu() : ""}</span>
+      <span class="lk-split"><button type="button" class="lk-btn" data-do="tidy" data-tour="tidy" aria-label="KalTidy: stop idle terminals"${hint("KalTidy: stop idle terminals in one click.")}>${icon("tidy")}<span>Tidy</span></button><button type="button" class="lk-btn lk-btn--caret" data-do="menu:tidy" aria-expanded="${state.menu === "tidy"}" aria-label="More KalTidy actions">${icon("chevron")}</button>${state.menu === "tidy" ? tidyMenu() : ""}</span>
     </span>
   </div>
   ${renderCanvasTools(state)}
   ${canvas}
-  <div class="lk-statusbar"><span>${focusedTab ? `${tabGlyph(state, focusedTab)} ${esc(tabTitle(state, focusedTab))}` : "No pane"}</span><span>${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys"><kbd>Ctrl Alt ←↑→↓</kbd> focus <kbd>Ctrl Alt Shift H/J/K/L</kbd> move</span></div>
+  <div class="lk-statusbar"><span>${tab ? `${tabGlyph(state, tab)} ${esc(tabTitle(state, tab))}` : "No pane"}</span><span>${icon("globe")} ${DEV_URL}</span><span>${icon("branch")} ${WORKSPACE.branch} · ${WORKSPACE.changed} changed</span><span><span class="lk-dot" data-tone="working"></span>${running} running</span><span class="lk-statusbar__keys">${paneCount(state)} ${paneCount(state) === 1 ? "pane" : "panes"}</span></div>
 </div>`;
 }
 
@@ -372,64 +496,73 @@ function contextMenu(): string {
 // ── Dashboard: the Agent Fleet ──────────────────────────────────────────────────────────────
 
 function fleetCard(state: State, a: Agent): string {
+  const s = agentState(a);
+  const t = AGENT_STATE_TONE[s];
+  const asks = s === "needs_you" && !a.approval;
   const approval = a.approval
-    ? `<div class="lk-approval lk-approval--card"><p class="lk-approval__title">${icon("shield")} ${esc(a.approval.title)}</p><code>${esc(a.approval.command)}</code><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${a.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${a.id}">Approve once</button></div></div>`
+    ? `<div class="lk-approval lk-approval--card"><p class="lk-approval__title">${icon("approvals")} ${esc(a.approval.title)}</p><code>${esc(a.approval.command)}</code><div class="lk-approval__actions"><button type="button" class="lk-btn lk-btn--danger" data-do="deny:${a.id}">Deny</button><button type="button" class="lk-btn lk-btn--primary" data-do="approve:${a.id}">Approve once</button></div></div>`
     : "";
-  return `<article class="lk-card" data-key="c-${a.id}" data-tone="${statusTone(a.status)}" data-needs="${needsYou(a)}" aria-label="${esc(a.name)}">
-  <p class="lk-card__top"><span class="lk-dot" data-tone="${statusTone(a.status)}"></span><strong>${esc(accountLabel(state, a.account))}</strong><span class="lk-stage" data-tone="${statusTone(a.status)}">${fleetStage(a.status)}</span><time>${icon("clock")}${a.minutes ? `${a.minutes} min` : "<1 min"}</time></p>
+  return `<article class="lk-card" data-key="c-${a.id}" data-tone="${t}" data-needs="${s === "needs_you"}" aria-label="${esc(a.name)}">
+  <p class="lk-card__top"><span class="lk-dot" data-tone="${t}"></span><strong>${esc(accountLabel(state, a.account))}</strong><span class="lk-stage" data-tone="${t}">${AGENT_STATE_TEXT[s]}</span><time>${icon("clock")}${a.minutes ? `${a.minutes} min` : "<1 min"}</time></p>
   <h5 class="lk-card__name">${esc(a.name)}</h5>
-  <p class="lk-card__meta">${glyph(a.provider)}${PROVIDER_NAME[a.provider]} · ${accountLabel(state, a.account)} · ${WORKSPACE.name}</p>
-  <p class="lk-card__mono lk-mono"><span>${esc(a.model === "Default" ? "default" : a.model.toLowerCase())}</span><span class="lk-kbd">${esc(a.effort.toLowerCase())}</span>${icon("branch")}${esc(a.branch)}</p>
-  ${approval || `<p class="lk-card__activity">${esc(a.activity)}</p>`}
-  <p class="lk-card__foot"><span>${a.files} ${a.files === 1 ? "file" : "files"}</span><button type="button" class="lk-btn${needsYou(a) && !a.approval ? " lk-btn--primary" : ""}" data-do="agent:${a.id}">${needsYou(a) && !a.approval ? "Reply" : "Open"}${icon("forward")}</button></p>
+  <p class="lk-card__meta">${glyph(a.provider)}<span>${PROVIDER_NAME[a.provider]} · ${WORKSPACE.name}</span></p>
+  <p class="lk-card__mono lk-mono"><span>${esc(modelLabel(a).toLowerCase())}</span>${icon("branch")}<span class="lk-card__branch">${esc(a.branch)}</span></p>
+  ${approval || `<p class="lk-card__activity"${asks ? ' data-asks="true"' : ""}>${esc(a.activity)}</p>`}
+  <p class="lk-card__foot"><span>${a.files} ${a.files === 1 ? "file" : "files"}</span><button type="button" class="lk-btn${asks ? " lk-btn--primary" : ""}" data-do="agent:${a.id}">${asks ? "Reply" : "Open"}${icon("forward")}</button></p>
 </article>`;
 }
 
 function dashboard(state: State): string {
   const c = counts(state);
-  const list = agentsList(state);
-  const filters: [State["fleet"], string, number][] = [
-    ["all", "All", c.agents],
-    ["needs", "Needs you", c.needs],
-    ["working", "Working", c.working],
-    ["done", "Done", c.done],
-    ["idle", "Idle", c.idle],
-  ];
-  const pick = (f: State["fleet"]) =>
-    f === "needs"
-      ? list.filter(needsYou)
-      : f === "working"
-        ? list.filter(isWorking)
-        : f === "done"
-          ? list.filter((a) => a.status === "done")
-          : f === "idle"
-            ? list.filter((a) => a.status === "idle")
-            : list;
-  const groups: [string, string, Agent[]][] =
+  const n: Record<(typeof AGENT_FILTERS)[number], number> = {
+    all: c.agents,
+    needs_you: c.needs,
+    working: c.working,
+    waiting: c.waiting,
+    done: c.done,
+    idle: c.idle,
+    failed: c.failed,
+  };
+  const groups =
     state.fleet === "all"
-      ? [
-          ["Needs you", "waiting", pick("needs")],
-          ["Working", "working", pick("working")],
-          ["Done", "done", pick("done")],
-          ["Idle", "muted", pick("idle")],
-        ]
-      : [[filters.find((f) => f[0] === state.fleet)?.[1] ?? "", "muted", pick(state.fleet)]];
-  const seg = (n: number, tone: string) =>
-    n ? `<span class="lk-seg" data-tone="${tone}" data-n="${Math.min(n, 10)}"></span>` : "";
+      ? AGENT_FILTERS.filter((f) => f !== "all").map((f) => [f, agentsIn(state, f)] as const)
+      : ([[state.fleet, agentsIn(state, state.fleet)]] as const);
+  const tones: Record<string, string> = {
+    needs_you: "waiting",
+    working: "working",
+    waiting: "muted",
+    done: "done",
+    idle: "muted",
+    failed: "failed",
+    all: "muted",
+  };
+  const seg = (count: number, t: string) =>
+    count ? `<span class="lk-seg" data-tone="${t}" data-n="${Math.min(count, 10)}"></span>` : "";
+  const summary = [
+    `${c.agents} agents`,
+    `${c.working} working`,
+    `${c.needs} ${c.needs === 1 ? "needs" : "need"} you`,
+    c.waiting ? `${c.waiting} waiting` : "",
+    `${c.done} done`,
+    c.idle ? `${c.idle} idle` : "",
+    c.failed ? `${c.failed} failed` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return `<div class="lk-page lk-scroll" data-scroll-key="dash">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Dashboard</h3><p>${c.agents} agents · ${c.working} working · ${c.needs} ${c.needs === 1 ? "needs" : "need"} you · ${c.done} done${c.idle ? ` · ${c.idle} idle` : ""}</p></div>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Dashboard</h3><p>${summary}</p></div>
     <div class="lk-trend" aria-hidden="true"><small>Last hour</small><span class="lk-trend__bars">${[1, 1, 2, 1, 3, 2, 4, 3, 5, 6].map((h) => `<i data-h="${h}"></i>`).join("")}</span><strong>${12 + state.tick} events</strong></div></header>
   <section class="lk-board" aria-label="Agent Fleet" data-tour="fleet">
-    <div class="lk-board__top"><p class="lk-board__count"><span class="lk-eyebrow">Agent Fleet ${soon("agent-fleet")}</span><strong>${c.agents}</strong> agents</p><span class="lk-segbar" aria-hidden="true">${seg(c.needs, "waiting")}${seg(c.working, "working")}${seg(c.done, "done")}${seg(c.idle, "muted")}</span>
-      <div class="lk-filters" role="group" aria-label="Filter agents">${filters.map(([id, label, n]) => `<button type="button" class="lk-filter" data-do="fleet:${id}" aria-pressed="${state.fleet === id}">${label} <strong>${n}</strong></button>`).join("")}</div>
+    <div class="lk-board__top"><p class="lk-board__count"><span class="lk-eyebrow">Agent Fleet ${soon("agent-fleet")}</span><strong>${c.agents}</strong> agents</p><span class="lk-segbar" aria-hidden="true">${seg(c.needs, "waiting")}${seg(c.working, "working")}${seg(c.waiting, "muted")}${seg(c.done, "done")}${seg(c.idle, "muted")}${seg(c.failed, "failed")}</span>
+      <div class="lk-filters" role="group" aria-label="Filter agents">${AGENT_FILTERS.map((f) => `<button type="button" class="lk-filter" data-do="fleet:${f}" data-tone="${tones[f]}" aria-pressed="${state.fleet === f}">${f === "all" ? "" : '<span class="lk-dot"></span>'}${AGENT_FILTER_LABEL[f]} <strong>${n[f]}</strong></button>`).join("")}</div>
       <button type="button" class="lk-btn" data-do="tidy-finished">${icon("tidy")}Clean up</button>
     </div>
     ${
       groups
-        .filter(([, , agents]) => agents.length)
+        .filter(([, agents]) => agents.length)
         .map(
-          ([label, tone, agents]) =>
-            `<div class="lk-group"><p class="lk-label" data-tone="${tone}"><span class="lk-dot"></span>${label} <span>${agents.length}</span></p><div class="lk-cards">${agents.map((a) => fleetCard(state, a)).join("")}</div></div>`,
+          ([f, agents]) =>
+            `<div class="lk-group"><p class="lk-label" data-tone="${tones[f]}"><span class="lk-dot"></span>${AGENT_FILTER_LABEL[f]} <span>${agents.length}</span></p><div class="lk-cards">${agents.map((a) => fleetCard(state, a)).join("")}</div></div>`,
         )
         .join("") || `<p class="lk-empty">No agents match this filter.</p>`
     }
@@ -502,6 +635,7 @@ function contextServices(): string {
 function operations(state: State): string {
   const all = runs(state);
   const running = all.filter((r) => r.status === "Running").length;
+  const queued = all.filter((r) => r.status === "Queued").length + 2;
   const tabs: [State["opsTab"], string][] = [
     ["runs", "Runs"],
     ["queue", "Queue"],
@@ -519,7 +653,7 @@ function operations(state: State): string {
   <header class="lk-page__head"><div><h3 class="lk-h1">Operations <span class="lk-pill" data-tone="working">Scheduler active</span></h3><p>One execution record from queued intent to runtime evidence and deployed state.</p></div></header>
   <div class="lk-tiles">${[
     [running, "Running", "working"],
-    [2, "Queued", "muted"],
+    [queued, "Queued", "muted"],
     [1, "Services", "recovering"],
     [0, "Failed", "failed"],
   ]
@@ -546,7 +680,7 @@ function opsRuns(state: State, all: Run[]): string {
   const inspector = selected
     ? `<div class="lk-inspect"><p class="lk-label">Run</p><h5>${esc(selected.name)}</h5><p class="lk-inspect__state"><span class="lk-dot" data-tone="${RUN_TONE[selected.status]}"></span>${selected.status} · ${selected.duration}</p>
       <ol class="lk-timeline"><li data-done="true">Queued</li><li data-done="true">Started${agent ? ` · ${esc(agent.name)} on ${esc(accountLabel(state, agent.account))}` : ""}</li><li data-done="${selected.status === "Succeeded"}">${esc(selected.action)}</li></ol>
-      <dl class="lk-dl"><div><dt>Changed files</dt><dd>${agent ? agent.files : selected.kind === "build" ? "—" : "0"}</dd></div><div><dt>Tests</dt><dd>${selected.agent === "a2" || agent?.status === "done" ? "14 passed" : "—"}</dd></div><div><dt>Branch</dt><dd class="lk-mono">${esc(agent?.branch ?? "main")}</dd></div></dl>
+      <dl class="lk-dl"><div><dt>Changed files</dt><dd>${agent ? agent.files : selected.kind === "build" ? "—" : "0"}</dd></div><div><dt>Tests</dt><dd>${selected.agent === "a2" && selected.status === "Succeeded" ? "14 passed" : "—"}</dd></div><div><dt>Branch</dt><dd class="lk-mono">${esc(agent?.branch ?? "main")}</dd></div></dl>
       ${agent ? `<button type="button" class="lk-btn lk-btn--primary" data-do="agent:${agent.id}">${icon("terminal")}Open its terminal</button>` : selected.kind === "service" ? `<button type="button" class="lk-btn lk-btn--primary" data-do="browser">${icon("globe")}Open in Browser</button>` : ""}</div>`
     : `<div class="lk-inspect lk-inspect--empty"><p>Select a run to inspect its timeline, changed files and tests.</p></div>`;
   return `<div class="lk-ops__split"><div class="lk-runs">${list}</div>${inspector}</div>`;
@@ -561,7 +695,7 @@ function opsQueue(state: State, all: Run[]): string {
   return `<div class="lk-queue">${col(
     "Now",
     now.map((r) => card(r.name, r.agent ? `${state.agents[r.agent]?.name ?? ""} · ${r.status}` : r.status)),
-  )}${col("Next", [card("Update README screenshots", "Codex · Personal · Default"), card("Dark mode tokens", "Claude Code · Personal · Sonnet")])}${col("Later", [card("Upgrade the router", "Unassigned")])}</div>`;
+  )}${col("Next", [card("Update README screenshots", "Gemini CLI · Personal · Auto"), card("Dark mode tokens", "Claude Code · Personal · Sonnet")])}${col("Later", [card("Upgrade the router", "Unassigned")])}</div>`;
 }
 
 function opsServices(): string {
@@ -618,9 +752,9 @@ function kalvoice(state: State): string {
 
 function threads(): string {
   return `<div class="lk-page lk-scroll" data-scroll-key="th">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Threads</h3><p>Chat-style conversations with your providers, kept with your project.</p></div></header>
-  <div class="lk-explain">${icon("alert")}<div><strong>Threads are conversations. Agents are terminals.</strong><p>A coding agent is the real Claude Code or Codex running in its own terminal in Code. Threads are a separate, chat-style surface.</p><button type="button" class="lk-btn lk-btn--primary" data-do="go:code">${icon("code")}See the agents in Code</button></div></div>
-  <ul role="list" class="lk-threads"><li>${glyph("claude")}<span><strong>Plan the onboarding flow</strong><small>Claude Code · Personal · 2 hours ago</small></span></li><li>${glyph("codex")}<span><strong>Explain the auth middleware</strong><small>Codex · Personal · Yesterday</small></span></li></ul>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Threads</h3><p>Persistent units of AI work with Claude Code, Codex or Gemini CLI, kept with your project.</p></div></header>
+  <div class="lk-explain">${icon("alert")}<div><strong>Threads are conversations. Agents are terminals.</strong><p>A coding agent is the real provider CLI running in its own terminal in Code. Threads are a separate surface.</p><button type="button" class="lk-btn lk-btn--primary" data-do="go:code">${icon("code")}See the agents in Code</button></div></div>
+  <ul role="list" class="lk-threads"><li>${glyph("claude")}<span><strong>Plan the onboarding flow</strong><small>Claude Code · Personal · 2 hours ago</small></span></li><li>${glyph("codex")}<span><strong>Explain the auth middleware</strong><small>Codex · Personal · Yesterday</small></span></li><li>${glyph("gemini")}<span><strong>Summarize the changelog</strong><small>Gemini CLI · Personal · Monday</small></span></li></ul>
 </div>`;
 }
 
@@ -636,28 +770,38 @@ export function accountCard(a: Account, compact = false): string {
 
 function providers(state: State): string {
   return `<div class="lk-page lk-scroll" data-scroll-key="pv">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Providers ${soon("account-hub")}</h3><p>Claude Code and Codex, signed in with your own accounts. Add as many as you use.</p></div></header>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Providers ${soon("account-hub")}</h3><p>Claude Code, Codex, Gemini CLI and Cursor, signed in with your own accounts. Add as many as you use.</p></div></header>
   <div class="lk-tabs" role="tablist" aria-label="Providers"><button type="button" role="tab" class="lk-tabs__tab" aria-selected="false" disabled>Setup</button><button type="button" role="tab" class="lk-tabs__tab" aria-selected="true">Accounts</button><button type="button" role="tab" class="lk-tabs__tab" aria-selected="false" disabled>Health</button></div>
-  ${(["claude", "codex"] as const)
-    .map(
-      (p) =>
-        `<div class="lk-provgroup"><p class="lk-label">${glyph(p)}${PROVIDER_NAME[p]}</p><div class="lk-accts">${state.accounts
-          .filter((a) => a.provider === p)
-          .map((a) => accountCard(a))
-          .join(
-            "",
-          )}<button type="button" class="lk-acct lk-acct--add" data-do="connect">${icon("plus")}<span>Connect another account<small>Sign in from KalCode</small></span></button></div></div>`,
-    )
-    .join("")}
+  ${PROVIDERS.map(
+    (p) =>
+      `<div class="lk-provgroup"><p class="lk-label">${glyph(p)}${PROVIDER_NAME[p]}</p><div class="lk-accts">${state.accounts
+        .filter((a) => a.provider === p)
+        .map((a) => accountCard(a))
+        .join(
+          "",
+        )}<button type="button" class="lk-acct lk-acct--add" data-do="connect">${icon("plus")}<span>Connect another account<small>Sign in from KalCode</small></span></button></div></div>`,
+  ).join("")}
   <p class="lk-note">${icon("shield")} Usage appears only when reported by your provider. KalCode never pays for, resells or meters your AI usage.</p>
 </div>`;
 }
 
-function settings(cfg: RenderConfig): string {
+function settings(state: State, cfg: RenderConfig): string {
+  const seg = (options: readonly string[], current: string) =>
+    `<span class="lk-seg-ctl">${options.map((o) => `<span${o === current ? ' aria-current="true"' : ""}>${o}</span>`).join("")}</span>`;
   return `<div class="lk-page lk-scroll" data-scroll-key="st">
-  <header class="lk-page__head"><div><h3 class="lk-h1">Settings</h3><p>Appearance, KalVoice, updates and your account.</p></div></header>
+  <header class="lk-page__head"><div><h3 class="lk-h1">Settings</h3><p>Appearance, permissions, KalVoice, updates and your account.</p></div></header>
+  <p class="lk-label lk-settings__head">Appearance</p>
   <dl class="lk-settings">
-    <div><dt>Theme</dt><dd><span class="lk-seg-ctl"><span>System</span><span>Light</span><span aria-current="true">Dark</span></span></dd></div>
+    <div><dt>Theme</dt><dd>${seg(["System", "Light", "Dark"], "Dark")}</dd></div>
+    <div><dt>Contrast</dt><dd>${seg(["System", "Standard", "High"], "System")}</dd></div>
+    <div><dt>Text size</dt><dd>${seg(["Default", "Large", "Larger"], "Default")}</dd></div>
+  </dl>
+  <p class="lk-label lk-settings__head">Permissions</p>
+  <dl class="lk-settings">
+    <div><dt>New agents start in</dt><dd><span class="lk-seg-ctl">${(["bypass", "plan"] as const).map((m) => `<button type="button" data-do="mode:${m}" aria-pressed="${state.mode === m}">${MODE_LABEL[m]}</button>`).join("")}</span><small>${esc(MODE_DESCRIPTION[state.mode])}</small></dd></div>
+  </dl>
+  <p class="lk-label lk-settings__head">KalCode</p>
+  <dl class="lk-settings">
     <div><dt>KalVoice push-to-talk key</dt><dd><kbd>F8</kbd> · or another function key, Pause, Scroll Lock or Insert</dd></div>
     <div><dt>Updates</dt><dd>KalCode downloads updates by itself and applies them the next time you close and reopen it.</dd></div>
     <div><dt>Account</dt><dd>You're exploring as a guest. <a class="lk-link" href="${esc(cfg.accountHref)}">Create an account</a></dd></div>
@@ -670,19 +814,17 @@ function settings(cfg: RenderConfig): string {
 function launcherDialog(state: State): string {
   const l = state.launcher;
   if (!l) return "";
-  const groups = (["claude", "codex"] as const)
-    .map(
-      (p) =>
-        `<p class="lk-label">${glyph(p)}${PROVIDER_NAME[p]}</p>${state.accounts
-          .filter((a) => a.provider === p)
-          .map((a) => {
-            const left = a.windows[0]?.left ?? 0;
-            const on = l.account === a.id;
-            return `<button type="button" role="radio" aria-checked="${on}" class="lk-lrow" data-key="lr-${a.id}" data-do="pick:${a.id}"><span class="lk-radio" aria-hidden="true"></span><span class="lk-lrow__name"><strong>${esc(a.name)}</strong><small>${esc(a.plan)}${a.isDefault ? " · Default" : ""}</small></span>${meter(left)}<span class="lk-lrow__left">${left}% left</span><span class="lk-lrow__state" data-tone="${left < 20 ? "waiting" : "working"}"><span class="lk-dot"></span>${left < 20 ? "Low" : "Ready"}</span></button>`;
-          })
-          .join("")}`,
-    )
-    .join("");
+  const groups = PROVIDERS.map(
+    (p) =>
+      `<p class="lk-label lk-lgroup">${glyph(p)}${PROVIDER_NAME[p]}</p>${state.accounts
+        .filter((a) => a.provider === p)
+        .map((a) => {
+          const left = a.windows[0]?.left ?? 0;
+          const on = l.account === a.id;
+          return `<button type="button" role="radio" aria-checked="${on}" class="lk-lrow" data-key="lr-${a.id}" data-do="pick:${a.id}"><span class="lk-radio" aria-hidden="true"></span><span class="lk-lrow__name"><strong>${esc(a.name)}</strong><small>${esc(a.plan)}${a.isDefault ? " · Default" : ""}</small></span>${meter(left)}<span class="lk-lrow__left">${left}% left</span><span class="lk-lrow__state" data-tone="${left < 20 ? "waiting" : "working"}"><span class="lk-dot"></span>${left < 20 ? "Low" : "Ready"}</span></button>`;
+        })
+        .join("")}`,
+  ).join("");
   const chips = (kind: "model" | "effort", values: readonly string[], value: string) =>
     values
       .map(
@@ -691,78 +833,163 @@ function launcherDialog(state: State): string {
       )
       .join("");
   const n = l.count;
+  const name = PROVIDER_NAME[l.provider];
+  const selected = accountOf(state, l.account);
+  const better = accountSuggestion(state, l.account);
+  const suggestion =
+    better && selected
+      ? `<p class="lk-lowhint" role="status"><span>${esc(selected.name)} is running low. Use ${esc(better.name)} instead?</span><button type="button" class="lk-linkbtn" data-do="pick:${better.id}">Use ${esc(better.name)}</button></p>`
+      : "";
+  const efforts = EFFORTS[l.provider];
   return `<div class="lk-scrim" data-do="launcher-close"></div>
 <div class="lk-dialog" role="dialog" aria-modal="true" aria-labelledby="lk-launch-title" data-tour="launcher" data-dialog>
   <header class="lk-dialog__head"><span class="lk-dialog__icon">${icon("bot")}</span><div><h4 id="lk-launch-title">New agent ${soon("provider-terminals")}</h4><p>A real coding agent in its own terminal in <strong>${WORKSPACE.name}</strong>.</p></div><kbd>Esc</kbd></header>
   <div class="lk-dialog__body">
-    <div role="radiogroup" aria-label="Account">${groups}</div>
+    <div role="radiogroup" aria-label="Account" class="lk-lrows">${groups}</div>
+    ${suggestion}
     <div class="lk-lset">
       <p class="lk-label">Model</p><div role="radiogroup" aria-label="Model" class="lk-chips">${chips("model", MODELS[l.provider], l.model)}</div>
-      <p class="lk-label">Effort</p><div role="radiogroup" aria-label="Effort" class="lk-chips">${chips("effort", EFFORTS[l.provider], l.effort)}</div>
-      <p class="lk-label">Agents</p><div class="lk-stepper"><button type="button" class="lk-icon-btn" data-do="count:-1" aria-label="One fewer agent" ${n <= 1 ? "disabled" : ""}>−</button><output aria-live="polite">${n}</output><button type="button" class="lk-icon-btn" data-do="count:1" aria-label="One more agent" ${n >= MAX_AGENTS_PER_LAUNCH ? "disabled" : ""}>+</button><small>Each agent gets its own terminal.</small></div>
+      ${efforts.length ? `<p class="lk-label">Effort</p><div role="radiogroup" aria-label="Effort" class="lk-chips">${chips("effort", efforts, l.effort)}</div>` : ""}
+      <p class="lk-label">Agents</p><div class="lk-stepper"><button type="button" class="lk-icon-btn" data-do="count:-1" aria-label="One fewer agent" ${n <= 1 ? "disabled" : ""}>−</button><output aria-live="polite">${n}</output><button type="button" class="lk-icon-btn" data-do="count:1" aria-label="One more agent" ${n >= MAX_AGENTS_PER_LAUNCH ? "disabled" : ""}>+</button><small>Up to ${MAX_AGENTS_PER_LAUNCH} at once. Each gets its own terminal.</small></div>
+      <p class="lk-label">Other</p><div class="lk-chips"><button type="button" class="lk-chip" data-do="terminal">${icon("terminal")}Terminal</button><button type="button" class="lk-chip" data-do="browser">${icon("globe")}Live Browser</button></div>
     </div>
   </div>
-  <footer class="lk-dialog__foot"><p class="lk-label">Other</p><button type="button" class="lk-chip" data-do="terminal">${icon("terminal")}Terminal</button><button type="button" class="lk-chip" data-do="browser">${icon("globe")}Live Browser</button><span class="lk-agent__spacer"></span><button type="button" class="lk-btn lk-btn--ghost" data-do="launcher-close">Cancel</button><button type="button" class="lk-btn lk-btn--primary lk-btn--launch" data-do="launch">${glyph(l.provider)}Launch ${n === 1 ? `${PROVIDER_NAME[l.provider]} agent` : `${n} ${PROVIDER_NAME[l.provider]} agents`}</button></footer>
+  <footer class="lk-dialog__foot"><span class="lk-dialog__mode">${icon("approvals")}Starts in ${MODE_LABEL[state.mode]}</span><button type="button" class="lk-btn lk-btn--ghost" data-do="launcher-close">Cancel</button><button type="button" class="lk-btn lk-btn--primary lk-btn--launch" data-do="launch">${glyph(l.provider)}<span>Launch ${n === 1 ? `${name} agent` : `${n} ${name} agents`}</span></button></footer>
 </div>`;
 }
 
+function smartClose(state: State): string {
+  if (!state.closing) return "";
+  return `<div class="lk-scrim" data-do="close-cancel"></div>
+<div class="lk-dialog lk-dialog--alert" role="alertdialog" aria-modal="true" aria-labelledby="lk-close-title" aria-describedby="lk-close-body" data-dialog>
+  <h4 id="lk-close-title">Close active work?</h4>
+  <p id="lk-close-body">A terminal or agent may still be running. Keep it in the background, or stop it and close.</p>
+  <div class="lk-dialog__actions"><button type="button" class="lk-btn lk-btn--ghost" data-do="close-cancel">Cancel</button><button type="button" class="lk-btn" data-do="close-keep">Keep Running</button><button type="button" class="lk-btn lk-btn--danger" data-do="close-stop">Stop and Close</button></div>
+</div>`;
+}
+
+/** The terminal-header account picker (desktop PaneAccountPicker): a new session on another account. */
+function accountPicker(state: State): string {
+  const picker = state.picker;
+  const agent = picker ? state.agents[picker.agent] : undefined;
+  if (!picker || !agent) return "";
+  const choice = picker.choice ? accountOf(state, picker.choice) : undefined;
+  const rows = state.accounts
+    .filter((a) => a.provider === agent.provider)
+    .map((a) => {
+      const current = a.id === agent.account;
+      const w = a.windows[0];
+      return `<button type="button" class="lk-prow" data-do="picker-pick:${a.id}" aria-pressed="${(picker.choice ?? agent.account) === a.id}">${glyph(a.provider)}<span class="lk-prow__id"><strong>${esc(a.name)}${current ? '<span class="lk-tagsm">Current</span>' : ""}${a.isDefault ? '<span class="lk-tagsm">Default</span>' : ""}</strong><small>${PROVIDER_NAME[a.provider]} · Ready</small></span><span class="lk-prow__quota">${w ? `${meter(w.left)}<small>${w.left}% · ${esc(w.resets)}</small>` : ""}</span></button>`;
+    })
+    .join("");
+  const confirm =
+    choice && choice.id !== agent.account
+      ? `<div class="lk-picker__confirm"><p>Switching to <strong>${esc(choice.name)}</strong> starts a fresh coding session with the same workspace, working directory, model and permissions. The current session stays open.</p><div class="lk-dialog__actions"><button type="button" class="lk-btn lk-btn--ghost" data-do="picker-pick:${agent.account}">Cancel</button><button type="button" class="lk-btn lk-btn--primary" data-do="picker-start">Start with ${esc(choice.name)}</button></div></div>`
+      : "";
+  return `<div class="lk-pop lk-pop--picker" role="dialog" aria-labelledby="lk-picker-title" data-anchor='[data-picker-for="${agent.id}"]' data-keep="style data-placed" data-placed="false"><h4 id="lk-picker-title">Account &amp; usage</h4><p class="lk-pop__foot">Choose an account for your next coding session.</p><div class="lk-prows" role="group" aria-label="${PROVIDER_NAME[agent.provider]} accounts">${rows}</div>${confirm}</div>`;
+}
+
 function accountsPopover(state: State): string {
-  return `<div class="lk-pop lk-pop--accounts" role="dialog" aria-label="Accounts and usage"><p class="lk-pop__title"><strong>Accounts &amp; usage</strong><small>Your providers, at a glance</small></p><p class="lk-pop__new">New agents: Claude Code · Personal</p>${state.accounts.map((a) => accountCard(a, true)).join("")}<p class="lk-pop__foot">Usage appears only when reported by your provider.</p><button type="button" class="lk-btn" data-do="go:providers">${icon("providers")}Manage accounts</button></div>`;
+  const next = state.accounts.find((a) => a.provider === "claude" && a.isDefault);
+  return `<div class="lk-pop lk-pop--accounts" role="dialog" aria-label="Accounts and usage"><p class="lk-pop__title"><strong>Accounts &amp; usage</strong><small>Your providers, at a glance</small></p><p class="lk-pop__new">New agents: Claude Code · ${esc(next?.name ?? "Personal")}</p><div class="lk-pop__list">${state.accounts.map((a) => accountCard(a, true)).join("")}</div><p class="lk-pop__foot">Usage appears only when reported by your provider.</p><button type="button" class="lk-btn" data-do="go:providers">${icon("providers")}Manage accounts</button></div>`;
 }
 
 function envMenu(state: State): string {
   return `<div class="lk-pop lk-pop--env" role="menu" aria-label="Environment">${ENVIRONMENTS.map((e) => `<button type="button" role="menuitemradio" aria-checked="${state.environment === e}" class="lk-menu__item" data-do="env:${e}"><span class="lk-env-dot" data-env="${e}"></span><span>${e}</span></button>`).join("")}<button type="button" class="lk-menu__item" data-do="ops:environments">${icon("operations")}<span>Open Environments</span></button></div>`;
 }
 
-function modeMenu(): string {
-  return `<div class="lk-pop lk-pop--mode" role="menu" aria-label="New agents start in"><p class="lk-label">New agents start in</p>${[
-    ["Plan", "Plan first, change nothing yet"],
-    ["Approve", "Ask before edits and commands"],
-    ["Auto", "Act within your rules"],
-  ]
+function modeMenu(state: State): string {
+  return `<div class="lk-pop lk-pop--mode" role="menu" aria-label="New agents start in"><p class="lk-label">New agents start in</p>${(
+    ["bypass", "plan"] as const
+  )
     .map(
-      ([m, d]) =>
-        `<button type="button" role="menuitemradio" aria-checked="${m === "Approve"}" class="lk-menu__item" data-do="menu-close">${icon("shield")}<span>${m}<small>${d}</small></span></button>`,
+      (m) =>
+        `<button type="button" role="menuitemradio" aria-checked="${state.mode === m}" class="lk-menu__item" data-do="mode:${m}">${icon(m === "bypass" ? "shieldAlert" : "shield")}<span>${MODE_LABEL[m]}<small>${esc(MODE_DESCRIPTION[m])}</small></span></button>`,
     )
-    .join("")}<p class="lk-pop__foot">Bypass and Custom are planned.</p></div>`;
+    .join(
+      "",
+    )}<div role="separator" class="lk-sep"></div><button type="button" role="menuitem" class="lk-menu__item" data-do="go:settings">${icon("settings")}<span>Permission settings…</span></button></div>`;
 }
 
-interface Command {
+export interface Command {
   label: string;
   act: string;
   icon: LiveIcon;
+  group: string;
+  meta?: string;
 }
 
+/** The universal quick switcher: workspaces, agents, terminals, accounts, pages and commands. */
 export function paletteCommands(state: State): Command[] {
-  const base: Command[] = [
-    { label: "New agent", act: "launcher", icon: "bot" },
-    { label: "Open Live Browser", act: "browser", icon: "globe" },
-    { label: "New terminal", act: "terminal", icon: "terminal" },
-    { label: "Show what needs me", act: "needs", icon: "alert" },
-    { label: "KalTidy: stop idle terminals", act: "tidy", icon: "tidy" },
-    ...SURFACES.map((s) => ({ label: `Go to ${s.label}`, act: `go:${s.id}`, icon: s.icon as LiveIcon })),
-    { label: "Go to Settings", act: "go:settings", icon: "settings" },
-    ...agentsList(state).map((a) => ({
-      label: `Open ${a.name}`,
-      act: `agent:${a.id}`,
-      icon: "terminal" as LiveIcon,
-    })),
-  ];
   const q = state.palette.q.trim().toLowerCase();
-  return q ? base.filter((c) => c.label.toLowerCase().includes(q)) : base;
+  const entities: Command[] = [
+    {
+      label: WORKSPACE.name,
+      act: "go:code",
+      icon: "folder" as LiveIcon,
+      group: "",
+      meta: `Workspace · ${WORKSPACE.path}`,
+    },
+    ...agentsList(state).map((a) => ({
+      label: a.name,
+      act: `agent:${a.id}`,
+      icon: "bot" as LiveIcon,
+      group: "",
+      meta: `Agent · ${PROVIDER_NAME[a.provider]} · ${AGENT_STATE_TEXT[agentState(a)]}`,
+    })),
+    ...Object.values(state.tabs)
+      .filter((t) => t.kind === "terminal")
+      .map((t) => ({ label: t.title, act: `tab:${t.id}`, icon: "terminal" as LiveIcon, group: "", meta: "Terminal" })),
+    ...state.accounts.map((a) => ({
+      label: `${a.name}`,
+      act: "menu:accounts",
+      icon: "accountCog" as LiveIcon,
+      group: "",
+      meta: `Account · ${PROVIDER_NAME[a.provider]} · ${a.plan}`,
+    })),
+  ].map((c) => ({ ...c, group: q ? "Best matches" : "Recent and suggested" }));
+  const commands: Command[] = [
+    { label: "New agent…", act: "launcher", icon: "bot", group: "Agents" },
+    ...SURFACES.map((s) => ({
+      label: `Go to ${s.label}`,
+      act: `go:${s.id}`,
+      icon: s.icon as LiveIcon,
+      group: "Go to",
+    })),
+    { label: "Go to Settings", act: "go:settings", icon: "settings", group: "Go to" },
+    { label: "Open Live Browser", act: "browser", icon: "globe", group: "Code" },
+    { label: "New terminal", act: "terminal", icon: "terminal", group: "Code" },
+    { label: "Show what needs me", act: "needs", icon: "alert", group: "Code" },
+    { label: "KalTidy: stop idle terminals", act: "tidy", icon: "tidy", group: "Code" },
+  ];
+  if (!q) return [...entities.slice(0, 6), ...commands];
+  const match = (c: Command) => `${c.label} ${c.meta ?? ""}`.toLowerCase().includes(q);
+  // Commands named by the query lead, so "operations" + Enter goes to Operations.
+  const named = commands.filter((c) => c.label.toLowerCase().includes(q));
+  return [
+    ...named.map((c) => ({ ...c, group: "Best matches" })),
+    ...entities.filter(match),
+    ...commands.filter((c) => !named.includes(c) && match(c)),
+  ];
 }
 
 function palette(state: State): string {
   const list = paletteCommands(state);
   const sel = Math.min(state.palette.sel, Math.max(0, list.length - 1));
-  return `<div class="lk-scrim lk-scrim--light" data-do="menu-close"></div><div class="lk-palette" role="dialog" aria-modal="true" aria-label="Command palette" data-dialog><div class="lk-palette__input">${icon("search")}<input data-key="pal-in" data-palette autocomplete="off" role="combobox" aria-expanded="true" aria-controls="lk-pal-list" aria-activedescendant="lk-pal-${sel}" placeholder="Search or run a command" aria-label="Search or run a command" value="${esc(state.palette.q)}"/><kbd>Esc</kbd></div><ul id="lk-pal-list" role="listbox" class="lk-palette__list">${
-    list
-      .map(
-        (c, i) =>
-          `<li id="lk-pal-${i}" role="option" aria-selected="${i === sel}" data-key="p-${c.act}" data-do="${c.act}">${icon(c.icon)}<span>${esc(c.label)}</span></li>`,
-      )
-      .join("") || `<li class="lk-empty">No matching command</li>`
-  }</ul></div>`;
+  let html = "";
+  let open = "";
+  list.forEach((c, i) => {
+    if (c.group !== open) {
+      if (open) html += "</div>";
+      open = c.group;
+      html += `<div role="group" class="lk-palette__group" aria-label="${esc(c.group)}"><p class="lk-palette__head" aria-hidden="true">${esc(c.group)}</p>`;
+    }
+    html += `<div id="lk-pal-${i}" role="option" aria-selected="${i === sel}" class="lk-palette__opt" data-key="p-${esc(c.act)}-${i}" data-do="${esc(c.act)}">${icon(c.icon)}<span>${esc(c.label)}</span>${c.meta ? `<small>${esc(c.meta)}</small>` : ""}</div>`;
+  });
+  if (open) html += "</div>";
+  return `<div class="lk-scrim lk-scrim--light" data-do="menu-close"></div><div class="lk-palette" role="dialog" aria-modal="true" aria-label="Command palette" data-dialog><div class="lk-palette__input">${icon("search")}<input data-key="pal-in" data-palette autocomplete="off" role="combobox" aria-expanded="true" aria-controls="lk-pal-list" aria-activedescendant="lk-pal-${sel}" placeholder="Search anything: workspaces, agents, settings..." aria-label="Search or run a command" value="${esc(state.palette.q)}"/><kbd>Esc</kbd></div><div id="lk-pal-list" role="listbox" aria-label="Results" class="lk-palette__list">${
+    html || `<p class="lk-empty">No matches. Try a name or a setting.</p>`
+  }</div></div>`;
 }
 
 function voicePanel(state: State): string {
@@ -773,7 +1000,7 @@ function voicePanel(state: State): string {
 function toastView(state: State): string {
   const t = state.toast;
   if (!t) return "";
-  return `<div class="lk-toast" role="status" data-key="toast-${t.id}" data-tone="${t.tone}">${icon(t.tone === "done" ? "check" : "kalvoice")}<span>${esc(t.text)}</span>${t.agent ? `<button type="button" class="lk-btn" data-do="agent:${t.agent}">Open</button>` : ""}<button type="button" class="lk-icon-btn" data-do="toast-close" aria-label="Dismiss">${icon("close")}</button></div>`;
+  return `<div class="lk-toast" role="status" data-key="toast-${t.id}" data-tone="${t.tone}">${icon(t.tone === "done" ? "check" : t.tone === "waiting" ? "alert" : "sparkles")}<span>${esc(t.text)}</span><button type="button" class="lk-icon-btn lk-toast__x" data-do="toast-close" aria-label="Dismiss">${icon("close")}</button>${t.agent && state.agents[t.agent] ? `<button type="button" class="lk-toast__open" data-do="agent:${t.agent}">Open agent${icon("forward")}</button>` : ""}</div>`;
 }
 
 function nudgeView(state: State, cfg: RenderConfig): string {
@@ -782,6 +1009,12 @@ function nudgeView(state: State, cfg: RenderConfig): string {
   const href = n.cta === "account" ? cfg.accountHref : cfg.downloadHref;
   const label = n.cta === "account" ? "Create account" : n.cta === "get" ? "Get KalCode" : cfg.downloadLabel;
   return `<aside class="lk-nudge" aria-label="Try KalCode for real" data-key="nudge-${n.id}"><p><strong>${esc(n.title)}</strong>${esc(n.body)}</p><div><a class="lk-btn lk-btn--primary" href="${esc(href)}" data-cta="${n.id}">${esc(label)}</a><button type="button" class="lk-btn lk-btn--ghost" data-do="nudge-close">Keep exploring</button></div></aside>`;
+}
+
+/** One floating message at a time: an offer outranks a status toast (which stays in Notifications). */
+function floatView(state: State, cfg: RenderConfig): string {
+  const body = state.nudge ? nudgeView(state, cfg) : toastView(state);
+  return `<div class="lk-float" data-has="${Boolean(body)}">${body}</div>`;
 }
 
 function tourCard(state: State, cfg: RenderConfig): string {
@@ -813,7 +1046,7 @@ function surface(state: State, cfg: RenderConfig): string {
     case "memory":
       return renderMemory(state.memory, esc, isAvailable("unified-memory"));
     case "settings":
-      return settings(cfg);
+      return settings(state, cfg);
     default:
       return codeSurface(state);
   }
@@ -823,11 +1056,13 @@ export function renderApp(state: State, cfg: RenderConfig): string {
   const menu = state.menu;
   return `<div class="lk-app" data-surface="${state.surface}" data-mobile="${state.mobile}" data-rail="${state.railOpen}" data-touring="${state.tour !== null}">
 ${topBar(state)}
+${navBar(state)}
+${favoritesBar(state)}
 <div class="lk-body">${state.mobile ? "" : sidebar(state)}<main class="lk-main" aria-label="${esc(SURFACES.find((s) => s.id === state.surface)?.label ?? "Settings")}">${surface(state, cfg)}</main>${state.mobile ? "" : rail(state)}</div>
-${state.mobile ? tabBar(state) : ""}
-${menu === "accounts" ? accountsPopover(state) : ""}${menu === "environment" ? envMenu(state) : ""}${menu === "mode" ? modeMenu() : ""}${state.voice.open ? voicePanel(state) : ""}
-${menu === "palette" ? palette(state) : ""}${launcherDialog(state)}
-<div class="lk-float">${toastView(state)}${nudgeView(state, cfg)}</div>
+${state.mobile ? `${floatView(state, cfg)}${tabBar(state)}` : ""}
+${menu === "accounts" ? accountsPopover(state) : ""}${menu === "environment" ? envMenu(state) : ""}${menu === "mode" ? modeMenu(state) : ""}${state.voice.open ? voicePanel(state) : ""}${accountPicker(state)}
+${menu === "palette" ? palette(state) : ""}${launcherDialog(state)}${smartClose(state)}
+${state.mobile ? "" : floatView(state, cfg)}
 ${tourCard(state, cfg)}
 </div>`;
 }

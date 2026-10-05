@@ -5,7 +5,7 @@ import { useOptionalUiIntents } from "../../../runtime/uiIntents.tsx";
 import { compareThreads } from "../../../surfaces/dashboard/data/board.ts";
 import { useCodingAgents } from "../../../surfaces/dashboard/data/DashboardData.tsx";
 import { formatElapsed } from "../../../surfaces/dashboard/data/format.ts";
-import { useNow } from "../../../surfaces/dashboard/useNow.ts";
+import { useClock } from "../../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../../navigation.tsx";
 import styles from "./Widgets.module.css";
 
@@ -25,8 +25,9 @@ export function ActiveAgentsWidget() {
   const { state } = useCodingAgents();
   const intents = useOptionalUiIntents();
   const { navigate } = useNavigation();
-  const now = useNow(30_000);
   const list = useMemo(() => (state.status === "ready" ? working(state.data) : []), [state]);
+  // A tick re-renders the widget only when a run time it shows changes.
+  const now = useClock((at) => list.map((thread) => formatElapsed(at - Date.parse(thread.createdAt))).join("|"));
 
   if (state.status === "loading") {
     return (

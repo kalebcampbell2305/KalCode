@@ -357,10 +357,15 @@
   }
 }
 
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .signalDot[data-pulse]::after {
+  :root:not([data-motion="full"]) .signalDot[data-pulse]::after {
     animation: none;
   }
+}
+
+:root[data-motion="reduced"] .signalDot[data-pulse]::after {
+  animation: none;
 }
 
 .signalCount {

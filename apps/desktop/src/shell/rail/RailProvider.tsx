@@ -127,7 +127,16 @@ export function RailProvider({ children }: { children: ReactNode }) {
     try {
       const next = await client.railState();
       if (!isCurrent() || id !== lifetime.request) return;
-      setSnapshot({ owner: lifetime, epoch: lifetime.epoch, rail: next, state: "ready", error: null });
+      // Most events leave the rail as it was: keep the snapshot then, so the tree doesn't re-render.
+      setSnapshot((current) =>
+        current.owner === lifetime &&
+        current.epoch === lifetime.epoch &&
+        current.state === "ready" &&
+        current.error === null &&
+        JSON.stringify(current.rail) === JSON.stringify(next)
+          ? current
+          : { owner: lifetime, epoch: lifetime.epoch, rail: next, state: "ready", error: null },
+      );
     } catch (cause) {
       if (!isCurrent() || id !== lifetime.request) return;
       setSnapshot((current) => ({

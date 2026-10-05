@@ -1,22 +1,32 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { DISPLAY_STATUS_LABEL } from "@kalcode/protocol/display-status";
+import { AGENT_STATE_LABEL } from "@kalcode/protocol";
 import { PLAN_FEATURES } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
 import {
+  agentState,
   agentsList,
+  closeOverlays,
   counts,
   EFFORTS,
+  go,
   initialState,
   isAvailable,
   jumpToNeeds,
   launch,
+  locationOf,
+  MAX_AGENTS_PER_LAUNCH,
   MODELS,
+  navStep,
   openBrowser,
   openLauncher,
   openOperationsContext,
   openTerminal,
+  PROVIDERS,
   promptAgent,
+  recordVisit,
+  requestClose,
+  resolveClose,
   runs,
   runVoice,
   SURFACES,
@@ -32,10 +42,11 @@ describe("the live demo's sample workspace", () => {
     const state = initialState();
     expect(state.surface).toBe("code");
     expect(SURFACES[0]?.id).toBe("code");
-    const byName = Object.fromEntries(agentsList(state).map((a) => [a.name, a]));
-    expect(byName["Dashboard Redesign"]?.status).toBe("working");
-    expect(byName["Dashboard Tests"]?.status).toBe("testing");
-    expect(byName["Code Review"]?.status).toBe("done");
+    const byName = Object.fromEntries(agentsList(state).map((a) => [a.name, agentState(a)]));
+    expect(byName["Dashboard Redesign"]).toBe("working");
+    expect(byName["Dashboard Tests"]).toBe("testing");
+    expect(byName["Code Review"]).toBe("done");
+    expect(byName["README Screenshots"]).toBe("waiting");
     expect(counts(state).needs).toBe(1);
     expect(Object.values(state.tabs).some((t) => t.kind === "terminal" && t.title.includes("dev server"))).toBe(true);
   });
@@ -82,28 +93,105 @@ describe("the live demo's sample workspace", () => {
       expect(tab?.kind).toBe("agent");
       expect(state.agents[id]?.provider).toBe("codex");
     }
-    // Fresh sessions keep clean provider names until they receive a meaningful task.
-    expect(created.map((id) => state.agents[id]?.name)).toEqual(["Codex", "Codex", "Codex"]);
+    // As in the app, a fresh session is "New agent" until its first prompt names the task.
+    expect(created.map((id) => state.agents[id]?.name)).toEqual(["New agent", "New agent", "New agent"]);
     expect(state.surface).toBe("code");
   });
 
-  it("offers the desktop launcher's exact model and effort choices", () => {
-    expect(MODELS.claude).toEqual(["Default", "Opus", "Sonnet", "Haiku", "Fable"]);
-    expect(EFFORTS.claude).toContain("Extra high");
-    expect(EFFORTS.codex).toContain("Minimal");
+  it("launches up to ten agents at once, as the desktop launcher does", () => {
+    expect(MAX_AGENTS_PER_LAUNCH).toBe(10);
+    const state = initialState();
+    openLauncher(state, "claude");
+    if (state.launcher) state.launcher.count = 12;
+    expect(launch(state)).toHaveLength(10);
   });
 
-  it("shows statuses in the protocol's own words", () => {
+  it("offers every shipped provider: Claude Code, Codex, Gemini CLI and Cursor", () => {
+    expect(PROVIDERS).toEqual(["claude", "codex", "gemini", "cursor"]);
+    const state = initialState();
+    openLauncher(state, "gemini");
+    const html = renderApp(state, cfg);
+    for (const name of ["Claude Code", "Codex", "Gemini CLI", "Cursor"]) expect(html).toContain(name);
+    expect(html).not.toContain('aria-label="Effort"');
+  });
+
+  it("starts new agents in Bypass, with Plan as the read-only choice", () => {
+    const state = initialState();
+    expect(state.mode).toBe("bypass");
+    openLauncher(state, "claude");
+    const html = renderApp(state, cfg);
+    const [id] = launch(state);
+    expect(state.agents[id ?? ""]?.mode).toBe("bypass");
+    expect(html).toContain("Starts in Bypass");
+    expect(html).not.toMatch(/Approve mode|>Approve<|Bypass and Custom are planned/);
+  });
+
+  it("makes its Needs You moment a secret request, never a package-install approval", () => {
+    const state = initialState();
+    const waiting = agentsList(state).filter((a) => agentState(a) === "needs_you");
+    expect(waiting.map((a) => a.approval?.reason)).toEqual([expect.stringMatching(/credentials and secrets/)]);
+    expect(renderApp(state, cfg)).not.toMatch(/pnpm add zod|Installing packages/);
+  });
+
+  it("goes Back and Forward through visited pages and panes", () => {
+    const state = initialState();
+    go(state, "dashboard");
+    recordVisit(state);
+    go(state, "operations");
+    recordVisit(state);
+    expect(navStep(state, -1)).toBe(true);
+    expect(state.surface).toBe("dashboard");
+    expect(navStep(state, -1)).toBe(true);
+    expect(locationOf(state)).toBe("code:t-a1");
+    expect(navStep(state, 1)).toBe(true);
+    expect(state.surface).toBe("dashboard");
+  });
+
+  it("Smart Close asks before ending active work and can keep an agent running", () => {
+    const state = initialState();
+    requestClose(state, "t-a1");
+    expect(state.closing).toBe("t-a1");
+    resolveClose(state, "keep");
+    expect(state.tabs["t-a1"]).toBeUndefined();
+    expect(state.agents.a1).toBeDefined();
+    requestClose(state, "t-a3");
+    expect(state.closing).toBeNull();
+    expect(state.agents.a3).toBeUndefined();
+  });
+
+  it("closes every overlay when the page changes the demo's surface", () => {
+    const state = initialState();
+    openLauncher(state, "claude");
+    state.menu = "accounts";
+    state.voice.open = true;
+    go(state, "operations");
+    expect([state.launcher, state.menu, state.voice.open]).toEqual([null, null, false]);
+    openLauncher(state, "codex");
+    closeOverlays(state);
+    expect(state.launcher).toBeNull();
+  });
+
+  it("offers the desktop launcher's exact model and effort choices", () => {
+    expect(MODELS.claude).toEqual(["Account default", "Opus", "Sonnet", "Haiku", "Fable"]);
+    expect(MODELS.gemini).toEqual(["Auto (default)", "Pro", "Flash", "Flash-Lite"]);
+    expect(EFFORTS.claude).toContain("Extra high");
+    expect(EFFORTS.codex).toContain("Minimal");
+    expect(EFFORTS.gemini).toEqual([]);
+    expect(EFFORTS.cursor).toEqual([]);
+  });
+
+  it("shows statuses in the one agent-state model's own words", () => {
     const html = renderApp(initialState(), cfg);
-    expect(html).toContain(DISPLAY_STATUS_LABEL.working);
-    expect(html).toContain(DISPLAY_STATUS_LABEL.testing);
+    expect(html).toContain(AGENT_STATE_LABEL.working);
+    expect(html).toContain(AGENT_STATE_LABEL.testing);
+    expect(html).not.toMatch(/PERMISSION REQUIRED|WAITING FOR YOU|Needs approval/);
   });
 
   it("jumps Needs You to the blocked agent and KalTidy stops only idle terminals", () => {
     const state = initialState();
     expect(jumpToNeeds(state)).toBe(true);
     const focused = state.frames.find((f) => f.id === state.focus);
-    expect(state.tabs[focused?.active ?? ""]?.title).toBe("Login Validation");
+    expect(state.tabs[focused?.active ?? ""]?.title).toBe("Payments Webhook");
     openTerminal(state);
     const before = agentsList(state).length;
     const result = tidyIdle(state);
@@ -128,7 +216,7 @@ describe("the live demo's sample workspace", () => {
     promptAgent(state, id ?? "", "Add a dark mode toggle");
     expect(state.agents[id ?? ""]?.name).toBe("Dark Mode Toggle");
     for (let i = 0; i < 30; i++) tick(state);
-    expect(state.agents[id ?? ""]?.status).toBe("done");
+    expect(agentState(state.agents[id ?? ""] ?? ({} as never))).toBe("done");
     promptAgent(state, id ?? "", "Write tests for Login");
     expect(state.agents[id ?? ""]?.name).toBe("Dark Mode Toggle");
   });
@@ -151,9 +239,10 @@ describe("the live demo's truth", () => {
     expect((html.match(/lk-soon/g) ?? []).length).toBeLessThanOrEqual(soon);
   });
 
-  it("never shows Gemini CLI, which Stable cannot use, or any real person's data", () => {
+  it("shows Gemini CLI as the shipped provider it is, and never any real person's data", () => {
     const html = renderApp(initialState(), cfg);
-    expect(html).not.toMatch(/Gemini/);
+    expect(html).toContain("Gemini CLI");
+    expect(html).not.toMatch(/Gemini CLI unavailable|not in Stable/i);
     expect(html).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/i);
   });
 

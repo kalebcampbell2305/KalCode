@@ -1,21 +1,23 @@
 import type { ProviderAccount } from "@kalcode/protocol";
 import { ProviderGlyph } from "@kalcode/ui/components";
 import { Popover } from "radix-ui";
-import { type CSSProperties, useEffect, useId, useState } from "react";
+import { type CSSProperties, useId } from "react";
 import { formatRelative } from "../../runtime/describeEvent.ts";
 import { accountProviderName } from "../../shell/accountCommands.ts";
+import { useNow } from "../dashboard/useNow.ts";
 import styles from "./AccountUsageBadge.module.css";
 import { accountName, accountSessionState } from "./accountIdentity.ts";
 import {
   type AccountUsageState,
   isReportedPercent,
   LOW_USAGE_PERCENT,
-  limitingWindow,
+  primaryUsageLabel,
   resetsIn,
   type UsageWindow,
   usagePercent,
   usageSummary,
   useAccountUsage,
+  weeklyWindow,
 } from "./accountUsage.ts";
 import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 
@@ -27,7 +29,7 @@ export interface AccountUsageBadgeProps {
   interactive?: boolean;
 }
 
-/** Compact "64% left" usage for one provider account, from the canonical account state. */
+/** Compact "64% left" (weekly remaining) usage for one provider account, from the canonical account state. */
 export function AccountUsageBadge({ account, size = "sm", interactive = false }: AccountUsageBadgeProps) {
   const usage = useAccountUsage(account.id);
   const summary = usageSummary(usage);
@@ -58,7 +60,8 @@ export function AccountUsageBadge({ account, size = "sm", interactive = false }:
           type="button"
           {...common}
           data-interactive=""
-          aria-label={`${accountName(account)} usage: ${summary.short}. Show account details`}
+          title={usageTitle(usage)}
+          aria-label={`${accountName(account)} usage: ${primaryUsageLabel(usage) ?? summary.short}. Show account details`}
         >
           {body}
         </button>
@@ -72,8 +75,10 @@ export function AccountUsageBadge({ account, size = "sm", interactive = false }:
   );
 }
 
+/** Tooltip: which window the headline is (weekly), then every reported window, labelled. */
 function usageTitle(usage: AccountUsageState): string | undefined {
   if (usage.status !== "fresh" && usage.status !== "stale") return usage.reason ?? undefined;
+  const primary = primaryUsageLabel(usage);
   const lines = usage.windows
     .filter((w) => isReportedPercent(w.remainingPercent))
     .map((w) =>
@@ -84,6 +89,7 @@ function usageTitle(usage: AccountUsageState): string | undefined {
         .filter(Boolean)
         .join(" · "),
     );
+  if (primary) lines.unshift(primary);
   if (usage.checkedAt) lines.push(`Updated ${formatRelative(usage.checkedAt)}`);
   return lines.join("\n");
 }
@@ -92,11 +98,11 @@ function percent(window: UsageWindow): number {
   return window.remainingPercent;
 }
 
-/** A small remaining-quota bar plus "64% left": the non-interactive form used inside rows. */
+/** A small weekly-remaining bar plus "64% left": the non-interactive form used inside rows. */
 export function UsageMeter({ usage, className }: { usage: AccountUsageState; className?: string }) {
   const summary = usageSummary(usage);
-  const limiting = limitingWindow(usage);
-  const known = usage.status === "fresh" && limiting !== null;
+  const weekly = weeklyWindow(usage);
+  const known = usage.status === "fresh" && weekly !== null;
   return (
     <span
       className={[styles.meter, className].filter(Boolean).join(" ")}
@@ -106,21 +112,11 @@ export function UsageMeter({ usage, className }: { usage: AccountUsageState; cla
       title={usageTitle(usage)}
     >
       <span className={styles.track} data-empty={!known || undefined} aria-hidden="true">
-        {known ? <span className={styles.fill} style={{ "--fill": `${percent(limiting)}%` } as CSSProperties} /> : null}
+        {known ? <span className={styles.fill} style={{ "--fill": `${percent(weekly)}%` } as CSSProperties} /> : null}
       </span>
       <span className={styles.meterText}>{summary.short}</span>
     </span>
   );
-}
-
-/** Re-renders once a minute so "Resets in…" and "Updated…" stay honest while a menu is open. */
-function useMinuteClock(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
 }
 
 /** Account, identity, plan, each usage window and when it was read: the badge's popover body. */
@@ -131,7 +127,8 @@ export function AccountUsageDetails({
   account: Pick<ProviderAccount, "id" | "displayName" | "providerId">;
   usage: AccountUsageState;
 }) {
-  const now = useMinuteClock();
+  // The shared clock keeps "Resets in…" and "Updated…" honest while the popover is open.
+  const now = useNow();
   const titleId = useId();
   const sessions = useOptionalProviderAccountSessions();
   const full = sessions?.accounts?.find((a) => a.id === account.id) ?? null;

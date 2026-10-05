@@ -1,8 +1,9 @@
 import type { ThreadSummary } from "@kalcode/protocol";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { AgentCard, startedText } from "./AgentCard.tsx";
+import { Profiler } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentCard, type AgentCardProps, sameAgentCardProps, startedText } from "./AgentCard.tsx";
 
 function thread(accountLabel: string | null): ThreadSummary {
   return {
@@ -178,10 +179,55 @@ describe("AgentCard waiting states", () => {
     expect(card.textContent).not.toContain("system resources");
   });
 
-  it("a held launch offers Stop, never Pause or Archive", async () => {
+  it("a held launch offers Start Anyway and Stop, never Pause or Archive", async () => {
     mount({ ...thread(null), ...WAITING });
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Pin globally", "Stop…"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Open",
+      "Pin globally",
+      "Start Anyway",
+      "Stop…",
+    ]);
+  });
+
+  it("a held launch shows its real reason with Start Anyway on the card, which starts it", async () => {
+    const onAction = vi.fn();
+    const summary = { ...thread(null), ...WAITING };
+    mount(summary, { onAction });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("memory is critically low");
+    await userEvent.click(screen.getByRole("button", { name: "Start Research anyway" }));
+    expect(onAction).toHaveBeenCalledWith(summary, "start_anyway");
+  });
+
+  it("Start Anyway in flight shows on its own button, not the menu", () => {
+    mount({ ...thread(null), ...WAITING }, { pendingAction: "start_anyway" });
+    expect(screen.getByRole("button", { name: "Start Research anyway" }).getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("button", { name: "More actions for Research" }).getAttribute("aria-busy")).not.toBe(
+      "true",
+    );
+  });
+
+  it("a launch whose wait ran out keeps Resume on the card and offers Start Anyway in the menu", async () => {
+    const onAction = vi.fn();
+    const summary: ThreadSummary = {
+      ...thread(null),
+      status: "interrupted",
+      error: {
+        code: "resources_unavailable",
+        message: "Codex didn't start: memory stayed critically low after 90 s. Your message is saved.",
+      },
+    };
+    mount(summary, { onAction });
+    expect(screen.getByRole("button", { name: "Resume Research" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Start Anyway" }));
+    expect(onAction).toHaveBeenCalledWith(summary, "start_anyway");
+  });
+
+  it("a wait on another task never offers Start Anyway", () => {
+    mount({ ...thread(null), status: "waiting_for_dependency", currentActivity: null });
+    expect(screen.queryByRole("button", { name: "Start Research anyway" })).toBeNull();
   });
 
   it("an idle thread offers Archive, not Stop", async () => {
@@ -272,5 +318,82 @@ describe("AgentCard Fleet controls", () => {
     mount(summary, { onFocus });
     await userEvent.click(screen.getByRole("article", { name: "Research" }));
     expect(onFocus).toHaveBeenCalledWith(summary);
+  });
+});
+
+describe("AgentCard clock ticks", () => {
+  const props = (summary: ThreadSummary, now: string, extra: Partial<AgentCardProps> = {}): AgentCardProps => ({
+    thread: summary,
+    now: Date.parse(now),
+    approvals: [],
+    pendingAction: undefined,
+    onFocus: () => {},
+    onAction: () => {},
+    onDecide: async () => {},
+    onReviewApprovals: () => {},
+    ...extra,
+  });
+
+  it("skips a tick that changes none of the times the card shows", () => {
+    const t = thread(null);
+    const base = props(t, "2026-09-28T12:01:05Z");
+    const same = { ...base, now: Date.parse("2026-09-28T12:01:25Z") };
+    expect(sameAgentCardProps(base, same)).toBe(true);
+  });
+
+  it("re-renders when the elapsed or last-activity text changes", () => {
+    const t = thread(null);
+    const base = props(t, "2026-09-28T12:01:40Z");
+    expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T12:02:10Z") })).toBe(false);
+  });
+
+  it("re-renders when any other prop changes", () => {
+    const t = thread(null);
+    const base = props(t, "2026-09-28T12:01:10Z");
+    expect(sameAgentCardProps(base, { ...base, thread: { ...t, status: "active" } })).toBe(false);
+    expect(sameAgentCardProps(base, { ...base, expanded: true })).toBe(false);
+    const { expanded: _, ...withoutExpanded } = { ...base, expanded: false };
+    expect(sameAgentCardProps({ ...base, expanded: false }, withoutExpanded)).toBe(false);
+  });
+
+  it("updates the archived time when its relative text changes", () => {
+    const t = { ...thread(null), archivedAt: "2026-09-28T12:00:00Z" };
+    const base = props(t, "2026-09-28T13:10:05Z", { archived: true });
+    expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T13:10:20Z") })).toBe(true);
+    expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T14:40:00Z") })).toBe(false);
+  });
+});
+
+describe("AgentCard on the shared clock", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("without a given time, re-renders on a tick only when a time it shows changes", () => {
+    vi.useFakeTimers();
+    // 12:00:40: started 40 s ago ("Started just now", "<1 min").
+    vi.setSystemTime(Date.parse("2026-09-28T12:00:40Z"));
+    const t = { ...thread(null), status: "active" as const };
+    const onRender = vi.fn();
+    render(
+      <Profiler id="card" onRender={onRender}>
+        <AgentCard
+          thread={t}
+          approvals={[]}
+          pendingAction={undefined}
+          onFocus={vi.fn()}
+          onAction={vi.fn()}
+          onDecide={vi.fn()}
+          onReviewApprovals={vi.fn()}
+        />
+      </Profiler>,
+    );
+    onRender.mockClear();
+    act(() => vi.advanceTimersByTime(20_000)); // 12:01:00: one minute, the texts change
+    expect(onRender).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("article", { name: "Research" }).textContent).toContain("1 min");
+    onRender.mockClear();
+    act(() => vi.advanceTimersByTime(30_000)); // 12:01:30: still one minute
+    expect(onRender).not.toHaveBeenCalled();
   });
 });

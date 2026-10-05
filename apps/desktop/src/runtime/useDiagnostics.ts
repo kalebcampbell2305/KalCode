@@ -2,12 +2,16 @@ import type { Diagnostics } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useEvents, useRuntime } from "./RuntimeProvider.tsx";
+import { useThrottledValue } from "./useThrottledValue.ts";
 
-/** Diagnostics snapshot that refreshes whenever a new event is recorded. */
+/**
+ * Diagnostics snapshot that refreshes when new events are recorded (every event moves the event
+ * count it shows). A burst of events becomes one or two reads, not one read per event.
+ */
 export function useDiagnostics() {
   const { client } = useRuntime();
   const { events } = useEvents();
-  const latestSeq = events[0]?.seq ?? 0;
+  const latestSeq = useThrottledValue(events[0]?.seq ?? 0);
   const scope = useMemo(() => ({ client, mounted: false }), [client]);
   const live = useRef(scope);
   live.current = scope;

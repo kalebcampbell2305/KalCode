@@ -1,22 +1,24 @@
 /** Object actions for the temporary sample, using the same Code/agent distinction as the app. */
-import { PLAN_FEATURES } from "@kalcode/protocol/plans";
 import { canvasAction, canvasState } from "../../lib/live/canvas";
 import {
-  closeTab,
   focusTab,
   frameOfTab,
+  isAvailable,
+  isSaved,
   isWorking,
-  launch,
+  newLikeThis,
   openBrowser,
   openLauncher,
   openTerminal,
+  requestClose,
   type State,
   tabOfAgent,
   toast,
+  toggleFavorite,
 } from "../../lib/live/model";
 
 export type DemoContextTarget = { kind: "workspace" } | { kind: "tab" | "output"; id: string };
-type Action = "launcher" | "browser" | "duplicate" | "focus" | "stop" | "close" | "copy";
+type Action = "launcher" | "browser" | "duplicate" | "focus" | "favorite" | "pin" | "stop" | "close" | "copy";
 interface Item {
   action: Action;
   label: string;
@@ -35,10 +37,13 @@ export function demoContextItems(state: State, target: DemoContextTarget): Item[
   const agent = tab.agent ? state.agents[tab.agent] : undefined;
   if (target.kind === "output")
     return (agent?.lines ?? tab.lines ?? []).length ? [{ action: "copy", label: "Copy relevant context" }] : [];
+  // The app's words (apps/desktop CodeCanvas): "New like this" starts a fresh session like this one.
   const items: Item[] = [
     { action: "browser", label: "Open Browser beside" },
-    { action: "duplicate", label: "Duplicate" },
+    { action: "duplicate", label: "New like this" },
     { action: "focus", label: "Focus" },
+    { action: "favorite", label: isSaved(state, "favorite", tab.id) ? "Remove Favorite" : "Add Favorite" },
+    { action: "pin", label: isSaved(state, "pin", tab.id) ? "Unpin globally" : "Pin globally" },
   ];
   if (agent ? isWorking(agent) || agent.approval !== null : !tab.idle)
     items.push({ action: "stop", label: "Stop", danger: true });
@@ -77,31 +82,36 @@ export function applyDemoContextAction(state: State, target: DemoContextTarget, 
     }
   } else if (tab && action === "focus") focusTab(state, tab.id);
   else if (tab && action === "duplicate") {
-    if (agent) {
-      openLauncher(state, agent.provider);
-      state.launcher = {
-        provider: agent.provider,
-        account: agent.account,
-        model: agent.model,
-        effort: agent.effort,
-        count: 1,
-      };
-      launch(state);
-    } else openTerminal(state);
-    toast(state, "Opened a fresh coding session. Existing work stays in its original pane.");
+    if (agent) newLikeThis(state, agent.id);
+    else openTerminal(state);
+    toast(state, "Opened a fresh session like this one. Existing work stays in its original pane.");
+  } else if (tab && (action === "favorite" || action === "pin")) {
+    const scope = action === "pin" ? "pin" : "favorite";
+    const saved = isSaved(state, scope, tab.id);
+    toggleFavorite(state, tab.id, scope);
+    toast(
+      state,
+      saved
+        ? `${scope === "pin" ? "Unpinned" : "Removed from favorites"}.`
+        : scope === "pin"
+          ? "Pinned for every workspace."
+          : "Added to this workspace's favorites.",
+      "done",
+    );
   } else if (tab && action === "stop") {
     if (agent) {
-      agent.status = "idle";
+      agent.status = "interrupted";
       agent.activity = "Stopped";
       agent.script = [];
+      agent.cursor = 0;
       agent.approval = null;
-      agent.prompt = true;
+      agent.prompt = false;
     } else {
       tab.idle = true;
       tab.lines = [...(tab.lines ?? []), { k: "dim", t: "Stopped the sample command. Shell ready." }];
     }
     toast(state, `Stopped ${tab.title}.`);
-  } else if (tab && action === "close") closeTab(state, tab.id);
+  } else if (tab && action === "close") requestClose(state, tab.id);
   else if (tab && action === "copy")
     return (agent?.lines ?? tab.lines ?? [])
       .slice(-40)
@@ -162,8 +172,8 @@ export function mountContextMenus(host: HTMLElement, getState: () => State, rend
     menu.setAttribute("aria-label", title);
     const heading = document.createElement("p");
     heading.className = "lk-object-menu__title";
-    const available = PLAN_FEATURES.some((feature) => feature.id === "context-menus" && feature.status === "available");
-    heading.textContent = `${title}${available ? "" : " · Coming soon"}`;
+    // Object context menus shipped with the navigation system (plans.ts "quick-switcher", 0.1.9+1565).
+    heading.textContent = `${title}${isAvailable("quick-switcher") ? "" : " · Coming soon"}`;
     menu.append(heading);
     let danger = false;
     for (const item of items) {

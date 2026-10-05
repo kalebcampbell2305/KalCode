@@ -1,12 +1,19 @@
+import type { Diagnostics } from "@kalcode/protocol";
 import { Button, ErrorState, KeyValueList, Skeleton, StatusIndicator } from "@kalcode/ui/components";
-import { type ReactNode, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { formatVersion } from "../../../platform/version.ts";
 import { formatDuration, formatRelative } from "../../../runtime/describeEvent.ts";
 import { useDiagnostics } from "../../../runtime/useDiagnostics.ts";
+import { useClock } from "../../../surfaces/dashboard/useNow.ts";
 import type { ProvidersSummary } from "../../../surfaces/providers/providerLabels.ts";
 import { useProvidersSummary } from "../../../surfaces/providers/useProvidersSummary.ts";
 import { useDiagnosticsActions } from "../../../surfaces/settings/useDiagnosticsActions.ts";
 import styles from "./RuntimeHealthWidget.module.css";
+
+/** How long the core has run: the reported uptime, carried forward by the clock between reads. */
+function uptimeAt(data: Diagnostics, now: number): number {
+  return Math.max(data.uptimeMs, now - new Date(data.startedAt).getTime());
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -46,12 +53,12 @@ export function RuntimeHealthWidget() {
   const { data, error, refresh } = useDiagnostics();
   const providers = useProvidersSummary();
   const { checkSecureStore, checking } = useDiagnosticsActions();
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
+  // The shared clock; a tick re-renders the widget only when its uptime or check time reads differently.
+  const now = useClock((at) =>
+    data
+      ? `${formatDuration(uptimeAt(data, at))}|${data.secureStore.lastCheckedAt ? formatRelative(data.secureStore.lastCheckedAt, at) : ""}`
+      : null,
+  );
 
   if (error && !data) {
     return (
@@ -74,7 +81,7 @@ export function RuntimeHealthWidget() {
     );
   }
 
-  const uptime = Math.max(data.uptimeMs, now - new Date(data.startedAt).getTime());
+  const uptime = uptimeAt(data, now);
   const store = data.secureStore;
   const db = data.database;
 

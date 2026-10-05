@@ -3,7 +3,7 @@ import { Button, Skeleton } from "@kalcode/ui/components";
 import { ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { formatAbsolute, formatRelative } from "../../../runtime/describeEvent.ts";
-import { useNow } from "../../../surfaces/dashboard/useNow.ts";
+import { useClock } from "../../../surfaces/dashboard/useNow.ts";
 import { DECISION_LABELS } from "../../../surfaces/permissions/labels.ts";
 import { usePermissions } from "../../../surfaces/permissions/PermissionsProvider.tsx";
 import styles from "./Widgets.module.css";
@@ -22,7 +22,8 @@ export function usePendingApprovalCount(): number | null {
  */
 export function ApprovalsWidget() {
   const { pending, pendingState, pendingError, decide, setPanelOpen } = usePermissions();
-  const now = useNow(30_000);
+  // A tick re-renders the list only when a time it shows changes.
+  const now = useClock((at) => pending.map((request) => formatRelative(request.createdAt, at)).join("|"));
   if (pendingState === "loading" && pending.length === 0) {
     return (
       <div role="status" aria-busy="true">

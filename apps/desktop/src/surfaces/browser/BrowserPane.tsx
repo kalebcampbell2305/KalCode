@@ -61,7 +61,13 @@ import { type LiveBrowserServices, useLiveBrowserServices } from "./useLiveBrows
 const DEFAULT_URL = "http://localhost:3000/";
 const ATTACH_RETRY_DELAYS_MS = [20, 40, 80, 160, 320, 640, 760] as const;
 const RETRYABLE_ATTACH_CODES = new Set(["browser_closing", "browser_starting", "browser_closed_during_start"]);
+/** Native status backstop: native announces navigation, loads, titles and pop-ups as events, so
+ *  an unchanged pane is re-read less and less often (in-page history moves have no event). */
+const INFO_MS = 750;
+const INFO_MAX_MS = 6_000;
+/** Page errors and picks are read from the page helper; quieter while nothing changes. */
 const INSPECT_MS = 2_000;
+const INSPECT_MAX_MS = 6_000;
 const PICKING_INSPECT_MS = 350;
 const NOTICE_MS = 6_000;
 
@@ -231,9 +237,12 @@ export function BrowserPane({
   }, []);
 
   const rememberedFor = useRef<string | null>(null);
+  // The last state shown, so a status read that changed nothing renders nothing.
+  const shownState = useRef("");
   const acceptState = useCallback(
     (next: BrowserState) => {
       if (!alive.current) return;
+      shownState.current = JSON.stringify(next);
       setState(next);
       if (!addressEditing.current) setAddress(next.url);
       onUrlChange(next.url);
@@ -375,42 +384,109 @@ export function BrowserPane({
   }, [bridge, content.browserId, viewport]);
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     void bridge
       .subscribeFocus((event) => {
         if (event.browserId === content.browserId && browserVisible) onRequestFocus();
       })
       .then((dispose) => {
-        unlisten = dispose;
+        // Unmounted while subscribing: release the listener now instead of leaking it.
+        if (disposed) dispose();
+        else unlisten = dispose;
       })
       .catch(() => undefined);
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [bridge, browserVisible, content.browserId, onRequestFocus]);
 
-  useEffect(() => {
-    if (!browserVisible) return;
-    const timer = window.setInterval(() => {
-      if (!attached.current) return;
-      void bridge
-        .info(content.browserId)
-        .then(acceptState)
-        .catch(() => {
-          setError("Browser status is temporarily unavailable.");
-        });
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [acceptState, bridge, browserVisible, content.browserId]);
-
-  // Page errors and picks come from the page helper. Faster while the person is picking.
+  // Status: read at once when native says this pane moved; otherwise poll, backing off while
+  // nothing changes and staying quick while a page loads.
   useEffect(() => {
     if (!browserVisible) return;
     let disposed = false;
+    let timer: number | undefined;
+    let delay = INFO_MS;
+    let reading = false;
+    // Native announced a move while a read was in flight: that read may predate it.
+    let movedWhileReading = false;
+    const schedule = (wait: number) => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = disposed ? undefined : window.setTimeout(read, wait);
+    };
     const read = () => {
-      if (!attached.current) return;
+      timer = undefined;
+      if (disposed) return;
+      if (!attached.current || reading) {
+        schedule(INFO_MS);
+        return;
+      }
+      reading = true;
+      bridge
+        .info(content.browserId)
+        .then((next) => {
+          if (disposed) return;
+          const changed = JSON.stringify(next) !== shownState.current;
+          if (changed) acceptState(next);
+          delay = changed || next.loading ? INFO_MS : Math.min(delay * 2, INFO_MAX_MS);
+        })
+        .catch(() => {
+          if (!disposed) setError("Browser status is temporarily unavailable.");
+        })
+        .finally(() => {
+          reading = false;
+          schedule(movedWhileReading ? 0 : delay);
+          movedWhileReading = false;
+        });
+    };
+    let unlisten: (() => void) | undefined;
+    void bridge
+      .subscribeState((event) => {
+        if (event.browserId !== content.browserId || disposed) return;
+        delay = INFO_MS;
+        if (reading) movedWhileReading = true;
+        else schedule(0);
+      })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => undefined);
+    schedule(INFO_MS);
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      unlisten?.();
+    };
+  }, [acceptState, bridge, browserVisible, content.browserId]);
+
+  // Page errors and picks come from the page helper. Faster while the person is picking, slower
+  // while nothing changes; a page that moves (address, title or load) is read quickly again.
+  const pageState = state ? `${state.url} ${state.title ?? ""} ${state.loading}` : "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `pageState` restarts the quick cadence.
+  useEffect(() => {
+    if (!browserVisible) return;
+    let disposed = false;
+    let timer: number | undefined;
+    let delay = picking ? PICKING_INSPECT_MS : INSPECT_MS;
+    let lastSeen: string | null = null;
+    const schedule = () => {
+      if (!disposed) timer = window.setTimeout(read, delay);
+    };
+    const read = () => {
+      if (!attached.current) {
+        schedule();
+        return;
+      }
       void bridge
         .inspect(content.browserId)
         .then((inspection) => {
           if (disposed || !alive.current || !inspection.available) return;
+          const seen = JSON.stringify([inspection.errorCount, inspection.errors, inspection.picking]);
+          if (!picking) delay = seen === lastSeen ? Math.min(delay * 2, INSPECT_MAX_MS) : INSPECT_MS;
+          lastSeen = seen;
           setErrors((previous) =>
             previous.count === inspection.errorCount && previous.list.join("\n") === inspection.errors.join("\n")
               ? previous
@@ -427,15 +503,15 @@ export function BrowserPane({
             showNotice(null);
           }
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(schedule);
     };
     read();
-    const timer = window.setInterval(read, picking ? PICKING_INSPECT_MS : INSPECT_MS);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [bridge, browserVisible, content.browserId, picking, showNotice]);
+  }, [bridge, browserVisible, content.browserId, picking, showNotice, pageState]);
 
   // A new page starts with no errors of its own.
   const pageKey = state?.url ?? "";

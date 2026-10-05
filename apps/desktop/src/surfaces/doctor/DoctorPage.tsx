@@ -20,6 +20,10 @@ export interface DoctorPageProps {
 
 type BusyAction = "run" | "cancel" | "fix" | "ignore" | "revert";
 
+/** A running check list is re-read this often, backing off to the maximum while nothing changes. */
+const RUN_POLL_MS = 500;
+const RUN_POLL_MAX_MS = 2_000;
+
 export function DoctorPage({ api, workspaceId }: DoctorPageProps) {
   const [snapshot, setSnapshot] = useState<DoctorRun | null>(null);
   const [preview, setPreview] = useState<FixPreview | null>(null);
@@ -42,13 +46,43 @@ export function DoctorPage({ api, workspaceId }: DoctorPageProps) {
     void refresh().catch(() => setError("Environment Doctor status could not be loaded."));
   }, [refresh]);
 
+  // During a run only its status moves: poll just the run, slower while nothing changes (and while
+  // the window is hidden), and re-read the fix log and ignored list once when it ends.
+  const runningId = snapshot?.status === "running" ? snapshot.id : null;
   useEffect(() => {
-    if (snapshot?.status !== "running") return;
-    const timer = window.setInterval(() => {
-      void refresh().catch(() => setError("The current diagnostic status could not be refreshed."));
-    }, 250);
-    return () => window.clearInterval(timer);
-  }, [refresh, snapshot?.status]);
+    if (!runningId) return;
+    let disposed = false;
+    let timer: number | undefined;
+    let delay = RUN_POLL_MS;
+    let lastSeen = "";
+    const poll = async () => {
+      try {
+        const latest = await api.last();
+        if (disposed) return;
+        if (latest?.status !== "running") {
+          await refresh();
+          return;
+        }
+        const seen = JSON.stringify(latest);
+        if (seen === lastSeen) delay = Math.min(delay * 2, RUN_POLL_MAX_MS);
+        else {
+          delay = RUN_POLL_MS;
+          lastSeen = seen;
+          setSnapshot(latest);
+        }
+      } catch {
+        if (disposed) return;
+        setError("The current diagnostic status could not be refreshed.");
+      }
+      const wait = document.visibilityState === "hidden" ? RUN_POLL_MAX_MS : delay;
+      timer = window.setTimeout(() => void poll(), wait);
+    };
+    timer = window.setTimeout(() => void poll(), RUN_POLL_MS);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [api, refresh, runningId]);
 
   const groups = useMemo(() => (snapshot ? checksByArea(snapshot) : []), [snapshot]);
   const findings = useMemo(() => (snapshot ? visibleFindings(snapshot, false) : []), [snapshot]);

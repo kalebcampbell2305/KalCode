@@ -9,7 +9,15 @@
 //! that profile's own encrypted store.
 //!
 //! Sign-in is narrower: it only lets Gemini authenticate and exit, so it runs from a neutral
-//! directory with a read-only floor and no MCP servers or extensions.
+//! directory with a read-only floor and no MCP servers or extensions. Administrator system
+//! settings apply to it exactly as to a native `gemini` sign-in (an enforced auth type included).
+//!
+//! Neither launch redirects Gemini's system settings (`GEMINI_CLI_SYSTEM_SETTINGS_PATH`,
+//! `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`): Gemini CLI 0.61.0 loads those files only when they and
+//! their directory are owned by Administrators/SYSTEM (root elsewhere) and skips any other file
+//! with a "Security Warning: Skipping system settings file ..." line on every start. A per-user
+//! managed profile is never administrator-owned, so a redirect into it enforces nothing; it only
+//! hides the administrator's real system settings behind that warning.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -26,6 +34,8 @@ use crate::managed::{ManagedProfiles, ProfileLease, plain_path};
 const UNSAFE_MANAGED_PATH: &str =
     "Gemini's managed launch files are not ordinary files inside the managed profile";
 const UNEXPECTED_NEUTRAL_POLICY: &str = "Gemini's managed policy directory contains an unexpected policy; repair the provider profile before launching";
+
+const RETIRED_SYSTEM_SETTINGS: [&str; 2] = ["system-settings.json", "system-defaults.json"];
 
 const PLAN_CORE_TOOLS: &[&str] = &["list_directory", "read_file", "grep_search", "glob"];
 const PLAN_AUTHORITY_TOOLS: &[&str] = &[
@@ -115,9 +125,9 @@ impl ManagedGeminiLaunch {
 
 /// Gemini CLI 0.61.0's documented environment selector for its "Sign in with Google" auth type.
 /// Gemini consults it only when no auth type is saved in the profile's own settings, so an
-/// explicit provider-side choice still wins. KalCode's system settings files cannot carry this
-/// default: Gemini skips system settings whose directory is not administrator/root owned, which
-/// a per-user managed profile never is.
+/// explicit provider-side choice still wins. A system settings file cannot carry this default:
+/// Gemini skips system settings whose directory is not administrator/root owned, which a per-user
+/// managed profile never is (see the module docs).
 pub const DEFAULT_AUTH_ENV: &str = "GOOGLE_GENAI_USE_GCA";
 
 /// Selects Gemini CLI 0.61.0's encrypted, per-profile credential storage for every managed process
@@ -191,13 +201,10 @@ impl ManagedGeminiSignIn {
         let neutral_policy_dir = ensure_child_directory(&gemini_dir, "policies")?;
         let policy_dir = ensure_child_directory(&root, "managed-policy")?;
         let admin_policy_dir = ensure_child_directory(&root, "managed-admin-policy")?;
-        let system_settings_path = root.join("system-settings.json");
-        let system_defaults_path = root.join("system-defaults.json");
         require_empty_directory(&neutral_policy_dir)?;
         require_empty_directory(&policy_dir)?;
         require_empty_directory(&admin_policy_dir)?;
-        write_controlled_file(&system_settings_path, b"{}\n")?;
-        write_controlled_file(&system_defaults_path, b"{}\n")?;
+        remove_retired_system_settings(&root);
         write_controlled_file(
             &gemini_dir.join("settings.json"),
             &floor_settings(PermissionMode::Plan)?,
@@ -205,16 +212,6 @@ impl ManagedGeminiSignIn {
 
         let mut environment = profiles.launch_env(ProviderId::GEMINI_CLI, account_id, source)?;
         insert_env(&mut environment, "GEMINI_CLI_TRUST_WORKSPACE", "true");
-        insert_env(
-            &mut environment,
-            "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-            plain_path(&system_settings_path),
-        );
-        insert_env(
-            &mut environment,
-            "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
-            plain_path(&system_defaults_path),
-        );
         select_credential_storage(&mut environment);
         insert_env(&mut environment, DEFAULT_AUTH_ENV, "true");
         // The browser flow is the only sign-in this session may use: a suppressed browser would
@@ -241,6 +238,20 @@ impl ManagedGeminiSignIn {
 
     pub fn args(&self) -> &[OsString] {
         &self.args
+    }
+}
+
+/// Earlier builds wrote `{}` system settings files into the sign-in directory and pointed Gemini at
+/// them. Nothing reads them any more; remove KalCode's own leftovers (ordinary files only, never a
+/// link) so the profile keeps no inert files that look like enforced policy.
+fn remove_retired_system_settings(sign_in_root: &Path) {
+    for name in RETIRED_SYSTEM_SETTINGS {
+        let path = sign_in_root.join(name);
+        if std::fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_file() && !is_link_or_reparse(&metadata))
+        {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
@@ -704,6 +715,7 @@ mod tests {
             .profiles
             .sign_in_dir("gemini-cli", &fixture.account_id)
             .expect("sign-in dir");
+        assert_no_system_settings_redirect(&sign_in, &sign_in_root);
         assert!(sign_in.cwd().starts_with(&sign_in_root));
         assert!(!sign_in.cwd().starts_with(&fixture.workspace));
         let settings: serde_json::Value = serde_json::from_slice(
@@ -736,6 +748,84 @@ mod tests {
         for expected in ["--skip-trust", "--allowed-mcp-server-names", "--extensions"] {
             assert!(args.iter().any(|arg| arg == expected), "{args:?}");
         }
+    }
+
+    /// Gemini CLI 0.61.0 skips a system settings file that is not administrator-owned and prints a
+    /// "Security Warning" on every start, so the sign-in must neither redirect Gemini's system
+    /// settings into the per-user profile nor write files there that look like enforced policy.
+    fn assert_no_system_settings_redirect(sign_in: &ManagedGeminiSignIn, sign_in_root: &Path) {
+        for redirect in [
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+            "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+        ] {
+            assert!(sign_in_env(sign_in, redirect).is_none(), "{redirect}");
+        }
+        for retired in RETIRED_SYSTEM_SETTINGS {
+            assert!(!sign_in_root.join(retired).exists(), "{retired}");
+        }
+    }
+
+    #[test]
+    fn sign_in_removes_system_settings_files_left_by_earlier_builds() {
+        let fixture = Fixture::new();
+        let sign_in_root = fixture
+            .profiles
+            .sign_in_dir("gemini-cli", &fixture.account_id)
+            .expect("sign-in dir");
+        std::fs::create_dir_all(&sign_in_root).expect("sign-in root");
+        for retired in RETIRED_SYSTEM_SETTINGS {
+            std::fs::write(sign_in_root.join(retired), b"{}\n").expect("earlier build's file");
+        }
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("gemini-cli", &fixture.account_id)
+            .expect("exclusive lease");
+        let sign_in = ManagedGeminiSignIn::prepare(
+            &fixture.profiles,
+            &fixture.source,
+            &fixture.account_id,
+            &lease,
+        )
+        .expect("sign-in launch");
+        assert_no_system_settings_redirect(&sign_in, &sign_in_root);
+    }
+
+    #[test]
+    fn sign_in_keeps_a_system_settings_path_the_person_chose() {
+        // Native parity: a person who points Gemini at their own system settings in their
+        // environment gets the same behavior as in a native terminal; KalCode adds no redirect.
+        let mut fixture = Fixture::new();
+        let chosen = fixture
+            .workspace
+            .join("chosen-system-settings.json")
+            .into_os_string();
+        fixture
+            .source
+            .vars
+            .push(("GEMINI_CLI_SYSTEM_SETTINGS_PATH".into(), chosen.clone()));
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("gemini-cli", &fixture.account_id)
+            .expect("exclusive lease");
+        let sign_in = ManagedGeminiSignIn::prepare(
+            &fixture.profiles,
+            &fixture.source,
+            &fixture.account_id,
+            &lease,
+        )
+        .expect("sign-in launch");
+        assert_eq!(
+            sign_in_env(&sign_in, "GEMINI_CLI_SYSTEM_SETTINGS_PATH"),
+            Some(chosen.as_os_str())
+        );
+        assert!(sign_in_env(&sign_in, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH").is_none());
+        drop(lease);
+
+        let launch = fixture.prepare(PermissionMode::Auto).expect("launch");
+        assert_eq!(
+            env_value(&launch, "GEMINI_CLI_SYSTEM_SETTINGS_PATH"),
+            Some(chosen.as_os_str())
+        );
     }
 
     #[test]

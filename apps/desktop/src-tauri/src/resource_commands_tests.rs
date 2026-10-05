@@ -17,7 +17,9 @@ use kalcode_resources::{
     ResourceSnapshot, SamplerStats, Signal, admission_max_age,
 };
 
-use super::provider::{ProviderAdmission, ProviderAdmissionPermit, ResourceAdmissionProvider};
+use super::provider::{
+    GovernorAdmission, ProviderAdmission, ProviderAdmissionPermit, ResourceAdmissionProvider,
+};
 use super::{
     ActivityTracker, AgentLaunch, LocalWorkloadEstimate, REPORT_HISTORY_POINTS, ReservationBudget,
     ResourceFreshnessState, ResourceGovernorState, Runtime, freshness, projected_admission,
@@ -1980,4 +1982,236 @@ fn critically_low_memory_holds_with_the_real_reason_and_start_anyway_starts_it()
     ));
     drop(session);
     governor.shutdown();
+}
+
+/// The real governor's admission on one machine that a build pins later: until `pin_cpu`, a
+/// quiet moment (12 % CPU); after it, every core busy (98 % CPU). Two real governors, so neither
+/// waits for its smoothed CPU reading to climb.
+struct MachineAdmission {
+    quiet: GovernorAdmission,
+    busy: GovernorAdmission,
+    pinned: AtomicBool,
+}
+
+impl MachineAdmission {
+    fn new(quiet: &Arc<ResourceGovernorState>, busy: &Arc<ResourceGovernorState>) -> Arc<Self> {
+        Arc::new(Self {
+            quiet: GovernorAdmission::new(Arc::clone(quiet)),
+            busy: GovernorAdmission::new(Arc::clone(busy)),
+            pinned: AtomicBool::new(false),
+        })
+    }
+
+    fn pin_cpu(&self) {
+        self.pinned.store(true, Ordering::SeqCst);
+    }
+
+    fn now(&self) -> &GovernorAdmission {
+        if self.pinned.load(Ordering::SeqCst) {
+            &self.busy
+        } else {
+            &self.quiet
+        }
+    }
+}
+
+impl ProviderAdmission for MachineAdmission {
+    fn reserve(
+        &self,
+        provider: ProviderId,
+        launch: &AgentLaunch,
+    ) -> Result<Box<dyn ProviderAdmissionPermit>, ProviderError> {
+        self.now().reserve(provider, launch)
+    }
+
+    fn hold_timing(&self) -> (Duration, Duration) {
+        self.now().hold_timing()
+    }
+}
+
+/// A provider adapter of any kind behind the admission wrapper, on `machine`.
+fn on_machine(machine: &Arc<MachineAdmission>, provider: &'static str) -> Arc<dyn AgentProvider> {
+    let inner: Arc<dyn AgentProvider> = Arc::new(FakeProvider {
+        id: provider,
+        start: FakeStart::Live {
+            exit_on_terminate: true,
+        },
+        starts: Arc::new(AtomicUsize::new(0)),
+        child_active: Arc::new(AtomicBool::new(false)),
+    });
+    let admission: Arc<dyn ProviderAdmission> = machine.clone();
+    ResourceAdmissionProvider::with_admission(inner, admission)
+}
+
+struct OneWorkspace(kalcode_threads::ResolvedWorkspace);
+
+impl kalcode_threads::WorkspaceResolver for OneWorkspace {
+    fn list(&self) -> kalcode_core::Result<Vec<kalcode_threads::ResolvedWorkspace>> {
+        Ok(vec![self.0.clone()])
+    }
+
+    fn resolve(
+        &self,
+        workspace_id: &str,
+    ) -> kalcode_core::Result<kalcode_threads::ResolvedWorkspace> {
+        if workspace_id == self.0.id {
+            Ok(self.0.clone())
+        } else {
+            Err(kalcode_threads::registry::workspace_not_found())
+        }
+    }
+}
+
+fn wait_for_status(
+    runtime: &kalcode_threads::ThreadRuntime,
+    thread_id: &str,
+    status: kalcode_contracts::threads::ThreadStatus,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let current = runtime.get(thread_id).expect("thread").status;
+        if current == status {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "thread stayed {current:?}, expected {status:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Owner rule: a person's message is never held for CPU load, even on a thread the Operations
+/// scheduler started as background work. The scheduled thread starts on a quiet machine and
+/// finishes its first turn; a build then pins every core. The person's follow-up on that thread
+/// is admitted at once (no `waiting_for_resources`), while new scheduled work still yields.
+#[test]
+fn a_persons_follow_up_on_a_scheduled_thread_is_never_held_for_cpu_load() {
+    use kalcode_contracts::threads::ThreadStatus;
+
+    let (quiet, busy) = (healthy_governor(), cpu_saturated_governor());
+    let machine = MachineAdmission::new(&quiet, &busy);
+    let temp = tempfile::tempdir().expect("temp");
+    let core = Arc::new(
+        kalcode_core::Core::open(kalcode_core::CoreConfig {
+            paths: kalcode_core::Paths::new(temp.path()),
+            app_version: "0.0.0-test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .expect("core"),
+    );
+    let root = temp.path().join("repo");
+    std::fs::create_dir_all(&root).expect("repo");
+    let workspace_id = kalcode_contracts::ids::new_id();
+    let registry = Arc::new(kalcode_threads::ProviderRegistry::new());
+    registry.register(on_machine(&machine, ProviderId::CODEX));
+    let runtime = kalcode_threads::ThreadRuntime::new(
+        core,
+        registry,
+        Arc::new(OneWorkspace(kalcode_threads::ResolvedWorkspace {
+            id: workspace_id.clone(),
+            name: "Fixture".into(),
+            root,
+        })),
+        Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+    )
+    .expect("runtime");
+    let request = |prompt: &str| kalcode_threads::CreateThread {
+        provider_id: ProviderId::CODEX.into(),
+        provider_account_id: None,
+        account_label: None,
+        workspace_id: workspace_id.clone(),
+        model: None,
+        effort: None,
+        permission_mode: PermissionMode::Approve,
+        prompt: prompt.into(),
+        name: None,
+    };
+
+    // The scheduler's thread starts on a quiet machine and its first turn completes.
+    let scheduled = runtime
+        .create_reviewed_for_operation(&kalcode_contracts::ids::new_id(), request("quick"), None)
+        .expect("scheduled thread starts on a quiet machine");
+    wait_for_status(&runtime, &scheduled.id, ThreadStatus::Idle);
+    assert_eq!(quiet.running_work_for_test().agents, 0);
+
+    machine.pin_cpu();
+
+    // New scheduled work still yields to the CPU load.
+    let yielding = runtime
+        .create_reviewed_for_operation(&kalcode_contracts::ids::new_id(), request("work"), None)
+        .expect("scheduled thread waits");
+    assert_eq!(yielding.status, ThreadStatus::WaitingForDependency);
+
+    // The person writes to the scheduled thread: their message runs now.
+    let started = Instant::now();
+    let followed_up = runtime
+        .send(&scheduled.id, "keep going")
+        .expect("the person's follow-up is accepted");
+    assert_eq!(
+        followed_up.status,
+        ThreadStatus::Active,
+        "the person's follow-up was held for CPU load: {:?}",
+        followed_up.current_activity
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(busy.running_work_for_test().agents, 1, "the turn runs");
+
+    runtime.stop(&yielding.id).expect("stop the waiting thread");
+    runtime
+        .stop(&scheduled.id)
+        .expect("stop the scheduled thread");
+    runtime.shutdown();
+    quiet.shutdown();
+    busy.shutdown();
+}
+
+/// A scheduled session's own turns keep yielding to CPU load, for every provider, until the
+/// person takes it over: from then on its turns use their policy and start at once.
+#[test]
+fn a_scheduled_session_yields_until_the_person_takes_it_over() {
+    let (quiet, busy) = (healthy_governor(), cpu_saturated_governor());
+    let machine = MachineAdmission::new(&quiet, &busy);
+    let scheduled: Vec<_> = [
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::CURSOR,
+        ProviderId::GEMINI_CLI,
+        "future-provider",
+    ]
+    .into_iter()
+    .map(|provider| {
+        let session = on_machine(&machine, provider)
+            .start_session(
+                SessionConfig {
+                    launch_origin: LaunchOrigin::Background,
+                    ..session_config()
+                },
+                Box::new(|_: AgentEvent| {}),
+            )
+            .unwrap_or_else(|error| panic!("{provider}: quiet machine held it: {error}"));
+        (provider, session)
+    })
+    .collect();
+
+    machine.pin_cpu();
+
+    for (provider, session) in &scheduled {
+        let Err(ProviderError::ResourcesHeld(hold)) = session.send(text("scheduled turn")) else {
+            panic!("{provider}: a scheduled turn must yield to CPU load");
+        };
+        assert_eq!(hold.kind, LaunchHoldKind::BackgroundYield);
+
+        session.set_launch_origin(LaunchOrigin::User);
+        let started = Instant::now();
+        session
+            .send(text("the person's turn"))
+            .unwrap_or_else(|error| panic!("{provider}: the person's turn was held: {error}"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+    assert_eq!(busy.running_work_for_test().agents, 5);
+    drop(scheduled);
+    assert_eq!(busy.running_work_for_test().agents, 0);
+    quiet.shutdown();
+    busy.shutdown();
 }

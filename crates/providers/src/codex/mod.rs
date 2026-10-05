@@ -282,7 +282,7 @@ pub(crate) fn usable_executable_and_version(
     spec: &DetectionSpec,
     env: &DetectEnv,
 ) -> Result<(std::path::PathBuf, Option<Version>), ProviderError> {
-    let detected = detect(spec, env);
+    let detected = crate::launch_probe::detect_for_launch(spec, env, None);
     match (detected.detection.state, detected.executable) {
         (DetectionState::Installed, Some(exe))
             if detected.detection.auth != AuthState::NotAuthenticated =>
@@ -323,7 +323,7 @@ pub(crate) fn managed_executable_and_version(
     env: &DetectEnv,
     guardian: &crate::guardian::ProviderProbeGuardian,
 ) -> Result<(std::path::PathBuf, Version), ProviderError> {
-    let detected = detect_guarded(spec, env, guardian);
+    let detected = crate::launch_probe::detect_for_launch(spec, env, Some(guardian));
     match (detected.detection.state, detected.executable) {
         (DetectionState::Installed, Some(executable))
             if detected.detection.auth != AuthState::NotAuthenticated =>

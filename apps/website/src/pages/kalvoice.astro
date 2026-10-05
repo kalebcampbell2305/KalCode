@@ -11,6 +11,13 @@ import { RELEASES, servedStableRelease } from "../lib/releases";
 import { KALVOICE, getPage } from "../lib/site";
 
 const page = getPage("/kalvoice");
+// Push to talk as shipped (docs/KALVOICE.md, 0.1.7 notes): hold Fn on a Mac; F8 is the fallback
+// key everywhere, and the one to use on Windows, where most keyboards never report Fn to apps.
+const PTT = {
+  mac: "Fn",
+  fallback: KALVOICE.pushToTalkKey,
+  note: `Hold Fn on a Mac keyboard and wait for Listening; a quick tap keeps Fn's usual action. ${KALVOICE.pushToTalkKey} is the fallback on every keyboard, and the key to use on Windows, where most keyboards don't report Fn to apps. Choose another function key, Pause, Scroll Lock or Insert instead. The key works while KalCode is the active window, so other apps keep it otherwise.`,
+};
 // KalVoice is described as shipped only while /download serves a signed Stable release.
 const stable = servedStableRelease(RELEASES);
 const description = stable ? page.description.replace(/ In development\.$/, "") : page.description;
@@ -60,8 +67,8 @@ const privacy = [
         <span class="hero__statement">Speak your prompts with KalVoice.</span>
       </h1>
       <p class="hero__line">
-        Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Release, and your words land in the focused
-        agent — or, if you said a command, KalCode does it.
+        Hold {PTT.mac} on a Mac, or {PTT.fallback} on any keyboard, to talk to KalVoice. Release, and
+        your words land in the focused agent — or, if you said a command, KalCode does it.
       </p>
       <div class="button-row hero__actions">
         <a class="button button--secondary button--lg" href="#modes">
@@ -77,19 +84,29 @@ const privacy = [
     <div class="container">
       <SectionHead
         id="modes-title"
-        title={`Hold ${KALVOICE.pushToTalkKey}. Speak. Release.`}
+        title="Hold the key. Speak. Release."
         text="One key, one gesture. KalVoice decides from context what you meant."
       />
-      <p class="ptt">
-        <kbd class="ptt__key">{KALVOICE.pushToTalkKey}</kbd>
-        <span class="ptt__note">{KALVOICE.keyNote}</span>
-      </p>
+      <div class="ptt">
+        <div class="ptt__keys">
+          <span class="ptt__cap">
+            <kbd class="ptt__key">{PTT.mac}</kbd>
+            <span class="ptt__where">Mac</span>
+          </span>
+          <span class="ptt__or" aria-hidden="true">or</span>
+          <span class="ptt__cap">
+            <kbd class="ptt__key">{PTT.fallback}</kbd>
+            <span class="ptt__where">Any keyboard</span>
+          </span>
+        </div>
+        <p class="ptt__note">{PTT.note}</p>
+      </div>
       <div class="modes">
         <article class="mode" aria-labelledby="dictation-title">
           <p class="mode__keys">Into a focused input</p>
           <h3 id="dictation-title" class="h2 h2--sm">Your words are typed there.</h3>
           <ul>
-            <li>{stable ? "A Claude Code or Codex thread, a terminal, a search box." : "A Claude Code, Codex or Gemini CLI thread, a terminal, a search box."}</li>
+            <li>A Claude Code, Codex, Cursor or Gemini CLI agent, a terminal, a search box.</li>
             <li>The target is fixed when you press the key, so switching windows cannot misdirect your words.</li>
             <li>Dictation is unlimited on every plan, and never counted.</li>
           </ul>
@@ -101,7 +118,7 @@ const privacy = [
           <ul>
             <li>Structured commands run locally; more complex interpretation requires the on-device runtime.</li>
             <li>Workspace controls run locally; coding tasks keep provider-native permissions.</li>
-            <li>Each command is one KalVoice Request.</li>
+            <li>Local commands are never counted; a cloud-backed request counts once.</li>
           </ul>
           <p class="mode__example">“Pause every active thread.”</p>
         </article>
@@ -166,7 +183,7 @@ const privacy = [
       <SectionHead
         id="privacy-title"
         title="Private by default."
-        text="KalVoice works inside your permission model: it cannot raise its own authority, approve its own requests, or turn on Bypass."
+        text="KalVoice works inside your permission model: it cannot raise its own authority or approve its own requests."
       />
       <ul class="facts" role="list">
         {

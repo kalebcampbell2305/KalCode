@@ -1,4 +1,4 @@
-import type { ApprovalView, ThreadSummary } from "@kalcode/protocol";
+import type { ApprovalView, ThreadSummary, ThreadWorktreeState } from "@kalcode/protocol";
 import {
   Button,
   DropdownMenu,
@@ -46,11 +46,10 @@ import {
 import { useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
 import { canDismiss, useAgentCleanup } from "./fleet/agentCleanup.ts";
 import { isFolded, useFleetLayout } from "./fleet/fleetLayout.ts";
-import { mergeReadiness } from "./fleet/fleetModel.ts";
+import { type MergeReadiness, mergeReadiness } from "./fleet/fleetModel.ts";
 import { morphIntoAgent } from "./fleet/morph.ts";
 import { useAgentOverlaps } from "./fleet/useAgentOverlaps.ts";
 import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
-import { useNow } from "./useNow.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
 
 /** Card sizing: a card never gets narrower than this; wider boards get more columns. */
@@ -136,7 +135,6 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const { navigate } = useNavigation();
   // Provider panes are how a coding agent runs: a real CLI in a Code terminal pane.
   const providerPanes = useProviderPanesEnabled();
-  const now = useNow(30_000);
   const [showArchived, setShowArchived] = useState(false);
   const [archivedShown, setArchivedShown] = useState(ARCHIVED_PAGE);
   const [confirmCloseAll, setConfirmCloseAll] = useState(false);
@@ -332,7 +330,6 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
             <div tabIndex={-1} style={{ minWidth: 0 }}>
               <AgentCard
                 thread={thread}
-                now={now}
                 approvals={approvalsByThread.get(thread.id) ?? NO_APPROVALS}
                 pendingAction={pendingActions.get(thread.id)}
                 onFocus={onFocus}
@@ -340,7 +337,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                 onDecide={permissions.decide}
                 onReviewApprovals={onReviewApprovals}
                 worktree={worktrees.get(thread.id)}
-                readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
+                readiness={thread.worktreeId ? readinessOf(thread, worktrees.get(thread.id)) : undefined}
                 onCommitted={applyWorktree}
                 expanded={expanded.has(thread.id)}
                 onToggleExpanded={toggleCard}
@@ -702,7 +699,6 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
               <AgentCard
                 key={thread.id}
                 thread={thread}
-                now={now}
                 archived
                 approvals={NO_APPROVALS}
                 pendingAction={archivedThreads.pendingActions.get(thread.id)}
@@ -729,6 +725,21 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
 }
 
 const NO_APPROVALS: readonly ApprovalView[] = [];
+
+/** The last readiness worked out per agent record, kept while its worktree facts are the same. */
+const readinessCache = new WeakMap<
+  ThreadSummary,
+  { worktree: ThreadWorktreeState | undefined; readiness: MergeReadiness }
+>();
+
+/** The card's merge readiness, the same object while the agent and its worktree facts are (so the card's memo holds). */
+function readinessOf(thread: ThreadSummary, worktree: ThreadWorktreeState | undefined): MergeReadiness {
+  const cached = readinessCache.get(thread);
+  if (cached && cached.worktree === worktree) return cached.readiness;
+  const readiness = mergeReadiness(thread, worktree);
+  readinessCache.set(thread, { worktree, readiness });
+  return readiness;
+}
 const NO_THREADS: readonly ThreadSummary[] = [];
 
 /** The fleet at a glance: one segment per state, sized by its share (decorative; chips say it). */

@@ -122,8 +122,9 @@ describe("approval_decide", () => {
 
 describe("thread actions", () => {
   // Unarchive is offered only on archived cards (never by status); it has its own test below.
+  // Start Anyway is never refused: native (and memory) return a thread that isn't held unchanged.
   const COMMANDS: Record<
-    Exclude<ThreadAction, "open" | "unarchive">,
+    Exclude<ThreadAction, "open" | "unarchive" | "start_anyway">,
     (c: KalCodeClient, id: string) => Promise<unknown>
   > = {
     interrupt: (c, id) => c.interruptThread(id),
@@ -137,7 +138,7 @@ describe("thread actions", () => {
     const probe = new KalCodeClient(createMemoryTransport("busy"));
     const threads = await probe.listThreads();
     for (const thread of threads) {
-      const offered = availableActions(thread.status);
+      const offered = availableActions(thread);
       for (const action of Object.keys(COMMANDS) as (keyof typeof COMMANDS)[]) {
         // Retry and Resume share `thread_resume`; only check the one this state offers.
         const sharesCommand =

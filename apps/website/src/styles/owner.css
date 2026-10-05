@@ -1,7 +1,10 @@
 /* Owner command center (src/pages/owner/analytics.astro). Dark only, built on @kalcode/ui tokens. */
 
 .oc {
-  --oc-bg: #03050b;
+  /* Theme-invariant brand ground (the owner page is dark only), with graphite steps over it. */
+  --oc-bg: var(--brand-ground);
+  --oc-raised: color-mix(in srgb, var(--brand-ink) 5%, var(--brand-ground));
+  --oc-raised-2: color-mix(in srgb, var(--brand-ink) 9%, var(--brand-ground));
   --oc-ink: #eef3fc;
   --oc-ink-2: #b4c0d6;
   --oc-ink-3: #8593ab;
@@ -14,7 +17,11 @@
   --oc-s3: #9085e9;
   --oc-line: rgb(150 180 235 / 0.1);
   --oc-line-2: rgb(150 180 235 / 0.18);
-  --oc-panel: linear-gradient(180deg, rgb(17 27 48 / 0.66) 0%, rgb(8 13 25 / 0.74) 100%);
+  --oc-panel: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--oc-raised-2) 70%, transparent) 0%,
+    color-mix(in srgb, var(--oc-raised) 78%, transparent) 100%
+  );
   --oc-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --oc-wide: var(--font-wide);
   min-height: 100vh;
@@ -57,7 +64,11 @@
   align-items: center;
   gap: var(--space-4);
   padding: 12px clamp(16px, 3vw, 44px);
-  background: linear-gradient(180deg, rgb(3 5 11 / 0.86), rgb(3 5 11 / 0.6));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--oc-bg) 86%, transparent),
+    color-mix(in srgb, var(--oc-bg) 60%, transparent)
+  );
   backdrop-filter: blur(18px) saturate(1.3);
   border-bottom: 1px solid var(--oc-line);
 }
@@ -331,12 +342,18 @@
   background:
     linear-gradient(
       90deg,
-      rgb(3 5 11 / 0.96) 0%,
-      rgb(3 5 11 / 0.82) 30%,
-      rgb(3 5 11 / 0.2) 62%,
-      rgb(3 5 11 / 0.35) 100%
+      color-mix(in srgb, var(--oc-bg) 96%, transparent) 0%,
+      color-mix(in srgb, var(--oc-bg) 82%, transparent) 30%,
+      color-mix(in srgb, var(--oc-bg) 20%, transparent) 62%,
+      color-mix(in srgb, var(--oc-bg) 35%, transparent) 100%
     ),
-    linear-gradient(180deg, rgb(3 5 11 / 0.55) 0%, transparent 22%, transparent 70%, var(--oc-bg) 100%);
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--oc-bg) 55%, transparent) 0%,
+      transparent 22%,
+      transparent 70%,
+      var(--oc-bg) 100%
+    );
 }
 
 .hero__copy {
@@ -422,7 +439,7 @@
   position: relative;
   height: 12px;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgb(10 18 34 / 0.9), rgb(26 38 62 / 0.9));
+  background: linear-gradient(180deg, var(--oc-raised), var(--oc-raised-2));
   box-shadow:
     inset 0 1px 3px rgb(0 0 0 / 0.7),
     0 0 0 1px rgb(150 180 235 / 0.2),
@@ -633,7 +650,7 @@
   padding: 12px 18px;
   border-radius: 12px;
   border: 1px solid var(--oc-line);
-  background: linear-gradient(90deg, rgb(53 196 141 / 0.06), rgb(10 16 30 / 0.6) 30%);
+  background: linear-gradient(90deg, rgb(53 196 141 / 0.06), color-mix(in srgb, var(--oc-raised) 60%, transparent) 30%);
   overflow: hidden;
 }
 .pulse__badge {
@@ -739,7 +756,7 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #0b1322;
+  background: var(--oc-raised-2);
   border: 2px solid rgb(255 255 255 / 0.16);
   transition:
     background 400ms ease,
@@ -848,7 +865,7 @@
   background: radial-gradient(140% 90% at 100% 0%, rgb(227 161 90 / 0.08), transparent 60%), var(--oc-panel);
 }
 .panel--quiet {
-  background: rgb(8 13 25 / 0.5);
+  background: color-mix(in srgb, var(--oc-raised) 50%, transparent);
 }
 .panel__head {
   display: flex;
@@ -1137,11 +1154,11 @@
   stroke-dasharray: 3 3;
 }
 .chart__dot {
-  stroke: #0a1120;
+  stroke: var(--oc-raised);
   stroke-width: 2;
 }
 .chart__end {
-  stroke: #0a1120;
+  stroke: var(--oc-raised);
   stroke-width: 2;
 }
 .chart__empty {
@@ -1592,9 +1609,9 @@
   .hero__world::after {
     background: linear-gradient(
       180deg,
-      rgb(3 5 11 / 0.35) 0%,
-      rgb(3 5 11 / 0.55) 45%,
-      rgb(3 5 11 / 0.94) 70%,
+      color-mix(in srgb, var(--oc-bg) 35%, transparent) 0%,
+      color-mix(in srgb, var(--oc-bg) 55%, transparent) 45%,
+      color-mix(in srgb, var(--oc-bg) 94%, transparent) 70%,
       var(--oc-bg) 100%
     );
   }

@@ -15,6 +15,7 @@ import { needsYouCount } from "../../../shell/deck/deckModel.ts";
 import { contentKey } from "../../../shell/panes/model.ts";
 import { filteredSnapshot } from "../../operations/model.ts";
 import { useOptionalPermissions } from "../../permissions/PermissionsProvider.tsx";
+import { terminalActivity } from "../kaltidy/activity.ts";
 import { PROCESS_SCAN_LIMIT } from "../kaltidy/classify.ts";
 import type { ProviderPaneEntry } from "../panes/useProviderPanes.ts";
 import {
@@ -34,6 +35,8 @@ import { type OrgPrefsApi, useOrgPrefs } from "./prefs.ts";
 
 /** How often the process scan refreshes while Code is shown and a terminal runs. */
 export const PROCESS_SCAN_MS = 5000;
+/** An unchanged scan backs off (5 s, 10 s, 20 s) up to this; typing in a terminal resets it. */
+export const PROCESS_SCAN_MAX_MS = 30000;
 
 export interface Organization {
   items: OrgItem[];
@@ -64,7 +67,9 @@ export interface ProcessScan {
 
 /**
  * Polls the related-process scan while it can matter, and rescans at once when the set of running
- * terminals changes; null when unavailable or cut short.
+ * terminals changes; null when unavailable or cut short. An unchanged result backs the poll off
+ * (keeping the previous scan, so nothing re-renders); input in a running terminal, the window
+ * regaining focus or a changed result brings it back to every 5 s. Paused while the window is hidden.
  */
 function useProcessScan(enabled: boolean, runningKey: string): ProcessScan | null {
   const { client } = useRuntime();
@@ -73,33 +78,78 @@ function useProcessScan(enabled: boolean, runningKey: string): ProcessScan | nul
     [client],
   );
   const [scan, setScan] = useState<ProcessScan | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new set of running terminals restarts the loop (an immediate rescan).
+  // A new set of running terminals (runningKey) restarts the loop: an immediate rescan.
   useEffect(() => {
     if (!enabled) return;
+    const terminalIds = runningKey.split(",").map((part) => part.slice(0, part.lastIndexOf("@")));
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      if (document.visibilityState === "visible") {
-        try {
-          const list = await utilities.processes("related");
-          const sampledAt = Date.parse(list.sampledAt);
-          if (!cancelled) {
-            setScan(
-              list.processes.length >= PROCESS_SCAN_LIMIT || Number.isNaN(sampledAt)
-                ? null
-                : { processes: list.processes, sampledAt },
-            );
-          }
-        } catch {
-          if (!cancelled) setScan(null);
-        }
-      }
-      if (!cancelled) timer = setTimeout(() => void tick(), PROCESS_SCAN_MS);
+    let scanning = false;
+    let interval = PROCESS_SCAN_MS;
+    let lastScanAt = 0;
+    let last: string | null = null;
+    const typedSince = (at: number) => terminalIds.some((id) => (terminalActivity(id).lastInputAt ?? 0) > at);
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      if (!cancelled && document.visibilityState === "visible")
+        timer = setTimeout(() => void tick(false), PROCESS_SCAN_MS);
     };
-    void tick();
+    const tick = async (now: boolean) => {
+      if (cancelled || scanning) return;
+      if (!now && Date.now() - lastScanAt < interval && !typedSince(lastScanAt)) {
+        schedule();
+        return;
+      }
+      if (!now && typedSince(lastScanAt)) interval = PROCESS_SCAN_MS;
+      scanning = true;
+      lastScanAt = Date.now();
+      try {
+        const list = await utilities.processes("related");
+        const sampledAt = Date.parse(list.sampledAt);
+        const next =
+          list.processes.length >= PROCESS_SCAN_LIMIT || Number.isNaN(sampledAt)
+            ? null
+            : { processes: list.processes, sampledAt };
+        const key = next ? JSON.stringify(next.processes) : "null";
+        if (!cancelled) {
+          if (key === last) interval = Math.min(interval * 2, PROCESS_SCAN_MAX_MS);
+          else {
+            // The set of running terminals is fixed for this loop, so an unchanged process list
+            // keeps the previous scan (its sample time still covers every running terminal).
+            last = key;
+            interval = PROCESS_SCAN_MS;
+            setScan(next);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          last = null;
+          interval = PROCESS_SCAN_MS;
+          setScan(null);
+        }
+      } finally {
+        scanning = false;
+      }
+      schedule();
+    };
+    const wake = () => {
+      if (document.visibilityState !== "visible") {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+        return;
+      }
+      interval = PROCESS_SCAN_MS;
+      void tick(true);
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    if (document.visibilityState === "visible") void tick(true);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
     };
   }, [enabled, utilities, runningKey]);
   return enabled ? scan : null;

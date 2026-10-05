@@ -8,10 +8,12 @@ import { formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { accountFullLabel, accountName, sortAccounts } from "../../surfaces/providers/accountIdentity.ts";
 import {
   type AccountUsageState,
   LOW_USAGE_PERCENT,
+  primaryUsageLabel,
   resetsIn,
   type UsageWindow,
   usageSummary,
@@ -77,7 +79,7 @@ export function AccountUsageCenter() {
     : chipAccount
       ? accountCenterStatus(chipAccount, model.checking.has(chipAccount.id), model.validationErrors.get(chipAccount.id))
       : null;
-  // A ready account shows its canonical usage on the chip ("64% left"); anything else, its state.
+  // A ready account shows its canonical WEEKLY usage on the chip ("64% left"); anything else, its state.
   const fallbackChipUsage = useAccountUsage(chipAccount?.id);
   const chipUsage = canonicalChip?.usage ?? fallbackChipUsage;
   const chipSummary = usageSummary(chipUsage);
@@ -166,7 +168,13 @@ export function AccountUsageCenter() {
           aria-label="Account and usage center"
           title={
             chipAccount
-              ? `${accountFullLabel(chipAccount)} · ${focusedAccount ? "Current session" : "New agents"}`
+              ? [
+                  accountFullLabel(chipAccount),
+                  focusedAccount ? "Current session" : "New agents",
+                  chipStatus?.label === chipSummary.short ? primaryUsageLabel(chipUsage) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
               : "Accounts & usage"
           }
           data-tone={chipStatus?.tone ?? (model.loadError || focused ? "danger" : undefined)}
@@ -346,16 +354,6 @@ export function AccountUsageCenter() {
 
 type AccountModel = ReturnType<typeof useProviderAccounts>;
 
-/** Ticks while the center is open so "Resets in…" and "Updated…" stay honest. */
-function useClock(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
-
 function percentLeft(window: UsageWindow): number {
   return Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
 }
@@ -393,7 +391,8 @@ function AccountEntry({
   const [name, setName] = useState(account.displayName);
   const detailsId = useId();
   const nameId = useId();
-  const now = useClock();
+  // The shared clock ticks while the center is open so "Resets in…" and "Updated…" stay honest.
+  const now = useNow();
   const canonical = useOptionalProviderAccountSessions()?.states.get(account.id);
   const fallbackUsage = useAccountUsage(account.id);
   const usage = canonical?.usage ?? fallbackUsage;

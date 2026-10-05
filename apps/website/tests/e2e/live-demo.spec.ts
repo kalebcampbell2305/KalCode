@@ -37,29 +37,98 @@ test.describe("live demo (desktop)", () => {
     await dialog.getByRole("button", { name: "One more agent" }).click();
     await dialog.getByRole("button", { name: "Launch 2 Codex agents" }).click();
     await expect(app(page).locator(".lk-tab")).toHaveCount(panes + 2);
-    await expect(app(page).getByRole("button", { name: "Codex", exact: true }).first()).toBeVisible();
+    // As in the app, a fresh agent is "New agent" until its first prompt names the task.
+    await expect(app(page).getByRole("button", { name: "New agent", exact: true }).first()).toBeVisible();
     // The new agent waits at its own prompt, like a real terminal.
     await expect(
       app(page)
-        .getByRole("textbox", { name: /Prompt for Codex/ })
+        .getByRole("textbox", { name: /Prompt for New agent/ })
         .first(),
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
 
-  test("Needs You jumps to the blocked agent; approving it lets the agent continue", async ({ page }) => {
+  test("Needs You jumps to the agent asking for a secret; approving it lets the agent continue", async ({ page }) => {
     await openDemo(page);
+    await expect(app(page).getByRole("button", { name: "Permission mode: Bypass" })).toBeVisible();
     await app(page)
       .getByRole("button", { name: /needs you/ })
       .click();
-    await expect(app(page).getByRole("group", { name: "Login Validation needs approval" })).toBeVisible();
+    const ask = app(page).getByRole("group", { name: "Payments Webhook needs approval" });
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText("credentials and secrets");
     await app(page).getByRole("button", { name: "Approve once" }).click();
-    await expect(app(page).getByRole("group", { name: "Login Validation needs approval" })).toHaveCount(0);
+    await expect(app(page).getByRole("group", { name: "Payments Webhook needs approval" })).toHaveCount(0);
+  });
+
+  test("page controls never leave the New agent dialog or a popover over a different screen", async ({ page }) => {
+    await openDemo(page);
+    await app(page).getByRole("button", { name: "New agent" }).click();
+    await expect(app(page).getByRole("dialog", { name: /New agent/ })).toBeVisible();
+    await page
+      .locator('[data-live-do="go:operations"]')
+      .first()
+      .evaluate((el: HTMLElement) => el.click());
+    await expect(app(page).getByRole("heading", { name: /Operations/ })).toBeVisible();
+    await expect(app(page).getByRole("dialog", { name: /New agent/ })).toHaveCount(0);
+    await page
+      .locator('[data-live-do="menu:accounts"]')
+      .first()
+      .evaluate((el: HTMLElement) => el.click());
+    await page
+      .locator('[data-live-do="voice:open"]')
+      .first()
+      .evaluate((el: HTMLElement) => el.click());
+    await expect(app(page).getByRole("dialog", { name: "Accounts and usage" })).toHaveCount(0);
+    await expect(app(page).getByRole("dialog", { name: "KalVoice" })).toBeVisible();
+    // The launch label is never cut off, even for ten agents.
+    await app(page).getByRole("button", { name: "Code", exact: true }).first().click();
+    await app(page).getByRole("button", { name: "New agent" }).click();
+    for (let i = 0; i < 9; i++) await app(page).getByRole("button", { name: "One more agent" }).click();
+    const launch = app(page).getByRole("button", { name: "Launch 10 Claude Code agents" });
+    await expect(launch).toBeVisible();
+    const clipped = await launch.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+    expect(clipped).toBe(false);
+  });
+
+  test("Smart Close, the quick switcher, Back and the header account picker work like the app", async ({ page }) => {
+    const errors = await openDemo(page);
+    await app(page).getByRole("button", { name: "Close Dashboard Redesign" }).click();
+    const close = app(page).getByRole("alertdialog", { name: "Close active work?" });
+    await expect(close).toBeVisible();
+    await close.getByRole("button", { name: "Keep Running" }).click();
+    await expect(app(page).getByRole("button", { name: "Dashboard Redesign", exact: true, pressed: true })).toHaveCount(
+      0,
+    );
+    await expect(app(page).getByRole("complementary", { name: "Agents" })).toContainText("Dashboard Redesign");
+    await app(page).getByRole("button", { name: "Open quick switcher" }).click();
+    await page.keyboard.type("dashboard redesign");
+    await page.keyboard.press("Enter");
+    await expect(
+      app(page).getByRole("button", { name: "Dashboard Redesign", exact: true, pressed: true }),
+    ).toBeVisible();
+    await app(page)
+      .getByRole("navigation", { name: "KalCode" })
+      .getByRole("button", { name: /^Operations/ })
+      .click();
+    await app(page).getByRole("button", { name: "Go back" }).click();
+    await expect(app(page).locator(".lk-app")).toHaveAttribute("data-surface", "code");
+    await app(page).getByRole("button", { name: "Personal. Switch Claude Code account" }).first().click();
+    const picker = app(page).getByRole("dialog", { name: "Account & usage" });
+    await expect(picker).toContainText("Choose an account for your next coding session.");
+    await picker.getByRole("button", { name: /^Work/ }).click();
+    await picker.getByRole("button", { name: "Start with Work" }).click();
+    // Code Review already runs on Work; the fresh session joins it, and the original keeps running.
+    await expect(app(page).getByRole("button", { name: "Work. Switch Claude Code account" })).toHaveCount(2);
+    expect(errors).toEqual([]);
   });
 
   test("Agent Fleet, Live Browser and Operations work from the demo", async ({ page }) => {
     await openDemo(page);
-    await app(page).getByRole("button", { name: "Dashboard" }).first().click();
+    await app(page)
+      .getByRole("navigation", { name: "KalCode" })
+      .getByRole("button", { name: /^Dashboard/ })
+      .click();
     await expect(app(page).getByRole("region", { name: "Agent Fleet" })).toContainText("Dashboard Redesign");
     await app(page)
       .getByRole("article", { name: /Dashboard Tests/ })
@@ -69,7 +138,10 @@ test.describe("live demo (desktop)", () => {
     await app(page).getByRole("button", { name: "Add to pane 1" }).click();
     await app(page).getByRole("menuitem", { name: "Browser" }).click();
     await expect(app(page).getByText("localhost:3000").first()).toBeVisible();
-    await app(page).getByRole("button", { name: "Operations" }).first().click();
+    await app(page)
+      .getByRole("navigation", { name: "KalCode" })
+      .getByRole("button", { name: /^Operations/ })
+      .click();
     for (const tab of ["Runs", "Queue", "Services", "Environments", "Activity"]) {
       await app(page).getByRole("tab", { name: tab }).click();
       await expect(app(page).getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");

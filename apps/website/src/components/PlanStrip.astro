@@ -1,47 +1,461 @@
 ---
 /**
- * The home page's compact plan strip: each plan's stage, monthly price and headline limits, with
- * the most popular plan lit. Everything comes from @kalcode/protocol/plans; /pricing has the rest.
+ * The home page's plan strip. Every value comes from @kalcode/protocol/plans: what every plan
+ * shares is said once above the cards, and each card shows only what makes that plan different,
+ * its allowances and the roadmap features it leads with (`cardFeatures`), each tagged Available or
+ * Coming soon from its catalog status. /pricing has the full matrix.
  */
-import { CORE_LIMITS, PLANS, UNLIMITED_NOTE, formatCoreLimit, formatInterval, formatPrice } from "@kalcode/protocol/plans";
+import {
+  CORE_LIMITS,
+  type Plan,
+  PLANS,
+  UNLIMITED_NOTE,
+  formatCoreLimit,
+  formatInterval,
+  formatLimit,
+  formatPrice,
+  getPlanFeature,
+  yearlySavingsUsd,
+} from "@kalcode/protocol/plans";
 import Icon from "./Icon.astro";
 
-/** The limits the strip leads with: agents, terminals and KalVoice. */
-const STRIP_LIMITS = CORE_LIMITS.filter((limit) =>
-  ["parallelAgents", "openTerminals", "kalvoiceRequestsPerMonth"].includes(limit.key),
-);
+const [agents, terminals] = CORE_LIMITS;
+const free = PLANS[0] as Plan;
+/** Shared by every plan, so it is said once. */
+const shared = [formatCoreLimit(free.limits, agents), formatCoreLimit(free.limits, terminals)];
+
+/** The allowances that differ between plans, short labels for the cards. */
+const ALLOWANCES = [
+  { key: "workspaces", label: "Workspaces" },
+  { key: "providerAccounts", label: "Provider accounts" },
+  { key: "kalvoiceRequestsPerMonth", label: "KalVoice Requests / mo" },
+] as const;
+
+const cards = PLANS.map((plan, index) => ({
+  plan,
+  level: index + 1,
+  previous: index > 0 ? PLANS[index - 1] : undefined,
+  savings: yearlySavingsUsd(plan),
+  features: plan.cardFeatures.map((id) => {
+    const feature = getPlanFeature(id);
+    return {
+      id,
+      label: (feature.label.split(":")[0] ?? feature.label).trim(),
+      value: feature.values?.[plan.id],
+      soon: feature.status !== "available",
+    };
+  }),
+}));
 ---
-<div class="plan-strip">
-  <ul class="plan-cards" role="list">
+<div class="pstrip">
+  <p class="pstrip__shared">
+    <span class="pstrip__shared-label">Every plan</span>
+    {shared.map((item) => (
+      <span class="pstrip__shared-item"><Icon name="check" />{item}<sup aria-hidden="true">*</sup></span>
+    ))}
+    <span class="pstrip__shared-item"><Icon name="check" />Every supported coding provider</span>
+  </p>
+  <ul class="pstrip__cards" role="list">
     {
-      PLANS.map((plan) => (
-        <li class:list={["plan-card", { "plan-card--featured": plan.popular }]} data-plan={plan.id}>
-          <p class="plan-card__name">
-            <span>
-              {plan.name}
-              <span class="plan-card__stage">{plan.stage}</span>
-            </span>
-            {plan.popular && <span class="plan-card__tag">Most popular</span>}
+      cards.map(({ plan, level, previous, savings, features }) => (
+        <li class:list={["pcard", { "pcard--popular": plan.popular }]} data-plan={plan.id}>
+          <p class="pcard__top">
+            <span class="pcard__stage">{plan.stage}</span>
+            {plan.popular && <span class="pcard__tag">Most popular</span>}
           </p>
-          <p class="plan-card__price">
+          <span class="pcard__level" data-level={level} aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <h3 class="pcard__name">{plan.name}</h3>
+          <p class="pcard__price">
             {formatPrice(plan, "month")}
             <small>{formatInterval("month")}</small>
           </p>
-          <p class="plan-card__summary">{plan.tagline}</p>
-          <ul class="plan-card__points" role="list">
-            {STRIP_LIMITS.map((limit) => (
-              <li>
-                <Icon name="check" /> {formatCoreLimit(plan.limits, limit)}
-                {plan.limits[limit.key] === null && <sup aria-hidden="true">*</sup>}
+          <p class="pcard__yearly">
+            {savings > 0 ? `or ${formatPrice(plan, "year")} a year, save $${savings}` : "Free forever, no card needed"}
+          </p>
+          <p class="pcard__tagline">{plan.tagline}</p>
+          <dl class="pcard__limits">
+            {ALLOWANCES.map((allowance) => (
+              <div>
+                <dt>{allowance.label}</dt>
+                <dd>{formatLimit(plan.limits[allowance.key])}</dd>
+              </div>
+            ))}
+          </dl>
+          <p class="pcard__plus">{previous ? `Everything in ${previous.name}, plus` : "Includes"}</p>
+          <ul class="pcard__features" role="list">
+            {features.map((feature) => (
+              <li data-soon={String(feature.soon)}>
+                <span class="pcard__mark" aria-hidden="true">{feature.soon ? "" : <Icon name="check" />}</span>
+                <span class="pcard__feature">
+                  <span>
+                    {feature.label}
+                    {feature.soon && <span class="pcard__soon">Coming soon</span>}
+                  </span>
+                  {feature.value && feature.value !== "Unlimited local agents" && <small>{feature.value}</small>}
+                </span>
               </li>
             ))}
           </ul>
-          <a class="text-link plan-card__link" href={`/pricing#plan-${plan.id}`}>
+          <a class="pcard__link" href={`/pricing#plan-${plan.id}`}>
             {plan.name} details <Icon name="arrow-right" />
           </a>
         </li>
       ))
     }
   </ul>
-  <p class="plan-strip__note"><span aria-hidden="true">* </span>{UNLIMITED_NOTE}</p>
+  <p class="pstrip__note"><span aria-hidden="true">* </span>{UNLIMITED_NOTE}</p>
 </div>
+
+<style>
+  .pstrip {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .pstrip__shared {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2) var(--space-5);
+    padding: 0.75rem 1.25rem;
+    border: 1px solid var(--color-border-lit-soft);
+    border-radius: var(--radius-xl);
+    background:
+      linear-gradient(90deg, transparent, var(--color-accent-soft), transparent),
+      var(--color-surface-1);
+    color: var(--color-text);
+    font-size: var(--site-text-small);
+    font-weight: var(--weight-medium);
+  }
+
+  .pstrip__shared-label {
+    color: var(--color-accent-text);
+    font-family: var(--font-wider);
+    font-size: 0.625rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+
+  .pstrip__shared-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4375rem;
+  }
+
+  .pstrip__shared-item :global(svg) {
+    width: 0.9375rem;
+    height: 0.9375rem;
+    color: var(--status-working);
+  }
+
+  .pstrip__shared sup {
+    color: var(--color-accent-text);
+  }
+
+  .pstrip__cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .pcard {
+    position: relative;
+    display: grid;
+    grid-template-rows: auto auto auto auto auto auto auto auto 1fr auto;
+    gap: 0.5rem;
+    padding: 1.25rem 1.25rem 1.125rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: var(--panel-sheen), var(--color-surface-1);
+    box-shadow: var(--shadow-panel);
+    transition:
+      border-color var(--dur-base) var(--ease-out),
+      transform var(--dur-base) var(--ease-out);
+  }
+
+  .pcard:hover {
+    border-color: var(--color-border-strong);
+    transform: translateY(-2px);
+  }
+
+  .pcard--popular {
+    border-color: var(--color-border-lit);
+    background:
+      radial-gradient(120% 60% at 50% 0%, var(--color-accent-soft), transparent 70%),
+      var(--panel-sheen),
+      var(--color-surface-1);
+    box-shadow:
+      var(--shadow-lit),
+      0 30px 60px -36px var(--color-glow);
+  }
+
+  .pcard__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-height: 1.375rem;
+  }
+
+  .pcard__stage {
+    color: var(--color-accent-text);
+    font-family: var(--font-wider);
+    font-size: 0.625rem;
+    letter-spacing: 0.24em;
+  }
+
+  .pcard__tag {
+    padding: 0.1875rem 0.5rem;
+    border-radius: var(--radius-full);
+    background: var(--btn-primary-bg);
+    color: var(--btn-primary-fg);
+    font-size: 0.625rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    box-shadow: 0 0 18px -4px var(--btn-primary-glow);
+  }
+
+  /* Four ticks, lit up to the plan's place in TRY → BUILD → ORCHESTRATE → AUTOMATE. */
+  .pcard__level {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.25rem;
+    margin-block: 0.125rem 0.25rem;
+  }
+
+  .pcard__level i {
+    height: 0.1875rem;
+    border-radius: var(--radius-full);
+    background: var(--chart-track);
+  }
+
+  .pcard__level[data-level="1"] i:nth-child(-n + 1),
+  .pcard__level[data-level="2"] i:nth-child(-n + 2),
+  .pcard__level[data-level="3"] i:nth-child(-n + 3),
+  .pcard__level[data-level="4"] i {
+    background: var(--color-accent);
+    box-shadow: 0 0 10px -2px var(--color-glow);
+  }
+
+  .pcard__name {
+    margin: 0;
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .pcard__price {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: 2.375rem;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .pcard__price small {
+    margin-left: 0.25rem;
+    color: var(--color-text-muted);
+    font-family: var(--font-sans);
+    font-size: var(--site-text-small);
+    font-weight: var(--weight-regular);
+    letter-spacing: 0;
+  }
+
+  .pcard__yearly {
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+  }
+
+  .pcard__tagline {
+    min-height: 2.6em;
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: 1.35;
+  }
+
+  .pcard__limits {
+    display: grid;
+    margin: 0.25rem 0 0;
+    border-block: 1px solid var(--color-border-subtle);
+  }
+
+  .pcard__limits div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-block: 0.4375rem;
+  }
+
+  .pcard__limits div + div {
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .pcard__limits dt {
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+  }
+
+  .pcard__limits dd {
+    margin: 0;
+    color: var(--color-text);
+    font-size: var(--site-text-small);
+    font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pcard__plus {
+    margin-top: 0.25rem;
+    color: var(--color-text-faint);
+    font-size: 0.6875rem;
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .pcard__features {
+    display: grid;
+    align-content: start;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--site-text-small);
+  }
+
+  .pcard__features li {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1fr);
+    gap: 0.5rem;
+    align-items: start;
+    color: var(--color-text);
+  }
+
+  .pcard__features li[data-soon="true"] {
+    color: var(--color-text-secondary);
+  }
+
+  .pcard__mark {
+    display: grid;
+    place-items: center;
+    width: 1rem;
+    height: 1rem;
+    margin-top: 0.125rem;
+    border-radius: var(--radius-full);
+    color: var(--status-working);
+  }
+
+  .pcard__mark :global(svg) {
+    width: 0.9375rem;
+    height: 0.9375rem;
+  }
+
+  .pcard__features li[data-soon="true"] .pcard__mark {
+    width: 0.5rem;
+    height: 0.5rem;
+    margin: 0.375rem 0.25rem 0;
+    border: 1px solid var(--color-accent-text);
+    background: var(--color-accent-soft);
+  }
+
+  .pcard__feature {
+    display: grid;
+    line-height: 1.35;
+  }
+
+  .pcard__feature small {
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+  }
+
+  .pcard__soon {
+    display: inline-block;
+    margin-left: 0.375rem;
+    padding: 0 0.4375rem;
+    vertical-align: 0.0625rem;
+    white-space: nowrap;
+    border: 1px solid var(--color-border-lit-soft);
+    border-radius: var(--radius-full);
+    color: var(--color-accent-text);
+    font-size: 0.625rem;
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.06em;
+  }
+
+  .pcard__link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-top: var(--space-3);
+    color: var(--color-accent-text);
+    font-size: var(--site-text-small);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+  }
+
+  .pcard__link :global(svg) {
+    width: 0.875rem;
+    height: 0.875rem;
+    transition: transform var(--dur-base) var(--ease-out);
+  }
+
+  .pcard__link:hover {
+    color: var(--color-text);
+  }
+
+  .pcard__link:hover :global(svg) {
+    transform: translateX(3px);
+  }
+
+  .pcard__link:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 3px;
+    border-radius: var(--radius-sm);
+  }
+
+  .pstrip__note {
+    color: var(--color-text-muted);
+    font-size: var(--site-text-xs);
+    text-align: center;
+  }
+
+  @media (max-width: 68rem) {
+    .pstrip__cards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 34rem) {
+    .pstrip__cards {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .pcard__tagline {
+      min-height: 0;
+    }
+
+    .pstrip__shared {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pcard,
+    .pcard__link :global(svg) {
+      transition: none;
+    }
+
+    .pcard:hover {
+      transform: none;
+    }
+  }
+</style>

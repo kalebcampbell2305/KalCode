@@ -8,7 +8,15 @@ import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { classifyChanges, classifyRange, dependentsOf, renderClassify, workspaceGraph } from "./lifecycle/classify.mjs";
-import { gateForWorktree, recordGate, runGates, selectGates, TIMED_OUT } from "./lifecycle/gate.mjs";
+import {
+  gateConcurrency,
+  gateForWorktree,
+  gatePortOffset,
+  recordGate,
+  runGates,
+  selectGates,
+  TIMED_OUT,
+} from "./lifecycle/gate.mjs";
 import { makeGit, parseNameStatus } from "./lifecycle/git.mjs";
 import { evaluateStop } from "./lifecycle/hook.mjs";
 import { changedImporters, LockfileError, parsePnpmLock } from "./lifecycle/lockfile.mjs";
@@ -859,7 +867,12 @@ describe("gate", () => {
     assert.equal(checkout.env.STAGE_URL, undefined, "unset like ci.yml");
     assert.equal(checkout.env.PATH, "p");
     ran.length = 0;
-    const failed = await runGates(plan, { repo: ".", exec: exec("pnpm --filter @kalcode/website build") });
+    const failed = await runGates(plan, {
+      repo: ".",
+      exec: exec("pnpm --filter @kalcode/website build"),
+      jobs: 1,
+      keepGoing: false,
+    });
     assert.equal(failed.status, "FAIL");
     assert.deepEqual(
       failed.results.map((r) => r.state),
@@ -927,6 +940,134 @@ describe("gate", () => {
     assert.match(spent.results[0].why, /^b timed out/);
   });
 
+  test("runs independent gates concurrently, never overlaps an exclusive resource, and keeps plan order", async () => {
+    const gate = (id, extra = {}) => ({
+      id,
+      run: [`${id}-1`, `${id}-2`],
+      env: {},
+      unsetEnv: [],
+      requires: [],
+      builtin: null,
+      timeoutMs: null,
+      exclusive: [],
+      scheduling: { resources: { workspace: "read" } },
+      state: "selected",
+      ...extra,
+    });
+    const plan = [
+      gate("a"),
+      gate("rust", { exclusive: ["cargo-build"] }),
+      gate("b"),
+      gate("e2e", { exclusive: ["cargo-build"] }),
+      gate("mac", { state: "unavailable", why: "not here" }),
+      gate("c"),
+    ];
+    const active = new Set();
+    let peak = 0;
+    const overlaps = [];
+    const exec = async (command, { output }) => {
+      const id = command.replace(/-\d$/, "");
+      active.add(id);
+      peak = Math.max(peak, active.size);
+      if (active.has("rust") && active.has("e2e")) overlaps.push(command);
+      output?.(`out of ${command}\n`);
+      await new Promise((r) => setTimeout(r, id === "rust" ? 40 : 5));
+      active.delete(id);
+      return 0;
+    };
+    const lines = [];
+    const outcome = await runGates(plan, { repo: ".", exec, concurrency: 3, log: (l) => lines.push(l) });
+    assert.equal(outcome.status, "PASS");
+    assert.deepEqual(
+      outcome.results.map((r) => [r.id, r.state]),
+      [
+        ["a", "pass"],
+        ["rust", "pass"],
+        ["b", "pass"],
+        ["e2e", "pass"],
+        ["mac", "unavailable"],
+        ["c", "pass"],
+      ],
+    );
+    assert.equal(peak, 3, "three gates ran at once");
+    assert.deepEqual(overlaps, [], "gates sharing cargo-build never overlap");
+    const rustBlock = lines.find((l) => l.startsWith("---- rust "));
+    assert.match(rustBlock, />> {3}rust: rust-1\nout of rust-1\n>> {3}rust: rust-2\nout of rust-2\nPASS rust$/);
+    assert.ok(!lines.some((l) => l.startsWith(">>")), "a concurrent gate's output only appears in its block");
+
+    // Concurrency 1 is today's sequential, live-streamed behaviour.
+    const order = [];
+    const seq = await runGates(plan, {
+      repo: ".",
+      jobs: 1,
+      exec: (command, options) => {
+        order.push(command);
+        assert.equal(options.output, undefined, "streams live");
+        return 0;
+      },
+    });
+    assert.equal(seq.status, "PASS");
+    assert.deepEqual(order, ["a-1", "a-2", "rust-1", "rust-2", "b-1", "b-2", "e2e-1", "e2e-2", "c-1", "c-2"]);
+  });
+
+  test("a failure stops starting new gates but lets running gates finish; keepGoing runs the rest", async () => {
+    const gate = (id) => ({
+      id,
+      run: [id],
+      env: {},
+      unsetEnv: [],
+      requires: [],
+      builtin: null,
+      state: "selected",
+      scheduling: { resources: { workspace: "read" } },
+    });
+    const plan = ["fast-fail", "slow", "later-1", "later-2"].map(gate);
+    const exec = async (command) => {
+      await new Promise((r) => setTimeout(r, command === "slow" ? 30 : 1));
+      return command === "fast-fail" ? 1 : 0;
+    };
+    const stopped = await runGates(plan, { repo: ".", exec, concurrency: 2, keepGoing: false });
+    assert.equal(stopped.status, "FAIL");
+    assert.deepEqual(
+      stopped.results.map((r) => r.state),
+      ["fail", "pass", "not-run", "not-run"],
+    );
+    const kept = await runGates(plan, { repo: ".", exec, concurrency: 2, keepGoing: true });
+    assert.deepEqual(
+      kept.results.map((r) => r.state),
+      ["fail", "pass", "pass", "pass"],
+    );
+    assert.equal(gateConcurrency({}), 4);
+    assert.equal(gateConcurrency({ KALCODE_GATE_CONCURRENCY: "1" }), 1);
+    assert.throws(() => gateConcurrency({ KALCODE_GATE_CONCURRENCY: "0" }), /from 1 to 4/);
+    assert.equal(gatePortOffset({ KALCODE_GATE_PORT_OFFSET: "50" }), 50);
+    assert.throws(() => gatePortOffset({ KALCODE_GATE_PORT_OFFSET: "-1" }), /0-1000/);
+  });
+
+  test("gate ports shift per worker slot without overlap, and resource tags are validated", () => {
+    const web = classification(["apps/website/a.ts"], ["website"], ["website"]);
+    const portsAt = (slot) =>
+      Object.values(selectGates(policy, web, { only: ["website-checkout-e2e"], portOffset: slot * 10 })[0].env).filter(
+        (v) => /^\d{4,5}$/.test(v),
+      );
+    assert.deepEqual(portsAt(0), ["8898", "8899", "8900"]);
+    assert.deepEqual(portsAt(5), ["8948", "8949", "8950"]);
+    const all = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap(portsAt));
+    assert.equal(all.size, 30, "ten worker slots get distinct checkout ports");
+    const rust = selectGates(policy, classification(["crates/a.rs"], ["desktop"], ["desktop"]), {
+      platform: "win32",
+    });
+    assert.deepEqual(rust.find((g) => g.id === "rust").exclusive, ["cargo-build", "desktop-dist"]);
+    assert.deepEqual(rust.find((g) => g.id === "desktop-native-e2e").exclusive, ["cargo-build", "desktop-dist"]);
+    assert.deepEqual(validatePolicy({ ...policy, gates: [{ id: "x", run: ["y"], exclusive: "cargo" }] }), [
+      "gate x: exclusive must be a list of resource names",
+    ]);
+    assert.deepEqual(
+      validatePolicy({ ...policy, gates: [{ id: "x", run: ["y"], ports: { P: 80 }, env: { Q: "1" } }] }),
+      ["gate x: port P must be an integer 1024-60000 and not also in env"],
+    );
+  });
+
   test("an overrunning command's whole process tree is killed, not just its shell", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kc-gate-timeout-"));
     after(() => rmSync(dir, { recursive: true, force: true }));
@@ -991,7 +1132,13 @@ describe("gate", () => {
     assert.equal(recordGate(f.git, clean, { status: "FAIL", results: [] }), null);
     const subset = gateForWorktree(policy, f.git, { base: "origin/main", only: ["api"] });
     assert.equal(recordGate(f.git, subset, { status: "PASS", results: [] }), null, "no receipt for an --only subset");
-    const receipt = recordGate(f.git, clean, { status: "PASS", results: [] });
+    assert.equal(recordGate(f.git, clean, { status: "PASS", results: [] }), null);
+    mkdirSync(join(f.repo, ".git", "info"), { recursive: true });
+    writeFileSync(join(f.repo, ".git", "info", "exclude"), "/target/\n");
+    const receipt = recordGate(f.git, clean, {
+      status: "PASS",
+      results: clean.plan.map((gate) => ({ id: gate.id, state: gate.state === "selected" ? "pass" : "unavailable" })),
+    });
     assert.equal(JSON.parse(readFileSync(receipt, "utf8")).head, head);
     const list = spawnSync(process.execPath, [SHIP, "gate", "--list", "--repo", f.repo], {
       encoding: "utf8",

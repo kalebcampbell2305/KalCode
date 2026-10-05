@@ -36,13 +36,15 @@ impl ProviderState {
     }
 }
 
-/// Runs detection (blocking) and records the resulting `provider.*` events when the core is
-/// available. Shared by `providers_detect` and the thread runtime's first use.
-pub fn detect_and_record(
+/// Makes sure a detection exists (blocking) and records the resulting `provider.*` events when
+/// the core is available. For the thread runtime's first use (a session launch): returns at
+/// once when a check completed, waits for a running one (the startup check) instead of queueing
+/// another full check behind it, and checks only when none ever ran.
+pub fn detect_once_and_record(
     core: Option<&Arc<Core>>,
     registry: &ProviderRegistry,
 ) -> Vec<ProviderStatus> {
-    let (statuses, events) = registry.detect_all();
+    let (statuses, events) = registry.detect_all_once();
     record(core, events);
     statuses
 }

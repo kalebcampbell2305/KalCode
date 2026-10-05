@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::agent::ProviderId;
+use crate::agent_state::{AgentFilter, AgentState};
 use crate::threads::ThreadStatus;
 
 /// Most choices a clarification offers. More matches than this ask for a longer name.
@@ -88,21 +89,75 @@ pub enum SessionResolution {
 
 /// A state KalVoice can look sessions up by ("focus the one waiting for permission",
 /// "which agent failed?").
+///
+/// For coding agents ([`SessionScope::Agents`]) every state is read from the shared agent-state
+/// model ([`Self::matches_agent`]), the same for every provider; for chat threads
+/// ([`SessionScope::Threads`]) from the thread's own status ([`Self::matches`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum SessionAttention {
     /// A permission request is pending.
     WaitingForPermission,
-    /// The provider asked the person something.
+    /// The provider asked the person something (or a permission request is pending: both wait
+    /// on the person).
     WaitingForYou,
+    /// The session failed. For a coding agent this includes an agent whose last turn failed.
     Failed,
-    /// Not failed, but not making progress: waiting on a dependency, recovering or offline.
+    /// Not failed, but not making progress. A coding agent is stuck when the shared model says
+    /// WAITING (blocked on something other than the person); an offline agent is IDLE there and
+    /// a recovering one STARTING, so neither is stuck. A chat thread is stuck while waiting on a
+    /// dependency, recovering or offline.
     Stuck,
 }
 
+/// Which open sessions a state lookup ("which agent is stuck?", "which thread failed?") reads.
+/// Agents and Threads are separate product concepts: an agent is a real coding terminal session
+/// of any provider, never a chat thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SessionScope {
+    /// Coding agents only (interactive provider terminals of every provider). The default:
+    /// "which one is stuck", "what failed" and every phrase that names an agent, a terminal, a
+    /// pane or a provider.
+    #[default]
+    Agents,
+    /// Chat threads only: phrases that name a thread or a session.
+    Threads,
+}
+
 impl SessionAttention {
-    /// Whether a thread in `status` is in this state.
+    /// Whether a coding agent with these runtime facts is in this state, read from the shared
+    /// agent-state model ([`AgentState::of`]): identical for every provider.
+    pub fn matches_agent(
+        self,
+        status: ThreadStatus,
+        activity: Option<&str>,
+        pending_approvals: u32,
+    ) -> bool {
+        let state = AgentState::of(status, activity, pending_approvals);
+        match self {
+            Self::WaitingForPermission => {
+                state == AgentState::NeedsYou
+                    && (status == ThreadStatus::WaitingForPermission || pending_approvals > 0)
+            }
+            Self::WaitingForYou => state == AgentState::NeedsYou,
+            Self::Failed => state == AgentState::Failed,
+            Self::Stuck => state == AgentState::Waiting,
+        }
+    }
+
+    /// The Agents tab group that shows every agent in this state.
+    pub fn agent_filter(self) -> AgentFilter {
+        match self {
+            Self::WaitingForPermission | Self::WaitingForYou => AgentFilter::NeedsYou,
+            Self::Failed => AgentFilter::Failed,
+            Self::Stuck => AgentFilter::Waiting,
+        }
+    }
+
+    /// Whether a chat thread in `status` is in this state.
     pub fn matches(self, status: ThreadStatus) -> bool {
         match self {
             Self::WaitingForPermission => status == ThreadStatus::WaitingForPermission,
@@ -204,6 +259,56 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SessionAttention::WaitingForPermission).expect("json"),
             "waiting_for_permission"
+        );
+    }
+
+    #[test]
+    fn agent_attention_reads_the_shared_agent_state_model() {
+        use crate::agent_state::LAST_TURN_FAILED_ACTIVITY;
+        use SessionAttention as A;
+        let states = [
+            A::WaitingForPermission,
+            A::WaitingForYou,
+            A::Failed,
+            A::Stuck,
+        ];
+        for status in ThreadStatus::ALL {
+            for pending in [0, 1] {
+                let agent = AgentState::of(status, None, pending);
+                for state in states {
+                    // Every agent in a state is in that state's Agents tab group.
+                    if state.matches_agent(status, None, pending) {
+                        assert!(state.agent_filter().matches(agent), "{status:?} {state:?}");
+                    }
+                }
+                // The groups that name exactly one shared state agree with it.
+                assert_eq!(
+                    A::Stuck.matches_agent(status, None, pending),
+                    agent == AgentState::Waiting
+                );
+                assert_eq!(
+                    A::WaitingForYou.matches_agent(status, None, pending),
+                    agent == AgentState::NeedsYou
+                );
+                assert_eq!(
+                    A::Failed.matches_agent(status, None, pending),
+                    agent == AgentState::Failed
+                );
+            }
+        }
+        // Permission is the narrower Needs-you: a request is open, not a question.
+        assert!(A::WaitingForPermission.matches_agent(ThreadStatus::WaitingForPermission, None, 0));
+        assert!(A::WaitingForPermission.matches_agent(ThreadStatus::RunningTool, None, 1));
+        assert!(!A::WaitingForPermission.matches_agent(ThreadStatus::WaitingForUser, None, 0));
+        assert!(!A::WaitingForPermission.matches_agent(ThreadStatus::Completed, None, 1));
+        // A failed last turn is a failed agent; offline and recovering agents are not stuck.
+        assert!(A::Failed.matches_agent(ThreadStatus::Idle, Some(LAST_TURN_FAILED_ACTIVITY), 0));
+        assert!(!A::Stuck.matches_agent(ThreadStatus::Offline, None, 0));
+        assert!(!A::Stuck.matches_agent(ThreadStatus::Recovering, None, 0));
+        assert!(A::Stuck.matches_agent(ThreadStatus::WaitingForDependency, None, 0));
+        assert_eq!(
+            serde_json::to_value(SessionScope::default()).expect("json"),
+            "agents"
         );
     }
 

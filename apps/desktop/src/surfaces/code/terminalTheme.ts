@@ -1,4 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
+import type { CSSProperties } from "react";
 
 /**
  * Terminal palettes, derived from the design tokens (packages/ui/src/styles/tokens.css).
@@ -127,4 +128,13 @@ export function luminance(hex: string): number {
 export function contrast(a: string, b: string): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+/** The host's cursor colour for Code.module.css's compositor-blinked bar cursor. */
+const CURSOR_STYLES = {
+  dark: { "--terminal-cursor": TERMINAL_THEMES.dark.cursor },
+  light: { "--terminal-cursor": TERMINAL_THEMES.light.cursor },
+} as Record<"dark" | "light", CSSProperties>;
+export function cursorStyle(theme: "dark" | "light"): CSSProperties {
+  return CURSOR_STYLES[theme];
 }

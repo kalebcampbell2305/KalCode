@@ -9,6 +9,7 @@ import {
   formatInterval,
   formatLimit,
   formatPrice,
+  getPlan,
   getPlanFeature,
   planIncludes,
   yearlySavingsUsd,
@@ -20,13 +21,27 @@ import IntervalToggle from "../components/IntervalToggle.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
 import { checkoutIntentHref } from "../lib/checkout-intent";
-import { RELEASES, releaseCopy } from "../lib/releases";
-import { getPage } from "../lib/site";
+import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/pricing");
 // Paid plans open with the same strict build flag as the account page's checkout (docs/BILLING.md
-// §9). Either way CHECK OUT NOW goes account-first; /account says when paid plans are not open.
+// §9). Either way a plan's button goes account-first; /account says when paid plans are not open.
+// Free needs no payment, so its button says so ("Start free") instead of "Check out now".
 const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
+const isFree = (plan: (typeof PLANS)[number]) => plan.price.monthlyUsd === 0;
+const freePlan = getPlan("free");
+
+// "Every plan includes": every feature the catalog makes available from the first plan, so the list
+// grows the moment plans.ts flips a feature to available. A value shared by every plan is shown.
+const everyPlan = PLAN_FEATURE_GROUPS.flatMap((group) =>
+  group.features.filter((feature) => feature.from === freePlan.id && feature.status === "available"),
+).map((feature) => {
+  const values = PLANS.map((plan) => feature.values?.[plan.id]);
+  const shared = values.every((value) => value && value === values[0]) ? values[0] : undefined;
+  return { id: feature.id, label: feature.label, shared };
+});
+const planNames = PLANS.map((plan) => plan.name);
+const everyPlanNames = `${planNames.slice(0, -1).join(", ")} and ${planNames.at(-1)}`;
 
 // Every price, limit, plan name and feature state below comes from @kalcode/protocol/plans.
 const usd = (value: number) => `$${value.toLocaleString("en-US")}`;
@@ -76,19 +91,16 @@ const faq = [
   },
   {
     q: "Do I pay for AI usage through KalCode?",
-    a: "No. Claude Code and Codex run on your own provider accounts, and your usage is billed by each provider, as it is today. KalCode never charges for, resells or meters provider usage.",
+    a: "No. Claude Code, Codex, Cursor and Gemini CLI run on your own provider accounts, and your usage is billed by each provider, as it is today. KalCode never charges for, resells or meters provider usage.",
   },
   {
     q: "Are permission modes limited by plan?",
-    a: releaseCopy(
-      "No. Permission modes are safety controls, never a paid extra. In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
-      RELEASES,
-    ),
+    a: "No. Every permission mode is on every plan; plans never differ by safety controls. New coding agents start in Bypass, so edits, commands, tests, builds, Git and dev servers just run, and access to credentials and secrets still asks. Choose Plan when an agent should only read.",
   },
   checkoutOpen
     ? {
         q: "How do I buy a plan?",
-        a: "Pick monthly or yearly and press CHECK OUT NOW on a plan. Sign in or create your KalCode account, and KalCode continues straight to Stripe's hosted checkout for that plan. Cancel any time from Manage billing on your account page.",
+        a: `Pick monthly or yearly and press Check out now on a plan. Sign in or create your KalCode account, and KalCode continues straight to Stripe's hosted checkout for that plan. ${freePlan.name} needs no checkout. Cancel any time from Manage billing on your account page.`,
       }
     : {
         q: "When can I buy a plan?",
@@ -152,11 +164,25 @@ const faq = [
                   )}
                 </p>
                 <a
-                  class:list={["button", "button--primary", "tier__cta", { "tier__cta--popular": plan.popular }]}
+                  class:list={[
+                    "button",
+                    plan.popular ? "button--primary" : "button--secondary",
+                    "tier__cta",
+                    { "tier__cta--popular": plan.popular },
+                  ]}
                   href={checkoutIntentHref(plan.id, "month")}
                   data-checkout-plan={plan.id}
                 >
-                  CHECK OUT NOW<span class="visually-hidden"> with {plan.name}</span>
+                  {isFree(plan) ? (
+                    <>
+                      Start free<span class="visually-hidden"> with {plan.name}</span>
+                    </>
+                  ) : (
+                    <>
+                      Check out now<span class="visually-hidden"> with {plan.name}</span>
+                    </>
+                  )}
+                  <Icon name="arrow-right" />
                 </a>
 
                 <ul class="tier__limits" role="list" aria-label={`${plan.name} limits`}>
@@ -220,20 +246,56 @@ const faq = [
         }
       </ul>
 
-      <div class="pricing__notes">
-        <p class="pricing__footnote" id="unlimited-note"><span aria-hidden="true">* </span>{UNLIMITED_NOTE}</p>
-        <div class="includes">
-          <p class="includes__label">Every plan includes</p>
-          <ul class="chips" role="list">
-            <li class="chip chip--built">All supported providers</li>
-            <li class="chip chip--built">Unlimited local agents and terminals</li>
-            <li class="chip chip--built">Your own provider accounts</li>
-            <li class="chip chip--built">Plan, Approve and Auto modes</li>
-            <li class="chip chip--built">Unlimited on-device dictation</li>
-            <li class="chip chip--built">Security fixes and updates</li>
-          </ul>
+      <section class="unlimited" aria-labelledby="unlimited-title">
+        <div class="unlimited__lead">
+          <p class="unlimited__kicker"><span class="unlimited__glyph" aria-hidden="true">∞</span> On every plan</p>
+          <h3 id="unlimited-title" class="unlimited__title">Unlimited local coding agents + terminals.</h3>
+          <p class="unlimited__text">
+            KalCode never caps how many agents or terminals you run, on {freePlan.name} too. You pay for
+            the workflow KalCode adds around them.
+          </p>
         </div>
-      </div>
+        <ul class="unlimited__limits" role="list">
+          <li>
+            <span class="unlimited__mark unlimited__mark--ok" aria-hidden="true"><Icon name="check" /></span>
+            <h4>No KalCode cap</h4>
+            <p>Start as many local coding agents and terminals as your work needs. An agent you start is never held back because the CPU is busy.</p>
+          </li>
+          <li>
+            <span class="unlimited__mark" aria-hidden="true"><Icon name="key" /></span>
+            <h4>Your provider's limits still apply</h4>
+            <p>Your Claude, ChatGPT, Cursor and Google plans keep their own usage, rate and concurrency limits. When an account is limited, KalCode suggests another one you connected and never switches on its own.</p>
+          </li>
+          <li>
+            <span class="unlimited__mark" aria-hidden="true"><Icon name="system" /></span>
+            <h4>Your computer sets the ceiling</h4>
+            <p>Memory, disk and CPU decide how many agents run smoothly at once. KalCode waits only when your computer genuinely can't start one, says why, and offers Start Anyway.</p>
+          </li>
+        </ul>
+        <p class="unlimited__note" id="unlimited-note"><span aria-hidden="true">* </span>{UNLIMITED_NOTE}</p>
+      </section>
+
+      <section class="every-plan" aria-labelledby="every-plan-title">
+        <div class="every-plan__head">
+          <h3 id="every-plan-title" class="every-plan__title">Every plan includes</h3>
+          <p>Available today on {everyPlanNames}.</p>
+        </div>
+        <ul class="every-plan__list" role="list">
+          {
+            everyPlan.map((feature) => (
+              <li data-included={feature.id}>
+                <span class="every-plan__check" aria-hidden="true">
+                  <Icon name="check" />
+                </span>
+                <span>
+                  {feature.label}
+                  {feature.shared && <span class="every-plan__value"> · {feature.shared}</span>}
+                </span>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
 
       <details class="compare" id="compare">
         <summary class="compare__summary">
@@ -333,18 +395,20 @@ const faq = [
         </div>
       </details>
 
-      <p class="section-foot">
-        <span>Local dictation is unlimited. Provider inference stays on your connected provider account.</span>
-        <a class="text-link" href="/docs/kalvoice">How KalVoice Requests are counted <Icon name="arrow-right" /></a>
-      </p>
     </div>
   </section>
 
   <section class="world-section" aria-labelledby="faq-title">
     <Backdrop variant="deep" />
-    <div class="container feature-split feature-split--top">
-      <div class="feature-split__copy">
-        <h2 id="faq-title" class="h2 h2--sm">Questions</h2>
+    <div class="container faq-layout">
+      <div class="faq-layout__aside">
+        <h2 id="faq-title" class="faq-layout__title">Questions</h2>
+        <p>Straight answers about plans, billing and what counts. Anything else, ask us.</p>
+        <ul class="faq-layout__links" role="list">
+          <li><a class="text-link" href="/docs/kalvoice">How KalVoice Requests are counted <Icon name="arrow-right" /></a></li>
+          <li><a class="text-link" href="/docs/providers">How provider accounts work <Icon name="arrow-right" /></a></li>
+          <li><a class="text-link" href={`mailto:${CONTACT_EMAIL}`}>Email {CONTACT_EMAIL} <Icon name="arrow-right" /></a></li>
+        </ul>
       </div>
       <div class="faq">
         {
@@ -412,8 +476,8 @@ const faq = [
   .state--soon svg,
   .feat--coming_soon .feat__mark svg {
     fill: none;
-    stroke: var(--color-text-muted);
-    stroke-width: 1.8;
+    stroke: var(--color-text-secondary);
+    stroke-width: 2;
     stroke-dasharray: 3 2.6;
   }
 
@@ -442,23 +506,16 @@ const faq = [
     display: flex;
     flex-direction: column;
     padding: clamp(1.5rem, 1.1rem + 0.9vw, 2rem);
-    border-radius: var(--world-frame-radius);
-    background: linear-gradient(180deg, rgb(12 20 40 / 0.72), rgb(4 7 16 / 0.66));
-    box-shadow:
-      inset 0 0 0 1px rgb(var(--world-line) / 0.16),
-      inset 0 1px 0 rgb(255 255 255 / 0.07),
-      0 40px 80px -50px rgb(0 0 0 / 0.95);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
   }
 
   .tier--popular {
     background:
-      radial-gradient(120% 55% at 50% 0%, rgb(var(--world-blue) / 0.24), transparent 70%),
-      linear-gradient(180deg, rgb(14 26 54 / 0.9), rgb(4 8 18 / 0.8));
-    box-shadow:
-      inset 0 0 0 1px rgb(var(--world-blue) / 0.6),
-      inset 0 1px 0 rgb(255 255 255 / 0.14),
-      0 0 60px -14px rgb(var(--world-blue) / 0.6),
-      0 40px 80px -50px rgb(0 0 0 / 0.95);
+      radial-gradient(120% 45% at 50% 0%, rgb(var(--world-blue) / 0.2), transparent 70%),
+      var(--world-panel);
+    box-shadow: var(--world-panel-lit);
   }
 
   .tier__head {
@@ -484,9 +541,9 @@ const faq = [
     transform: translate(-50%, -50%);
     padding: 0.4rem 0.9rem;
     border-radius: var(--radius-full);
-    background: linear-gradient(180deg, rgb(var(--world-blue) / 0.95), rgb(58 120 234 / 0.95));
-    box-shadow: 0 0 20px -4px rgb(var(--world-blue) / 0.8);
-    color: #03060d;
+    background: linear-gradient(180deg, var(--color-accent-hover), var(--color-accent));
+    box-shadow: 0 0 20px -4px var(--color-glow);
+    color: var(--color-accent-fg);
     font-family: var(--font-wider);
     font-size: 0.625rem;
     font-weight: var(--weight-semibold);
@@ -548,12 +605,9 @@ const faq = [
 
   .tier__cta {
     width: 100%;
+    min-height: 3rem;
     margin-top: var(--space-6);
-    letter-spacing: 0.12em;
-  }
-
-  .tier:not(.tier--popular) .tier__cta::before {
-    opacity: 0.28;
+    font-size: var(--site-text-small);
   }
 
   .tier__cta--popular::before {
@@ -565,7 +619,7 @@ const faq = [
     gap: var(--space-2);
     margin-top: var(--space-6);
     padding-top: var(--space-5);
-    border-top: 1px solid rgb(var(--world-line) / 0.14);
+    border-top: 1px solid var(--color-border);
     color: var(--color-text-secondary);
     font-size: var(--site-text-small);
   }
@@ -658,31 +712,301 @@ const faq = [
     white-space: nowrap;
   }
 
-  /* ---------- Notes ---------- */
+  /* ---------- Unlimited, explained ---------- */
 
-  .pricing__notes {
+  .unlimited {
+    position: relative;
     display: grid;
-    gap: var(--space-6);
-    margin-top: clamp(1.75rem, 1.25rem + 1.5vw, 2.5rem);
+    gap: clamp(1.5rem, 1rem + 2vw, 2.5rem);
+    margin-top: clamp(2rem, 1.5rem + 2vw, 3.5rem);
+    padding: clamp(1.5rem, 1rem + 2vw, 2.75rem);
+    overflow: hidden;
+    border-radius: var(--radius-xl);
+    background:
+      radial-gradient(60% 120% at 0% 0%, rgb(var(--world-blue) / 0.16), transparent 62%),
+      var(--world-panel);
+    box-shadow: var(--world-panel-lit);
   }
 
-  .pricing__footnote {
-    max-width: 80ch;
+  .unlimited::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: clamp(1.5rem, 1rem + 2vw, 2.75rem);
+    width: min(50%, 22rem);
+    height: 1px;
+    background: linear-gradient(90deg, var(--color-accent-icy), transparent);
+  }
+
+  .unlimited__lead {
+    display: grid;
+    align-content: start;
+    align-items: end;
+    gap: var(--space-4) var(--space-12);
+    color: var(--color-text-secondary);
+  }
+
+  .unlimited__kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-accent-text);
+    font-family: var(--font-wider);
+    font-size: var(--type-label);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  .unlimited__glyph {
+    font-family: var(--font-sans);
+    font-size: 1.25rem;
+    letter-spacing: 0;
+    line-height: 1;
+  }
+
+  .unlimited__title {
+    max-width: 22ch;
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-type-headline);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 1.04;
+    text-wrap: balance;
+  }
+
+  .unlimited__text {
+    max-width: 44ch;
+    font-size: var(--site-text-lead);
+    line-height: 1.5;
+  }
+
+  .unlimited__limits {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .unlimited__limits li {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-4);
+    row-gap: var(--space-1);
+    align-content: start;
+    padding: var(--space-5);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-bg-sunken) 60%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+  }
+
+  .unlimited__limits h4 {
+    color: var(--color-text);
+    font-size: 1.0625rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.01em;
+  }
+
+  .unlimited__limits p {
+    grid-column: 2;
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    line-height: var(--leading-normal);
+  }
+
+  .unlimited__mark {
+    grid-row: span 2;
+    display: inline-grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-text) 5%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-border-strong);
+    color: var(--color-text-secondary);
+  }
+
+  .unlimited__mark--ok {
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+    color: var(--color-accent-text);
+  }
+
+  .unlimited__mark :global(svg) {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .unlimited__note {
     color: var(--color-text-muted);
     font-size: var(--site-text-xs);
   }
 
-  .includes {
-    margin-bottom: 0;
+  @media (min-width: 64rem) {
+    .unlimited__lead {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    }
+
+    .unlimited__kicker {
+      grid-column: 1 / -1;
+    }
+
+    .unlimited__text {
+      padding-bottom: 0.35rem;
+    }
+  }
+
+  @media (min-width: 56rem) {
+    .unlimited__limits {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-4);
+    }
+
+    .unlimited__limits li {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--space-3);
+      padding: var(--space-6);
+    }
+
+    .unlimited__mark {
+      grid-row: auto;
+    }
+
+    .unlimited__limits p {
+      grid-column: 1;
+    }
+  }
+
+  /* ---------- Every plan includes (from the catalog) ---------- */
+
+  .every-plan {
+    display: grid;
+    gap: var(--space-6);
+    margin-top: var(--space-4);
+    padding: clamp(1.5rem, 1rem + 2vw, 2.75rem);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
+  }
+
+  .every-plan__head {
+    display: grid;
+    align-content: start;
+    gap: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--site-text-small);
+  }
+
+  .every-plan__title {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-type-title);
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.02em;
+  }
+
+  .every-plan__list {
+    columns: 17rem 3;
+    column-gap: var(--space-8);
+  }
+
+  .every-plan__list li {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding-block: var(--space-2);
+    break-inside: avoid;
+    color: var(--color-text);
+    font-size: var(--site-text-small);
+    line-height: 1.45;
+  }
+
+  .every-plan__check {
+    display: inline-flex;
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    margin-top: 0.15em;
+    color: var(--color-success);
+  }
+
+  .every-plan__check :global(svg) {
+    width: 100%;
+    height: 100%;
+  }
+
+  .every-plan__value {
+    color: var(--color-text-muted);
+  }
+
+  @media (min-width: 64rem) {
+    .every-plan__head {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: baseline;
+      column-gap: var(--space-5);
+      padding-bottom: var(--space-5);
+      border-bottom: 1px solid var(--color-border);
+    }
+  }
+
+  /* ---------- Questions ---------- */
+
+  .faq-layout {
+    display: grid;
+    gap: var(--space-8);
+  }
+
+  .faq-layout__aside {
+    display: grid;
+    align-content: start;
+    gap: var(--space-4);
+    color: var(--color-text-secondary);
+  }
+
+  .faq-layout__title {
+    color: var(--color-text);
+    font-family: var(--font-display);
+    font-size: var(--site-type-headline);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 1;
+  }
+
+  .faq-layout__aside > p {
+    max-width: 36ch;
+  }
+
+  .faq-layout__links {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    font-size: var(--site-text-small);
+  }
+
+  .faq-layout__links .text-link {
+    overflow-wrap: anywhere;
+  }
+
+  @media (min-width: 64rem) {
+    .faq-layout {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      gap: var(--space-16);
+    }
+
+    .faq-layout__aside {
+      position: sticky;
+      top: calc(var(--site-header-h) + var(--space-8));
+      align-self: start;
+    }
   }
 
   /* ---------- Compare all features ---------- */
 
   .compare {
     margin-top: clamp(2.5rem, 2rem + 2vw, 4rem);
-    border-radius: var(--world-frame-radius);
-    background: linear-gradient(180deg, rgb(10 18 36 / 0.6), rgb(4 7 16 / 0.55));
-    box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.16);
+    border-radius: var(--radius-xl);
+    background: var(--world-panel);
+    box-shadow: var(--world-panel-edge);
   }
 
   .compare__summary {
@@ -724,7 +1048,7 @@ const faq = [
   .compare__title {
     color: var(--color-text);
     font-family: var(--font-display);
-    font-size: var(--type-title);
+    font-size: var(--site-type-title);
     font-weight: var(--weight-semibold);
     letter-spacing: -0.02em;
   }
@@ -741,9 +1065,9 @@ const faq = [
 
   .compare__wrap {
     margin: 0 clamp(0.5rem, 0.25rem + 1vw, 1.25rem) clamp(0.5rem, 0.25rem + 1vw, 1.25rem);
-    border-radius: var(--radius-xl);
-    background: var(--world-base, #03050c);
-    box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.12);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-border);
     overflow-x: auto;
     overscroll-behavior-x: contain;
   }
@@ -765,7 +1089,7 @@ const faq = [
   .compare__table th,
   .compare__table td {
     padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid rgb(var(--world-line) / 0.09);
+    border-bottom: 1px solid var(--color-border-subtle);
     text-align: center;
     vertical-align: middle;
   }
@@ -775,7 +1099,7 @@ const faq = [
     left: 0;
     z-index: 1;
     width: 38%;
-    background: var(--world-base, #03050c);
+    background: var(--color-bg-sunken);
     color: var(--color-text);
     font-weight: var(--weight-regular);
     text-align: left;
@@ -784,8 +1108,8 @@ const faq = [
   .compare__table thead th,
   .compare__table thead td {
     padding-block: var(--space-5);
-    border-bottom: 1px solid rgb(var(--world-line) / 0.2);
-    background: var(--world-base, #03050c);
+    border-bottom: 1px solid var(--color-border-strong);
+    background: var(--color-bg-sunken);
   }
 
   .compare__plan {
@@ -812,9 +1136,9 @@ const faq = [
 
   .compare__table thead .is-popular {
     background:
-      linear-gradient(rgb(var(--world-blue) / 0.12), rgb(var(--world-blue) / 0.12)),
-      var(--world-base, #03050c);
-    box-shadow: inset 0 2px 0 rgb(var(--world-blue));
+      linear-gradient(var(--color-accent-soft), var(--color-accent-soft)),
+      var(--color-bg-sunken);
+    box-shadow: inset 0 2px 0 var(--color-accent);
   }
 
   .compare__group th {

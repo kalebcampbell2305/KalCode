@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{
     AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, AuthState, DetectionState,
-    ModelInfo, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    LaunchOrigin, ModelInfo, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::events::{EventPayload, NewEvent};
 use kalcode_contracts::ids::new_id;
@@ -69,6 +70,8 @@ pub struct FakeSession {
     /// Set when the runtime drops its handle: a real adapter releases the account's shared
     /// profile lease at that point.
     released: AtomicBool,
+    /// Who asks for the next turns, as the resource admission wrapper sees it.
+    origin: Mutex<LaunchOrigin>,
 }
 
 impl FakeSession {
@@ -79,6 +82,11 @@ impl FakeSession {
 
     pub fn calls(&self) -> Vec<Call> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// Who asks for this session's next turn: its launch origin, or the latest update.
+    pub fn launch_origin(&self) -> LaunchOrigin {
+        *self.origin.lock().unwrap()
     }
 
     pub fn fail_next_sends(&self) {
@@ -166,6 +174,10 @@ impl AgentSession for SessionHandle {
             });
         }
         Ok(())
+    }
+
+    fn set_launch_origin(&self, origin: LaunchOrigin) {
+        *self.0.origin.lock().unwrap() = origin;
     }
 
     fn interrupt(&self) -> Result<(), ProviderError> {
@@ -394,6 +406,7 @@ impl AgentProvider for FakeProvider {
         if let Some(error) = self.start_error.lock().unwrap().pop_front() {
             return Err(error);
         }
+        let origin = Mutex::new(config.launch_origin);
         let session = Arc::new(FakeSession {
             config,
             sink,
@@ -408,6 +421,7 @@ impl AgentProvider for FakeProvider {
             reconfigure_reserved: AtomicBool::new(false),
             interrupt_supported: self.interrupt,
             released: AtomicBool::new(false),
+            origin,
         });
         self.sessions.lock().unwrap().push(session.clone());
         Ok(Box::new(SessionHandle(session)))

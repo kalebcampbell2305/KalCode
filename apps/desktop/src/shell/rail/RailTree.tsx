@@ -1,4 +1,4 @@
-import type { WorkspaceGroup, WorkspaceRailEntry } from "@kalcode/protocol";
+import type { RailThread, WorkspaceGroup, WorkspaceRailEntry } from "@kalcode/protocol";
 import { DISPLAY_STATUS_TONE, displayStatusOf } from "@kalcode/protocol";
 import {
   DISPLAY_STATUS_GLYPH,
@@ -22,8 +22,9 @@ import {
   MoreHorizontal,
   Pencil,
 } from "lucide-react";
-import { forwardRef, type HTMLAttributes, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, type HTMLAttributes, type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useClock } from "../../surfaces/dashboard/useNow.ts";
 import { FavoriteButton } from "../favorites/FavoriteActions.tsx";
 import { isVisibleFavorite } from "../favorites/selection.ts";
 import { useFavorites } from "../favorites/store.ts";
@@ -100,13 +101,6 @@ export function RailTree({
   const [menuFor, setMenuFor] = useState<string | null>(null);
 
   const rows = useRef(new Map<string, HTMLDivElement>());
-  const [now, setNow] = useState(() => Date.now());
-
-  // Relative times stay honest while the rail is open.
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
 
   // The focused row: the remembered one if still visible, else the active workspace, else the first.
   const activeKey = nodes.find((n) => n.kind === "workspace" && isActive(n.entry))?.key;
@@ -385,23 +379,9 @@ export function RailTree({
             );
           }
 
-          const info = displayStatusOf(node.thread.status);
-          const Glyph = DISPLAY_STATUS_GLYPH[info.status];
           return (
             <RailThreadContextMenu key={node.key} id={node.thread.id}>
-              <TreeItem
-                {...common}
-                className={styles.threadRow}
-                aria-label={threadLabel(node.thread, now)}
-                title={`${node.thread.name} · ${statusWords(node.thread.status)}`}
-              >
-                <span className={styles.threadGlyph} data-tone={DISPLAY_STATUS_TONE[info.status]} aria-hidden="true">
-                  <Glyph />
-                </span>
-                <span className={styles.threadName}>{node.thread.name}</span>
-                <RailThreadFavoriteButton id={node.thread.id} />
-                <span className={styles.age}>{relativeTime(node.thread.lastActivityAt, now)}</span>
-              </TreeItem>
+              <ThreadRow {...common} thread={node.thread} />
             </RailThreadContextMenu>
           );
         })}
@@ -409,6 +389,35 @@ export function RailTree({
     </RailThreadMenus>
   );
 }
+
+/**
+ * A thread's row. Its age ("now", "4m") reads the shared clock itself, so a tick re-renders only
+ * the rows whose age changed, not the whole tree and every row's context menu.
+ */
+const ThreadRow = forwardRef<
+  HTMLDivElement,
+  Omit<TreeItemProps, "children" | "className" | "title"> & { thread: RailThread }
+>(function ThreadRow({ thread, ...rest }, ref) {
+  const now = useClock((at) => relativeTime(thread.lastActivityAt, at));
+  const info = displayStatusOf(thread.status);
+  const Glyph = DISPLAY_STATUS_GLYPH[info.status];
+  return (
+    <TreeItem
+      ref={ref}
+      {...rest}
+      className={styles.threadRow}
+      aria-label={threadLabel(thread, now)}
+      title={`${thread.name} · ${statusWords(thread.status)}`}
+    >
+      <span className={styles.threadGlyph} data-tone={DISPLAY_STATUS_TONE[info.status]} aria-hidden="true">
+        <Glyph />
+      </span>
+      <span className={styles.threadName}>{thread.name}</span>
+      <RailThreadFavoriteButton id={thread.id} />
+      <span className={styles.age}>{relativeTime(thread.lastActivityAt, now)}</span>
+    </TreeItem>
+  );
+});
 
 interface TreeItemProps extends Omit<HTMLAttributes<HTMLDivElement>, "role" | "tabIndex"> {
   rowRef: (el: HTMLDivElement | null) => void;

@@ -218,7 +218,8 @@ impl InteractiveCliProvider {
             (Some(profiles), Some(account_id)) => match self.cli {
                 PaneCli::Cursor => {
                     let guardian = profiles.probe_guardian()?;
-                    let detected = detect_guarded(&spec, &self.env, &guardian);
+                    let detected =
+                        crate::launch_probe::detect_for_launch(&spec, &self.env, Some(&guardian));
                     let executable = detected.executable.ok_or(ProviderError::NotInstalled)?;
                     if detected.detection.state != DetectionState::Installed {
                         return Err(ProviderError::Start(detected.detection.message.unwrap_or_else(|| "Cursor integration could not be checked. Update Cursor Agent and retry.".into())));
@@ -558,7 +559,7 @@ fn managed_gemini_executable(
     env: &DetectEnv,
     guardian: &crate::guardian::ProviderProbeGuardian,
 ) -> Result<PathBuf, ProviderError> {
-    let detected = detect_guarded(spec, env, guardian);
+    let detected = crate::launch_probe::detect_for_launch(spec, env, Some(guardian));
     match (detected.detection.state, detected.executable) {
         (DetectionState::Installed, Some(executable))
             if detected.detection.auth != AuthState::NotAuthenticated =>

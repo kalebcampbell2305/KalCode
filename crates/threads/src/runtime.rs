@@ -216,7 +216,7 @@ struct LiveState {
     /// The user interrupted or paused the current turn: its failed completion is not a failure.
     halted: bool,
     /// Who asked for the current session: the Operations scheduler's launches are background
-    /// work and yield first; a person's Resume makes it theirs again.
+    /// work and yield first; a person's Resume or message makes it theirs again.
     origin: LaunchOrigin,
 }
 
@@ -3916,6 +3916,16 @@ impl Inner {
             &row_prompt_target(&row),
             &persisted_prompt.text,
         )?;
+        // Only a person's message (`thread_send` or a previewed context send) reaches here; the
+        // Operations scheduler only creates its threads. Whatever started the session,
+        // the person is asking now, so this and later turns are theirs (owner rule: CPU load
+        // never holds them), exactly as Resume makes it theirs.
+        if state.origin != LaunchOrigin::User {
+            state.origin = LaunchOrigin::User;
+            if let Some(session) = &state.session {
+                session.set_launch_origin(LaunchOrigin::User);
+            }
+        }
         self.send_locked_with_payload(&live, &mut state, persisted_prompt.text, provider_payload)
     }
 

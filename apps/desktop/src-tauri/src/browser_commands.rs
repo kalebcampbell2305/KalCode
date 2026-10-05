@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use kalcode_contracts::ids::is_valid_id;
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use serde::{Deserialize, Serialize};
-#[cfg(windows)]
 use tauri::Emitter;
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{LogicalPosition, LogicalSize, Manager, State, Webview, WebviewUrl};
@@ -29,6 +28,9 @@ use crate::browser_policy::{
 const MAX_BROWSER_VIEWS: usize = 8;
 #[cfg(windows)]
 const FOCUS_EVENT: &str = "kalcode://browser-focus";
+/// A pane's native state moved (navigation, load, title, denied pop-up): the trusted main webview
+/// reads `browser_info` now instead of polling fast for it.
+const STATE_EVENT: &str = "kalcode://browser-state";
 const HIDDEN_CHILD_POSITION: f64 = 16_000.0;
 #[cfg(feature = "e2e")]
 static NEXT_E2E_DEBUG_PORT: AtomicU16 = AtomicU16::new(0);
@@ -300,6 +302,23 @@ pub struct BrowserState {
 #[serde(rename_all = "camelCase")]
 struct BrowserFocusEvent {
     browser_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserStateEvent {
+    browser_id: String,
+}
+
+/// Only the browser id leaves: the main webview reads the state itself through `browser_info`.
+fn notify_state_changed(app: &tauri::AppHandle, browser_id: &str) {
+    let _ = app.emit_to(
+        "main",
+        STATE_EVENT,
+        BrowserStateEvent {
+            browser_id: browser_id.to_owned(),
+        },
+    );
 }
 
 impl BrowserState {
@@ -977,6 +996,10 @@ pub async fn browser_attach(
     let popup_views = views.inner().clone();
     let popup_id = request.browser_id.clone();
     let popup_lease = request.page_lease;
+    let navigation_app = webview.app_handle().clone();
+    let page_app = navigation_app.clone();
+    let title_app = navigation_app.clone();
+    let popup_app = navigation_app.clone();
     #[cfg(windows)]
     let initial_url = WebviewUrl::External(url::Url::parse("about:blank").map_err(|_| {
         unavailable(
@@ -994,6 +1017,7 @@ pub async fn browser_attach(
     .disable_drag_drop_handler()
     .on_navigation(move |candidate| {
         let allowed = safe_runtime_url(candidate);
+        let mut changed = false;
         if allowed
             && let Some(record) = navigation_views
                 .lock()
@@ -1005,6 +1029,10 @@ pub async fn browser_attach(
         {
             record.url = candidate.to_string();
             record.loading = true;
+            changed = true;
+        }
+        if changed {
+            notify_state_changed(&navigation_app, &navigation_id);
         }
         allowed
     })
@@ -1013,6 +1041,7 @@ pub async fn browser_attach(
     // Pop-ups stay denied (they would be unmanaged windows). A safe HTTP(S) target is remembered
     // so the pane can offer it here or in the system browser, e.g. a "Sign in with Google" window.
     .on_new_window(move |candidate, _| {
+        let mut changed = false;
         if safe_runtime_url(&candidate)
             && let Some(record) = popup_views.lock().get_mut(&popup_id).filter(|record| {
                 record.page_lease == popup_lease && popup_lease == popup_views.current_page_lease()
@@ -1020,6 +1049,10 @@ pub async fn browser_attach(
         {
             record.blocked_popup = Some(candidate.to_string());
             record.blocked_popup_seq = record.blocked_popup_seq.saturating_add(1);
+            changed = true;
+        }
+        if changed {
+            notify_state_changed(&popup_app, &popup_id);
         }
         NewWindowResponse::Deny
     })
@@ -1036,6 +1069,7 @@ pub async fn browser_attach(
     // `didFinishNavigation`, when `WKWebView.URL` is the committed, non-nil URL. It reads that URL
     // with an unwrap, but failed or cancelled provisional navigations never reach this handler.
     .on_page_load(move |_, payload| {
+        let mut changed = false;
         if safe_runtime_url(payload.url())
             && let Some(record) = page_views.lock().get_mut(&page_id).filter(|record| {
                 record.page_lease == page_lease && page_lease == page_views.current_page_lease()
@@ -1043,13 +1077,22 @@ pub async fn browser_attach(
         {
             record.url = payload.url().to_string();
             record.loading = matches!(payload.event(), PageLoadEvent::Started);
+            changed = true;
+        }
+        if changed {
+            notify_state_changed(&page_app, &page_id);
         }
     })
     .on_document_title_changed(move |_, title| {
+        let mut changed = false;
         if let Some(record) = title_views.lock().get_mut(&title_id).filter(|record| {
             record.page_lease == title_lease && title_lease == title_views.current_page_lease()
         }) {
             record.title = clean_title(title);
+            changed = true;
+        }
+        if changed {
+            notify_state_changed(&title_app, &title_id);
         }
     });
     // On Windows the child starts at inert `about:blank`; Tauri's construction-time denial and
@@ -1425,8 +1468,9 @@ fn native_browser_url(
     read_native().filter(safe_runtime_url)
 }
 
-/// Polled about every 750 ms per visible Browser pane, so it stays off the main thread; the
-/// native URL read still hops to the main thread on its own.
+/// Read when `kalcode://browser-state` says a pane moved, and polled as a backstop (750 ms, backing
+/// off while nothing changes) per visible Browser pane, so it stays off the main thread; the native
+/// URL read still hops to the main thread on its own.
 #[tauri::command(async)]
 pub fn browser_info(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,

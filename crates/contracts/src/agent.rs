@@ -436,6 +436,10 @@ pub trait AgentSession: Send + Sync {
     fn terminate_reserved(&self) -> Result<(), ProviderError> {
         Err(ProviderError::Unsupported)
     }
+    /// Who asks for this session's next turns. A person's message on a session the Operations
+    /// scheduler started makes it theirs, so later turns use the user-requested Resource
+    /// Governor policy. Resource admission only: adapters ignore it, wrappers forward it.
+    fn set_launch_origin(&self, _origin: LaunchOrigin) {}
     /// Answers an `ApprovalRequired` (host-approval providers only).
     fn respond_to_approval(
         &self,

@@ -128,7 +128,7 @@ selected KalCode account by design.
 | Administrator system settings and policies | Yes | Parity: no longer redirected to empty files. Launches no longer refuse when administrator policies exist |
 | Plan mode | `--approval-mode plan` | Parity (Gemini's own Plan mode; KalCode's extra tool floor is gone) |
 | Authentication | Yes | Bound: per-profile encrypted credential store; `GEMINI_API_KEY` doesn't override the account |
-| Sign-in | Yes | KalCode's sign-in step (authenticate, then exit) runs with a read-only floor and no MCP servers or extensions; it is not a coding session |
+| Sign-in | Yes | KalCode's sign-in step (authenticate, then exit) runs with a read-only floor and no MCP servers or extensions; it is not a coding session. Administrator system settings apply to it as natively (no longer redirected to user-owned empty files, which Gemini 0.61 skipped with two "Security Warning" lines) |
 
 ### Cursor
 

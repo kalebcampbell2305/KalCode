@@ -810,8 +810,8 @@
       color var(--dur-fast) var(--ease-standard);
   }
 
-  .chip[data-tone="working"] svg,
-  .tool[data-phase="running"] .toolEyebrow::before {
+  :root:not([data-motion="reduced"]) .chip[data-tone="working"] svg,
+  :root:not([data-motion="reduced"]) .tool[data-phase="running"] .toolEyebrow::before {
     animation: pane-breathe var(--dur-pulse) var(--ease-in-out) infinite;
   }
 
@@ -821,5 +821,13 @@
       background-color var(--dur-fast) var(--ease-standard),
       border-color var(--dur-fast) var(--ease-standard),
       color var(--dur-fast) var(--ease-standard);
+  }
+}
+
+/* The app's Motion setting Full keeps the working loops under the OS preference. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="full"] .chip[data-tone="working"] svg,
+  :root[data-motion="full"] .tool[data-phase="running"] .toolEyebrow::before {
+    animation: pane-breathe var(--dur-pulse) var(--ease-in-out) infinite;
   }
 }

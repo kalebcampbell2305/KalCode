@@ -17,7 +17,7 @@ use crate::agent::ProviderId;
 use crate::agent_state::AgentFilter;
 use crate::app::SurfaceId;
 use crate::permissions::PermissionMode;
-use crate::sessions::SessionAttention;
+use crate::sessions::{SessionAttention, SessionScope};
 use crate::workspace_ui::{DashboardChip, SplitAxis};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -354,15 +354,23 @@ pub enum KalVoiceIntent {
         target: String,
         prompt: String,
     },
-    /// "Focus the one waiting for permission / that failed / that's stuck".
+    /// "Focus the one waiting for permission / that failed / that's stuck". `scope` says whether
+    /// the person meant coding agents (the default, every provider alike) or chat threads ("the
+    /// thread that failed"); older payloads without it mean agents.
     FocusByState {
         state: SessionAttention,
+        #[serde(default)]
+        scope: SessionScope,
     },
     /// "Go back to the terminal / thread I was just using."
     FocusPrevious,
-    /// "Which agent failed? / which one is stuck?": reads back up to three names with status.
+    /// "Which agent failed? / which one is stuck?": reads back up to three names with status
+    /// (and, for agents, shows the Agents tab group that holds them). `scope` as for
+    /// [`Self::FocusByState`].
     WhichSessions {
         state: SessionAttention,
+        #[serde(default)]
+        scope: SessionScope,
     },
     // ---- Added 2026-10-04 (provider-agnostic agent state). Every status below is the shared
     // `AgentState` model, identical for Claude Code, Codex, Cursor, Gemini CLI and any future
@@ -611,10 +619,12 @@ mod tests {
             },
             KalVoiceIntent::FocusByState {
                 state: SessionAttention::WaitingForPermission,
+                scope: SessionScope::Agents,
             },
             KalVoiceIntent::FocusPrevious,
             KalVoiceIntent::WhichSessions {
                 state: SessionAttention::Failed,
+                scope: SessionScope::Threads,
             },
             KalVoiceIntent::FilterAgents {
                 filter: AgentFilter::NeedsYou,
@@ -778,9 +788,12 @@ mod tests {
         );
         let by_state = serde_json::to_value(KalVoiceIntent::FocusByState {
             state: SessionAttention::Stuck,
+            scope: SessionScope::Threads,
         })
         .expect("json");
         assert_eq!(by_state["state"], "stuck");
+        assert_eq!(by_state["scope"], "threads");
+        // An older payload without a scope means coding agents.
         let which: KalVoiceIntent = serde_json::from_value(serde_json::json!({
             "kind": "which_sessions", "state": "waiting_for_permission"
         }))
@@ -788,7 +801,8 @@ mod tests {
         assert_eq!(
             which,
             KalVoiceIntent::WhichSessions {
-                state: SessionAttention::WaitingForPermission
+                state: SessionAttention::WaitingForPermission,
+                scope: SessionScope::Agents,
             }
         );
     }
