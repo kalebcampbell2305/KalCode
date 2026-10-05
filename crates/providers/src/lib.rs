@@ -1,6 +1,8 @@
 //! KalCode provider runtime (campaign Z2).
 //!
 //! - [`detect`]: read-only detection of provider CLIs (executable, version, sign-in state).
+//! - [`launch_probe`]: session launches reuse a recent, still-valid detection instead of
+//!   probing again; concurrent identical launches share one probe.
 //! - [`catalog`]: the providers KalCode knows, their capabilities and permission mappings.
 //! - [`process`]: supervision of provider child processes (argv only, sanitized environment,
 //!   bounded output, redacted stderr, timeouts, tree kill on drop, failure isolation).
@@ -31,6 +33,7 @@ pub mod guardian;
 pub mod health;
 pub mod interactive;
 pub mod launch;
+pub mod launch_probe;
 pub mod managed;
 pub mod model;
 pub mod native_config;

@@ -16,13 +16,13 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
     title="Privacy"
-    lead="This site collects one thing: the email address you give us to join early access."
+    lead="What kalcoded.com and KalCode accounts collect, what we use it for, and how to remove it."
   >
-    <p class="muted small">Last updated October 2, 2026</p>
+    <p class="muted small">Last updated October 5, 2026</p>
   </PageHead>
   <section class="section">
     <div class="container prose">
-      <h2>What we store</h2>
+      <h2>What we store for early access</h2>
       <p>When you join early access, we store:</p>
       <ul>
         <li>your email address,</li>
@@ -40,13 +40,13 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
         </li>
       </ul>
       <p>
-        That is all. We do not store your IP address, your browser's user agent, or any other
-        information about your device.
-      </p>{checkoutOpen && <p>Payments are processed by Stripe; KalCode receives your subscription status and billing contact, never your card details.</p>}
+        That is all for early access. We do not store your IP address, your browser's user agent, or
+        any other information about your device.
+      </p>
 
       <h2>What we use it for</h2>
       <p>
-        We use your email address only to contact you about KalCode early access and launch. We do
+        We use your early-access email address only to contact you about KalCode early access and launch. We do
         not sell it, share it for marketing, or add it to anyone else's list.
       </p>
 
@@ -87,6 +87,68 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
         can remain in those copies until they expire.
       </p>
 
+      <h2 id="accounts">KalCode accounts</h2>
+      <p>
+        You can create a KalCode account on this site or in the KalCode app by signing in with Google,
+        Microsoft or a one-time email link. For your account, we store:
+      </p>
+      <ul>
+        <li>your email address, verified by the email link or by Google or Microsoft, and when it was verified,</li>
+        <li>
+          if you sign in with Google or Microsoft, that service's identifier for your account (from
+          Google or Microsoft we keep only this identifier and your email address),
+        </li>
+        <li>the display name you choose, if you set one,</li>
+        <li>when you created the account and when you chose a plan,</li>
+        <li>your plan, how it was granted and, for a paid plan, its billing period, with a record of every change to it,</li>
+        <li>
+          for each signed-in session on this site or in the app, a one-way fingerprint of its sign-in
+          token (never the token itself), whether it is a website or app session, and when it was
+          created and expires,
+        </li>
+        <li>
+          for each KalVoice Request counted against your plan, a random request ID and the time it was
+          recorded, never audio, transcripts or what you asked.
+        </li>
+      </ul>
+      <p>
+        We use this to sign you in, keep your plan and KalVoice Request allowance the same on this site
+        and in the app, and send the sign-in and deletion links you ask for. Those links are the only
+        emails your account gets from us, and they expire after 10 minutes. To stop abuse, sign-in and
+        account emails are limited per network, per address and per account, using short-lived
+        counters stored under keyed one-way fingerprints of your IP address and email address, never
+        the addresses themselves. We keep a record of each account email we send (its purpose, the day
+        and those fingerprints, never your address) for 30 days.
+      </p>
+      <p>
+        In the KalCode app, your session stays in your operating system's credential store. While you
+        are signed in, the app contacts api.kalcoded.com to load your account, plan and KalVoice usage
+        and to count KalVoice Requests. The app never sends us your prompts, transcripts, code or
+        workspace content.
+      </p>
+      <p>
+        Account data is stored in a Cloudflare D1 database operated for api.kalcoded.com, and account
+        emails are delivered by Resend, as described below.
+      </p>{checkoutOpen && <p>Payments are processed by Stripe on its own hosted pages. When you start a checkout, we give Stripe your account email address and account ID; we keep your Stripe customer and subscription IDs, plan, subscription status and billing period, never your card details. Deleting your KalCode account does not delete your records at Stripe, which keeps them under its own privacy policy.</p>}
+
+      <h2 id="delete-account">Deleting your account</h2>
+      <p>
+        Sign in on the <a href="/account">account page</a> and press <strong>Delete account</strong>.
+        We email you a one-time link that expires after 10 minutes; open it in the browser where you
+        are signed in to confirm. You can't delete an account while a paid subscription has not ended
+        or a checkout is in progress, so cancel the subscription and wait for its paid period to end
+        first.
+      </p>
+      <p>
+        Deleting your account replaces your email address with a placeholder, removes your display
+        name and signs out every session on this site and in the app. We keep the rest of the
+        account record, including its internal ID, its plan and billing history and its KalVoice
+        Request counts, so those records stay complete. A Google or Microsoft identifier stays linked
+        to the deleted account until you next sign in with that Google or Microsoft account, which
+        releases it. Cloudflare's point-in-time recovery copies of the database can keep the
+        previous data for up to 30 days.
+      </p>
+
       <h2>Your voice and KalVoice</h2>
       <p>
         This site never uses your microphone. In the KalCode app,
@@ -101,37 +163,40 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
       </p>
       <p>
         KalVoice interprets commands on your device. It never uses the AI providers you connected, or
-        KalCode's servers, to understand what you said. Words you dictate into a Claude Code, Codex or
-        Gemini CLI thread, and coding tasks you send there, go to that provider under your own account
-        and that provider's terms, exactly as if you typed them yourself.
+        KalCode's servers, to understand what you said. Words you dictate into a coding agent (Claude
+        Code, Codex, Cursor or Gemini CLI), and coding tasks you send to it, go to that provider under
+        your own account and that provider's terms, exactly as if you typed them yourself.
       </p>
 
       <h2 id="email-delivery">Resend delivers our emails</h2>
       <p>
-        We send confirmation and removal emails through Resend (resend.com), our email-delivery
-        processor. For each email, Resend receives your email address and the message we send you,
+        We send early-access confirmation and removal emails, and KalCode account sign-in and
+        deletion emails, through Resend (resend.com), our email-delivery processor. For each email, Resend receives your email address and the message we send you,
         including its link, and processes them only to deliver that email, under its own privacy
         policy and data processing terms. Resend keeps a record of each email it sends, including the
         address and the message, for a limited time under its own retention policy. The links in
-        those messages stop working after {hours} hours or once used. We send no other emails
-        through Resend and share nothing else with it.
+        those messages stop working once used, or after {hours} hours (early access) or 10 minutes
+        (account emails). We send no other emails through Resend and share nothing else with it.
       </p>
 
       <h2>Cloudflare as our infrastructure provider</h2>
       <p>
-        kalcoded.com runs on Cloudflare. Like any network provider, Cloudflare processes technical
-        request data — such as your IP address — to deliver pages and protect the site from abuse,
+        kalcoded.com and the account service at api.kalcoded.com run on Cloudflare. Like any network
+        provider, Cloudflare processes technical request data — such as your IP address — to deliver
+        pages and protect the site from abuse,
         under its own privacy policy. To stop automated abuse, the early-access forms and email
         links count requests per IP address using Cloudflare's rate limiting; that short-lived
         counter is not stored by us. Our own server logs record only events and errors (for example,
         "confirmation email sent") and never contain email addresses, links or IP addresses.
       </p>
 
-      <h2>No analytics, no cookies</h2>
+      <h2>No analytics, no tracking cookies</h2>
       <p>
         This site has no analytics, no tracking pixels, no advertising, and no third-party scripts.
-        We set no cookies. Cloudflare may set a strictly necessary security cookie if its bot
-        protection is triggered for a request.
+        The only cookie we set keeps you signed in to your KalCode account: when you sign in on this
+        site, api.kalcoded.com sets a strictly necessary, HttpOnly session cookie that expires after
+        30 days and is removed when you sign out or delete your account. Cloudflare may set a
+        strictly necessary security cookie if its bot protection is triggered for a request.
       </p>
       <p>
         To know how KalCode is distributed, our server counts the files it serves: installer
@@ -143,7 +208,10 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
       </p>
       <p>
         If you choose a light or dark theme, that choice is saved in your browser's local storage
-        and never sent to us.
+        and never sent to us. If you pick a plan on the pricing page, the account page keeps that
+        choice in local storage so it survives signing in; it expires after an hour. While a Google
+        or Microsoft sign-in is in progress, its one-time security values are kept in that browser
+        tab's session storage and removed when you return.
       </p>
 
       <h2 id="remove">Remove your email</h2>
@@ -164,8 +232,7 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
       </p>
       <h2>Changes</h2>
       <p>
-        If what we collect changes — for example, when KalCode accounts arrive at launch — we will
-        update this notice before the change takes effect and change the date at the top of the
+        If what we collect changes, we will update this notice before the change takes effect and change the date at the top of the
         page.
       </p>
     </div>

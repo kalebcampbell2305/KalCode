@@ -1,5 +1,12 @@
-// `ship.mjs lifecycle hook`: the Claude Code Stop hook that enforces the Definition of Done.
+// `ship.mjs lifecycle hook`: the Claude Code hook that enforces the Definition of Done (Stop) and the merge
+// train (PreToolUse). One command serves both events; `evaluateHook` dispatches on hook_event_name.
 //
+// PreToolUse (Bash, PowerShell): denies a command that would update main outside the merge train
+// (`gh pr merge`, a merging `gh api` call, `git push` to main; see merge-guard.mjs) with
+// {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":...}}
+// on stdout and exit 0. No network, git only for a bare `git push`/`git push <remote> HEAD`; its own errors allow.
+//
+// Stop:
 // Input (stdin, Claude Code hook JSON): { session_id, transcript_path, cwd, hook_event_name: "Stop",
 // stop_hook_active, ... }. Output: nothing (allow), or {"decision":"block","reason":"..."} on stdout with
 // exit 0 (Claude Code continues the turn with the reason). Rules:
@@ -13,6 +20,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { makeGit } from "./git.mjs";
+import { denialReason, mainUpdateViolation } from "./merge-guard.mjs";
 import { loadPolicy } from "./policy.mjs";
 import { computeStatus, readJsonFile, stateDir, writeJsonAtomic } from "./status.mjs";
 
@@ -122,6 +130,48 @@ export function evaluateStop(inputText, deps = {}) {
   }
 }
 
+const GUARDED_TOOLS = new Set(["Bash", "PowerShell"]);
+
+/**
+ * Evaluates one PreToolUse event: denies shell commands that update main outside the merge train.
+ * `deps` injects { currentBranch, pushTarget } for tests. Returns { stdout, code }; never throws.
+ */
+export function evaluatePreToolUse(inputText, deps = {}) {
+  try {
+    if (!inputText?.trim()) return allow();
+    const input = typeof inputText === "string" ? JSON.parse(inputText) : inputText;
+    if (input.hook_event_name !== "PreToolUse" || !GUARDED_TOOLS.has(input.tool_name)) return allow();
+    const command = input.tool_input?.command;
+    if (typeof command !== "string" || !command.trim()) return allow();
+    const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+    const label = mainUpdateViolation(command, { cwd, deps });
+    if (!label) return allow();
+    return {
+      stdout: JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: denialReason(label),
+        },
+      }),
+      code: 0,
+    };
+  } catch {
+    return allow();
+  }
+}
+
+/** Routes one hook invocation by its event: PreToolUse to the merge-train guard, everything else to Stop. */
+export function evaluateHook(inputText, deps = {}) {
+  let event = null;
+  try {
+    event = inputText?.trim() ? JSON.parse(inputText).hook_event_name : null;
+  } catch {
+    return allow();
+  }
+  return event === "PreToolUse" ? evaluatePreToolUse(inputText, deps) : evaluateStop(inputText, deps);
+}
+
 /** Detached `lifecycle status --refresh-cache` so the next Stop sees fresh production state. */
 function startRefresh(dir, deps, now) {
   if (deps.refresh === false || process.env.KALCODE_LIFECYCLE_HOOK_REFRESH === "0") return;
@@ -179,7 +229,7 @@ export async function runHook({ shipPath, write = (s) => process.stdout.write(s)
   let result = allow();
   try {
     const text = await readStdin();
-    result = evaluateStop(text, { shipPath });
+    result = evaluateHook(text, { shipPath });
   } catch {
     result = allow();
   }

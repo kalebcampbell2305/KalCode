@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyChanges } from "./classify.mjs";
+import { runGatePool } from "./gate-pool.mjs";
 import { matchAny } from "./policy.mjs";
 import { stateDir, writeJsonAtomic } from "./status.mjs";
 
@@ -19,12 +20,16 @@ export function worktreeChanges(git, base) {
   return { mergeBase: mb, baseSha, changes };
 }
 
-export function selectGates(policy, classification, { platform = process.platform, only = null } = {}) {
+export function selectGates(policy, classification, { platform = process.platform, only = null, portOffset = 0 } = {}) {
   const paths = classification.files.map((f) => f.path);
   if (paths.length === 0) return [];
+  // UI source and browser-test changes have no native compilation inputs. Any unknown
+  // path, manifest, generated protocol or tooling change retains the broader policy.
+  const frontendOnly = paths.every((path) => /^apps\/desktop\/(src\/|tests\/ui\/)/.test(path));
   const plan = [];
   for (const g of policy.gates) {
     if (only && !only.includes(g.id)) continue;
+    if (!only && frontendOnly && ["rust", "desktop-native-e2e"].includes(g.id)) continue;
     const w = g.when;
     const hit =
       !w ||
@@ -36,8 +41,13 @@ export function selectGates(policy, classification, { platform = process.platfor
     plan.push({
       id: g.id,
       run: g.run,
-      env: { ...(g.env ?? {}), ...(g.envByPlatform?.[platform] ?? {}) },
+      env: {
+        ...(g.env ?? {}),
+        ...Object.fromEntries(Object.entries(g.ports ?? {}).map(([key, port]) => [key, String(port + portOffset)])),
+        ...(g.envByPlatform?.[platform] ?? {}),
+      },
       unsetEnv: g.unsetEnv ?? [],
+      exclusive: g.exclusive ?? [],
       requires: g.requires ?? [],
       builtin: g.builtin ?? null,
       timeoutMs: g.timeoutMs ?? null,
@@ -50,6 +60,21 @@ export function selectGates(policy, classification, { platform = process.platfor
 
 /** What an exec resolves to when its command overran the gate's `timeoutMs`. */
 export const TIMED_OUT = "timed-out";
+
+export const DEFAULT_GATE_CONCURRENCY = 4;
+export function gateConcurrency(env = process.env) {
+  const raw = env.KALCODE_GATE_JOBS ?? env.KALCODE_GATE_CONCURRENCY;
+  if (raw === undefined || raw === "") return DEFAULT_GATE_CONCURRENCY;
+  const jobs = Number(raw);
+  if (!Number.isInteger(jobs) || jobs < 1 || jobs > 4) throw new Error("Gate check concurrency must be from 1 to 4");
+  return jobs;
+}
+export function gatePortOffset(env = process.env) {
+  const offset = Number(env.KALCODE_GATE_PORT_OFFSET ?? 0);
+  if (!Number.isInteger(offset) || offset < 0 || offset > 1000)
+    throw new Error("KALCODE_GATE_PORT_OFFSET must be 0-1000");
+  return offset;
+}
 
 /** Kills a command's whole process tree: the shell and everything it started. */
 export function killTree(pid, { platform = process.platform } = {}) {
@@ -65,8 +90,12 @@ export function killTree(pid, { platform = process.platform } = {}) {
 }
 
 function defaultExec(repo) {
-  return (command, { env, quiet = false, timeoutMs = null } = {}) =>
+  return (command, { env, quiet = false, timeoutMs = null, signal, output } = {}) =>
     new Promise((resolve) => {
+      if (signal?.aborted) {
+        resolve(130);
+        return;
+      }
       const unix = process.platform !== "win32";
       let child;
       try {
@@ -74,13 +103,17 @@ function defaultExec(repo) {
           cwd: repo,
           env,
           shell: true,
-          stdio: quiet ? "ignore" : "inherit",
+          stdio: quiet ? "ignore" : output ? ["ignore", "pipe", "pipe"] : "inherit",
           windowsHide: true,
           detached: unix,
         });
       } catch {
         resolve(127);
         return;
+      }
+      if (output && !quiet) {
+        child.stdout.on("data", (chunk) => output(chunk.toString()));
+        child.stderr.on("data", (chunk) => output(chunk.toString()));
       }
       let timedOut = false;
       const timer =
@@ -90,19 +123,15 @@ function defaultExec(repo) {
               timedOut = true;
               killTree(child.pid);
             }, timeoutMs);
-      // A detached Unix group no longer receives the terminal's Ctrl+C: end it with the gate.
-      const interrupt = () => {
-        killTree(child.pid);
-        process.exit(130);
-      };
-      if (unix) for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(s, interrupt);
+      const interrupt = () => killTree(child.pid);
+      signal?.addEventListener("abort", interrupt, { once: true });
       let settled = false;
       const finish = (code) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
-        if (unix) for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.removeListener(s, interrupt);
-        resolve(timedOut ? TIMED_OUT : code);
+        signal?.removeEventListener("abort", interrupt);
+        resolve(timedOut ? TIMED_OUT : signal?.aborted ? 130 : code);
       };
       child.once("error", () => finish(127));
       child.once("close", (code) => finish(code ?? 1));
@@ -120,14 +149,34 @@ const BUILTINS = {
   },
 };
 
+export function gateEnvironment(gate, baseEnv) {
+  const env = { ...baseEnv, ...gate.env };
+  // Policy ports are local fallbacks. Registered workers own isolated browser ports.
+  for (const key of ["KALCODE_E2E_PORT", "KALCODE_E2E_MAIL_PORT", "KALCODE_E2E_INSPECTOR_PORT", "KALCODE_E2E_CDP_PORT"])
+    if (baseEnv[key] !== undefined) env[key] = baseEnv[key];
+  if (!env.KALCODE_E2E_CDP_PORT && /^[0-5]$/.test(baseEnv.KALCODE_GATE_SLOT ?? ""))
+    env.KALCODE_E2E_CDP_PORT = String(19333 + Number(baseEnv.KALCODE_GATE_SLOT) * 1000);
+  for (const key of gate.unsetEnv ?? []) delete env[key];
+  return env;
+}
+
 /**
  * Runs a gate plan in order. Stops at the first failure unless keepGoing. A gate with `timeoutMs` fails once its
  * commands together overrun it, and the overrunning command's process tree is killed, so a hung test cannot hold a
  * shared runner.
  */
-export async function runGates(
+async function runSerialGate(
   plan,
-  { repo, exec = defaultExec(repo), log = () => {}, keepGoing = false, baseEnv = process.env, now = Date.now },
+  {
+    repo,
+    exec = defaultExec(repo),
+    log = () => {},
+    keepGoing = false,
+    baseEnv = process.env,
+    now = Date.now,
+    signal,
+    output,
+  },
 ) {
   const results = [];
   let failed = false;
@@ -141,10 +190,9 @@ export async function runGates(
       results.push({ id: g.id, state: "not-run" });
       continue;
     }
-    const env = { ...baseEnv, ...g.env };
-    for (const k of g.unsetEnv) delete env[k];
+    const env = gateEnvironment(g, baseEnv);
     const missing = [];
-    for (const probe of g.requires) if ((await exec(probe, { env, quiet: true })) !== 0) missing.push(probe);
+    for (const probe of g.requires) if ((await exec(probe, { env, quiet: true, signal })) !== 0) missing.push(probe);
     if (missing.length) {
       log(`FAIL ${g.id}: required tool missing (${missing.join("; ")}); install it and rerun`);
       results.push({ id: g.id, state: "fail", why: `missing tool: ${missing.join("; ")}` });
@@ -158,7 +206,10 @@ export async function runGates(
     for (const command of g.run) {
       log(`>>   ${g.id}: ${command}`);
       const remaining = deadline === null ? null : deadline - now();
-      code = remaining !== null && remaining <= 0 ? TIMED_OUT : await exec(command, { env, timeoutMs: remaining });
+      code =
+        remaining !== null && remaining <= 0
+          ? TIMED_OUT
+          : await exec(command, { env, timeoutMs: remaining, signal, ...(output ? { output } : {}) });
       if (code !== 0) {
         failedCommand = command;
         break;
@@ -166,21 +217,98 @@ export async function runGates(
     }
     if (code === 0) {
       log(`PASS ${g.id}`);
-      results.push({ id: g.id, state: "pass" });
+      results.push({ id: g.id, state: "pass", exitCode: 0 });
     } else {
       const why =
         code === TIMED_OUT
           ? `${failedCommand} timed out: the ${g.id} gate exceeded its ${g.timeoutMs >= 60000 ? `${+(g.timeoutMs / 60000).toFixed(1)} min` : `${g.timeoutMs / 1000} s`} limit; its process tree was killed`
           : `${failedCommand} exited ${code}`;
       log(`FAIL ${g.id}: ${why}`);
-      results.push({ id: g.id, state: "fail", why });
+      results.push({ id: g.id, state: "fail", why, exitCode: typeof code === "number" ? code : null });
       failed = true;
     }
   }
   return { status: failed ? "FAIL" : "PASS", results };
 }
 
-export function gateForWorktree(policy, git, { base = "origin/main", platform = process.platform, only = null } = {}) {
+/** Independent checks continue after another check fails; dependent checks wait. */
+export async function runGates(plan, options) {
+  const {
+    jobs = options.concurrency ?? 4,
+    concurrency: _concurrency,
+    keepGoing = true,
+    signal: externalSignal,
+    evidence,
+    capacity,
+    report,
+    ...execution
+  } = options;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  externalSignal?.addEventListener("abort", abort, { once: true });
+  if (externalSignal?.aborted) abort();
+  for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(name, abort);
+  try {
+    const outcome = await runGatePool(
+      plan,
+      async (gate) => {
+        const startedAt = new Date().toISOString();
+        report?.start(gate.id);
+        let buffer = "";
+        const buffered = jobs > 1;
+        const log = execution.log ?? (() => {});
+        if (buffered) log(`..   ${gate.id}: started`);
+        const execute = async () =>
+          (
+            await runSerialGate([gate], {
+              ...execution,
+              signal: controller.signal,
+              ...(buffered
+                ? {
+                    log: (line) => {
+                      buffer += `${line}\n`;
+                    },
+                    output: (chunk) => {
+                      buffer += chunk;
+                    },
+                  }
+                : {}),
+            })
+          ).results[0];
+        const result = evidence && gate.state === "selected" ? await evidence.run(gate, execute) : await execute();
+        if (buffered)
+          log(
+            `---- ${gate.id} (${Math.round((Date.now() - Date.parse(startedAt)) / 1000)} s) ----\n${buffer.trimEnd()}`,
+          );
+        if (result.reusedFrom)
+          log(`PASS ${gate.id}: verified inputs reused from ${result.reusedFrom}, bound to ${result.reboundTo}`);
+        // A check that ended before running (evidence or capacity refusal) still says why.
+        else if (result.state !== "pass" && result.why && !buffer.includes(`FAIL ${gate.id}`))
+          log(`FAIL ${gate.id}: ${result.why}`);
+        const completed = { ...result, startedAt, finishedAt: new Date().toISOString() };
+        report?.finish(completed);
+        return completed;
+      },
+      {
+        jobs,
+        keepGoing,
+        signal: controller.signal,
+        capacity,
+      },
+    );
+    for (const result of outcome.results) report?.finish(result);
+    return outcome;
+  } finally {
+    externalSignal?.removeEventListener("abort", abort);
+    for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.removeListener(name, abort);
+  }
+}
+
+export function gateForWorktree(
+  policy,
+  git,
+  { base = "origin/main", platform = process.platform, only = null, portOffset = 0 } = {},
+) {
   const top = git.toplevel();
   const { mergeBase, baseSha, changes } = worktreeChanges(git, base);
   const readWorktree = (path) => {
@@ -203,9 +331,10 @@ export function gateForWorktree(policy, git, { base = "origin/main", platform = 
     base: { ref: base, commit: baseSha },
     head,
     clean,
+    tree: clean && head ? git.tree("HEAD") : null,
     partial: Boolean(only),
     classification,
-    plan: selectGates(policy, classification, { platform, only }),
+    plan: selectGates(policy, classification, { platform, only, portOffset }),
   };
 }
 
@@ -215,8 +344,24 @@ export function gateForWorktree(policy, git, { base = "origin/main", platform = 
  */
 export function recordGate(git, g, outcome, { platform = process.platform, now = Date.now } = {}) {
   if (outcome.status !== "PASS" || !g.clean || !g.head || g.partial) return null;
+  if (git.rev("HEAD") !== g.head || git.diff("HEAD", null).length || git.untracked().length) return null;
+  const required = g.plan.filter((gate) => gate.state === "selected").map((gate) => gate.id);
+  if (
+    outcome.results.length !== g.plan.length ||
+    g.plan.some(
+      (gate) =>
+        outcome.results.filter(
+          (result) => result.id === gate.id && result.state === (gate.state === "selected" ? "pass" : "unavailable"),
+        ).length !== 1,
+    )
+  )
+    return null;
+  if (
+    required.some((id) => outcome.results.filter((result) => result.id === id && result.state === "pass").length !== 1)
+  )
+    return null;
   const path = join(stateDir(git.commonDir()), "gates", `${g.head}.json`);
-  writeJsonAtomic(path, {
+  const receipt = {
     schema: "kalcode-lifecycle-gate/v1",
     status: "PASS",
     head: g.head,
@@ -225,7 +370,10 @@ export function recordGate(git, g, outcome, { platform = process.platform, now =
     targets: g.classification.targets,
     platform,
     results: outcome.results,
+    required,
     at: new Date(now()).toISOString(),
-  });
+  };
+  writeJsonAtomic(path, receipt);
+  writeJsonAtomic(join(g.top, "target", "gate-evidence.json"), receipt);
   return path;
 }

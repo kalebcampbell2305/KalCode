@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use kalcode_contracts::agent::{AgentInput, AgentSession, ProviderError};
+use kalcode_contracts::agent::{AgentInput, AgentSession, LaunchOrigin, ProviderError};
 use kalcode_contracts::permissions::ApprovalDecision;
 
 use crate::detect::DetectEnv;
@@ -862,6 +862,9 @@ impl AgentSession for LeasedSession {
     }
     fn terminate(&self) -> Result<(), ProviderError> {
         self.session.terminate()
+    }
+    fn set_launch_origin(&self, origin: LaunchOrigin) {
+        self.session.set_launch_origin(origin);
     }
     fn respond_to_approval(
         &self,

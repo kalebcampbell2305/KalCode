@@ -13,7 +13,7 @@ vi.mock("../../surfaces/dashboard/data/DashboardData.tsx", () => ({
   useCodingAgents: () => ({ state: { status: "ready", data: mocks.threads }, reload: vi.fn() }),
   useArchivedCodingAgents: () => ({ state: { status: "ready", data: [] } }),
 }));
-vi.mock("../../surfaces/dashboard/useNow.ts", () => ({ useNow: () => NOW }));
+vi.mock("../../surfaces/dashboard/useNow.ts", () => ({ useClock: () => NOW }));
 vi.mock("./DeckUi.tsx", () => ({
   useDeckUi: () => ({ agentsOpen: true, setAgentsOpen: vi.fn(), setAgentsActive: vi.fn() }),
 }));

@@ -29,7 +29,18 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { type KeyboardEvent, type PointerEvent, type ReactElement, type ReactNode, useEffect, useRef } from "react";
+import {
+  createContext,
+  isValidElement,
+  type KeyboardEvent,
+  memo,
+  type PointerEvent,
+  type ReactElement,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useRef,
+} from "react";
 import { useOptionalWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { FavoriteButton, useFavoriteMenuItems } from "../favorites/FavoriteActions.tsx";
 import type { FavoriteTarget } from "../favorites/model.ts";
@@ -95,6 +106,12 @@ function paneFavoriteTarget(content: PaneContent, workspaceId: string | null): F
   return null;
 }
 
+/** The pane's workspace: the canvas's own, else the active one (read here, not by the frame). */
+function usePaneWorkspace(workspaceId: string | undefined): string | null {
+  const workspaces = useOptionalWorkspaces();
+  return workspaceId ?? workspaces?.active?.id ?? null;
+}
+
 function PaneObjectMenu({
   content,
   workspaceId,
@@ -103,12 +120,12 @@ function PaneObjectMenu({
   children,
 }: {
   content: PaneContent;
-  workspaceId: string | null;
+  workspaceId: string | undefined;
   title: string;
   items: readonly ObjectMenuItem[];
   children: ReactElement;
 }) {
-  const favorites = useFavoriteMenuItems(paneFavoriteTarget(content, workspaceId), title);
+  const favorites = useFavoriteMenuItems(paneFavoriteTarget(content, usePaneWorkspace(workspaceId)), title);
   return (
     <ObjectContextMenu label={`${title} actions`} items={[...favorites, ...items]}>
       {children}
@@ -117,10 +134,138 @@ function PaneObjectMenu({
 }
 
 /**
+ * The canvas' current host. The canvas memoizes frames and hands them stable host callbacks;
+ * the parts that call the host while rendering (empty pane, add menu, context menus) read this
+ * so they follow the host without re-rendering the whole frame.
+ */
+export const PaneHostVersion = createContext<unknown>(null);
+
+/** Host-rendered content (an empty pane's body, the add menu's items). */
+function HostSlot({ render, paneId }: { render: (paneId: string) => ReactNode; paneId: string }) {
+  useContext(PaneHostVersion);
+  return <>{render(paneId)}</>;
+}
+
+/** An object's context menu, with the host's current actions for it. */
+export function HostContextMenu({
+  contextMenu,
+  content,
+  paneId,
+  title,
+  children,
+}: {
+  contextMenu: (content: PaneContent, paneId: string) => readonly ObjectMenuItem[];
+  content: PaneContent;
+  paneId: string;
+  title: string;
+  children: ReactElement;
+}) {
+  useContext(PaneHostVersion);
+  return (
+    <ObjectContextMenu label={`${title} actions`} items={contextMenu(content, paneId)}>
+      {children}
+    </ObjectContextMenu>
+  );
+}
+
+/** A tab's menu: favorites, then the host's current actions for it. */
+function TabMenu({
+  contextMenu,
+  content,
+  paneId,
+  workspaceId,
+  title,
+  children,
+}: {
+  contextMenu: ((content: PaneContent, paneId: string) => readonly ObjectMenuItem[]) | undefined;
+  content: PaneContent;
+  paneId: string;
+  workspaceId: string | undefined;
+  title: string;
+  children: ReactElement;
+}) {
+  useContext(PaneHostVersion);
+  return (
+    <PaneObjectMenu
+      content={content}
+      workspaceId={workspaceId}
+      title={title}
+      items={contextMenu?.(content, paneId) ?? []}
+    >
+      {children}
+    </PaneObjectMenu>
+  );
+}
+
+/** The active content's favorite star, with the same menu as its tab. */
+function PaneFavorite({
+  contextMenu,
+  content,
+  paneId,
+  workspaceId,
+  title,
+}: {
+  contextMenu: ((content: PaneContent, paneId: string) => readonly ObjectMenuItem[]) | undefined;
+  content: PaneContent;
+  paneId: string;
+  workspaceId: string | undefined;
+  title: string;
+}) {
+  const target = paneFavoriteTarget(content, usePaneWorkspace(workspaceId));
+  if (!target) return null;
+  return (
+    <TabMenu contextMenu={contextMenu} content={content} paneId={paneId} workspaceId={workspaceId} title={title}>
+      <span>
+        <FavoriteButton target={target} title={title} />
+      </span>
+    </TabMenu>
+  );
+}
+
+/** Equal decorative nodes: the same element type and key with the same props. */
+function sameNode(a: ReactNode, b: ReactNode): boolean {
+  if (Object.is(a, b)) return true;
+  if (!isValidElement(a) || !isValidElement(b) || a.type !== b.type || a.key !== b.key) return false;
+  const pa = a.props as Record<string, unknown>;
+  const pb = b.props as Record<string, unknown>;
+  const keys = Object.keys(pa);
+  return keys.length === Object.keys(pb).length && keys.every((key) => Object.is(pa[key], pb[key]));
+}
+
+/** Tab descriptions are rebuilt on every canvas render; compare them by what they show and do. */
+function sameTab(a: TabInfo, b: TabInfo): boolean {
+  if (a === b) return true;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof TabInfo)[]);
+  for (const key of keys) {
+    if (key === "glyph" || key === "actions") {
+      if (!sameNode(a[key], b[key])) return false;
+    } else if (key === "stop") {
+      if (a.stop !== b.stop && (a.stop?.label !== b.stop?.label || a.stop?.run !== b.stop?.run)) return false;
+    } else if (!Object.is(a[key], b[key])) return false;
+  }
+  return true;
+}
+
+function samePaneFrameProps(a: PaneFrameProps, b: PaneFrameProps): boolean {
+  const keys = Object.keys(b) as (keyof PaneFrameProps)[];
+  if (keys.length !== Object.keys(a).length) return false;
+  return keys.every((key) => {
+    if (key === "rect") {
+      const [x, y] = [a.rect, b.rect];
+      return x === y || (x.x === y.x && x.y === y.y && x.width === y.width && x.height === y.height);
+    }
+    if (key === "tabs")
+      return a.tabs.length === b.tabs.length && a.tabs.every((tab, i) => sameTab(tab, b.tabs[i] as TabInfo));
+    return Object.is(a[key], b[key]);
+  });
+}
+
+/**
  * Pane chrome and its content slot. Persistent content hosts belong to the canvas, so
  * moving, tabbing, minimizing and docking preserve the mounted view and session identity.
+ * Memoized: one pane's change (an agent's status) re-renders that frame only.
  */
-export function PaneFrame(props: PaneFrameProps) {
+export const PaneFrame = memo(function PaneFrame(props: PaneFrameProps) {
   const {
     leaf,
     index,
@@ -154,8 +299,7 @@ export function PaneFrame(props: PaneFrameProps) {
     consumeClick,
   } = props;
   const listRef = useRef<HTMLDivElement>(null);
-  const workspaces = useOptionalWorkspaces();
-  const workspaceId = props.workspaceId ?? workspaces?.active?.id ?? null;
+  const workspaceId = props.workspaceId;
   const frameRef = useRef<HTMLElement>(null);
   const active = leaf.tabs[leaf.activeTab] ?? null;
   const activeInfo = tabs[leaf.activeTab] ?? null;
@@ -166,20 +310,21 @@ export function PaneFrame(props: PaneFrameProps) {
   const attentionLabel = (info: TabInfo) => (info.attention === "needs-you" ? "Needs You" : "Done");
   function menuFor(content: PaneContent, title: string, child: ReactElement) {
     return (
-      <PaneObjectMenu
+      <TabMenu
         key={contentKey(content)}
+        contextMenu={contextMenu}
         content={content}
+        paneId={leaf.paneId}
         workspaceId={workspaceId}
         title={title}
-        items={contextMenu?.(content, leaf.paneId) ?? []}
       >
         {child}
-      </PaneObjectMenu>
+      </TabMenu>
     );
   }
   const body = (
     <div key="body" id={bodyDomId(leaf.paneId)} className={styles.body} data-pane-body hidden={hidden || collapsed}>
-      {!active && !hidden && !collapsed ? renderEmpty(leaf.paneId) : null}
+      {!active && !hidden && !collapsed ? <HostSlot render={renderEmpty} paneId={leaf.paneId} /> : null}
     </div>
   );
 
@@ -412,20 +557,21 @@ export function PaneFrame(props: PaneFrameProps) {
               minWidth={16}
               style={{ maxHeight: "var(--radix-dropdown-menu-content-available-height)" }}
             >
-              {addMenu(leaf.paneId)}
+              <HostSlot render={addMenu} paneId={leaf.paneId} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
         <div className={styles.headerActions} data-no-drag>
-          {active && paneFavoriteTarget(active, workspaceId)
-            ? menuFor(
-                active,
-                title,
-                <span>
-                  <FavoriteButton target={paneFavoriteTarget(active, workspaceId) as FavoriteTarget} title={title} />
-                </span>,
-              )
-            : null}
+          {active ? (
+            <PaneFavorite
+              key={contentKey(active)}
+              contextMenu={contextMenu}
+              content={active}
+              paneId={leaf.paneId}
+              workspaceId={workspaceId}
+              title={title}
+            />
+          ) : null}
           {activeInfo?.actions}
           {maximized ? (
             <span className={styles.maxBadge}>
@@ -542,4 +688,4 @@ export function PaneFrame(props: PaneFrameProps) {
       {body}
     </section>
   );
-}
+}, samePaneFrameProps);

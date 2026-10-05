@@ -44,10 +44,12 @@ import { OverlapNote } from "./fleet/OverlapNote.tsx";
 import type { AgentOverlap } from "./fleet/overlap.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
 import { AgentOutcome } from "./outcome/AgentOutcome.tsx";
+import { useClock } from "./useNow.ts";
 
 export interface AgentCardProps {
   thread: ThreadSummary;
-  now: number;
+  /** The time the card's relative texts read from; omitted, the card follows the shared clock. */
+  now?: number;
   /** Pending approval requests from this thread, oldest first. */
   approvals: readonly ApprovalView[];
   /** The action in flight for this thread, if any. */
@@ -137,6 +139,35 @@ function isInteractive(target: EventTarget | null): boolean {
   );
 }
 
+/** Every text the card derives from `now`: the elapsed time, started, archived and last activity. */
+function clockTexts({
+  thread,
+  now,
+  archived = false,
+}: Pick<AgentCardProps, "thread" | "archived"> & { now: number }): string {
+  const elapsedMs = runDurationMs(thread, now);
+  return [
+    elapsedMs === null || archived ? "" : elapsedMs < 60_000 ? "<1 min" : formatElapsed(elapsedMs),
+    startedText(thread.createdAt, now) ?? "",
+    archived && thread.archivedAt ? formatRelative(thread.archivedAt, now) : "",
+    formatRelative(thread.lastActivityAt, now),
+  ].join("\n");
+}
+
+/**
+ * A card given `now` re-renders for a new time only when a time it shows changes (each card's
+ * whole menu subtree re-rendered every 30 s otherwise).
+ */
+export function sameAgentCardProps(prev: AgentCardProps, next: AgentCardProps): boolean {
+  for (const key of Object.keys(next) as (keyof AgentCardProps)[]) {
+    if (key !== "now" && !Object.is(prev[key], next[key])) return false;
+  }
+  for (const key of Object.keys(prev)) if (!(key in next)) return false;
+  if (prev.now === next.now) return true;
+  if (prev.now === undefined || next.now === undefined) return false;
+  return clockTexts({ ...prev, now: prev.now }) === clockTexts({ ...next, now: next.now });
+}
+
 /**
  * One coding agent in the Agent Fleet: who it runs as (account), its task, its state and how
  * long it has run; the provider and workspace; model, effort and branch; and what it is doing now
@@ -145,7 +176,7 @@ function isInteractive(target: EventTarget | null): boolean {
  */
 export const AgentCard = memo(function AgentCard({
   thread,
-  now,
+  now: givenNow,
   approvals,
   pendingAction,
   onFocus,
@@ -162,6 +193,10 @@ export const AgentCard = memo(function AgentCard({
   onDismiss,
   overlaps,
 }: AgentCardProps) {
+  // Following the shared clock, a tick re-renders this card only when one of its times changes
+  // (the board and every card's menu subtree no longer re-render on each tick).
+  const clock = useClock((at) => (givenNow === undefined ? clockTexts({ thread, now: at, archived }) : null));
+  const now = givenNow ?? clock;
   const display = displayStatusOf(thread.status);
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
   const ready = !archived && readiness?.ready === true;
@@ -195,7 +230,7 @@ export const AgentCard = memo(function AgentCard({
 
   const actions = archived
     ? []
-    : (availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
+    : (availableActions(thread).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
   const request = archived ? undefined : approvals[0];
   const actionNeeded = !archived && display.status === "permission_required";
   const failed = display.status === "failed";
@@ -213,10 +248,21 @@ export const AgentCard = memo(function AgentCard({
   };
 
   // The one primary follow-up each state needs, on the card.
-  let primary: { label: string; run: () => void; busy?: boolean; aria?: string } | null = null;
+  let primary: {
+    label: string;
+    run: () => void;
+    busy?: boolean;
+    aria?: string;
+    action?: Exclude<ThreadAction, "open">;
+  } | null = null;
   if (!archived) {
     if (failed && actions.includes("retry")) {
-      primary = { label: "Retry", run: () => onAction(thread, "retry"), busy: pendingAction === "retry" };
+      primary = {
+        label: "Retry",
+        run: () => onAction(thread, "retry"),
+        busy: pendingAction === "retry",
+        action: "retry",
+      };
     } else if (display.status === "waiting_for_you") {
       primary = { label: "Reply", run: () => onFocus(thread) };
     } else if (resumable) {
@@ -225,6 +271,17 @@ export const AgentCard = memo(function AgentCard({
         run: () => onAction(thread, "resume"),
         busy: pendingAction === "resume",
         aria: `Resume ${thread.name}`,
+        action: "resume",
+      };
+    } else if (actions.includes("start_anyway")) {
+      // A launch held for system resources: the real reason is on the card, and the person's
+      // own override is one click away, as in the agent's pane.
+      primary = {
+        label: ACTION_LABELS.start_anyway,
+        run: () => onAction(thread, "start_anyway"),
+        busy: pendingAction === "start_anyway",
+        aria: `Start ${thread.name} anyway`,
+        action: "start_anyway",
       };
     } else if (group === "done" || ready) {
       primary = { label: "Open", run: () => onFocus(thread), aria: `Open ${thread.name}` };
@@ -505,7 +562,11 @@ export const AgentCard = memo(function AgentCard({
           {primary ? (
             <Button
               size="sm"
-              variant={failed || display.status === "waiting_for_you" ? "primary" : "secondary"}
+              variant={
+                failed || display.status === "waiting_for_you" || primary.action === "start_anyway"
+                  ? "primary"
+                  : "secondary"
+              }
               className={styles.primary}
               busy={primary.busy}
               aria-label={primary.aria}
@@ -543,7 +604,12 @@ export const AgentCard = memo(function AgentCard({
                     className={styles.tool}
                     label={`More actions for ${thread.name}`}
                     icon={<MoreHorizontal />}
-                    busy={pendingAction !== undefined && pendingAction !== "retry" && pendingAction !== "resume"}
+                    busy={
+                      pendingAction !== undefined &&
+                      pendingAction !== "retry" &&
+                      pendingAction !== "resume" &&
+                      pendingAction !== primary?.action
+                    }
                   />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -600,4 +666,4 @@ export const AgentCard = memo(function AgentCard({
       )}
     </article>
   );
-});
+}, sameAgentCardProps);

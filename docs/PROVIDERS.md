@@ -374,8 +374,21 @@ install command, docs link, capabilities and permission mappings, adapter state,
 **Never read or shown:** account email, organization, plan or tokens.
 
 `ProviderRegistry` detects every provider in parallel, each on its own thread, so a hanging or
-crashing CLI affects only its row. Detections are serialized and cached. KalCode shows the
-documented install command but never runs an installer.
+crashing CLI affects only its row. Detections are serialized and cached. Full checks are
+single-flight: checks requested while one runs share one follow-up check, and a session launch
+that only needs a completed check (`detect_all_once`) waits for the running startup check
+instead of queueing another. KalCode shows the documented install command but never runs an
+installer.
+
+Session launches (every adapter, headless and pane) detect through
+`launch_probe::detect_for_launch` (`crates/providers/src/launch_probe.rs`). It reuses a
+detection younger than 60 s made for exactly the same inputs (spec, whole environment, platform,
+timeouts) when re-resolving the executable (path lookups only) finds the same file and that
+file, plus what a launcher starts (shim target, `node`, script), keeps its size, modification
+and creation time. Only launchable results (installed, supported version, not signed out) are
+reused; anything else is probed again, so installing, upgrading or signing in is seen at once.
+A failed start, a session authentication error, or an explicit check of that executable drops
+the reusable result. Concurrent identical launches share one in-flight probe.
 
 ## 7. Process supervision
 
@@ -400,7 +413,8 @@ stream-JSON on stdin and stdout.
 
 ### 8.1 Starting a session
 
-`start_session` re-runs version-only detection and refuses to start when Claude Code is not
+`start_session` re-runs version-only detection (or reuses a recent still-valid one, §6) and
+refuses to start when Claude Code is not
 installed, outdated or in error, or when `secretRef` is set. The provider-native coding session
 validates sign-in. The working directory must be an existing absolute folder resolved natively. argv:
 
@@ -479,7 +493,8 @@ the classification drives status and summaries; `actions::normalize` builds the 
 `crates/providers/src/codex/`, on the shared turn engine `crates/providers/src/turns.rs`. A
 KalCode session is a sequence of supervised `codex exec` processes sharing Codex's thread id:
 the first turn starts a thread, later turns run `exec … resume <thread id> -`. This is how the
-official Codex TypeScript SDK drives `codex exec` [14]. `start_session` re-runs detection and
+official Codex TypeScript SDK drives `codex exec` [14]. `start_session` re-runs detection (or
+reuses a recent still-valid one, §6) and
 refuses not installed, outdated (< 0.155.1), detection error, signed out, or `secretRef`; the
 argv is validated before anything runs. Launch: Z2's rules (argv only, sanitized and hardened
 environment, the npm `codex.cmd` shim resolved to `<absolute node.exe> …\@openai\codex\bin\codex.js`,
@@ -574,8 +589,10 @@ plaintext sign-in into the encrypted per-account store and later launches read i
 rejects `--ignore-env` ("Unknown arguments"), so the floor's
 `advanced.ignoreLocalEnv` setting replaces it; it crashes at startup ("EISDIR … lstat 'C:'") on a
 Windows verbatim `\\?\` `GEMINI_CLI_HOME`, so every path Gemini receives is in its plain form; and it
-skips system settings/defaults files whose directory is not administrator/root owned, so KalCode
-never relies on them for Gemini behavior.
+skips system settings/defaults files whose directory is not administrator/root owned (printing
+"Security Warning: Skipping system settings file ..." on every start), so KalCode never relies on
+them for Gemini behavior and never redirects `GEMINI_CLI_SYSTEM_SETTINGS_PATH`/
+`GEMINI_CLI_SYSTEM_DEFAULTS_PATH` into a managed profile, for sessions, panes or sign-in.
 
 ### 8.7.1 Managed-profile CLI versions (certified compatibility lines)
 

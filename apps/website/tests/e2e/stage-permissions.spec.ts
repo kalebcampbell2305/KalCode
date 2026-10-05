@@ -1,82 +1,68 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
-/** PermissionModes: modes change what the agent may do; the approval card follows. */
+/**
+ * PermissionModes as 0.1.9+1738 ships them (apps/desktop permissions labels.ts DEFAULT_MODE_CHOICES,
+ * crates/permissions policy.rs `baseline`): Bypass is the default, Plan is read-only, and
+ * credentials and secrets ask in both. A native radio group, no script.
+ */
 const STAGE_URL = process.env.STAGE_URL ?? "/";
 
 async function open(page: Page): Promise<Locator> {
   await page.goto(STAGE_URL);
-  // The full variant (the compact table is covered in stage-moments.spec.ts).
-  const block = page
-    .getByTestId("permission-modes")
-    .filter({ has: page.getByTestId("permissions-full") })
-    .first();
-  test.skip((await block.count()) === 0, `The full PermissionModes is not on ${STAGE_URL}`);
+  const block = page.getByTestId("permission-modes").first();
+  test.skip((await block.count()) === 0, `PermissionModes is not on ${STAGE_URL}`);
   await block.scrollIntoViewIfNeeded();
-  await expect(block).toHaveAttribute("data-kc-bound", "true");
   return block;
+}
+
+/** The visible outcome for an action row. */
+function outcome(block: Locator, action: string): Locator {
+  return block.getByRole("row", { name: new RegExp(`^${action}`) }).locator("td:visible");
 }
 
 test.describe("PermissionModes", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("modes are a radio group with roving focus; selecting changes authority", async ({ page }) => {
+  test("offers Bypass (the default) and Plan as a radio group", async ({ page }) => {
     const block = await open(page);
-    const approve = block.getByTestId("mode-approve");
-    await expect(approve).toHaveAttribute("aria-checked", "true");
-    await approve.focus();
+    const radios = block.getByRole("radio");
+    await expect(radios).toHaveCount(2);
+    const bypass = block.getByRole("radio", { name: /Bypass/ });
+    await expect(bypass).toBeChecked();
+    await expect(block.getByTestId("mode-bypass")).toContainText("Default");
+    await expect(block.getByTestId("mode-plan")).toContainText("Read-only");
+    await expect(block.locator("fieldset")).not.toContainText(/Approve|Auto|Custom|Planned/);
+    // Arrow keys move the selection, as in any native radio group.
+    await bypass.focus();
     await page.keyboard.press("ArrowRight");
-    const auto = block.getByTestId("mode-auto");
-    await expect(auto).toBeFocused();
-    await expect(auto).toHaveAttribute("aria-checked", "true");
-    await expect(block.getByTestId("permissions-full")).toHaveAttribute("data-mode", "auto");
-    await expect(block.getByTestId("live-permission-modes")).toContainText("Auto mode selected");
+    await expect(block.getByRole("radio", { name: /Plan/ })).toBeChecked();
   });
 
-  test("Bypass allows the install without asking; Plan denies it", async ({ page }) => {
+  test("Bypass runs everything except credentials and secrets; Plan is read-only", async ({ page }) => {
     const block = await open(page);
-    const card = block.getByTestId("approval-zod");
-    await block.getByTestId("mode-bypass").click();
-    await expect(card).toHaveAttribute("data-state", "mode-allow");
-    await expect(card).toContainText("runs without asking");
-    await block.getByTestId("mode-plan").click();
-    await expect(card).toHaveAttribute("data-state", "mode-deny");
-    await block.getByTestId("mode-approve").click();
-    await expect(card).toHaveAttribute("data-state", "pending");
-  });
-
-  test("hovering a mode previews it and leaving restores the selection", async ({ page }) => {
-    const block = await open(page);
-    const panel = block.getByTestId("permissions-full");
-    await block.getByTestId("mode-bypass").hover();
-    await expect(panel).toHaveAttribute("data-mode", "bypass");
-    await page.mouse.move(2, 2);
-    await expect(panel).toHaveAttribute("data-mode", "approve");
-  });
-
-  test("decisions resolve the card and Ask again resets it", async ({ page }) => {
-    const block = await open(page);
-    const card = block.getByTestId("approval-zod");
-    const buttons = card.locator(".kc-approval__actions button");
-    await expect(buttons).toHaveText(["Deny", "Allow for workspace", "Allow for thread", "Approve once"]);
-    await expect(card.locator(".kc-approval__coverage")).toContainText("in every thread of this workspace for 30 days");
-    await expect(card.locator(".kc-approval__coverage")).toContainText(
-      "in this thread until it stops (24 hours at most)",
-    );
-    await buttons.nth(3).click();
-    await expect(card).toHaveAttribute("data-state", "approved");
-    await expect(block.getByTestId("approval-reset")).toBeFocused();
-    await block.getByTestId("approval-reset").click();
-    await expect(card).toHaveAttribute("data-state", "pending");
-    await buttons.nth(0).click();
-    await expect(card).toHaveAttribute("data-state", "denied");
-  });
-
-  test("Bypass and Custom are marked Planned", async ({ page }) => {
-    const block = await open(page);
-    await expect(block.getByTestId("mode-bypass")).toContainText("Planned");
-    await expect(block.getByTestId("mode-custom")).toContainText("Planned");
-    for (const id of ["plan", "approve", "auto"]) {
-      await expect(block.getByTestId(`mode-${id}`)).not.toContainText("Planned");
+    for (const action of ["Edit files", "Commands, tests and builds", "Git commits and pushes", "Dev servers"]) {
+      await expect(outcome(block, action)).toHaveText("Runs");
     }
+    await expect(outcome(block, "Credentials and secrets")).toHaveText("Asks you");
+    await expect(block).toContainText("Only access to credentials and secrets still asks.");
+
+    await block.getByTestId("mode-plan").click();
+    await expect(outcome(block, "Read files, Git history and logs")).toHaveText("Runs");
+    for (const action of ["Edit files", "Commands, tests and builds", "Git commits and pushes", "Dev servers"]) {
+      await expect(outcome(block, action)).toHaveText("Refused");
+    }
+    await expect(outcome(block, "Credentials and secrets")).toHaveText("Asks you");
+    await expect(block).toContainText("Read and plan only.");
+  });
+
+  test("the Needs You moment is a secret request, never a package install", async ({ page }) => {
+    const block = await open(page);
+    await expect(block).toContainText("Needs you");
+    await expect(block).toContainText("Wants to read STRIPE_SECRET_KEY in .env.local");
+    await expect(block).toContainText("Credentials and secrets always ask.");
+    await expect(block).not.toContainText(/pnpm add|Installing packages/);
+    await expect(block.getByTestId("stage-label")).toContainText(
+      "Product preview · sample data · every mode on every plan",
+    );
   });
 });

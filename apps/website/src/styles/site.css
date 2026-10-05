@@ -83,8 +83,8 @@
   gap: var(--space-2) var(--space-6);
 }
 
-/* Narrow phones: the X handles need the full width rather than half a column. */
-@media (max-width: 24rem) {
+/* Phones: the X handles need the full width rather than half a column. */
+@media (max-width: 30rem) {
   .site-footer__follow {
     grid-column: 1 / -1;
   }
@@ -353,32 +353,27 @@
   }
 }
 
+/* On world pages the facts sit on graphite panels, legible over any backdrop. */
+body[data-world] .facts {
+  gap: var(--space-4);
+  border-top: 0;
+}
+
+body[data-world] .fact {
+  padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--world-panel);
+  box-shadow: var(--world-panel-edge);
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-/* ---------- Pricing page ---------- */
-
-.includes {
-  display: grid;
-  gap: var(--space-4);
-  margin-bottom: var(--space-8);
-}
-
-.includes__label {
-  color: var(--color-text);
-  font-weight: var(--weight-medium);
-}
-
-@media (min-width: 52rem) {
-  .includes {
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: var(--space-6);
-  }
-}
+/* ---------- Meters, ticks and the FAQ ---------- */
 
 .meter {
   width: 100%;
@@ -470,6 +465,7 @@
 
 .platforms {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-xl);
   background: var(--color-surface);
@@ -478,9 +474,15 @@
 
 .platform {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
-  padding: var(--space-6);
+  min-width: 0;
+  padding: var(--space-6) clamp(1.125rem, 0.75rem + 1.5vw, 1.5rem);
   scroll-margin-top: var(--space-8);
+}
+
+.platform code {
+  overflow-wrap: anywhere;
 }
 
 .platform + .platform {
@@ -542,6 +544,13 @@ html[data-os="linux"] .platform[data-os="linux"] {
   gap: var(--space-3);
 }
 
+@media (max-width: 30rem) {
+  .platform__meta div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-0-5);
+  }
+}
+
 .platform__meta dt {
   color: var(--color-text-muted);
 }
@@ -552,45 +561,110 @@ html[data-os="linux"] .platform[data-os="linux"] {
   overflow-wrap: anywhere;
 }
 
+.platform__meta dd.mono {
+  font-size: var(--site-text-xs);
+  line-height: 1.6;
+}
+
+/* Routine guidance: a quiet graphite note. Amber is kept for a real warning (data-tone="warn"). */
 .platform__note {
   max-width: 62ch;
   padding: var(--space-3) var(--space-4);
-  border-left: 2px solid var(--color-waiting);
-  background: var(--color-waiting-soft);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-text) 3%, transparent);
+  box-shadow: inset 0 0 0 1px var(--color-border);
   color: var(--color-text-secondary);
   font-size: var(--site-text-small);
 }
 
-@media (min-width: 52rem) {
+.platform__note code {
+  color: var(--color-text);
+}
+
+.platform__note[data-tone="warn"] {
+  background: var(--color-waiting-soft);
+  box-shadow: inset 2px 0 0 var(--color-waiting);
+}
+
+.platform__notes {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.platform__note-title {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--color-text);
+  font-size: var(--site-text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+}
+
+.platform__note-fine {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
+}
+
+.platform__info,
+.platform__side {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.platform__side {
+  gap: var(--space-5);
+}
+
+.platform__action {
+  gap: var(--space-3) var(--space-5);
+}
+
+.platform__terms {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
+}
+
+/* Phones: the download button takes the row. */
+@media (max-width: 30rem) {
+  .platform__action .button {
+    width: 100%;
+  }
+}
+
+@media (min-width: 60rem) {
   .platform[data-state="available"] {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    column-gap: var(--space-10);
     padding: var(--space-8);
   }
 
-  .platform__action {
-    grid-column: 2;
-    grid-row: 1 / span 3;
-    align-self: center;
-  }
-
-  /* Notes and the terms line stack under the details instead of auto-filling the action column,
-     where notes of different heights sat side by side, centred against each other. */
-  .platform[data-state="available"] > :not(.platform__action) {
-    grid-column: 1;
+  .platform__side {
+    padding-left: var(--space-10);
+    border-left: 1px solid var(--color-border);
   }
 }
 
 .expect {
   display: grid;
-  padding-top: var(--space-8);
-  gap: var(--space-2) var(--space-10);
+  margin-top: var(--space-6);
+  gap: var(--space-4);
 }
 
 .expect li {
-  padding-block: var(--space-4);
-  border-top: 1px solid var(--color-border);
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--world-panel);
+  box-shadow: var(--world-panel-edge);
   color: var(--color-text-secondary);
+}
+
+.expect strong {
+  display: block;
+  margin-bottom: var(--space-1);
 }
 
 .expect strong {
@@ -656,6 +730,30 @@ html[data-os="linux"] .platform[data-os="linux"] {
   margin-bottom: var(--space-10);
 }
 
+.ptt__keys {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.ptt__cap {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
+.ptt__where {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
+}
+
+.ptt__or {
+  align-self: center;
+  margin-top: calc(-1 * var(--space-6));
+  color: var(--color-text-faint);
+  font-size: var(--site-text-small);
+}
+
 kbd.ptt__key {
   height: 4rem;
   min-width: 5rem;
@@ -666,6 +764,9 @@ kbd.ptt__key {
   color: var(--color-text);
   font-size: 1.5rem;
   font-weight: var(--weight-medium);
+  box-shadow:
+    0 0 0 1px var(--color-border-lit-soft),
+    0 0 28px -10px var(--color-glow);
 }
 
 .ptt__note {
@@ -745,6 +846,19 @@ kbd.ptt__key {
   gap: var(--space-4);
   padding-block: var(--space-4);
   border-bottom: 1px solid var(--color-border);
+}
+
+/* Phones: the plan and its allowance share a row; the bar takes the full width under them. */
+@media (max-width: 40rem) {
+  .allowance {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-3) var(--space-4);
+  }
+
+  .allowance .meter {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
 }
 
 .allowance__plan {
@@ -1052,6 +1166,12 @@ kbd.ptt__key {
   max-width: 52ch;
 }
 
+/* Page titles carry the page: the marketing display size, not the desktop's 28 px token. */
+.page-head .h1 {
+  font-size: clamp(2.625rem, 1.5rem + 3.4vw, 4.5rem);
+  line-height: 0.98;
+}
+
 .page-head + .section {
   padding-top: clamp(1rem, 0.5rem + 1.5vw, 2.5rem);
   border-top: 0;
@@ -1188,27 +1308,49 @@ kbd.shortcut > kbd {
   margin-inline: 0.1em;
 }
 
-/* ---------- Docs layout ---------- */
+/* ---------- Docs layout ----------
+ * Docs keep the KalCode world: graphite ground, a faint deep-space field, and the article on a
+ * raised graphite reading sheet. Three columns where the space allows (topics, article, on this
+ * page), two on tablets, one on phones. The reading measure stays near 68ch at every width.
+ */
+
+.docs-shell {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+}
+
+.docs-shell > .container {
+  position: relative;
+  z-index: 1;
+}
 
 .docs {
   display: grid;
-  gap: var(--space-10);
-  padding-block: clamp(2.5rem, 2rem + 3vw, 5rem) var(--site-section-y);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-8);
+  padding-block: clamp(2rem, 1.5rem + 2.5vw, 4rem) var(--site-section-y);
 }
 
-.docs__nav h2 {
+.docs__nav {
+  min-width: 0;
+}
+
+.docs__nav h2,
+.docs__toc-title {
   margin-bottom: var(--space-3);
-  font-family: var(--font-sans);
-  font-size: var(--site-text-small);
+  color: var(--color-text-muted);
+  font-family: var(--font-wider);
+  font-size: var(--type-label);
   font-weight: var(--weight-medium);
-  letter-spacing: 0;
-  color: var(--color-text);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .docs__nav ul {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1) var(--space-2);
+  gap: var(--space-2);
 }
 
 .docs__nav a {
@@ -1216,10 +1358,13 @@ kbd.shortcut > kbd {
   align-items: center;
   min-height: 2.5rem;
   padding-inline: var(--space-3);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   font-size: var(--site-text-small);
   text-decoration: none;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .docs__nav a:hover {
@@ -1229,13 +1374,31 @@ kbd.shortcut > kbd {
 
 .docs__nav a[aria-current="page"] {
   background: var(--color-surface-selected);
+  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
   color: var(--color-text);
+}
+
+/* Phones and tablets: the topics are a row of pills that scrolls sideways inside itself. */
+@media (max-width: 55.99rem) {
+  .docs__nav ul {
+    flex-wrap: nowrap;
+    margin-inline: calc(-1 * var(--site-gutter));
+    padding-inline: var(--site-gutter);
+    padding-bottom: var(--space-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .docs__nav a {
+    white-space: nowrap;
+    box-shadow: inset 0 0 0 1px var(--color-border);
+  }
 }
 
 .docs__content {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-10);
+  gap: clamp(2rem, 1.5rem + 2vw, 3rem);
   min-width: 0;
 }
 
@@ -1246,60 +1409,248 @@ kbd.shortcut > kbd {
 }
 
 .docs__head .h1 {
-  max-width: 20ch;
-  font-size: clamp(2.25rem, 1.5rem + 2.4vw, 3.75rem);
+  max-width: 18ch;
+  font-size: clamp(2.5rem, 1.6rem + 2.8vw, 4rem);
+  line-height: 0.98;
+}
+
+.docs__head .lead {
+  max-width: 56ch;
+}
+
+.docs__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-10);
+  align-items: start;
+}
+
+/* The reading sheet: a raised graphite panel with a hairline and a short lit edge on top. */
+.docs__sheet {
+  position: relative;
+  min-width: 0;
+  padding: clamp(1.25rem, 0.75rem + 2.5vw, 3rem);
+  border-radius: var(--radius-xl);
+  background: var(--world-panel);
+  box-shadow: var(--world-panel-edge);
+}
+
+.docs__sheet::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: clamp(1.25rem, 0.75rem + 2.5vw, 3rem);
+  width: min(40%, 14rem);
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-accent), transparent);
+  opacity: 0.7;
+}
+
+.docs__sheet {
+  max-width: 54rem;
+}
+
+.docs__sheet > .prose {
+  max-width: 72ch;
+}
+
+.docs__toc {
+  display: none;
+}
+
+.docs__toc ul {
+  display: grid;
+  gap: var(--space-0-5);
+  border-left: 1px solid var(--color-border);
+}
+
+.docs__toc a {
+  display: block;
+  margin-left: -1px;
+  padding: var(--space-1-5) 0 var(--space-1-5) var(--space-4);
+  border-left: 1px solid transparent;
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.docs__toc a:hover {
+  border-left-color: var(--color-accent);
+  color: var(--color-text);
 }
 
 @media (min-width: 56rem) {
   .docs {
-    grid-template-columns: 13rem minmax(0, 1fr);
-    gap: var(--space-16);
+    grid-template-columns: 12rem minmax(0, 1fr);
+    gap: clamp(2.5rem, 1rem + 3vw, 4.5rem);
   }
 
   .docs__nav {
     position: sticky;
-    top: var(--space-8);
+    top: calc(var(--site-header-h) + var(--space-6));
     align-self: start;
+    padding-top: var(--space-2);
   }
 
   .docs__nav ul {
     display: grid;
-    gap: var(--space-0-5);
+    gap: var(--space-1);
   }
 
   .docs__nav a {
     width: 100%;
-    margin-left: calc(-1 * var(--space-3));
   }
 }
 
-.doc-index {
-  display: grid;
-  max-width: var(--site-measure);
+@media (min-width: 80rem) {
+  .docs__body {
+    grid-template-columns: minmax(0, 1fr) 13rem;
+  }
+
+  .docs__toc {
+    display: block;
+    position: sticky;
+    top: calc(var(--site-header-h) + var(--space-6));
+    padding-top: var(--space-6);
+  }
+}
+
+/* Prose on the graphite sheet: section heads ride a hairline, lists carry the accent. */
+.docs__sheet .prose h2 {
+  margin-top: var(--space-12);
+  padding-top: var(--space-8);
   border-top: 1px solid var(--color-border);
+  scroll-margin-top: calc(var(--site-header-h) + var(--space-6));
 }
 
-.doc-index li {
-  border-bottom: 1px solid var(--color-border);
+.docs__sheet .prose > :first-child,
+.docs__sheet .prose > h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
-.doc-index a {
-  display: grid;
-  gap: var(--space-1);
-  padding-block: var(--space-5);
-  text-decoration: none;
-  color: var(--color-text-secondary);
-}
-
-.doc-index a:hover .doc-index__title {
+.docs__sheet .prose li::marker {
   color: var(--color-accent-text);
 }
 
-.doc-index__title {
-  color: var(--color-text);
-  font-size: var(--site-h3);
+.docs__sheet .prose a:not(.button) {
+  color: var(--color-accent-text);
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.docs__sheet .prose .table-wrap {
+  border-top: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-sunken);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.docs__sheet .prose .table th,
+.docs__sheet .prose .table td {
+  padding-inline: var(--space-4);
+}
+
+.docs__sheet .prose .table thead th {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
   font-weight: var(--weight-medium);
-  transition: color var(--dur-fast) var(--ease-out);
+  letter-spacing: 0.04em;
+}
+
+.docs__sheet .prose .table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+/* A callout inside a reading sheet: one accent rule, never a warning colour for routine notes. */
+.prose .callout {
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+  color: var(--color-text-secondary);
+}
+
+.prose .callout strong {
+  color: var(--color-text);
+}
+
+/* Docs index: one card per topic. */
+.doc-cards {
+  display: grid;
+  gap: var(--space-4);
+}
+
+@media (min-width: 44rem) {
+  .doc-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.doc-card {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: var(--space-3);
+  height: 100%;
+  padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+  border-radius: var(--radius-xl);
+  background: var(--world-panel);
+  box-shadow: var(--world-panel-edge);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  transition:
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.doc-card:hover {
+  color: var(--color-text-secondary);
+  box-shadow: var(--world-panel-lit);
+  transform: translateY(-2px);
+}
+
+.doc-card__index {
+  color: var(--color-accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--site-text-xs);
+}
+
+.doc-card__title {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.025em;
+}
+
+.doc-card__more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  color: var(--color-accent-text);
+  font-size: var(--site-text-small);
+  font-weight: var(--weight-medium);
+}
+
+.doc-card__more svg {
+  width: 1rem;
+  height: 1rem;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.doc-card:hover .doc-card__more svg {
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .doc-card,
+  .doc-card:hover,
+  .doc-card:hover .doc-card__more svg {
+    transform: none;
+  }
 }
 
 /* ---------- 404 ---------- */
@@ -1322,7 +1673,7 @@ kbd.shortcut > kbd {
 }
 
 .not-found__line span {
-  color: var(--color-danger-text);
+  color: var(--color-accent-text);
 }
 
 /* ---------- Motion safety ---------- */

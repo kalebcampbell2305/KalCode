@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useThrottledValue } from "../../runtime/useThrottledValue.ts";
 import { type ProvidersSummary, summarizeProviders } from "./providerLabels.ts";
 
 /**
@@ -9,7 +10,7 @@ import { type ProvidersSummary, summarizeProviders } from "./providerLabels.ts";
 export function useProvidersSummary(): { summary: ProvidersSummary | null; failed: boolean } {
   const { client } = useRuntime();
   const { events } = useEvents();
-  const latestProviderSeq = events.find((e) => e.type.startsWith("provider."))?.seq ?? 0;
+  const latestProviderSeq = useThrottledValue(events.find((e) => e.type.startsWith("provider."))?.seq ?? 0);
   const lifecycle = useMemo(() => ({ client }), [client]);
   const [snapshot, setSnapshot] = useState<{
     lifecycle: typeof lifecycle;

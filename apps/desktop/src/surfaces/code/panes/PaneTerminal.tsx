@@ -20,10 +20,17 @@ import { terminalContext } from "../../../shell/context/terminalContext.ts";
 import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
+import { useCodeShown } from "../codeShown.ts";
 import { suppressReplayQueries } from "../replayQueries.ts";
 import { isTerminalShortcut } from "../shortcuts.ts";
 import { registerTerminalImageTarget, TerminalImageError, terminalImageTargetKey } from "../terminalImages.ts";
-import { invalidateMonoFontFamily, MINIMUM_CONTRAST, monoFontFamily, TERMINAL_THEMES } from "../terminalTheme.ts";
+import {
+  cursorStyle,
+  invalidateMonoFontFamily,
+  MINIMUM_CONTRAST,
+  monoFontFamily,
+  TERMINAL_THEMES,
+} from "../terminalTheme.ts";
 import styles from "./Panes.module.css";
 import type { PaneChannel } from "./paneChannel.ts";
 import { lastPersonInputAt } from "./personInput.ts";
@@ -76,10 +83,14 @@ export const PaneTerminal = memo(function PaneTerminal({
   label,
   running,
   focusRequest,
-  visible = true,
+  visible: paneVisible = true,
   theme,
-  throttled = false,
+  throttled: paneThrottled = false,
 }: PaneTerminalProps) {
+  // Code's own visibility arrives from a store, so hiding Code never re-renders pane chrome.
+  const codeShown = useCodeShown();
+  const visible = paneVisible && codeShown;
+  const throttled = paneThrottled || !codeShown;
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -560,7 +571,13 @@ export const PaneTerminal = memo(function PaneTerminal({
         context={{ kind: "output", label: `${label} output`, text: "" }}
         getContext={(target, keyboard) => terminalContext(termRef.current, target, label, keyboard)}
       >
-        <div ref={hostRef} className={codeStyles.xtermHost} data-pane-terminal={threadId} data-selectable />
+        <div
+          ref={hostRef}
+          className={codeStyles.xtermHost}
+          style={cursorStyle(theme)}
+          data-pane-terminal={threadId}
+          data-selectable
+        />
       </ContentContextMenu>
       {connectError ? (
         <ContentContextMenu

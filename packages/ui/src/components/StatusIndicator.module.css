@@ -69,7 +69,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pulse::after {
+  :root:not([data-motion="full"]) .pulse::after {
     animation: none;
   }
 }

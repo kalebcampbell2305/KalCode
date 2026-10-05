@@ -1,15 +1,17 @@
 //! Real Gemini CLI 0.61.0 checks of KalCode's managed launch material. Every test is `#[ignore]`d
 //! and needs `KALCODE_REAL_GEMINI` set to an installed `gemini` executable or npm shim.
 //!
-//! Neither test signs in, sends a prompt or uses quota:
+//! No test signs in, sends a prompt or uses quota:
 //! - the sign-in probe answers "n" to Gemini's own consent question, so no browser opens and no
 //!   credential is written;
 //! - the headless probe runs against a signed-out profile with the browser suppressed, so Gemini
-//!   stops at its own authentication check.
+//!   stops at its own authentication check;
+//! - the security-warning probe only asks for `--version`.
 //!
 //! They prove what fixtures can't: that Gemini accepts every flag KalCode passes (0.61.0 rejects
 //! `--ignore-env`), starts with KalCode's profile selector (it crashes on a Windows verbatim
-//! `GEMINI_CLI_HOME`), and reaches its official sign-in only through the dedicated flow.
+//! `GEMINI_CLI_HOME`), reaches its official sign-in only through the dedicated flow, and starts
+//! without a Gemini "Security Warning" about system settings.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -262,4 +264,61 @@ fn real_headless_launch_is_accepted_and_stops_at_geminis_auth_check() {
         Some(41),
         "a signed-out profile stops at Gemini's FATAL_AUTHENTICATION_ERROR: {stderr}"
     );
+}
+
+/// Gemini CLI 0.61.0 loads a system settings or system defaults file only when it and its
+/// directory are owned by Administrators/SYSTEM (root elsewhere); any other file is skipped with a
+/// "Security Warning: Skipping system settings file ..." line on every start. A per-user managed
+/// profile is never administrator-owned, so a KalCode launch must not redirect Gemini's system
+/// settings into it. `--version` loads settings before it prints, so it shows the warning without
+/// signing in, opening a browser or using quota.
+#[test]
+#[ignore = "needs a real Gemini CLI 0.61.0 (KALCODE_REAL_GEMINI); no sign-in, prompt or quota"]
+fn real_managed_launches_start_without_a_gemini_security_warning() {
+    let Some(gemini) = real_gemini() else { return };
+    let temp = tempfile::tempdir().expect("temp");
+    let root = std::fs::canonicalize(temp.path()).expect("canonical temp");
+    std::fs::create_dir_all(root.join("person")).expect("person");
+    let profiles = ManagedProfiles::new(root.join("managed")).expect("profiles");
+    let account_id = kalcode_contracts::ids::new_id();
+    let gemini_dir = profiles
+        .profile_home("gemini-cli", &account_id)
+        .expect("home")
+        .join(".gemini");
+    std::fs::create_dir_all(&gemini_dir).expect("gemini dir");
+    // The profile's own user settings: Gemini must keep honoring them (and must not update itself
+    // while this test runs).
+    std::fs::write(
+        gemini_dir.join("settings.json"),
+        r#"{"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false}}"#,
+    )
+    .expect("profile settings");
+    let version = [std::ffi::OsString::from("--version")];
+
+    let (launch, _, env) = headless_launch(&root, &profiles, &account_id);
+    let session = run(&gemini, &env, launch.cwd(), &version, b"");
+    drop(launch);
+
+    let lease = profiles
+        .acquire_sign_in_lease("gemini-cli", &account_id)
+        .expect("exclusive lease");
+    let sign_in = ManagedGeminiSignIn::prepare(&profiles, &source(&root), &account_id, &lease)
+        .expect("sign-in launch");
+    let signing_in = run(&gemini, sign_in.environment(), sign_in.cwd(), &version, b"");
+    drop(lease);
+
+    for (label, output) in [("session", session), ("sign-in", signing_in)] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "{label}: exit {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status.code()
+        );
+        assert_eq!(output.status.code(), Some(0), "{label}: {stderr}");
+        assert!(stdout.trim().starts_with("0.61."), "{label}: {stdout}");
+        assert!(
+            !stderr.contains("Security Warning") && !stdout.contains("Security Warning"),
+            "{label} launch made Gemini print a security warning:\n{stderr}"
+        );
+    }
 }

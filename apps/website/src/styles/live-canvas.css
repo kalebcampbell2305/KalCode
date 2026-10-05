@@ -2,10 +2,16 @@
 .lk-adaptive-tools {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 0.375rem;
-  padding: 0.375rem 0.625rem 0.625rem;
+  min-width: 0;
+  padding: 0 0.625rem 0.5rem;
+  overflow: hidden;
   color: var(--color-text-secondary);
+}
+.lk-adaptive-tools .lk-btn {
+  min-height: 1.625rem;
+  padding: 0 0.5625rem;
+  font-size: 0.71875rem;
 }
 .lk-adaptive-name {
   display: inline-flex;
@@ -18,10 +24,11 @@
 }
 .lk-adaptive-presets {
   display: inline-flex;
+  flex: none;
   gap: 0.125rem;
   padding: 0.125rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.625rem;
+  border-radius: var(--radius-md);
   background: var(--color-surface-1);
 }
 .lk-adaptive-presets .lk-btn {
@@ -34,7 +41,9 @@
   color: var(--color-text);
 }
 .lk-adaptive-suggestion {
+  flex: none;
   margin-left: auto;
+  white-space: nowrap;
   padding: 0.375rem 0.5rem;
   border: 0;
   border-radius: 0.5rem;
@@ -164,8 +173,22 @@
   gap: 0.375rem;
   padding: 0.375rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.625rem;
+  border-radius: var(--radius-lg);
   background: var(--color-surface-1);
+}
+/* Phones: the pane strip is one swipeable row, never a wall of chips. */
+.lk-adaptive-mobile {
+  flex-wrap: nowrap;
+  flex: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.lk-adaptive-mobile .lk-btn {
+  flex: none;
+  min-height: 2rem;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .lk-adaptive-dock > span {
   margin: 0 0.375rem;
@@ -176,15 +199,18 @@
   background: var(--color-accent-soft);
   border-color: var(--color-border-lit);
 }
-@media (max-width: 760px) {
-  .lk-adaptive-name {
-    flex-basis: 100%;
-  }
+@container live (max-width: 62rem) {
   .lk-adaptive-suggestion {
     display: none;
   }
-  .lk-adaptive-presets {
-    flex-wrap: wrap;
+}
+@container live (max-width: 47.5rem) {
+  .lk-adaptive-tools {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .lk-adaptive-tools .lk-btn {
+    min-height: 2rem;
   }
 }
 @media (prefers-reduced-motion: reduce) {

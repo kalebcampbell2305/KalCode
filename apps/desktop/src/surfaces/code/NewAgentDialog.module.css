@@ -487,12 +487,11 @@
 }
 
 .skeleton {
+  position: relative;
   display: block;
+  overflow: hidden;
   height: 2.75rem;
   border-radius: var(--row-r);
-  background: linear-gradient(90deg, var(--color-surface-2), var(--color-surface-hover), var(--color-surface-2));
-  background-size: 200% 100%;
-  animation: shimmer 1.4s var(--ease-in-out) infinite;
 }
 
 .restoringText,
@@ -661,11 +660,26 @@
 }
 
 .chipPending {
+  position: relative;
+  overflow: hidden;
   width: 3.5rem;
   height: 1.75rem;
   border-radius: var(--radius-full);
-  background: linear-gradient(90deg, var(--color-surface-2), var(--color-surface-hover), var(--color-surface-2));
-  background-size: 200% 100%;
+}
+
+/* The shimmer (a 2-width gradient tile sliding one tile per cycle) is a 3-width layer moved with
+   transform, so the compositor runs it instead of repainting a moving background every frame. */
+.skeleton::before,
+.chipPending::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 300%;
+  background:
+    linear-gradient(90deg, var(--color-surface-2), var(--color-surface-hover), var(--color-surface-2)) 0 0 /
+    calc(200% / 3) 100%;
   animation: shimmer 1.4s var(--ease-in-out) infinite;
 }
 
@@ -842,16 +856,26 @@
 }
 
 @keyframes shimmer {
+  from {
+    transform: translateX(calc(-200% / 3));
+  }
   to {
-    background-position: -200% 0;
+    transform: translateX(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .overlay,
-  .dialog,
-  .skeleton,
-  .chipPending {
+  :root:not([data-motion="full"]) .overlay,
+  :root:not([data-motion="full"]) .dialog,
+  :root:not([data-motion="full"]) .skeleton::before,
+  :root:not([data-motion="full"]) .chipPending::before {
     animation: none;
   }
+}
+
+:root[data-motion="reduced"] .overlay,
+:root[data-motion="reduced"] .dialog,
+:root[data-motion="reduced"] .skeleton::before,
+:root[data-motion="reduced"] .chipPending::before {
+  animation: none;
 }

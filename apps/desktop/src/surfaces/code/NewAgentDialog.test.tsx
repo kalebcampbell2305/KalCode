@@ -21,10 +21,20 @@ vi.mock("../providers/accountUsage.ts", async (importOriginal) => {
   return { ...actual, useAccountUsages: () => usage.map };
 });
 
-const fresh = (accountId: string, remainingPercent: number, plan: string | null = null): AccountUsageState => ({
+const fresh = (
+  accountId: string,
+  weeklyPercent: number,
+  plan: string | null = null,
+  fiveHourPercent: number | null = null,
+): AccountUsageState => ({
   accountId,
   status: "fresh",
-  windows: [{ id: "five_hour", label: "5-hour", remainingPercent, resetsAt: null }],
+  windows: [
+    { id: "weekly", label: "Weekly", remainingPercent: weeklyPercent, resetsAt: null },
+    ...(fiveHourPercent === null
+      ? []
+      : [{ id: "five_hour", label: "5-hour", remainingPercent: fiveHourPercent, resetsAt: null }]),
+  ],
   checkedAt: new Date().toISOString(),
   reason: null,
   plan,
@@ -428,10 +438,26 @@ describe("restored accounts in the Code launcher", () => {
     expect(optionA).toHaveTextContent(/8% left/);
     expect(optionA).toHaveTextContent(/Ready/);
     expect(screen.getByRole("option", { name: /Claude B/ })).toHaveTextContent(/91% left.*Ready/);
-    expect(screen.getByText("Claude A is running low. Use Claude B instead?")).toBeVisible();
+    expect(screen.getByText("Claude A is running low on its weekly limit. Use Claude B instead?")).toBeVisible();
     expect(optionA).toHaveAttribute("aria-selected", "true");
     await userEvent.setup().click(screen.getByRole("button", { name: "Use Claude B" }));
     expect(screen.getByRole("option", { name: /Claude B/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows weekly remaining on rows but names the 5-hour limit when that one runs low", async () => {
+    const a = makeAccount("claude-a", "Claude A", true);
+    const b = makeAccount("claude-b", "Claude B", false);
+    usage.map = new Map([
+      [a.id, fresh(a.id, 73, "Max", 4)],
+      [b.id, fresh(b.id, 40, "Max", 90)],
+    ]);
+    runtime.client = clientWith([a, b], async () => threadOptions(["claude-code"]));
+    render(dialog({}));
+    const optionA = await screen.findByRole("option", { name: /Claude A/ });
+    expect(optionA).toHaveTextContent(/73% left/);
+    expect(optionA).not.toHaveTextContent(/4% left/);
+    expect(screen.getByRole("option", { name: /Claude B/ })).toHaveTextContent(/40% left/);
+    expect(screen.getByText("Claude A is running low on its 5-hour limit. Use Claude B instead?")).toBeVisible();
   });
 
   it("never invents usage: unknown accounts say so", async () => {

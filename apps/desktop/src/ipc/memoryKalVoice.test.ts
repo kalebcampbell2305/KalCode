@@ -243,6 +243,39 @@ describe("memory KalVoice agent status (mirrors native grammar_agents)", () => {
     expect(response.directive).toEqual(directive);
   });
 
+  it.each([
+    ["which agent is stuck", "which_sessions", { kind: "filter_agents", filter: "waiting", providerId: null }],
+    ["which one is stuck", "which_sessions", { kind: "filter_agents", filter: "waiting", providerId: null }],
+    [
+      "which agents are waiting for permission",
+      "which_sessions",
+      { kind: "filter_agents", filter: "needs_you", providerId: null },
+    ],
+    ["what needs permission", "which_sessions", { kind: "filter_agents", filter: "needs_you", providerId: null }],
+    ["what failed", "which_sessions", { kind: "filter_agents", filter: "failed", providerId: null }],
+    ["which threads failed", "which_sessions", null],
+  ])("%j reads the right scope (native grammar_sessions)", async (text, intent, directive) => {
+    const response = await ask(text);
+    expect(response.intent).toBe(intent);
+    expect(response.directive).toEqual(directive);
+  });
+
+  it("focuses agents by state, and threads only when a thread is named", async () => {
+    expect((await ask("focus the agent that needs me")).outcome).toMatchObject({
+      kind: "failed",
+      message: "No agent is waiting for you.",
+    });
+    expect((await ask("open the one that failed")).outcome).toMatchObject({
+      kind: "failed",
+      message: "No agent has failed.",
+    });
+    expect((await ask("show me the failed thread")).outcome).toMatchObject({
+      kind: "failed",
+      message: "No thread has failed.",
+    });
+    expect((await ask("which agent is stuck")).outcome).toMatchObject({ summary: "No agents are stuck." });
+  });
+
   it("never reads a narrower state as stop everything", async () => {
     for (const text of ["stop all idle agents", "stop the paused threads", "pause all idle agents"]) {
       expect((await ask(text)).intent).not.toMatch(/^(stop|pause|resume)_threads$/);

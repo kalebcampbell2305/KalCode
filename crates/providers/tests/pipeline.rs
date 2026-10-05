@@ -17,7 +17,7 @@ use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::ThreadStatus;
 use kalcode_providers::claude::session::SessionTimeouts;
 use kalcode_providers::detect::detect;
-use kalcode_providers::{ClaudeCodeProvider, DetectEnv, ProviderRegistry, catalog};
+use kalcode_providers::{ClaudeCodeProvider, DetectEnv, ProviderRegistry, catalog, launch_probe};
 use serde_json::{Value, json};
 
 const FAKE: &str = env!("CARGO_BIN_EXE_kalcode-fake-provider");
@@ -460,7 +460,8 @@ fn registry_isolates_a_hanging_provider_from_the_others() {
         "claude",
         json!({"version": "2.1.300 (Claude Code)", "versionDelayMs": 0}),
     );
-    let hanging = FakeInstall::new("codex", json!({"versionDelayMs": 30000}));
+    // The hang outlasts the probe timeout by a wide margin, so it must end as a timeout error.
+    let hanging = FakeInstall::new("codex", json!({"versionDelayMs": 60000}));
     let sep = if cfg!(windows) { ";" } else { ":" };
     let mut env = fake.env();
     env.vars.retain(|(k, _)| k != "PATH");
@@ -473,9 +474,18 @@ fn registry_isolates_a_hanging_provider_from_the_others() {
         )
         .into(),
     ));
-    env.probe_timeout = Some(Duration::from_secs(4));
+    // Generous for the healthy probe on a loaded gate machine (the timeout applies to every
+    // provider; at 4 s a slow but healthy claude probe was itself timed out), far below the hang.
+    env.probe_timeout = Some(Duration::from_secs(15));
     let registry = ProviderRegistry::new(env);
+    let started = std::time::Instant::now();
     let (statuses, events) = registry.detect_all();
+    // Isolation: the hanging provider is cut off at its timeout, not waited out.
+    assert!(
+        started.elapsed() < Duration::from_secs(45),
+        "a hanging provider delayed detection: {:?}",
+        started.elapsed()
+    );
     let state = |id: &str| {
         statuses
             .iter()
@@ -491,6 +501,161 @@ fn registry_isolates_a_hanging_provider_from_the_others() {
         registry.usable(),
         vec![kalcode_contracts::agent::ProviderId::new("claude-code")]
     );
+}
+
+// ---------------------------------------------------------------- launch-time probe reuse
+
+impl FakeInstall {
+    /// How many times the provider was started with exactly `args` (one line per start).
+    fn started_with(&self, args: &[&str]) -> usize {
+        self.runs()
+            .iter()
+            .filter(|run| run["args"] == json!(args))
+            .count()
+    }
+
+    fn executable(&self, name: &str) -> std::path::PathBuf {
+        self.dir.path().join(if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        })
+    }
+}
+
+/// Measured on the real app: every launch spawned `--version` (and Codex `login status`) again.
+/// Launches through the shared path reuse one recent detection while the binary is unchanged,
+/// and probe again once it changes.
+#[test]
+fn launch_detection_spawns_one_probe_per_unchanged_binary() {
+    const LAUNCHES: usize = 5;
+    let fake = FakeInstall::new("codex", json!({"version": "codex-cli 0.160.0"}));
+    let env = fake.env();
+    let spec = catalog::codex_spec();
+
+    // Before: a full detection per launch.
+    for _ in 0..LAUNCHES {
+        detect(&spec, &env);
+    }
+    let before = (
+        fake.started_with(&["--version"]),
+        fake.started_with(&["login", "status"]),
+    );
+    assert_eq!(before, (LAUNCHES, LAUNCHES));
+
+    // After: one probe for all launches.
+    for _ in 0..LAUNCHES {
+        let detected = launch_probe::detect_for_launch(&spec, &env, None);
+        assert_eq!(detected.detection.state, DetectionState::Installed);
+        assert_eq!(detected.detection.auth, AuthState::Authenticated);
+    }
+    let after = (
+        fake.started_with(&["--version"]) - before.0,
+        fake.started_with(&["login", "status"]) - before.1,
+    );
+    assert_eq!(
+        after,
+        (1, 1),
+        "{LAUNCHES} launches, one version and one sign-in probe"
+    );
+    eprintln!(
+        "probes per {LAUNCHES} launches: before {} version + {} sign-in, after {} + {}",
+        before.0, before.1, after.0, after.1
+    );
+
+    // An upgraded binary (new modification time) is probed again; then reused again.
+    std::fs::File::options()
+        .write(true)
+        .open(fake.executable("codex"))
+        .expect("open")
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+        .expect("mtime");
+    launch_probe::detect_for_launch(&spec, &env, None);
+    launch_probe::detect_for_launch(&spec, &env, None);
+    assert_eq!(fake.started_with(&["--version"]), before.0 + 2);
+
+    // An explicit check (Providers page, Provider Health) makes the next launch probe again.
+    launch_probe::forget(spec.provider_id);
+    launch_probe::detect_for_launch(&spec, &env, None);
+    assert_eq!(fake.started_with(&["login", "status"]), before.1 + 3);
+}
+
+/// A real session launch: the second start reuses the first one's detection; a binary that
+/// disappeared afterwards is reported as not installed, not served from the cache.
+#[test]
+fn session_launches_reuse_detection_and_report_a_removed_binary() {
+    let fake = FakeInstall::new("claude", json!({}));
+    let adapter = provider(&fake);
+    for _ in 0..3 {
+        let (session, _rx) = start_with(provider(&fake), &fake, PermissionMode::Approve);
+        session.terminate().expect("terminate");
+    }
+    assert_eq!(
+        fake.started_with(&["--version"]),
+        1,
+        "3 launches, one probe"
+    );
+
+    // Renaming works on Windows even while a just-ended process is still being reaped.
+    std::fs::rename(
+        fake.executable("claude"),
+        fake.dir.path().join("moved-away.bin"),
+    )
+    .expect("uninstall");
+    let sink = Box::new(|_: AgentEvent| {}) as Box<dyn kalcode_contracts::agent::AgentEventSink>;
+    assert_eq!(
+        adapter
+            .start_session(fake.config(PermissionMode::Approve, None), sink)
+            .err(),
+        Some(ProviderError::NotInstalled)
+    );
+}
+
+/// Startup: several full checks requested while one runs share one follow-up check, and a
+/// launch that only needs a completed check waits for the running one instead of queueing a
+/// whole check behind it.
+#[test]
+fn concurrent_full_checks_share_one_follow_up_and_launches_join_the_running_one() {
+    let fake = FakeInstall::new(
+        "claude",
+        json!({"version": "2.1.300 (Claude Code)", "versionDelayMs": 1500}),
+    );
+    let registry = ProviderRegistry::with_specs(fake.env(), vec![catalog::claude_spec()]);
+    let deadline = Instant::now() + WAIT;
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| registry.detect_all());
+        while fake.started_with(&["--version"]) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let launch = scope.spawn(|| {
+            let started = Instant::now();
+            let (statuses, events) = registry.detect_all_once();
+            (started.elapsed(), statuses, events)
+        });
+        let checks: Vec<_> = (0..3)
+            .map(|_| scope.spawn(|| registry.detect_all()))
+            .collect();
+        let (statuses, events) = first.join().expect("first check");
+        assert!(statuses[0].detection.is_some());
+        assert!(!events.is_empty(), "the first check reports the detection");
+        let (waited, launch_statuses, launch_events) = launch.join().expect("launch");
+        assert!(launch_statuses[0].detection.is_some());
+        assert!(launch_events.is_empty());
+        assert!(waited < Duration::from_millis(2500), "{waited:?}");
+        for check in checks {
+            let (statuses, _) = check.join().expect("check");
+            assert!(statuses[0].detection.is_some());
+        }
+    });
+    assert_eq!(
+        registry.checks_run(),
+        2,
+        "one running check and one shared follow-up"
+    );
+    assert_eq!(fake.started_with(&["--version"]), 2);
+    // Once a check completed, a launch never starts another.
+    registry.detect_all_once();
+    assert_eq!(registry.checks_run(), 2);
 }
 
 // ---------------------------------------------------------------- sessions

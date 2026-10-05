@@ -37,7 +37,7 @@ import {
   UserRoundCog,
   X,
 } from "lucide-react";
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import type { VoiceSceneTarget } from "../../kalvoice/sceneTargets.ts";
 import {
@@ -94,6 +94,7 @@ import { rebindBlocker } from "../threads/useThreadAccount.ts";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
 import { CodeContextOperationsRegistration } from "./CodeContextOperations.tsx";
+import { CodeShownContext, createShownStore, useCodeShown } from "./codeShown.ts";
 import { HandOffDialog } from "./HandOffDialog.tsx";
 import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
@@ -128,7 +129,7 @@ import {
   paneRebindAccounts,
   rememberDuplicatePlacement,
 } from "./paneContextActions.ts";
-import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
+import { type PaneAccountIdentity, paneAccountLabel, resolvePaneAccount, samePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
 import { RenamePaneDialog } from "./RenamePaneDialog.tsx";
@@ -213,6 +214,24 @@ interface CodeCanvasProps {
   children: (api: CodeCanvasApi | null, canvas: ReactNode) => ReactNode;
 }
 
+/**
+ * One stable function per id that always runs the latest `run`. Memoized panes and tabs keep
+ * their identity across canvas renders instead of re-rendering for a new closure.
+ */
+function useHandlerCache(run: (id: string) => void): (id: string) => () => void {
+  const latest = useRef(run);
+  latest.current = run;
+  const cache = useRef(new Map<string, () => void>());
+  return useCallback((id: string) => {
+    let handler = cache.current.get(id);
+    if (!handler) {
+      handler = () => latest.current(id);
+      cache.current.set(id, handler);
+    }
+    return handler;
+  }, []);
+}
+
 /** The canvas while panes or the saved layout load: one quiet pane frame, never a blank page. */
 function CanvasSkeleton({ label }: { label: string }) {
   return (
@@ -259,6 +278,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const { current, navigate, recordLocation, registerRestorer } = useNavigation();
   const workspaceVisible = useWorkspaceVisible();
   const codeShown = current === "code" && workspaceVisible;
+  const [shownStore] = useState(() => createShownStore(codeShown));
+  useLayoutEffect(() => shownStore.set(codeShown), [shownStore, codeShown]);
   const threadsIntent = useThreadsIntent();
   const theme = useResolvedTheme();
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccount[] | null>(null);
@@ -305,9 +326,17 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const restoredProviderAccountsUnavailable = accountSessions
     ? accountSessions.loadError !== null
     : providerAccountsUnavailable;
+  // Resolution makes a new object per call: keep each thread's previous identity while it renders
+  // the same, so one agent's update never hands every other pane a "changed" account.
+  const resolvedAccounts = useRef(new Map<string, PaneAccountIdentity | null>());
   const accountFor = useCallback(
-    (thread: ThreadSummary) =>
-      resolvePaneAccount(thread, restoredProviderAccounts, restoredProviderAccountsUnavailable),
+    (thread: ThreadSummary) => {
+      const next = resolvePaneAccount(thread, restoredProviderAccounts, restoredProviderAccountsUnavailable);
+      const previous = resolvedAccounts.current.get(thread.id);
+      if (previous !== undefined && samePaneAccount(previous, next)) return previous;
+      resolvedAccounts.current.set(thread.id, next);
+      return next;
+    },
     [restoredProviderAccounts, restoredProviderAccountsUnavailable],
   );
 
@@ -772,14 +801,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     },
     [smartClose.request],
   );
-  const closeAgentFor = useCallback(
-    (threadId: string) => () => requestContentClose(agentContent(threadId)),
-    [requestContentClose],
-  );
+  // Stable per id, like `handOffFor`: a fresh closure per render re-rendered every pane and tab.
+  const closeAgentFor = useHandlerCache((threadId: string) => requestContentClose(agentContent(threadId)));
   // One flag for the whole batch: the dialog can't be cancelled or resubmitted between creates.
   const [launching, setLaunching] = useState(false);
   // A fresh launcher never shows the previous launch's refusal.
-  const { clearLaunchError } = providerPanes;
+  const { clearLaunchError, createMany } = providerPanes;
   const openAgentLauncher = useCallback(
     (providerId?: PaneProviderId, paneId: string | null = null, count?: number) => {
       clearLaunchError();
@@ -794,14 +821,12 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
   const launchAgents = useCallback(
     async ({ providerId, count, ...launch }: AgentLaunchSpec, paneId: string | null, returnToHandoff = false) => {
-      const created: string[] = [];
+      let created: string[] = [];
       setLaunching(true);
       try {
-        for (let i = 0; i < count; i += 1) {
-          const thread = await providerPanes.create(providerId, launch);
-          if (!thread) break;
-          created.push(thread.id);
-        }
+        // A few sessions start at once and join the list in one update; the layout is arranged
+        // once below. A refusal stops the batch (sessions already started are kept).
+        created = (await createMany(providerId, launch, count)).map((thread) => thread.id);
       } finally {
         setLaunching(false);
       }
@@ -828,7 +853,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (returnToHandoff && first) setHandoffTargetId(first);
       return created.length;
     },
-    [providerPanes],
+    [createMany],
   );
 
   // One-click New agent. What KalCode already knows (workspace account bindings, the models each
@@ -959,6 +984,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     (terminalId: string) => requestContentClose(terminalContent(terminalId)),
     [requestContentClose],
   );
+  const closeTerminalFor = useHandlerCache(closeTerminalTab);
+  const acknowledgeFor = useHandlerCache(attention.acknowledge);
 
   const restartById = useCallback((terminalId: string) => void restartTerminal(terminalId), [restartTerminal]);
   const [renaming, setRenaming] = useState<{ content: PaneContent; name: string } | null>(null);
@@ -1151,8 +1178,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           actions: running ? (
             <TerminalImageButton targetKey={terminalImageTargetKey("terminal", terminal.id)} />
           ) : undefined,
-          stop: running ? { label: "End terminal", run: () => closeTerminalTab(terminal.id) } : undefined,
-          onClose: () => closeTerminalTab(terminal.id),
+          stop: running ? { label: "End terminal", run: closeTerminalFor(terminal.id) } : undefined,
+          onClose: closeTerminalFor(terminal.id),
         };
       }
       if (content.kind === "agent") {
@@ -1173,23 +1200,28 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
               <TerminalImageButton targetKey={terminalImageTargetKey("agent", entry.thread.id)} />
             ) : undefined,
           attention: attention.pending.get(entry.thread.id),
-          onAttentionSeen: () => attention.acknowledge(entry.thread.id),
+          onAttentionSeen: acknowledgeFor(entry.thread.id),
           stateLabel:
             agentAttention(entry.thread) === "needs-you"
               ? "Needs You"
               : entry.thread.status === "completed"
                 ? "Done"
                 : undefined,
-          onClose: () => requestContentClose(agentContent(entry.thread.id)),
+          onClose: closeAgentFor(entry.thread.id),
         };
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminalTab, accountFor, requestContentClose, orgItems, attention],
+    [terminalById, labels, paneById, closeTerminalFor, accountFor, closeAgentFor, orgItems, attention, acknowledgeFor],
   );
 
+  // Reads the latest panes through refs: a stable handler keeps every pane's account picker
+  // memoized when one agent's status changes.
+  const latestPanes = useRef({ paneById, providerPanes });
+  latestPanes.current = { paneById, providerPanes };
   const continueWithAccount = useCallback(
     async (threadId: string, accountId: string) => {
+      const { paneById, providerPanes } = latestPanes.current;
       const source = paneById.get(threadId)?.thread;
       const input = source ? duplicatePaneInput(source) : null;
       if (!input) throw new Error("This coding session cannot be continued with its current settings.");
@@ -1205,9 +1237,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       // Creation succeeded. A failed list refresh must not invite a duplicate launch on retry.
       void Promise.all([refreshWorkspaces(), providerPanes.refresh()]).catch(() => undefined);
     },
-    [paneById, providerPanes, refreshWorkspaces],
+    [refreshWorkspaces],
   );
 
+  const { error: paneError, refresh: refreshPanes, channel: paneChannel, updated: paneUpdated } = providerPanes;
   const render = useCallback(
     (content: PaneContent, context: PaneRenderContext): ReactNode | null => {
       if (content.kind === "browser")
@@ -1218,7 +1251,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             workspaceId={workspace.id}
             context={context}
             controllerRef={controllerRef}
-            visible={codeShown && context.visible !== false}
+            visible={context.visible !== false}
             initialUrl={initialBrowserUrls.current.get(content.browserId)}
           />
         );
@@ -1231,7 +1264,6 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             label={labels.get(terminal.id) ?? terminal.title}
             focused={context.focused}
             focusRequest={context.focusRequest}
-            codeShown={codeShown}
             visible={context.visible !== false}
             theme={theme}
             workspace={workspace}
@@ -1243,20 +1275,21 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "agent") {
         const entry = paneById.get(content.agentId);
         if (!entry?.info) {
-          return <AgentConnecting error={providerPanes.error} onRetry={providerPanes.refresh} />;
+          return <AgentConnecting error={paneError} onRetry={refreshPanes} />;
         }
+        // Code's own visibility reaches the terminal through `CodeShownContext`, not these props.
         return (
           <ProviderPane
             thread={entry.thread}
             info={entry.info}
-            channel={providerPanes.channel}
+            channel={paneChannel}
             account={accountFor(entry.thread)}
             theme={theme}
             focusRequest={context.focusRequest}
-            visible={context.visible !== false && codeShown}
+            visible={context.visible !== false}
             closePending={smartClose.pending !== null}
-            throttled={!context.focused || !codeShown}
-            onChanged={providerPanes.updated}
+            throttled={!context.focused}
+            onChanged={paneUpdated}
             onContinue={continueWithAccount}
             onHandOff={handOffFor(entry.thread.id)}
             onClose={closeAgentFor(entry.thread.id)}
@@ -1273,8 +1306,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       workspace,
       restartById,
       closeTerminalTab,
-      providerPanes,
-      codeShown,
+      paneError,
+      refreshPanes,
+      paneChannel,
+      paneUpdated,
       accountFor,
       browserBridge,
       handOffFor,
@@ -1696,7 +1731,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       <SmartCloseDialog close={smartClose} />
       <UtilityDockRegistration />
       <CodeContextOperationsRegistration />
-      {children(api, canvas)}
+      <CodeShownContext.Provider value={shownStore}>{children(api, canvas)}</CodeShownContext.Provider>
       {renaming && (renaming.content.kind === "terminal" || renaming.content.kind === "agent") ? (
         <RenamePaneDialog
           name={renaming.name}
@@ -1805,7 +1840,6 @@ const TerminalPanel = memo(function TerminalPanel({
   label,
   focused,
   focusRequest,
-  codeShown,
   visible,
   theme,
   workspace,
@@ -1816,7 +1850,6 @@ const TerminalPanel = memo(function TerminalPanel({
   label: string;
   focused: boolean;
   focusRequest: number;
-  codeShown: boolean;
   visible: boolean;
   theme: "light" | "dark";
   workspace: Workspace;
@@ -1859,10 +1892,10 @@ const TerminalPanel = memo(function TerminalPanel({
         key={`${terminal.id}:${terminal.startedAt ?? ""}`}
         terminal={terminal}
         label={label}
-        visible={visible && codeShown}
+        visible={visible}
         focusRequest={focusRequest}
         theme={theme}
-        throttled={!focused || !codeShown}
+        throttled={!focused}
       />
       {terminal.status === "exited" ? (
         <div className={styles.endedBar} role="status" data-tone={failed ? "failed" : "muted"}>
@@ -2006,6 +2039,7 @@ function BrowserContentPanel({
   visible: boolean;
   initialUrl?: string;
 }) {
+  const codeShown = useCodeShown();
   const onRequestFocus = useCallback(
     () => controllerRef.current.focusPane(context.paneId, false),
     [controllerRef, context.paneId],
@@ -2024,7 +2058,7 @@ function BrowserContentPanel({
       workspaceId={workspaceId}
       context={context}
       bridge={bridge}
-      visible={visible}
+      visible={visible && codeShown}
       initialUrl={initialUrl}
       onRequestFocus={onRequestFocus}
       onUrlChange={onUrlChange}

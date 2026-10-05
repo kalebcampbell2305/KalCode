@@ -165,6 +165,12 @@ Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 31 
   what KalVoice typed), "tell <session> to …" (`direct_prompt`, through the composer's own Send),
   `focus_by_state`, `focus_previous` and `which_sessions` ("what needs permission?"). Every
   spoken session name goes through the session resolver; several fits get a "Which one?" choice.
+  State lookups carry a `scope`: a phrase naming an agent, terminal, pane or provider, or naming
+  nothing ("which one is stuck", "what failed", "focus the agent that needs me"), reads only coding
+  agents of every provider, classified by the shared agent-state model (stuck = WAITING; failed =
+  FAILED, including a failed last turn; permission = NEEDS YOU with a request open), replies in
+  "agents" and shows the matching Agents tab filter. "Which thread failed" / "the stuck session"
+  reads only chat threads.
   In a focused provider pane, ordinary work instructions go to that pane; "Type …" inserts only,
   "Tell <provider> …" inserts and sends, and "Send that" submits the KalVoice-owned draft.
   Navigation commands never become provider text. A raw shell terminal remains insert-only and

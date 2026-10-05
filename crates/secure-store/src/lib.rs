@@ -195,12 +195,16 @@ pub const PROBE_ACCOUNT: &str = "diagnostics:probe";
 /// The probe value is random and never leaves this function. Callers should not run probes
 /// concurrently against the same store (they share [`PROBE_ACCOUNT`]).
 pub fn probe(store: &dyn SecretStore) -> Result<(), SecretStoreError> {
-    let key = SecretKey::new(PROBE_ACCOUNT)?;
+    round_trip(store, &SecretKey::new(PROBE_ACCOUNT)?)
+}
+
+/// Writes a random secret under `key`, reads it back and deletes it.
+fn round_trip(store: &dyn SecretStore, key: &SecretKey) -> Result<(), SecretStoreError> {
     let value = SecretString::new(uuid::Uuid::new_v4().to_string());
-    store.set(&key, &value)?;
-    let read = store.get(&key);
+    store.set(key, &value)?;
+    let read = store.get(key);
     // Always attempt cleanup, even if the read failed.
-    let deleted = store.delete(&key);
+    let deleted = store.delete(key);
     let read = read?;
     deleted?;
     match read {
@@ -274,12 +278,14 @@ mod tests {
             return;
         }
         let store = OsSecretStore::new();
-        probe(&store).expect("OS credential store probe");
+        // A unique account, not PROBE_ACCOUNT: parallel gate workers share one OS account and
+        // its credential store, and concurrent probes of one fixed entry read each other's value.
         let key = SecretKey::new(format!(
             "test:os-roundtrip:{}",
             uuid::Uuid::now_v7().simple()
         ))
         .expect("key");
+        round_trip(&store, &key).expect("OS credential store round trip");
         assert!(store.get(&key).expect("get missing").is_none());
         assert!(!store.delete(&key).expect("delete missing"));
     }

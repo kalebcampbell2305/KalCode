@@ -450,6 +450,10 @@ function commandForSuite(suite, reportPath, platform, inherited = process.env) {
   const environment = {};
   if (suite.runner === "vitest") {
     args.push("--reporter=json", `--outputFile=${reportPath}`);
+    if (inherited.VITEST_MAX_WORKERS !== undefined) {
+      if (!/^[1-9]\d?$/.test(inherited.VITEST_MAX_WORKERS)) throw new Error("Invalid VITEST_MAX_WORKERS");
+      args.push(`--maxWorkers=${inherited.VITEST_MAX_WORKERS}`);
+    }
   }
   if (suite.runner === "playwright") {
     args.push("--reporter=json");

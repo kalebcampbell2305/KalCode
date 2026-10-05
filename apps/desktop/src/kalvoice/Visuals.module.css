@@ -211,13 +211,14 @@
 
 /* ---------- Reduced motion: decorative motion off, state stays readable ---------- */
 
-:global([data-motion="reduced"]) .orb *,
-:global([data-motion="reduced"]) .wave * {
+/* :root keeps the app's setting level with the phase rules that start the loops (it comes later). */
+:global(:root[data-motion="reduced"]) .orb *,
+:global(:root[data-motion="reduced"]) .wave * {
   animation: none;
   transition: none;
 }
 
-:global([data-motion="reduced"]) .orb[data-phase="listening"] .mark {
+:global(:root[data-motion="reduced"]) .orb[data-phase="listening"] .mark {
   transform: none;
 }
 

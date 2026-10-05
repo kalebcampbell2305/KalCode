@@ -147,15 +147,69 @@ function clampPage(limit: number): number {
   return Math.max(1, Math.min(MAX_THREAD_PAGE, Math.floor(limit)));
 }
 
+/**
+ * Read-only commands whose identical concurrent calls can share one native read. Several views
+ * mount together (startup, a tab switch) and ask for the same lists at the same moment.
+ */
+const SHARED_READS: ReadonlySet<CommandName> = new Set<CommandName>([
+  "account_status",
+  "approval_list",
+  "diagnostics_get",
+  "kalvoice_status",
+  "notification_list",
+  "operations_snapshot",
+  "permission_profiles_list",
+  "permission_settings_get",
+  "provider_account_bindings_list",
+  "provider_account_usage",
+  "provider_accounts_list",
+  "provider_health_list",
+  "providers_list",
+  "rail_state",
+  "runtime_status",
+  "settings_get",
+  "shells_list",
+  "terminal_list",
+  "terminals_running",
+  "thread_list",
+  "thread_options",
+  "updater_status",
+  "workspace_active",
+  "workspace_list",
+]);
+
 /** The only module that talks to the native runtime. Every failure becomes a KalCodeError. */
 export class KalCodeClient {
   readonly handoffs: HandoffsClient;
+  /**
+   * Shared reads in flight, by command and arguments. A call joins one only if no other command
+   * was sent and no event arrived since it started, so a joined read never predates a change.
+   */
+  private readonly reads = new Map<string, Promise<unknown>>();
 
   constructor(readonly transport: Transport) {
     this.handoffs = new HandoffsClient((command, args) => this.call(command, args));
   }
 
   private async call<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
+    if (!SHARED_READS.has(command)) {
+      this.reads.clear();
+      return this.invoke<T>(command, args);
+    }
+    const key = `${command} ${JSON.stringify(args ?? null)}`;
+    const shared = this.reads.get(key) as Promise<T> | undefined;
+    // Each caller gets its own copy: a caller may sort or edit what it receives.
+    if (shared) return shared.then((value) => structuredClone(value));
+    const read = this.invoke<T>(command, args);
+    this.reads.set(key, read);
+    const done = () => {
+      if (this.reads.get(key) === read) this.reads.delete(key);
+    };
+    read.then(done, done);
+    return read;
+  }
+
+  private async invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T> {
     try {
       return await this.transport.invoke<T>(command, args);
     } catch (error) {
@@ -270,7 +324,11 @@ export class KalCodeClient {
 
   async subscribeEvents(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe> {
     try {
-      return await this.transport.subscribe(onEvent);
+      // Something changed: reads started before this event are not shared with later callers.
+      return await this.transport.subscribe((event) => {
+        this.reads.clear();
+        onEvent(event);
+      });
     } catch (error) {
       throw toKalCodeError(error);
     }

@@ -36,6 +36,7 @@ use crate::claude::actions::ActionContext;
 use crate::claude::argv::{SessionStart, working_directory};
 use crate::detect::{DetectEnv, detect, detect_guarded};
 use crate::launch::{LaunchKind, resolve};
+use crate::launch_probe::detect_for_launch;
 
 /// Default pane size until the view reports its own.
 const DEFAULT_SIZE: (u16, u16) = (120, 32);
@@ -330,10 +331,7 @@ impl InteractiveClaudeProvider {
         probe_guardian: Option<&crate::guardian::ProviderProbeGuardian>,
     ) -> Result<PathBuf, ProviderError> {
         let spec = catalog::claude_spec();
-        let detected = match probe_guardian {
-            Some(guardian) => detect_guarded(&spec, &self.env, guardian),
-            None => detect(&spec, &self.env),
-        };
+        let detected = detect_for_launch(&spec, &self.env, probe_guardian);
         match (detected.detection.state, detected.executable) {
             (DetectionState::Installed, Some(exe))
                 if detected.detection.auth != AuthState::NotAuthenticated =>

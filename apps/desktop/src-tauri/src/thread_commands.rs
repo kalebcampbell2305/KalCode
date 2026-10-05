@@ -36,7 +36,7 @@ use tauri::{State, Webview};
 
 use crate::AppState;
 use crate::provider_auth_commands::ProviderRuntimeAuthority;
-use crate::provider_commands::detect_and_record;
+use crate::provider_commands::detect_once_and_record;
 use crate::provider_pane_commands::ProviderPanesState;
 use crate::resource_commands::ResourceAdmissionProvider;
 
@@ -463,7 +463,7 @@ impl ThreadsState {
             .iter()
             .all(|status| status.detection.is_none());
         if never_detected {
-            detect_and_record(core, &self.detection);
+            detect_once_and_record(core, &self.detection);
             self.sync_providers();
         }
     }

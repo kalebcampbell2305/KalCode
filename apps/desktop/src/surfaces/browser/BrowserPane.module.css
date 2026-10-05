@@ -166,7 +166,19 @@
   bottom: 0;
   left: 0;
   height: 2px;
+  overflow: hidden;
   opacity: 0;
+  transition: opacity 200ms ease;
+}
+/* The sweep is a half-width layer moved with transform (on the compositor), the same picture as
+   sliding a half-width background across the bar. */
+.progress::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 50%;
   background: linear-gradient(
     90deg,
     transparent,
@@ -175,12 +187,11 @@
     var(--lb-accent) 65%,
     transparent
   );
-  background-size: 50% 100%;
-  background-repeat: no-repeat;
-  transition: opacity 200ms ease;
 }
 .root[data-loading] .progress {
   opacity: 1;
+}
+.root[data-loading] .progress::before {
   animation: progress 1.1s var(--ease-in-out, ease-in-out) infinite;
 }
 
@@ -888,6 +899,7 @@
   font-size: var(--text-xs);
 }
 .openingGlyph {
+  position: relative;
   display: grid;
   width: 46px;
   height: 46px;
@@ -899,9 +911,27 @@
     color-mix(in srgb, var(--color-accent) 25%, transparent),
     color-mix(in srgb, var(--color-accent) 5%, transparent)
   );
-  box-shadow: 0 0 30px -8px var(--color-glow);
   color: var(--color-accent-icy);
   animation: breathe 1.6s ease-in-out infinite;
+}
+/* The glow breathes by cross-fading its resting and its full shadow, each painted once on its own
+   layer, so the compositor runs it instead of repainting a box-shadow every frame. */
+.openingGlyph::before,
+.openingGlyph::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.openingGlyph::before {
+  box-shadow: 0 0 30px -8px var(--color-glow);
+  animation: breathe-rest 1.6s ease-in-out infinite;
+}
+.openingGlyph::after {
+  box-shadow: 0 0 40px -6px var(--color-glow);
+  opacity: 0;
+  animation: breathe-full 1.6s ease-in-out infinite;
 }
 .openingText {
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -1136,10 +1166,10 @@
 }
 @keyframes progress {
   from {
-    background-position: -50% 0;
+    transform: translateX(-50%);
   }
   to {
-    background-position: 150% 0;
+    transform: translateX(150%);
   }
 }
 @keyframes slide-in {
@@ -1156,30 +1186,53 @@
 }
 @keyframes breathe {
   50% {
-    box-shadow: 0 0 40px -6px var(--color-glow);
     transform: scale(1.03);
   }
 }
+@keyframes breathe-rest {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes breathe-full {
+  50% {
+    opacity: 1;
+  }
+}
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) .root {
+  :root:not([data-motion="full"]) .root,
+  :root:not([data-motion="full"]) .spinner,
+  :root:not([data-motion="full"]) .openingGlyph,
+  :root:not([data-motion="full"]) .openingGlyph::before,
+  :root:not([data-motion="full"]) .openingGlyph::after,
+  :root:not([data-motion="full"]) .root[data-loading] .progress::before,
+  :root:not([data-motion="full"]) .notice,
+  :root:not([data-motion="full"]) .askPanel,
+  :root:not([data-motion="full"]) .errorsPanel,
+  :root:not([data-motion="full"]) .chip,
+  :root:not([data-motion="full"]) .chipAdd,
+  :root:not([data-motion="full"]) .errorBadge {
     animation: none;
   }
-  .spinner,
-  .openingGlyph,
-  .root[data-loading] .progress,
-  .notice,
-  .askPanel,
-  .errorsPanel,
-  .chip,
-  .chipAdd,
-  .errorBadge {
-    animation: none;
-  }
-  .viewport {
+  :root:not([data-motion="full"]) .viewport {
     transition: none;
   }
 }
-
-:global([data-motion="reduced"]) .root {
+:root[data-motion="reduced"] .root,
+:root[data-motion="reduced"] .spinner,
+:root[data-motion="reduced"] .openingGlyph,
+:root[data-motion="reduced"] .openingGlyph::before,
+:root[data-motion="reduced"] .openingGlyph::after,
+:root[data-motion="reduced"] .root[data-loading] .progress::before,
+:root[data-motion="reduced"] .notice,
+:root[data-motion="reduced"] .askPanel,
+:root[data-motion="reduced"] .errorsPanel,
+:root[data-motion="reduced"] .chip,
+:root[data-motion="reduced"] .chipAdd,
+:root[data-motion="reduced"] .errorBadge {
   animation: none;
+}
+:root[data-motion="reduced"] .viewport {
+  transition: none;
 }

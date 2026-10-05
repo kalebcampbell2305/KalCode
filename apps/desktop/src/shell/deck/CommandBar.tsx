@@ -31,7 +31,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { WorkspaceMenuContent } from "../../surfaces/code/WorkspaceMenu.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
-import { focusSection, useNow } from "../../surfaces/dashboard/useNow.ts";
+import { focusSection, useClock } from "../../surfaces/dashboard/useNow.ts";
 import { DEFAULT_MODE_CHOICES, MODE_DESCRIPTIONS, MODE_LABELS } from "../../surfaces/permissions/labels.ts";
 import { usePermissions } from "../../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "../Brand.tsx";
@@ -245,8 +245,9 @@ function EnvironmentChip() {
   const { active } = useWorkspaces();
   const { operations } = useDeckData();
   const { navigate } = useNavigation();
-  const now = useNow(30_000);
   const environment = primaryEnvironment(operations.data?.environments ?? [], active?.id ?? null);
+  const lastDeploy = environment?.lastDeploy ?? null;
+  const now = useClock((at) => (lastDeploy ? ago(lastDeploy, at) : null));
   const label = environment ? ENVIRONMENT_LABELS[environment.kind] : "Local";
   const tone = environment ? environmentTone(environment) : "muted";
   const description = environment
@@ -327,8 +328,8 @@ function Signals() {
   const { pending, setPanelOpen } = usePermissions();
   const { navigate } = useNavigation();
   const { revealAgents } = useDeckUi();
-  const now = useNow(30_000);
-  const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
+  // Working and needs-you counts don't move with time (only "Just finished" does), so no clock.
+  const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, Date.now()) : null), [state]);
   const working = sections?.working.length ?? 0;
   const needs = sections ? needsYouCount(sections.needsYou, pending) : pending.length;
   return (

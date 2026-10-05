@@ -93,6 +93,11 @@ export function validatePolicy(p) {
     if (!Array.isArray(g.run) || g.run.length === 0) problems.push(`gate ${g.id}: run required`);
     if (g.timeoutMs !== undefined && !(Number.isInteger(g.timeoutMs) && g.timeoutMs > 0))
       problems.push(`gate ${g.id}: timeoutMs must be a positive integer`);
+    if (g.exclusive !== undefined && !(Array.isArray(g.exclusive) && g.exclusive.every((r) => /^[a-z0-9-]+$/.test(r))))
+      problems.push(`gate ${g.id}: exclusive must be a list of resource names`);
+    for (const [k, port] of Object.entries(g.ports ?? {}))
+      if (!(Number.isInteger(port) && port >= 1024 && port <= 60000) || g.env?.[k] !== undefined)
+        problems.push(`gate ${g.id}: port ${k} must be an integer 1024-60000 and not also in env`);
   }
   if (new Set((p?.gates ?? []).map((g) => g.id)).size !== (p?.gates ?? []).length) problems.push("duplicate gate ids");
   return problems;

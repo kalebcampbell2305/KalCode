@@ -787,8 +787,8 @@ impl DesktopProviders {
     fn ensure_detected(&self) {
         if self.registry.list().iter().all(|s| s.detection.is_none()) {
             // First use before the Providers page ran detection: read-only version and
-            // sign-in checks.
-            let _ = self.registry.detect_all();
+            // sign-in checks (or the startup check already running, without a second one).
+            let _ = self.registry.detect_all_once();
         }
     }
 }
