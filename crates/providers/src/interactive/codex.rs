@@ -305,6 +305,7 @@ mod tests {
                     hook_prefix_args: &[],
                     endpoint: "test-endpoint",
                     session: "test-session",
+                    observe_hooks: true,
                 };
                 let args = interactive_args_with_overrides(
                     &launch,
