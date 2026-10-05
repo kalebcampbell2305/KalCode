@@ -574,8 +574,10 @@ plaintext sign-in into the encrypted per-account store and later launches read i
 rejects `--ignore-env` ("Unknown arguments"), so the floor's
 `advanced.ignoreLocalEnv` setting replaces it; it crashes at startup ("EISDIR … lstat 'C:'") on a
 Windows verbatim `\\?\` `GEMINI_CLI_HOME`, so every path Gemini receives is in its plain form; and it
-skips system settings/defaults files whose directory is not administrator/root owned, so KalCode
-never relies on them for Gemini behavior.
+skips system settings/defaults files whose directory is not administrator/root owned (printing
+"Security Warning: Skipping system settings file ..." on every start), so KalCode never relies on
+them for Gemini behavior and never redirects `GEMINI_CLI_SYSTEM_SETTINGS_PATH`/
+`GEMINI_CLI_SYSTEM_DEFAULTS_PATH` into a managed profile, for sessions, panes or sign-in.
 
 ### 8.7.1 Managed-profile CLI versions (certified compatibility lines)
 
