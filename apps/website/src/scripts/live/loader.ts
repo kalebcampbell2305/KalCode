@@ -15,6 +15,34 @@ function load(): Promise<LiveDemo> {
   return demo;
 }
 
+/**
+ * Scrolls the demo into place and resolves once the page has stopped there. A smooth scroll takes
+ * as long as the machine needs (a busy one drops frames), so this waits for `scrollend` rather
+ * than a fixed delay; a page already at the demo resolves at once. Browsers without `scrollend`
+ * fall back to the typical smooth-scroll time; a capped wait covers a scroll that never reports.
+ */
+function scrollToDemo(demo: HTMLElement): Promise<void> {
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const margin = Number.parseFloat(getComputedStyle(demo).scrollMarginTop) || 0;
+  const limit = document.documentElement.scrollHeight - window.innerHeight;
+  const destination = Math.min(Math.max(0, window.scrollY + demo.getBoundingClientRect().top - margin), limit);
+  const moves = Math.abs(destination - window.scrollY) >= 1;
+  return new Promise((resolve) => {
+    let timer = 0;
+    const done = () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("scrollend", done);
+      resolve();
+    };
+    if (moves) {
+      document.addEventListener("scrollend", done);
+      timer = window.setTimeout(done, "onscrollend" in window ? 3000 : 450);
+    }
+    demo.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    if (!moves) done();
+  });
+}
+
 if (root) {
   if ("IntersectionObserver" in window) {
     const io = new IntersectionObserver(
@@ -40,21 +68,14 @@ if (root) {
     if (href?.startsWith("#")) history.replaceState(null, "", href);
     const action = trigger.dataset.liveDo ?? "";
     const inside = root.contains(trigger);
-    if (!inside) {
-      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      root.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
-    }
-    void load().then((d) => {
-      // Let the scroll settle so the tour's spotlight measures the final position.
-      window.setTimeout(
-        () => {
-          if (action === "reset") d.reset();
-          else if (action) d.run(action);
-          // Keyboard and screen-reader users land in the demo, unless the action focused something in it.
-          if (!inside && !root.contains(document.activeElement)) root.focus({ preventScroll: true });
-        },
-        inside ? 0 : 450,
-      );
+    // An in-demo control acts once its own click has finished; a page control once the scroll arrives.
+    const arrived = inside ? new Promise<void>((resolve) => window.setTimeout(resolve, 0)) : scrollToDemo(root);
+    void Promise.all([load(), arrived]).then(([d]) => {
+      // The scroll has settled, so the tour's spotlight measures the final position.
+      if (action === "reset") d.reset();
+      else if (action) d.run(action);
+      // Keyboard and screen-reader users land in the demo, unless the action focused something in it.
+      if (!inside && !root.contains(document.activeElement)) root.focus({ preventScroll: true });
     });
   });
 }

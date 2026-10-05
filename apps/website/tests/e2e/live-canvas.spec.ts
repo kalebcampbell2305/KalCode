@@ -13,6 +13,10 @@ async function open(page: import("@playwright/test").Page) {
     .first()
     .click();
   await expect(page.locator("[data-live]")).toHaveAttribute("data-live", "ready");
+  // Try KalCode smooth-scrolls to the demo and focuses it once the page has stopped there. Acting
+  // earlier lets a focus scroll interrupt the smooth scroll mid-way and leave the canvas wherever it
+  // was, its pane headers possibly under the sticky site header.
+  await expect(page.locator("[data-live]")).toBeFocused();
   return errors;
 }
 
@@ -67,9 +71,9 @@ test("task layouts and Tidy preserve pane identity, drafts and newly opened work
 test("pointer preview, keyboard movement and resizing use the same canvas", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const errors = await open(page);
-  // Smooth scrolling (critical.css) can stall on a loaded machine long enough for two reads to agree
-  // mid-scroll; scroll instantly so every box below is the final layout. (A CSSOM write: the site's
-  // CSP forbids injected style elements.)
+  // Canvas focus moves scroll with the page's smooth behavior (critical.css), which can stall on a
+  // loaded machine long enough for two reads to agree mid-scroll; scroll instantly so every box below
+  // is the final layout. (A CSSOM write: the site's CSP forbids injected style elements.)
   await page.evaluate(() => {
     document.documentElement.style.scrollBehavior = "auto";
   });
@@ -84,6 +88,12 @@ test("pointer preview, keyboard movement and resizing use the same canvas", asyn
   await app(page).locator('[data-canvas-grip="f1"]').scrollIntoViewIfNeeded();
   // The page scrolls smoothly (critical.css), so measure only once the scroll has settled.
   const source = await settledBox(page, app(page).locator('[data-canvas-grip="f1"]'));
+  // The press must land on the grip itself, not on the sticky site header over it.
+  const pressed = await page.evaluate(
+    ([x, y]) => document.elementFromPoint(x, y)?.closest("[data-canvas-grip]")?.getAttribute("data-canvas-grip"),
+    [source.x + source.width / 2, source.y + source.height / 2],
+  );
+  expect(pressed).toBe("f1");
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
   await page.mouse.down();
   // Start the drag, then aim at where the target is now.
