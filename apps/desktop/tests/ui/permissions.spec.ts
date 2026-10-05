@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectApprovalItems } from "./nav.ts";
 
 /**
  * Booting the app (Vite module load, the in-memory runtime, the account gate, first render) can
@@ -11,7 +12,7 @@ const APP_READY_TIMEOUT = 30_000;
 async function open(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
   // Ready: the shell replaced the boot screen and rendered the Dashboard.
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({
     timeout: APP_READY_TIMEOUT,
   });
 }
@@ -38,24 +39,31 @@ async function setTheme(page: Page, theme: "light" | "dark") {
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 
-const approvalsButton = (page: Page) =>
-  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^Approvals/ });
+/** Needs you: the one inbox, where every pending approval is an item with a Review action. */
+const needsYou = (page: Page) =>
+  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^Needs you/ });
+const inbox = (page: Page) => page.getByRole("dialog", { name: "Needs you" });
+/** Opens the approvals panel the way a person does: Needs you, then an approval's Review. */
+async function openApprovals(page: Page) {
+  await needsYou(page).click();
+  await inbox(page)
+    .getByRole("button", { name: /^Review: / })
+    .first()
+    .click();
+}
 
 test.describe("approvals", () => {
-  test("the sidebar shows how many approvals are waiting", async ({ page }) => {
+  test("Needs you lists each waiting approval, and none when nothing waits", async ({ page }) => {
     await open(page);
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, none waiting");
-    await approvalsButton(page).click();
-    const panel = page.getByRole("dialog", { name: "Approvals" });
-    await expect(panel.getByRole("heading", { name: "You're all caught up" })).toBeVisible();
+    await expectApprovalItems(page, 0);
 
     await page.goto("/?scenario=approvals");
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, 4 waiting");
+    await expectApprovalItems(page, 4);
   });
 
   test("each prompt shows provider, thread, action, workspace and mode", async ({ page }) => {
     await open(page, "approvals");
-    await approvalsButton(page).click();
+    await openApprovals(page);
     const panel = page.getByRole("dialog", { name: "Approvals" });
     const prompt = panel.getByRole("region", { name: "Install zod@4 with npm" });
     await expect(prompt).toBeVisible();
@@ -88,7 +96,7 @@ test.describe("approvals", () => {
 
   test("approving and denying record the answer and update the count", async ({ page }) => {
     await open(page, "approvals");
-    await approvalsButton(page).click();
+    await openApprovals(page);
     const panel = page.getByRole("dialog", { name: "Approvals" });
     await panel
       .getByRole("region", { name: "Install zod@4 with npm" })
@@ -101,14 +109,19 @@ test.describe("approvals", () => {
     await expect(panel.getByText("2 requests are waiting.")).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, 2 waiting");
+    await expectApprovalItems(page, 2);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Approved", { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Denied", { exact: true })).toBeVisible();
   });
 
   test("works from the keyboard and returns focus", async ({ page }) => {
     await open(page, "approvals");
-    await approvalsButton(page).focus();
+    await needsYou(page).focus();
+    await page.keyboard.press("Enter");
+    const review = inbox(page)
+      .getByRole("button", { name: /^Review: / })
+      .first();
+    await review.focus();
     await page.keyboard.press("Enter");
     const panel = page.getByRole("dialog", { name: "Approvals" });
     await expect(panel).toBeVisible();
@@ -126,13 +139,12 @@ test.describe("approvals", () => {
     await expect(panel.getByRole("region", { name: "Deploy the website with Wrangler" })).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(panel).toBeHidden();
-    await expect(approvalsButton(page)).toBeFocused();
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, 3 waiting");
+    await expectApprovalItems(page, 3);
   });
 
   test("a new request is announced to screen readers", async ({ page }) => {
     await open(page);
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, none waiting");
+    await expectApprovalItems(page, 0);
     await page.evaluate(() => {
       (
         window as unknown as { __kalcodeMemory: { permissions: { requestApproval: (k: string) => void } } }
@@ -140,13 +152,15 @@ test.describe("approvals", () => {
     });
     await expect(page.getByRole("alert")).toContainText("Approval needed");
     await expect(page.getByRole("alert")).toContainText("Push main to origin");
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, 1 waiting");
+    await expectApprovalItems(page, 1);
   });
 
-  test("collapsed sidebar keeps the count in the accessible name", async ({ page }) => {
+  test("collapsed sidebar keeps the Needs you count in the accessible name", async ({ page }) => {
     await open(page, "approvals");
+    const expanded = await needsYou(page).getAttribute("aria-label");
+    expect(expanded).toMatch(/^Needs you, \d+ waiting$/);
     await page.getByRole("button", { name: "Collapse sidebar" }).click();
-    await expect(approvalsButton(page)).toHaveAccessibleName("Approvals, 4 waiting");
+    await expect(needsYou(page)).toHaveAccessibleName(expanded ?? "");
   });
 });
 
@@ -161,7 +175,7 @@ test.describe("permission settings", () => {
     await modes.getByRole("radio", { name: "Plan" }).click();
     await expect(modes.getByRole("radio", { name: "Plan" })).toBeChecked();
     await expect(section.getByText("Read and plan only.")).toBeVisible();
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(
       page.getByRole("region", { name: "Activity" }).getByText("Permission mode changed").first(),
     ).toBeVisible();
@@ -206,7 +220,7 @@ test.describe("permission accessibility", () => {
       await section.getByText("Code Reviewer", { exact: true }).click();
       await expectNoSeriousA11yViolations(page);
 
-      await approvalsButton(page).click();
+      await openApprovals(page);
       await expect(page.getByRole("dialog", { name: "Approvals" }).getByRole("region").first()).toBeVisible();
       await expectNoSeriousA11yViolations(page);
     });

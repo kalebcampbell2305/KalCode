@@ -164,7 +164,7 @@ test("native Operations executes dependencies, controls a local service, and rec
 
   try {
     app = await launch(dataDir, { ...commonEnvironment, KALCODE_E2E_NATIVE_CONFIRM: "decline" });
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     const workspace = await invoke<Workspace | null>(app.page, "workspace_open_dialog");
     expect(workspace?.rootPath).toBe(canonicalProject);
     if (!workspace) throw new Error("The native folder picker did not open the Operations fixture");

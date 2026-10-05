@@ -11,6 +11,7 @@ import type { CommandName } from "../../ipc/transport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
+import { goTo } from "../../test/nav.ts";
 import { getRebindRequest, getSelectedThread, requestRebind, resetAccountIntentForTests } from "./accountIntent.ts";
 import { describeRebindError } from "./useThreadAccount.ts";
 
@@ -144,8 +145,7 @@ async function mountStable(): Promise<Mounted> {
 }
 
 async function openThreads(user: Mounted["user"]) {
-  const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  await user.click(primary.getByRole("button", { name: "Threads" }));
+  await goTo(user, "Threads");
   await screen.findByRole("heading", { name: "Threads", level: 1 });
 }
 

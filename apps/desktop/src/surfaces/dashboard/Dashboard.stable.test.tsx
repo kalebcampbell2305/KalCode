@@ -53,13 +53,15 @@ async function mount(scenario: MemoryScenario, channel: Channel = "stable") {
       </TooltipProvider>
     </ToastProvider>,
   );
-  await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+  await screen.findByRole("heading", { level: 1, name: "Activity" });
   return { user: userEvent.setup(), client };
 }
 
 const board = () => within(screen.getByRole("region", { name: "Agents" }));
+const needsYouNav = () =>
+  within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: /^Needs you/ });
 const dashboardNav = () =>
-  within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Dashboard" });
+  within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Activity" });
 
 describe("Stable Dashboard", () => {
   it("empty: says no agents yet and launches a coding agent from Code, never a Thread", async () => {
@@ -118,7 +120,7 @@ describe("Stable Dashboard", () => {
   });
 
   it("populated: shows the board and the Sidebar counts what needs you", async () => {
-    await mount("busy");
+    const { user } = await mount("busy");
     const agents = board();
     await waitFor(() => expect(agents.getAllByRole("article").length).toBeGreaterThan(0));
     expect(agents.queryByRole("heading", { name: "No agents yet" })).toBeNull();
@@ -127,23 +129,43 @@ describe("Stable Dashboard", () => {
     const count = Number(waiting.getAttribute("aria-label")?.split(", ")[1]);
     expect(count).toBeGreaterThan(0);
 
-    // The badge shows the same number; the button keeps its name and describes the count.
+    // Activity carries no duplicate count. The sidebar's one inbox, Needs you, counts what
+    // genuinely needs the person: the board's needs-you agents, the failed one, and the two
+    // finished agents whose changes are waiting for review (busy fixture).
     const nav = dashboardNav();
-    await waitFor(() => expect(nav.textContent).toBe(`Dashboard${count}`));
-    expect(nav).toHaveAccessibleName("Dashboard");
-    expect(nav).toHaveAccessibleDescription(`${count} agents need you`);
+    expect(nav.textContent).toBe("Activity");
+    expect(nav).not.toHaveAttribute("aria-describedby");
+    expect(count).toBe(3);
+    expect(agents.getByRole("button", { name: "Failed, 1" })).toBeInTheDocument();
+    const inbox = needsYouNav();
+    await waitFor(() => expect(inbox).toHaveAccessibleName("Needs you, 6 waiting"));
+    expect(inbox.textContent).toBe("Needs you6");
     // Every card shows how long its agent has run.
     for (const card of agents.getAllByRole("article")) {
       expect(card.querySelector('time[data-kind="elapsed"]')?.textContent).toMatch(/^Running time /);
     }
+
+    // The inbox lists them blockers first, each with what happened and the next action.
+    await user.click(inbox);
+    const sheet = within(await screen.findByRole("dialog", { name: "Needs you" }));
+    const items = within(sheet.getByRole("region", { name: "Needs you now" })).getAllByRole("listitem");
+    expect(items.map((item) => item.querySelector("p:nth-of-type(2)")?.textContent)).toEqual([
+      "Approval: Needs your permission",
+      "Approval: Needs your permission",
+      "Question: Asked you a question",
+      "Failed: Failed",
+      "Review: Finished · 12 files changed",
+      "Review: Finished · 9 files changed",
+    ]);
   });
 
   it("the Sidebar shows no count when nothing needs you", async () => {
     await mount("archived");
     await board().findByRole("heading", { name: "All 3 agents are archived" });
-    const nav = dashboardNav();
-    expect(nav.textContent).toBe("Dashboard");
-    expect(nav).not.toHaveAttribute("aria-describedby");
+    expect(dashboardNav().textContent).toBe("Activity");
+    const inbox = needsYouNav();
+    await waitFor(() => expect(inbox).toHaveAccessibleName("Needs you, nothing waiting"));
+    expect(inbox.textContent).toBe("Needs you");
   });
 });
 

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("New agent keeps the last selected provider, account, model and effort", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
@@ -50,7 +50,7 @@ test("New agent starts the remembered agent in one click; an explicit count star
   page,
 }, testInfo) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity", level: 1 })).toBeVisible();
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
@@ -105,7 +105,7 @@ test("returning workspaces open directly in Code", async ({ page }) => {
 
 test("Fleet focuses the exact live terminal after four agents launch", async ({ page }, testInfo) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
@@ -124,7 +124,7 @@ test("Fleet focuses the exact live terminal after four agents launch", async ({ 
     elements.map((element) => element.getAttribute("data-provider-pane")),
   );
   expect(new Set(ids).size).toBe(4);
-  await primary.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await primary.getByRole("button", { name: "Activity", exact: true }).click();
   const agent = page.getByRole("article").last();
   const id = await agent.getAttribute("data-thread-id");
   await agent.getByRole("heading").getByRole("button").click();

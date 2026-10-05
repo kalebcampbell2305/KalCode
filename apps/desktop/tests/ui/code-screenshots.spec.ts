@@ -38,7 +38,7 @@ for (const theme of ["dark", "light"] as const) {
 
       // Empty state with recent workspaces.
       await page.goto("/");
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await setTheme(page, theme);
       await code(page).click();
       await expect(page.getByRole("heading", { name: "Open a project folder" })).toBeVisible();
@@ -46,9 +46,9 @@ for (const theme of ["dark", "light"] as const) {
 
       // A workspace with running, colourful and ended tabs.
       await page.goto("/?scenario=code");
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await setTheme(page, theme);
-      await page.getByRole("button", { name: "Dashboard" }).click();
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       await expect(page.getByRole("region", { name: "Terminals" }).getByText("Git Bash")).toBeVisible();
       await shot(page, `dashboard-terminals-${theme}-${size.name}`);
 

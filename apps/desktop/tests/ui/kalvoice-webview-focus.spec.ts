@@ -1,11 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 async function open(page: Page) {
   await page.goto("/?transcript=dashboard");
-  await page
-    .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "KalVoice", exact: true })
-    .click();
+  await goTo(page, "KalVoice");
   const field = page.locator("#kalvoice-page-request");
   await field.fill("Original");
   await field.focus();

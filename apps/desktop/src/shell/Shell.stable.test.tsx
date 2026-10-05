@@ -8,6 +8,7 @@ import { AccountClient } from "../ipc/account.ts";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
+import { goTo, morePlaces } from "../test/nav.ts";
 import nativeStableSurfaces from "./fixtures/stable-native-surfaces.json";
 import { Shell } from "./Shell.tsx";
 
@@ -58,13 +59,15 @@ async function mountStable(compiled = true) {
 it("mounts Stable KalVoice navigation, provider, widget and Settings when the speech engine is compiled", async () => {
   const user = await mountStable();
   const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  expect(primary.getByRole("button", { name: "KalVoice" })).toBeInTheDocument();
-  expect(primary.getByRole("button", { name: "Operations" })).toBeInTheDocument();
+  const places = await morePlaces(user);
+  expect(places).toEqual(expect.arrayContaining(["KalVoice", "Operations"]));
+  expect(places).not.toContain("Agents");
+  await user.keyboard("{Escape}");
   expect(await screen.findByRole("region", { name: "KalVoice widget" })).toBeInTheDocument();
   expect(primary.queryByRole("button", { name: "Agents" })).toBeNull();
-  await user.click(primary.getByRole("button", { name: "Operations" }));
+  await goTo(user, "Operations");
   expect(await screen.findByRole("heading", { name: "Operations", level: 1 })).toBeInTheDocument();
-  await user.click(primary.getByRole("button", { name: "KalVoice" }));
+  await goTo(user, "KalVoice");
   expect(await screen.findByRole("heading", { name: "KalVoice", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Type a request for KalVoice" })).toBeInTheDocument();
   await user.click(primary.getByRole("button", { name: "Settings" }));
@@ -75,7 +78,8 @@ it("mounts Stable KalVoice navigation, provider, widget and Settings when the sp
 it("keeps KalVoice out of the Stable shell when the native speech component is absent", async () => {
   const user = await mountStable(false);
   const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  expect(primary.queryByRole("button", { name: "KalVoice" })).toBeNull();
+  expect(await morePlaces(user)).not.toContain("KalVoice");
+  await user.keyboard("{Escape}");
   expect(screen.queryByRole("region", { name: "KalVoice widget" })).toBeNull();
   await user.click(primary.getByRole("button", { name: "Settings" }));
   expect(screen.queryByText("Speech model")).toBeNull();

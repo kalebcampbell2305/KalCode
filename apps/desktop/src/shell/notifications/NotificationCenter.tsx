@@ -4,8 +4,12 @@ import { BellRing, Check, CheckCheck, Circle, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { memo, useCallback, useMemo, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { DashboardDataBoundary } from "../../surfaces/dashboard/data/DashboardData.tsx";
 import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { useVirtualRows } from "../../surfaces/dashboard/useVirtualRows.ts";
+import { AttentionList } from "../attention/AttentionList.tsx";
+import { attentionSummary } from "../attention/model.ts";
+import { useAttention } from "../attention/useAttention.ts";
 import { KIND_META, type NotificationRow, withDayHeadings } from "./model.ts";
 import styles from "./NotificationCenter.module.css";
 import { useNotifications } from "./NotificationsProvider.tsx";
@@ -13,14 +17,24 @@ import { useNotifications } from "./NotificationsProvider.tsx";
 type Show = "all" | "unread";
 
 /**
- * The notification center (Z7-W3): a side sheet with every notification, newest first, grouped by
- * day. Opening one marks it read and focuses its thread, workspace or provider. Unread state is
- * stored natively and survives restarts.
+ * Needs You: KalCode's one attention inbox, as a side sheet. On top, live items that genuinely
+ * need the person (what happened, why, what to do next; see `attention/model.ts`). Below, the
+ * notification history, newest first, grouped by day: opening one marks it read and focuses its
+ * thread, workspace or provider. Unread state is stored natively and survives restarts.
  */
 export function NotificationCenter() {
+  return (
+    <DashboardDataBoundary>
+      <NeedsYouSheet />
+    </DashboardDataBoundary>
+  );
+}
+
+function NeedsYouSheet() {
   const center = useNotifications();
   const { panelOpen, setPanelOpen, panelReturnFocus, unreadCount, state } = center;
   const [show, setShow] = useState<Show>("all");
+  const attention = useAttention();
 
   return (
     <>
@@ -37,9 +51,14 @@ export function NotificationCenter() {
           >
             <header className={styles.header}>
               <div>
-                <Dialog.Title className={styles.title}>Notifications</Dialog.Title>
+                <Dialog.Title className={styles.title}>Needs you</Dialog.Title>
                 <Dialog.Description id="notifications-description" className={styles.description}>
-                  {unreadCount === 0 ? "You're all caught up." : `${unreadCount} unread`}
+                  {!attention.ready
+                    ? "Checking…"
+                    : attention.items.length === 0
+                      ? "You're all caught up."
+                      : attentionSummary(attention.items)}
+                  {unreadCount > 0 ? ` · ${unreadCount} unread ${unreadCount === 1 ? "update" : "updates"}` : ""}
                 </Dialog.Description>
               </div>
               <div className={styles.headerActions}>
@@ -53,10 +72,14 @@ export function NotificationCenter() {
                   Mark all read
                 </Button>
                 <Dialog.Close asChild>
-                  <IconButton label="Close notifications" icon={<X />} />
+                  <IconButton label="Close Needs you" icon={<X />} />
                 </Dialog.Close>
               </div>
             </header>
+            <section className={styles.attention} aria-label="Needs you now">
+              <AttentionList items={attention.items} ready={attention.ready} compact />
+            </section>
+            <h3 className={styles.historyTitle}>History</h3>
             {state === "ready" && center.notifications.length > 0 ? (
               <div className={styles.filter}>
                 <SegmentedControl<Show>

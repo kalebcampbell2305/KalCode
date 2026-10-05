@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
 import { closeGracefully, EXE, launch, removeDir, test } from "./harness.ts";
+import { goTo } from "./nav.ts";
 
 /**
  * Wave 2 integration against the real app: a workspace (Z1) is offered to threads (Z3) together
@@ -64,7 +65,7 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
   try {
     const app = await launch(dataDir, { KALCODE_E2E_PICK_FOLDER: project });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
     // Z1: open the temp folder and start a real shell in it.
     await nav(page, "Code").click();
@@ -77,7 +78,7 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
     await expect.poll(() => countIn(page, "wave2-before"), { timeout: 20_000 }).toBeGreaterThanOrEqual(2);
 
     // Z3 + Z2: the New thread flow. Its first load runs the real, read-only detection.
-    await nav(page, "Threads").click();
+    await goTo(page, "Threads");
     await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
@@ -135,7 +136,7 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
     await expect.poll(() => countIn(page, "wave2-after"), { timeout: 20_000 }).toBeGreaterThanOrEqual(2);
 
     // The Dashboard lists it among running terminals.
-    await nav(page, "Dashboard").click();
+    await nav(page, "Activity").click();
     const terminals = page.getByRole("region", { name: "Terminals" });
     await expect(terminals.getByRole("heading", { name: "wave2-project" })).toBeVisible();
     await expect(terminals.getByRole("listitem")).toHaveCount(1);

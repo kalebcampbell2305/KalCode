@@ -127,6 +127,7 @@ const CATALOG: Omit<SpeechModelInfo, "state">[] = [
 const SURFACE_WORDS: Record<string, SurfaceId> = {
   dashboard: "dashboard",
   home: "dashboard",
+  activity: "dashboard",
   kalvoice: "kalvoice",
   code: "code",
   threads: "threads",
@@ -142,7 +143,7 @@ const SURFACE_WORDS: Record<string, SurfaceId> = {
 
 const SURFACE_LABELS: Record<SurfaceId, string> = {
   operations: "Operations",
-  dashboard: "the Dashboard",
+  dashboard: "Activity",
   kalvoice: "KalVoice",
   code: "Code",
   threads: "Threads",

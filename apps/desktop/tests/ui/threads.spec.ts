@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { expectApprovalItems, goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
 const NOT_FAVORITE = ":not([data-favorite-action])";
@@ -29,10 +30,10 @@ async function openFolders(page: Page, ...names: string[]) {
 
 async function openThreads(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   // Without a Threads scenario, threads run in folders opened in Code (Z1).
   if (!scenario) await openFolders(page, "kalcode", "kalcoded.com");
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+  await goTo(page, "Threads");
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 }
 
@@ -117,7 +118,7 @@ test.describe("threads", () => {
     await expect(conversation(page).getByText("Writing")).toHaveCount(0);
 
     // Every step was recorded in the event log.
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("Thread created")).toBeVisible();
     await expect(activity.getByText("Tool finished").first()).toBeVisible();
@@ -170,9 +171,9 @@ test.describe("threads", () => {
 
   test("only providers that can run threads are offered; the others say why", async ({ page }) => {
     await page.goto("/?scenario=providers-signed-out");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await openFolders(page, "kalcode");
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await goTo(page, "Threads");
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code"]);
@@ -233,7 +234,7 @@ test.describe("threads", () => {
 
   test("without a workspace, New thread points to Code", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await goTo(page, "Threads");
     await page.getByRole("button", { name: "New thread" }).first().click();
     await expect(page.getByRole("heading", { name: "No workspaces yet" })).toBeVisible();
     await page.getByRole("button", { name: "Open Code" }).click();
@@ -242,9 +243,9 @@ test.describe("threads", () => {
 
   test("without a managed account, one is added and signed in inside the thread form", async ({ page }) => {
     await page.goto("/?scenario=provider-accounts-empty");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await openFolders(page, "kalcode");
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await goTo(page, "Threads");
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByRole("combobox", { name: "Account" })).toHaveCount(0);
@@ -434,8 +435,8 @@ test.describe("threads", () => {
       "Allow for thread",
       "Approve once",
     ]);
-    // The same request is waiting in the Approvals panel.
-    await expect(page.getByRole("button", { name: "Approvals, 1 waiting" })).toBeVisible();
+    // The same request is waiting in Needs you.
+    await expectApprovalItems(page, 1);
 
     await request.getByRole("button", { name: "Approve once" }).click();
     const tool = conversation(page).getByRole("listitem").filter({ hasText: "Run npm install lodash" });
@@ -451,7 +452,7 @@ test.describe("threads", () => {
     await expect(detail(page).getByRole("region", { name: "Run npm install lodash" })).toBeVisible();
     await detail(page).getByRole("button", { name: "Interrupt" }).click();
     await expect(detail(page).getByRole("region", { name: "Run npm install lodash" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
+    await expectApprovalItems(page, 0);
   });
 
   test("failed threads explain why and can be resumed", async ({ page }) => {
@@ -485,7 +486,10 @@ test.describe("threads", () => {
 
   test("command palette opens the new thread flow and thread search", async ({ page }) => {
     await openThreads(page, "threads");
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard" }).click();
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Activity", exact: true })
+      .click();
     await page.keyboard.press(`${MOD}+k`);
     await page.keyboard.type("new thread");
     await page.keyboard.press("Enter");

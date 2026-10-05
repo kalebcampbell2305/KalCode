@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Switch accounts, lane 3, against the in-memory transport: Providers → Accounts shows what uses
@@ -45,14 +46,14 @@ async function switchWorkspace(page: Page, name: string) {
 }
 
 async function openAccounts(page: Page) {
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Providers" }).click();
+  await goTo(page, "Providers");
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
   await page.getByRole("tab", { name: "Accounts" }).click();
   await expect(page.getByRole("region", { name: "Codex · Personal" })).toBeVisible();
 }
 
 async function openNewThread(page: Page) {
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+  await goTo(page, "Threads");
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   await page.getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
@@ -88,7 +89,7 @@ async function expectNoSeriousA11yViolations(page: Page) {
 test.describe("switch accounts: accounts view and workspace defaults", () => {
   test("Accounts shows thread use and workspace defaults, and adds another account per provider", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await openFolders(page, "kalcode", "kalcoded.com");
 
     // A Codex thread under Personal, remembered for kalcoded.com.
@@ -149,7 +150,7 @@ test.describe("switch accounts: accounts view and workspace defaults", () => {
 
   test("New thread follows the active workspace A → B → A; Remember writes only when checked", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await openFolders(page, "kalcode", "kalcoded.com");
     await openAccounts(page);
     // The toolbar's Add account adds the account, then runs Claude Code's own sign-in for it.

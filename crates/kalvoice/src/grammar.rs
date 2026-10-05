@@ -1856,7 +1856,7 @@ fn surface_words(words: &[String]) -> Option<SurfaceId> {
 
 fn surface_name(name: &str) -> Option<SurfaceId> {
     Some(match name {
-        "dashboard" | "home" | "overview" => SurfaceId::Dashboard,
+        "dashboard" | "activity" | "home" | "overview" => SurfaceId::Dashboard,
         "operations" => SurfaceId::Operations,
         "kalvoice" | "kal voice" | "voice" => SurfaceId::KalVoice,
         "code" | "code mode" | "editor" => SurfaceId::Code,

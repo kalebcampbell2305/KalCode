@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Review screenshots of the KalVoice voice widget in every state, the KalVoice page and
@@ -20,14 +21,14 @@ const state = (page: Page, name: string) =>
 async function start(page: Page, theme: "dark" | "light", query = "") {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/${query}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("radiogroup", { name: "Theme" })
     .getByRole("radio", { name: theme === "light" ? "Light" : "Dark" })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
 }
 
 async function widgetShot(page: Page, name: string) {
@@ -51,7 +52,7 @@ for (const theme of ["dark", "light"] as const) {
     await widgetShot(page, `ready-expanded-${theme}`);
     await widget(page).getByRole("button", { name: "Show less" }).click();
 
-    await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+    await goTo(page, "KalVoice");
     await page.getByRole("main").getByRole("textbox", { name: "Type a request for KalVoice" }).focus();
     await page.keyboard.down("F8");
     await expect(state(page, "Listening")).toBeVisible();

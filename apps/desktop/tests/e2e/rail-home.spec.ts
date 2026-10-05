@@ -73,7 +73,7 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
     // ---- First session: build up the rail.
     let app = await launch(dataDir, env);
     let page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await showRail(page);
     await expect(page.getByText("No workspaces yet")).toBeVisible();
 

@@ -19,7 +19,7 @@ async function openWorkspace(page: Page, transcript: string, folder: string, pan
   const params = new URLSearchParams({ transcript });
   if (panes) params.set("panes", panes);
   await page.goto(`/?${params.toString()}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate((nextFolder) => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }

@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -7,7 +8,7 @@ async function open(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
   // Wait for boot to finish so keyboard shortcuts are registered.
   await expect(
-    page.getByRole("heading", { level: 1, name: scenario === "startup-error" ? /./ : "Dashboard" }).first(),
+    page.getByRole("heading", { level: 1, name: scenario === "startup-error" ? /./ : "Activity" }).first(),
   ).toBeVisible();
 }
 
@@ -27,7 +28,7 @@ async function expectNoSeriousA11yViolations(page: Page) {
 test.describe("dashboard", () => {
   test("shows runtime health and live activity from the event log", async ({ page }) => {
     await open(page);
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Agents", exact: true })).toContainText("No agents yet");
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalCode started")).toBeVisible();
@@ -69,7 +70,7 @@ test.describe("settings", () => {
     await page.getByRole("radiogroup", { name: "Motion" }).getByRole("radio", { name: "Reduced" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-motion", "reduced");
 
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Settings changed").first()).toBeVisible();
   });
 
@@ -114,7 +115,7 @@ test.describe("navigation and commands", () => {
 
   test("an explicitly named command outranks weaker fuzzy matches", async ({ page }) => {
     await open(page, "threads");
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await goTo(page, "Threads");
     await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 
     await page.keyboard.press(`${MOD}+k`);
@@ -133,7 +134,7 @@ test.describe("navigation and commands", () => {
     await page.keyboard.press(`${MOD}+b`);
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
     await expect(
-      page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard" }),
+      page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Activity", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Expand sidebar" }).click();
     await expect(page.getByRole("button", { name: "Collapse sidebar" })).toBeVisible();
@@ -141,7 +142,7 @@ test.describe("navigation and commands", () => {
 
   test("gated surfaces explain that they are not available yet", async ({ page }) => {
     await open(page);
-    await page.getByRole("button", { name: "Agents", exact: true }).click();
+    await goTo(page, "Agents");
     await expect(page.getByRole("heading", { level: 1, name: "Agents" })).toBeVisible();
     await expect(page.getByText("Not available in this build")).toBeVisible();
     await expect(page.getByText("Nothing on this page runs yet.")).toBeVisible();
@@ -175,7 +176,7 @@ test.describe("accessibility", () => {
       if (theme === "light") {
         await page.getByRole("button", { name: "Settings" }).click();
         await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
-        await page.getByRole("button", { name: "Dashboard" }).click();
+        await page.getByRole("button", { name: "Activity", exact: true }).click();
       }
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(page.getByRole("region", { name: "Activity" }).getByText("KalCode started")).toBeVisible();
@@ -185,7 +186,7 @@ test.describe("accessibility", () => {
       await expect(page.getByRole("region", { name: "Diagnostics" }).getByText("Recorded events")).toBeVisible();
       await expectNoSeriousA11yViolations(page);
 
-      await page.getByRole("button", { name: "KalVoice" }).click();
+      await goTo(page, "KalVoice");
       await expectNoSeriousA11yViolations(page);
 
       await page.keyboard.press(`${MOD}+k`);

@@ -11,6 +11,7 @@ import type { CommandName } from "../../ipc/transport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
+import { goTo } from "../../test/nav.ts";
 import { openProviderAccounts } from "./providersTab.ts";
 
 // Providers → Accounts on the Stable channel: every account row shows its activity and, in its
@@ -109,8 +110,7 @@ async function mountStable({ openAccounts = true }: { openAccounts?: boolean } =
   );
   const user = userEvent.setup();
   if (!openAccounts) return { user, calls, client };
-  const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  await user.click(primary.getByRole("button", { name: "Providers" }));
+  await goTo(user, "Providers");
   await screen.findByRole("heading", { level: 1, name: "Providers" });
   await user.click(screen.getByRole("tab", { name: "Accounts" }));
   await screen.findByRole("region", { name: "Codex · Personal" });
@@ -241,10 +241,9 @@ describe("Providers → Accounts (Stable)", () => {
 
   it("openProviderAccounts opens Accounts at that provider with its connect form, and creates nothing", async () => {
     const { user, calls } = await mountStable({ openAccounts: false });
-    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+    await screen.findByRole("heading", { level: 1, name: "Activity" });
     act(() => openProviderAccounts({ providerId: "gemini-cli", connect: true }));
-    const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-    await user.click(primary.getByRole("button", { name: "Providers" }));
+    await goTo(user, "Providers");
 
     const name = await screen.findByRole("textbox", { name: "Name for the new Gemini CLI account" });
     expect(screen.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");

@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 function widget(page: Page): Locator {
   return page.getByRole("region", { name: "KalVoice widget" });
@@ -6,7 +7,7 @@ function widget(page: Page): Locator {
 
 async function openKalVoice(page: Page, transcript: string) {
   await page.goto(`/?transcript=${encodeURIComponent(transcript)}`);
-  await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+  await goTo(page, "KalVoice");
   await expect(page.getByRole("heading", { level: 1, name: "KalVoice" })).toBeVisible();
 }
 
@@ -59,7 +60,7 @@ test("a closed target fails without echoing its transcript", async ({ page }) =>
   await page.keyboard.down("F8");
   await expect(widget(page).getByText("Listening", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   await page.keyboard.up("F8");
 
   await expect(widget(page).getByText("Error", { exact: true })).toBeVisible();

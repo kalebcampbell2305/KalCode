@@ -6,7 +6,7 @@ const OUT = new URL("../../qa/screenshots/", import.meta.url);
 // Agent handoff is a MAX feature (packages/protocol/src/features.ts).
 async function open(page: Page, scenario = "account-ready-max") {
   await page.goto(`/?scenario=${scenario}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 async function openWorkspace(page: Page, folder = "handoff-project") {

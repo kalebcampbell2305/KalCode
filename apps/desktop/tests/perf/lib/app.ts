@@ -177,7 +177,7 @@ export async function pageTimings(page: Page): Promise<PageTimings> {
 
 /** Waits for the Dashboard to be on screen (the app booted into its normal shell). */
 export async function waitForShell(page: Page, timeoutMs = 30_000): Promise<void> {
-  await page.getByRole("heading", { level: 1, name: "Dashboard" }).waitFor({ state: "visible", timeout: timeoutMs });
+  await page.getByRole("heading", { level: 1, name: "Activity" }).waitFor({ state: "visible", timeout: timeoutMs });
 }
 
 function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {

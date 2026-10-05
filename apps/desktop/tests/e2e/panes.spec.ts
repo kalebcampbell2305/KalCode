@@ -88,7 +88,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
   try {
     let app = await launch(dataDir, env);
     let page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await codeNav(page).click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "w1-panes" })).toBeVisible();

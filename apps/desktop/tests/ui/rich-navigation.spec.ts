@@ -1,9 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 const BACK = process.platform === "darwin" ? "Meta+[" : "Alt+ArrowLeft";
 const FORWARD = process.platform === "darwin" ? "Meta+]" : "Alt+ArrowRight";
-const primary = (page: Page) => page.getByRole("navigation", { name: "Primary" });
 const surface = (page: Page) => page.locator("#main");
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 
@@ -33,7 +33,7 @@ test("Back and Forward retrace surfaces without replacing the live terminal", as
     (window as unknown as { __kalcodeMemory: { runningProcessCount(): number } }).__kalcodeMemory.runningProcessCount(),
   );
 
-  await primary(page).getByRole("button", { name: "Providers", exact: true }).click();
+  await goTo(page, "Providers");
   await expect(surface(page)).toHaveAttribute("data-surface", "providers");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(surface(page)).toHaveAttribute("data-surface", "settings");
@@ -96,7 +96,7 @@ test("quick switcher opens the exact setting and recent navigation returns to it
   await palette(page).getByRole("option").filter({ hasText: "Diagnostics" }).first().click();
   await expect(surface(page)).toHaveAttribute("data-surface", "settings");
   await expect(page.locator("#diagnostics")).toBeInViewport();
-  await primary(page).getByRole("button", { name: "Providers", exact: true }).click();
+  await goTo(page, "Providers");
   await page.getByRole("button", { name: "Recent navigation", exact: true }).click();
   await page.getByRole("menuitem").filter({ hasText: "Diagnostics" }).first().click();
   await expect(surface(page)).toHaveAttribute("data-surface", "settings");

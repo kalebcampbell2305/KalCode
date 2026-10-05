@@ -12,7 +12,7 @@ const OUT = new URL("../../qa/screenshots/", import.meta.url);
 
 async function open(page: Page, query = "") {
   await page.goto(`/${query}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 async function setTheme(page: Page, theme: "light" | "dark") {
@@ -107,7 +107,7 @@ test.describe("provider panes", () => {
       await expect(page.getByText("Open in Threads", { exact: true })).toHaveCount(0);
       await page
         .getByRole("navigation", { name: "Primary" })
-        .getByRole("button", { name: "Dashboard", exact: true })
+        .getByRole("button", { name: "Activity", exact: true })
         .click();
       await expect(page.getByRole("article")).toHaveCount(count);
       await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
@@ -286,7 +286,7 @@ test.describe("provider panes", () => {
     await expect(region.getByText(/^Ended/)).toBeVisible();
     await page
       .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: "Activity", exact: true })
       .click();
     const card = page.getByRole("article", { name: "Login flake", exact: true });
     await expect(card.getByRole("heading", { name: "Login flake", exact: true })).toBeVisible();

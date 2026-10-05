@@ -117,7 +117,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
     .getByRole("radio", { name: theme === "light" ? "Light" : "Dark" })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  await nav(page, "Dashboard").click();
+  await nav(page, "Activity").click();
 }
 
 test.describe("@w2-shots", () => {

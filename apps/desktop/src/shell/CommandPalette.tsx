@@ -4,6 +4,7 @@ import { Command } from "cmdk";
 import {
   ALargeSmall,
   AudioLines,
+  BellDot,
   Bot,
   BroomSparkles,
   ChevronsDownUp,
@@ -19,6 +20,7 @@ import {
   GitCommitHorizontal,
   Globe,
   House,
+  Inbox,
   KeyRound,
   LayoutGrid,
   ListChecks,
@@ -45,6 +47,7 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
+import { useKalActions } from "../runtime/actions.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
@@ -446,6 +449,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             >
               New agent with options…
             </Item>
+            {uiIntents ? <AttentionCommands run={run} /> : null}
           </Command.Group>
 
           {visible.has("threads") ? (
@@ -871,5 +875,33 @@ function Item({
     </FavoriteToggle>
   ) : (
     item
+  );
+}
+
+/**
+ * Needs You from the palette: the same canonical actions as the sidebar's inbox button and
+ * KalVoice's "show the one waiting" (only where the app's intents are mounted).
+ */
+function AttentionCommands({ run }: { run: (action: () => unknown) => () => void }) {
+  const actions = useKalActions();
+  return (
+    <>
+      <Item
+        icon={<BellDot />}
+        onSelect={run(() => actions.showWaiting())}
+        commandId="agent:show-waiting"
+        keywords={["waiting", "needs you", "blocked", "question", "show the one waiting"]}
+      >
+        Show the agent that needs me
+      </Item>
+      <Item
+        icon={<Inbox />}
+        onSelect={run(() => actions.openInbox())}
+        commandId="attention:open"
+        keywords={["needs you", "inbox", "attention", "notifications", "approvals", "failed"]}
+      >
+        Open Needs you
+      </Item>
+    </>
   );
 }

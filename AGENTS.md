@@ -1,5 +1,40 @@
 # KalCode agent policy
 
+## Permanent simplification + power rule (owner directive 2026-10-05)
+
+"KALCODE SHOULD REDUCE THE NUMBER OF DECISIONS USERS MUST MAKE AND COMPLETE MORE OF THE MECHANICAL WORK BETWEEN THOSE DECISIONS.
+
+CENTER THE EXPERIENCE ON THE PROJECT.
+
+MAKE STARTING REAL CODING AGENTS EFFORTLESS.
+
+PUT EVERYTHING THAT GENUINELY NEEDS THE USER INTO ONE ATTENTION INBOX.
+
+VOICE, TEXT, BUTTONS, AND MENUS SHOULD CALL THE SAME CANONICAL ACTIONS.
+
+ASSUME MANY CODING AGENTS WORK IN PARALLEL AND COORDINATE THEM BY DEFAULT.
+
+SHOW OUTCOMES BESIDE TERMINALS, INCLUDING THE DIFFERENCE BETWEEN AGENT DONE, VERIFIED, MERGED, AND SHIPPED.
+
+CARRY USEFUL, INSPECTABLE PROJECT MEMORY ACROSS PROVIDERS AND SESSIONS.
+
+EVERYTHING SHOULD FEEL LIKE ONE CONNECTED WORKFLOW.
+
+KEEP IT SIMPLE.
+KEEP IT BEAUTIFUL.
+KEEP IT FAST.
+KEEP IT RELIABLE."
+
+This applies to Claude Code, Codex and every future agent, for every surface and provider. The flow is OPEN PROJECT → START WORK → CODING AGENTS WORK → KALCODE COORDINATES THEM → NEEDS YOU SURFACES ONLY REAL DECISIONS → RESULTS APPEAR BESIDE THE WORK → COMPATIBLE CHANGES VALIDATE → AUTO-MERGE → AUTO-SHIP → USERS RECEIVE THEM → PROJECT MEMORY RETAINS USEFUL CONTEXT. Fewer top-level decisions, never fewer capabilities.
+
+- **Project-centered navigation.** The sidebar's primary places are **Code**, **Activity** (the `dashboard` surface: Needs You on top, then the Agent Fleet) and the **Projects** list (`PRIMARY_NAV` in `apps/desktop/src/shell/navigation.tsx`). Every other surface (Browser, Operations/Runs, Threads, KalVoice, Unified Memory, Providers, in-development surfaces) stays one click away in the footer's **More** menu, the command palette, context actions and shortcuts. Never re-add a surface to the primary list without an owner request; progressive disclosure, not removal.
+- **Effortless New Agent.** An agent is a real coding terminal, never a Thread. New agent launches the remembered provider/account/exact model/effort in the current project immediately when there is one obvious valid configuration, and expands the options inline only when a choice is genuinely needed. Never ask again for what KalCode already knows. Truthful STARTING → READY → WORKING state appears at once.
+- **One attention inbox (Needs You).** `apps/desktop/src/shell/attention/model.ts` derives every item from canonical state (coding agents via `agentStateOf`, pending approvals, provider sign-outs); it keeps no copy. Items cover questions, approvals, failures, sign-outs, stalled agents and finished work with changes, and each says WHAT HAPPENED, WHY IT NEEDS YOU and WHAT TO DO NEXT, with actions that open the exact coding terminal. Ordinary progress and routine KalCode permission prompts never land there. New attention sources (merge conflicts, overlapping edits, deploy failures) are added to this model, never as a separate inbox.
+- **One action bus.** `apps/desktop/src/runtime/actions.ts` (`useKalActions`) is the canonical intent → resolved target → execution → visible result path for buttons, menus, the palette and the inbox; KalVoice directives land in the same `uiIntents` focus and pane commands. Execute when the target is clear; when it is genuinely ambiguous, show the short list to choose from, never guess. Never add a voice-only or button-only behavior for an action that exists.
+- **Parallel by default.** Assume 6+ agents work concurrently: isolate work in per-agent worktrees, surface overlapping edits early, and send ready work through the shared merge train. A conflict blocks only the affected changes.
+- **Outcomes beside the work.** Every agent can show what changed, what passed/failed, its branch/worktree, and whether it is merged and shipped, from real state only. AGENT DONE, CHANGE VERIFIED, MERGED and SHIPPED TO USERS are different facts; never show one as another, and never guess.
+- **Unified Memory in the flow.** Project memory (see the Unified Memory rule) is visible where people work, inspectable, editable and removable, and only relevant notes reach a task.
+
 ## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
 
 **UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
@@ -449,7 +484,7 @@ This applies to Claude Code, Codex and every future agent, in product code, UI c
 - **Agent** = a real provider coding session (Claude Code, Codex, Gemini CLI) running in its own terminal pane in Code, with a provider, account, exact model, effort, workspace, worktree/branch where relevant, live status and current task. N agents = N panes.
 - **Thread** = the chat-oriented surface in Threads. Never implement, list, count or open an agent as a Thread, and never call a thread an agent.
 - In storage, coding sessions retain their existing record IDs and are identified by `runtimeKind: "interactive_pty"`, stamped from the durable provider-pane marker before resource admission. This shared storage does not make an agent a chat Thread. Agent surfaces read `useCodingAgents()`; opening an agent uses `uiIntents.focus({ kind: "agent", agentId, workspaceId })`, and Code persists `{ kind: "agent", agentId }` pane content. Never route an agent through a Thread focus target or fall back to a headless chat when its terminal runtime is unavailable.
-- Code's **New agent** launcher (+) chooses provider → account (only when there are several) → exact model → effort → count, and starts that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on the Dashboard; "the agent that just finished" means the latest finished coding agent.
+- Code's **New agent** starts the remembered provider/account/exact model/effort at once when that configuration is still valid; its options (provider → account, only when there are several → exact model → effort → count) open only when a choice is needed or asked for, and start that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on Activity (the `dashboard` surface); "the agent that just finished" means the latest finished coding agent.
 - Agents rail, Agent Fleet, Needs You counts, widgets, Squads, Handoffs, Queue, Runs and future automation use this same definition. Do not create an alternate one.
 
 ## KalVoice integration rule (owner directive 2026-10-01)

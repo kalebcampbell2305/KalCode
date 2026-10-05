@@ -13,9 +13,9 @@ async function open(page: Page, scenario?: string) {
   // These scenarios exercise Dashboard entry points; returning workspaces open Code.
   await page
     .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "Dashboard", exact: true })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 async function goToCode(page: Page) {
@@ -92,7 +92,7 @@ test.describe("opening a workspace", () => {
   test("workspace events appear in the activity feed", async ({ page }) => {
     await open(page);
     await openFolderAndTerminal(page);
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("Workspace added")).toBeVisible();
     await expect(activity.getByText("Terminal started")).toBeVisible();
@@ -110,7 +110,7 @@ test.describe("terminals", () => {
     await expect(visibleTerminal(page)).toContainText("hello-from-ui");
 
     // Navigating away detaches; coming back replays the scrollback.
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await goToCode(page);
     await expect(visibleTerminal(page)).toContainText("hello-from-ui");
   });
@@ -185,7 +185,7 @@ test.describe("terminals", () => {
     await page.keyboard.press("Enter");
     await expect(visibleTerminal(page)).toContainText("after-restart");
     const activity = async () => {
-      await page.getByRole("button", { name: "Dashboard" }).click();
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       return page.getByRole("region", { name: "Activity" });
     };
     await expect((await activity()).getByText("Terminal exited with an error")).toBeVisible();
@@ -259,7 +259,7 @@ test.describe("keyboard", () => {
     await expect(page.getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toHaveAttribute("aria-selected", "true");
 
     await queueFolders(page, "design-notes");
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page.keyboard.press(`${MOD}+k`);
     await page.keyboard.type("open folder");
     await page.keyboard.press("Enter");
@@ -284,7 +284,7 @@ test.describe("workspaces list", () => {
       ).__kalcodeMemory.makeUnavailable("second-project"),
     );
     // The active workspace's folder disappeared: explained, with a way out.
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await goToCode(page);
     await expect(page.getByRole("heading", { name: "This folder can't be found" })).toBeVisible();
     await expect(page.getByRole("button", { name: "New terminal" })).toBeDisabled();
@@ -322,7 +322,7 @@ test.describe("dashboard", () => {
 
     // Live: a new terminal appears on the Dashboard.
     await page.getByRole("button", { name: "New terminal" }).click();
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(section.getByRole("listitem")).toHaveCount(3);
   });
 
@@ -331,7 +331,7 @@ test.describe("dashboard", () => {
     await page.getByRole("button", { name: /^Workspace\s/ }).click();
     await page.getByRole("menuitemradio", { name: /api-server/ }).click();
     await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page
       .getByRole("region", { name: "Terminals" })
       .getByRole("button", { name: /Show Git Bash/ })
@@ -358,7 +358,7 @@ test.describe("accessibility", () => {
         await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
       }
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-      await page.getByRole("button", { name: "Dashboard" }).click();
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       await expect(page.getByRole("region", { name: "Terminals" }).getByText("Git Bash")).toBeVisible();
       await expectNoSeriousA11yViolations(page);
 
