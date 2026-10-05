@@ -50,7 +50,7 @@ test("New agent starts the remembered agent in one click; an explicit count star
   page,
 }, testInfo) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity", level: 1 })).toBeVisible();
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
