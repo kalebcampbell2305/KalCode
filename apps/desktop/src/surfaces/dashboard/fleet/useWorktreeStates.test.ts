@@ -12,6 +12,8 @@ const state = (threadId: string, patch: Partial<ThreadWorktreeState> = {}): Thre
   changed: 2,
   untracked: 0,
   conflicts: false,
+  changedPaths: ["src/a.ts", "src/b.ts"],
+  changedPathsTruncated: false,
   observedAt: "2026-10-05T12:00:00Z",
   ...patch,
 });
@@ -52,4 +54,12 @@ it("drops agents the read no longer reports and adds new ones", () => {
   const next = keepUnchanged(current, [a, c]);
   expect([...next.keys()]).toEqual(["a", "c"]);
   expect(next.get("a")).toBe(a);
+});
+
+it("treats a different list of changed files as new facts (the agent's outcome shows it)", () => {
+  const before = state("a");
+  const current = new Map([["a", before]]);
+  const next = keepUnchanged(current, [state("a", { changedPaths: ["src/a.ts", "src/c.ts"] })]);
+  expect(next).not.toBe(current);
+  expect(next.get("a")?.changedPaths).toEqual(["src/a.ts", "src/c.ts"]);
 });
