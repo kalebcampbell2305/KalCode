@@ -28,7 +28,7 @@ import {
 } from "./panelGeometry.ts";
 import { pushToTalkReadiness } from "./readiness.ts";
 import { displayKey } from "./shortcutModel.ts";
-import { KalVoiceWordmark, Orb, Waveform } from "./Visuals.tsx";
+import { KalVoiceWordmark, Orb, VoiceRoute, Waveform } from "./Visuals.tsx";
 
 const DOCK_CHOICES: PanelAnchor[] = [
   "top_left",
@@ -312,8 +312,10 @@ export function FloatingAssistant() {
       data-dragging={drag ? "true" : undefined}
       data-anchor={panel.anchor}
       aria-label="KalVoice widget"
+      data-kalvoice-widget=""
       style={{ left: position.left, top: position.top }}
     >
+      <VoiceRoute origin={ref} />
       {/* Collapsed to the orb, the push-to-talk bar announces activity instead (no double reading). */}
       {view === "orb" ? null : (
         <p className="visually-hidden" role="status" aria-live="polite">
