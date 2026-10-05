@@ -9,6 +9,7 @@ import {
   interpretShip,
   RELEASE_TIMEOUT_MS,
   releaseIdentity,
+  releaseSupersession,
   shipLockState,
   shipRunArgs,
   shipStateDir,
@@ -121,6 +122,69 @@ describe("release on merge", () => {
     assert.equal(
       shipLockState(lock, { alive: () => true, now: () => Date.parse(at) + RELEASE_TIMEOUT_MS + 11 * 60_000 }),
       "stale",
+    );
+  });
+});
+
+describe("newest valid build wins", () => {
+  const OLD = "1".repeat(40);
+  const NEW = "2".repeat(40);
+  const OTHER = "3".repeat(40);
+  // NEW contains OLD; OTHER is an unrelated line.
+  const isAncestor = (a, b) => a === b || (a === OLD && b === NEW);
+
+  test("an older job yields when main already advanced to a head containing it (coalescing)", () => {
+    const result = releaseSupersession({
+      commit: OLD,
+      version: "0.1.9+1700",
+      mainHead: NEW,
+      published: null,
+      isAncestor,
+    });
+    assert.equal(result.state, "superseded");
+    assert.match(result.description, /^SUPERSEDED: main advanced to 222222222222/);
+  });
+
+  test("the newest head releases", () => {
+    assert.equal(
+      releaseSupersession({
+        commit: NEW,
+        version: "0.1.9+1701",
+        mainHead: NEW,
+        published: { version: "0.1.9+1700", commit: OLD },
+        isAncestor,
+      }),
+      null,
+    );
+  });
+
+  test("an equal or newer Stable that contains the commit supersedes it", () => {
+    const result = releaseSupersession({
+      commit: OLD,
+      version: "0.1.9+1700",
+      mainHead: OLD,
+      published: { version: "0.1.9+1701", commit: NEW },
+      isAncestor,
+    });
+    assert.equal(result.state, "superseded");
+    assert.match(result.description, /Stable 0\.1\.9\+1701 already contains/);
+  });
+
+  test("a newer Stable that lacks the commit blocks: never publish an older build over it", () => {
+    const result = releaseSupersession({
+      commit: OTHER,
+      version: "0.1.9+1700",
+      mainHead: OTHER,
+      published: { version: "0.1.9+1701", commit: NEW },
+      isAncestor,
+    });
+    assert.equal(result.state, "blocked");
+  });
+
+  test("an unrelated main head never supersedes a job", () => {
+    assert.equal(
+      releaseSupersession({ commit: OLD, version: "0.1.9+1700", mainHead: OTHER, published: null, isAncestor }),
+      null,
     );
   });
 });
