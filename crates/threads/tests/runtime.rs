@@ -206,6 +206,35 @@ fn operation_sessions_are_background_and_a_resume_makes_them_the_persons() {
     );
 }
 
+/// Owner rule: a person's message on a thread the Operations scheduler started is theirs. The
+/// live session learns it before the turn is admitted, so CPU load never holds it.
+#[test]
+fn a_persons_message_on_an_operation_thread_makes_its_turns_theirs() {
+    let h = Harness::new();
+    let operation_id = new_id();
+    let thread = h
+        .runtime
+        .create_reviewed_for_operation(&operation_id, h.request("scheduled work"), None)
+        .expect("create operation thread");
+    let session = h.provider.last_session();
+    assert_eq!(session.launch_origin(), LaunchOrigin::Background);
+    session.emit(AgentEvent::TurnCompleted { ok: true });
+    wait_status(&h, &thread.id, ThreadStatus::Idle);
+
+    h.runtime
+        .send(&thread.id, "keep going")
+        .expect("the person's follow-up");
+    assert_eq!(
+        session.launch_origin(),
+        LaunchOrigin::User,
+        "the person's turn is admitted as theirs"
+    );
+    assert_eq!(
+        session.calls().last(),
+        Some(&Call::Send("keep going".into()))
+    );
+}
+
 #[test]
 fn operation_thread_uses_reserved_id_and_never_replays_on_collision() {
     let h = Harness::new();

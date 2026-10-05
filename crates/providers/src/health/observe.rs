@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, ProviderCapabilities,
-    ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, LaunchOrigin,
+    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::permissions::ApprovalDecision;
 
@@ -182,6 +182,10 @@ impl AgentSession for ObservedSession {
         let result = self.inner.terminate();
         self.observer.end();
         result
+    }
+
+    fn set_launch_origin(&self, origin: LaunchOrigin) {
+        self.inner.set_launch_origin(origin);
     }
 
     fn respond_to_approval(

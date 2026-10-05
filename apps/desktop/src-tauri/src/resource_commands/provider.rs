@@ -15,7 +15,9 @@
 //! launch; only genuine hard pressure, an explicit Custom limit, or the OS refusing to create the
 //! process does, with the real reason and Start Anyway. A session the Operations scheduler starts
 //! (`SessionConfig::launch_origin` = `Background`) uses the strict background policy instead and
-//! yields to CPU load first (`LaunchHoldKind::BackgroundYield`).
+//! yields to CPU load first (`LaunchHoldKind::BackgroundYield`). The origin is per turn: once the
+//! person sends a message on a scheduled session (`AgentSession::set_launch_origin`), its turns
+//! are theirs and use the user-requested policy.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -55,8 +57,14 @@ pub(super) trait ProviderAdmission: Send + Sync {
     }
 }
 
-struct GovernorAdmission {
+pub(super) struct GovernorAdmission {
     governor: Arc<ResourceGovernorState>,
+}
+
+impl GovernorAdmission {
+    pub(super) fn new(governor: Arc<ResourceGovernorState>) -> Self {
+        Self { governor }
+    }
 }
 
 struct GovernorPermit {
@@ -161,7 +169,7 @@ impl ResourceAdmissionProvider {
         inner: Arc<dyn AgentProvider>,
         governor: Arc<ResourceGovernorState>,
     ) -> Arc<dyn AgentProvider> {
-        Self::with_admission(inner, Arc::new(GovernorAdmission { governor }))
+        Self::with_admission(inner, Arc::new(GovernorAdmission::new(governor)))
     }
 
     pub(super) fn with_admission(
@@ -175,7 +183,9 @@ impl ResourceAdmissionProvider {
 /// The capacity one session holds for its current turn, if any.
 struct AdmissionLifecycle {
     provider: ProviderId,
-    launch: AgentLaunch,
+    /// Who asks for the next turn. A person's message on a scheduled session makes it theirs
+    /// (`AgentSession::set_launch_origin`), so their turns are never held for CPU load.
+    launch: Mutex<AgentLaunch>,
     admission: Arc<dyn ProviderAdmission>,
     permit: Mutex<Option<Box<dyn ProviderAdmissionPermit>>>,
 }
@@ -188,7 +198,7 @@ impl AdmissionLifecycle {
     ) -> Self {
         Self {
             provider,
-            launch,
+            launch: Mutex::new(launch),
             admission,
             permit: Mutex::new(None),
         }
@@ -201,11 +211,20 @@ impl AdmissionLifecycle {
         if permit.is_some() {
             return Ok(false);
         }
-        *permit = Some(
-            self.admission
-                .reserve(self.provider.clone(), &self.launch)?,
-        );
+        let launch = self
+            .launch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        *permit = Some(self.admission.reserve(self.provider.clone(), &launch)?);
         Ok(true)
+    }
+
+    fn set_origin(&self, origin: LaunchOrigin) {
+        self.launch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .origin = origin;
     }
 
     fn release(&self) {
@@ -293,6 +312,10 @@ impl AgentSession for AdmissionSession {
 
     fn interrupt(&self) -> Result<(), ProviderError> {
         self.inner.interrupt()
+    }
+
+    fn set_launch_origin(&self, origin: LaunchOrigin) {
+        self.lifecycle.set_origin(origin);
     }
 
     fn terminate(&self) -> Result<(), ProviderError> {
