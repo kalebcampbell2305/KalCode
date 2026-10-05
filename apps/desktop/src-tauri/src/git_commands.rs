@@ -354,16 +354,23 @@ pub(crate) fn thread_worktree_states_for(
         let Some((repo, base, head)) = entry.as_ref() else {
             continue;
         };
-        let dirty = match worktree::dirty_state(exe, repo, &path) {
-            Ok(dirty) => dirty,
+        let branch_ref = format!("refs/heads/{}", row.branch);
+        let base_ref = base.as_ref().and(head.as_deref());
+        let (dirty, touched) = match worktree::changed_paths(
+            exe,
+            repo,
+            &path,
+            base_ref,
+            &branch_ref,
+        ) {
+            Ok(read) => read,
             Err(error) => {
                 tracing::warn!(event = "git.thread_worktree_unreadable", thread_id = %thread_id, error = %error.diagnostic());
                 continue;
             }
         };
         let (mut ahead, mut behind, mut conflicts) = (None, None, None);
-        if let (Some(_), Some(base_ref)) = (base, head) {
-            let branch_ref = format!("refs/heads/{}", row.branch);
+        if let Some(base_ref) = base_ref {
             if let Ok((left, right)) = worktree::ahead_behind(exe, repo, base_ref, &branch_ref) {
                 (behind, ahead) = (Some(left), Some(right));
             }
@@ -381,6 +388,8 @@ pub(crate) fn thread_worktree_states_for(
             changed: dirty.changed,
             untracked: dirty.untracked,
             conflicts,
+            changed_paths: touched.paths,
+            changed_paths_truncated: touched.truncated,
             observed_at: kalcode_core::time::now_rfc3339(),
         });
     }

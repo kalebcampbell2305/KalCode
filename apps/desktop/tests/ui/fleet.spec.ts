@@ -45,6 +45,27 @@ test("a finished agent is ready to merge only when its worktree facts all agree"
   await expect(conflicted).not.toContainText("Ready to merge ");
 });
 
+test("agents editing the same files in one project see each other early, and the chip opens the other", async ({
+  page,
+}) => {
+  await page.goto("/?scenario=busy");
+  const checkout = card(page, "Fix flaky checkout test");
+  const invoices = card(page, "Write invoices migration");
+  const toInvoices = checkout.getByRole("button", { name: /^Overlaps with Gemini CLI · Write invoices migration/ });
+  await expect(toInvoices).toContainText("1 file");
+  await expect(invoices.getByRole("button", { name: /^Overlaps with Codex · Fix flaky checkout test/ })).toBeVisible();
+  // Different projects and agents without shared files never overlap.
+  await expect(card(page, "Refactor auth middleware").getByRole("list", { name: "Overlapping edits" })).toHaveCount(0);
+
+  // The files are named, then the chip opens the other agent's terminal in Code.
+  await toInvoices.hover();
+  await expect(page.getByRole("tooltip")).toContainText("apps/web/checkout/cart.ts");
+  await toInvoices.click();
+  await expect(
+    page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+});
+
 test("a new thread runs in its own worktree by default and is not an agent in the Fleet", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
