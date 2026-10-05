@@ -44,9 +44,9 @@ for (const theme of ["dark", "light"] as const) {
       await expect(page.getByRole("heading", { name: "Open a project folder" })).toBeVisible();
       await shot(page, `code-empty-${theme}-${size.name}`);
 
-      // A workspace with running, colourful and ended tabs.
+      // A workspace with running, colourful and ended tabs. A returning workspace opens directly in Code.
       await page.goto("/?scenario=code");
-      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
       await setTheme(page, theme);
       await page.getByRole("button", { name: "Activity", exact: true }).click();
       await expect(page.getByRole("region", { name: "Terminals" }).getByText("Git Bash")).toBeVisible();

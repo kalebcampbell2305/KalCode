@@ -41,11 +41,11 @@ for (const theme of ["dark", "light"] as const) {
       await expect(detail.getByText("Run npm test").first()).toBeVisible();
       await shot(page, `threads-list-${theme}-${size.name}`);
 
-      await list.getByRole("button", { name: /Add Dark Mode Toggle/ }).click();
+      await list.getByRole("button", { name: /^Add Dark Mode Toggle/ }).click();
       await expect(detail.getByText("Waiting for 1 permission decision")).toBeVisible();
       await shot(page, `threads-waiting-${theme}-${size.name}`);
 
-      await list.getByRole("button", { name: /Migrate API to v2/ }).click();
+      await list.getByRole("button", { name: /^Migrate API to v2/ }).click();
       await expect(detail.getByRole("alert")).toBeVisible();
       await shot(page, `threads-failed-${theme}-${size.name}`);
 
