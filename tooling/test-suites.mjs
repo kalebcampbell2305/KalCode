@@ -345,14 +345,29 @@ export function reportFailureNames(value) {
   return names.slice(0, 20);
 }
 
-/** `file › title` of every test Playwright reports as flaky (passed only on retry). */
+/** Terminal colour codes Playwright embeds in error messages (ESC [ ... m). */
+const ANSI_COLOUR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+/**
+ * `file › title` of every test Playwright reports as flaky (passed only on retry), followed by the
+ * first line of the failed attempt's error, so a flaky gate names its cause instead of only its
+ * test (the suite's own output is suppressed and the report is deleted with its directory).
+ */
 export function playwrightFlakyTitles(value) {
   const names = [];
   const visit = (suites) => {
     for (const suite of Array.isArray(suites) ? suites : []) {
       for (const spec of Array.isArray(suite.specs) ? suite.specs : []) {
         for (const test of Array.isArray(spec.tests) ? spec.tests : []) {
-          if (test?.status === "flaky") names.push(`${spec.file ?? suite.file ?? "?"} › ${spec.title}`.slice(0, 200));
+          if (test?.status !== "flaky") continue;
+          const name = `${spec.file ?? suite.file ?? "?"} › ${spec.title}`.slice(0, 200);
+          const failed = (Array.isArray(test.results) ? test.results : []).find((r) => r?.status !== "passed");
+          const firstLine = String(failed?.error?.message ?? "")
+            .replace(ANSI_COLOUR, "")
+            .split("\n")
+            .map((line) => line.trim())
+            .find((line) => line.length > 0);
+          names.push(firstLine ? `${name} [${firstLine.slice(0, 240)}]` : name);
         }
       }
       visit(suite.suites);
