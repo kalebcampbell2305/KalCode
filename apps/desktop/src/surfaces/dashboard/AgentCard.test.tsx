@@ -2,7 +2,7 @@ import type { ThreadSummary } from "@kalcode/protocol";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { AgentCard, startedText } from "./AgentCard.tsx";
+import { AgentCard, type AgentCardProps, sameAgentCardProps, startedText } from "./AgentCard.tsx";
 
 function thread(accountLabel: string | null): ThreadSummary {
   return {
@@ -272,5 +272,48 @@ describe("AgentCard Fleet controls", () => {
     mount(summary, { onFocus });
     await userEvent.click(screen.getByRole("article", { name: "Research" }));
     expect(onFocus).toHaveBeenCalledWith(summary);
+  });
+});
+
+describe("AgentCard clock ticks", () => {
+  const props = (summary: ThreadSummary, now: string, extra: Partial<AgentCardProps> = {}): AgentCardProps => ({
+    thread: summary,
+    now: Date.parse(now),
+    approvals: [],
+    pendingAction: undefined,
+    onFocus: () => {},
+    onAction: () => {},
+    onDecide: async () => {},
+    onReviewApprovals: () => {},
+    ...extra,
+  });
+
+  it("skips a tick that changes none of the times the card shows", () => {
+    const t = thread(null);
+    const base = props(t, "2026-09-28T12:01:05Z");
+    const same = { ...base, now: Date.parse("2026-09-28T12:01:25Z") };
+    expect(sameAgentCardProps(base, same)).toBe(true);
+  });
+
+  it("re-renders when the elapsed or last-activity text changes", () => {
+    const t = thread(null);
+    const base = props(t, "2026-09-28T12:01:40Z");
+    expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T12:02:10Z") })).toBe(false);
+  });
+
+  it("re-renders when any other prop changes", () => {
+    const t = thread(null);
+    const base = props(t, "2026-09-28T12:01:10Z");
+    expect(sameAgentCardProps(base, { ...base, thread: { ...t, status: "active" } })).toBe(false);
+    expect(sameAgentCardProps(base, { ...base, expanded: true })).toBe(false);
+    const { expanded: _, ...withoutExpanded } = { ...base, expanded: false };
+    expect(sameAgentCardProps({ ...base, expanded: false }, withoutExpanded)).toBe(false);
+  });
+
+  it("updates the archived time when its relative text changes", () => {
+    const t = { ...thread(null), archivedAt: "2026-09-28T12:00:00Z" };
+    const base = props(t, "2026-09-28T13:10:05Z", { archived: true });
+    expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T13:10:20Z") })).toBe(true);
+    expect(sameAgentCardProps(base, { ...base, now: Date.parse("2026-09-28T14:40:00Z") })).toBe(false);
   });
 });

@@ -132,6 +132,29 @@ function isInteractive(target: EventTarget | null): boolean {
   );
 }
 
+/** Every text the card derives from `now`: the elapsed time, started, archived and last activity. */
+function clockTexts({ thread, now, archived = false }: AgentCardProps): string {
+  const elapsedMs = runDurationMs(thread, now);
+  return [
+    elapsedMs === null || archived ? "" : elapsedMs < 60_000 ? "<1 min" : formatElapsed(elapsedMs),
+    startedText(thread.createdAt, now) ?? "",
+    archived && thread.archivedAt ? formatRelative(thread.archivedAt, now) : "",
+    formatRelative(thread.lastActivityAt, now),
+  ].join("\n");
+}
+
+/**
+ * The board's clock ticks every card; a card re-renders for a tick only when a time it shows
+ * changes (each card's whole menu subtree re-rendered every 30 s otherwise).
+ */
+export function sameAgentCardProps(prev: AgentCardProps, next: AgentCardProps): boolean {
+  for (const key of Object.keys(next) as (keyof AgentCardProps)[]) {
+    if (key !== "now" && !Object.is(prev[key], next[key])) return false;
+  }
+  for (const key of Object.keys(prev)) if (!(key in next)) return false;
+  return prev.now === next.now || clockTexts(prev) === clockTexts(next);
+}
+
 /**
  * One coding agent in the Agent Fleet: who it runs as (account), its task, its state and how
  * long it has run; the provider and workspace; model, effort and branch; and what it is doing now
@@ -596,4 +619,4 @@ export const AgentCard = memo(function AgentCard({
       )}
     </article>
   );
-});
+}, sameAgentCardProps);
