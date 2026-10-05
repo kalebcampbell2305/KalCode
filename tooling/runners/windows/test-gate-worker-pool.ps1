@@ -36,7 +36,7 @@ foreach ($case in @(
 }
 $reserved=$healthy.Clone();$reserved.FreeGiB=19
 Assert-Equal (Test-GateWorkerAdmission $reserved 2) 'memory_pressure' 'Reserve headroom for newly admitted jobs and user agents'
-foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-worker-pool.ps1','invoke-gate-worker-pool-install.ps1','diagnose-gate-worker-pool.ps1','add-gate-workers.ps1')) {
+foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-worker-pool.ps1','invoke-gate-worker-pool-install.ps1','diagnose-gate-worker-pool.ps1','add-gate-workers.ps1','repair-gate-worker-hooks.ps1')) {
     $tokens=$null;$parseErrors=$null
     $fileAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file),[ref]$tokens,[ref]$parseErrors)
     if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
@@ -46,6 +46,22 @@ foreach ($file in @('gate-worker-pool.psm1','gate-worker-hook.ps1','setup-gate-w
         $node.Left.VariablePath.UserPath -imatch '^(HOME|HOST|PID|CODEX_HOME)$'
     },$true)
     if ($reservedWrites.Count) { throw "Reserved process variable assignment in $file : $($reservedWrites.Extent.Text -join ', ')" }
+}
+$repairAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'repair-gate-worker-hooks.ps1'),[ref]$tokens,[ref]$parseErrors)
+$rewrite=$repairAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HookEnvironment'},$false)
+Invoke-Expression $rewrite.Extent.Text
+$fixturePool='C:\ProgramData\KalCodeGatePool'
+$fixtureLines=@('KALCODE_GATE_SLOT=1','PATH=preserve this literal path','ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\ProgramData\KalCodeGatePool\before.cmd','ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ProgramData\KalCodeGatePool\after.cmd','UNRELATED=ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\ProgramData\KalCodeGatePool\before.cmd')
+$environmentText=($fixtureLines -join "`r`n")+"`r`n"
+$expectedLines=$fixtureLines.Clone(); $expectedLines[2]=$expectedLines[2].Replace('before.cmd','before.ps1'); $expectedLines[3]=$expectedLines[3].Replace('after.cmd','after.ps1')
+Assert-Equal (Get-HookEnvironment $environmentText $fixturePool) (($expectedLines -join "`r`n")+"`r`n") 'Only two exact hook lines change; all other bytes remain'
+foreach ($bad in @($environmentText+$fixtureLines[2],$environmentText.Replace('before.cmd','unexpected.ps1'))) {
+    $rejected=$false; try {Get-HookEnvironment $bad $fixturePool|Out-Null} catch {$rejected=$true}
+    Assert-Equal $rejected $true 'Unknown or duplicate hooks are refused'
+}
+$installerText=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'setup-gate-worker-pool.ps1'))
+foreach ($phase in @('before','after')) {
+    if ($installerText -notmatch ('ACTIONS_RUNNER_HOOK_JOB_(?:STARTED|COMPLETED)=.*'+$phase+'\.ps1') -or $installerText -match ('ACTIONS_RUNNER_HOOK_JOB_(?:STARTED|COMPLETED)=.*'+$phase+'\.cmd')) { throw 'Installer hooks must use a runner-supported .ps1 extension.' }
 }
 $wrapperAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'invoke-gate-worker-pool-install.ps1'),[ref]$tokens,[ref]$parseErrors)
 foreach ($name in @('Assert-OrdinaryToolPath','Read-ApprovedCargoTools','Read-ApprovedServiceState')) {

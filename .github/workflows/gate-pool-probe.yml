@@ -7,6 +7,9 @@ on:
       - .github/workflows/gate-pool-probe.yml
       - tooling/runners/windows/gate-worker-probe.mjs
       - tooling/runners/windows/gate-worker-probe.test.mjs
+      - tooling/runners/windows/gate-worker-hook.ps1
+      - tooling/runners/windows/gate-worker-pool.psm1
+      - tooling/runners/windows/setup-gate-worker-pool.ps1
   workflow_dispatch:
 
 permissions:
