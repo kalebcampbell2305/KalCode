@@ -26,6 +26,10 @@ export type BrowserAction = "back" | "forward" | "reload" | "stop";
 export interface BrowserFocusEvent {
   browserId: string;
 }
+/** Native says this pane's state moved (navigation, load, title, denied pop-up): read `info`. */
+export interface BrowserStateEvent {
+  browserId: string;
+}
 
 /** The element the person picked in the page (page-controlled text, bounded natively). */
 export interface PickedElement {
@@ -81,6 +85,7 @@ export interface BrowserBridge {
   hideAll(): Promise<number>;
   openExternal(url: string): Promise<void>;
   subscribeFocus(listener: (event: BrowserFocusEvent) => void): Promise<UnlistenFn>;
+  subscribeState(listener: (event: BrowserStateEvent) => void): Promise<UnlistenFn>;
   /** Console errors and the picked element. Never rejects for a page that simply has no helper. */
   inspect(browserId: string): Promise<BrowserInspection>;
   /** Starts or stops picking an element in the page; resolves whether picking is active. */
@@ -147,6 +152,8 @@ export function createBrowserBridge(): BrowserBridge {
       }),
     subscribeFocus: (listener) =>
       listen<BrowserFocusEvent>("kalcode://browser-focus", (event) => listener(event.payload)),
+    subscribeState: (listener) =>
+      listen<BrowserStateEvent>("kalcode://browser-state", (event) => listener(event.payload)),
     inspect: async (browserId) =>
       invoke<BrowserInspection>("browser_inspect", {
         browserId,
@@ -195,6 +202,7 @@ interface MemoryPage {
 // One in-memory Browser per page load, shared by every bridge (React may create several).
 const memoryPages = new Map<string, MemoryPage>();
 const memoryOpened: string[] = [];
+const memoryStateListeners = new Set<(event: BrowserStateEvent) => void>();
 
 export function createMemoryBrowserBridge(): BrowserBridge {
   type Page = MemoryPage;
@@ -241,6 +249,8 @@ export function createMemoryBrowserBridge(): BrowserBridge {
           blockedPopup: url,
           blockedPopupSeq: (entry.state.blockedPopupSeq ?? 0) + 1,
         };
+        // Like native's denied-pop-up handler, announce the move.
+        for (const listener of [...memoryStateListeners]) listener({ browserId });
       }
     },
     lastUrl: (browserId) => pages.get(browserId)?.state.url ?? null,
@@ -305,6 +315,12 @@ export function createMemoryBrowserBridge(): BrowserBridge {
       opened.push(url);
     },
     subscribeFocus: async () => () => undefined,
+    subscribeState: async (listener) => {
+      memoryStateListeners.add(listener);
+      return () => {
+        memoryStateListeners.delete(listener);
+      };
+    },
     inspect: async (browserId) => {
       const entry = page(browserId);
       const picked = entry.picked;
