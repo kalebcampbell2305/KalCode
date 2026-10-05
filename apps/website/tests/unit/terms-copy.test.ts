@@ -68,7 +68,7 @@ describe("/terms in preview mode", () => {
   it("renders the pinned preview legal text", async () => {
     const html = await renderTerms();
     expect(createHash("sha256").update(legal(html)).digest("hex")).toBe(
-      "08e4c32e47ab5c7f45bf680cce28b2192da5d3df3e177df8909dbb88df0a16ba",
+      "4a7f3405c295af4c857fc84730168acd8a15a227392c2d602eb513296074dfdb",
     );
     expect(meta(html)).toBe(
       "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode preview app.",
@@ -83,7 +83,7 @@ describe("/terms once Stable is served", () => {
     const html = await renderTerms();
     const copy = text(html);
     for (const sentence of [
-      "These terms cover kalcoded.com, the KalCode early-access list and the KalCode app.",
+      "These terms cover kalcoded.com, your KalCode account, the KalCode early-access list and the KalCode app.",
       "Last updated October 5, 2026",
       "The site describes KalCode. Descriptions of features, plans and prices reflect current plans and may change.",
       "3. The KalCode app",
