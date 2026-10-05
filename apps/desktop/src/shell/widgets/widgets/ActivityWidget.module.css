@@ -55,8 +55,14 @@
   min-width: 0;
 }
 
+/* A long title shrinks with an ellipsis (full text on hover) so it never paints into the time column. */
 .title {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text);
   font-size: var(--type-ui);
   font-weight: var(--weight-medium);
