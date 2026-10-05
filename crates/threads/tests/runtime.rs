@@ -839,11 +839,15 @@ fn file_changes_and_usage_are_recorded() {
             })
             .collect();
     assert_eq!(paths, ["src/main.rs", "README.md", "src/main.rs"]);
-    let usage = h
-        .core
-        .read(|conn| kalcode_threads::store::usage(conn, &id))
-        .expect("usage");
-    assert_eq!(usage, (100, 40, 0));
+    // Usage is the fourth event and is written after the file events: wait for it the same way
+    // instead of reading once, which raced the runtime under gate load (saw (0, 0, 0)).
+    let usage = |h: &Harness| {
+        h.core
+            .read(|conn| kalcode_threads::store::usage(conn, &id))
+            .expect("usage")
+    };
+    wait_until("usage", || usage(&h) != (0, 0, 0));
+    assert_eq!(usage(&h), (100, 40, 0));
 }
 
 #[test]
