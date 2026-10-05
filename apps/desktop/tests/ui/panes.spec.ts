@@ -494,13 +494,14 @@ test.describe("scale", () => {
       });
     });
     await page.goto("/?scenario=code");
+    // Time the layout restore, not app boot: start once the Code surface is up (boot and the
+    // dev server's first compile vary widely on a loaded gate machine).
+    await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
     const started = Date.now();
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
     await expect(panes(page)).toHaveCount(24);
-    // 3 s alone; the CI gate runs the whole suite fully parallel against a dev server, where a
-    // healthy restore measured 3.2 s. A real regression (sequential or quadratic pane mounts)
-    // costs far more than either budget.
-    expect(Date.now() - started).toBeLessThan(process.env.CI ? 6000 : 3000);
+    // About 0.9 s for 24 panes; sequential or quadratic pane mounts would blow the budget.
+    expect(Date.now() - started).toBeLessThan(3000);
     const terminals = await page
       .locator('[data-content-key^="terminal:"]')
       .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("data-content-key")));
