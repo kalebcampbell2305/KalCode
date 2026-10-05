@@ -3,19 +3,19 @@
 /**
  * One talk interaction's stage timings in milliseconds (absent stages didn't happen).
  */
-export type StageTimings = { keyDownToMic: number | null, speechToPartial: number | null, keyUpToFinal: number | null, finalToRecognized: number | null, recognizedToAction: number | null, 
+export type StageTimings = { keyDownToMic: number | null, speechToPartial: number | null, keyUpToFinal: number | null, finalToRecognized: number | null, recognizedToAction: number | null,
 /**
  * `reused_partial` when the final transcript needed no pass after release.
  */
-finalSource: string | null, 
+finalSource: string | null,
 /**
  * Key up → recording stopped and finalized (the start of stage 3).
  */
-keyUpToAudioFinal?: number, 
+keyUpToAudioFinal?: number,
 /**
  * Route decided → intent resolved: parsed and its target bound (inside stage 5).
  */
-recognizedToIntent?: number, 
+recognizedToIntent?: number,
 /**
  * Intent resolved → the executor starts the action (inside stage 5).
  */

@@ -6,7 +6,7 @@ import type { WorkspaceOption } from "./WorkspaceOption.ts";
 /**
  * Everything the New thread flow needs to offer valid choices (`thread_options`).
  */
-export type ThreadOptions = { providers: Array<ProviderOption>, workspaces: Array<WorkspaceOption>, 
+export type ThreadOptions = { providers: Array<ProviderOption>, workspaces: Array<WorkspaceOption>,
 /**
  * Modes a thread can be created with. Bypass and Custom are set later, through the
  * permission engine, by an explicit user action.

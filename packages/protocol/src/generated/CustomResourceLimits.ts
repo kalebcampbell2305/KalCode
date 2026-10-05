@@ -6,27 +6,27 @@ import type { ProviderId } from "./ProviderId.ts";
  * User-set targets for `Custom` mode (replaces the proposal's `GovernorThresholds`; thresholds
  * derive from these, see `docs/RESOURCE_GOVERNOR.md`).
  */
-export type CustomResourceLimits = { 
+export type CustomResourceLimits = {
 /**
  * Machine CPU use (percent) above which new agent work is held. 20–100.
  */
-maxCpuPercent: number, 
+maxCpuPercent: number,
 /**
  * Most memory the KalCode process tree (agents included) should use, MiB. `None` = no cap.
  */
-maxKalcodeMemoryMb: number | null, 
+maxKalcodeMemoryMb: number | null,
 /**
  * Physical memory to keep available for everything else, MiB. 256–262,144.
  */
-minAvailableMemoryMb: number, 
+minAvailableMemoryMb: number,
 /**
  * Free space to keep on workspace volumes, MiB. 256–1,048,576.
  */
-minDiskFreeMb: number, 
+minDiskFreeMb: number,
 /**
  * Most simultaneous agent tasks. 1–64.
  */
-maxAgents: number, 
+maxAgents: number,
 /**
  * Most simultaneous tasks per provider (0 = do not start tasks for that provider). ≤ 64.
  */

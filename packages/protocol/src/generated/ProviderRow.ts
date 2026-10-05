@@ -5,7 +5,7 @@ import type { RailThread } from "./RailThread.ts";
 /**
  * A workspace's threads for one provider.
  */
-export type ProviderRow = { providerId: ProviderId, providerName: string, threads: number, working: number, needsYou: number, 
+export type ProviderRow = { providerId: ProviderId, providerName: string, threads: number, working: number, needsYou: number,
 /**
  * Most recently active first; at most 25 (the count above is the full number).
  */

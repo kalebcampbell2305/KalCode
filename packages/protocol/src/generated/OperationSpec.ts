@@ -3,15 +3,15 @@ import type { OperationEnvironmentKind } from "./OperationEnvironmentKind.ts";
 import type { OperationKind } from "./OperationKind.ts";
 import type { OperationLane } from "./OperationLane.ts";
 
-export type OperationSpec = { name: string, workspaceId: string, kind: OperationKind, 
+export type OperationSpec = { name: string, workspaceId: string, kind: OperationKind,
 /**
  * Explicit owner-authored shell command. Never filled from untrusted output.
  */
-command: string | null, prompt: string | null, providerId: string | null, providerAccountId: string | null, model: string | null, effort: string | null, dependencies: Array<string>, priority: number, lane: OperationLane, environment: OperationEnvironmentKind, 
+command: string | null, prompt: string | null, providerId: string | null, providerAccountId: string | null, model: string | null, effort: string | null, dependencies: Array<string>, priority: number, lane: OperationLane, environment: OperationEnvironmentKind,
 /**
  * Declared deployment endpoints, not proof of a live deployment.
  */
-urls: Array<string>, 
+urls: Array<string>,
 /**
  * Names only. Secret values never cross the Operations boundary.
  */

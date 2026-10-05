@@ -3,11 +3,11 @@
 /**
  * The index's health, shown next to results ("Indexing…", entry count).
  */
-export type LocatorIndexState = { entries: number, 
+export type LocatorIndexState = { entries: number,
 /**
  * False until the first full index finished.
  */
-ready: boolean, 
+ready: boolean,
 /**
  * False when the index lives in memory for this session only (schema v11 not installed).
  */

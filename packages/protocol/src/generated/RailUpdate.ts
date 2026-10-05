@@ -3,19 +3,19 @@
 /**
  * A change to one workspace's rail state. Absent fields stay as they are.
  */
-export type RailUpdate = { workspaceId: string, pinned?: boolean, 
+export type RailUpdate = { workspaceId: string, pinned?: boolean,
 /**
  * A folder id to move the workspace into, or `""` to take it out of its folder.
  */
-groupId?: string, 
+groupId?: string,
 /**
  * Position within its section (pinned or folder).
  */
-position?: number, collapsed?: boolean, archived?: boolean, 
+position?: number, collapsed?: boolean, archived?: boolean,
 /**
  * The rail name (1–80 characters); an empty value shows the folder's name again.
  */
-name?: string, 
+name?: string,
 /**
  * Turn message-text search for this workspace on or off.
  */

@@ -12,49 +12,49 @@ import type { Recoverability } from "./Recoverability.ts";
 /**
  * The health of one provider.
  */
-export type ProviderHealth = { providerId: ProviderId, displayName: string, state: HealthState, 
+export type ProviderHealth = { providerId: ProviderId, displayName: string, state: HealthState,
 /**
  * `None` until the provider has been detected.
  */
-detection: DetectionState | null, 
+detection: DetectionState | null,
 /**
  * As the provider reports it through its documented status command; `unknown` when it
  * documents none (Gemini CLI).
  */
-auth: AuthState, 
+auth: AuthState,
 /**
  * Display label of the connected account. KalCode never reads account details from a
  * provider, so this is `None` until API-key accounts exist.
  */
-accountLabel: string | null, version: string | null, 
+accountLabel: string | null, version: string | null,
 /**
  * The adapter's minimum supported version, when one is declared.
  */
-minimumVersion: string | null, models: Array<ModelInfo>, 
+minimumVersion: string | null, models: Array<ModelInfo>,
 /**
  * At least one session process of this provider is running.
  */
-processRunning: boolean, activeSessions: number, 
+processRunning: boolean, activeSessions: number,
 /**
  * Time from sending input to the first provider output, observed over the last 15 minutes.
  */
-latencyP50Ms: number | null, latencyP95Ms: number | null, latencySamples: number, 
+latencyP50Ms: number | null, latencyP95Ms: number | null, latencySamples: number,
 /**
  * Session failures observed in the last 60 minutes.
  */
-recentFailures: number, lastFailure: HealthFailure | null, capacity: CapacityState, 
+recentFailures: number, lastFailure: HealthFailure | null, capacity: CapacityState,
 /**
  * Only when the provider reported when to retry. Never estimated.
  */
-backoffUntil: string | null, trend: HealthTrend, recoverability: Recoverability, 
+backoffUntil: string | null, trend: HealthTrend, recoverability: Recoverability,
 /**
  * Stable machine code for the current state, e.g. `signed_out`, `rate_limited`.
  */
-reasonCode: string | null, 
+reasonCode: string | null,
 /**
  * User-safe explanation of the current state.
  */
-reason: string | null, 
+reason: string | null,
 /**
  * When the detection this is based on ran.
  */

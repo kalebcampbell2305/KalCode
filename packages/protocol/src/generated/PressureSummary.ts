@@ -5,11 +5,11 @@ import type { ResourcePressure } from "./ResourcePressure.ts";
 /**
  * Pressure across the governed resources (CPU, memory, disk space).
  */
-export type PressureSummary = { 
+export type PressureSummary = {
 /**
  * Known levels, one entry per governed resource with data, in `ResourceKind` order.
  */
-entries: Array<ResourcePressure>, 
+entries: Array<ResourcePressure>,
 /**
  * Governed resources without data right now (their level is unknown, not `Normal`).
  */

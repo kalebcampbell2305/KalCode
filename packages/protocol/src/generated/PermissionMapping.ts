@@ -5,7 +5,7 @@ import type { PermissionMode } from "./PermissionMode.ts";
 /**
  * How a provider realizes one KalCode permission mode. Adapters never map to broader authority.
  */
-export type PermissionMapping = { mode: PermissionMode, fidelity: MappingFidelity, 
+export type PermissionMapping = { mode: PermissionMode, fidelity: MappingFidelity,
 /**
  * The provider-native setting used, e.g. `--permission-mode plan`.
  */
