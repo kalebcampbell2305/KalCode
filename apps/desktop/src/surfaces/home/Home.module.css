@@ -41,7 +41,7 @@
 
 .eyebrow {
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--color-accent-text);
   font-family: var(--font-label);
   font-size: var(--type-label);
   font-weight: var(--type-label-weight);
@@ -57,6 +57,9 @@
   font-weight: var(--type-display-weight);
   letter-spacing: var(--type-display-tracking);
   line-height: var(--leading-tight);
+  /* Cinematic level: the headline carries a faint electric halo (static; off in high contrast,
+     where --color-glow is transparent). */
+  text-shadow: 0 0 36px color-mix(in srgb, var(--color-glow) 55%, transparent);
 }
 
 .summary {
@@ -315,11 +318,14 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-2);
-  transition: border-color var(--dur-fast) var(--ease-out);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .workspace:hover {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-border-lit-soft);
+  box-shadow: var(--lift-active);
 }
 
 .workspace[data-active] {
@@ -418,6 +424,22 @@
   border-radius: var(--radius-panel, var(--radius-lg));
   background: var(--panel-sheen), var(--color-surface-1);
   box-shadow: var(--shadow-panel);
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+/* A launch step is a mission tile: it lifts toward the person and lights when hovered or focused. */
+.step:hover {
+  border-color: var(--color-border-lit-soft);
+  box-shadow: var(--shadow-panel), var(--lift-active);
+  transform: translateY(-1px);
+}
+
+.step:focus-within {
+  border-color: var(--color-border-lit);
+  box-shadow: var(--glow-active), var(--lift-active);
 }
 
 .step::before {
