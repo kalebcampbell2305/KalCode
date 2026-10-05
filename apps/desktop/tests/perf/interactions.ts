@@ -271,11 +271,17 @@ async function main(): Promise<void> {
       },
       {
         key: "nav.threads",
+        // Threads lives in the sidebar's More menu (#257): open it unmeasured, then time the pick.
         setup: async (p) => {
           await nav(p, "Activity").click();
           await p.getByRole("heading", { level: 1, name: "Activity" }).waitFor();
+          await p
+            .getByRole("navigation", { name: "Primary" })
+            .getByRole("button", { name: /^More places/ })
+            .click();
         },
-        run: (p) => measure(p, heading("Threads"), () => nav(p, "Threads").click()),
+        run: (p) =>
+          measure(p, heading("Threads"), () => p.getByRole("menuitem", { name: "Threads", exact: true }).click()),
       },
       {
         key: "accountHub.open",

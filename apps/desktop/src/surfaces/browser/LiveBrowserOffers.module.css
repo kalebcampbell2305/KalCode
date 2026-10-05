@@ -122,9 +122,15 @@
     transform: scale(1.6);
   }
 }
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .offer,
-  .pulse::after {
+  :root:not([data-motion="full"]) .offer,
+  :root:not([data-motion="full"]) .pulse::after {
     animation: none;
   }
+}
+
+:root[data-motion="reduced"] .offer,
+:root[data-motion="reduced"] .pulse::after {
+  animation: none;
 }

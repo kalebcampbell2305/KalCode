@@ -1,0 +1,32 @@
+[package]
+name = "kalcode-update-helper"
+description = "Post-exit macOS update helper bundled inside the signed KalCode app (swap, relaunch, rollback)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Its own package, so building the helper never compiles the desktop library (it used to be a bin
+# of kalcode-desktop, which recompiled that whole crate under a second TAURI_CONFIG on every macOS
+# release: about 10 of the package's 38 minutes).
+[[bin]]
+name = "kalcode-update-helper"
+path = "src/main.rs"
+
+[dependencies]
+kalcode-updater = { path = "../updater" }
+sha2 = "=0.10.9"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The macOS swap reads the app identity and writes JSON receipts; on other targets only the stub main compiles.
+kalcode-contracts = { path = "../contracts" }
+libc = "0.2"
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -499,7 +499,7 @@ test.describe("scale", () => {
     await page.goto("/?scenario=code");
     // Time the layout restore, not app boot: start once the Code surface is up (boot and the
     // dev server's first compile vary widely on a loaded gate machine).
-    await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
+    await expect(page.locator("#main")).toHaveAttribute("data-surface", "code", { timeout: 30_000 });
     const started = Date.now();
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
     await expect(panes(page)).toHaveCount(24);

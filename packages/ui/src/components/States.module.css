@@ -152,29 +152,43 @@
 
 /* ---------------- Skeleton ---------------- */
 .skeleton {
+  position: relative;
   display: block;
+  overflow: hidden;
   border-radius: var(--radius-xs);
-  background:
-    linear-gradient(90deg, transparent 0%, var(--skeleton-highlight) 40%, transparent 80%) 0 0 / 300% 100%,
-    var(--skeleton-base);
-  animation: shimmer var(--dur-shimmer) linear infinite;
+  background: var(--skeleton-base);
+}
+
+/* The shimmer is a repeating highlight (one tile every 3 widths) on a layer moved with transform,
+   so the compositor runs it instead of repainting a moving background every frame. The background
+   swept 6 widths per cycle at a steady speed; the same picture is 3 widths (one tile) every half
+   cycle, started a third of a tile in, which a 4-width layer covers. */
+.skeleton::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 400%;
+  background: linear-gradient(90deg, transparent 0%, var(--skeleton-highlight) 40%, transparent 80%) 0 0 / 75% 100%;
+  animation: shimmer calc(var(--dur-shimmer) / 2) linear calc(var(--dur-shimmer) / -6) infinite;
 }
 
 @keyframes shimmer {
   from {
-    background-position: 100% 0;
+    transform: translateX(-75%);
   }
   to {
-    background-position: -200% 0;
+    transform: translateX(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .skeleton {
+  :root:not([data-motion="full"]) .skeleton::after {
     animation: none;
   }
 }
 
-:global([data-motion="reduced"]) .skeleton {
+:root[data-motion="reduced"] .skeleton::after {
   animation: none;
 }

@@ -318,9 +318,15 @@
   }
 }
 
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .popover,
-  .meter[data-checking] .meterText {
+  :root:not([data-motion="full"]) .popover,
+  :root:not([data-motion="full"]) .meter[data-checking] .meterText {
     animation: none;
   }
+}
+
+:root[data-motion="reduced"] .popover,
+:root[data-motion="reduced"] .meter[data-checking] .meterText {
+  animation: none;
 }

@@ -52,6 +52,39 @@ export function releaseIdentity({ commit, version, publishedVersion }) {
   return { commit, version, baselineVersion: lower ? publishedVersion : null };
 }
 
+/**
+ * Newest valid build wins (owner rule 2026-10-05, high-concurrency release pipeline). A release job for
+ * `commit` is SUPERSEDED, and must not build or publish, when:
+ *  - main has already advanced to a newer head that contains it (the newest head's job releases every
+ *    change at once: rapid landings coalesce instead of shipping each intermediate build), or
+ *  - Stable already serves an equal or newer build that contains it.
+ * Stable at an equal or newer build WITHOUT this commit is BLOCKED: only a newer exact build can ship it.
+ * Returns null when this job should release. `isAncestor(a, b)` is git's `merge-base --is-ancestor a b`.
+ */
+export function releaseSupersession({ commit, version, mainHead, published, isAncestor }) {
+  if (!SHA40.test(commit)) throw new ReleaseError(`bad commit ${commit}`);
+  if (SHA40.test(mainHead ?? "") && mainHead !== commit && isAncestor(commit, mainHead)) {
+    return {
+      state: "superseded",
+      description: `SUPERSEDED: main advanced to ${mainHead.slice(0, 12)}, whose release includes ${commit.slice(0, 12)}`,
+    };
+  }
+  const order = published?.version ? compareReleaseVersions(published.version, version) : null;
+  if (order !== null && order >= 0) {
+    if (SHA40.test(published.commit ?? "") && (published.commit === commit || isAncestor(commit, published.commit))) {
+      return {
+        state: "superseded",
+        description: `SUPERSEDED: Stable ${published.version} already contains ${commit.slice(0, 12)}`,
+      };
+    }
+    return {
+      state: "blocked",
+      description: `Stable ${published.version} is not older than ${version} and does not contain ${commit.slice(0, 12)}; a newer build is required`,
+    };
+  }
+  return null;
+}
+
 /** The state directory for an identity, under the persistent state root. */
 export function shipStateDir(stateRoot, { version, commit }) {
   return join(stateRoot, `${version}-${commit.slice(0, 12)}`);
@@ -202,6 +235,22 @@ export async function main({ cwd = process.cwd(), env = process.env } = {}) {
     version,
     publishedVersion: status.targets?.desktop?.published?.version ?? null,
   });
+  // Coalesce and never publish over a newer live build: an older job yields to the newest valid one.
+  run("git", ["fetch", "-q", "origin", "main"], { cwd });
+  const mainHead = run("git", ["rev-parse", "origin/main"], { cwd }).output.trim();
+  const superseded = releaseSupersession({
+    commit: head,
+    version: identity.version,
+    mainHead,
+    published: status.targets?.desktop?.published ?? null,
+    isAncestor: (a, b) => run("git", ["merge-base", "--is-ancestor", a, b], { cwd }).code === 0,
+  });
+  if (superseded) {
+    postStatus(head, superseded.state === "blocked" ? "failure" : "success", superseded.description);
+    console.log(superseded.description);
+    return superseded.state === "blocked" ? 1 : 0;
+  }
+
   const stateRoot = env.KALCODE_RELEASE_STATE_ROOT;
   if (!stateRoot) throw new ReleaseError("KALCODE_RELEASE_STATE_ROOT is not set");
   const stateDir = shipStateDir(stateRoot, identity);

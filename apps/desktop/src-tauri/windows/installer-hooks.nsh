@@ -28,14 +28,23 @@ AllowSkipFiles off
   ${EndIf}
 !macroend
 
+; Builds up to 0.1.9+1816 installed kalcode-update-helper.exe (it was a bin of the desktop crate). The helper is
+; macOS-only and is no longer in the Windows payload, so this uninstaller would not know the file: an install updated
+; from one of those builds kept it and uninstall could never empty the folder. Remove it on update and on uninstall.
+!macro KALCODE_REMOVE_RETIRED_FILES
+  Delete "$INSTDIR\kalcode-update-helper.exe"
+!macroend
+
 ; Tauri calls PREINSTALL after SetOutPath has created the destination directory.
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro KALCODE_CANONICAL_INSTALL_PATH
+  !insertmacro KALCODE_REMOVE_RETIRED_FILES
 !macroend
 
 ; Tauri calls PREUNINSTALL before deleting files, protocol registrations, or shortcuts.
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro KALCODE_CANONICAL_INSTALL_PATH
+  !insertmacro KALCODE_REMOVE_RETIRED_FILES
 !macroend
 
 ; KalCode installs a staged same-version build silently (/S /UPDATE, no /R) after the user closes

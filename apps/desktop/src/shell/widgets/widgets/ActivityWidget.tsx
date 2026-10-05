@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { describeEvent, formatAbsolute, formatRelative } from "../../../runtime/describeEvent.ts";
 import { useEvents } from "../../../runtime/RuntimeProvider.tsx";
 import { useThreadSummaries } from "../../../surfaces/dashboard/data/DashboardData.tsx";
-import { useNow } from "../../../surfaces/dashboard/useNow.ts";
+import { useClock } from "../../../surfaces/dashboard/useNow.ts";
 import styles from "./ActivityWidget.module.css";
 
 const VISIBLE_STEP = 25;
@@ -22,7 +22,6 @@ export function ActivityWidget() {
   const threads = useThreadSummaries().state;
   const [visible, setVisible] = useState(VISIBLE_STEP);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const now = useNow();
   const threadNames = useMemo(
     () => new Map(threads.status === "ready" ? threads.data.map((t) => [t.id, t.name]) : []),
     [threads],
@@ -32,6 +31,8 @@ export function ActivityWidget() {
   const feed = useMemo(() => events.filter((e) => e.type !== "notification.created"), [events]);
   const shown = feed.slice(0, visible);
   const canShowMore = visible < feed.length || !reachedStart;
+  // A tick re-renders the feed only when a time it shows changes.
+  const now = useClock((at) => shown.map((event) => formatRelative(event.occurredAt, at)).join("|"));
 
   const showMore = async () => {
     if (visible + VISIBLE_STEP > feed.length && !reachedStart) {
@@ -79,7 +80,9 @@ export function ActivityWidget() {
             <li key={event.seq} className={styles.row}>
               <span className={styles.dot} data-tone={description.tone} aria-hidden="true" />
               <span className={styles.text}>
-                <span className={styles.title}>{description.title}</span>
+                <span className={styles.title} title={description.title}>
+                  {description.title}
+                </span>
                 {threadName ? <span className={styles.thread}>{threadName}</span> : null}
                 {description.detail ? <span className={styles.detail}>{description.detail}</span> : null}
               </span>

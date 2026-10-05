@@ -183,7 +183,7 @@ jobs:
             *) echo "Unsupported macOS host target: $host_target" >&2; exit 1 ;;
           esac
 
-          cargo build --locked --target "$host_target" -p kalcode-desktop --bin kalcode-update-helper
+          cargo build --locked --target "$host_target" -p kalcode-update-helper --bin kalcode-update-helper
           cargo build --locked --target "$host_target" -p kalcode-providers --bin kalcode-provider-guardian
           cargo build --locked --target "$host_target" -p kalcode-hook-bridge --bin kalcode-hook --no-default-features
 

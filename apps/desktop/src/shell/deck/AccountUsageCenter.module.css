@@ -503,15 +503,26 @@
     transform: translateY(0);
   }
 }
+
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .popover,
-  .details,
-  .spinning,
-  .usage[data-checking],
-  .waiting {
+  :root:not([data-motion="full"]) .popover,
+  :root:not([data-motion="full"]) .details,
+  :root:not([data-motion="full"]) .spinning,
+  :root:not([data-motion="full"]) .usage[data-checking],
+  :root:not([data-motion="full"]) .waiting {
     animation: none;
   }
 }
+
+:root[data-motion="reduced"] .popover,
+:root[data-motion="reduced"] .details,
+:root[data-motion="reduced"] .spinning,
+:root[data-motion="reduced"] .usage[data-checking],
+:root[data-motion="reduced"] .waiting {
+  animation: none;
+}
+
 @media (max-width: 1140px) {
   .chip {
     max-width: 175px;

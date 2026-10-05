@@ -3206,6 +3206,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kalcode-update-helper"
+version = "0.0.0"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-updater",
+ "libc",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
 name = "kalcode-updater"
 version = "0.0.0"
 dependencies = [

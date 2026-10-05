@@ -21,6 +21,30 @@ export interface WorktreeStates {
   apply: (state: ThreadWorktreeState) => void;
 }
 
+/** A read's `observedAt` moves every time; the cards never show it. */
+function sameFacts(a: ThreadWorktreeState, b: ThreadWorktreeState): boolean {
+  return JSON.stringify({ ...a, observedAt: "" }) === JSON.stringify({ ...b, observedAt: "" });
+}
+
+/**
+ * The new read, keeping each unchanged agent's previous facts (and the map itself when nothing
+ * changed), so a quiet 10 s read re-renders neither the board nor any card.
+ */
+export function keepUnchanged(
+  current: Map<string, ThreadWorktreeState>,
+  list: readonly ThreadWorktreeState[],
+): Map<string, ThreadWorktreeState> {
+  let changed = current.size !== list.length;
+  const next = new Map<string, ThreadWorktreeState>();
+  for (const state of list) {
+    const before = current.get(state.threadId);
+    const same = before !== undefined && sameFacts(before, state);
+    next.set(state.threadId, same ? before : state);
+    if (!same) changed = true;
+  }
+  return changed ? next : current;
+}
+
 export function useWorktreeStates(threads: readonly ThreadSummary[] | null): WorktreeStates {
   const { client } = useRuntime();
   const { events } = useEvents();
@@ -60,7 +84,7 @@ export function useWorktreeStates(threads: readonly ThreadSummary[] | null): Wor
         .threadWorktreeStates(ids)
         .then(
           (list) => {
-            if (!disposed) setStates(new Map(list.map((s) => [s.threadId, s])));
+            if (!disposed) setStates((current) => keepUnchanged(current, list));
           },
           () => {
             // Keep the last observed facts; cards say "Checking the worktree…" until the first read.

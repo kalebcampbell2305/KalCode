@@ -8,5 +8,8 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     css: { modules: { classNameStrategy: "non-scoped" } },
+    // jsdom + axe renders can exceed vitest's 5 s default on a slower gate machine (the second-PC gate
+    // timed out DesignSystem/DiffView/DropdownMenu at 5 s); a real hang still fails.
+    testTimeout: 30_000,
   },
 });

@@ -12,15 +12,15 @@ default-run = "kalcode"
 
 [lib]
 name = "kalcode_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop only: the `kalcode` binary links the rlib. The Tauri template's staticlib/cdylib exist for
+# mobile builds (there is no mobile project); under release `lto = true` + `codegen-units = 1` the
+# cdylib cost a second full fat-LTO link and the staticlib a whole-dependency archive on every
+# release build. Add them back only when a mobile target exists.
+crate-type = ["rlib"]
 
 [[bin]]
 name = "kalcode"
 path = "src/main.rs"
-
-[[bin]]
-name = "kalcode-update-helper"
-path = "src/bin/kalcode-update-helper.rs"
 
 [build-dependencies]
 serde_json.workspace = true

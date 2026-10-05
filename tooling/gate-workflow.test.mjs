@@ -4,10 +4,14 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/gate.yml", import.meta.url), "utf8");
-const windows = workflow.split("\n  macos:")[0];
+// Two Windows jobs test the same SHA: the build PC's pool ("windows") and the second PC ("pc2").
+const windows = workflow.split("\n  pc2:")[0];
+const pc2Job = workflow.split("\n  pc2:")[1].split("\n  macos:")[0];
 const steps = windows.split(/\n {6}- /).slice(1);
+const pc2Steps = pc2Job.split(/\n {6}- /).slice(1);
 function script(step) {
   const block = step.split("\n        run: |\n")[1];
   if (block)
@@ -63,6 +67,14 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
       labels: ["self-hosted", "Windows", "kalcode-gate", "kalcode-main-pc"],
       steps: [{ name: "Gate", conclusion: "success" }],
     },
+    pc2: {
+      name: "Gate (Windows, PC2)",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-2",
+      labels: ["self-hosted", "Windows", "kalcode-gate-pc2"],
+      steps: [{ name: "Gate", conclusion: "success" }],
+    },
   };
   const cases = [
     ["exact", {}, true],
@@ -72,9 +84,19 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
     ["missing-host-label", { job: { labels: ["self-hosted", "Windows", "kalcode-gate"] } }, false],
     ["skipped-check", { job: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
     ["cancelled-run", { run: { conclusion: "cancelled" } }, false],
+    // A split gate needs the second PC's half green too; a legacy run without it keeps single-job reuse.
+    ["split-both-green", { pc2: {} }, true],
+    ["split-pc2-red", { pc2: { conclusion: "failure" } }, false],
+    ["split-pc2-wrong-runner", { pc2: { runner_name: "kalcode-win-gate-w1" } }, false],
+    ["split-pc2-other-sha", { pc2: { head_sha: "b".repeat(40) } }, false],
+    ["split-pc2-skipped-check", { pc2: { steps: [{ name: "Gate", conclusion: "skipped" }] } }, false],
   ];
   for (const [name, patch, expected] of cases) {
-    const fixture = { run: { ...baseline.run, ...patch.run }, job: { ...baseline.job, ...patch.job } };
+    const fixture = {
+      run: { ...baseline.run, ...patch.run },
+      job: { ...baseline.job, ...patch.job },
+      pc2: patch.pc2 === undefined ? null : { ...baseline.pc2, ...patch.pc2 },
+    };
     const output = join(root, `${name}.out`);
     const path = join(root, `${name}.ps1`);
     writeFileSync(output, "");
@@ -83,7 +105,7 @@ test("main reuses only an exact successful candidate on a trusted pool worker", 
       `$fixture = '${JSON.stringify(fixture).replaceAll("'", "''")}' | ConvertFrom-Json
 function Invoke-RestMethod {
   param($Headers, $Uri)
-  if ($Uri -match '/jobs\\?filter=latest&per_page=100$') { return @{ jobs = @($fixture.job) } }
+  if ($Uri -match '/jobs\\?filter=latest&per_page=100$') { return @{ jobs = @(@($fixture.job) + @($fixture.pc2 | Where-Object { $_ })) } }
   if ($Uri -match '/runs\\?head_sha=') { return @{ workflow_runs = @($fixture.run) } }
   throw 'Unexpected evidence API request'
 }
@@ -137,4 +159,140 @@ test("selected-check outputs use Actions-compatible bytes on Windows PowerShell"
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.equal(readFileSync(output, "utf8").trim().replaceAll("\r\n", "\n"), expected);
   }
+});
+
+test("checkout keeps the warm target: clean:false, exact-SHA reset, orphans stopped before and after", () => {
+  const names = steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? step.split("\n")[0]);
+  const checkout = steps.findIndex((step) => step.startsWith("uses: actions/checkout@"));
+  const before = names.indexOf("Stop this worker's orphaned processes");
+  const reset = names.indexOf("Reset to the exact event SHA, keeping warm caches");
+  const plan = names.indexOf("Plan change-based gate");
+  const after = names.indexOf("Stop processes this job left behind");
+  // Gate 37362947496: checkout's git clean -ffdx failed on DLLs an orphan held in the warm target.
+  assert.match(steps[checkout], /^ {10}clean: false$/m);
+  assert.ok(before >= 0 && before < checkout, "orphans stop before checkout");
+  assert.ok(checkout < reset && reset < plan, "the exact-SHA reset runs before any check is planned");
+  assert.equal(after, steps.length - 1, "the post-job orphan stop is the last step");
+  assert.match(steps[after], /^ {8}if: always\(\)$/m);
+  assert.match(script(steps[reset]), /gate-workspace-hygiene\.ps1 -Phase Reset/);
+  assert.match(script(steps[after]), /gate-workspace-hygiene\.ps1 -Phase Stop/);
+  // The inline pre-checkout stop is scoped to this worker's _work and never stops the live job.
+  const inline = script(steps[before]);
+  assert.match(inline, /RUNNER_WORKSPACE/);
+  assert.match(inline, /_work/);
+  assert.match(inline, /Runner\\.\(Worker\|Listener\)/);
+  assert.match(inline, /taskkill\.exe \/T \/F/);
+  const hygiene = readFileSync(new URL("../.github/scripts/gate-workspace-hygiene.ps1", import.meta.url), "utf8");
+  assert.match(hygiene, /git reset --hard --quiet \$env:GITHUB_SHA/);
+  assert.match(hygiene, /git clean -ffdxq -e target\/ -e node_modules\//);
+  assert.match(hygiene, /Checkout does not match the immutable event SHA/);
+  assert.match(hygiene, /gate-evidence\.json/);
+});
+
+test("the workspace hygiene script parses and refuses a non-_work root", { skip: process.platform !== "win32" }, () => {
+  const path = new URL("../.github/scripts/gate-workspace-hygiene.ps1", import.meta.url);
+  const parse = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      `$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('${decodeURIComponent(path.pathname.slice(1)).replaceAll("/", "\\")}',[ref]$null,[ref]$e); if ($e) { $e | Out-String; exit 1 }`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  assert.equal(parse.status, 0, parse.stdout + parse.stderr);
+  const dir = mkdtempSync(join(tmpdir(), "kc-hygiene-"));
+  const refused = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", decodeURIComponent(path.pathname.slice(1)), "-Phase", "Stop"],
+    { encoding: "utf8", windowsHide: true, env: { ...process.env, RUNNER_WORKSPACE: join(dir, "repo") } },
+  );
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stdout + refused.stderr, /Refusing to clean outside a runner _work directory/);
+});
+
+test("both halves reuse with the identical evidence rule", () => {
+  const reuse = (list) => script(list.find((step) => step.startsWith("name: Reuse the merge-train")));
+  assert.ok(reuse(steps));
+  assert.equal(reuse(pc2Steps), reuse(steps));
+});
+
+test("the second PC's half is self-contained and gates the same exact candidate", () => {
+  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? step.split("\n")[0]);
+  assert.match(pc2Job, /^ {4}name: Gate \(Windows, PC2\)$/m);
+  assert.match(pc2Job, /^ {4}runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]$/m);
+  assert.match(pc2Job, /head\.repo\.full_name == github\.repository/, "fork guard");
+  assert.match(pc2Job, /persist-credentials: false/);
+  assert.match(pc2Job, /clean: false/);
+  assert.doesNotMatch(pc2Job, /KalCodeGatePool|Assert-GateWorkerHost|gate-worker-hook|kalcode-main-pc\]/);
+  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
+  assert.match(plan, /RUNNER_NAME -ne 'kalcode-win-gate-2'/);
+  assert.match(plan, /trailers:key=Merge-Train-Base,valueonly/);
+  assert.match(plan, /Checkout does not match the immutable event SHA/);
+  assert.match(plan, /gate-split\.mjs pc2/);
+  for (const port of ["4691", "4692", "9701", "1791", "39333"]) assert.ok(plan.includes(port), `fixed port ${port}`);
+  const gate = script(pc2Steps[names.indexOf("Gate")]);
+  assert.match(gate, /BelowNormal/);
+  assert.match(gate, /--only \$env:KALCODE_GATE_ONLY/);
+  assert.match(gate, /nothing selected for the second PC/);
+  assert.equal(names.indexOf("Stop this worker's orphaned processes"), 1);
+  assert.equal(names.at(-1), "Stop processes this job left behind");
+  assert.ok(
+    names.indexOf("Reset to the exact event SHA, keeping warm caches") < names.indexOf("Plan change-based gate"),
+  );
+});
+
+test("the second PC's plan outputs pick Python and browsers for its own checks", {
+  skip: process.platform !== "win32",
+}, () => {
+  const names = pc2Steps.map((step) => step.match(/^name: (.+)$/m)?.[1] ?? "");
+  const plan = script(pc2Steps[names.indexOf("Plan change-based gate")]);
+  const outputs = plan.split("\n").filter((line) => line.includes("$env:GITHUB_OUTPUT"));
+  assert.equal(outputs.length, 2);
+  const root = mkdtempSync(join(tmpdir(), "kalcode-gate-pc2-output-"));
+  for (const [name, ids, expected] of [
+    ["tooling", ["tooling-unit"], "python=true\nbrowsers=false"],
+    ["website", ["website-e2e"], "python=false\nbrowsers=true"],
+    ["none", [], "python=false\nbrowsers=false"],
+  ]) {
+    const output = join(root, name);
+    writeFileSync(output, "");
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-Command", `$ids = @(${ids.map((id) => `'${id}'`).join(",")})\n${outputs.join("\n")}`],
+      { encoding: "utf8", windowsHide: true, env: { ...process.env, GITHUB_OUTPUT: output } },
+    );
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(readFileSync(output, "utf8").trim().replaceAll("\r\n", "\n"), expected);
+  }
+});
+
+test("the gate split runs every selected check exactly once across the two PCs", async () => {
+  const { PC2_GATES, splitGateIds } = await import("./release/lifecycle/gate-split.mjs");
+  const policy = JSON.parse(readFileSync(new URL("./release/lifecycle/policy.json", import.meta.url), "utf8"));
+  const all = policy.gates.map((gate) => gate.id);
+  for (const id of PC2_GATES) assert.ok(all.includes(id), `${id} is a real gate`);
+  const { main, pc2 } = splitGateIds(all);
+  assert.deepEqual([...main, ...pc2].sort(), [...all].sort());
+  assert.equal(new Set([...main, ...pc2]).size, all.length);
+  // Native checks need the build PC's warm Cargo targets, CMake/libclang and provider CLIs.
+  for (const id of ["rust", "desktop-frontend", "desktop-ui", "desktop-native-e2e", "cargo-deny", "cargo-audit"])
+    assert.ok(main.includes(id), `${id} stays on the build PC`);
+  assert.deepEqual(
+    splitGateIds(["a-check-added-later"]).main,
+    ["a-check-added-later"],
+    "new checks default to the build PC",
+  );
+  assert.deepEqual(splitGateIds([]), { main: [], pc2: [] });
+  const cli = (machine, ids) =>
+    spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("./release/lifecycle/gate-split.mjs", import.meta.url)), machine, ids],
+      {
+        encoding: "utf8",
+      },
+    ).stdout;
+  assert.equal(cli("main", "biome,rust,website-e2e"), "rust");
+  assert.equal(cli("pc2", "biome,rust,website-e2e"), "biome,website-e2e");
+  assert.equal(cli("pc2", ""), "");
 });

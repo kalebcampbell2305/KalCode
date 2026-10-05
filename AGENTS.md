@@ -567,43 +567,54 @@ Owner wording (2026-10-05):
 - This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.
 - Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
 
-## Permanent parallel integration rule: the shared merge train (owner directive 2026-10-04)
+## Permanent high-concurrency merge + release architecture: lanes on the shared merge train (owner directive 2026-10-05; replaces the 2026-10-04 single-queue wording)
 
-> "KALCODE USES PARALLEL INTEGRATION. Any coding agent may finish and submit work for merge. Ready changes prepare, rebase, validate and form merge groups in parallel. Only the final atomic update to main is serialized. Compatible PRs are batched against the same main snapshot. One conflicting PR must not block unrelated completed work. Claude Code and Codex use the same merge queue. No agent may bypass it. Test the actual merge candidate, land it quickly, then ship immediately."
+> "KALCODE USES A HIGH-CONCURRENCY INTEGRATION AND RELEASE PIPELINE.
+> ONE GLOBAL MERGE QUEUE OR ONE GLOBAL SHIPPER MUST NEVER BECOME A BOTTLENECK.
+> READY CHANGES PREPARE IN PARALLEL THROUGH MULTIPLE INTEGRATION LANES.
+> COMPATIBLE CHANGES ARE BATCHED INTO EXACT MERGE CANDIDATES.
+> MULTIPLE GATE WORKERS VALIDATE CANDIDATES CONCURRENTLY.
+> ONLY THE FINAL ATOMIC UPDATE TO MAIN IS SERIALIZED, AND THAT LOCK MUST BE EXTREMELY SHORT.
+> AFTER MERGE, MULTIPLE RELEASE JOBS MAY PREPARE CONCURRENTLY.
+> ONLY THE FINAL SHARED PRODUCTION POINTER/FEED MUTATION IS SERIALIZED.
+> NEWEST VALID BUILD WINS.
+> STALE WORK IS CANCELLED OR SUPERSEDED.
+> CONFLICTS BLOCK ONLY THE CONFLICTING CHANGE SET.
+> THE PIPELINE MUST BE DESIGNED FOR 6+ CODING AGENTS FINISHING WORK CONCURRENTLY.
+> THE GOAL IS MINIMUM TIME FROM AGENT FINISHED TO USERS RECEIVING THE FEATURE, WITHOUT LOWERING CORRECTNESS."
 
-This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` branches and every other direct update of `main`. Every Claude Code and Codex session uses the same tool, `tooling/merge-train/train.mjs`; main changes only through it.
+This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` branches and every other direct update of `main`. Claude Code and Codex use the same tool, `tooling/merge-train/train.mjs`; main changes only through it.
 
-**1. Submit, never merge.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), queue it:
+**1. Submit, never merge.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), run `node tooling/merge-train/train.mjs submit <pr>` (adds the `merge-queue` label). Never run `gh pr merge` or push to `main`. A PreToolUse merge guard (`tooling/release/lifecycle/merge-guard.mjs`, `.claude/settings.json`) and `.codex/rules/merge-train.rules` refuse both.
 
-- `node tooling/merge-train/train.mjs submit <pr>` adds the `merge-queue` label. The queue is the open, non-draft, same-repository PRs carrying that label, in the order it was added. Never run `gh pr merge` and never push to `main`.
-- Then drive the train yourself; any agent may, at any time, concurrently with others: `node tooling/merge-train/train.mjs run`. Nobody waits for a designated merger.
-- A PreToolUse merge guard (`tooling/release/lifecycle/merge-guard.mjs`, wired in `.claude/settings.json`) and the Codex rules `.codex/rules/merge-train.rules` refuse `gh pr merge` and direct pushes to `main`, pointing at `submit`.
+**2. One coordinator, many lanes.** `node tooling/merge-train/train.mjs run` is the coordinator. It takes a lease (`target/lanes/coordinator.lock`, pid + heartbeat); a second `run` on the machine exits with "coordinator already running" instead of racing. Never leave a competing `run` loop in the background.
+- `plan [--json]` partitions the queued PRs into independent **lanes** on one captured main SHA. PRs share a lane when one stacks on the other, they share a risky zone (CI workflows, lockfiles, migrations, generated protocol, agent state/runtime, provider sessions, the Resource Governor, merge/runner tooling), or `git merge-tree` reports a real conflict between their heads. Everything else is independent.
+- `build` builds every lane at once as **stacked exact candidates**: level 1 = main + lane 1, level 2 = level 1 + lane 2, and so on, each pushed as `merge-train/<base12>-<id>`. All levels gate concurrently on the gate pool. A conflicting PR is skipped (told the files and why) and blocks nothing else.
+- **Land** fast-forwards main to the deepest green level: compatible lanes batch into one main update, and the levels below it are SUPERSEDED (gate cancelled, branch deleted). When a lower level lands first, the deeper levels still fast-forward later on their exact gated trees, because main is on their first-parent chain. No re-gate is needed.
+- **Red gates stay in their lane.** A red level whose lower levels are green is attributed to its own lane: a single PR is ejected with a comment; a multi-PR lane is bisected. Levels built on it are superseded; other lanes continue.
+- **Exact-candidate only.** Land requires a successful Gate (Windows) for the exact candidate push on a main-PC pool worker, unchanged queued PR heads, and main still on the candidate's chain (`--force-with-lease`). One exception, re-verified at landing: when main moved only by release records (`apps/website/src/data/releases.json`, `docs/releases/**`) or paths gate.yml never gates, a lane that touches none of the website/release-note inputs may land its rebuilt candidate on the identical stack's green gate.
+- **Mechanical conflicts only.** The registered `release-record` resolver settles a `releases.json` conflict by taking the side with the higher `latest.version` build, and refuses if either side changed anything else. Semantic conflicts go to the owning agent.
+- **Tiny main lock.** Only the `git push` to main runs under `target/lanes/main-update.lock`, and the time it is held is logged in ms. Nothing else (fetches, gate queries, tests) runs under it. Never re-push a candidate whose base is no longer main.
+- `status [--json]` reports every PR as READY FOR INTEGRATION / MERGE GROUP / GATING / GREEN / FAILED / LANDING / MERGED / SUPERSEDED, with queue wait, conflict wait, gate and time-to-land timings.
 
-**2. What the train does.** `run` repeats build → gate → land until the queue is empty:
+**3. No PR-specific bypass.** `land --pr` is disabled.
 
-- **build** fetches main once (the snapshot BASE) and merges every queued PR head onto it with `--no-ff` merge commits (PR commits are kept, so GitHub marks each PR merged when it lands). It pushes the result as `merge-train/<base12>-<id>`. A PR that conflicts is skipped and told why: the files, and whether it conflicts with main (rebase it) or with PRs ahead of it (it retries on the next train). It never blocks the others. Two agents building at once on the same BASE get the same candidate; the branch is created atomically and the loser reuses it.
-- **gate**: `gate.yml` runs "Gate (Windows)" on the exact candidate commit, against the BASE recorded in its `Merge-Train-Base` trailer, with `--keep-going`. A docs-only train still gates, but the gate selects no heavy stages for it.
-- **land** fast-forwards main to the candidate only if Gate (Windows) executed successfully for that exact candidate push on the main Windows PC, every included PR head is unchanged and still queued, and main is still BASE (`--force-with-lease`, held under the short local `target/lanes/main-update.lock`). If main moved or a PR changed, `run` rebuilds on the new main automatically. A failed gate is bisected; a PR that fails alone is removed from the queue with a comment linking the failing gate.
-- `node tooling/merge-train/train.mjs status` shows the queue, the candidates and their gate state. `build` and `land <merge-train/branch>` run single steps.
+**4. After landing, ship.** `land` comments "Landed in main <sha>" on each PR, removes the label, appends `LANDED <sha> SHIP` to `target/lanes/merge-log.md` and prints `SHIP <sha>` with the release-kit command (`tooling/merge-train/on-landed.mjs`). Start that release immediately. If a landed change breaks main, fixing it is the lander's top priority.
 
-**3. No PR-specific bypass.** `land --pr` is disabled. Submit every ready PR to the same queue and gate its exact candidate, including compatible queued changes.
+**5. Announce shared hot spots.** Before submitting changes to KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater, send a one-line SendMessage to the live sessions (ListAgents). Never force-push, rebase or merge another session's branch without asking that session.
 
-**4. After landing, ship.** `land` comments "Landed in main <sha>" on each PR, removes the label, appends `LANDED <sha> SHIP` to `target/lanes/merge-log.md`, and prints `SHIP <sha>` with the release-kit start command (`tooling/merge-train/on-landed.mjs`). Start that release immediately (multi-shipper rule). Main stays green: if a landed change breaks main, fixing it is the lander's top priority.
-
-**5. Gate on the owner's main Windows PC (64 GB).** The train runs one candidate gate for compatible queued PRs. Never route gates or QA to the second Windows PC. The normal main push workflow may run again after landing; it does not replace the candidate's required evidence. Cancel gate runs for superseded branches. Docs-only PRs skip the PR gate (Markdown, `docs/**` except `docs/releases/**`, `marketing/**`).
-
-**6. Announce shared hot spots.** Before submitting changes to KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater, send a one-line SendMessage to the live sessions (ListAgents). Never force-push, rebase or merge another session's branch without asking that session.
-
-**7. Release jobs run in parallel; one website deploy at a time** (shared Worker); landing never waits for either.
-- **Release.** Follow the multi-shipper rule. Any session starts a release job for the landed commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
-- **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
-- **Takeover.** If a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take the lock over. A stalled older release job is superseded by any newer build that ships, never waited on.
+**6. Releases run in parallel; only the production pointer is serialized.**
+- Any landed build may start its own release job. Windows and macOS prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check.
+- **Newest valid build wins.** An older job never overwrites a newer live build; a stalled older job is SUPERSEDED by any newer build that ships. Coalesce rapid landings opportunistically, with no fixed delay.
+- **Website:** claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, release the lock.
+- **Takeover:** if a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take it over.
+- **DONE** means the user restarts KalCode and receives the feature.
 
 ## Permanent parallel gate worker pool rule (owner directive 2026-10-04)
 
 > "KALCODE USES A PARALLEL GATE WORKER POOL. MULTIPLE READY CHANGES SHOULD VALIDATE CONCURRENTLY. GATES ARE CHANGE-BASED, NOT GIANT GENERIC CHECKLISTS. INDEPENDENT CHECKS RUN IN PARALLEL. A FAILURE IN ONE CHANGE MUST NOT BLOCK UNRELATED READY WORK. GATE RESULTS ARE TIED TO THE EXACT MERGE CANDIDATE. STALE GATES ARE CANCELLED. STILL-VALID EVIDENCE IS REUSED. ONCE THE REQUIRED GATES PASS, AUTO-MERGE AND AUTO-SHIP IMMEDIATELY. THE PURPOSE OF GATES IS TO PROVE CORRECTNESS QUICKLY, NOT TO CREATE A BOTTLENECK."
 
-- **No single gate owner.** The pool is the `kalcode-gate` runners on the main 64 GB Windows PC: `kalcode-win-gate` plus the workers `kalcode-win-gate-w1`…`-w5`, added by `tooling/runners/windows/add-gate-workers.ps1` (one elevated run; see `tooling/runners/README.md`). Claude Code and Codex submit to the same pool through PRs and the merge train. Never validate and merge privately.
+- **No single gate owner.** The pool (lanes gate their stacked levels on it concurrently) is the `kalcode-gate` runners on the main 64 GB Windows PC: `kalcode-win-gate` plus the workers `kalcode-win-gate-w1`…`-w5`, added by `tooling/runners/windows/add-gate-workers.ps1` (one elevated run; see `tooling/runners/README.md`). Claude Code and Codex submit to the same pool through PRs and the merge train. Never validate and merge privately.
 - **Isolation and priority.** Six main-PC slots use separate worker accounts, homes, checkouts, caches and ports. The canonical `KALCODE_GATE_SLOT` is 0 for the original runner and 1-5 for added workers. Gates run below normal priority. At most three Rust gate jobs hold machine-wide tokens and start with at least 10 GiB free memory; they never bypass admission after a timeout. Optional gates yield under CPU/RAM/disk pressure before the UI or user coding agents slow down. These background limits never cap user agents.
 - **Change-based and parallel inside.** `node tooling/release/ship.mjs gate --base <base>` selects checks from the diff. Independent checks run concurrently with `KALCODE_GATE_JOBS=2` per CI worker. Shared build resources and dependent checks remain ordered. During an active main-PC gate, agents must not launch long local full Cargo, Playwright, Vitest or ship-gate suites; focused single-file checks are allowed.
 - **Exact evidence, reused when still valid.** Train evidence is a passing Gate step for the exact candidate push on a verified main-PC worker. Per-check reuse binds source inputs, commands, policy, environment and toolchain; revision-sensitive checks also bind the commit. Changed or unknown inputs invalidate reuse. Live audits always run. A main push of the identical landed candidate reuses its verified green gate.
