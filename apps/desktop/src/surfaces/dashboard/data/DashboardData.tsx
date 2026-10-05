@@ -421,6 +421,23 @@ export function useOptionalAllCodingAgents(): readonly ThreadSummary[] | null {
   }, [value]);
 }
 
+/**
+ * Every thread, open and archived, from the shared `thread_list` read when a Dashboard data
+ * provider is mounted (the Shell mounts one): null until it loads, undefined without a
+ * provider. Lets other views reuse this read instead of repeating it on every thread event.
+ */
+export function useOptionalAllThreads(): readonly ThreadSummary[] | null | undefined {
+  const value = useContext(DashboardDataContext);
+  const open = value?.threads.state;
+  const archived = value?.archived.state;
+  const provided = value !== null;
+  return useMemo(() => {
+    if (!provided) return undefined;
+    if (open?.status !== "ready") return null;
+    return archived?.status === "ready" ? [...open.data, ...archived.data] : open.data;
+  }, [provided, open, archived]);
+}
+
 /** Archived coding agents, retaining their persisted task or manual names. */
 export function useArchivedCodingAgents() {
   const archived = useArchivedThreads();

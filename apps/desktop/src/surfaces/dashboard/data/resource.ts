@@ -47,7 +47,15 @@ export function useResource<T>(load: () => Promise<T>, version: number): Resourc
     load().then(
       (data) => {
         if (id !== requestId.current) return;
-        setState({ status: "ready", data, error: null });
+        // A refresh that changed nothing keeps the state (and unchanged records keep their
+        // identity), so consumers such as the Fleet's cards re-render only for what changed.
+        setState((current) => {
+          if (current.status !== "ready") return { status: "ready", data, error: null };
+          const merged = reuseRecords(current.data, data);
+          return merged === current.data && current.error === null
+            ? current
+            : { status: "ready", data: merged, error: null };
+        });
       },
       (raw: unknown) => {
         if (id !== requestId.current) return;
@@ -80,6 +88,23 @@ export function useResource<T>(load: () => Promise<T>, version: number): Resourc
   );
 
   return useMemo(() => ({ state, reload, update }), [state, reload, update]);
+}
+
+const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/** `next`, reusing equal records of `previous` (by `id` in lists), and `previous` itself when equal. */
+function reuseRecords<T>(previous: T, next: T): T {
+  if (!Array.isArray(previous) || !Array.isArray(next)) return same(previous, next) ? previous : next;
+  const byId = new Map<unknown, unknown>();
+  for (const item of previous) if (item && typeof item === "object" && "id" in item) byId.set(item.id, item);
+  let unchanged = previous.length === next.length;
+  const merged = next.map((item: unknown, i) => {
+    const before = item && typeof item === "object" && "id" in item ? byId.get(item.id) : undefined;
+    const kept = before !== undefined && same(before, item) ? before : item;
+    if (kept !== previous[i]) unchanged = false;
+    return kept;
+  });
+  return (unchanged ? previous : merged) as T;
 }
 
 export function readyData<T>(state: ResourceState<T>): T | null {
