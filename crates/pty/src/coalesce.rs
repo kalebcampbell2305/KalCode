@@ -161,8 +161,11 @@ impl OutputCoalescer {
 impl Drop for OutputCoalescer {
     fn drop(&mut self) {
         // The listener holding this coalescer was released (detach, lag, or the end of the
-        // output): hand over what is buffered instead of waiting for the timer.
-        let _ = self.inner.deliver(false);
+        // output): hand over what is buffered instead of waiting for the timer. A coalescer that
+        // never delivered was never attached (no session to show), so it sends nothing at all.
+        if lock(&self.inner.state).started {
+            let _ = self.inner.deliver(false);
+        }
     }
 }
 

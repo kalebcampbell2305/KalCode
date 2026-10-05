@@ -115,6 +115,15 @@ fn dropping_the_coalescer_delivers_what_it_still_buffers() {
 }
 
 #[test]
+fn a_coalescer_that_never_delivered_sends_nothing_when_dropped() {
+    // `attach` found no session: the listener is dropped without ever being called, and the
+    // view must not receive a stray empty "replay" after the command already returned null.
+    let (coalescer, rx) = recording(config(8, 1 << 20));
+    drop(coalescer);
+    assert!(drain(&rx).is_empty());
+}
+
+#[test]
 fn a_refusing_sink_detaches_the_listener() {
     let open = Arc::new(AtomicBool::new(true));
     let gate = open.clone();
