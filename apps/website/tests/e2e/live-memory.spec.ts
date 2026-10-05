@@ -1,6 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
+/** Unified Memory lives in the sidebar's More menu (desktop) or the tab bar (phone). */
+async function openMemory(app: import("@playwright/test").Locator) {
+  const more = app.getByRole("navigation", { name: "KalCode" }).getByRole("button", { name: "More" });
+  if (await more.isVisible()) await more.click();
+  await app.locator('[data-do="go:memory"]').first().click();
+}
+
 for (const width of [1440, 390]) {
   test(`Unified Memory demo edits temporary project context at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
@@ -13,7 +20,7 @@ for (const width of [1440, 390]) {
       .click();
     await expect(page.locator("[data-live]")).toHaveAttribute("data-live", "ready");
     const app = page.locator("[data-live-app]");
-    await app.locator('[data-do="go:memory"]').click();
+    await openMemory(app);
     const memory = app.getByRole("region", { name: "Unified Memory", exact: true });
     await expect(memory).toContainText("Fictional sample notes");
     await expect(memory.getByRole("article", { name: "Memory details" })).toContainText("Dashboard.tsx");
@@ -46,7 +53,7 @@ for (const width of [1440, 390]) {
     await memory.getByRole("button", { name: "Save memory", exact: true }).click();
     await expect(memory.getByRole("article")).toContainText("Keep releases small");
     await page.getByRole("button", { name: "Reset demo", exact: true }).click();
-    await app.locator('[data-do="go:memory"]').click();
+    await openMemory(app);
     await expect(memory).not.toContainText("Keep releases small");
     await expect(memory.getByRole("article")).toContainText("main dashboard shell");
     await memory.getByRole("combobox", { name: "Filter memory category" }).selectOption("decisions");
