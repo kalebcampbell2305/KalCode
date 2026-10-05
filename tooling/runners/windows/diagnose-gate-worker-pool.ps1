@@ -53,6 +53,18 @@ function Assert-Plain([string]$Path) {
         if ($parent -eq $cursor) { break }; $cursor=$parent
     }
 }
+function Assert-DiagnosticSourceInventory($Sources) {
+    $required=@('setup-gate-worker-pool.ps1','gate-worker-pool.psm1','gate-worker-hook.ps1','test-gate-worker-pool.ps1')
+    $allowed=$required+@('gate-worker-job-hook.js')
+    if ($Sources.Count -notin @(4,5)) { throw 'source_inventory_invalid' }
+    $seen=@{}
+    foreach ($source in $Sources) {
+        $name=[IO.Path]::GetFileName($source.Path)
+        if ($name -cnotin $allowed -or $seen.ContainsKey($name) -or $source.Hash -notmatch '^[a-fA-F0-9]{64}$') { throw 'source_inventory_invalid' }
+        $seen[$name]=$true
+    }
+    foreach ($name in $required) { if (-not $seen.ContainsKey($name)) { throw 'source_inventory_invalid' } }
+}
 $reportDirectory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Report))
 if ($reportDirectory -ne [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($InstallReceipt)) -or [IO.Path]::GetExtension($Report) -ne '.json') { throw 'Report must be a new JSON beside the installation receipt.' }
 Assert-Plain $Report
@@ -84,11 +96,9 @@ try {
         }
         $result.phase='sources'
         $sources=Get-Content -LiteralPath $SourceManifest -Raw | ConvertFrom-Json
-        $allowed=@('setup-gate-worker-pool.ps1','gate-worker-pool.psm1','gate-worker-hook.ps1','test-gate-worker-pool.ps1')
-        if ($sources.Count -ne 4) { throw 'source_inventory_invalid' }
+        Assert-DiagnosticSourceInventory $sources
         foreach ($source in $sources) {
             $name=[IO.Path]::GetFileName($source.Path)
-            if ($name -notin $allowed -or $source.Hash -notmatch '^[a-fA-F0-9]{64}$') { throw 'source_inventory_invalid' }
             $path=Join-Path $stage $name; Assert-Plain $path
             $result.sources += @{name=$name;stagedMatches=((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq $source.Hash)}
         }
