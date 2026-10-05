@@ -57,7 +57,7 @@ test("message search opt-out is immediate and survives restart", async () => {
       PATH: `${bin};${process.env.PATH ?? ""}`,
     });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await invoke(page, "workspace_open_dialog");
 
     // Safety gate: native detection found the fakes, not a real install.

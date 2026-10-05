@@ -211,6 +211,11 @@ pub fn add(git: &Git, repo: &Repo, path: &Path, start: &WorktreeStart) -> Result
 /// Counts uncommitted changes in a worktree (ignored files are not counted: git removes them
 /// with the worktree, which is why [`RemoveMode::Safe`] documents it).
 pub fn dirty_state(git: &Git, repo: &Repo, path: &Path) -> Result<DirtyState> {
+    Ok(worktree_status(git, repo, path)?.0)
+}
+
+/// [`dirty_state`] plus the repository-relative files behind it (a rename lists both names).
+fn worktree_status(git: &Git, repo: &Repo, path: &Path) -> Result<(DirtyState, Vec<String>)> {
     let out = git
         .cmd()
         .configs(repo.overrides().iter().cloned())
@@ -226,10 +231,69 @@ pub fn dirty_state(git: &Git, repo: &Repo, path: &Path) -> Result<DirtyState> {
         .run_ok("worktree")?;
     let status = crate::status::parse_porcelain_v2(&out.stdout);
     let untracked = status.entries.iter().filter(|e| e.untracked).count();
-    Ok(DirtyState {
+    let dirty = DirtyState {
         changed: u32::try_from(status.entries.len() - untracked).unwrap_or(u32::MAX),
         untracked: u32::try_from(untracked).unwrap_or(u32::MAX),
-    })
+    };
+    let paths = status
+        .entries
+        .into_iter()
+        .flat_map(|e| std::iter::once(e.path).chain(e.orig_path))
+        .collect();
+    Ok((dirty, paths))
+}
+
+/// The most files [`changed_paths`] reports for one worktree.
+pub const MAX_CHANGED_PATHS: usize = 200;
+
+/// The files an agent's worktree touched, relative to the repository top level.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChangedPaths {
+    /// Sorted and unique; at most [`MAX_CHANGED_PATHS`].
+    pub paths: Vec<String>,
+    /// More files changed than were reported.
+    pub truncated: bool,
+}
+
+/// Uncommitted state and the touched files of a thread's worktree in one read: files committed on
+/// `branch` since it forked from `base` (`git diff --name-only --no-renames base...branch`, so a
+/// rename lists both names) plus every uncommitted and untracked file in the worktree folder.
+/// `base` `None` (no base branch to compare with) reports only the uncommitted files. Read-only.
+/// Used to detect agents editing the same files before their work meets at merge time.
+pub fn changed_paths(
+    git: &Git,
+    repo: &Repo,
+    path: &Path,
+    base: Option<&str>,
+    branch: &str,
+) -> Result<(DirtyState, ChangedPaths)> {
+    validate_revision(branch)?;
+    let (dirty, mut paths) = worktree_status(git, repo, path)?;
+    let mut truncated = false;
+    if let Some(base) = base {
+        validate_revision(base)?;
+        let out = repo
+            .cmd(git)
+            .args(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff"])
+            .arg(format!("{base}...{branch}"))
+            .arg("--")
+            .read_only()
+            .run_ok("diff")?;
+        truncated |= out.truncated;
+        paths.extend(
+            out.stdout
+                .split(|b| *b == 0)
+                .filter(|name| !name.is_empty())
+                .map(|name| String::from_utf8_lossy(name).into_owned()),
+        );
+    }
+    paths.sort_unstable();
+    paths.dedup();
+    if paths.len() > MAX_CHANGED_PATHS {
+        paths.truncate(MAX_CHANGED_PATHS);
+        truncated = true;
+    }
+    Ok((dirty, ChangedPaths { paths, truncated }))
 }
 
 /// Removes a linked worktree. See the module docs for what each mode may destroy.

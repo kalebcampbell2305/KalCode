@@ -62,7 +62,12 @@
 
 .backdrop--gravity::before {
   background:
-    radial-gradient(22% 28% at 50% 52%, var(--world-deep) 0, rgb(1 2 8 / 0.85) 45%, transparent 100%),
+    radial-gradient(
+      22% 28% at 50% 52%,
+      var(--world-deep) 0,
+      color-mix(in srgb, var(--world-deep) 85%, transparent) 45%,
+      transparent 100%
+    ),
     repeating-radial-gradient(ellipse 100% 62% at 50% 52%, rgb(var(--world-line) / 0.07) 0 1px, transparent 1px 2.4rem),
     radial-gradient(55% 55% at 50% 52%, rgb(var(--world-blue) / 0.16), transparent 72%);
   -webkit-mask-image: radial-gradient(50% 55% at 50% 52%, #000 40%, transparent 100%);
@@ -71,7 +76,12 @@
 
 .backdrop--orbital::before {
   background:
-    radial-gradient(70% 34% at 50% 100%, rgb(var(--world-blue) / 0.28), rgb(30 70 180 / 0.08) 45%, transparent 72%),
+    radial-gradient(
+      70% 34% at 50% 100%,
+      rgb(var(--world-blue) / 0.28),
+      rgb(var(--world-blue) / 0.07) 45%,
+      transparent 72%
+    ),
     repeating-radial-gradient(
       ellipse 120% 24% at 50% 100%,
       rgb(var(--world-line) / 0.09) 0 1px,
@@ -154,14 +164,10 @@
 .frame {
   position: relative;
   border-radius: var(--world-frame-radius);
-  background:
-    radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.07), transparent 60%),
-    linear-gradient(180deg, rgb(12 20 40 / 0.62), rgb(4 7 16 / 0.52));
+  background: radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.06), transparent 60%), var(--world-panel);
   box-shadow:
-    inset 0 0 0 1px rgb(var(--world-line) / 0.16),
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    0 40px 80px -48px rgb(0 0 0 / 0.95),
-    0 0 60px -30px rgb(var(--world-blue) / 0.35);
+    var(--world-panel-edge),
+    0 0 60px -30px rgb(var(--world-blue) / 0.3);
 }
 
 .frame--feature {
@@ -548,22 +554,13 @@
   gap: var(--space-4);
   padding: clamp(1.5rem, 1rem + 1vw, 2rem);
   border-radius: var(--world-frame-radius);
-  background: linear-gradient(180deg, rgb(12 20 40 / 0.66), rgb(4 7 16 / 0.6));
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--world-line) / 0.16),
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    0 40px 80px -50px rgb(0 0 0 / 0.95);
+  background: var(--world-panel);
+  box-shadow: var(--world-panel-edge);
 }
 
 .plan-card--featured {
-  background:
-    radial-gradient(120% 70% at 50% 0%, rgb(var(--world-blue) / 0.2), transparent 70%),
-    linear-gradient(180deg, rgb(14 24 50 / 0.8), rgb(4 7 16 / 0.7));
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--world-blue) / 0.55),
-    inset 0 1px 0 rgb(255 255 255 / 0.12),
-    0 0 50px -12px rgb(var(--world-blue) / 0.55),
-    0 40px 80px -50px rgb(0 0 0 / 0.95);
+  background: radial-gradient(120% 70% at 50% 0%, rgb(var(--world-blue) / 0.16), transparent 70%), var(--world-panel);
+  box-shadow: var(--world-panel-lit);
 }
 
 .plan-card__name {
@@ -672,7 +669,13 @@
   position: relative;
   isolation: isolate;
   overflow: clip;
-  padding-block: clamp(3.5rem, 2rem + 4vw, 6rem) clamp(16rem, 10rem + 16vw, 28rem);
+  padding-block: clamp(3.5rem, 2rem + 4vw, 6rem) clamp(9rem, 5rem + 9vw, 14rem);
+}
+
+/* The horizon art fills the section's height; shifted down, its planet rim rises behind the call
+   to action and the ridge closes the section, instead of a band of empty rock above the footer. */
+.finale .space-backdrop--horizon .space-backdrop__art {
+  bottom: -16cqh;
 }
 
 .finale .closing {
@@ -695,7 +698,7 @@
 }
 
 .finale .form__input {
-  background: rgb(2 4 10 / 0.7);
+  background: var(--world-glass);
 }
 
 /* ---------- Page heads on world pages ---------- */
@@ -721,13 +724,8 @@ body[data-world] .ladder-wrap,
 body[data-world] .platforms,
 body[data-world] .mode {
   border: 0;
-  background:
-    radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.06), transparent 60%),
-    linear-gradient(180deg, rgb(12 20 40 / 0.62), rgb(4 7 16 / 0.52));
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--world-line) / 0.16),
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    0 50px 100px -50px rgb(0 0 0 / 0.95);
+  background: radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.05), transparent 60%), var(--world-panel);
+  box-shadow: var(--world-panel-edge);
 }
 
 body[data-world] .ladder__col--featured {

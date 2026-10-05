@@ -253,3 +253,20 @@ export function formatBytes(bytes: number): string {
   if (bytes >= 1_000) return `${Math.round(bytes / 1_000)} KB`;
   return `${bytes} B`;
 }
+
+/** How long a plain result stays before the widget returns to Ready on its own. */
+export const DONE_SETTLE_MS = 4000;
+/**
+ * A result that offers an action ("Type it instead") stays long enough to use it after, say,
+ * switching threads first: nobody should race a 4 s timer to undo (timing adjustable).
+ */
+export const DONE_ACTION_SETTLE_MS = 15_000;
+
+/**
+ * When a finished result returns to Ready: never while the person points at or focuses it (null);
+ * after the action delay while its action is on screen; otherwise after the plain delay.
+ */
+export function doneSettleMs(held: boolean, actionShown: boolean): number | null {
+  if (held) return null;
+  return actionShown ? DONE_ACTION_SETTLE_MS : DONE_SETTLE_MS;
+}

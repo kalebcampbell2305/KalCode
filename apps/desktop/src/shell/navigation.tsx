@@ -1,5 +1,6 @@
 import type { FeatureFlag, SurfaceFlag, SurfaceId } from "@kalcode/protocol";
 import {
+  Activity,
   AudioLines,
   Blocks,
   Bot,
@@ -9,7 +10,6 @@ import {
   Flag,
   FolderGit2,
   House,
-  LayoutDashboard,
   type LucideIcon,
   MessagesSquare,
   PanelsTopLeft,
@@ -39,9 +39,9 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
   },
   dashboard: {
     id: "dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
-    summary: "What's running, who is doing it, and what needs your approval.",
+    label: "Activity",
+    icon: Activity,
+    summary: "Every coding agent across your projects: what needs you, what's working and what finished.",
   },
   kalvoice: {
     id: "kalvoice",
@@ -168,7 +168,13 @@ export function viewVisible(view: AppView, features: readonly FeatureFlag[] | un
   return features?.some((f) => f.id === feature && f.visible) ?? false;
 }
 
-/** Navigation order within the sidebar. Settings is pinned to the bottom separately. */
+/**
+ * The sidebar's primary places (with the Projects list beneath them): Code, where agents work, and
+ * Activity, where everything they do comes together. Every other surface lives in More.
+ */
+export const PRIMARY_NAV: readonly SurfaceId[] = ["code", "dashboard"];
+
+/** Every surface in order (More, the command palette). Settings is pinned to the bottom separately. */
 export const PRIMARY_ORDER: readonly SurfaceId[] = [
   "code",
   "dashboard",

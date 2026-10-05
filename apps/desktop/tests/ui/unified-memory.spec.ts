@@ -1,9 +1,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 test("project memory supports editing, search, preferences and removal", async ({ page }, testInfo) => {
   await page.goto("/?scenario=code");
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Unified Memory" }).click();
+  await goTo(page, "Unified Memory");
   await expect(page.getByRole("heading", { name: "Unified Memory", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Remember something" }).click();
   await page.getByLabel("Title", { exact: true }).fill("Dashboard owns the workspace shell");
@@ -64,7 +65,7 @@ test("project memory supports editing, search, preferences and removal", async (
 
 test("switching projects isolates their memories", async ({ page }) => {
   await page.goto("/?scenario=code");
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Unified Memory" }).click();
+  await goTo(page, "Unified Memory");
   const workspace = page.getByLabel("Memory workspace");
   const original = await workspace.inputValue();
   await page.getByRole("button", { name: "Remember something" }).click();

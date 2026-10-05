@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Every surface fills the area right of the sidebar at any window size (no narrow column with
@@ -28,7 +29,7 @@ async function openSurface(page: Page, surface: Surface) {
   switch (surface) {
     case "dashboard":
       await page.goto("/?scenario=busy");
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Activity" }).getByText("KalCode started")).toBeVisible();
       return page.locator("#main [data-page-content]");
     case "code":
@@ -38,14 +39,14 @@ async function openSurface(page: Page, surface: Surface) {
       return page.locator('[role="tabpanel"]:not([hidden])');
     case "threads":
       await page.goto("/?scenario=threads");
-      await nav("Threads").click();
+      await goTo(page, "Threads");
       await expect(
         page.getByRole("region", { name: "Thread", exact: true }).getByText("Run npm test").first(),
       ).toBeVisible();
       return page.getByRole("region", { name: "Thread", exact: true });
     case "providers":
       await page.goto("/");
-      await nav("Providers").click();
+      await goTo(page, "Providers");
       await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
       // Accounts is the default tab; the width check uses Setup's widest content.
       await page.getByRole("tab", { name: "Setup" }).click();

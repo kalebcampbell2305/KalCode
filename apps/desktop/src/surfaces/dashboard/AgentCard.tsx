@@ -40,7 +40,10 @@ import { fleetGroupOf } from "./data/board.ts";
 import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
+import { OverlapNote } from "./fleet/OverlapNote.tsx";
+import type { AgentOverlap } from "./fleet/overlap.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
+import { AgentOutcome } from "./outcome/AgentOutcome.tsx";
 
 export interface AgentCardProps {
   thread: ThreadSummary;
@@ -70,6 +73,8 @@ export interface AgentCardProps {
   onToggleExpanded?: (threadId: string) => void;
   /** One-click remove for a failed, finished or stopped agent (the X); absent: not offered. */
   onDismiss?: (thread: ThreadSummary) => void;
+  /** Other agents in the same project editing the same files (clicking one opens it). */
+  overlaps?: readonly AgentOverlap[];
 }
 
 /**
@@ -132,6 +137,29 @@ function isInteractive(target: EventTarget | null): boolean {
   );
 }
 
+/** Every text the card derives from `now`: the elapsed time, started, archived and last activity. */
+function clockTexts({ thread, now, archived = false }: AgentCardProps): string {
+  const elapsedMs = runDurationMs(thread, now);
+  return [
+    elapsedMs === null || archived ? "" : elapsedMs < 60_000 ? "<1 min" : formatElapsed(elapsedMs),
+    startedText(thread.createdAt, now) ?? "",
+    archived && thread.archivedAt ? formatRelative(thread.archivedAt, now) : "",
+    formatRelative(thread.lastActivityAt, now),
+  ].join("\n");
+}
+
+/**
+ * The board's clock ticks every card; a card re-renders for a tick only when a time it shows
+ * changes (each card's whole menu subtree re-rendered every 30 s otherwise).
+ */
+export function sameAgentCardProps(prev: AgentCardProps, next: AgentCardProps): boolean {
+  for (const key of Object.keys(next) as (keyof AgentCardProps)[]) {
+    if (key !== "now" && !Object.is(prev[key], next[key])) return false;
+  }
+  for (const key of Object.keys(prev)) if (!(key in next)) return false;
+  return prev.now === next.now || clockTexts(prev) === clockTexts(next);
+}
+
 /**
  * One coding agent in the Agent Fleet: who it runs as (account), its task, its state and how
  * long it has run; the provider and workspace; model, effort and branch; and what it is doing now
@@ -155,6 +183,7 @@ export const AgentCard = memo(function AgentCard({
   expanded = false,
   onToggleExpanded,
   onDismiss,
+  overlaps,
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
@@ -189,7 +218,7 @@ export const AgentCard = memo(function AgentCard({
 
   const actions = archived
     ? []
-    : (availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
+    : (availableActions(thread).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
   const request = archived ? undefined : approvals[0];
   const actionNeeded = !archived && display.status === "permission_required";
   const failed = display.status === "failed";
@@ -207,10 +236,21 @@ export const AgentCard = memo(function AgentCard({
   };
 
   // The one primary follow-up each state needs, on the card.
-  let primary: { label: string; run: () => void; busy?: boolean; aria?: string } | null = null;
+  let primary: {
+    label: string;
+    run: () => void;
+    busy?: boolean;
+    aria?: string;
+    action?: Exclude<ThreadAction, "open">;
+  } | null = null;
   if (!archived) {
     if (failed && actions.includes("retry")) {
-      primary = { label: "Retry", run: () => onAction(thread, "retry"), busy: pendingAction === "retry" };
+      primary = {
+        label: "Retry",
+        run: () => onAction(thread, "retry"),
+        busy: pendingAction === "retry",
+        action: "retry",
+      };
     } else if (display.status === "waiting_for_you") {
       primary = { label: "Reply", run: () => onFocus(thread) };
     } else if (resumable) {
@@ -219,6 +259,17 @@ export const AgentCard = memo(function AgentCard({
         run: () => onAction(thread, "resume"),
         busy: pendingAction === "resume",
         aria: `Resume ${thread.name}`,
+        action: "resume",
+      };
+    } else if (actions.includes("start_anyway")) {
+      // A launch held for system resources: the real reason is on the card, and the person's
+      // own override is one click away, as in the agent's pane.
+      primary = {
+        label: ACTION_LABELS.start_anyway,
+        run: () => onAction(thread, "start_anyway"),
+        busy: pendingAction === "start_anyway",
+        aria: `Start ${thread.name} anyway`,
+        action: "start_anyway",
       };
     } else if (group === "done" || ready) {
       primary = { label: "Open", run: () => onFocus(thread), aria: `Open ${thread.name}` };
@@ -356,6 +407,9 @@ export const AgentCard = memo(function AgentCard({
         </p>
       ) : null}
 
+      {/* What the work amounted to: agent → changed → tests → merge → release, each observed. */}
+      {archived ? null : <AgentOutcome thread={thread} worktree={worktree} variant="card" />}
+
       {/* The inline approval already says what the agent asks for; anything else, say it here. */}
       {actionNeeded && request ? null : (
         <p className={styles.activity} data-tone={tone} data-group={group} title={activity}>
@@ -379,13 +433,8 @@ export const AgentCard = memo(function AgentCard({
         </div>
       ) : null}
 
-      {/* A finished agent in its own worktree says what still stands between it and a merge. */}
-      {!archived && readiness && !readiness.ready && (display.status === "done" || display.status === "idle") ? (
-        <p className={styles.mergeNote}>
-          <GitMerge aria-hidden="true" />
-          <span>Not ready to merge: {readiness.reason}</span>
-        </p>
-      ) : null}
+      {/* Another agent edits the same files: seen now, not at merge time. */}
+      {!archived && overlaps && overlaps.length > 0 ? <OverlapNote overlaps={overlaps} onFocus={onFocus} /> : null}
 
       {confirmStop ? (
         // biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields.
@@ -501,7 +550,11 @@ export const AgentCard = memo(function AgentCard({
           {primary ? (
             <Button
               size="sm"
-              variant={failed || display.status === "waiting_for_you" ? "primary" : "secondary"}
+              variant={
+                failed || display.status === "waiting_for_you" || primary.action === "start_anyway"
+                  ? "primary"
+                  : "secondary"
+              }
               className={styles.primary}
               busy={primary.busy}
               aria-label={primary.aria}
@@ -539,7 +592,12 @@ export const AgentCard = memo(function AgentCard({
                     className={styles.tool}
                     label={`More actions for ${thread.name}`}
                     icon={<MoreHorizontal />}
-                    busy={pendingAction !== undefined && pendingAction !== "retry" && pendingAction !== "resume"}
+                    busy={
+                      pendingAction !== undefined &&
+                      pendingAction !== "retry" &&
+                      pendingAction !== "resume" &&
+                      pendingAction !== primary?.action
+                    }
                   />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -596,4 +654,4 @@ export const AgentCard = memo(function AgentCard({
       )}
     </article>
   );
-});
+}, sameAgentCardProps);

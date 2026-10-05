@@ -76,13 +76,17 @@ test.describe("theme", () => {
     for (const scheme of ["light", "dark"] as const) {
       const context = await browser.newContext({ colorScheme: scheme });
       const page = await context.newPage();
-      await page.goto("/docs");
+      await page.goto("/privacy");
       await expect(page.locator("html")).toHaveAttribute("data-theme", scheme);
       await expect(page.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
       await page.goto("/");
-      // World pages (home, product, KalVoice, pricing, download) are dark in both themes.
+      // World pages (home, product, KalVoice, pricing, download, docs, security) are dark in both themes.
       await expect(page.locator("body")).toHaveAttribute("data-theme", "dark");
       await expect(page.locator(".hero")).toHaveAttribute("data-theme", "dark");
+      for (const path of ["/docs", "/docs/providers", "/security"]) {
+        await page.goto(path);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", "dark");
+      }
       await context.close();
     }
   });
@@ -90,7 +94,7 @@ test.describe("theme", () => {
   test("the toggle applies a theme, persists it across reloads, and can return to system", async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: "dark" });
     const page = await context.newPage();
-    await page.goto("/docs");
+    await page.goto("/privacy");
     const html = page.locator("html");
 
     await page.getByRole("button", { name: "Use light theme" }).click();
@@ -101,7 +105,7 @@ test.describe("theme", () => {
 
     await page.reload();
     await expect(html).toHaveAttribute("data-theme", "light");
-    await page.goto("/privacy");
+    await page.goto("/terms");
     await expect(html).toHaveAttribute("data-theme", "light");
     expect(await page.evaluate(() => localStorage.getItem("kalcode-theme"))).toBe("light");
 
@@ -129,7 +133,7 @@ test.describe("theme", () => {
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.goto("/docs");
+    await page.goto("/privacy");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await page.getByRole("button", { name: "Use dark theme" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

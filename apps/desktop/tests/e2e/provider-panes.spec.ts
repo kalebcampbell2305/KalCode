@@ -122,13 +122,13 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
   try {
     const app = await launch(dataDir, env);
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await codeNav(page).click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "pane-site" })).toBeVisible();
 
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -209,7 +209,7 @@ test("launching four Claude Code agents creates four fresh live terminals with t
     expect(workspace?.name).toBe("four-agent-site");
 
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
     await expect(launcher).toBeVisible();
     await launcher.getByRole("radio", { name: "Sonnet", exact: true }).click();
@@ -325,7 +325,7 @@ test("launching four Claude Code agents creates four fresh live terminals with t
     if (!focused) throw new Error("The four-agent launch did not return a focus target");
     await page
       .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: "Activity", exact: true })
       .click();
     const fleetCard = page.locator(`[data-thread-id="${focused.id}"]`);
     await expect(fleetCard).toBeVisible({ timeout: 30_000 });

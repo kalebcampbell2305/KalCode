@@ -20,18 +20,22 @@ on:
 
 concurrency:
   group: gate-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
-  # Dedicated ports, so a gate never collides with an agent session on the same PC.
-  KALCODE_E2E_PORT: "4491"
-  KALCODE_E2E_MAIL_PORT: "4492"
-  KALCODE_E2E_INSPECTOR_PORT: "9501"
-  KALCODE_UI_TEST_PORT: "1591"
+  # Each physical worker assigns isolated ports below. Bound nested check fan-out.
+  KALCODE_GATE_JOBS: "2"
+  # Rust compiles need real parallelism: at most three heavy gates hold a Rust slot at once (heavy
+  # tokens) and run at below-normal priority, so 8 jobs each keeps the owner's UI and agents first
+  # while a cold first build still fits (2 jobs could not, gate 37345525181).
+  CARGO_BUILD_JOBS: "8"
+  VITEST_MAX_WORKERS: "2"
+  KALCODE_UI_TEST_WORKERS: "2"
 
 jobs:
   windows:
@@ -39,71 +43,188 @@ jobs:
     # Never run code from a fork on our machines.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Owner policy: validate on the main 64 GB Windows PC, never the second PC.
-    runs-on: [self-hosted, Windows, kalcode-gate]
-    timeout-minutes: 150
+    runs-on: [self-hosted, Windows, kalcode-gate, kalcode-main-pc]
+    timeout-minutes: 195
     steps:
+      # A merge-train landing fast-forwards main to a candidate this job already gated. Re-gating the
+      # identical commit would only occupy the gate runner, so reuse that evidence. Runs before checkout:
+      # no code under test sees the token.
+      - name: Reuse the merge-train gate of this exact commit
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          try {
+            $runs = (Invoke-RestMethod -Headers $headers -Uri "$api/workflows/gate.yml/runs?head_sha=$env:GITHUB_SHA&per_page=20").workflow_runs
+            foreach ($run in $runs) {
+              if ($run.id -eq [long]$env:GITHUB_RUN_ID -or $run.head_sha -ne $env:GITHUB_SHA -or $run.event -ne 'push' -or
+                  $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/gate.yml' -or $run.head_branch -notmatch '^merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') { continue }
+              $jobs = (Invoke-RestMethod -Headers $headers -Uri "$api/runs/$($run.id)/jobs?filter=latest&per_page=100").jobs
+              # The same evidence the train lands on: a main-PC pool worker whose Gate step itself ran and passed.
+              $green = $jobs | Where-Object {
+                $_.name -eq 'Gate (Windows)' -and $_.conclusion -eq 'success' -and $_.head_sha -eq $env:GITHUB_SHA -and
+                $_.runner_name -match '^kalcode-win-gate(-w[1-5])?$' -and
+                ($_.labels -contains 'self-hosted') -and ($_.labels -contains 'Windows') -and
+                ($_.labels -contains 'kalcode-gate') -and ($_.labels -contains 'kalcode-main-pc') -and
+                ($_.steps | Where-Object { $_.name -eq 'Gate' -and $_.conclusion -eq 'success' })
+              }
+              if ($green) {
+                Write-Output "Gate (Windows) already passed for $env:GITHUB_SHA on $($run.head_branch): $($run.html_url)"
+                # ASCII: Windows PowerShell's utf8 writes a BOM into an empty file, which corrupts the key.
+                Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii -Value 'reused=true'
+                exit 0
+              }
+            }
+          } catch {
+            Write-Output "::warning::Could not look up merge-train gate evidence ($($_.Exception.Message)); gating."
+          }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.reuse.outputs.reused != 'true'
         with:
           fetch-depth: 0
           # Leave no GitHub token in the checkout for the code under test.
           persist-credentials: false
+      - name: Plan change-based gate
+        if: steps.reuse.outputs.reused != 'true'
+        id: plan
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module ./tooling/runners/windows/gate-worker-pool.psm1 -Force
+          Assert-GateWorkerHost
+          if ($env:RUNNER_NAME -notmatch '^kalcode-win-gate(-w[1-5])?$') { throw 'Unknown main-PC gate worker' }
+          $slot = if ($env:RUNNER_NAME -eq 'kalcode-win-gate') { 0 } else { [int]$env:RUNNER_NAME.Substring($env:RUNNER_NAME.Length - 1) }
+          if ($env:KALCODE_GATE_SLOT -and $env:KALCODE_GATE_SLOT -ne [string]$slot) { throw 'Runner name does not match its configured slot' }
+          $ports = Get-GateWorkerPlan -Slot $slot
+          $head = (git rev-parse HEAD | Out-String).Trim()
+          if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the immutable event SHA' }
+          $base = $env:BASE
+          if ($env:GITHUB_REF -like 'refs/heads/merge-train/*') {
+            if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -notmatch '^refs/heads/merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') {
+              throw 'Merge-train evidence requires an exact candidate branch push'
+            }
+            $base = (git log -1 --format='%(trailers:key=Merge-Train-Base,valueonly)' HEAD | Out-String).Trim()
+            if ($LASTEXITCODE -or $base -notmatch '^[0-9a-f]{40}$' -or $base -eq $head) {
+              throw 'Merge-train candidate has no distinct immutable Merge-Train-Base trailer'
+            }
+          }
+          $base = (git rev-parse --verify "$base^{commit}" | Out-String).Trim()
+          if ($LASTEXITCODE -or $base -notmatch '^[0-9a-f]{40}$') { throw 'Cannot resolve immutable gate base' }
+          git merge-base --is-ancestor $base HEAD
+          if ($LASTEXITCODE) { throw 'Gate base is not an ancestor of the candidate' }
+          $json = node tooling/release/ship.mjs gate --base $base --list --json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $plan = ($json | Out-String | ConvertFrom-Json).plan
+          $ids = @($plan | Where-Object { $_.state -eq 'selected' } | ForEach-Object { $_.id })
+          @(
+            "KALCODE_GATE_BASE=$base", "KALCODE_GATE_HEAVY=$($ids -contains 'rust' -or $ids -contains 'desktop-native-e2e')", "KALCODE_GATE_SLOT=$slot",
+            "KALCODE_E2E_PORT=$($ports.E2ePort)", "KALCODE_E2E_MAIL_PORT=$($ports.MailPort)",
+            "KALCODE_E2E_INSPECTOR_PORT=$($ports.InspectorPort)", "KALCODE_UI_TEST_PORT=$($ports.UiPort)",
+            "KALCODE_E2E_CDP_PORT=$($ports.CdpPort)",
+            'KALCODE_GATE_REPORT_DIR=C:\ProgramData\KalCodeGatePool\reports',
+            'KALCODE_GATE_EVIDENCE_DIR=C:\ProgramData\KalCodeGatePool\evidence'
+          ) | Add-Content -Path $env:GITHUB_ENV -Encoding ascii
+          "python=$(([string]($ids -contains 'tooling-unit' -or $ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
+          "native=$(([string]($ids -contains 'desktop-native-e2e')).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
+          "browsers=$(([string](@($ids | Where-Object { $_ -in @('desktop-ui','desktop-native-e2e','website-e2e','website-checkout-e2e') }).Count -gt 0)).ToLower())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding ascii
+          Write-Host "Exact candidate $head; base $base; selected checks: $($ids -join ', ')"
+      - name: Admit optional gate work
+        if: steps.reuse.outputs.reused != 'true'
+        id: admission
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          & 'C:\ProgramData\KalCodeGatePool\gate-worker-hook.ps1' -Phase Before -Slot $env:KALCODE_GATE_SLOT
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install
+        if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           pnpm install --frozen-lockfile
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install selected browser runtime
+        if: steps.reuse.outputs.reused != 'true' && (steps.plan.outputs.browsers == 'true')
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
           pnpm --filter @kalcode/desktop exec playwright install chromium
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          pnpm --filter @kalcode/website exec playwright install chromium
       # tooling-unit runs the desktop package proof's real SQLite comparison through `python`.
       # The gate machine has no system Python, so use the same pinned, signature-checked
       # portable runtime the desktop QA workflows use, scoped to this run.
       - name: Prepare portable Python
+        id: python
+        if: steps.reuse.outputs.reused != 'true' && (steps.plan.outputs.python == 'true')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-desktop-python.ps1
       # build:e2e compiles kalvoice-whisper: whisper-rs-sys needs CMake and libclang (bindgen),
       # which the gate machine lacks. Pinned, hash-checked official archives, scoped to this run.
       - name: Prepare portable CMake and libclang
+        id: native
+        if: steps.reuse.outputs.reused != 'true' && (steps.plan.outputs.native == 'true')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-portable-cmake.ps1
       - name: Gate
+        if: steps.reuse.outputs.reused != 'true'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || 'origin/main~1' }}
-          # API tests spawn Wrangler/workerd children; bound their fan-out on the shared PC.
-          VITEST_MAX_WORKERS: "4"
         # Release tooling expects Cargo's default target/ (checkout-local; the runner keeps it).
         run: |
           Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
-          if ($env:RUNNER_NAME -ne 'kalcode-win-gate') { throw "Gate must run on the owner's main Windows PC" }
           $head = (git rev-parse HEAD | Out-String).Trim()
           if ($LASTEXITCODE -or $head -ne $env:GITHUB_SHA) { throw "Checkout does not match the immutable event SHA" }
-          $base = $env:BASE
-          $extra = @()
-          if ($env:GITHUB_REF -like 'refs/heads/merge-train/*') {
-            if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -notmatch '^refs/heads/merge-train/[0-9a-f]{12}-[0-9a-f]{8}$') {
-              throw "Merge-train evidence requires an exact candidate branch push"
+          (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+          $token = $null
+          try {
+            if ($env:KALCODE_GATE_HEAVY -eq 'True') {
+              # Six workers share three Rust slots. Process exit releases the held lock.
+              $lockRoot = 'C:\ProgramData\KalCodeGatePool\heavy'
+              if (-not (Test-Path -LiteralPath $lockRoot -PathType Container)) { throw 'Gate pool heavy-token directory is not installed' }
+              $deadline = (Get-Date).AddMinutes(45)
+              while ($null -eq $token) {
+                $freeGb = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).FreePhysicalMemory / 1MB
+                if ($freeGb -ge 10) {
+                  foreach ($index in 1..3) {
+                    try {
+                      $token = [IO.File]::Open((Join-Path $lockRoot "heavy-$index.lock"), 'OpenOrCreate', 'ReadWrite', 'None')
+                      break
+                    } catch [IO.IOException] { }
+                  }
+                }
+                if ($null -ne $token) { break }
+                if ((Get-Date) -ge $deadline) { throw 'Optional Rust gate remains resource-constrained; retry when capacity is available' }
+                Write-Host "Waiting for one of three Rust slots and at least 10 GiB free RAM; available $([math]::Round($freeGb,1)) GiB"
+                Start-Sleep -Seconds 15
+              }
             }
-            # New branches have no meaningful event.before. Gate every change since the main
-            # snapshot recorded in the candidate, never a moving origin/main reference.
-            $base = (git log -1 --format='%(trailers:key=Merge-Train-Base,valueonly)' HEAD | Out-String).Trim()
-            if ($LASTEXITCODE -or $base -notmatch '^[0-9a-f]{40}$' -or $base -eq $head) {
-              throw "Merge-train candidate has no distinct immutable Merge-Train-Base trailer"
-            }
-            git merge-base --is-ancestor $base HEAD
-            if ($LASTEXITCODE) { throw "Merge-Train-Base $base is not an ancestor of the candidate" }
-            $extra = @('--keep-going')
+            node tooling/release/ship.mjs gate --base $env:KALCODE_GATE_BASE --jobs $env:KALCODE_GATE_JOBS --keep-going
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          } finally {
+            if ($null -ne $token) { $token.Dispose() }
           }
-          node tooling/release/ship.mjs gate --base $base @extra
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Remove this run's portable Python
-        if: always()
+        if: steps.reuse.outputs.reused != 'true' && (always() && steps.python.outcome != 'skipped' && steps.python.outcome != '')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-desktop-python.ps1 -Cleanup
       - name: Remove this run's portable CMake and libclang
-        if: always()
+        if: steps.reuse.outputs.reused != 'true' && (always() && steps.native.outcome != 'skipped' && steps.native.outcome != '')
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: .github/scripts/prepare-portable-cmake.ps1 -Cleanup
+      - name: Release optional gate slot
+        if: steps.reuse.outputs.reused != 'true' && (always() && steps.admission.outcome == 'success')
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          & 'C:\ProgramData\KalCodeGatePool\gate-worker-hook.ps1' -Phase After -Slot $env:KALCODE_GATE_SLOT
+      - name: Preserve exact candidate evidence
+        if: steps.reuse.outputs.reused != 'true' && (always())
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gate-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/gate-evidence.json
+          if-no-files-found: ignore
 
   macos:
     name: Gate (macOS, Rust)

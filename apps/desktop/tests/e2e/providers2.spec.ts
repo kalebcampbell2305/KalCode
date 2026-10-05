@@ -15,6 +15,7 @@ import {
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
+import { goTo } from "./nav.ts";
 
 /**
  * PROVIDERS-2 end to end against the real app: Codex and Gemini CLI threads run on the real
@@ -73,7 +74,7 @@ async function shot(page: Page, name: string) {
 
 async function startThread(page: Page, provider: string, task: string) {
   await waitForProviderAdmission(page);
-  await nav(page, "Threads").click();
+  await goTo(page, "Threads");
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   await page.getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
@@ -108,7 +109,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
       PATH: `${bin};${process.env.PATH ?? ""}`,
     });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await nav(page, "Code").click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "providers2-site" })).toBeVisible();
@@ -169,7 +170,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
       "no invented rate limits",
     ).toBe(true);
 
-    await nav(page, "Providers").click();
+    await goTo(page, "Providers");
     await page.getByRole("tab", { name: "Health" }).click();
     const view = page.getByRole("region", { name: "Provider health" });
     await expect(view.locator("#health-codex")).toHaveAttribute("data-health-state", "healthy", { timeout: 30_000 });
@@ -211,7 +212,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
       PATH: `${bin};${process.env.PATH ?? ""}`,
     });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     // Safety gate: Codex is the fake before any pane starts.
     const statuses = await invoke<StatusLite[]>(page, "providers_detect");
     expect(statuses.find((s) => s.id === "codex")?.detection?.displayPath ?? "").toContain(basename(root));
@@ -220,7 +221,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "codex-pane-site" })).toBeVisible();
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("group", { name: "Codex", exact: true })

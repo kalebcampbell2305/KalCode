@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expectApprovalItems, goTo } from "./nav.ts";
 
 /**
  * KalVoice UI tests against the in-memory transport. Speech here comes from the transport's
@@ -9,7 +10,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 
 async function open(page: Page, query = "") {
   await page.goto(`/${query}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await expect(widget(page)).toBeVisible();
 }
 
@@ -35,7 +36,7 @@ async function talk(page: Page, key = "F8", holdMs = 300) {
 }
 
 async function openKalVoicePage(page: Page) {
-  await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+  await goTo(page, "KalVoice");
   await expect(page.getByRole("heading", { level: 1, name: "KalVoice" })).toBeVisible();
 }
 
@@ -77,13 +78,14 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(shown(page).getByText("Opened Settings.")).toBeVisible();
     // Nothing had focus, so there's nowhere to type it instead.
     await expect(widget(page).getByRole("button", { name: "Type it instead" })).toHaveCount(0);
-    // The result collapses back to Ready on its own.
-    await expectState(page, "Ready");
+    // The result collapses back to Ready on its own after its settle timer (4 s), however busy the
+    // machine is.
+    await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(shown(page).getByText("Opened Settings.")).toHaveCount(0);
 
     await openKalVoicePage(page);
     await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command")).toBeVisible();
     // Activity never shows what was said.
@@ -307,7 +309,7 @@ test.describe("Immediate app control", () => {
     await expect(w.getByRole("button", { name: "Deny" })).toHaveCount(0);
     await expect(w.getByRole("button", { name: "Allow for thread" })).toHaveCount(0);
     await expect(w.getByRole("button", { name: "Approve once" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
+    await expectApprovalItems(page, 0);
   });
 
   test("dictation stays free and never creates an app-control approval", async ({ page }) => {
@@ -319,7 +321,7 @@ test.describe("Immediate app control", () => {
     await expect(box).toHaveValue("write the release notes");
     await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
     await expect(widget(page).getByRole("button", { name: /Approve|Deny/ })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
+    await expectApprovalItems(page, 0);
   });
 
   test("making things safer runs straight away", async ({ page }) => {
@@ -566,7 +568,7 @@ test.describe("Settings, KalVoice", () => {
     await page.keyboard.down("F8");
     await page.keyboard.up("F8");
     await expectState(page, "Ready");
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await talk(page, "F10");
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   });

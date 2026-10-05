@@ -8,6 +8,7 @@ import type { GitStatusSummary, OperationsSnapshot, ProviderHealth } from "@kalc
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsClient } from "../../ipc/operations.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useThrottledValue } from "../../runtime/useThrottledValue.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 
 export interface Feed<T> {
@@ -113,9 +114,10 @@ export function DeckDataProvider({ children }: { children: ReactNode }) {
 
   // The newest event of each family re-reads its feed.
   const latest = (prefix: string) => events.find((e) => e.type.startsWith(prefix))?.seq ?? 0;
-  const providerSeq = latest("provider.");
-  const gitSeq = latest("git.");
-  const operationSeq = latest("operation.");
+  // A burst of events re-reads each feed once or twice, not once per event.
+  const providerSeq = useThrottledValue(latest("provider."));
+  const gitSeq = useThrottledValue(latest("git."));
+  const operationSeq = useThrottledValue(latest("operation."));
 
   const operations = usePolled(loadOperations, OPERATIONS_MS, operationSeq, sameOperations);
   const health = usePolled(loadHealth, HEALTH_MS, providerSeq);

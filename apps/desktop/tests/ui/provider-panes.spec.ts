@@ -12,7 +12,7 @@ const OUT = new URL("../../qa/screenshots/", import.meta.url);
 
 async function open(page: Page, query = "") {
   await page.goto(`/${query}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 async function setTheme(page: Page, theme: "light" | "dark") {
@@ -42,7 +42,7 @@ const paneText = (page: Page) => pane(page).locator("[data-pane-terminal] .xterm
 const launcher = (page: Page) => page.getByRole("dialog", { name: "New agent" });
 
 async function newPane(page: Page) {
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })
@@ -84,7 +84,7 @@ test.describe("provider panes", () => {
     }) => {
       await open(page);
       await openWorkspace(page, "KalCode");
-      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
       await launcher(page).getByRole("group", { name: provider, exact: true }).getByRole("option").first().click();
       await launcher(page).getByLabel("Agents", { exact: true }).fill(String(count));
       await launcher(page)
@@ -107,7 +107,7 @@ test.describe("provider panes", () => {
       await expect(page.getByText("Open in Threads", { exact: true })).toHaveCount(0);
       await page
         .getByRole("navigation", { name: "Primary" })
-        .getByRole("button", { name: "Dashboard", exact: true })
+        .getByRole("button", { name: "Activity", exact: true })
         .click();
       await expect(page.getByRole("article")).toHaveCount(count);
       await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
@@ -224,7 +224,7 @@ test.describe("provider panes", () => {
   test("limited status: no hook events, approvals in the provider", async ({ page }) => {
     await open(page, "?panes=limited");
     await openWorkspace(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -286,7 +286,7 @@ test.describe("provider panes", () => {
     await expect(region.getByText(/^Ended/)).toBeVisible();
     await page
       .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: "Activity", exact: true })
       .click();
     const card = page.getByRole("article", { name: "Login flake", exact: true });
     await expect(card.getByRole("heading", { name: "Login flake", exact: true })).toBeVisible();
@@ -371,7 +371,7 @@ test.describe("provider panes", () => {
   test("a native refusal (feature off) is shown honestly and nothing starts", async ({ page }) => {
     await open(page, "?panes=off");
     await openWorkspace(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -381,7 +381,7 @@ test.describe("provider panes", () => {
     // A freshly opened launcher starts clean: the previous launch's refusal isn't shown again.
     await launcher(page).getByRole("button", { name: "Cancel" }).click();
     await expect(launcher(page)).toHaveCount(0);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await expect(launcher(page)).toBeVisible();
     await expect(page.getByText("Provider panes aren't available in this build yet.")).toHaveCount(0);
   });
@@ -391,7 +391,7 @@ test.describe("provider panes", () => {
   }) => {
     await open(page);
     await openWorkspace(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await expect(launcher(page).getByRole("group", { name: "Gemini CLI" })).toBeVisible();
     await launcher(page).getByRole("group", { name: "Codex" }).getByRole("option").first().click();
     await launcher(page).getByRole("button", { name: "Launch Codex agent" }).click();
@@ -428,7 +428,7 @@ test.describe("provider panes", () => {
   test("a Gemini CLI pane shows process state only", async ({ page }) => {
     await open(page);
     await openWorkspace(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("group", { name: "Gemini CLI" })
@@ -461,7 +461,7 @@ test.describe("provider panes", () => {
     // A Claude Code agent starts only after detection ran, so the offer below is settled.
     await newPane(page);
     // Signed-out Codex and a missing Gemini CLI aren't offered: not in the launcher, not in "Add".
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await expect(launcher(page).getByRole("group", { name: "Claude Code" })).toBeVisible();
     await expect(launcher(page).getByRole("group", { name: /^(Codex|Gemini CLI)$/ })).toHaveCount(0);
     await launcher(page).getByRole("button", { name: "Cancel" }).click();
@@ -470,7 +470,7 @@ test.describe("provider panes", () => {
     // In the default scenario both are offered, in the launcher and in a pane's add menu.
     await open(page);
     await openWorkspace(page, "pane-offer");
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await expect(launcher(page).getByRole("group", { name: "Codex" })).toBeVisible();
     await expect(launcher(page).getByRole("group", { name: "Gemini CLI" })).toBeVisible();
     await launcher(page).getByRole("button", { name: "Cancel" }).click();

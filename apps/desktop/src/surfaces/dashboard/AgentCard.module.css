@@ -138,27 +138,34 @@
   }
 }
 
+/* The ring is the dot's 6px halo drawn at full size and scaled from the dot's size (8px of 20px),
+   fading from the tone at 60%: the same picture as growing a box-shadow spread from 0 to 6px, but
+   transform and opacity run on the compositor (a box-shadow ping restyled and repainted every card
+   on the main thread every frame, nearly all of the Dashboard's idle CPU). */
 @keyframes ping {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tone) 60%, transparent);
+    opacity: 0.6;
+    transform: scale(0.4);
   }
   70%,
   100% {
-    box-shadow: 0 0 0 6px transparent;
+    opacity: 0;
+    transform: scale(1);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) .card::before,
-  :root:not([data-motion="full"]) .signal,
+  :root:not([data-motion="full"]) .signal::after,
   :root:not([data-motion="full"]) .state {
     animation: none;
   }
 }
 
-:global([data-motion="reduced"]) .card::before,
-:global([data-motion="reduced"]) .signal,
-:global([data-motion="reduced"]) .state {
+/* :root keeps the app's Reduced motion setting above the tone rules that start the animations. */
+:root[data-motion="reduced"] .card::before,
+:root[data-motion="reduced"] .signal::after,
+:root[data-motion="reduced"] .state {
   animation: none;
 }
 
@@ -173,6 +180,7 @@
 }
 
 .signal {
+  position: relative;
   flex: none;
   width: 0.5rem;
   height: 0.5rem;
@@ -180,8 +188,15 @@
   background: var(--tone);
 }
 
-.signal[data-tone="working"],
-.signal[data-tone="recovering"] {
+.signal[data-tone="working"]::after,
+.signal[data-tone="recovering"]::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: var(--tone);
+  opacity: 0;
+  pointer-events: none;
   animation: ping 1.8s var(--ease-out) infinite;
 }
 
@@ -472,22 +487,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.mergeNote {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--type-small);
-}
-
-.mergeNote svg {
-  flex: none;
-  width: 0.8125rem;
-  height: 0.8125rem;
-  color: var(--color-text-faint);
 }
 
 /* ---- details (expanded) ---- */

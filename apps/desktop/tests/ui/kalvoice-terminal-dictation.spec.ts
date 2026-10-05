@@ -19,7 +19,7 @@ async function openWorkspace(page: Page, transcript: string, folder: string, pan
   const params = new URLSearchParams({ transcript });
   if (panes) params.set("panes", panes);
   await page.goto(`/?${params.toString()}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate((nextFolder) => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
@@ -112,7 +112,7 @@ test.describe("KalVoice terminal destinations", () => {
     page,
   }) => {
     await openWorkspace(page, "say voice-provider", "voice-provider", "limited");
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -135,7 +135,7 @@ test.describe("KalVoice terminal destinations", () => {
 
   test("dictation never answers a provider-native permission prompt", async ({ page }) => {
     await openWorkspace(page, "yes approve everything", "voice-permission");
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("group", { name: "Codex" })

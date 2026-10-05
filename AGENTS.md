@@ -1,5 +1,40 @@
 # KalCode agent policy
 
+## Permanent simplification + power rule (owner directive 2026-10-05)
+
+"KALCODE SHOULD REDUCE THE NUMBER OF DECISIONS USERS MUST MAKE AND COMPLETE MORE OF THE MECHANICAL WORK BETWEEN THOSE DECISIONS.
+
+CENTER THE EXPERIENCE ON THE PROJECT.
+
+MAKE STARTING REAL CODING AGENTS EFFORTLESS.
+
+PUT EVERYTHING THAT GENUINELY NEEDS THE USER INTO ONE ATTENTION INBOX.
+
+VOICE, TEXT, BUTTONS, AND MENUS SHOULD CALL THE SAME CANONICAL ACTIONS.
+
+ASSUME MANY CODING AGENTS WORK IN PARALLEL AND COORDINATE THEM BY DEFAULT.
+
+SHOW OUTCOMES BESIDE TERMINALS, INCLUDING THE DIFFERENCE BETWEEN AGENT DONE, VERIFIED, MERGED, AND SHIPPED.
+
+CARRY USEFUL, INSPECTABLE PROJECT MEMORY ACROSS PROVIDERS AND SESSIONS.
+
+EVERYTHING SHOULD FEEL LIKE ONE CONNECTED WORKFLOW.
+
+KEEP IT SIMPLE.
+KEEP IT BEAUTIFUL.
+KEEP IT FAST.
+KEEP IT RELIABLE."
+
+This applies to Claude Code, Codex and every future agent, for every surface and provider. The flow is OPEN PROJECT → START WORK → CODING AGENTS WORK → KALCODE COORDINATES THEM → NEEDS YOU SURFACES ONLY REAL DECISIONS → RESULTS APPEAR BESIDE THE WORK → COMPATIBLE CHANGES VALIDATE → AUTO-MERGE → AUTO-SHIP → USERS RECEIVE THEM → PROJECT MEMORY RETAINS USEFUL CONTEXT. Fewer top-level decisions, never fewer capabilities.
+
+- **Project-centered navigation.** The sidebar's primary places are **Code**, **Activity** (the `dashboard` surface: Needs You on top, then the Agent Fleet) and the **Projects** list (`PRIMARY_NAV` in `apps/desktop/src/shell/navigation.tsx`). Every other surface (Browser, Operations/Runs, Threads, KalVoice, Unified Memory, Providers, in-development surfaces) stays one click away in the footer's **More** menu, the command palette, context actions and shortcuts. Never re-add a surface to the primary list without an owner request; progressive disclosure, not removal.
+- **Effortless New Agent.** An agent is a real coding terminal, never a Thread. New agent launches the remembered provider/account/exact model/effort in the current project immediately when there is one obvious valid configuration, and expands the options inline only when a choice is genuinely needed. Never ask again for what KalCode already knows. Truthful STARTING → READY → WORKING state appears at once.
+- **One attention inbox (Needs You).** `apps/desktop/src/shell/attention/model.ts` derives every item from canonical state (coding agents via `agentStateOf`, pending approvals, provider sign-outs); it keeps no copy. Items cover questions, approvals, failures, sign-outs, stalled agents and finished work with changes, and each says WHAT HAPPENED, WHY IT NEEDS YOU and WHAT TO DO NEXT, with actions that open the exact coding terminal. Ordinary progress and routine KalCode permission prompts never land there. New attention sources (merge conflicts, overlapping edits, deploy failures) are added to this model, never as a separate inbox.
+- **One action bus.** `apps/desktop/src/runtime/actions.ts` (`useKalActions`) is the canonical intent → resolved target → execution → visible result path for buttons, menus, the palette and the inbox; KalVoice directives land in the same `uiIntents` focus and pane commands. Execute when the target is clear; when it is genuinely ambiguous, show the short list to choose from, never guess. Never add a voice-only or button-only behavior for an action that exists.
+- **Parallel by default.** Assume 6+ agents work concurrently: isolate work in per-agent worktrees, surface overlapping edits early, and send ready work through the shared merge train. A conflict blocks only the affected changes.
+- **Outcomes beside the work.** Every agent can show what changed, what passed/failed, its branch/worktree, and whether it is merged and shipped, from real state only. AGENT DONE, CHANGE VERIFIED, MERGED and SHIPPED TO USERS are different facts; never show one as another, and never guess.
+- **Unified Memory in the flow.** Project memory (see the Unified Memory rule) is visible where people work, inspectable, editable and removable, and only relevant notes reach a task.
+
 ## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
 
 **UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
@@ -315,7 +350,7 @@ Default lifecycle: **IMPLEMENT -> TEST WHAT CHANGED -> REVIEW -> MERGE -> BUILD 
 Fastest possible does not mean careless: maximum speed with high quality and correctness. Don't stop between stages without a real blocker. On a blocker, IDENTIFY → FIX → RERUN ONLY THE INVALIDATED CHECK → CONTINUE, never restarting the pipeline. Long releases are pipeline problems to fix, not something to accept. These practices, learned on the 2026-10-03 trains, keep it fast:
 
 - **Trains are for gates, not releases.** Combine ready PRs on one `train/<topic>` branch to share one gate run. Releases are not serialized: see the multi-shipper rule. Any session starts its own release job, and only the final feed write takes `target/lanes/publish.lock`.
-- **One gate per train, on idle runners.** The PR's Gate (Windows) job runs the full `ship.mjs gate` on the shared Windows PC. Don't run a second full gate locally at the same time, and don't run heavy local cargo/Playwright work while a release is packaging: contention causes timeouts and memory-guard aborts. Use local `--only <lanes> --keep-going` for fast diagnosis.
+- **One proof per exact candidate, parallel independent candidates.** The shared main-PC pool validates independent ready changes concurrently using the smallest change-based gate set. Never launch a duplicate full gate for the same candidate, or long local Cargo/Playwright/Vitest suites while a shared gate runs. Focused single-file checks remain available for diagnosis. Resource admission throttles optional validation before user work.
 - **Speculative builds.** Start the signed Windows and macOS builds from the exact commit under test while its gate runs. Publish only after the gate passes and the commit is on main. If only test files change afterwards, the build stays valid.
 - **Rerun only what changed.** After a fix, rerun the invalidated lanes, not the whole gate. Classify every remaining failure truthfully: train regression, intended behavior with a stale test, already failing on main, or environmental. Only real product risk blocks shipping. Record the classification and file follow-ups.
 - **Update tests with behavior.** When a change alters a default, schema version, launcher structure or spec inventory, update the unit, UI and native e2e specs that encode it in the same PR. Check `git merge-tree` against other open PRs touching the same files, not just main.
@@ -449,7 +484,7 @@ This applies to Claude Code, Codex and every future agent, in product code, UI c
 - **Agent** = a real provider coding session (Claude Code, Codex, Gemini CLI) running in its own terminal pane in Code, with a provider, account, exact model, effort, workspace, worktree/branch where relevant, live status and current task. N agents = N panes.
 - **Thread** = the chat-oriented surface in Threads. Never implement, list, count or open an agent as a Thread, and never call a thread an agent.
 - In storage, coding sessions retain their existing record IDs and are identified by `runtimeKind: "interactive_pty"`, stamped from the durable provider-pane marker before resource admission. This shared storage does not make an agent a chat Thread. Agent surfaces read `useCodingAgents()`; opening an agent uses `uiIntents.focus({ kind: "agent", agentId, workspaceId })`, and Code persists `{ kind: "agent", agentId }` pane content. Never route an agent through a Thread focus target or fall back to a headless chat when its terminal runtime is unavailable.
-- Code's **New agent** launcher (+) chooses provider → account (only when there are several) → exact model → effort → count, and starts that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on the Dashboard; "the agent that just finished" means the latest finished coding agent.
+- Code's **New agent** starts the remembered provider/account/exact model/effort at once when that configuration is still valid; its options (provider → account, only when there are several → exact model → effort → count) open only when a choice is needed or asked for, and start that many panes. KalVoice "start six Claude Code agents" launches six panes; "show my agents" / "Agent Fleet" opens the Fleet on Activity (the `dashboard` surface); "the agent that just finished" means the latest finished coding agent.
 - Agents rail, Agent Fleet, Needs You counts, widgets, Squads, Handoffs, Queue, Runs and future automation use this same definition. Do not create an alternate one.
 
 ## KalVoice integration rule (owner directive 2026-10-01)
@@ -512,10 +547,22 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 
 **KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
 
-- **Priority, throttled from the bottom:** 1 KalCode UI, 2 user-requested coding agents, 3 builds/tests the user started, 4 important active services, 5 optional/background work, 6 indexing/maintenance/analytics.
+Owner wording (2026-10-05):
+
+> "KALCODE MUST NEVER BLOCK A USER-REQUESTED CODING AGENT FROM STARTING MERELY BECAUSE CPU USAGE IS HIGH.
+>
+> USER-REQUESTED INTERACTIVE CODING WORK HAS PRIORITY OVER OPTIONAL BACKGROUND WORK.
+>
+> RESOURCE GOVERNANCE MAY THROTTLE BACKGROUND TASKS, INDEXING, ANALYTICS, AND MAINTENANCE FIRST.
+>
+> IT MUST NOT BECOME A HIDDEN CODING-AGENT CONCURRENCY LIMIT.
+>
+> ONLY GENUINE HARD RESOURCE FAILURE MAY PREVENT AN AGENT FROM STARTING."
+
+- **Priority, throttled from the bottom (owner order 2026-10-05):** 1 KalCode UI, 2 user-requested coding agents, 3 user-requested builds/tests, 4 active services, 5 optional automation, 6 indexing, 7 analytics/maintenance/background refreshes. Items 1-3 are never blocked under normal load.
 - **Hard pressure only:** critically low available memory, disk effectively full, the OS cannot create another process, or severe exhaustion likely to crash. Then show the real reason (for example "Memory is critically low.") with actions such as [Run KalTidy] / [Start Anyway] where safe. Never a generic "CPU busy".
-- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies.
-- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started.
+- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies. KalCode pricing includes unlimited local coding agents on every plan, so the governor must never act as a hidden concurrency cap.
+- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started: a newly requested agent that has not started shows STARTING, or WAITING with the real hard reason.
 - **Provider-agnostic:** applies equally to Claude Code, Codex, Cursor, Gemini and future providers, and to every launch path (panes, New agent, KalVoice, user-initiated Squads and Handoffs).
 - This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.
 - Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
@@ -530,6 +577,7 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 
 - `node tooling/merge-train/train.mjs submit <pr>` adds the `merge-queue` label. The queue is the open, non-draft, same-repository PRs carrying that label, in the order it was added. Never run `gh pr merge` and never push to `main`.
 - Then drive the train yourself; any agent may, at any time, concurrently with others: `node tooling/merge-train/train.mjs run`. Nobody waits for a designated merger.
+- A PreToolUse merge guard (`tooling/release/lifecycle/merge-guard.mjs`, wired in `.claude/settings.json`) and the Codex rules `.codex/rules/merge-train.rules` refuse `gh pr merge` and direct pushes to `main`, pointing at `submit`.
 
 **2. What the train does.** `run` repeats build → gate → land until the queue is empty:
 
@@ -550,6 +598,21 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 - **Release.** Follow the multi-shipper rule. Any session starts a release job for the landed commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
 - **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
 - **Takeover.** If a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take the lock over. A stalled older release job is superseded by any newer build that ships, never waited on.
+
+## Permanent parallel gate worker pool rule (owner directive 2026-10-04)
+
+> "KALCODE USES A PARALLEL GATE WORKER POOL. MULTIPLE READY CHANGES SHOULD VALIDATE CONCURRENTLY. GATES ARE CHANGE-BASED, NOT GIANT GENERIC CHECKLISTS. INDEPENDENT CHECKS RUN IN PARALLEL. A FAILURE IN ONE CHANGE MUST NOT BLOCK UNRELATED READY WORK. GATE RESULTS ARE TIED TO THE EXACT MERGE CANDIDATE. STALE GATES ARE CANCELLED. STILL-VALID EVIDENCE IS REUSED. ONCE THE REQUIRED GATES PASS, AUTO-MERGE AND AUTO-SHIP IMMEDIATELY. THE PURPOSE OF GATES IS TO PROVE CORRECTNESS QUICKLY, NOT TO CREATE A BOTTLENECK."
+
+- **No single gate owner.** The pool is the `kalcode-gate` runners on the main 64 GB Windows PC: `kalcode-win-gate` plus the workers `kalcode-win-gate-w1`…`-w5`, added by `tooling/runners/windows/add-gate-workers.ps1` (one elevated run; see `tooling/runners/README.md`). Claude Code and Codex submit to the same pool through PRs and the merge train. Never validate and merge privately.
+- **Isolation and priority.** Six main-PC slots use separate worker accounts, homes, checkouts, caches and ports. The canonical `KALCODE_GATE_SLOT` is 0 for the original runner and 1-5 for added workers. Gates run below normal priority. At most three Rust gate jobs hold machine-wide tokens and start with at least 10 GiB free memory; they never bypass admission after a timeout. Optional gates yield under CPU/RAM/disk pressure before the UI or user coding agents slow down. These background limits never cap user agents.
+- **Change-based and parallel inside.** `node tooling/release/ship.mjs gate --base <base>` selects checks from the diff. Independent checks run concurrently with `KALCODE_GATE_JOBS=2` per CI worker. Shared build resources and dependent checks remain ordered. During an active main-PC gate, agents must not launch long local full Cargo, Playwright, Vitest or ship-gate suites; focused single-file checks are allowed.
+- **Exact evidence, reused when still valid.** Train evidence is a passing Gate step for the exact candidate push on a verified main-PC worker. Per-check reuse binds source inputs, commands, policy, environment and toolchain; revision-sensitive checks also bind the commit. Changed or unknown inputs invalidate reuse. Live audits always run. A main push of the identical landed candidate reuses its verified green gate.
+- **Stale gates are cancelled.** When main moves or a PR changes, the train cancels the obsolete candidate's unfinished gate runs and deletes its branch. A newer commit on a PR cancels that PR's older run.
+- **Green → land → ship.** When the exact candidate is green, the train lands it and shipping starts at once. No owner approval is needed. On failure, the train bisects. Send the exact failure to the owning agent; it fixes and resubmits, and only the invalidated gates rerun.
+
+## Permanent high-concurrency development assumption (owner directive 2026-10-04)
+
+KalCode development assumes AT LEAST 6 coding agents are actively building and finishing work concurrently at any given time. This is NORMAL, not an edge case. Design gate workers, merge queues, merge groups, CI validation, release jobs, shippers, conflict handling and resource scheduling to handle 6+ concurrent coding agents efficiently, and keep the pipeline fast when many agents finish close together. Do not build infrastructure around a one-agent-at-a-time assumption.
 
 ## Permanent visual quality rule (owner directive 2026-10-02)
 

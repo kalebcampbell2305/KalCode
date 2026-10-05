@@ -1,4 +1,4 @@
-import { CORE_LIMITS, formatCoreLimit, formatPrice, PLANS } from "@kalcode/protocol/plans";
+import { CORE_LIMITS, formatCoreLimit, formatLimit, formatPrice, getPlanFeature, PLANS } from "@kalcode/protocol/plans";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseManifest } from "../../src/data/releases";
@@ -73,9 +73,8 @@ const GATED_CLAIMS = [
   /Scheduled \+ event/i,
   /hand whole objectives/i,
   /Plans differ in KalVoice Requests and workspace features/i,
-  // Provider panes are allowed only as "not in Stable yet".
-  /provider panes(?! (are )?not in Stable)/i,
-  /side by side/i,
+  // Provider terminals in Code ship since 0.1.9+1340 (plans.ts provider-terminals), so "side by side"
+  // and provider panes are no longer gated claims; the Command Center surface still is.
   /\bCommand center\b/,
 ];
 
@@ -284,12 +283,14 @@ describe("plans", () => {
     for (const pattern of PLAN_CONCURRENCY_CLAIMS) expect(copy).not.toMatch(pattern);
   });
 
-  it("give each home plan card its stage, monthly price and headline limits from the catalog", async () => {
+  it("give each home plan card its stage, monthly price, allowances and lead features from the catalog", async () => {
     const html = await render(Home, "/");
+    // What every plan shares (unlimited local agents and terminals) is said once, above the cards.
+    const shared = text(html.match(/<p class="pstrip__shared[^"]*"[^>]*>([\s\S]*?)<\/p>/)?.[1] ?? "");
+    expect(shared).toContain(formatCoreLimit(PLANS[0].limits, CORE_LIMITS[0]));
+    expect(shared).toContain(formatCoreLimit(PLANS[0].limits, CORE_LIMITS[1]));
     const cards = [
-      ...html.matchAll(
-        /<li class="plan-card[^"]*"[^>]*data-plan="([^"]+)"[^>]*>([\s\S]*?)<\/li>\s*(?=<li class="plan-card|<\/ul>)/g,
-      ),
+      ...html.matchAll(/<li class="pcard[^"]*"[^>]*data-plan="([^"]+)"[^>]*>([\s\S]*?)<a class="pcard__link/g),
     ];
     expect(cards.map((m) => m[1])).toEqual(PLANS.map((plan) => plan.id));
     for (const [index, plan] of PLANS.entries()) {
@@ -297,7 +298,15 @@ describe("plans", () => {
       expect(card).toContain(plan.stage);
       expect(card).toContain(`${formatPrice(plan, "month")} /month`);
       expect(card).toContain(plan.tagline);
-      expect(card).toContain(formatCoreLimit(plan.limits, CORE_LIMITS[0]));
+      expect(card).toContain(`Workspaces ${formatLimit(plan.limits.workspaces)}`);
+      expect(card).toContain(`Provider accounts ${formatLimit(plan.limits.providerAccounts)}`);
+      expect(card).toContain(`KalVoice Requests / mo ${formatLimit(plan.limits.kalvoiceRequestsPerMonth)}`);
+      for (const id of plan.cardFeatures) {
+        const feature = getPlanFeature(id);
+        const label = (feature.label.split(":")[0] ?? "").trim();
+        // A feature that has not shipped always says so, right beside its name.
+        expect(card).toContain(feature.status === "available" ? label : `${label} Coming soon`);
+      }
       expect(card.includes("Most popular")).toBe(plan.popular);
     }
   });
@@ -307,16 +316,16 @@ describe("home page", () => {
   // AGENTS.md "AGENT means a coding agent": an agent is a real coding terminal, never a thread.
   it("describes the workspace as it ships: agents are coding terminals, not threads", async () => {
     const copy = text(await render(Home, "/"));
-    expect(copy).toContain("An agent is a real coding terminal.");
-    expect(copy).toContain("the actual Claude Code or Codex running in its own terminal pane, not a chat thread");
-    expect(copy).toContain("From one agent to a fleet.");
+    expect(copy).toContain("Every agent is a real coding terminal.");
+    expect(copy).toContain("an agent is the provider's own CLI running in its own terminal pane, not a chat thread");
+    expect(copy).toContain("Every agent. One state. One view.");
     expect(copy).not.toMatch(/agents' threads|Every thread\. One dashboard/);
   });
 
   it("says in the home meta that agents run in real terminals, without a panes claim", () => {
     const home = PAGES.find((p) => p.path === "/")?.description ?? "";
-    expect(home).toContain("Claude Code and Codex");
-    expect(home).toContain("Run agents in real terminals");
+    expect(home).toContain("Claude Code, Codex, Cursor and Gemini CLI");
+    expect(home).toContain("real agent terminals");
     expect(home).not.toMatch(/threads/i);
     expect(PAGES.find((p) => p.path === "/product")?.description).not.toMatch(/provider panes/i);
   });
@@ -327,12 +336,11 @@ describe("home page", () => {
 });
 
 describe("shipped features are not called planned", () => {
-  it("lists split panes and the Browser pane as built on the product page", async () => {
+  it("lists split panes and the Browser pane as available on the product page", async () => {
     const copy = text(await render(Product, "/product"));
-    expect(copy).toContain("Split panes and the Browser pane Built");
-    expect(copy).toContain("Approvals and permission modes Built");
-    expect(copy).toContain("File tree, Git and diff views Planned");
-    expect(copy).toContain("Terminals, the browser and threads open in panes you can split and resize.");
+    expect(copy).toContain("Tabbed terminal panes you split, stack into groups and rename");
+    expect(copy).toContain("a Browser pane beside agents");
+    expect(copy).toMatch(/Integrated Browser Every plan Available \d+\.\d+\.\d+ · build \d+/);
   });
 
   it("labels the Browser preview and KalVoice stage honestly", async () => {
@@ -344,12 +352,10 @@ describe("shipped features are not called planned", () => {
     expect(compact).toContain("Multi-agent runs not in Stable yet");
   });
 
-  it("lists the live Dashboard as built on the product page", async () => {
-    const html = await render(Product, "/product");
-    const copy = text(html);
-    expect(copy).toContain("Dashboard Built Live thread status from runtime events, with approvals inline");
-    expect(copy).toContain("Built Every thread, one Dashboard.");
-    expect(html).toMatch(/<p class="chip chip--built"[^>]*>Built<\/p>\s*<h2 id="threads-title"/);
+  it("lists Agent Fleet as available on the product page", async () => {
+    const copy = text(await render(Product, "/product"));
+    expect(copy).toContain("Agent Fleet and Needs You");
+    expect(copy).toMatch(/Agent Fleet Every plan Available \d+\.\d+\.\d+ · build \d+/);
   });
 
   it("keeps the product demos from calling provider panes shipped", async () => {
@@ -382,9 +388,9 @@ describe("Stable features are not framed as a development build", () => {
 
   it("states the current-build claims plainly", async () => {
     const product = text(await render(Product, "/product"));
-    expect(product).toContain("App shell, search and palette, light and dark themes Built In the app today");
-    expect(product).toContain("Built Real terminals in a real workspace.");
-    expect(product).toContain("Updated with every milestone. Built means in the app you can download today.");
+    expect(product).toContain(
+      "Available means it's in the KalCode you download today, with the build it was verified in.",
+    );
     const security = text(await render(Security, "/security"));
     expect(security).toContain("This page lists the controls in current builds and the ones still planned.");
     expect(security).toContain("Current builds send no user data off the device.");
@@ -417,10 +423,10 @@ function selectSignedStable() {
   fixture.manifest.unavailable = fixture.manifest.unavailable.filter((entry) => entry.os !== "macos");
 }
 
-/** The items under the security page's "Planned" heading. */
+/** The items under the security page's "Planned" heading (none when nothing is planned). */
 function plannedItems(html: string) {
-  const list = html.match(/<h2[^>]*>Planned<\/h2>\s*<ul[^>]*>([\s\S]*?)<\/ul>/)?.[1];
-  if (list === undefined) throw new Error("no Planned list on /security");
+  const list = html.match(/<h[23][^>]*>Planned<\/h[23]>\s*<ul[^>]*>([\s\S]*?)<\/ul>/)?.[1];
+  if (list === undefined) return [];
   return [...list.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => text(m[1]).trim());
 }
 
@@ -442,16 +448,18 @@ describe("security controls that shipped are not listed as planned", () => {
       "Workspace containment A path counts as inside your workspace only when it still lands inside the workspace folder after",
     );
     expect(copy).toContain("symlinks and junctions are resolved. Paths KalCode cannot resolve safely");
-    expect(copy).toContain("Provider isolation Each provider's CLI starts with a sanitized environment");
+    // Since 0.1.9+1658 agents get the user's real environment (crates/providers/src/env.rs
+    // EnvPolicy::NATIVE); only KalCode-internal and account-auth override variables are left out.
     expect(copy).toContain(
-      "KalCode's permission engine checks every action an AI agent wants to take against the permission mode you choose: Plan, Approve or Auto.",
+      "Your real environment, KalCode's secrets kept out Each coding agent starts the way it would in your own terminal",
     );
-    expect(copy).toContain("Consequential decisions are recorded in an audit log.");
+    expect(copy).not.toMatch(/sanitized environment/i);
+    expect(copy).toContain("New coding agents start in Bypass");
+    expect(copy).toContain("consequential decisions are recorded in a local audit log.");
     const planned = plannedItems(html);
     for (const pattern of SHIPPED) expect(planned.join(" ")).not.toMatch(pattern);
-    expect(planned).toContain(
-      "Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.",
-    );
+    // Paid plans are live with signed entitlements, so billing checks are no longer "planned".
+    expect(planned.join(" ")).not.toMatch(/when paid plans launch/);
   });
 
   it("claims signed installers and updates only while a signed Stable release is served", async () => {
@@ -468,9 +476,7 @@ describe("security controls that shipped are not listed as planned", () => {
     expect(copy).toContain(
       "before installing one, KalCode checks its SHA-256 checksum and its update signature, and on Windows the installer's Authenticode signature too.",
     );
-    expect(plannedItems(stable)).toEqual([
-      "Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.",
-    ]);
+    expect(plannedItems(stable)).toEqual([]);
     for (const pattern of DEV_BUILD_FRAMING) expect(`${copy} ${metaDescription(stable)}`).not.toMatch(pattern);
   });
 });
@@ -523,11 +529,11 @@ describe("product stages once Stable is served", () => {
     }
   });
 
-  it("renders the stages on the Stable /product page", async () => {
+  it("renders the shipped permission modes on the Stable /product page", async () => {
     selectSignedStable();
     const copy = text(await render(Product, "/product"));
-    expect(copy).toContain("The words land in the focused agent. In Stable 0.1.6");
-    expect(copy).toContain("Real terminals in your workspace.");
+    expect(copy).toContain("Product preview · sample data · every mode on every plan");
+    expect(copy).toContain("Bypass Default Plan Read-only");
   });
 
   it("tags the Stable-shipped steps and demos with the served release", async () => {
@@ -625,11 +631,9 @@ describe("Gemini CLI in stages once Stable is served", () => {
     );
   });
 
-  it.each([
-    { name: "home page", component: Home as Component, path: "/" },
-    { name: "product page", component: Product as Component, path: "/product" },
-    { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
-  ])(
+  // Home and product draw Gemini CLI as the working provider it is since 0.1.9+1450 (see "provider
+  // support status" in provider-truth-copy.test.ts), so only the KalVoice page's stage is checked here.
+  it.each([{ name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" }])(
     "every stage on the Stable $name either draws no Gemini CLI or says it is unavailable",
     async ({ component, path }) => {
       selectSignedStable();
@@ -692,20 +696,17 @@ describe("docs once Stable is served", () => {
 describe("KalVoice dictation targets once Stable is served", () => {
   it("does not offer a Gemini CLI thread as a working dictation target", async () => {
     selectSignedStable();
+    // Gemini CLI (0.1.9+1450/1658) and Cursor (0.1.9+1502) are working coding agents now.
     const page = text(await render(KalVoicePage, "/kalvoice"));
-    expect(page).toContain("A Claude Code or Codex thread, a terminal, a search box.");
-    expect(page).not.toMatch(/Codex or Gemini CLI thread/);
+    expect(page).toContain("A Claude Code, Codex, Cursor or Gemini CLI agent, a terminal, a search box.");
     const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
-    expect(docs).toContain("a Claude Code or Codex thread composer (Gemini CLI is unavailable in this release),");
-    expect(docs).not.toMatch(/Codex or Gemini CLI thread/);
+    expect(docs).toContain("a Claude Code, Codex, Cursor or Gemini CLI agent's terminal,");
+    for (const copy of [page, docs]) expect(copy).not.toMatch(/Gemini CLI is unavailable/);
   });
 
-  it("keeps the preview list", async () => {
+  it("keeps the same list before Stable is served", async () => {
     expect(text(await render(KalVoicePage, "/kalvoice"))).toContain(
-      "A Claude Code, Codex or Gemini CLI thread, a terminal, a search box.",
-    );
-    expect(text(await render(KalVoiceDocs, "/docs/kalvoice"))).toContain(
-      "a Claude Code, Codex or Gemini CLI thread composer,",
+      "A Claude Code, Codex, Cursor or Gemini CLI agent, a terminal, a search box.",
     );
   });
 });
@@ -721,11 +722,14 @@ describe("stage status tags once Stable is served", () => {
     expect(tags).toContain("Browser pane in Stable 0.1.6 · provider panes not yet");
   });
 
-  it("labels the home permission modes with the shipped and planned modes", async () => {
+  // 0.1.9+1738 (labels.ts DEFAULT_MODE_CHOICES; crates/permissions policy.rs baseline): new agents
+  // start in Bypass, Plan is read-only, and credentials and secrets ask in both.
+  it("labels the home permission modes with the shipped modes", async () => {
     selectSignedStable();
     const home = text(await render(Home, "/"));
-    expect(home).toContain("Plan, Approve and Auto in Stable 0.1.6 · Bypass and Custom planned");
-    expect(home).not.toContain("Modes as designed");
+    expect(home).toContain("Bypass Default Plan Read-only");
+    expect(home).toContain("Credentials and secrets Asks you Asks you");
+    expect(home).not.toMatch(/Modes as designed|Approve once.*pnpm add/);
   });
 });
 
@@ -785,8 +789,9 @@ const EVERY_MODE_CLAIMS = [
 ];
 
 describe("permission modes in 0.1.6", () => {
+  // Home and product describe the shipped bypass-default model (see "permissions as shipped" below).
   it.each([
-    ...PAGES_UNDER_TEST,
+    ...PAGES_UNDER_TEST.filter((page) => page.path !== "/" && page.path !== "/product"),
     { name: "permissions docs", component: PermissionsDocs as Component, path: "/docs/permissions" },
     { name: "security page", component: Security as Component, path: "/security" },
   ])("the $name never presents Bypass or Custom as available", async ({ component, path }) => {
@@ -795,33 +800,22 @@ describe("permission modes in 0.1.6", () => {
     for (const pattern of EVERY_MODE_CLAIMS) expect(copy).not.toMatch(pattern);
   });
 
-  it("says in the permissions docs which modes 0.1.6 threads start in and marks the rest Planned", async () => {
+  // 0.1.9+1738 (labels.ts DEFAULT_MODE_CHOICES, PermissionsSettings.tsx): the starting modes are
+  // Bypass (the default) and read-only Plan; only credentials and secrets still ask.
+  it("says in the permissions docs that agents start in Bypass or Plan", async () => {
     const copy = text(await render(PermissionsDocs, "/docs/permissions"));
-    expect(copy).toContain("In KalCode 0.1.6, threads start in Plan, Approve or Auto, on every plan.");
-    expect(copy).toContain("Bypass and Custom are planned and not available in 0.1.6.");
-    expect(copy).toContain("Bypass Planned");
-    expect(copy).toContain("Custom Planned");
-    expect(copy).not.toMatch(/Plan Planned|Approve Planned|Auto Planned/);
+    expect(copy).toMatch(/New coding agents start in Bypass/);
+    expect(copy).toContain("Bypass Default");
+    expect(copy).toContain("access to credentials and secrets");
+    expect(copy).toContain("Every permission mode is on every plan.");
+    expect(copy).not.toMatch(/Approve is the default|Bypass and Custom are planned|Planned/);
   });
 
-  it("marks Bypass and Custom Planned on the product page", async () => {
-    const copy = text(await render(Product, "/product"));
-    expect(copy).toContain("Threads run in Plan, Approve or Auto on every plan. Bypass and Custom are planned.");
-    expect(copy).toContain("Bypass Planned");
-    expect(copy).toContain("Custom Planned");
-  });
-
-  it("names only the startable modes where the plans list what every plan includes", async () => {
-    for (const [component, path] of [
-      [Home, "/"],
-      [Pricing, "/pricing"],
-    ] as const) {
-      expect(text(await render(component, path))).toContain("Plan, Approve and Auto");
-    }
+  it("answers the pricing permission question with the shipped modes", async () => {
     const pricing = text(await render(Pricing, "/pricing"));
-    expect(pricing).toContain(
-      "In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
-    );
+    expect(pricing).toContain("Every permission mode is on every plan; plans never differ by safety controls.");
+    expect(pricing).toContain("New coding agents start in Bypass");
+    expect(pricing).not.toMatch(/Plan, Approve (and|or) Auto|Bypass and Custom are planned/);
   });
 
   it("marks Bypass and Custom Planned in the permission-modes preview", async () => {
@@ -837,6 +831,21 @@ describe("permission modes in 0.1.6", () => {
     );
     expect(panel).toContain("Bypass Planned");
     expect(panel).toContain("Custom Planned");
+  });
+});
+
+// The permission model as 0.1.9+1738 ships it (owner directive 2026-10-03): Bypass by default, Plan
+// read-only, credentials and secrets always ask, every mode on every plan, and no approval-first copy.
+describe("permissions as shipped", () => {
+  it.each([
+    { name: "home page", component: Home as Component, path: "/" },
+    { name: "product page", component: Product as Component, path: "/product" },
+  ])("the $name says agents start in Bypass, Plan is read-only and secrets ask", async ({ component, path }) => {
+    const copy = text(await render(component, path));
+    expect(copy).toContain("New coding agents start in Bypass");
+    expect(copy).toMatch(/Plan (for a read-only pass|is the read-only alternative)/);
+    expect(copy).toMatch(/Access to credentials and secrets always asks/);
+    expect(copy).not.toMatch(/Approve is the default|Bypass and Custom are planned|Plan, Approve (and|or) Auto/i);
   });
 });
 

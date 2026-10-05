@@ -48,6 +48,7 @@ use kalcode_contracts::permissions::{
 use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountBindingKind};
 use kalcode_contracts::sessions::{
     MAX_SESSION_CHOICES, SessionAttention, SessionFollowUp, SessionMatchTier, SessionResolution,
+    SessionScope,
 };
 use kalcode_contracts::threads::WorkspaceOption;
 use kalcode_contracts::threads::{ProviderOption, ThreadRuntimeKind, ThreadStatus, ThreadSummary};
@@ -1546,7 +1547,28 @@ fn permission_pending_error(thread: &ThreadSummary) -> ExecError {
     )
 }
 
-/// Whether a thread in `thread`'s state counts as `state`. "Waiting for you" includes a
+/// Whether a coding agent counts as `state`, read from the shared agent-state model: the same
+/// facts give the same answer for every provider (stuck is WAITING, failed includes a failed last
+/// turn, permission is NEEDS YOU with a request open).
+fn agent_attention(state: SessionAttention, agent: &ThreadSummary) -> bool {
+    state.matches_agent(
+        agent.status,
+        agent.current_activity.as_deref(),
+        agent.pending_approvals,
+    )
+}
+
+/// "agent" / "agents" / "thread" / "threads": what a state lookup found, by scope.
+fn scope_noun(scope: SessionScope, count: usize) -> &'static str {
+    match (scope, count) {
+        (SessionScope::Agents, 1) => "agent",
+        (SessionScope::Agents, _) => "agents",
+        (SessionScope::Threads, 1) => "thread",
+        (SessionScope::Threads, _) => "threads",
+    }
+}
+
+/// Whether a chat thread in `thread`'s state counts as `state`. "Waiting for you" includes a
 /// pending permission request: both wait on the person.
 fn attention_matches(state: SessionAttention, thread: &ThreadSummary) -> bool {
     match state {
@@ -1863,38 +1885,62 @@ impl DesktopExecutor {
         Ok((thread, submit))
     }
 
-    /// Open threads in `state`, current workspace first.
-    fn threads_in_state(
+    /// Open sessions in `state`, current workspace first (most recent first within each). For
+    /// [`SessionScope::Agents`] only coding agents of every provider (interactive provider
+    /// terminals, the durable pane marker) classified by the shared agent-state model; for
+    /// [`SessionScope::Threads`] only chat threads. An agent is never a thread.
+    fn sessions_in_state(
         &self,
         state: SessionAttention,
+        scope: SessionScope,
         ctx: &ExecContext,
     ) -> Result<Vec<ThreadSummary>, ExecError> {
-        Ok(self
-            .open_threads(ctx.workspace_id.as_deref())?
-            .into_iter()
-            .filter(|t| attention_matches(state, t))
-            .collect())
+        let mut found: Vec<ThreadSummary> = match scope {
+            SessionScope::Agents => self
+                .coding_agents()?
+                .into_iter()
+                .filter(|agent| agent_attention(state, agent))
+                .collect(),
+            SessionScope::Threads => {
+                let sessions = self.core.paths().data_dir.join("sessions");
+                self.open_threads(None)?
+                    .into_iter()
+                    .filter(|thread| {
+                        !kalcode_providers::interactive::provider::marked_interactive(
+                            &sessions, &thread.id,
+                        ) && attention_matches(state, thread)
+                    })
+                    .collect()
+            }
+        };
+        let workspace = ctx.workspace_id.as_deref();
+        found.sort_by_key(|t| workspace.is_none_or(|w| t.workspace_id != w));
+        Ok(found)
     }
 
-    /// "Focus the one waiting for permission": exactly one, or a "Which one?" choice.
+    /// "Focus the agent waiting for permission": exactly one, or a "Which one?" choice.
     fn prepare_focus_by_state(
         &self,
         state: SessionAttention,
+        scope: SessionScope,
         ctx: &ExecContext,
     ) -> Result<ThreadSummary, ExecError> {
-        let found = self.threads_in_state(state, ctx)?;
+        let found = self.sessions_in_state(state, scope, ctx)?;
         match found.as_slice() {
-            [] => Err(ExecError::new(
-                "session_not_found",
-                match state {
-                    SessionAttention::WaitingForPermission => {
-                        "No thread is waiting for permission."
-                    }
-                    SessionAttention::WaitingForYou => "No thread is waiting for you.",
-                    SessionAttention::Failed => "No thread has failed.",
-                    SessionAttention::Stuck => "No thread is stuck.",
-                },
-            )),
+            [] => {
+                let noun = scope_noun(scope, 1);
+                Err(ExecError::new(
+                    "session_not_found",
+                    match state {
+                        SessionAttention::WaitingForPermission => {
+                            format!("No {noun} is waiting for permission.")
+                        }
+                        SessionAttention::WaitingForYou => format!("No {noun} is waiting for you."),
+                        SessionAttention::Failed => format!("No {noun} has failed."),
+                        SessionAttention::Stuck => format!("No {noun} is stuck."),
+                    },
+                ))
+            }
             [one] => Ok(one.clone()),
             many => {
                 let shown: Vec<&ThreadSummary> = many.iter().take(MAX_SESSION_CHOICES).collect();
@@ -1904,8 +1950,9 @@ impl DesktopExecutor {
                 );
                 if many.len() > shown.len() {
                     question.push_str(&format!(
-                        " {} threads match; say the name of the one you want.",
-                        many.len()
+                        " {} {} match; say the name of the one you want.",
+                        many.len(),
+                        scope_noun(scope, many.len())
                     ));
                 }
                 Err(ExecError::new("target_ambiguous", question.clone())
@@ -1914,23 +1961,26 @@ impl DesktopExecutor {
         }
     }
 
-    /// "Which agent failed?": up to three names, the rest counted.
+    /// "Which agent is stuck?": up to three names, the rest counted. For agents the Agents tab
+    /// shows the group that holds them (Needs you, Waiting or Failed), for every provider.
     fn which_sessions(
         &self,
         state: SessionAttention,
+        scope: SessionScope,
         ctx: &ExecContext,
     ) -> Result<Executed, ExecError> {
-        let found = self.threads_in_state(state, ctx)?;
+        let found = self.sessions_in_state(state, scope, ctx)?;
         let refs: Vec<&ThreadSummary> = found.iter().collect();
         let shown = &refs[..refs.len().min(3)];
         let summary = if found.is_empty() {
+            let noun = scope_noun(scope, 0);
             match state {
                 SessionAttention::WaitingForPermission => {
-                    "No threads are waiting for permission.".to_owned()
+                    format!("No {noun} are waiting for permission.")
                 }
-                SessionAttention::WaitingForYou => "Nothing is waiting for you.".to_owned(),
-                SessionAttention::Failed => "No threads have failed.".to_owned(),
-                SessionAttention::Stuck => "No threads are stuck.".to_owned(),
+                SessionAttention::WaitingForYou => format!("No {noun} are waiting for you."),
+                SessionAttention::Failed => format!("No {noun} have failed."),
+                SessionAttention::Stuck => format!("No {noun} are stuck."),
             }
         } else {
             let verb = match (state, found.len()) {
@@ -1944,28 +1994,29 @@ impl DesktopExecutor {
                 names.push(format!("{more} more"));
             }
             format!(
-                "{} {verb}: {}.",
-                plural(found.len(), "thread", "threads"),
+                "{} {} {verb}: {}.",
+                found.len(),
+                scope_noun(scope, found.len()),
                 and_list(&names)
             )
         };
-        let directive = match state {
-            SessionAttention::WaitingForPermission if self.permissions.is_some() => {
-                Some(UiDirective::ShowApprovals)
-            }
-            // The Agents tab group that holds them: Needs you, or Failed (never hidden in
-            // Needs you, which doesn't show failed agents).
-            SessionAttention::WaitingForPermission | SessionAttention::WaitingForYou => {
-                Some(UiDirective::FilterAgents {
-                    filter: AgentFilter::NeedsYou,
-                    provider_id: None,
-                })
-            }
-            SessionAttention::Failed => Some(UiDirective::FilterAgents {
-                filter: AgentFilter::Failed,
+        let directive = match scope {
+            // The Agents tab group that holds them: Needs you, Waiting or Failed (never hidden
+            // in Needs you, which doesn't show failed agents).
+            SessionScope::Agents => Some(UiDirective::FilterAgents {
+                filter: state.agent_filter(),
                 provider_id: None,
             }),
-            SessionAttention::Stuck => None,
+            SessionScope::Threads
+                if state == SessionAttention::WaitingForPermission
+                    && self.permissions.is_some() =>
+            {
+                Some(UiDirective::ShowApprovals)
+            }
+            SessionScope::Threads if !found.is_empty() => Some(UiDirective::Navigate {
+                surface: SurfaceId::Threads,
+            }),
+            SessionScope::Threads => None,
         };
         Ok(Executed { summary, directive })
     }
@@ -1987,8 +2038,8 @@ impl DesktopExecutor {
             }
             KalVoiceIntent::SubmitFocused => self.prepare_submit(ctx).map(|_| ()),
             KalVoiceIntent::ClearFocused => self.focused_thread(ctx).map(|_| ()),
-            KalVoiceIntent::FocusByState { state } => {
-                self.prepare_focus_by_state(*state, ctx).map(|_| ())
+            KalVoiceIntent::FocusByState { state, scope } => {
+                self.prepare_focus_by_state(*state, *scope, ctx).map(|_| ())
             }
             KalVoiceIntent::OpenFinishedAgent { provider_id } => {
                 self.finished_agent(provider_id.as_ref()).map(|_| ())
@@ -2691,8 +2742,8 @@ impl Executor for DesktopExecutor {
                     }),
                 })
             }
-            KalVoiceIntent::FocusByState { state } => {
-                let thread = self.prepare_focus_by_state(*state, ctx)?;
+            KalVoiceIntent::FocusByState { state, scope } => {
+                let thread = self.prepare_focus_by_state(*state, *scope, ctx)?;
                 Ok(Executed {
                     summary: format!(
                         "Opened \u{201c}{}\u{201d} ({}).",
@@ -2702,7 +2753,9 @@ impl Executor for DesktopExecutor {
                     directive: Some(self.open_session_directive(&thread)?),
                 })
             }
-            KalVoiceIntent::WhichSessions { state } => self.which_sessions(*state, ctx),
+            KalVoiceIntent::WhichSessions { state, scope } => {
+                self.which_sessions(*state, *scope, ctx)
+            }
             KalVoiceIntent::FocusPrevious => Ok(Executed {
                 summary: "Going back to where you were.".into(),
                 directive: Some(UiDirective::FocusPrevious),
@@ -5642,10 +5695,18 @@ mod tests {
 
     #[test]
     fn sessions_by_state_focus_one_or_clarify_and_read_back_names() {
+        // Every session here is a chat thread: "the thread that failed" reads them, while an
+        // agent question never counts a chat thread.
         let s = sessions();
         let ctx = s.f.ctx();
-        let focus = |state| KalVoiceIntent::FocusByState { state };
-        let which = |state| KalVoiceIntent::WhichSessions { state };
+        let focus = |state| KalVoiceIntent::FocusByState {
+            state,
+            scope: SessionScope::Threads,
+        };
+        let which = |state| KalVoiceIntent::WhichSessions {
+            state,
+            scope: SessionScope::Threads,
+        };
         assert_eq!(
             s.f.run(&focus(SessionAttention::Failed), &ctx)
                 .map_err(|e| e.message),
@@ -5677,12 +5738,11 @@ mod tests {
             "{}",
             read.summary
         );
-        // Failed sessions show the Failed group (Needs you never shows failed agents).
+        // Chat threads live in Threads, never in the Agents tab.
         assert_eq!(
             read.directive,
-            Some(UiDirective::FilterAgents {
-                filter: AgentFilter::Failed,
-                provider_id: None,
+            Some(UiDirective::Navigate {
+                surface: SurfaceId::Threads,
             })
         );
         s.f.set_status(&s.research_a, ThreadStatus::WaitingForPermission);
@@ -5705,6 +5765,29 @@ mod tests {
                 .expect("stuck");
         assert_eq!(stuck.summary, "No threads are stuck.");
         assert_eq!(stuck.directive, None);
+
+        // "Which agent failed?" with only chat threads failed: no agent has.
+        let agents =
+            s.f.run(
+                &KalVoiceIntent::WhichSessions {
+                    state: SessionAttention::Failed,
+                    scope: SessionScope::Agents,
+                },
+                &ctx,
+            )
+            .expect("agents");
+        assert_eq!(agents.summary, "No agents have failed.");
+        assert_eq!(
+            s.f.run(
+                &KalVoiceIntent::FocusByState {
+                    state: SessionAttention::WaitingForPermission,
+                    scope: SessionScope::Agents,
+                },
+                &ctx,
+            )
+            .map_err(|e| e.message),
+            Err("No agent is waiting for permission.".into())
+        );
         let _ = (&s.release_windows, &s.research_b);
     }
 
@@ -5955,6 +6038,167 @@ mod tests {
         assert_eq!(
             status.summary,
             "8 agents: 2 need you, 1 working, 1 done, 2 idle, 2 failed."
+        );
+    }
+
+    /// "Which agent is stuck / waiting for permission", "focus the one that failed", "focus the
+    /// agent that needs me": coding agents of every provider classified by the shared agent
+    /// state, named as agents, shown in the Agents tab group, and never the chat thread.
+    #[test]
+    fn agent_attention_reads_coding_agents_of_every_provider_never_chat_threads() {
+        let s = fleet();
+        let ctx = s.f.ctx();
+        let which = |state| KalVoiceIntent::WhichSessions {
+            state,
+            scope: SessionScope::Agents,
+        };
+        let focus = |state| KalVoiceIntent::FocusByState {
+            state,
+            scope: SessionScope::Agents,
+        };
+        let filtered = |filter| {
+            Some(UiDirective::FilterAgents {
+                filter,
+                provider_id: None,
+            })
+        };
+        let opened_agent = |agent: &ThreadSummary| {
+            Some(UiDirective::OpenAgent {
+                agent_id: agent.id.clone(),
+                workspace_id: agent.workspace_id.clone(),
+            })
+        };
+
+        // Failed: Gemini's failed session and Cursor's failed last turn.
+        let failed =
+            s.f.run(&which(SessionAttention::Failed), &ctx)
+                .expect("failed");
+        assert!(
+            failed.summary.starts_with("2 agents failed: ")
+                && failed.summary.contains("Gemini D")
+                && failed.summary.contains("Cursor I"),
+            "{}",
+            failed.summary
+        );
+        assert_eq!(failed.directive, filtered(AgentFilter::Failed));
+        let two =
+            s.f.run(&focus(SessionAttention::Failed), &ctx)
+                .expect_err("two agents failed");
+        assert_eq!(two.code, "target_ambiguous");
+        let mut ids = choices(&two);
+        ids.sort();
+        let mut expected = vec![
+            s.gemini_failed.id.clone(),
+            s.cursor_last_turn_failed.id.clone(),
+        ];
+        expected.sort();
+        assert_eq!(ids, expected);
+
+        // Permission: only the agent with a request open, opened as its coding terminal.
+        let permission =
+            s.f.run(&which(SessionAttention::WaitingForPermission), &ctx)
+                .expect("permission");
+        assert_eq!(
+            permission.summary,
+            "1 agent is waiting for permission: Gemini F."
+        );
+        assert_eq!(permission.directive, filtered(AgentFilter::NeedsYou));
+        let one =
+            s.f.run(&focus(SessionAttention::WaitingForPermission), &ctx)
+                .expect("one permission");
+        assert_eq!(one.directive, opened_agent(&s.gemini_permission));
+        assert_eq!(
+            one.summary,
+            "Opened \u{201c}Gemini F\u{201d} (waiting for permission)."
+        );
+
+        // Needs me: Codex B and Gemini F, never the chat thread that is also waiting for you.
+        let needs =
+            s.f.run(&which(SessionAttention::WaitingForYou), &ctx)
+                .expect("needs you");
+        assert!(
+            needs.summary.starts_with("2 agents are waiting for you: ")
+                && needs.summary.contains("Codex B")
+                && needs.summary.contains("Gemini F")
+                && !needs.summary.contains("Chat H"),
+            "{}",
+            needs.summary
+        );
+        assert_eq!(needs.directive, filtered(AgentFilter::NeedsYou));
+        let choice =
+            s.f.run(&focus(SessionAttention::WaitingForYou), &ctx)
+                .expect_err("two agents need you");
+        assert!(!choices(&choice).contains(&s.chat_waiting.id));
+        assert_eq!(choices(&choice).len(), 2);
+
+        // Stuck is the shared WAITING state: nothing yet, and an offline agent is idle, not
+        // stuck. A chat thread blocked on a dependency is a stuck thread, never a stuck agent.
+        let none =
+            s.f.run(&which(SessionAttention::Stuck), &ctx)
+                .expect("stuck");
+        assert_eq!(none.summary, "No agents are stuck.");
+        assert_eq!(none.directive, filtered(AgentFilter::Waiting));
+        s.f.set_state(
+            &s.cursor_idle,
+            ThreadStatus::Offline,
+            None,
+            "2026-10-04T12:00:20.000Z",
+        );
+        s.f.set_state(
+            &s.chat_waiting,
+            ThreadStatus::WaitingForDependency,
+            None,
+            "2026-10-04T12:00:21.000Z",
+        );
+        assert_eq!(
+            s.f.run(&which(SessionAttention::Stuck), &ctx)
+                .expect("still none")
+                .summary,
+            "No agents are stuck."
+        );
+        assert_eq!(
+            s.f.run(&focus(SessionAttention::Stuck), &ctx)
+                .map_err(|e| e.message),
+            Err("No agent is stuck.".into())
+        );
+        s.f.set_state(
+            &s.claude_working,
+            ThreadStatus::WaitingForDependency,
+            None,
+            "2026-10-04T12:00:22.000Z",
+        );
+        let stuck =
+            s.f.run(&which(SessionAttention::Stuck), &ctx)
+                .expect("one stuck");
+        assert_eq!(stuck.summary, "1 agent is stuck: Claude A.");
+        assert_eq!(
+            s.f.run(&focus(SessionAttention::Stuck), &ctx)
+                .expect("focus stuck")
+                .directive,
+            opened_agent(&s.claude_working)
+        );
+        // "Which thread is stuck?" still reads chat threads, and only them.
+        let thread =
+            s.f.run(
+                &KalVoiceIntent::WhichSessions {
+                    state: SessionAttention::Stuck,
+                    scope: SessionScope::Threads,
+                },
+                &ctx,
+            )
+            .expect("stuck thread");
+        assert_eq!(thread.summary, "1 thread is stuck: Chat H.");
+        assert_eq!(
+            s.f.run(
+                &KalVoiceIntent::FocusByState {
+                    state: SessionAttention::Stuck,
+                    scope: SessionScope::Threads,
+                },
+                &ctx,
+            )
+            .expect("focus stuck thread")
+            .directive,
+            opened(&s.chat_waiting)
         );
     }
 

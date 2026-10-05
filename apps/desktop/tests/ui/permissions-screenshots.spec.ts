@@ -24,7 +24,7 @@ for (const theme of ["dark", "light"] as const) {
     for (const size of SIZES) {
       await page.setViewportSize({ width: size.width, height: size.height });
       await page.goto("/?scenario=approvals");
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await page.getByRole("button", { name: "Settings", exact: true }).click();
       await page
         .getByRole("radiogroup", { name: "Theme" })
@@ -49,7 +49,12 @@ for (const theme of ["dark", "light"] as const) {
 
       await page
         .getByRole("navigation", { name: "Primary" })
-        .getByRole("button", { name: /^Approvals/ })
+        .getByRole("button", { name: /^Needs you/ })
+        .click();
+      await page
+        .getByRole("dialog", { name: "Needs you" })
+        .getByRole("button", { name: /^Review: / })
+        .first()
         .click();
       await expect(page.getByRole("dialog", { name: "Approvals" }).getByRole("region").first()).toBeVisible();
       await shot(page, `permissions-approvals-${theme}-${size.name}`);
@@ -57,7 +62,7 @@ for (const theme of ["dark", "light"] as const) {
 
       if (size.name === "1440") {
         await page.getByRole("button", { name: "Collapse sidebar" }).click();
-        await page.getByRole("button", { name: "Dashboard" }).click();
+        await page.getByRole("button", { name: "Activity", exact: true }).click();
         await shot(page, `permissions-sidebar-collapsed-${theme}-${size.name}`);
         await page.getByRole("button", { name: "Expand sidebar" }).click();
       }

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Account-aware + launch proof. Every route stays in the launch surface: one account is implicit,
@@ -18,7 +19,7 @@ const pane = (page: Page) => page.locator("[data-provider-pane]").first();
 
 async function open(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 async function openWorkspace(page: Page, folder: string) {
@@ -33,7 +34,7 @@ async function openWorkspace(page: Page, folder: string) {
 }
 
 async function openThreads(page: Page) {
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+  await goTo(page, "Threads");
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 }
 
@@ -68,7 +69,7 @@ test("Dashboard Launch an agent routes through Code, implicitly uses sole Claude
 }) => {
   await open(page);
   await openWorkspace(page, "dashboard-plus");
-  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   const agents = page.getByRole("region", { name: "Agents" });
   await expect(agents.getByRole("heading", { name: "No agents yet" })).toBeVisible();
 
@@ -94,7 +95,7 @@ test("Code + immediately offers multiple Codex accounts, signs Work in inline an
   await page.setViewportSize({ width: 1040, height: 760 });
   await open(page);
   await openWorkspace(page, "agent-picker");
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const dialog = launcher(page);
   // Every account of every provider is one list; Codex's two accounts are its own group.
   const accounts = dialog.getByRole("group", { name: "Codex" }).getByRole("option");
@@ -158,7 +159,7 @@ test("empty-account + flows add and sign in without leaving either agent or thre
   await open(page, "provider-accounts-empty");
   await openWorkspace(page, "empty-account-plus");
 
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   let surface = launcher(page);
   await expect(surface.getByText("No Claude Code account added yet")).toBeVisible();
   await expect(surface.getByRole("button", { name: "Launch Claude Code agent" })).toBeDisabled();

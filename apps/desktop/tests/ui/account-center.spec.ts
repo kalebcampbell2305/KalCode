@@ -26,7 +26,7 @@ test("account center opens in place with each account's real usage, never an inv
   const work = center.getByRole("region", { name: "Codex · Work", exact: true });
   await expect(work).not.toContainText(/\d+% left/);
   await expect(work.getByRole("button", { name: "Sign in Work" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Dashboard", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity", exact: true, level: 1 })).toBeVisible();
   const violations = (await new AxeBuilder({ page }).include("[data-account-center]").analyze()).violations.filter(
     (v) => v.impact === "serious" || v.impact === "critical",
   );
@@ -57,7 +57,7 @@ test("rename, details and default stay in the center and update canonical accoun
 test("switching selects the next agent while the current terminal keeps its real account", async ({ page }) => {
   await page.goto("/?scenario=code");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })
@@ -80,7 +80,7 @@ test("switching selects the next agent while the current terminal keeps its real
   await expect(center).toContainText("This terminal is using: Claude Code · Personal");
   await expect(chip).toContainText("Personal");
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   await expect(launcher.getByRole("option", { selected: true })).toContainText("Studio");
   await launcher.getByRole("button", { name: "Launch Claude Code agent" }).click();
@@ -92,7 +92,7 @@ test("switching selects the next agent while the current terminal keeps its real
   await page.keyboard.press("Escape");
   await page
     .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "Dashboard", exact: true })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
   await chip.click();
   await expect(center).not.toContainText("This terminal is using");

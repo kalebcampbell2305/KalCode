@@ -312,3 +312,8 @@ export function useNotifications(): NotificationsValue {
   if (!value) throw new Error("useNotifications must be used inside <NotificationsProvider>");
   return value;
 }
+
+/** The notification center when one is mounted (canonical actions run outside it in tests). */
+export function useOptionalNotifications(): NotificationsValue | null {
+  return useContext(NotificationsContext);
+}

@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo, needsYouButton } from "./nav.ts";
 
 /**
  * The live Dashboard (Z7-W3) against the in-memory transport's Dashboard scenarios
@@ -22,7 +23,7 @@ type Scenario =
 async function open(page: Page, scenario: Scenario = "default", extra = "") {
   const query = [scenario === "default" ? "" : `scenario=${scenario}`, extra].filter(Boolean).join("&");
   await page.goto(query ? `/?${query}` : "/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 const main = (page: Page) => page.locator("#main");
@@ -53,7 +54,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
     .getByRole("radio", { name: theme === "light" ? "Light" : "Dark" })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
 }
 
 test.describe("a fresh session", () => {
@@ -363,7 +364,7 @@ test.describe("widgets", () => {
     await expect(resize).toHaveAttribute("aria-valuenow", "384");
 
     await page.reload();
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     expect(await order()).toEqual([
       "approvals",
       "activity",
@@ -388,10 +389,10 @@ test.describe("widgets", () => {
   test("provider health shows each provider's health and links to the Health tab", async ({ page }) => {
     await open(page);
     // Detection runs on the Providers page; the widget only reads the health snapshot.
-    await page.getByRole("button", { name: "Providers" }).click();
+    await goTo(page, "Providers");
     await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
     await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
 
     const health = page.getByRole("region", { name: "Provider health" });
     const row = (id: string) => health.locator(`[data-provider-health="${id}"]`);
@@ -410,17 +411,17 @@ test.describe("widgets", () => {
       "degraded",
     );
     // A later plain visit opens the default tab again.
-    await page.getByRole("button", { name: "Dashboard" }).click();
-    await page.getByRole("button", { name: "Providers" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    await goTo(page, "Providers");
     await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("provider health shows sign-in, install and reported rate-limit states in words", async ({ page }) => {
     const visit = async (scenario: string) => {
       await page.goto(`/?scenario=${scenario}`);
-      await page.getByRole("button", { name: "Providers" }).click();
+      await goTo(page, "Providers");
       await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
-      await page.getByRole("button", { name: "Dashboard" }).click();
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       return page.getByRole("region", { name: "Provider health" });
     };
     let health = await visit("providers-signed-out");
@@ -531,31 +532,36 @@ test.describe("states", () => {
 });
 
 test.describe("sidebar", () => {
-  test("the Dashboard item counts what needs you, from the same list", async ({ page }) => {
+  test("Needs you counts what needs the person, from the same list; Activity carries no duplicate count", async ({
+    page,
+  }) => {
     await open(page, "busy");
-    const nav = page
-      .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true });
+    const primary = page.getByRole("navigation", { name: "Primary" });
+    const activity = primary.getByRole("button", { name: "Activity", exact: true });
+    const inbox = needsYouButton(page);
     await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
-    await expect(nav).toHaveText("Dashboard3");
-    await expect(nav).toHaveAccessibleDescription("3 agents need you");
-    // Pausing the thread that waits for permission leaves three.
+    await expect(activity).toHaveText("Activity");
+    // Busy fixture: the board's three needing-you agents, the failed one and two finished agents
+    // whose changes wait for review.
+    await expect(inbox).toHaveAccessibleName("Needs you, 6 waiting");
+    await expect(inbox).toHaveText("Needs you6");
+    // Pausing the thread that waits for permission takes it out of both.
     await card(page, "Refactor auth middleware")
       .getByRole("button", { name: "More actions for Refactor auth middleware" })
       .click();
     await page.getByRole("menuitem", { name: "Pause" }).click();
-    await expect(nav).toHaveText("Dashboard2");
-    await expect(nav).toHaveAccessibleDescription("2 agents need you");
+    await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 2");
+    await expect(inbox).toHaveAccessibleName("Needs you, 5 waiting");
   });
 
-  test("the Dashboard item shows no count when nothing needs you", async ({ page }) => {
+  test("Needs you shows no count when nothing needs you", async ({ page }) => {
     await open(page, "empty");
-    const nav = page
-      .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true });
     await expect(board(page).getByRole("heading", { name: "No agents yet" })).toBeVisible();
-    await expect(nav).toHaveText("Dashboard");
-    await expect(nav).not.toHaveAttribute("aria-describedby");
+    await expect(
+      page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Activity", exact: true }),
+    ).toHaveText("Activity");
+    await expect(needsYouButton(page)).toHaveAccessibleName("Needs you, nothing waiting");
+    await expect(needsYouButton(page)).toHaveText("Needs you");
   });
 });
 

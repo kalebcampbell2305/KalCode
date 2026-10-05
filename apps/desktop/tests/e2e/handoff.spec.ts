@@ -111,13 +111,13 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
   try {
     const app = await launch(dataDir, env);
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await codeNav(page).click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "handoff-project" })).toBeVisible();
 
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
     await launcher.getByLabel("Agents", { exact: true }).fill("2");
     await launcher.getByRole("button", { name: "Launch 2 Claude Code agents", exact: true }).click();

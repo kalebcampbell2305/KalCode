@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Z7-W2: the workspace rail, the returning-user home, the project surface and the Session
@@ -14,8 +15,8 @@ test.use({ viewport: { width: 1600, height: 900 } });
 async function open(page: Page, scenario?: "rail" | "home") {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
   await expect(page.locator("#main")).toHaveAttribute("data-surface", scenario ? "code" : "dashboard");
-  await nav(page, "Dashboard").click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await nav(page, "Activity").click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 const tree = (page: Page) => page.getByRole("tree", { name: "Workspaces" });
@@ -234,7 +235,7 @@ test.describe("workspace rail", () => {
     });
     expect(geometry.headingWidth).toBeGreaterThan(0);
     expect(geometry.controlCount).toBeGreaterThan(0);
-    await nav(page, "Threads").click();
+    await goTo(page, "Threads");
     await expect(tree(page)).toBeVisible();
     await page.setViewportSize({ width: 1600, height: 900 });
     await expect(tree(page)).toBeVisible();
@@ -313,7 +314,7 @@ test.describe("home", () => {
       expect(greeting).toContain("Kaleb");
       expect(shown.slice(-5), `visit ${visit}: ${greeting}`).not.toContain(greeting);
       shown.push(greeting);
-      await nav(page, "Dashboard").click();
+      await nav(page, "Activity").click();
     }
   });
 
@@ -414,7 +415,7 @@ test.describe("search", () => {
 
   test("KalVoice “search for auth” opens the palette with the query", async ({ page }) => {
     await open(page, "rail");
-    await nav(page, "KalVoice").click();
+    await goTo(page, "KalVoice");
     const box = page.getByRole("main").getByRole("textbox", { name: "Type a request for KalVoice" });
     await box.fill("search for auth");
     await box.press("Enter");

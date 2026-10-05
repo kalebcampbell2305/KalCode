@@ -10,6 +10,7 @@ import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
+import { goTo } from "../../test/nav.ts";
 
 // Unarchive from the Stable Threads surface: an archived thread shown with "Show archived" can be
 // restored, and it becomes an ordinary open thread again. Stable flags as in Shell.stable.test.tsx.
@@ -56,9 +57,8 @@ it("restores an archived thread from the Threads surface", async () => {
     </ToastProvider>,
   );
   const user = userEvent.setup();
-  await user.click(
-    await within(screen.getByRole("navigation", { name: "Primary" })).findByRole("button", { name: "Threads" }),
-  );
+  await screen.findByRole("navigation", { name: "Primary" });
+  await goTo(user, "Threads");
   await screen.findByRole("heading", { level: 1, name: "Threads" });
   const list = await screen.findByRole("list", { name: "Threads" });
   expect(within(list).queryByText(finished.name)).toBeNull();

@@ -35,7 +35,7 @@ test("KalTidy stops an idle shell and keeps terminals still running a command", 
   try {
     const app = await launch(dataDir, { KALCODE_E2E_PICK_FOLDER: project });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "tidy-site" })).toBeVisible();
@@ -73,7 +73,7 @@ test("KalTidy stops an idle shell and keeps terminals still running a command", 
 
     // Past the threshold (2 minutes quiet), from the Dashboard so neither terminal is focused.
     await page.waitForTimeout(125_000);
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page.keyboard.press("Control+K");
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("combobox").fill("tidy");

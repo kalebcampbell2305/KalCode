@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Captures review screenshots of every desktop surface in both themes at three window sizes.
@@ -33,24 +34,24 @@ for (const theme of ["dark", "light"] as const) {
     for (const size of SIZES) {
       await page.setViewportSize({ width: size.width, height: size.height });
       await page.goto("/");
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await setTheme(page, theme);
       await page.getByRole("button", { name: "Check credential store" }).click();
       await page.getByRole("button", { name: "Dismiss notification" }).first().click();
       await shot(page, `settings-${theme}-${size.name}`);
-      await page.getByRole("button", { name: "Dashboard" }).click();
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       await shot(page, `dashboard-${theme}-${size.name}`);
       if (size.name === "1440") {
-        await page.getByRole("button", { name: "KalVoice" }).click();
+        await goTo(page, "KalVoice");
         await shot(page, `kalvoice-${theme}-${size.name}`);
-        await page.getByRole("button", { name: "Agents" }).click();
+        await goTo(page, "Agents");
         await shot(page, `gated-${theme}-${size.name}`);
         await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k");
         await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
         await shot(page, `palette-${theme}-${size.name}`);
         await page.keyboard.press("Escape");
         await page.keyboard.press(process.platform === "darwin" ? "Meta+b" : "Control+b");
-        await page.getByRole("button", { name: "Dashboard" }).click();
+        await page.getByRole("button", { name: "Activity", exact: true }).click();
         await shot(page, `dashboard-collapsed-${theme}-${size.name}`);
       }
     }
@@ -67,9 +68,9 @@ for (const theme of ["dark", "light"] as const) {
     for (const size of PROVIDER_SIZES) {
       await page.setViewportSize({ width: size.width, height: size.height });
       await page.goto("/");
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await setTheme(page, theme);
-      await page.getByRole("button", { name: "Providers" }).click();
+      await goTo(page, "Providers");
       await page.getByRole("tab", { name: "Setup" }).click();
       await expect(page.getByText("Installed, version 2.1.282")).toBeVisible();
       await shot(page, `providers-${theme}-${size.name}`);
@@ -95,13 +96,13 @@ test("@screenshots providers states", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   for (const scenario of ["providers-outdated", "providers-error", "providers-none"]) {
     await page.goto(`/?scenario=${scenario}`);
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await page.getByRole("button", { name: "Providers" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+    await goTo(page, "Providers");
     await page.getByRole("tab", { name: "Setup" }).click();
     await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
     await shot(page, `${scenario}-dark-1440`);
   }
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   await shot(page, "dashboard-providers-none-dark-1440");
 });
 

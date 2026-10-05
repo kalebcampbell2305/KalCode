@@ -17,7 +17,14 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { UsageMeter } from "../providers/AccountUsageBadge.tsx";
 import { accountName, accountSessionState, sortAccounts } from "../providers/accountIdentity.ts";
-import { type AccountUsageState, notChecked, usageSummary, useAccountUsages } from "../providers/accountUsage.ts";
+import {
+  type AccountUsageState,
+  LOW_USAGE_PERCENT,
+  limitingWindow,
+  notChecked,
+  type UsageWindow,
+  useAccountUsages,
+} from "../providers/accountUsage.ts";
 import { LaunchSignIn } from "../providers/LaunchAccountPicker.tsx";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import { isBrowserAuthProvider } from "../providers/useProviderAccounts.ts";
@@ -50,6 +57,8 @@ export interface NewAgentDialogProps {
   /** Codex / Gemini CLI when this build can run them (Claude Code is always offered). */
   offered: readonly PaneProviderId[];
   initialProvider: PaneProviderId;
+  /** Pre-fills the agent count (a "start six agents" request that still needs a choice). */
+  initialCount?: number;
   busy: boolean;
   error: string | null;
   /** Handoff launches create exactly one recipient while keeping the prepared draft in Code. */
@@ -111,6 +120,7 @@ export function NewAgentDialog({
   workspace,
   offered,
   initialProvider,
+  initialCount,
   busy,
   error,
   fixedCount,
@@ -147,8 +157,12 @@ export function NewAgentDialog({
     providerId: initialProvider,
   });
   // What the person typed; the launch uses it clamped, so editing "1" to "5" never passes through 15.
-  const [countText, setCountText] = useState(() => String(memory.byProvider[initialProvider]?.count ?? 1));
-  const [countTouched, setCountTouched] = useState(false);
+  const [countText, setCountText] = useState(() =>
+    String(
+      initialCount !== undefined ? clampAgentCount(initialCount) : (memory.byProvider[initialProvider]?.count ?? 1),
+    ),
+  );
+  const [countTouched, setCountTouched] = useState(initialCount !== undefined);
   const [signingIn, setSigningIn] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -456,14 +470,16 @@ export function NewAgentDialog({
     );
   };
 
-  // Low quota: suggest (never switch to) a same-provider account with more left.
-  const selectedUsage = account ? usageOf(account.id) : null;
+  // Low quota: suggest (never switch to) a same-provider account with more left. This judges the
+  // window that actually limits work (the 5-hour one can block before the weekly does) and names
+  // it, since the rows' headline percentage is the weekly one.
+  const lowWindow = account ? limitingLowWindow(usageOf(account.id)) : null;
   const alternative =
-    account && selectedUsage && usageSummary(selectedUsage).low
+    account && lowWindow
       ? candidates.find((a) => {
           if (a.id === account.id || !sessionOf(a).usable) return false;
-          const summary = usageSummary(usageOf(a.id));
-          return summary.tone === "ok";
+          const usage = usageOf(a.id);
+          return usage.status === "fresh" && limitingWindow(usage) !== null && limitingLowWindow(usage) === null;
         })
       : undefined;
 
@@ -733,10 +749,11 @@ export function NewAgentDialog({
                     {requestedName} isn't available here yet. Choose another account.
                   </p>
                 ) : null}
-                {alternative && account ? (
+                {alternative && account && lowWindow ? (
                   <p className={styles.lowHint}>
                     <span>
-                      {accountName(account)} is running low. Use {accountName(alternative)} instead?
+                      {accountName(account)} is running low on its {lowWindow.label.toLowerCase()} limit. Use{" "}
+                      {accountName(alternative)} instead?
                     </span>
                     <button
                       type="button"
@@ -1063,4 +1080,10 @@ function ChipGroup({
       </div>
     </div>
   );
+}
+
+/** The fresh window that limits this account when it is under LOW_USAGE_PERCENT, else null. */
+function limitingLowWindow(usage: AccountUsageState): UsageWindow | null {
+  const window = usage.status === "fresh" ? limitingWindow(usage) : null;
+  return window && window.remainingPercent < LOW_USAGE_PERCENT ? window : null;
 }

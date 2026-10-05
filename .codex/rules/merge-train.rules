@@ -1,0 +1,127 @@
+# KalCode merge train (execpolicy prefix rules, verified with codex-cli 0.160.0 `codex execpolicy check`).
+#
+# KalCode's main is updated ONLY by the shared `node tooling/merge-train/train.mjs land|run`.
+# Shipping starts from the train's validated landed commit. An agent queues its PR with
+#   node tooling/merge-train/train.mjs submit <pr>
+# Installed copies: this file (project rules, trusted checkouts), ~/.codex/rules/merge-train.rules, and each
+# KalCode-managed CODEX_HOME's rules/merge-train.rules. Keep them identical.
+#
+# Prefix rules match literal leading tokens, so forms with a variable token before the main refspec
+# (`git -C <dir> push ...`, `<sha>:refs/heads/main`, `gh api` endpoints with a PR number) are out of reach;
+# the Claude Code PreToolUse guard (tooling/release/lifecycle/merge-guard.mjs) covers those for Claude.
+
+MSG = "KalCode main is updated only by the merge train. Queue the PR instead: node tooling/merge-train/train.mjs submit <pr>"
+
+GH = ["gh", "gh.exe"]
+GIT = ["git", "git.exe"]
+MAIN = [
+    "main",
+    "HEAD:main",
+    "refs/heads/main",
+    "HEAD:refs/heads/main",
+    "+main",
+    "+HEAD:main",
+    "+refs/heads/main",
+    "+HEAD:refs/heads/main",
+    ":main",
+    ":refs/heads/main",
+]
+PUSH_FLAGS = [
+    "-f",
+    "--force",
+    "--force-with-lease",
+    "--force-if-includes",
+    "-u",
+    "--set-upstream",
+    "--no-verify",
+    "-q",
+    "--quiet",
+    "--atomic",
+    "-v",
+    "--verbose",
+    "-d",
+    "--delete",
+]
+
+# gh pr merge, every form (--admin, --auto, --squash ...).
+prefix_rule(
+    pattern = [GH, "pr", "merge"],
+    decision = "forbidden",
+    justification = MSG,
+    match = ["gh pr merge 221", "gh pr merge 221 --admin --merge", "gh.exe pr merge --auto --squash 7"],
+    not_match = ["gh pr view 221", "gh pr create --fill", "gh pr edit 5 --title x", "gh pr checks 5"],
+)
+
+prefix_rule(
+    pattern = [GH, ["-R", "--repo"], "kalebcampbell2305/KalCode", "pr", "merge"],
+    decision = "forbidden",
+    justification = MSG,
+    match = ["gh -R kalebcampbell2305/KalCode pr merge 5"],
+)
+
+# gh api calls whose method is PUT (the REST merge endpoint is PUT .../pulls/<n>/merge).
+prefix_rule(
+    pattern = [GH, "api", ["-X", "--method"], ["PUT", "put"]],
+    decision = "forbidden",
+    justification = MSG + " (gh api -X PUT is blocked because it is how the REST API merges a PR)",
+    match = ["gh api -X PUT repos/kalebcampbell2305/KalCode/pulls/5/merge"],
+    not_match = ["gh api repos/kalebcampbell2305/KalCode/pulls/5"],
+)
+
+prefix_rule(
+    pattern = [GH, "api", ["-XPUT", "--method=PUT", "--method=put"]],
+    decision = "forbidden",
+    justification = MSG + " (gh api -X PUT is blocked because it is how the REST API merges a PR)",
+)
+
+prefix_rule(
+    pattern = [GH, "api", ["repos/kalebcampbell2305/KalCode/merges", "/repos/kalebcampbell2305/KalCode/merges"]],
+    decision = "forbidden",
+    justification = MSG,
+)
+
+# git push <remote> <main refspec>, optionally after one or two flags.
+prefix_rule(
+    pattern = [GIT, "push", "origin", MAIN],
+    decision = "forbidden",
+    justification = MSG,
+    match = ["git push origin main", "git push origin HEAD:main", "git push origin HEAD:refs/heads/main --force"],
+    not_match = ["git push origin feat/merge-train", "git push origin HEAD:feat/x", "git push origin main-followup"],
+)
+
+prefix_rule(
+    pattern = [GIT, "push", PUSH_FLAGS, "origin", MAIN],
+    decision = "forbidden",
+    justification = MSG,
+    match = ["git push --force origin main", "git push -u origin HEAD:main", "git push --delete origin main"],
+    not_match = ["git push -u origin feat/merge-train", "git push --force-with-lease origin feat/x"],
+)
+
+prefix_rule(
+    pattern = [GIT, "push", PUSH_FLAGS, PUSH_FLAGS, "origin", MAIN],
+    decision = "forbidden",
+    justification = MSG,
+    match = ["git push -f -u origin main"],
+    not_match = ["git push -f -u origin feat/x"],
+)
+
+prefix_rule(
+    pattern = [GIT, "push", "origin", PUSH_FLAGS, MAIN],
+    decision = "forbidden",
+    justification = MSG,
+    match = ["git push origin --delete main", "git push origin --force HEAD:main"],
+    not_match = ["git push origin --force feat/x"],
+)
+
+# Pushing every branch includes main.
+prefix_rule(
+    pattern = [GIT, "push", ["--all", "--mirror", "--branches"]],
+    decision = "forbidden",
+    justification = MSG,
+)
+
+prefix_rule(
+    pattern = [GIT, "push", "origin", ["--all", "--mirror", "--branches"]],
+    decision = "forbidden",
+    justification = MSG,
+)

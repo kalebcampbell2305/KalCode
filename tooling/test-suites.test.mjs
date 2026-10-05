@@ -31,16 +31,16 @@ test("the registered Rust release gate includes the production speech engine and
   // real-Codex hook probes (AI quota) and the PTY/process-scan benchmarks (#238, #239).
   for (const [platform, expected] of [
     // The netstat CPU benchmark only compiles on Windows.
-    ["win32", 35],
-    ["darwin", 34],
+    ["win32", 36],
+    ["darwin", 35],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 31],
+    ["linux", 32],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 35);
+  assert.equal(inventory.rustIntentionalIgnores.length, 36);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
@@ -66,6 +66,23 @@ test("the Rust workspace suite builds the desktop crate with the Dev identity ov
   assert.deepEqual(launched.args, rust.command.slice(1));
   assert.equal(launched.env.KEEP, "yes");
   assert.equal(JSON.parse(launched.env.TAURI_CONFIG).identifier, "com.kalcode.desktop.dev");
+});
+
+test("the gate's Vitest worker budget reaches the child command and rejects invalid values", () => {
+  const selected = inventory.suites.find(({ id }) => id === "protocol-unit");
+  let launched;
+  const spawn = (_file, args) => {
+    launched = args;
+    return { status: 1, signal: null, error: null, stdout: "", stderr: "" };
+  };
+  assert.throws(() => runSuite(selected, { platform: "linux", environment: { VITEST_MAX_WORKERS: "2" }, spawn }));
+  assert.ok(launched.includes("--maxWorkers=2"));
+  launched = null;
+  assert.throws(
+    () => runSuite(selected, { platform: "linux", environment: { VITEST_MAX_WORKERS: "2;bad" }, spawn }),
+    /Invalid VITEST_MAX_WORKERS/,
+  );
+  assert.equal(launched, null);
 });
 
 test("the registered runner launches a real package suite and retains its exit status", () => {
@@ -485,14 +502,16 @@ test("website skip profiles require reviewed counts and runtime reasons", () => 
   const website = inventory.suites.find(({ id }) => id === "website-e2e");
   const defaultProfile = selectProfile(website, "win32", {});
   assert.equal(defaultProfile.minimumExecuted, 164);
-  assert.equal(defaultProfile.skippedMinimum, 33);
-  assert.equal(defaultProfile.skippedMaximum, 33);
+  // 38: the #259 home/product rebuild retired more stage components from pages, so their specs
+  // skip with the reviewed "<Component> is not on <page>" reasons below.
+  assert.equal(defaultProfile.skippedMinimum, 38);
+  assert.equal(defaultProfile.skippedMaximum, 38);
   assert.throws(
     () =>
       validateSuiteResult(website, defaultProfile, {
         executed: 163,
         failed: 0,
-        skipped: 33,
+        skipped: 38,
         flaky: 0,
         skipReasons: ["TryKalCode is not on /"],
       }),

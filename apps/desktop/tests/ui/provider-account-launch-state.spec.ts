@@ -5,7 +5,7 @@ import { expect, type Page, test } from "@playwright/test";
 // provider. Native authentication, process isolation and persistence have separate Rust proofs.
 async function workspace(page: Page, metadata: "available" | "unavailable" | "plan-unavailable") {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate(async (metadata) => {
     const path = "/src/ipc/memoryTransport.ts";
     const { sharedMemoryTransport } = await import(path);
@@ -54,7 +54,7 @@ async function workspace(page: Page, metadata: "available" | "unavailable" | "pl
     .first()
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "account-state-project" })).toBeVisible();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   return page.getByRole("dialog", { name: "New agent" });
 }
 

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 
 test("Code suggests a healthy account inline and waits for explicit confirmation", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
@@ -11,7 +11,7 @@ test("Code suggests a healthy account inline and waits for explicit confirmation
   });
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await page.getByRole("button", { name: "Open folder…" }).first().click();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   await launcher.getByRole("group", { name: "Codex", exact: true }).getByRole("option", { name: /Work/ }).click();
   await launcher.getByRole("button", { name: "Reconnect" }).click();

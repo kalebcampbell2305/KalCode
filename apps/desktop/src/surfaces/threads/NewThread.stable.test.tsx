@@ -11,6 +11,7 @@ import type { CommandName } from "../../ipc/transport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
+import { goTo } from "../../test/nav.ts";
 
 // New thread on the Stable channel: the account picker follows the active workspace's remembered
 // account, then the provider default, and "Remember these accounts for this workspace" is the
@@ -96,8 +97,7 @@ async function mountStable(prepare?: (h: Omit<Harness, "user" | "raw">) => Promi
 }
 
 async function openNewThread(user: Harness["user"]) {
-  const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  await user.click(primary.getByRole("button", { name: "Threads" }));
+  await goTo(user, "Threads");
   await screen.findByRole("heading", { level: 1, name: "Threads" });
   await user.click(screen.getAllByRole("button", { name: "New thread" })[0] as HTMLElement);
   const form = await screen.findByRole("region", { name: "New thread" });
@@ -182,9 +182,7 @@ describe("New thread account defaults (Stable)", () => {
       await client.archiveProviderAccount(claudeWork);
       await client.archiveProviderAccount(CLAUDE_PERSONAL);
     });
-    await h.user.click(
-      within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Threads" }),
-    );
+    await goTo(h.user, "Threads");
     await h.user.click(screen.getAllByRole("button", { name: "New thread" })[0] as HTMLElement);
     const form = within(await screen.findByRole("region", { name: "New thread" }));
     await h.user.type(await form.findByRole("textbox", { name: /Account name/ }), "New Work");
@@ -210,9 +208,7 @@ describe("New thread account defaults (Stable)", () => {
     const h = await mountStable(async ({ client, claudeWork }) => {
       await client.archiveProviderAccount(claudeWork);
     });
-    await h.user.click(
-      within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: "Threads" }),
-    );
+    await goTo(h.user, "Threads");
     await h.user.click(screen.getAllByRole("button", { name: "New thread" })[0] as HTMLElement);
     const form = within(await screen.findByRole("region", { name: "New thread" }));
     await form.findByRole("textbox", { name: "Task" });

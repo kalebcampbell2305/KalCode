@@ -97,7 +97,7 @@ test("Live Browser reads page errors, picks elements, captures screenshots and s
   try {
     app = await launch(dataDir, { KALCODE_E2E_PICK_FOLDER: project, KALCODE_E2E_BROWSER_CDP_BASE: String(PORT + 140) });
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
     await page.getByRole("button", { name: /Open folder/ }).click();
     await expect(page.getByRole("heading", { level: 1, name: "live-site" })).toBeVisible();

@@ -1,5 +1,5 @@
 /** Temporary sample-workspace layout state. Never mutates or recreates running work. */
-import { type Frame, isAvailable, type State, toast } from "./model";
+import { type Frame, isAvailable, needsYou, type State, toast } from "./model";
 
 export const CANVAS_TASKS = ["build", "debug", "review", "ship", "focus"] as const;
 export type CanvasTask = (typeof CANVAS_TASKS)[number];
@@ -49,7 +49,7 @@ export function visibleCanvasFrames(state: State): Frame[] {
 }
 export function canvasSuggestion(state: State): CanvasTask {
   if (Object.values(state.tabs).some((tab) => tab.lines?.some((line) => line.k === "err"))) return "debug";
-  if (Object.values(state.agents).some((agent) => agent.status === "reviewing" || agent.approval)) return "review";
+  if (Object.values(state.agents).some(needsYou)) return "review";
   return Object.values(state.tabs).some((tab) => tab.kind === "browser") ? "build" : "focus";
 }
 function rank(state: State, frame: Frame, task: CanvasTask) {

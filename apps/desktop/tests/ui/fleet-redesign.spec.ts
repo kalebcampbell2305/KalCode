@@ -17,7 +17,7 @@ const chip = (page: Page, label: string) =>
 
 async function open(page: Page, scenario: string) {
   await page.goto(`/?scenario=${scenario}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await expect(cards(page).first()).toBeVisible();
 }
 
@@ -37,10 +37,10 @@ test("six groups with real counts; old failures fold away and never count as nee
   ] as const) {
     await expect(chip(page, label)).toHaveAccessibleName(`${label}, ${count}`);
   }
-  // The sidebar badge counts what needs you, not the failure history.
+  // Activity carries no duplicate count (Needs you, the one inbox, counts what needs the person).
   await expect(
-    page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard", exact: true }),
-  ).toHaveText("Dashboard4");
+    page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Activity", exact: true }),
+  ).toHaveText("Activity");
   // Groups in board order; folding the live groups shows the history below them.
   for (const name of [
     /^Needs you ?, 4 agents/i,

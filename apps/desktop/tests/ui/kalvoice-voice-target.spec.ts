@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
 const NOT_FAVORITE = ":not([data-favorite-action])";
@@ -52,15 +53,14 @@ async function talk(page: Page, text: string, whileListening?: () => Promise<voi
 
 async function openThreads(page: Page) {
   await page.goto("/?scenario=threads");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  await goTo(page, "Threads");
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 }
 
 async function openThread(page: Page, name: string) {
-  const primary = page.getByRole("navigation", { name: "Primary" });
   if (!(await page.getByRole("heading", { level: 1, name: "Threads" }).isVisible())) {
-    await primary.getByRole("button", { name: "Threads" }).click();
+    await goTo(page, "Threads");
   }
   await list(page)
     .getByRole("button", { name: new RegExp(name) })
@@ -180,9 +180,10 @@ test.describe("KalVoice thread composer target", () => {
     await choices(page)
       .getByRole("button", { name: `${OAUTH} · Claude Code · Personal` })
       .click();
+    // The pointer is still on the widget, so the result stays while it's read.
+    await expect(widget(page).getByText(`Sent to “${OAUTH}”.`, { exact: true }).first()).toBeVisible();
     await expect(detail(page).getByRole("heading", { name: OAUTH })).toBeVisible();
     await expect(conversation(page)).toContainText("update the changelog");
-    await expect(widget(page).getByText(`Sent to “${OAUTH}”.`, { exact: true }).first()).toBeVisible();
   });
 
   test("“Type it instead” lands in the thread that was focused, not the one on screen", async ({ page }) => {
@@ -190,7 +191,7 @@ test.describe("KalVoice thread composer target", () => {
     await openThread(page, PARSER);
     await composer(page).click();
     await talk(page, "open dashboard");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
     // The person opens another thread before undoing; every composer shares one DOM id.
     await openThread(page, OAUTH);

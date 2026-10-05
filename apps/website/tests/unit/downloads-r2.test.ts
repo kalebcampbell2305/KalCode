@@ -81,7 +81,9 @@ async function download(path: string, init: RequestInit = {}): Promise<Response>
   return response;
 }
 
-describe("downloads against local R2", () => {
+// Each case drives a local R2 (Wrangler) instance; on a shared gate machine one case took over
+// vitest's 5 s default (gate 37334756000), so give them the same headroom as the D1 API tests.
+describe("downloads against local R2", { timeout: 60_000 }, () => {
   it.each(["stable", "beta", "dev"] as const)(
     "serves immutable %s updater claims before pointer rollout without changing the preview",
     async (channel) => {

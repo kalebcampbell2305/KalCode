@@ -11,6 +11,7 @@ import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../shell/Shell.tsx";
+import { goTo } from "../test/nav.ts";
 
 // Push to talk from the whole shell (Stable flags, memory runtime): the key must always produce
 // something visible, and "Ready" must mean the native key is really registered.
@@ -110,10 +111,8 @@ async function mount({ statusPatch, strict = false, statusFailure, subscribeFail
   );
   const user = userEvent.setup();
   if (!statusFailure?.()) await screen.findByRole("region", { name: "KalVoice widget" });
-  const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  const go = async (name: string) => {
-    await user.click(primary.getByRole("button", { name }));
-  };
+  screen.getByRole("navigation", { name: "Primary" });
+  const go = (name: string) => goTo(user, name);
   const inject = (signal: KalVoiceSignal) => act(() => deliver?.(signal));
   const talks = () => invoked.filter((c) => c === "kalvoice_talk").length;
   // Let the account runtime settle (its "ready" transition renews the channel at most once) so
@@ -150,7 +149,7 @@ describe("push to talk is always visible", () => {
     await screen.findByRole("alertdialog");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    await go("Dashboard");
+    await go("Activity");
     await go("Threads");
     await go("KalVoice");
     await go("Settings");
@@ -179,7 +178,7 @@ describe("push to talk is always visible", () => {
     expect(talks()).toBe(1);
   });
 
-  it.each(["Dashboard", "Threads", "Settings"])(
+  it.each(["Activity", "Threads", "Settings"])(
     "regression guard: Listening, Processing and the result from %s",
     async (page) => {
       const { go } = await mount();
@@ -195,7 +194,7 @@ describe("push to talk is always visible", () => {
 
   it("shows an actionable listening failure even when the widget is hidden", async () => {
     const { transport, user, go } = await mount();
-    await go("Dashboard");
+    await go("Activity");
     await user.click(within(widget()).getByRole("button", { name: /Hide the widget/ }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "KalVoice widget" })).toBeNull());
     // The speech model disappears behind the UI's back: the native side refuses to listen.

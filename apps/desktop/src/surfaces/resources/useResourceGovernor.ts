@@ -1,5 +1,5 @@
 import type { GovernorMode } from "@kalcode/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { getResourceReport, type ResourceReport, setResourceMode, setResourceViewOpen } from "../../ipc/resources.ts";
 
@@ -15,68 +15,110 @@ export interface ResourceGovernorData {
 }
 
 const VISIBLE_POLL_MS = 1_000;
-const HIDDEN_POLL_MS = 15_000;
 
-/** Polls only in-memory native state; native sampling remains independently bounded. */
-export function useResourceGovernor(): ResourceGovernorData {
-  const [report, setReport] = useState<ResourceReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [changingMode, setChangingMode] = useState(false);
-  const refreshRef = useRef<() => void>(() => undefined);
+interface Observation {
+  report: ResourceReport | null;
+  error: string | null;
+}
 
-  useEffect(() => {
-    let disposed = false;
-    let inFlight = false;
-    let timer: number | undefined;
+const EMPTY: Observation = { report: null, error: null };
 
-    const schedule = (delay: number) => {
-      if (disposed) return;
-      if (timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout(() => void poll(), delay);
-    };
-    const poll = async () => {
-      if (disposed || inFlight) return;
-      inFlight = true;
-      try {
-        const next = await getResourceReport();
-        if (!disposed) {
-          setReport(next);
-          setError(null);
-        }
-      } catch (cause) {
-        if (!disposed) setError(toKalCodeError(cause).message);
-      } finally {
-        inFlight = false;
-        schedule(document.visibilityState === "visible" ? VISIBLE_POLL_MS : HIDDEN_POLL_MS);
-      }
-    };
-    const syncVisibility = () => {
-      const visible = document.visibilityState === "visible";
-      void setResourceViewOpen(visible).catch(() => undefined);
-      schedule(0);
-    };
+/**
+ * One poller shared by every mounted consumer (ref-counted subscribers): two views never read
+ * twice a second, and the native "resource view open" flag has one owner, so one view closing
+ * can't clear it under another. Reads only in-memory native state, and pauses while the window is
+ * hidden (native sampling remains independently bounded).
+ */
+const shared = {
+  observation: EMPTY,
+  listeners: new Set<() => void>(),
+  timer: undefined as number | undefined,
+  inFlight: false,
+  again: false,
+  viewOpen: false,
+};
 
-    refreshRef.current = () => schedule(0);
+const windowVisible = () => document.visibilityState === "visible";
+
+function publish(next: Observation) {
+  shared.observation = next;
+  for (const listener of [...shared.listeners]) listener();
+}
+
+/** Reads after `delay`; nothing is scheduled without subscribers or while the window is hidden. */
+function schedule(delay: number) {
+  if (shared.timer !== undefined) window.clearTimeout(shared.timer);
+  shared.timer = undefined;
+  if (shared.listeners.size === 0 || !windowVisible()) return;
+  shared.timer = window.setTimeout(() => void poll(), delay);
+}
+
+async function poll() {
+  shared.timer = undefined;
+  if (shared.inFlight) {
+    shared.again = true;
+    return;
+  }
+  shared.inFlight = true;
+  let next: Observation | null = null;
+  try {
+    next = { report: await getResourceReport(), error: null };
+  } catch (cause) {
+    next = { report: shared.observation.report, error: toKalCodeError(cause).message };
+  } finally {
+    shared.inFlight = false;
+    const again = shared.again;
+    shared.again = false;
+    if (shared.listeners.size > 0) {
+      if (next) publish(next);
+      schedule(again ? 0 : VISIBLE_POLL_MS);
+    }
+  }
+}
+
+function setViewOpen(open: boolean) {
+  if (shared.viewOpen === open) return;
+  shared.viewOpen = open;
+  void setResourceViewOpen(open).catch(() => undefined);
+}
+
+function syncVisibility() {
+  setViewOpen(windowVisible());
+  schedule(0);
+}
+
+function subscribe(listener: () => void): () => void {
+  shared.listeners.add(listener);
+  if (shared.listeners.size === 1) {
     document.addEventListener("visibilitychange", syncVisibility);
     syncVisibility();
-    return () => {
-      disposed = true;
-      refreshRef.current = () => undefined;
-      if (timer !== undefined) window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", syncVisibility);
-      void setResourceViewOpen(false).catch(() => undefined);
-    };
-  }, []);
+  }
+  return () => {
+    shared.listeners.delete(listener);
+    if (shared.listeners.size > 0) return;
+    document.removeEventListener("visibilitychange", syncVisibility);
+    schedule(0);
+    shared.observation = EMPTY;
+    setViewOpen(false);
+  };
+}
 
-  const refresh = useCallback(() => refreshRef.current(), []);
+const observe = () => shared.observation;
+const refresh = () => {
+  if (shared.listeners.size > 0) schedule(0);
+};
+
+export function useResourceGovernor(): ResourceGovernorData {
+  const { report, error } = useSyncExternalStore(subscribe, observe, observe);
+  const [changingMode, setChangingMode] = useState(false);
+
   const changeMode = useCallback(async (mode: PresetResourceMode) => {
     setChangingMode(true);
     try {
       const next = await setResourceMode({ mode });
-      setReport(next);
-      setError(null);
+      if (shared.listeners.size > 0) publish({ report: next, error: null });
     } catch (cause) {
-      setError(toKalCodeError(cause).message);
+      if (shared.listeners.size > 0) publish({ ...shared.observation, error: toKalCodeError(cause).message });
     } finally {
       setChangingMode(false);
     }

@@ -100,10 +100,10 @@ test("workspace switching restores selected tabs, sizes and the focused pane", a
   await page.keyboard.press("Control+Alt+d");
   const second = panes(page).nth(1);
   await second.getByRole("button", { name: "Add to pane 2" }).click();
-  await page.getByRole("menuitem", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Activity", exact: true }).click();
   const id = await second.getAttribute("data-pane-id");
   if (!id) throw new Error("Missing focused pane identity");
-  await second.getByRole("tab", { name: "Dashboard", exact: true }).click();
+  await second.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.getByRole("button", { name: /^Workspace\s/ }).click();
   await page.getByRole("menuitemradio", { name: /api-server/ }).click();
   await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
@@ -112,7 +112,7 @@ test("workspace switching restores selected tabs, sizes and the focused pane", a
   // Visited workspaces stay mounted (hidden) so their terminals survive; api-server keeps its own focus.
   await expect(page.locator("[data-pane-id][data-focused]:visible")).toHaveAttribute("data-pane-id", id);
   await expect(
-    page.locator(`[data-pane-id="${id}"]`).getByRole("tab", { name: "Dashboard", exact: true }),
+    page.locator(`[data-pane-id="${id}"]`).getByRole("tab", { name: "Activity", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
 });
 

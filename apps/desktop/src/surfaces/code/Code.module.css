@@ -232,6 +232,41 @@
   outline-offset: -2px;
 }
 
+/* New agent: the primary action and its options as one lit control. */
+.agentSplit {
+  border-color: var(--btn-primary-bottom);
+  background: none;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.28),
+    0 0 16px -8px var(--btn-primary-glow);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+.agentSplit:hover {
+  border-color: var(--color-border-lit);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.28),
+    0 0 20px -6px var(--btn-primary-glow);
+}
+
+.agentSplit .splitPart {
+  box-shadow: inset 0 1px 0 var(--btn-primary-edge);
+}
+
+.agentSplit .splitPart:hover:not(:disabled) {
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 var(--btn-primary-edge);
+}
+
+.agentSplit .splitPart + .splitPart {
+  border-left: 1px solid rgb(0 0 0 / 0.32);
+  box-shadow:
+    inset 1px 0 0 rgb(255 255 255 / 0.08),
+    inset 0 1px 0 var(--btn-primary-edge);
+}
+
 .groupDivider {
   flex: none;
   width: 1px;
@@ -463,6 +498,32 @@
 
 .xtermHost :global(.xterm:focus-within) {
   outline: none;
+}
+
+/* The focused terminal's blinking bar cursor. xterm.js blinks it by animating box-shadow, which
+   restyles and repaints on the main thread every frame (most of Code's idle CPU with a terminal
+   focused). The same 1px bar blinking with opacity on its own layer looks identical and runs on
+   the compositor. --terminal-cursor is the theme's cursor colour, set on the host. */
+.xtermHost :global(.xterm .xterm-rows.xterm-focus .xterm-cursor.xterm-cursor-blink.xterm-cursor-bar) {
+  position: relative;
+  box-shadow: none;
+  animation: none;
+}
+
+.xtermHost :global(.xterm .xterm-rows.xterm-focus .xterm-cursor.xterm-cursor-blink.xterm-cursor-bar)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: 1px 0 0 var(--terminal-cursor) inset;
+  pointer-events: none;
+  will-change: opacity;
+  animation: terminal-cursor-blink 1s step-end infinite;
+}
+
+@keyframes terminal-cursor-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 /* A shell that exited: one refined footer row; the words truncate, the buttons stay aligned. */

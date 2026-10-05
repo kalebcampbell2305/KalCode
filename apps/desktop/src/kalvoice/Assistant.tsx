@@ -11,7 +11,7 @@ import { displayKey } from "./shortcutModel.ts";
 function examples(providerPanes: boolean): string[] {
   return [
     "Go to settings",
-    providerPanes ? "Open four Codex threads" : "Open Dashboard",
+    providerPanes ? "Open four Codex threads" : "Open Activity",
     "What needs permission?",
     "Pause every active thread",
   ];

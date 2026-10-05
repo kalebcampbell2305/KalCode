@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * The Command Deck shell: top bar (workspace, branch, environment, mode, command, signals), the
@@ -13,14 +14,14 @@ async function open(page: Page, scenario: string) {
   // Dashboard explicitly so the check never races that redirect.
   await page
     .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "Dashboard", exact: true })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" }).first()).toBeVisible();
 }
 
 /** Leaves the Dashboard (where the rail starts as its strip) for a surface that shows it. */
 async function toOperations(page: Page) {
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Operations" }).click();
+  await goTo(page, "Operations");
   await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 }
 
@@ -72,7 +73,7 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await page.getByRole("button", { name: "Open folder…" }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "deck-agent" })).toBeVisible();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

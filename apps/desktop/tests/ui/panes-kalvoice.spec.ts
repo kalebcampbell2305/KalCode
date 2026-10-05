@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * KalVoice pane intents (Z7-21) against the in-memory runtime: typed requests to KalVoice split,
@@ -31,7 +32,7 @@ async function openCode(page: Page) {
 
 /** Types a request to KalVoice on its page; the result brings the person back to Code. */
 async function ask(page: Page, text: string) {
-  await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+  await goTo(page, "KalVoice");
   const box = page.getByRole("main").getByRole("textbox", { name: "Type a request for KalVoice" });
   await box.fill(text);
   await box.press("Enter");
@@ -92,7 +93,7 @@ test.describe("KalVoice pane intents", () => {
 
   test("arranging Claude Code and Codex says honestly that Codex has no pane yet", async ({ page }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -109,7 +110,7 @@ test.describe("KalVoice pane intents", () => {
   test("arranging two providers splits next to the first one, not the previously focused pane", async ({ page }) => {
     await openCode(page);
     const launch = async (provider: "Claude Code" | "Codex") => {
-      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "New agent" });
       if (provider === "Codex") await dialog.getByRole("group", { name: "Codex" }).getByRole("option").first().click();
       await dialog.getByRole("button", { name: `Launch ${provider} agent` }).click();

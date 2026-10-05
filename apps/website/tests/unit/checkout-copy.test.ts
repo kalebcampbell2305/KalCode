@@ -15,8 +15,10 @@ async function render(page: typeof Home, path: string) {
     .replace(/\s+/g, " ");
 }
 
+// What the API sends to and keeps from Stripe: apps/api/worker/lib/stripe.ts (createCustomer),
+// apps/api/migrations/0005_accounts_billing.sql (billing_customers, billing_subscriptions).
 const PRIVACY_LINE =
-  "Payments are processed by Stripe; KalCode receives your subscription status and billing contact, never your card details.";
+  "Payments are processed by Stripe on its own hosted pages. When you start a checkout, we give Stripe your account email address and account ID; we keep your Stripe customer and subscription IDs, plan, subscription status and billing period, never your card details. Deleting your KalCode account does not delete your records at Stripe, which keeps them under its own privacy policy.";
 
 describe("paid-plan copy", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -26,7 +28,7 @@ describe("paid-plan copy", () => {
     expect(await render(Home, "/")).toContain("Nothing is for sale today.");
     const privacy = await render(Privacy, "/privacy");
     expect(privacy).not.toContain(PRIVACY_LINE);
-    expect(privacy).toContain("Last updated October 2, 2026");
+    expect(privacy).toContain("Last updated October 5, 2026");
   });
 
   it("sends buyers to their account and names Stripe once checkout is open", async () => {
@@ -41,7 +43,7 @@ describe("paid-plan copy", () => {
     expect(home).not.toContain("Nothing is for sale today.");
     const privacy = await render(Privacy, "/privacy");
     expect(privacy).toContain(PRIVACY_LINE);
-    expect(privacy).toContain("Last updated October 2, 2026");
+    expect(privacy).toContain("Last updated October 5, 2026");
     // Only the approved line differs.
     expect(privacy.replace(` ${PRIVACY_LINE}`, "")).toBe(closedPrivacy);
   });

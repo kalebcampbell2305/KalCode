@@ -203,7 +203,7 @@ export const PLANS: readonly Plan[] = [
       automations: "none",
       advancedMissions: true,
     },
-    cardFeatures: ["squads", "handoff-chains", "deploy"],
+    cardFeatures: ["agent-handoff", "squads", "deploy"],
   },
   {
     id: "max2x",
@@ -391,6 +391,15 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       { id: "core-browser", label: "Integrated Browser", from: "free", status: "available", verifiedIn: LIVE },
       {
+        id: "live-browser",
+        label: "Live Browser pane beside your coding agents",
+        detail:
+          "Open local, preview and production pages beside an agent; send the page, an element, errors or a screenshot to it.",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1450",
+      },
+      {
         id: "external-integrations",
         label: "External API / MCP integrations",
         from: "free",
@@ -407,10 +416,25 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       {
         id: "provider-terminals",
-        label: "Real Claude Code and Codex terminals in Code",
+        label: "Real Claude Code, Codex, Cursor and Gemini CLI terminals in Code",
         from: "free",
         status: "available",
-        verifiedIn: V019_STABLE,
+        verifiedIn: "0.1.9+1502",
+      },
+      {
+        id: "native-parity",
+        label: "Native provider tools, permissions and slash commands, unchanged",
+        detail: "Web search, MCP servers, shell tools and plugins work exactly as in your own terminal.",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1658",
+      },
+      {
+        id: "command-deck",
+        label: "Command Deck: workspace, branch, environment and mode at a glance",
+        from: "free",
+        status: "available",
+        verifiedIn: V019,
       },
       {
         id: "account-hub",
@@ -437,7 +461,8 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         id: "terminal-basics",
         label: "Terminal rename, groups, smart close and account-aware + buttons",
         from: "free",
-        status: "coming_soon",
+        status: "available",
+        verifiedIn: "0.1.9+1565",
       },
       {
         id: "terminal-smart",
@@ -447,7 +472,13 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       { id: "localhost", label: "Automatic localhost detection", from: "free", status: "available", verifiedIn: LIVE },
       { id: "kaltidy", label: "KalTidy", from: "free", status: "available", verifiedIn: "0.1.8+944" },
-      { id: "favorites", label: "Favorites", from: "free", status: "coming_soon" },
+      {
+        id: "favorites",
+        label: "Workspace favorites and global pins",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1738",
+      },
       {
         id: "navigation",
         label: "Command palette and keyboard shortcuts",
@@ -464,6 +495,13 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
       },
       { id: "needs-you", label: "Needs You", from: "free", status: "available", verifiedIn: LIVE },
       { id: "actionable-errors", label: "Actionable errors everywhere", from: "free", status: "coming_soon" },
+      {
+        id: "appearance",
+        label: "Graphite design with high contrast and adjustable text size",
+        from: "free",
+        status: "available",
+        verifiedIn: "0.1.9+1658",
+      },
       {
         id: "updates",
         label: "Security fixes, accessibility and KalCode updates",
@@ -654,6 +692,13 @@ export const PLAN_FEATURE_GROUPS: readonly PlanFeatureGroup[] = [
         label: "Advanced Git, environment and deployment workflows",
         from: "max",
         status: "coming_soon",
+      },
+      {
+        id: "agent-handoff",
+        label: "Agent Hand Off: pass work between coding agents with review context",
+        from: "max",
+        status: "available",
+        verifiedIn: "0.1.9+1266",
       },
       { id: "squads", label: "Squads: reusable agent teams", from: "max", status: "coming_soon" },
       { id: "handoff-chains", label: "Agent Handoff Chains", from: "max", status: "coming_soon" },

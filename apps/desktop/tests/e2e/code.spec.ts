@@ -129,7 +129,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
   try {
     let app = await launch(dataDir, env);
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
     // Open the folder through the (test-hooked) native picker.
     await codeNav(page).click();
@@ -216,7 +216,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
 
     // The Dashboard lists the running terminals of this workspace.
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const terminals = page.getByRole("region", { name: "Terminals" });
     await expect(terminals.getByRole("listitem")).toHaveCount(2);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Terminal started").first()).toBeVisible();
@@ -229,7 +229,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     // Restart available.
     app = await launch(dataDir, env);
     await expect(app.page.getByRole("heading", { level: 1, name: "z1-site" })).toBeVisible();
-    await app.page.getByRole("button", { name: "Dashboard" }).click();
+    await app.page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(
       app.page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running."),
     ).toBeVisible();
@@ -264,7 +264,7 @@ test("the native folder picker opens from Rust; cancelling it changes nothing", 
   try {
     // No KALCODE_E2E_PICK_FOLDER: the real system dialog is shown.
     const app = await launch(dataDir);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await codeNav(app.page).click();
     const open = app.page.getByRole("button", { name: "Open folder…" });
     await open.click();

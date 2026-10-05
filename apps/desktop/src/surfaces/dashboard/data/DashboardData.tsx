@@ -238,7 +238,9 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
                 ? await client.archiveThread(thread.id)
                 : action === "unarchive"
                   ? await client.unarchiveThread(thread.id)
-                  : await client.resumeThread(thread.id); // resume and retry
+                  : action === "start_anyway"
+                    ? await client.startThreadAnyway(thread.id)
+                    : await client.resumeThread(thread.id); // resume and retry
         if (!isCurrent(session)) return;
         // Reconcile even a superseded current-client command: native effects already happened.
         invalidate(["threads"], session);
@@ -419,6 +421,23 @@ export function useOptionalAllCodingAgents(): readonly ThreadSummary[] | null {
     const archived = value.archived.state.status === "ready" ? value.archived.state.data : [];
     return [...value.threads.state.data, ...archived].filter(isCodingAgent);
   }, [value]);
+}
+
+/**
+ * Every thread, open and archived, from the shared `thread_list` read when a Dashboard data
+ * provider is mounted (the Shell mounts one): null until it loads, undefined without a
+ * provider. Lets other views reuse this read instead of repeating it on every thread event.
+ */
+export function useOptionalAllThreads(): readonly ThreadSummary[] | null | undefined {
+  const value = useContext(DashboardDataContext);
+  const open = value?.threads.state;
+  const archived = value?.archived.state;
+  const provided = value !== null;
+  return useMemo(() => {
+    if (!provided) return undefined;
+    if (open?.status !== "ready") return null;
+    return archived?.status === "ready" ? [...open.data, ...archived.data] : open.data;
+  }, [provided, open, archived]);
 }
 
 /** Archived coding agents, retaining their persisted task or manual names. */

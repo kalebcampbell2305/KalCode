@@ -16,6 +16,7 @@ import {
   test,
   waitForProviderAdmission,
 } from "./harness.ts";
+import { goTo } from "./nav.ts";
 
 // Real application restart, SQLite, IPC and PTY; isolated fake provider, no credentials or inference.
 test.skip(process.platform !== "win32", "The native restart harness drives Windows WebView2.");
@@ -64,7 +65,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
   let app: Running | null = null;
   try {
     app = await launch(dataDir, env);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await invoke<{ id: string }>(app.page, "workspace_open_dialog");
     const providers = await invoke<{ id: string; detection: { displayPath: string | null } | null }[]>(
       app.page,
@@ -159,7 +160,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     });
     await expect.poll(() => existsSync(codexAReadMarker), { timeout: 30_000 }).toBe(true);
     await waitForProviderAdmission(app.page);
-    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await app.page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = app.page.getByRole("dialog", { name: "New agent" });
     // The launcher lists each provider's accounts as options; the restored default is marked.
     const codexGroup = launcher.getByRole("group", { name: "Codex", exact: true });
@@ -189,7 +190,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       { timeout: 30_000 },
     );
 
-    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await app.page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await account(codexGroup, "Codex B").click();
     await expect(account(codexGroup, "Codex B")).toHaveAttribute("aria-selected", "true");
     await launcher.getByRole("button", { name: "Launch Codex agent", exact: true }).click();
@@ -208,7 +209,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       { timeout: 30_000 },
     );
 
-    await app.page.getByRole("button", { name: "New agent", exact: true }).click();
+    await app.page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const claudeGroup = launcher.getByRole("group", { name: "Claude Code", exact: true });
     await expect(claudeGroup.getByRole("option")).toHaveCount(2);
     await account(claudeGroup, "Claude B").click();
@@ -251,7 +252,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
       .toBe("not_authenticated");
     const afterExpiry = await invoke<ProviderAccount[]>(app.page, "provider_accounts_list");
     expect(afterExpiry.find((account) => account.id === claudeA.id)?.authenticationState).toBe("authenticated");
-    await app.page.getByRole("button", { name: "Providers", exact: true }).click();
+    await goTo(app.page, "Providers");
     await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
     await expect(
       app.page.getByRole("region", { name: /Claude B/ }).getByText("Expired", { exact: true }),
@@ -273,7 +274,7 @@ test("connected accounts survive restart, launch without Refresh and isolate gen
     configure(0);
     app = await launch(dataDir, env);
     await expect(app.page.getByRole("heading", { level: 1, name: "project" })).toBeVisible();
-    await app.page.getByRole("button", { name: "Providers", exact: true }).click();
+    await goTo(app.page, "Providers");
     await app.page.getByRole("tab", { name: "Accounts", exact: true }).click();
     const codexARegion = app.page.getByRole("region", { name: /Codex A/ });
     // A coding agent counts as an agent (AGENTS.md agent definition); usage is truthful: the fake

@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_context::memory;
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, ProviderCapabilities,
-    ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, LaunchOrigin,
+    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::permissions::ApprovalDecision;
 use kalcode_contracts::unified_memory::{
@@ -573,6 +573,9 @@ impl AgentSession for MemorySession {
     }
     fn terminate(&self) -> std::result::Result<(), ProviderError> {
         self.inner.terminate()
+    }
+    fn set_launch_origin(&self, origin: LaunchOrigin) {
+        self.inner.set_launch_origin(origin);
     }
     fn respond_to_approval(
         &self,

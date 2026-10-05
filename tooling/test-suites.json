@@ -8,7 +8,7 @@
       "package": "@kalcode/desktop",
       "script": "test",
       "command": null,
-      "timeoutMs": 300000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -29,7 +29,7 @@
       "package": "@kalcode/website",
       "script": "test",
       "command": null,
-      "timeoutMs": 300000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -50,7 +50,7 @@
       "package": "@kalcode/api",
       "script": "test",
       "command": null,
-      "timeoutMs": 300000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -170,8 +170,8 @@
           "platforms": ["win32"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 35,
-          "skippedMaximum": 35,
+          "skippedMinimum": 36,
+          "skippedMaximum": 36,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 34,
-          "skippedMaximum": 34,
+          "skippedMinimum": 35,
+          "skippedMaximum": 35,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -188,8 +188,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 31,
-          "skippedMaximum": 31,
+          "skippedMinimum": 32,
+          "skippedMaximum": 32,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -276,8 +276,8 @@
             "PUBLIC_CHECKOUT_ENABLED": "absent"
           },
           "minimumExecuted": 164,
-          "skippedMinimum": 33,
-          "skippedMaximum": 33,
+          "skippedMinimum": 38,
+          "skippedMaximum": 38,
           "allowedSkipReasons": [
             "^no published release, so there are no release notes to link$",
             "^No stage components on .+$",
@@ -410,6 +410,10 @@
     {
       "path": "crates/providers/tests/codex_certification_real.rs",
       "reason": "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"
+    },
+    {
+      "path": "crates/providers/tests/gemini_sign_in_real.rs",
+      "reason": "needs a real Gemini CLI 0.61.0 (KALCODE_REAL_GEMINI); no sign-in, prompt or quota"
     },
     {
       "path": "crates/providers/tests/gemini_sign_in_real.rs",

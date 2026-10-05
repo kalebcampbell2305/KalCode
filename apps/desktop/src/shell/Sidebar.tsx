@@ -1,14 +1,30 @@
 import type { SurfaceId } from "@kalcode/protocol";
-import { IconButton, Tooltip } from "@kalcode/ui/components";
-import { Bell, BellDot, Globe, PanelLeftClose, PanelLeftOpen, ShieldAlert, ShieldCheck } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  IconButton,
+  Tooltip,
+} from "@kalcode/ui/components";
+import { Bell, BellDot, Globe, LayoutGrid, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useId } from "react";
 import { publicVersion } from "../platform/version.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
-import { DashboardDataBoundary, useWaitingForYouCount } from "../surfaces/dashboard/data/DashboardData.tsx";
-import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
+import { DashboardDataBoundary } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { AccountHub, useAccountHubShown } from "./AccountHub.tsx";
+import { useAttention } from "./attention/useAttention.ts";
 import { ProjectList } from "./deck/ProjectList.tsx";
-import { type Destination, destinationMeta, PRIMARY_ORDER, useNavigation, viewVisible } from "./navigation.tsx";
+import {
+  type Destination,
+  destinationMeta,
+  PRIMARY_NAV,
+  PRIMARY_ORDER,
+  useNavigation,
+  viewVisible,
+} from "./navigation.tsx";
 import { useNotifications } from "./notifications/NotificationsProvider.tsx";
 import { useRail } from "./rail/RailProvider.tsx";
 import styles from "./Sidebar.module.css";
@@ -21,14 +37,16 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
-  const openBrowser = useOpenBrowser();
   const { info, updateSettings } = useRuntime();
   const rail = useRail();
   const flags = new Map(info.flags.surfaces.map((flag) => [flag.id, flag]));
   const visible = (id: SurfaceId) => flags.get(id)?.visible ?? false;
 
-  const available = PRIMARY_ORDER.filter((id) => visible(id) && flags.get(id)?.state !== "gated");
-  const inDevelopment = PRIMARY_ORDER.filter((id) => visible(id) && flags.get(id)?.state === "gated");
+  // Projects, Code and Activity are where people work. Every other surface stays one click away
+  // in More (and in the command palette): fewer decisions in the rail, no capability lost.
+  const primary = PRIMARY_NAV.filter((id) => visible(id) && flags.get(id)?.state !== "gated");
+  const more = PRIMARY_ORDER.filter((id) => !PRIMARY_NAV.includes(id) && visible(id));
+  const gated = new Set(more.filter((id) => flags.get(id)?.state === "gated"));
 
   const toggle = () => void updateSettings({ sidebarCollapsed: !collapsed });
   // The hub menu carries the build version; without an account loaded the footer shows it.
@@ -39,51 +57,18 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       {/* Command Deck: the brand, workspace and search live in the top bar. */}
       <ul className={styles.list}>
         {viewVisible("home", info.flags.features) ? <NavItem id="home" collapsed={collapsed} /> : null}
-        {available.map((id) =>
-          id === "dashboard" ? (
-            <DashboardNavItem key={id} collapsed={collapsed} />
-          ) : (
-            <NavItem key={id} id={id} collapsed={collapsed} />
-          ),
-        )}
-        {available.includes("code") ? (
-          <li>
-            <SidebarButton
-              collapsed={collapsed}
-              label="Browser"
-              accessibleLabel="Switch to Browser"
-              icon={<Globe />}
-              onClick={() => void openBrowser()}
-              className={styles.item}
-            />
-          </li>
-        ) : null}
+        {primary.map((id) => (
+          <NavItem key={id} id={id} collapsed={collapsed} />
+        ))}
       </ul>
-
-      {inDevelopment.length > 0 ? (
-        <div className={styles.group}>
-          {collapsed ? (
-            <hr className={styles.divider} />
-          ) : (
-            <p className={styles.groupLabel} id="nav-in-development">
-              In development
-            </p>
-          )}
-          <ul className={styles.list} aria-labelledby={collapsed ? undefined : "nav-in-development"}>
-            {inDevelopment.map((id) => (
-              <NavItem key={id} id={id} collapsed={collapsed} gated />
-            ))}
-          </ul>
-        </div>
-      ) : null}
 
       {/* The workspace rail, when the build has it, is the projects list instead. */}
       {rail.enabled ? null : <ProjectList collapsed={collapsed} />}
 
       <div className={styles.footer}>
         <ul className={styles.list}>
-          <ApprovalsItem collapsed={collapsed} />
-          <NotificationsItem collapsed={collapsed} />
+          <NeedsYouItem collapsed={collapsed} />
+          <MoreItem collapsed={collapsed} surfaces={more} gated={gated} withBrowser={primary.includes("code")} />
           {visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}
         </ul>
         <div className={styles.footerRow}>
@@ -106,6 +91,81 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
         </div>
       </div>
     </nav>
+  );
+}
+
+/**
+ * More: every other place (Browser, Runs, Threads, KalVoice, Unified Memory, Providers and, in
+ * development builds, what is still being built). Progressive disclosure: expert surfaces stay one
+ * click away here, in the command palette and from the actions that lead to them.
+ */
+function MoreItem({
+  collapsed,
+  surfaces,
+  gated,
+  withBrowser,
+}: {
+  collapsed: boolean;
+  surfaces: readonly SurfaceId[];
+  gated: ReadonlySet<SurfaceId>;
+  withBrowser: boolean;
+}) {
+  const { current, navigate } = useNavigation();
+  const openBrowser = useOpenBrowser();
+  if (surfaces.length === 0 && !withBrowser) return null;
+  const showing = surfaces.includes(current as SurfaceId) ? destinationMeta(current).label : null;
+  const label = showing ? `More · ${showing}` : "More";
+  const item = (id: SurfaceId) => {
+    const meta = destinationMeta(id);
+    const Icon = meta.icon;
+    return (
+      <DropdownMenuItem key={id} icon={<Icon />} onSelect={() => navigate(id)}>
+        {meta.label}
+      </DropdownMenuItem>
+    );
+  };
+  const trigger = (
+    <DropdownMenuTrigger asChild>
+      <button
+        type="button"
+        className={[styles.button, styles.item].join(" ")}
+        aria-label={showing ? `More places, showing ${showing}` : "More places"}
+        aria-current={showing ? "page" : undefined}
+      >
+        <span className={styles.icon} aria-hidden="true">
+          <LayoutGrid />
+        </span>
+        {collapsed ? null : <span className={styles.label}>{label}</span>}
+      </button>
+    </DropdownMenuTrigger>
+  );
+  return (
+    <li>
+      <DropdownMenu>
+        {collapsed ? (
+          <Tooltip content={label} side="right">
+            {trigger}
+          </Tooltip>
+        ) : (
+          trigger
+        )}
+        <DropdownMenuContent side="right" align="end" sideOffset={8}>
+          {withBrowser ? (
+            <DropdownMenuItem icon={<Globe />} onSelect={() => void openBrowser()}>
+              Browser
+            </DropdownMenuItem>
+          ) : null}
+          {surfaces.filter((id) => !gated.has(id)).map(item)}
+          {gated.size > 0 ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>In development</DropdownMenuLabel>
+              {surfaces.filter((id) => gated.has(id)).map(item)}
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
   );
 }
 
@@ -150,69 +210,36 @@ function NavItem({ id, collapsed, gated = false, count }: NavItemProps) {
 }
 
 /**
- * The Dashboard entry with a "needs you" count: the Dashboard's "Waiting for you" chip, from the
- * same thread list (its data provider, or one of its own outside the Dashboard). Hidden at zero.
+ * Needs You: the one attention inbox (questions, approvals, failures, sign-outs, stalled agents and
+ * finished work to review). The count is only what genuinely needs the person; zero shows no badge.
  */
-function DashboardNavItem({ collapsed }: { collapsed: boolean }) {
+function NeedsYouItem({ collapsed }: { collapsed: boolean }) {
   return (
     <DashboardDataBoundary>
-      <DashboardNavItemCount collapsed={collapsed} />
+      <NeedsYouButton collapsed={collapsed} />
     </DashboardDataBoundary>
   );
 }
 
-function DashboardNavItemCount({ collapsed }: { collapsed: boolean }) {
-  const waiting = useWaitingForYouCount();
-  return (
-    <NavItem
-      id="dashboard"
-      collapsed={collapsed}
-      count={{ value: waiting, description: `${waiting} ${waiting === 1 ? "agent needs" : "agents need"} you` }}
-    />
-  );
-}
-
-/** Z4: the global pending-approvals indicator. Opens the approvals panel. */
-function ApprovalsItem({ collapsed }: { collapsed: boolean }) {
-  const { pending, setPanelOpen } = usePermissions();
-  const count = pending.length;
+function NeedsYouButton({ collapsed }: { collapsed: boolean }) {
+  const { setPanelOpen } = useNotifications();
+  const { items } = useAttention();
+  const count = items.length;
+  // Blocked work (a question, an approval, a failure, a sign-out) is lit; review and stalled aren't.
+  const urgent = items.some((item) => item.kind !== "review" && item.kind !== "stalled");
   return (
     <li>
       <SidebarButton
         collapsed={collapsed}
-        label="Approvals"
-        accessibleLabel={count === 0 ? "Approvals, none waiting" : `Approvals, ${count} waiting`}
-        icon={count > 0 ? <ShieldAlert /> : <ShieldCheck />}
+        label="Needs you"
+        accessibleLabel={count === 0 ? "Needs you, nothing waiting" : `Needs you, ${count} waiting`}
+        icon={count > 0 ? <BellDot /> : <Bell />}
         onClick={() => setPanelOpen(true)}
-        className={[styles.item, count > 0 && styles.approvalsWaiting].filter(Boolean).join(" ")}
+        className={[styles.item, urgent && styles.approvalsWaiting].filter(Boolean).join(" ")}
         badge={
           count > 0 ? (
             <span className={styles.countBadge} aria-hidden="true">
               {count > 99 ? "99+" : count}
-            </span>
-          ) : null
-        }
-      />
-    </li>
-  );
-}
-
-/** Z7-W3: the notification center and its unread count. */
-function NotificationsItem({ collapsed }: { collapsed: boolean }) {
-  const { unreadCount, setPanelOpen } = useNotifications();
-  return (
-    <li>
-      <SidebarButton
-        collapsed={collapsed}
-        label="Notifications"
-        accessibleLabel={unreadCount === 0 ? "Notifications, none unread" : `Notifications, ${unreadCount} unread`}
-        icon={unreadCount > 0 ? <BellDot /> : <Bell />}
-        onClick={() => setPanelOpen(true)}
-        className={styles.item}
-        badge={
-          unreadCount > 0 ? (
-            <span className={styles.countBadge} aria-hidden="true">
-              {unreadCount > 99 ? "99+" : unreadCount}
             </span>
           ) : null
         }

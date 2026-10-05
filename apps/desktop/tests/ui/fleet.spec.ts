@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Agent Fleet: the Dashboard's coding-agent cards with call signs, each agent's own worktree and
@@ -23,8 +24,8 @@ async function openFolders(page: Page, ...names: string[]) {
   }
 }
 
-const nav = (page: Page, name: string) =>
-  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name, exact: true }).click();
+/** Opens a place from the sidebar (Code and Activity directly, other surfaces through More). */
+const nav = (page: Page, name: string) => goTo(page, name);
 
 test("a finished agent is ready to merge only when its worktree facts all agree", async ({ page }) => {
   await page.goto("/?scenario=busy");
@@ -37,13 +38,38 @@ test("a finished agent is ready to merge only when its worktree facts all agree"
   await expect(ready).toContainText("feat/light-tokens");
 
   const conflicted = card(page, "Generate API client");
-  await expect(conflicted).toContainText("Not ready to merge: Would conflict with main");
+  // The outcome strip keeps merge separate from the agent being done.
+  const outcome = conflicted.getByRole("button", { name: /^Outcome of Generate API client/ });
+  await expect(outcome).toContainText("Would conflict");
+  await outcome.click();
+  await expect(conflicted.locator("[data-outcome-list]")).toContainText("With main");
   await expect(conflicted).not.toContainText("Ready to merge ");
+});
+
+test("agents editing the same files in one project see each other early, and the chip opens the other", async ({
+  page,
+}) => {
+  await page.goto("/?scenario=busy");
+  const checkout = card(page, "Fix flaky checkout test");
+  const invoices = card(page, "Write invoices migration");
+  const toInvoices = checkout.getByRole("button", { name: /^Overlaps with Gemini CLI · Write invoices migration/ });
+  await expect(toInvoices).toContainText("1 file");
+  await expect(invoices.getByRole("button", { name: /^Overlaps with Codex · Fix flaky checkout test/ })).toBeVisible();
+  // Different projects and agents without shared files never overlap.
+  await expect(card(page, "Refactor auth middleware").getByRole("list", { name: "Overlapping edits" })).toHaveCount(0);
+
+  // The files are named, then the chip opens the other agent's terminal in Code.
+  await toInvoices.hover();
+  await expect(page.getByRole("tooltip")).toContainText("apps/web/checkout/cart.ts");
+  await toInvoices.click();
+  await expect(
+    page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
 });
 
 test("a new thread runs in its own worktree by default and is not an agent in the Fleet", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "kalcode");
   await nav(page, "Threads");
   await page.getByRole("main").getByRole("button", { name: "New thread" }).first().click();
@@ -54,14 +80,14 @@ test("a new thread runs in its own worktree by default and is not an agent in th
   await form.getByRole("button", { name: "Start thread" }).click();
   await expect(page.getByRole("region", { name: "Thread", exact: true })).toBeVisible();
 
-  await nav(page, "Dashboard");
+  await nav(page, "Activity");
   await expect(page.getByRole("heading", { name: "No agents yet" })).toBeVisible();
   await expect(page.getByRole("article")).toHaveCount(0);
 });
 
 test("a folder outside Git can't give a thread its own worktree", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "design-notes");
   await nav(page, "Threads");
   await page.getByRole("main").getByRole("button", { name: "New thread" }).first().click();
@@ -72,16 +98,16 @@ test("a folder outside Git can't give a thread its own worktree", async ({ page 
 
 test("launching two agents from Code fills the Fleet, and a card opens its terminal", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "kalcode");
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   await launcher.getByRole("button", { name: "One more agent" }).click();
   await launcher.getByRole("button", { name: "Launch 2 Claude Code agents" }).click();
   await expect(launcher).toHaveCount(0);
   await expect(page.locator("[data-provider-pane]")).toHaveCount(2);
 
-  await nav(page, "Dashboard");
+  await nav(page, "Activity");
   await expect(page.getByRole("article")).toHaveCount(2);
   await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
   await expect(page.getByRole("heading", { level: 1, name: "kalcode" })).toBeVisible();

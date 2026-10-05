@@ -8,7 +8,13 @@ import { NotificationCenter } from "./NotificationCenter.tsx";
 import { NotificationsProvider, useNotifications } from "./NotificationsProvider.tsx";
 
 const runtime = vi.hoisted(() => ({
-  client: { listNotifications: vi.fn(), markNotifications: vi.fn() },
+  client: {
+    listNotifications: vi.fn(),
+    markNotifications: vi.fn(),
+    // The Needs you sheet reads the coding agents (none here) beside the history.
+    listThreads: vi.fn(async () => []),
+    runningTerminals: vi.fn(async () => []),
+  },
   events: [],
 }));
 vi.mock("../../runtime/RuntimeProvider.tsx", () => ({
@@ -16,6 +22,8 @@ vi.mock("../../runtime/RuntimeProvider.tsx", () => ({
   useEvents: () => runtime,
 }));
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: vi.fn() }) }));
+// The Needs you items run canonical app actions (navigation, Code); this test covers only the history.
+vi.mock("../../runtime/actions.ts", () => ({ useKalActions: () => ({ runAttention: vi.fn() }) }));
 
 function wrapper({ children }: { children: ReactNode }) {
   return (

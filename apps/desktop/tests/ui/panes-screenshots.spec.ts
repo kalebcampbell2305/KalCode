@@ -43,7 +43,7 @@ async function start(page: Page, theme: "dark" | "light") {
 }
 
 async function claudePane(page: Page, prompt: string) {
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })
@@ -108,7 +108,7 @@ for (const theme of ["dark", "light"] as const) {
 
       // The live Dashboard (Z7-W3) docked into the last pane beside the work.
       await pane(page, 5).getByRole("button", { name: "Add to pane 6" }).click();
-      await page.getByRole("menuitem", { name: "Dashboard" }).click();
+      await page.getByRole("menuitem", { name: "Agent Fleet", exact: true }).click();
       await expect(pane(page, 5).locator("[data-dashboard-pane]")).toBeVisible();
       await shot(page, `panes-dashboard-${tag}`);
     });

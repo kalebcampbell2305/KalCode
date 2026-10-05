@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
 const NOT_FAVORITE = ":not([data-favorite-action])";
@@ -25,13 +26,13 @@ test("Fleet right-click renames its coding agent and opens Browser beside the sa
   const nav = page.getByRole("navigation", { name: "Primary" });
   await nav.getByRole("button", { name: "Code", exact: true }).click();
   await page.getByRole("button", { name: "Open folder…" }).first().click();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })
     .click();
   await expect(page.locator("[data-provider-pane]")).toHaveCount(1);
-  await nav.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await nav.getByRole("button", { name: "Activity", exact: true }).click();
   const card = page
     .getByRole("article")
     .filter({ has: page.locator("[data-kind=state]") })
@@ -51,7 +52,7 @@ test("Fleet right-click renames its coding agent and opens Browser beside the sa
 
 test("Thread right-click renames the clicked row without navigating to it", async ({ page }) => {
   await page.goto("/?scenario=threads");
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads", exact: true }).click();
+  await goTo(page, "Threads");
   const list = page.getByRole("list", { name: "Threads", exact: true });
   const row = list.getByRole("button", { name: /Write Unit Tests for Parser Module/ }).and(page.locator(NOT_FAVORITE));
   await row.click({ button: "right" });

@@ -7,9 +7,9 @@ async function openPalette(page: Page) {
   await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   await page
     .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "Dashboard", exact: true })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.keyboard.press("Control+k");
   return page.getByRole("dialog", { name: "Command palette" });
 }

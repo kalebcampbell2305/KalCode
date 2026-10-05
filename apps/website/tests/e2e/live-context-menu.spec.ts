@@ -11,7 +11,9 @@ async function openDemo(page: Page) {
   return page.locator("[data-live-app]");
 }
 
-test("context actions duplicate the clicked coding terminal and put Browser beside it", async ({ page }, testInfo) => {
+test("New like this starts a fresh session like the clicked terminal and Browser opens beside it", async ({
+  page,
+}, testInfo) => {
   const app = await openDemo(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -19,9 +21,11 @@ test("context actions duplicate the clicked coding terminal and put Browser besi
   const count = await app.locator(".lk-tab").count();
   await tab.click({ button: "right" });
   await page.locator("[data-live]").screenshot({ path: testInfo.outputPath("context-menu-desktop.png") });
-  await page.getByRole("menuitem", { name: "Duplicate", exact: true }).click();
+  await expect(page.getByRole("menu", { name: "Dashboard Tests actions" })).toBeVisible();
+  await expect(page.getByRole("menu", { name: /Coming soon/ })).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "New like this", exact: true }).click();
   await expect(app.locator(".lk-tab")).toHaveCount(count + 1);
-  await expect(app.getByRole("button", { name: "Codex", exact: true }).first()).toBeVisible();
+  await expect(app.getByRole("button", { name: "New agent", exact: true }).first()).toBeVisible();
   await tab.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Open Browser beside" }).click();
   const source = app.locator('[data-key="f2"]');
@@ -49,7 +53,7 @@ test("keyboard menus stop the selected agent and restore focus on Escape", async
 
 test("workspace context actions open the actual demo launcher", async ({ page }) => {
   const app = await openDemo(page);
-  await app.locator('.lk-ctx__chip[data-do="go:code"] svg').click({ button: "right" });
+  await app.locator('.lk-ctx__chip[data-do="go:code"] svg').first().click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: /Deploy/ })).toHaveCount(0);
   await page.getByRole("menuitem", { name: "New coding agent…" }).click();
   await expect(app.getByRole("dialog", { name: /New agent/ })).toBeVisible();
@@ -69,7 +73,7 @@ test("context actions preserve adaptive Tidy and Undo while revealing Browser be
   await app.getByRole("button", { name: "Tidy layout", exact: true }).click();
   await source.locator('[data-do="tab:t-a1"]').click({ button: "right" });
   const count = await app.locator(".lk-tab").count();
-  await page.getByRole("menuitem", { name: "Duplicate", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New like this", exact: true }).click();
   await app.getByRole("button", { name: "Undo layout", exact: true }).click();
   await expect(app.locator(".lk-tab")).toHaveCount(count + 1);
   await expect(source).toBeVisible();
@@ -88,13 +92,13 @@ test("terminal output exposes only relevant content actions under production CSP
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveCount(1);
   await expect(menu.getByRole("menuitem", { name: "Copy relevant context" })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: /Stop|Close|Duplicate/ })).toHaveCount(0);
+  await expect(menu.getByRole("menuitem", { name: /Stop|Close|New like this/ })).toHaveCount(0);
   await menu.getByRole("menuitem", { name: "Copy relevant context" }).click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   expect(copied).toContain("Codex");
   expect(copied).not.toContain("Claude Code");
   await app.locator('[data-do="tab:t-a2"]').click({ button: "right" });
-  await expect(page.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "New like this", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

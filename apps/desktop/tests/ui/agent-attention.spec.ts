@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 async function openWorkspace(page: Page, shell = false) {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate(() => {
     (
       window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } }
@@ -15,7 +15,7 @@ async function openWorkspace(page: Page, shell = false) {
     await page.getByRole("button", { name: "New PowerShell 7 terminal", exact: true }).click();
     await expect(page.locator(".xterm-rows")).toContainText("PS C:");
   }
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

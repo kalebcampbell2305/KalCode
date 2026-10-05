@@ -1,3 +1,4 @@
+import { getPlanFeature } from "@kalcode/protocol/plans";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseManifest } from "../../src/data/releases";
@@ -69,20 +70,19 @@ it("renders the Stable notes anchor and uses the publication date from the manif
 });
 
 it.each([false, true])(
-  "keeps the product KalVoice row aligned with signed Stable availability (%s)",
+  "renders the product KalVoice roadmap row from the plan catalog, whatever the manifest (%s)",
   async (stable) => {
     if (stable) selectSignedStable();
     const container = await AstroContainer.create();
     const html = await container.renderToString(Product, { request: new Request("https://kalcoded.com/product") });
-    const row = html.match(/<tr[\s\S]*?<\/tr>/g)?.find((item) => item.includes("KalVoice dictation and commands"));
+    const dictation = getPlanFeature("kalvoice-dictation");
+    const row = html.match(/<li class="road__row"[\s\S]*?<\/li>/g)?.find((item) => item.includes(dictation.label));
     expect(row).toBeDefined();
-    if (stable) {
-      expect(row).toContain("Available in Stable");
-      expect(row).not.toContain("In development");
-    } else {
-      expect(row).toContain("In development");
-      expect(row).not.toContain("Available in Stable");
-    }
+    // The catalog is the authority: available with the build it was verified in, never "In development".
+    expect(dictation.status).toBe("available");
+    expect(row).toContain("Available");
+    expect(row).toContain(`build ${dictation.verifiedIn?.split("+")[1]}`);
+    expect(row).not.toContain("Coming soon");
   },
 );
 

@@ -23,6 +23,7 @@ import {
   test,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
+import { goTo } from "./nav.ts";
 
 // A binary built with the `e2e` feature (test hooks enabled) into its own target directory:
 //   CARGO_TARGET_DIR=target/e2e pnpm tauri build --no-bundle --features e2e
@@ -77,7 +78,7 @@ test("launch, change settings, quit, relaunch: settings and history persist", as
   try {
     // First launch: fresh database.
     let app = await launch(dataDir);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await expect(activity(app.page).getByText("Local database created")).toBeVisible();
     await expect(activity(app.page).getByText("KalCode started")).toBeVisible();
 
@@ -96,7 +97,7 @@ test("launch, change settings, quit, relaunch: settings and history persist", as
 
     // Relaunch: settings restored before first paint; history shows a clean shutdown.
     app = await launch(dataDir);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await expect(app.page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect(app.page.locator("html")).toHaveAttribute("data-density", "compact");
     await expect(activity(app.page).getByText("KalCode closed")).toBeVisible();
@@ -106,7 +107,7 @@ test("launch, change settings, quit, relaunch: settings and history persist", as
     // Crash: the next launch reports the interrupted session.
     await killForcibly(app);
     app = await launch(dataDir);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await expect(activity(app.page).getByText("Previous session ended unexpectedly")).toBeVisible();
 
     // Structured JSON logs were written, and contain no credential material.
@@ -127,7 +128,7 @@ test("a database from a newer KalCode is refused with a clear explanation", asyn
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   try {
     let app = await launch(dataDir);
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     await closeGracefully(app);
 
     // Simulate a database written by a future version.
@@ -148,7 +149,8 @@ test("a database from a newer KalCode is refused with a clear explanation", asyn
 // (Claude version detection and `codex login status`); it never sends a prompt or signs in.
 test("the Providers page detects the installed Claude Code CLI", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
-  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-provider-detection-"));
+  // Under the home folder so the detected path shows as ~…; a gate worker's TEMP is outside its home.
+  const root = mkdtempSync(join(homedir(), "kalcode-e2e-provider-detection-"));
   const bin = join(root, "bin");
   mkdirSync(bin);
   expect(existsSync(FAKE), "build:e2e must build the fake provider").toBe(true);
@@ -156,7 +158,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
   writeManagedFakeProviderConfig(bin);
   try {
     const app = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
     // Safety gate: native detection resolved every provider to the no-network fake before the UI
     // asserts any installed or account state.
@@ -174,7 +176,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
       expect(status?.detection?.version, id).toBe(version);
     }
 
-    await app.page.getByRole("button", { name: "Providers" }).click();
+    await goTo(app.page, "Providers");
     await expect(app.page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
     await app.page.getByRole("tab", { name: "Setup", exact: true }).click();
 
@@ -189,7 +191,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
     await expect(app.page.getByRole("button", { name: "Check again" })).toBeEnabled();
 
     // The first detection is recorded in the event log.
-    await app.page.getByRole("button", { name: "Dashboard" }).click();
+    await app.page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(activity(app.page).getByText(/^Claude Code \d+\.\d+\.\d+/)).toBeVisible();
     await closeGracefully(app);
   } finally {
@@ -200,7 +202,8 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
 
 test("the Threads surface runs on the native thread runtime", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
-  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-thread-options-"));
+  // Under the home folder so the detected path shows as ~…; a gate worker's TEMP is outside its home.
+  const root = mkdtempSync(join(homedir(), "kalcode-e2e-thread-options-"));
   try {
     const bin = join(root, "bin");
     mkdirSync(bin);
@@ -209,7 +212,7 @@ test("the Threads surface runs on the native thread runtime", async () => {
     writeManagedFakeProviderConfig(bin);
 
     const app = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
-    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
     for (const [id, executable, version] of [
       ["claude-code", "claude.exe", "2.1.282"],
@@ -223,7 +226,7 @@ test("the Threads surface runs on the native thread runtime", async () => {
       expect(status?.detection?.displayPath?.toLowerCase(), id).toBe(expectedDisplayPath.toLowerCase());
       expect(status?.detection?.version, id).toBe(version);
     }
-    await app.page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await goTo(app.page, "Threads");
     await expect(app.page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 
     // `thread_list` answered from the native runtime: an empty list, not an error.
