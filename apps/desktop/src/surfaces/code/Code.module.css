@@ -232,6 +232,41 @@
   outline-offset: -2px;
 }
 
+/* New agent: the primary action and its options as one lit control. */
+.agentSplit {
+  border-color: var(--btn-primary-bottom);
+  background: none;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.28),
+    0 0 16px -8px var(--btn-primary-glow);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+.agentSplit:hover {
+  border-color: var(--color-border-lit);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.28),
+    0 0 20px -6px var(--btn-primary-glow);
+}
+
+.agentSplit .splitPart {
+  box-shadow: inset 0 1px 0 var(--btn-primary-edge);
+}
+
+.agentSplit .splitPart:hover:not(:disabled) {
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 var(--btn-primary-edge);
+}
+
+.agentSplit .splitPart + .splitPart {
+  border-left: 1px solid rgb(0 0 0 / 0.32);
+  box-shadow:
+    inset 1px 0 0 rgb(255 255 255 / 0.08),
+    inset 0 1px 0 var(--btn-primary-edge);
+}
+
 .groupDivider {
   flex: none;
   width: 1px;

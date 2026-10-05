@@ -72,7 +72,7 @@ test("an agent row opens its coding terminal in Code, and a chat thread is never
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await page.getByRole("button", { name: "Open folder…" }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "deck-agent" })).toBeVisible();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

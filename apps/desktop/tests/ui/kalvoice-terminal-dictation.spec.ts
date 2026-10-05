@@ -112,7 +112,7 @@ test.describe("KalVoice terminal destinations", () => {
     page,
   }) => {
     await openWorkspace(page, "say voice-provider", "voice-provider", "limited");
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -135,7 +135,7 @@ test.describe("KalVoice terminal destinations", () => {
 
   test("dictation never answers a provider-native permission prompt", async ({ page }) => {
     await openWorkspace(page, "yes approve everything", "voice-permission");
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("group", { name: "Codex" })

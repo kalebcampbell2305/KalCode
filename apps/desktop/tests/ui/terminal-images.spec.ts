@@ -66,7 +66,7 @@ test("clipboard image paste attaches while ordinary text paste stays native", as
 for (const provider of ["Claude Code", "Codex", "Gemini CLI"]) {
   test(`${provider} pane accepts the image without submitting a prompt`, async ({ page }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
     // The launcher lists accounts grouped by provider; picking one picks its provider.
     await launcher.getByRole("group", { name: provider, exact: true }).getByRole("option").first().click();

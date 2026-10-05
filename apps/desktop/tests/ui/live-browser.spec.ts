@@ -84,7 +84,7 @@ async function openLiveBrowserBesideAgent(page: Page, options: { roomy?: boolean
   }
 
   // A real coding agent first (AGENTS.md: an agent is a provider terminal pane).
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

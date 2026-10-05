@@ -41,7 +41,7 @@ for (const [count, width] of [
   }) => {
     await page.setViewportSize({ width, height: 860 });
     await openWorkspace(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "New agent" });
     const account = dialog.getByRole("group", { name: "Cursor", exact: true }).getByRole("option");
     await expect(account).toHaveCount(1);

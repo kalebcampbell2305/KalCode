@@ -218,7 +218,13 @@ export type PaneCommand =
   /** Shows the exact provider pane threads created by the native executor. */
   | { kind: "open-provider-panes"; threadIds: string[] }
   /** Opens Code's + launcher using the last selection unless a provider is named. */
-  | { kind: "open-agent-launcher"; providerId?: string }
+  | { kind: "open-agent-launcher"; providerId?: string; count?: number }
+  /**
+   * New agent in one click: starts the obvious configuration (remembered account, exact model and
+   * effort) at once, or opens the launcher pre-filled when the person has to choose. One agent
+   * unless a count is named ("start six Codex agents").
+   */
+  | { kind: "launch-agents"; providerId?: string; count?: number }
   /** Open Browser beside this exact coding agent, regardless of the active tab. */
   | { kind: "agent-browser-beside"; threadId: string }
   /** Applies a named, deterministic layout operation. */

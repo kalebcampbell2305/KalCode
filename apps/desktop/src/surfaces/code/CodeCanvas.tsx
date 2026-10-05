@@ -1,7 +1,9 @@
 import type {
+  ModelInfo,
   PaneContent,
   PaneLayout,
   ProviderAccount,
+  ProviderAccountBinding,
   ShellOption,
   StatusTone,
   TerminalInfo,
@@ -83,7 +85,7 @@ import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
 import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "../../shell/rail/paneIds.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
-import { accountName } from "../providers/accountIdentity.ts";
+import { accountName, accountSessionState } from "../providers/accountIdentity.ts";
 import { useOptionalProviderAccountSessions } from "../providers/ProviderAccountSessions.tsx";
 import { setSelectedCodeContext } from "../threads/accountIntent.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
@@ -98,9 +100,15 @@ import { useKalTidyClosedPanes } from "./kaltidy/closedPanes.ts";
 import { type AgentLaunchSpec, NewAgentDialog } from "./NewAgentDialog.tsx";
 import { BADGES } from "./organization/model.ts";
 import { type Organization, useOrganization } from "./organization/useOrganization.ts";
-import { readLaunchMemory } from "./panes/agentLaunch.ts";
-import { isPaneProvider, type PaneProviderId } from "./panes/paneChannel.ts";
+import { boundLaunchAccount, readLaunchMemory, rememberLaunch } from "./panes/agentLaunch.ts";
+import { isPaneProvider, PANE_PROVIDERS, type PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
+import {
+  type QuickLaunch,
+  type QuickLaunchContext,
+  type QuickLaunchOverrides,
+  resolveQuickLaunch,
+} from "./panes/quickLaunch.ts";
 import { agentAttention, useAgentAttention } from "./useAgentAttention.ts";
 import { SmartCloseDialog, useSmartClose } from "./useSmartClose.tsx";
 import "./paneContents.tsx";
@@ -181,6 +189,15 @@ export interface CodeCanvasApi {
   newTerminal: (shellId: string | null) => void;
   /** Opens the coding-agent launcher with the last selection unless a provider is named. */
   openAgentLauncher: (providerId?: PaneProviderId) => void;
+  /**
+   * New agent in one click: starts the one obvious configuration at once, or opens the launcher
+   * pre-filled when the person has to choose (see `resolveQuickLaunch`).
+   */
+  startAgents: (overrides?: QuickLaunchOverrides) => void;
+  /** What one click on New agent would start right now, from what KalCode already knows. */
+  previewQuickLaunch: () => QuickLaunch;
+  /** A one-click launch is resolving or starting its panes. */
+  quickLaunching: boolean;
   titleOf: (content: PaneContent) => string;
   applyTaskLayout: (task: TaskLayout) => void;
   layoutSuggestion: ReturnType<typeof suggestTask>;
@@ -752,6 +769,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     providerId: PaneProviderId;
     paneId: string | null;
     returnToHandoff: boolean;
+    /** Pre-fills the count ("start six agents" that still needs a choice). */
+    count?: number;
   } | null>(null);
   const [handoffTargetId, setHandoffTargetId] = useState<string | null>(null);
   // The id only: the dialog always reads the thread's current summary, and closes if it's gone.
@@ -789,12 +808,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   // A fresh launcher never shows the previous launch's refusal.
   const { clearLaunchError, createMany } = providerPanes;
   const openAgentLauncher = useCallback(
-    (providerId?: PaneProviderId, paneId: string | null = null) => {
+    (providerId?: PaneProviderId, paneId: string | null = null, count?: number) => {
       clearLaunchError();
       setLauncher({
         providerId: providerId ?? readLaunchMemory().last?.providerId ?? "claude-code",
         paneId,
         returnToHandoff: false,
+        ...(count !== undefined ? { count } : {}),
       });
     },
     [clearLaunchError],
@@ -835,6 +855,129 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     },
     [createMany],
   );
+
+  // One-click New agent. What KalCode already knows (workspace account bindings, the models each
+  // provider reports) is read once in the background, so the button can say what it will start;
+  // a click re-reads the bindings (local, fast) so an Account Center change made since still wins.
+  const [launchBindings, setLaunchBindings] = useState<readonly ProviderAccountBinding[] | null>(null);
+  const [providerModels, setProviderModels] = useState<ReadonlyMap<string, readonly ModelInfo[]> | null>(null);
+  const [quickLaunching, setQuickLaunching] = useState(false);
+  useEffect(() => {
+    if (!providerPanes.enabled) return;
+    let cancelled = false;
+    client.listProviderAccountBindings({ kind: "workspace" }).then(
+      (next) => {
+        if (!cancelled) setLaunchBindings(next);
+      },
+      () => undefined,
+    );
+    client.threadOptions().then(
+      (options) => {
+        if (!cancelled) setProviderModels(new Map(options.providers.map((p) => [p.id, p.models])));
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, providerPanes.enabled]);
+  const quickLaunchContext = useCallback(
+    (accounts: readonly ProviderAccount[], bindings: readonly ProviderAccountBinding[] | null): QuickLaunchContext => ({
+      accounts,
+      bindings,
+      workspaceId: workspace.id,
+      memory: readLaunchMemory(),
+      // The launcher's own offer: Claude Code and Cursor always, Codex / Gemini CLI when detected.
+      providers: PANE_PROVIDERS.filter(
+        (p) => p === "claude-code" || p === "cursor" || providerPanes.offered.includes(p),
+      ),
+      usable: (account) => (accountSessions?.states.get(account.id)?.health ?? accountSessionState(account)).usable,
+      modelsOf: (providerId, accountId) => {
+        const discovered = accountSessions?.states.get(accountId)?.models;
+        if (discovered?.status === "available") return discovered.items;
+        if (providerId === "cursor") return null;
+        return providerModels?.get(providerId) ?? null;
+      },
+    }),
+    [workspace.id, providerPanes.offered, accountSessions, providerModels],
+  );
+  const previewQuickLaunch = useCallback(
+    (): QuickLaunch =>
+      restoredProviderAccounts
+        ? resolveQuickLaunch(quickLaunchContext(restoredProviderAccounts, launchBindings))
+        : { kind: "choose", reason: "Loading your accounts." },
+    [quickLaunchContext, restoredProviderAccounts, launchBindings],
+  );
+  const quickLaunchBusy = useRef(false);
+  const startAgents = useCallback(
+    (overrides: QuickLaunchOverrides = {}) => {
+      if (!providerPanes.enabled || quickLaunchBusy.current) return;
+      quickLaunchBusy.current = true;
+      setQuickLaunching(true);
+      void (async () => {
+        try {
+          const [accounts, bindings] = await Promise.all([
+            restoredProviderAccounts ?? client.listProviderAccounts(),
+            client.listProviderAccountBindings({ kind: "workspace" }),
+          ]);
+          setLaunchBindings(bindings);
+          const result = resolveQuickLaunch(quickLaunchContext(accounts, bindings), overrides);
+          if (result.kind === "choose") {
+            const requested = overrides.providerId;
+            openAgentLauncher(
+              result.providerId ?? (requested && isPaneProvider(requested) ? requested : undefined),
+              null,
+              result.count,
+            );
+            return;
+          }
+          const { spec } = result;
+          const started = await launchAgents(spec, null);
+          if (started < spec.count) {
+            // The launcher shows the real refusal and offers reconnect/retry for the rest.
+            openAgentLauncher(spec.providerId, null, spec.count - started);
+            return;
+          }
+          const remembered = readLaunchMemory().byProvider[spec.providerId];
+          const modelName =
+            (spec.model ? providerModels?.get(spec.providerId)?.find((m) => m.id === spec.model)?.displayName : null) ??
+            (remembered?.model === spec.model ? remembered?.modelName : null) ??
+            null;
+          rememberLaunch({
+            providerId: spec.providerId,
+            accountId: spec.providerAccountId ?? "",
+            model: spec.model ?? null,
+            modelName,
+            effort: spec.effort ?? null,
+            count: remembered?.count ?? spec.count,
+            workspaceId: workspace.id,
+            boundAccountId: boundLaunchAccount(accounts, bindings, spec.providerId, workspace.id),
+            at: new Date().toISOString(),
+          });
+        } catch {
+          // Accounts or bindings couldn't be read: the launcher says why and lets the person choose.
+          openAgentLauncher(undefined, null, overrides.count);
+        } finally {
+          quickLaunchBusy.current = false;
+          setQuickLaunching(false);
+        }
+      })();
+    },
+    [
+      providerPanes.enabled,
+      restoredProviderAccounts,
+      client,
+      quickLaunchContext,
+      openAgentLauncher,
+      launchAgents,
+      providerModels,
+      workspace.id,
+    ],
+  );
+
+  // The pane command handler stays stable while account state refreshes underneath it.
+  const startAgentsRef = useRef(startAgents);
+  startAgentsRef.current = startAgents;
 
   // ---------- Contents ----------
   const closeTerminalTab = useCallback(
@@ -1373,7 +1516,15 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (command.kind === "open-agent-launcher") {
         if (!providerPanes.enabled) return { handled: false, message: "Coding agents aren't available in this build." };
         const providerId = command.providerId;
-        openAgentLauncher(providerId && isPaneProvider(providerId) ? providerId : undefined);
+        openAgentLauncher(providerId && isPaneProvider(providerId) ? providerId : undefined, null, command.count);
+        return { handled: true };
+      }
+      if (command.kind === "launch-agents") {
+        if (!providerPanes.enabled) return { handled: false, message: "Coding agents aren't available in this build." };
+        startAgentsRef.current({
+          ...(command.providerId ? { providerId: command.providerId } : {}),
+          ...(command.count !== undefined ? { count: command.count } : {}),
+        });
         return { handled: true };
       }
       if (command.kind === "browser-control") {
@@ -1550,6 +1701,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       shells,
       newTerminal,
       openAgentLauncher,
+      startAgents,
+      previewQuickLaunch,
+      quickLaunching,
       titleOf,
       applyTaskLayout,
       layoutSuggestion,
@@ -1562,6 +1716,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       shells,
       newTerminal,
       openAgentLauncher,
+      startAgents,
+      previewQuickLaunch,
+      quickLaunching,
       titleOf,
       applyTaskLayout,
       layoutSuggestion,
@@ -1644,6 +1801,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           workspace={workspace}
           offered={providerPanes.offered}
           initialProvider={launcher.providerId}
+          initialCount={launcher.count}
           busy={launching || providerPanes.creating}
           error={providerPanes.error}
           fixedCount={launcher.returnToHandoff ? 1 : undefined}
