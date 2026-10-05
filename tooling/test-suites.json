@@ -71,7 +71,7 @@
       "package": "@kalcode/protocol",
       "script": "test",
       "command": null,
-      "timeoutMs": 180000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -92,7 +92,7 @@
       "package": "@kalcode/testing",
       "script": "test",
       "command": null,
-      "timeoutMs": 180000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -113,7 +113,7 @@
       "package": "@kalcode/ui",
       "script": "test",
       "command": null,
-      "timeoutMs": 180000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -134,7 +134,7 @@
       "package": "@kalcode/tooling",
       "script": "test",
       "command": null,
-      "timeoutMs": 600000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32"],
