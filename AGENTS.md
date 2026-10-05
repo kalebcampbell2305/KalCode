@@ -512,10 +512,22 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 
 **KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
 
-- **Priority, throttled from the bottom:** 1 KalCode UI, 2 user-requested coding agents, 3 builds/tests the user started, 4 important active services, 5 optional/background work, 6 indexing/maintenance/analytics.
+Owner wording (2026-10-05):
+
+> "KALCODE MUST NEVER BLOCK A USER-REQUESTED CODING AGENT FROM STARTING MERELY BECAUSE CPU USAGE IS HIGH.
+>
+> USER-REQUESTED INTERACTIVE CODING WORK HAS PRIORITY OVER OPTIONAL BACKGROUND WORK.
+>
+> RESOURCE GOVERNANCE MAY THROTTLE BACKGROUND TASKS, INDEXING, ANALYTICS, AND MAINTENANCE FIRST.
+>
+> IT MUST NOT BECOME A HIDDEN CODING-AGENT CONCURRENCY LIMIT.
+>
+> ONLY GENUINE HARD RESOURCE FAILURE MAY PREVENT AN AGENT FROM STARTING."
+
+- **Priority, throttled from the bottom (owner order 2026-10-05):** 1 KalCode UI, 2 user-requested coding agents, 3 user-requested builds/tests, 4 active services, 5 optional automation, 6 indexing, 7 analytics/maintenance/background refreshes. Items 1-3 are never blocked under normal load.
 - **Hard pressure only:** critically low available memory, disk effectively full, the OS cannot create another process, or severe exhaustion likely to crash. Then show the real reason (for example "Memory is critically low.") with actions such as [Run KalTidy] / [Start Anyway] where safe. Never a generic "CPU busy".
-- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies.
-- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started.
+- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies. KalCode pricing includes unlimited local coding agents on every plan, so the governor must never act as a hidden concurrency cap.
+- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started: a newly requested agent that has not started shows STARTING, or WAITING with the real hard reason.
 - **Provider-agnostic:** applies equally to Claude Code, Codex, Cursor, Gemini and future providers, and to every launch path (panes, New agent, KalVoice, user-initiated Squads and Handoffs).
 - This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.
 - Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
