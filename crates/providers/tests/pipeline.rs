@@ -460,7 +460,8 @@ fn registry_isolates_a_hanging_provider_from_the_others() {
         "claude",
         json!({"version": "2.1.300 (Claude Code)", "versionDelayMs": 0}),
     );
-    let hanging = FakeInstall::new("codex", json!({"versionDelayMs": 30000}));
+    // The hang outlasts the probe timeout by a wide margin, so it must end as a timeout error.
+    let hanging = FakeInstall::new("codex", json!({"versionDelayMs": 60000}));
     let sep = if cfg!(windows) { ";" } else { ":" };
     let mut env = fake.env();
     env.vars.retain(|(k, _)| k != "PATH");
@@ -473,9 +474,18 @@ fn registry_isolates_a_hanging_provider_from_the_others() {
         )
         .into(),
     ));
-    env.probe_timeout = Some(Duration::from_secs(4));
+    // Generous for the healthy probe on a loaded gate machine (the timeout applies to every
+    // provider; at 4 s a slow but healthy claude probe was itself timed out), far below the hang.
+    env.probe_timeout = Some(Duration::from_secs(15));
     let registry = ProviderRegistry::new(env);
+    let started = std::time::Instant::now();
     let (statuses, events) = registry.detect_all();
+    // Isolation: the hanging provider is cut off at its timeout, not waited out.
+    assert!(
+        started.elapsed() < Duration::from_secs(45),
+        "a hanging provider delayed detection: {:?}",
+        started.elapsed()
+    );
     let state = |id: &str| {
         statuses
             .iter()
