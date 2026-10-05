@@ -178,10 +178,55 @@ describe("AgentCard waiting states", () => {
     expect(card.textContent).not.toContain("system resources");
   });
 
-  it("a held launch offers Stop, never Pause or Archive", async () => {
+  it("a held launch offers Start Anyway and Stop, never Pause or Archive", async () => {
     mount({ ...thread(null), ...WAITING });
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Pin globally", "Stop…"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Open",
+      "Pin globally",
+      "Start Anyway",
+      "Stop…",
+    ]);
+  });
+
+  it("a held launch shows its real reason with Start Anyway on the card, which starts it", async () => {
+    const onAction = vi.fn();
+    const summary = { ...thread(null), ...WAITING };
+    mount(summary, { onAction });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("memory is critically low");
+    await userEvent.click(screen.getByRole("button", { name: "Start Research anyway" }));
+    expect(onAction).toHaveBeenCalledWith(summary, "start_anyway");
+  });
+
+  it("Start Anyway in flight shows on its own button, not the menu", () => {
+    mount({ ...thread(null), ...WAITING }, { pendingAction: "start_anyway" });
+    expect(screen.getByRole("button", { name: "Start Research anyway" }).getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("button", { name: "More actions for Research" }).getAttribute("aria-busy")).not.toBe(
+      "true",
+    );
+  });
+
+  it("a launch whose wait ran out keeps Resume on the card and offers Start Anyway in the menu", async () => {
+    const onAction = vi.fn();
+    const summary: ThreadSummary = {
+      ...thread(null),
+      status: "interrupted",
+      error: {
+        code: "resources_unavailable",
+        message: "Codex didn't start: memory stayed critically low after 90 s. Your message is saved.",
+      },
+    };
+    mount(summary, { onAction });
+    expect(screen.getByRole("button", { name: "Resume Research" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Start Anyway" }));
+    expect(onAction).toHaveBeenCalledWith(summary, "start_anyway");
+  });
+
+  it("a wait on another task never offers Start Anyway", () => {
+    mount({ ...thread(null), status: "waiting_for_dependency", currentActivity: null });
+    expect(screen.queryByRole("button", { name: "Start Research anyway" })).toBeNull();
   });
 
   it("an idle thread offers Archive, not Stop", async () => {

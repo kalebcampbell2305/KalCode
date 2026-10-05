@@ -238,7 +238,9 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
                 ? await client.archiveThread(thread.id)
                 : action === "unarchive"
                   ? await client.unarchiveThread(thread.id)
-                  : await client.resumeThread(thread.id); // resume and retry
+                  : action === "start_anyway"
+                    ? await client.startThreadAnyway(thread.id)
+                    : await client.resumeThread(thread.id); // resume and retry
         if (!isCurrent(session)) return;
         // Reconcile even a superseded current-client command: native effects already happened.
         invalidate(["threads"], session);

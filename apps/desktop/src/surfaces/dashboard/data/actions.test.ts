@@ -1,6 +1,6 @@
 import type { ThreadStatus } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { availableActions, type ThreadAction } from "./actions.ts";
+import { ACTION_LABELS, availableActions, type ThreadAction } from "./actions.ts";
 import { isLive, isTerminal } from "./status.ts";
 import { ALL_STATUSES } from "./testing.ts";
 
@@ -20,16 +20,16 @@ describe("availableActions", () => {
     ["failed", ["open", "retry", "archive"]],
     ["interrupted", ["open", "resume", "archive"]],
   ])("%s offers %j", (status, expected) => {
-    expect(availableActions(status)).toEqual(expected);
+    expect(availableActions({ status })).toEqual(expected);
   });
 
   it("always offers Open first", () => {
-    for (const status of ALL_STATUSES) expect(availableActions(status)[0]).toBe("open");
+    for (const status of ALL_STATUSES) expect(availableActions({ status })[0]).toBe("open");
   });
 
   it("never offers an action that is invalid for the state", () => {
     for (const status of ALL_STATUSES) {
-      const actions = availableActions(status);
+      const actions = availableActions({ status });
       if (isTerminal(status)) {
         expect(actions).not.toContain("interrupt");
         expect(actions).not.toContain("stop");
@@ -47,5 +47,36 @@ describe("availableActions", () => {
       // Resume and Retry both call `thread_resume`; a state never offers both.
       expect(actions.includes("resume") && actions.includes("retry")).toBe(false);
     }
+  });
+});
+
+describe("Start Anyway", () => {
+  const HELD = {
+    status: "waiting_for_dependency",
+    currentActivity: "Waiting to start: memory is critically low (412 MB free)",
+    error: { code: "waiting_for_resources", message: "Memory is critically low (412 MB free)." },
+  } as const;
+
+  it("a launch held for system resources offers Start Anyway (and Stop), as its pane does", () => {
+    expect(availableActions(HELD)).toEqual(["open", "start_anyway", "stop"]);
+    expect(ACTION_LABELS.start_anyway).toBe("Start Anyway");
+  });
+
+  it("a launch whose wait ran out offers Resume and Start Anyway", () => {
+    expect(
+      availableActions({
+        status: "interrupted",
+        error: { code: "resources_unavailable", message: "Codex didn't start." },
+      }),
+    ).toEqual(["open", "resume", "start_anyway", "archive"]);
+  });
+
+  it("is never offered without a resource hold", () => {
+    for (const status of ALL_STATUSES) expect(availableActions({ status })).not.toContain("start_anyway");
+    // Waiting on another task is not a resource hold.
+    expect(availableActions({ status: "waiting_for_dependency", error: null })).not.toContain("start_anyway");
+    expect(
+      availableActions({ status: "interrupted", error: { code: "provider_exited", message: "Exited." } }),
+    ).not.toContain("start_anyway");
   });
 });
