@@ -659,6 +659,8 @@ export function mountLiveDemo(root: HTMLElement): LiveDemo {
     if (!visible || document.hidden) return;
     timer = window.setInterval(
       () => {
+        // A held pane stays put: agent output would re-render and reflow the canvas under the pointer.
+        if (adaptiveCanvas.dragging()) return;
         tick(state);
         render();
       },

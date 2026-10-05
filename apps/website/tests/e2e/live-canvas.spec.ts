@@ -67,6 +67,12 @@ test("task layouts and Tidy preserve pane identity, drafts and newly opened work
 test("pointer preview, keyboard movement and resizing use the same canvas", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const errors = await open(page);
+  // Smooth scrolling (critical.css) can stall on a loaded machine long enough for two reads to agree
+  // mid-scroll; scroll instantly so every box below is the final layout. (A CSSOM write: the site's
+  // CSP forbids injected style elements.)
+  await page.evaluate(() => {
+    document.documentElement.style.scrollBehavior = "auto";
+  });
   const first = app(page).locator('[data-canvas-frame="f1"]');
   await first.focus();
   await page.keyboard.press("Control+Alt+Shift+L");
@@ -82,11 +88,17 @@ test("pointer preview, keyboard movement and resizing use the same canvas", asyn
   await page.mouse.down();
   // Start the drag, then aim at where the target is now.
   await page.mouse.move(source.x + source.width / 2 + 12, source.y + source.height / 2 + 12, { steps: 2 });
-  const target = await settledBox(page, app(page).locator('[data-canvas-frame="f2"]'));
+  // The grip took the pointer: the drag is live (the demo holds its agents still meanwhile).
+  await expect(app(page)).toHaveAttribute("data-canvas-dragging", "true");
+  const destination = app(page).locator('[data-canvas-frame="f2"]');
   // The drop side depends only on the horizontal position. Aim at the pane's vertical middle: its
-  // top edge can sit under the sticky site header, depending on where focus scrolling settled.
-  await page.mouse.move(target.x + 15, target.y + target.height / 2, { steps: 6 });
-  await expect(app(page).locator('[data-canvas-frame="f2"]')).toHaveAttribute("data-canvas-snap", "before");
+  // top edge can sit under the sticky site header. Re-aim at the pane's current box until the
+  // preview shows, so a late layout change can't leave the pointer somewhere stale.
+  await expect(async () => {
+    const target = await settledBox(page, destination);
+    await page.mouse.move(target.x + 15, target.y + target.height / 2, { steps: 3 });
+    await expect(destination).toHaveAttribute("data-canvas-snap", "before", { timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
   await page.mouse.up();
   await expect(app(page).locator("[data-canvas-frame]").first()).toHaveAttribute("data-canvas-frame", "f1");
   expect(errors).toEqual([]);
