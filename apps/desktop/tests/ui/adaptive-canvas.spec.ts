@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 type MemoryWindow = Window & { __kalcodeMemory: { runningProcessCount(): number } };
 
-const panes = (page: Page) => page.locator("[data-pane-id]:not([hidden])");
+const panes = (page: Page) => page.getByRole("group", { name: /^Panes in / }).locator("[data-pane-id]:not([hidden])");
 async function openCode(page: Page) {
   await page.goto("/?scenario=code");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
@@ -109,7 +109,10 @@ test("workspace switching restores selected tabs, sizes and the focused pane", a
   await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
   await page.getByRole("button", { name: /^Workspace\s/ }).click();
   await page.getByRole("menuitemradio", { name: /kalcode-site/ }).click();
-  await expect(page.locator("[data-pane-id][data-focused]")).toHaveAttribute("data-pane-id", id);
+  await expect(page.getByRole("group", { name: /^Panes in / }).locator("[data-pane-id][data-focused]")).toHaveAttribute(
+    "data-pane-id",
+    id,
+  );
   await expect(
     page.locator(`[data-pane-id="${id}"]`).getByRole("tab", { name: "Dashboard", exact: true }),
   ).toHaveAttribute("aria-selected", "true");

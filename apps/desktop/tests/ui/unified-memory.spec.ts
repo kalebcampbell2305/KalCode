@@ -44,7 +44,14 @@ test("project memory supports editing, search, preferences and removal", async (
   await page.getByRole("button", { name: "Memory preferences" }).click();
   await page.getByRole("checkbox", { name: /Automatically remember/ }).uncheck();
   await page.getByRole("checkbox", { name: /Share relevant memory/ }).uncheck();
-  await expect(page.getByText(/Agent sharing paused/)).toBeVisible();
+  await expect(
+    page.getByText(/Automatic agent capture and cross-provider context are included with Pro/),
+  ).toBeVisible();
+  await expect(page.getByText(/Agent sharing paused|Relevant context shared with your agents/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Memory preferences" }).click();
+  await page.getByRole("button", { name: "Memory preferences" }).click();
+  await expect(page.getByRole("checkbox", { name: /Automatically remember/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Share relevant memory/ })).not.toBeChecked();
   await page.getByRole("button", { name: "Memory preferences" }).click();
   await page.setViewportSize({ width: 760, height: 860 });
   await expect(page.getByRole("region", { name: "Memory details" })).toBeVisible();

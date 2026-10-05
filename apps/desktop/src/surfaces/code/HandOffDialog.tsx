@@ -333,7 +333,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
           {!featureAvailable ? (
             <div className={styles.planGate} role="note">
               <span>
-                <Badge tone="accent">Pro</Badge>
+                <Badge tone="accent">Max</Badge>
                 Agent handoff is included with Max and above.
               </span>
               <Button
