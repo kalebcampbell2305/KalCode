@@ -16,6 +16,8 @@ export const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9333);
 export const ACCOUNT_FIXTURE_OPT_IN = "onboarding-v1";
 export const ACCOUNT_READY_FIXTURE_OPT_IN = "ready-v1";
 export const ACCOUNT_KALVOICE_FIXTURE_OPT_IN = "kalvoice-under-limit-v1";
+/** A signed MAX account: features placed on MAX, such as agent handoff. */
+export const ACCOUNT_MAX_FIXTURE_OPT_IN = "max-v1";
 export const RESOURCE_PROVIDER_FIXTURE_OPT_IN = "provider-capacity-v1";
 const ACCOUNT_FIXTURE_PREFIX = "kalcode-e2e-account-";
 const ACCOUNT_FIXTURE_MARKER = ".kalcode-account-e2e-v1";
