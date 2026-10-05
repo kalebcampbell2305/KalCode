@@ -167,11 +167,20 @@
       "timeoutMs": 1800000,
       "profiles": [
         {
-          "platforms": ["win32", "darwin"],
+          "platforms": ["win32"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 28,
-          "skippedMaximum": 28,
+          "skippedMinimum": 35,
+          "skippedMaximum": 35,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        },
+        {
+          "platforms": ["darwin"],
+          "environment": {},
+          "minimumExecuted": 1258,
+          "skippedMinimum": 34,
+          "skippedMaximum": 34,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +188,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 25,
-          "skippedMaximum": 25,
+          "skippedMinimum": 31,
+          "skippedMaximum": 31,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -344,6 +353,22 @@
     { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
     { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
     { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    {
+      "path": "crates/providers/tests/codex_hooks_real.rs",
+      "reason": "consumes AI quota; requires the owner's explicit approval"
+    },
+    {
+      "path": "crates/providers/tests/codex_hooks_real.rs",
+      "reason": "consumes AI quota; requires the owner's explicit approval"
+    },
+    { "path": "crates/pty/tests/coalesce_bench.rs", "reason": "throughput benchmark" },
+    { "path": "crates/pty/tests/coalesce_bench.rs", "reason": "drives a real pseudo-terminal through 50 MB of output" },
+    { "path": "crates/pty/tests/coalesce_bench.rs", "reason": "drives a real pseudo-terminal" },
+    {
+      "path": "crates/utilities/tests/scan_bench.rs",
+      "reason": "samples this machine's live process and socket tables"
+    },
+    { "path": "crates/utilities/tests/scan_bench.rs", "reason": "spawns the system netstat tool" },
     {
       "path": "apps/desktop/src-tauri/src/kalvoice_guardian.rs",
       "reason": "requires production-signed pinned components and the native guardian helper"
