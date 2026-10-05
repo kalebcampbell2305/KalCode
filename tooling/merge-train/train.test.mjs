@@ -9,6 +9,7 @@ import {
   createGitHubProvider,
   gateStateFrom,
   MAIN_PC_GATE_RUNNER,
+  PC2_GATE_JOB,
   parseGateLog,
   parseSlug,
   queueFromGraphql,
@@ -864,6 +865,60 @@ describe("merge train pieces", () => {
     assert.equal(check(run, { ...job, conclusion: "cancelled" }), "stale");
   });
 
+  test("a split gate lands only when both PCs' jobs passed for the exact candidate", () => {
+    // Owner, 2026-10-05: tests run partly on the build PC's pool and partly on the second Windows PC.
+    const sha = "a".repeat(40);
+    const branch = "merge-train/aaaaaaaaaaaa-12345678";
+    const run = {
+      id: 1,
+      html_url: "u",
+      head_sha: sha,
+      head_branch: branch,
+      event: "push",
+      path: ".github/workflows/gate.yml",
+    };
+    const executed = [{ name: "Gate", status: "completed", conclusion: "success" }];
+    const main = {
+      name: "Gate (Windows)",
+      status: "completed",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-w3",
+      labels: ["self-hosted", "Windows", "kalcode-gate", "kalcode-main-pc"],
+      steps: executed,
+    };
+    const pc2 = {
+      name: PC2_GATE_JOB,
+      status: "completed",
+      conclusion: "success",
+      head_sha: sha,
+      runner_name: "kalcode-win-gate-2",
+      labels: ["self-hosted", "Windows", "X64", "kalcode-gate-pc2"],
+      steps: executed,
+    };
+    const state = (...jobs) => gateStateFrom([run], jobs, sha, branch).state;
+    assert.equal(state(main, pc2), "success", "both halves green");
+    assert.equal(state(main), "success", "a legacy single-job run keeps single-job evidence");
+    assert.equal(state(main, { ...pc2, conclusion: "failure" }), "failure", "a red second-PC half refuses");
+    assert.equal(state({ ...main, conclusion: "failure" }, pc2), "failure", "a red build-PC half refuses");
+    assert.equal(state(main, { ...pc2, status: "queued", conclusion: null }), "pending", "a missing result waits");
+    assert.equal(state(main, { ...pc2, status: "in_progress", conclusion: null }), "pending");
+    assert.equal(state(main, pc2, { ...pc2 }), "stale", "two second-PC jobs are ambiguous");
+    assert.equal(state(main, { ...pc2, head_sha: "b".repeat(40) }), "stale", "another commit is not evidence");
+    assert.equal(state(main, { ...pc2, runner_name: "kalcode-win-gate-w1" }), "stale", "only the second PC's runner");
+    assert.equal(
+      state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate-pc2", "kalcode-main-pc"] }),
+      "stale",
+    );
+    assert.equal(state(main, { ...pc2, labels: ["self-hosted", "Windows", "kalcode-gate"] }), "stale");
+    assert.equal(
+      state(main, { ...pc2, steps: [{ name: "Gate", status: "completed", conclusion: "skipped" }] }),
+      "stale",
+    );
+    assert.equal(state(main, { ...pc2, conclusion: "cancelled" }), "stale");
+    assert.equal(state({ ...pc2, name: "Gate (Windows)" }), "stale", "the second PC never satisfies the build-PC half");
+  });
+
   test("the canonical registry includes exactly the original worker and five additional slots", () => {
     for (const name of ["kalcode-win-gate", ...[1, 2, 3, 4, 5].map((slot) => `kalcode-win-gate-w${slot}`)])
       assert.ok(MAIN_PC_GATE_RUNNER.test(name), name);
@@ -983,7 +1038,15 @@ describe("merge train pieces", () => {
     assert.match(workflow, /Assert-GateWorkerHost/);
     assert.ok(workflow.includes("'^kalcode-win-gate(-w[1-5])?$'"));
     assert.match(workflow, /Runner name does not match its configured slot/);
-    assert.match(workflow, /--base \$env:KALCODE_GATE_BASE --jobs \$env:KALCODE_GATE_JOBS --keep-going/);
+    assert.match(
+      workflow,
+      /--base \$env:KALCODE_GATE_BASE --only \$env:KALCODE_GATE_ONLY --jobs \$env:KALCODE_GATE_JOBS --keep-going/,
+    );
+    // The split: the second PC's half gates the same exact candidate and recorded base.
+    assert.match(workflow, /name: Gate \(Windows, PC2\)/);
+    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate-pc2\]\n/);
+    assert.match(workflow, /gate-split\.mjs main/);
+    assert.match(workflow, /gate-split\.mjs pc2/);
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
@@ -1008,6 +1071,10 @@ test("bootstrap refuses pushing a candidate with no usable main-PC push workflow
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
     workflow.replace(/Windows, kalcode-gate(?:, kalcode-main-pc)?\]/, "Windows, kalcode-gate-2]"),
     workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
+    workflow.replace(
+      "runs-on: [self-hosted, Windows, kalcode-gate-pc2]",
+      "runs-on: [self-hosted, Windows, kalcode-gate-2]",
+    ),
   ]) {
     const env = setup();
     openPr(env, 1, { ".github/workflows/gate.yml": invalid });
