@@ -9,7 +9,10 @@
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyRange, renderClassify } from "./classify.mjs";
-import { evidenceStore, gateConcurrency, gateForWorktree, gatePortOffset, recordGate, runGates } from "./gate.mjs";
+import { gateConcurrency, gateForWorktree, gatePortOffset, recordGate, runGates } from "./gate.mjs";
+import { captureToolchain, prepareCheckEvidence } from "./gate-evidence.mjs";
+import { createGateCapacity } from "./gate-pressure.mjs";
+import { createGateReport } from "./gate-report.mjs";
 import { makeGit } from "./git.mjs";
 import { runHook } from "./hook.mjs";
 import { loadPolicy } from "./policy.mjs";
@@ -23,7 +26,7 @@ export class UsageError extends Error {
 }
 
 const SHIP = resolve(fileURLToPath(import.meta.url), "..", "..", "ship.mjs");
-const VALUED = new Set(["--base", "--head", "--main", "--repo", "--only"]);
+const VALUED = new Set(["--base", "--head", "--main", "--repo", "--only", "--jobs"]);
 const FLAGS = new Set(["--json", "--markdown", "--offline", "--check", "--refresh-cache", "--list", "--keep-going"]);
 
 export function parseLifecycleArgs(argv) {
@@ -106,16 +109,30 @@ export async function lifecycleMain(argv, io = {}) {
       log("gate: nothing changed; nothing to check");
       return 0;
     }
-    // Shared by every gate worker on this machine (gate runners set it); reused only for a clean tree.
-    const evidenceDir = process.env.KALCODE_GATE_EVIDENCE_DIR;
-    const outcome = await runGates(g.plan, {
-      repo: g.top,
-      log,
-      keepGoing: Boolean(opts.keepGoing),
-      concurrency: gateConcurrency(),
-      evidence: evidenceDir && g.tree ? { store: evidenceStore(evidenceDir), tree: g.tree } : null,
+    const jobs = opts.jobs === undefined ? gateConcurrency() : Number(opts.jobs);
+    if (!Number.isInteger(jobs) || jobs < 1 || jobs > 4) throw new UsageError("--jobs must be an integer from 1 to 4");
+    const toolchain = g.clean ? captureToolchain() : null;
+    const nativeToolchain =
+      g.clean && g.plan.some((gate) => ["rust", "desktop-native-e2e", "cargo-deny", "cargo-audit"].includes(gate.id))
+        ? captureToolchain({ native: true })
+        : toolchain;
+    const evidence = prepareCheckEvidence(git, g, policy, { toolchain, nativeToolchain });
+    const capacity = /^kalcode-win-gate(?:-w[1-5])?$/.test(process.env.RUNNER_NAME ?? "")
+      ? createGateCapacity(jobs)
+      : undefined;
+    const report = createGateReport({
+      directory: process.env.KALCODE_GATE_REPORT_DIR,
+      head: g.head,
+      base: g.base.commit,
+      worker: process.env.RUNNER_NAME,
+      plan: g.plan,
     });
+    const outcome = await runGates(g.plan, { repo: g.top, log, keepGoing: true, jobs, evidence, capacity, report });
     const receipt = recordGate(git, g, outcome);
+    if (outcome.status === "PASS" && g.clean && !g.partial && !receipt) {
+      outcome.status = "FAIL";
+      log("gate FAIL: source identity changed or required check evidence is incomplete");
+    }
     if (opts.json) log(JSON.stringify({ status: outcome.status, results: outcome.results, receipt }, null, 2));
     log(
       `gate ${outcome.status}${receipt ? ` (receipt for ${g.head.slice(0, 12)})` : outcome.status === "PASS" ? (only ? " (no receipt: --only ran a subset)" : " (no receipt: uncommitted changes)") : ""}`,

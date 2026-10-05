@@ -6,10 +6,15 @@ import { defineConfig, devices } from "@playwright/test";
  * The real-app end-to-end suite lives in tests/e2e.
  */
 const port = Number(process.env.KALCODE_UI_TEST_PORT ?? 1421);
+const gateWorkers = process.env.KALCODE_UI_TEST_WORKERS;
+if (gateWorkers !== undefined && !/^[1-4]$/.test(gateWorkers)) {
+  throw new Error("KALCODE_UI_TEST_WORKERS must be between 1 and 4");
+}
 
 export default defineConfig({
   testDir: ".",
   fullyParallel: true,
+  ...(gateWorkers === undefined ? {} : { workers: Number(gateWorkers) }),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   // The self-hosted gate runs this suite fully parallel on a slower machine, where a full-page

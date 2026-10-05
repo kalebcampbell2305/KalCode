@@ -66,6 +66,23 @@ test("the Rust workspace suite builds the desktop crate with the Dev identity ov
   assert.equal(JSON.parse(launched.env.TAURI_CONFIG).identifier, "com.kalcode.desktop.dev");
 });
 
+test("the gate's Vitest worker budget reaches the child command and rejects invalid values", () => {
+  const selected = inventory.suites.find(({ id }) => id === "protocol-unit");
+  let launched;
+  const spawn = (_file, args) => {
+    launched = args;
+    return { status: 1, signal: null, error: null, stdout: "", stderr: "" };
+  };
+  assert.throws(() => runSuite(selected, { platform: "linux", environment: { VITEST_MAX_WORKERS: "2" }, spawn }));
+  assert.ok(launched.includes("--maxWorkers=2"));
+  launched = null;
+  assert.throws(
+    () => runSuite(selected, { platform: "linux", environment: { VITEST_MAX_WORKERS: "2;bad" }, spawn }),
+    /Invalid VITEST_MAX_WORKERS/,
+  );
+  assert.equal(launched, null);
+});
+
 test("the registered runner launches a real package suite and retains its exit status", () => {
   const root = mkdtempSync(join(tmpdir(), "kalcode gate fixture "));
   const environment = { ...process.env };

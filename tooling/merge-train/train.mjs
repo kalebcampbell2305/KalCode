@@ -37,7 +37,7 @@ export function assertCandidateWorkflow(source) {
   const windows = workflow.match(/^ {2}windows:\n([\s\S]*?)(?=^ {2}[a-zA-Z][\w-]*:|$(?![\s\S]))/m)?.[1] ?? "";
   if (
     !/ {2}push:\n(?:\s+#.*\n)* {4}branches: \[main, "merge-train\/\*\*"\]/.test(workflow) ||
-    !/ {4}runs-on: \[self-hosted, Windows, kalcode-gate\]\n/.test(windows) ||
+    !/ {4}runs-on: \[self-hosted, Windows, kalcode-gate(?:, kalcode-main-pc)?\]\n/.test(windows) ||
     !windows.includes("name: Gate\n") ||
     !windows.includes("trailers:key=Merge-Train-Base,valueonly")
   ) {
@@ -281,21 +281,6 @@ export function createTrain({
     return r.code === 0;
   }
 
-  /**
-   * An obsolete candidate can never land: its gate runs are cancelled first (a gate worker never finishes dead
-   * work while newer candidates wait), then its branch is deleted.
-   */
-  async function retire(candidate, why) {
-    log(`retiring ${candidate.branch} (${short(candidate.sha)}): ${why}`);
-    try {
-      const cancelled = (await provider.cancelGates?.(candidate.sha, candidate.branch)) ?? [];
-      if (cancelled.length) log(`cancelled stale gate run(s) ${cancelled.join(", ")} of ${candidate.branch}`);
-    } catch (error) {
-      log(`warning: could not cancel gate runs of ${candidate.branch}: ${error.message}`);
-    }
-    await deleteRemote(candidate.branch, candidate.sha);
-  }
-
   async function commentOnce(number, marker, body) {
     try {
       if (marker && provider.hasComment && (await provider.hasComment(number, marker))) return;
@@ -325,6 +310,17 @@ export function createTrain({
   }
 
   const fresh = (candidate, active) => candidate.included.every((i) => active.get(i.number)?.head === i.head);
+  // A failed fetch is uncertainty, not evidence that an immutable candidate is obsolete.
+  const obsolete = (candidate, active) =>
+    candidate.included.some(
+      (i) => !active.has(i.number) || (active.get(i.number).head && active.get(i.number).head !== i.head),
+    );
+
+  async function retire(candidate, reason) {
+    log(`retiring ${candidate.branch}: ${reason}`);
+    await provider.cancelGates?.(candidate.sha, candidate.branch);
+    await deleteRemote(candidate.branch, candidate.sha);
+  }
 
   async function eject(candidate) {
     const { number, head } = candidate.included[0];
@@ -363,17 +359,14 @@ export function createTrain({
       await fetchHeads(ns, queue);
       const active = new Map(queue.map((pr) => [pr.number, pr]));
 
-      // Obsolete candidates are retired: those on an older main (main's lease would refuse them) and those with a
-      // PR that has since moved or left the queue (land would refuse them as stale).
+      // Candidates on an older main can never land (main's lease would refuse them); retire them.
       const current = [];
       for (const c of snap.candidates) {
         if (c.invalid) continue;
-        if (c.base !== base) {
-          if (await isAncestor(c.base, base)) await retire(c, `main moved to ${short(base)}`);
-        } else if (!fresh(c, active)) {
-          const gone = c.included.find((i) => active.get(i.number)?.head !== i.head);
-          await retire(c, `#${gone.number} ${active.has(gone.number) ? "moved" : "left the queue"}`);
-        } else current.push(c);
+        if (c.base === base && !obsolete(c, active)) current.push(c);
+        else if (c.base === base || (await isAncestor(c.base, base))) {
+          await retire(c, c.base === base ? "queued PR head or eligibility changed" : "main advanced");
+        }
       }
       for (const c of current) c.gate = await provider.gateStatus(c.sha, c.branch);
 
@@ -392,42 +385,123 @@ export function createTrain({
       const reusable = current
         .filter((c) => c.gate.state in rank && fresh(c, active))
         .sort((a, b) => rank[a.gate.state] - rank[b.gate.state] || b.included.length - a.included.length);
-      if (reusable.length) {
+      const reuse = () => {
+        if (!reusable.length) return null;
         const manifest = manifestFor(reusable[0], "reused");
         writeManifest(manifest);
         log(`reusing ${manifest.branch} (${short(manifest.candidate)}; gate ${reusable[0].gate.state})`);
         return manifest;
+      };
+      // A verified candidate can advance main immediately; prepare the next
+      // group against that new snapshot rather than spend a worker on old BASE.
+      if (reusable[0]?.gate.state === "success") return reuse();
+
+      // Reserve only the PR heads covered by valid candidates. New independent work can
+      // use another worker immediately; adding it never invalidates an existing gate.
+      const covered = new Set(reusable.flatMap((c) => c.included.map((i) => i.number)));
+      const failed = current
+        .filter((c) => c.gate.state === "failure" && fresh(c, active))
+        .sort((a, b) => a.included.length - b.included.length);
+      for (const c of failed) {
+        if (c.included.length === 1 && !covered.has(c.included[0].number)) {
+          await eject(c);
+          active.delete(c.included[0].number);
+        }
+      }
+      // Ejecting a failing singleton invalidates larger failed groups containing it.
+      // Their remaining independent PRs must become eligible again immediately.
+      const failedHeads = new Set(
+        failed.filter((c) => fresh(c, active)).flatMap((c) => c.included.map((i) => i.number)),
+      );
+      let selection = new Set([...active.keys()].filter((n) => !covered.has(n) && !failedHeads.has(n)));
+      if (!selection.size) {
+        for (const c of failed) {
+          if (!fresh(c, active)) continue;
+          const uncovered = c.included.filter((i) => !covered.has(i.number));
+          if (!uncovered.length) continue;
+          selection = new Set(uncovered.slice(0, Math.ceil(c.included.length / 2)).map((i) => i.number));
+          log(`bisecting failed ${c.branch}: trying ${[...selection].map((n) => `#${n}`).join(", ")}`);
+          break;
+        }
+      }
+      if (!selection.size && reusable.length) return reuse();
+
+      // A newly queued stacked PR can already contain a pending PR's commit. Keep
+      // that dependency in the manifest so landing rechecks BOTH exact heads.
+      // One history query per selected head avoids an O(PRs squared) process fan-out.
+      const ancestry = new Map();
+      const ancestorsOf = async (head) => {
+        if (!ancestry.has(head)) ancestry.set(head, new Set(await lines(["rev-list", head, `^${base}`])));
+        return ancestry.get(head);
+      };
+      const selectedAncestors = new Set();
+      for (const number of selection) {
+        const head = active.get(number)?.head;
+        if (head) for (const ancestor of await ancestorsOf(head)) selectedAncestors.add(ancestor);
+      }
+      for (const pr of active.values()) {
+        if (!pr.head || selection.has(pr.number)) continue;
+        if (selectedAncestors.has(pr.head)) selection.add(pr.number);
       }
 
-      // Gate failures bisect: the smallest failed candidate whose PRs are all still queued at the same heads
-      // is halved; a failed single-PR candidate ejects that PR. One failing PR never blocks the others for long.
-      let selection = null;
-      for (;;) {
-        const failed = current
-          .filter((c) => c.gate.state === "failure" && fresh(c, active))
-          .sort((a, b) => a.included.length - b.included.length)[0];
-        if (!failed) break;
-        if (failed.included.length === 1) {
-          await eject(failed);
-          active.delete(failed.included[0].number);
-          continue;
-        }
-        selection = new Set(failed.included.slice(0, Math.ceil(failed.included.length / 2)).map((i) => i.number));
-        log(`bisecting failed ${failed.branch}: trying ${[...selection].map((n) => `#${n}`).join(", ")}`);
-        break;
+      const dependencies = new Map();
+      // A failed head fetch must not erase a dependency already captured by another
+      // immutable candidate. Hold only children containing that head until its current
+      // queue eligibility and head can be checked; independent PRs still proceed.
+      const captured = snap.candidates
+        .filter((candidate) => !candidate.invalid)
+        .flatMap((candidate) => candidate.included);
+      const unavailableCaptured = new Map();
+      const remaining = [...active.values()].filter((pr) => selection.has(pr.number));
+      for (const pr of remaining) {
+        const ancestors = pr.head ? await ancestorsOf(pr.head) : new Set();
+        unavailableCaptured.set(pr.number, [
+          ...new Set(
+            captured
+              .filter(
+                (other) => other.number !== pr.number && !active.get(other.number)?.head && ancestors.has(other.head),
+              )
+              .map((other) => other.number),
+          ),
+        ]);
+        const needed = remaining
+          .filter((other) => other.head !== pr.head && ancestors.has(other.head))
+          .map((other) => other.number);
+        dependencies.set(pr.number, needed);
+      }
+      const ordered = [];
+      while (remaining.length) {
+        const next = remaining.findIndex((pr) =>
+          dependencies.get(pr.number).every((n) => ordered.some((p) => p.number === n)),
+        );
+        if (next < 0) throw new Error("queued PR dependency cycle");
+        ordered.push(...remaining.splice(next, 1));
       }
 
       let tip = base;
       const included = [];
       const skipped = [];
-      for (const pr of active.values()) {
-        if (selection && !selection.has(pr.number)) continue;
+      for (const pr of ordered) {
         if (!pr.head) {
           skipped.push({ number: pr.number, reason: "head-unavailable", files: [], conflictsWith: [] });
           continue;
         }
         if (await isAncestor(pr.head, base)) {
           skipped.push({ number: pr.number, head: pr.head, reason: "already-in-main", files: [], conflictsWith: [] });
+          continue;
+        }
+        const unavailable = [
+          ...unavailableCaptured.get(pr.number),
+          ...dependencies.get(pr.number).filter((n) => !included.some((i) => i.number === n)),
+        ];
+        if (unavailable.length) {
+          skipped.push({
+            number: pr.number,
+            head: pr.head,
+            reason: "dependency-unavailable",
+            files: [],
+            conflictsWith: unavailable,
+          });
           continue;
         }
         let merged = await mergeTrees(tip, pr.head);
@@ -476,9 +550,11 @@ export function createTrain({
       for (const s of skipped) {
         if (s.reason === "already-in-main" || s.reason === "head-unavailable") continue;
         const why =
-          s.reason === "conflicts-with-main"
-            ? `conflicts with main ${short(base)}; rebase or merge main into the PR (the label stays, so it retries automatically after your push)`
-            : `conflicts with ${s.conflictsWith.map((n) => `#${n}`).join(", ")}, which are ahead of it in this train; it retries on the next train once they land`;
+          s.reason === "dependency-unavailable"
+            ? `depends on queued ${s.conflictsWith.map((n) => `#${n}`).join(", ")}, which could not be included safely; it retries when that dependency is ready`
+            : s.reason === "conflicts-with-main"
+              ? `conflicts with main ${short(base)}; rebase or merge main into the PR (the label stays, so it retries automatically after your push)`
+              : `conflicts with ${s.conflictsWith.map((n) => `#${n}`).join(", ")}, which are ahead of it in this train; it retries on the next train once they land`;
         await commentOnce(
           s.number,
           `skip:${short(base)}:${short(s.head)}`,
@@ -487,6 +563,7 @@ export function createTrain({
       }
 
       if (included.length === 0) {
+        if (reusable.length) return reuse();
         log(`nothing to build on ${short(base)} (queue ${queue.length}, skipped ${skipped.length})`);
         return { schema: MANIFEST_SCHEMA, action: "idle", base, included, skipped };
       }
@@ -639,8 +716,35 @@ export function createTrain({
 
   async function waitForGate(sha, { branch, timeoutMs = 150 * 60_000, pollMs = 30_000 } = {}) {
     const start = now();
+    const candidate = branch ? await parseCandidate(branch, sha) : null;
     let last = null;
     for (;;) {
+      if (candidate) {
+        const main = await withNamespace(async (ns) => {
+          if (!(await fetchRetry([`+refs/heads/${mainBranch}:${ns}/main`]))) return null;
+          return rev(`${ns}/main`);
+        });
+        let reason = main && main !== candidate.base ? "main advanced while gating" : null;
+        for (const item of reason ? [] : candidate.included) {
+          const pr = await provider.getPr(item.number);
+          if (
+            pr &&
+            (!pr.open ||
+              !pr.queued ||
+              pr.draft ||
+              pr.crossRepository ||
+              pr.baseRef !== mainBranch ||
+              pr.head !== item.head)
+          ) {
+            reason = `#${item.number} changed while gating`;
+            break;
+          }
+        }
+        if (reason) {
+          await retire(candidate, reason);
+          return { state: "stale", reason };
+        }
+      }
       const gate = await provider.gateStatus(sha, branch);
       if (gate.state !== last) log(`gate for ${short(sha)}: ${gate.state}${gate.url ? ` ${gate.url}` : ""}`);
       last = gate.state;

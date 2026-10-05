@@ -9,7 +9,6 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { classifyChanges, classifyRange, dependentsOf, renderClassify, workspaceGraph } from "./lifecycle/classify.mjs";
 import {
-  evidenceStore,
   gateConcurrency,
   gateForWorktree,
   gatePortOffset,
@@ -862,7 +861,12 @@ describe("gate", () => {
     assert.equal(checkout.env.STAGE_URL, undefined, "unset like ci.yml");
     assert.equal(checkout.env.PATH, "p");
     ran.length = 0;
-    const failed = await runGates(plan, { repo: ".", exec: exec("pnpm --filter @kalcode/website build") });
+    const failed = await runGates(plan, {
+      repo: ".",
+      exec: exec("pnpm --filter @kalcode/website build"),
+      jobs: 1,
+      keepGoing: false,
+    });
     assert.equal(failed.status, "FAIL");
     assert.deepEqual(
       failed.results.map((r) => r.state),
@@ -940,6 +944,7 @@ describe("gate", () => {
       builtin: null,
       timeoutMs: null,
       exclusive: [],
+      scheduling: { resources: { workspace: "read" } },
       state: "selected",
       ...extra,
     });
@@ -981,13 +986,14 @@ describe("gate", () => {
     assert.equal(peak, 3, "three gates ran at once");
     assert.deepEqual(overlaps, [], "gates sharing cargo-build never overlap");
     const rustBlock = lines.find((l) => l.startsWith("---- rust "));
-    assert.match(rustBlock, />> {3}rust: rust-1\nout of rust-1\n>> {3}rust: rust-2\nout of rust-2$/);
+    assert.match(rustBlock, />> {3}rust: rust-1\nout of rust-1\n>> {3}rust: rust-2\nout of rust-2\nPASS rust$/);
     assert.ok(!lines.some((l) => l.startsWith(">>")), "a concurrent gate's output only appears in its block");
 
     // Concurrency 1 is today's sequential, live-streamed behaviour.
     const order = [];
     const seq = await runGates(plan, {
       repo: ".",
+      jobs: 1,
       exec: (command, options) => {
         order.push(command);
         assert.equal(options.output, undefined, "streams live");
@@ -999,13 +1005,22 @@ describe("gate", () => {
   });
 
   test("a failure stops starting new gates but lets running gates finish; keepGoing runs the rest", async () => {
-    const gate = (id) => ({ id, run: [id], env: {}, unsetEnv: [], requires: [], builtin: null, state: "selected" });
+    const gate = (id) => ({
+      id,
+      run: [id],
+      env: {},
+      unsetEnv: [],
+      requires: [],
+      builtin: null,
+      state: "selected",
+      scheduling: { resources: { workspace: "read" } },
+    });
     const plan = ["fast-fail", "slow", "later-1", "later-2"].map(gate);
     const exec = async (command) => {
       await new Promise((r) => setTimeout(r, command === "slow" ? 30 : 1));
       return command === "fast-fail" ? 1 : 0;
     };
-    const stopped = await runGates(plan, { repo: ".", exec, concurrency: 2 });
+    const stopped = await runGates(plan, { repo: ".", exec, concurrency: 2, keepGoing: false });
     assert.equal(stopped.status, "FAIL");
     assert.deepEqual(
       stopped.results.map((r) => r.state),
@@ -1016,9 +1031,9 @@ describe("gate", () => {
       kept.results.map((r) => r.state),
       ["fail", "pass", "pass", "pass"],
     );
-    assert.equal(gateConcurrency({}), 3);
+    assert.equal(gateConcurrency({}), 4);
     assert.equal(gateConcurrency({ KALCODE_GATE_CONCURRENCY: "1" }), 1);
-    assert.throws(() => gateConcurrency({ KALCODE_GATE_CONCURRENCY: "0" }), /positive integer/);
+    assert.throws(() => gateConcurrency({ KALCODE_GATE_CONCURRENCY: "0" }), /from 1 to 4/);
     assert.equal(gatePortOffset({ KALCODE_GATE_PORT_OFFSET: "50" }), 50);
     assert.throws(() => gatePortOffset({ KALCODE_GATE_PORT_OFFSET: "-1" }), /0-1000/);
   });
@@ -1045,99 +1060,6 @@ describe("gate", () => {
       validatePolicy({ ...policy, gates: [{ id: "x", run: ["y"], ports: { P: 80 }, env: { Q: "1" } }] }),
       ["gate x: port P must be an integer 1024-60000 and not also in env"],
     );
-  });
-
-  test("evidence: a gate that passed for the exact tree is reused, failures and dirty trees never are", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "kc-gate-evidence-"));
-    after(() => rmSync(dir, { recursive: true, force: true }));
-    const gate = (id) => ({
-      id,
-      run: [id],
-      env: { X: "1" },
-      unsetEnv: [],
-      requires: [],
-      builtin: null,
-      state: "selected",
-    });
-    const plan = ["ok", "flaky", "after"].map(gate);
-    const store = evidenceStore(dir, { label: "run 1", now: () => 0 });
-    const ran = [];
-    const first = await runGates(plan, {
-      repo: ".",
-      exec: (c) => {
-        ran.push(c);
-        return c === "flaky" ? 1 : 0;
-      },
-      keepGoing: true,
-      evidence: { store, tree: "t1" },
-    });
-    assert.equal(first.status, "FAIL");
-    assert.deepEqual(ran, ["ok", "flaky", "after"]);
-
-    ran.length = 0;
-    const lines = [];
-    const rerun = await runGates(plan, {
-      repo: ".",
-      exec: (c) => {
-        ran.push(c);
-        return 0;
-      },
-      log: (l) => lines.push(l),
-      evidence: { store: evidenceStore(dir, { label: "run 2" }), tree: "t1" },
-    });
-    assert.equal(rerun.status, "PASS");
-    assert.deepEqual(ran, ["flaky"], "only the failed gate reruns on the identical tree");
-    assert.deepEqual(
-      rerun.results.map((r) => r.reused ?? null),
-      ["run 1", null, "run 1"],
-    );
-    assert.ok(lines.includes("PASS ok: reused, passed for this exact tree in run 1 at 1970-01-01T00:00:00.000Z"));
-
-    ran.length = 0;
-    await runGates(plan, {
-      repo: ".",
-      exec: (c) => {
-        ran.push(c);
-        return 0;
-      },
-      evidence: { store, tree: "t2" },
-    });
-    assert.deepEqual(ran, ["ok", "flaky", "after"], "another tree reuses nothing");
-    ran.length = 0;
-    await runGates(plan, {
-      repo: ".",
-      exec: (c) => {
-        ran.push(c);
-        return 0;
-      },
-      evidence: { store, tree: null },
-    });
-    assert.deepEqual(ran, ["ok", "flaky", "after"], "a dirty worktree (no tree) reuses nothing");
-    ran.length = 0;
-    const changed = [{ ...gate("ok"), run: ["ok --more"] }];
-    await runGates(changed, {
-      repo: ".",
-      exec: (c) => {
-        ran.push(c);
-        return 0;
-      },
-      evidence: { store, tree: "t1" },
-    });
-    assert.deepEqual(ran, ["ok --more"], "different commands are different evidence");
-
-    // Evidence written while the run is in progress (by a command under test) is not used by that run.
-    const t3 = { store, tree: "t3" };
-    ran.length = 0;
-    await runGates(plan, {
-      repo: ".",
-      exec: (c) => {
-        ran.push(c);
-        if (c === "ok") store.record(gate("after"), "t3");
-        return 0;
-      },
-      evidence: t3,
-    });
-    assert.deepEqual(ran, ["ok", "flaky", "after"]);
   });
 
   test("an overrunning command's whole process tree is killed, not just its shell", async () => {
@@ -1204,7 +1126,13 @@ describe("gate", () => {
     assert.equal(recordGate(f.git, clean, { status: "FAIL", results: [] }), null);
     const subset = gateForWorktree(policy, f.git, { base: "origin/main", only: ["api"] });
     assert.equal(recordGate(f.git, subset, { status: "PASS", results: [] }), null, "no receipt for an --only subset");
-    const receipt = recordGate(f.git, clean, { status: "PASS", results: [] });
+    assert.equal(recordGate(f.git, clean, { status: "PASS", results: [] }), null);
+    mkdirSync(join(f.repo, ".git", "info"), { recursive: true });
+    writeFileSync(join(f.repo, ".git", "info", "exclude"), "/target/\n");
+    const receipt = recordGate(f.git, clean, {
+      status: "PASS",
+      results: clean.plan.map((gate) => ({ id: gate.id, state: gate.state === "selected" ? "pass" : "unavailable" })),
+    });
     assert.equal(JSON.parse(readFileSync(receipt, "utf8")).head, head);
     const list = spawnSync(process.execPath, [SHIP, "gate", "--list", "--repo", f.repo], {
       encoding: "utf8",

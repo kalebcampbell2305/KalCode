@@ -7,35 +7,28 @@ A personal-account repository has no runner groups, so a runner label is not acc
 | Runner | Machine / account | Labels | Runs | Credentials it can reach |
 |---|---|---|---|---|
 | `kalcode-win-gate` | Windows PC, local account `kalcode-ci`, Windows service | `kalcode-gate` | `gate.yml` for PRs (same repo only) and `main` | None. It has its own toolchain and caches under `C:\kalcode-ci` and can't read the owner's profile. |
-| `kalcode-win-gate-w1`…`-w5` | The same Windows PC and `kalcode-ci` account, one Windows service each (`C:\kalcode-ci\runner-w<n>`) | `kalcode-gate` | The gate worker pool: any `gate.yml` job, side by side with `kalcode-win-gate` | None, same as `kalcode-win-gate`. |
+| `kalcode-win-gate-w1`…`-w5` | Main Windows PC, separate `kalcode-ci-w1`…`-w5` accounts and services | `kalcode-gate,kalcode-main-pc` after staged verification | Independent gate jobs alongside the preserved original runner | None; private worker profiles and administrator-owned tools. |
 | `kalcode-win-release` | Windows PC, the owner (`Kaleb`), starts at sign-in | `kalcode-release` | Only `release.yml` from `main`, enforced by `release-job-guard.ps1` as the runner's pre-job hook | Azure Artifact Signing login, DPAPI updater key, Wrangler |
-| `kalcode-mac-gate` | Mac, hidden standard account `kalcodeci` (not an admin), LaunchDaemon | `kalcode-gate` (macOS) | The macOS Rust job in `gate.yml` | None. It can't read the owner's home folder or login Keychain (Developer ID, notary profile). |
-| `kalcode-win-desktop-qa` | Second Windows PC, standard account `kalcode-qa`, a normal app in that account's signed-in desktop (Startup shortcut to `run.cmd`, not a service) | `kalcode-desktop-qa` | Only `desktop-update-verify.yml` from `main`: Windows update delivery from the live Stable feed with a real, visible KalCode window | None. A dedicated test profile; the check uninstalls KalCode and removes its data after each run. |
+| `kalcode-mac-gate` | Legacy runner, disabled | Legacy labels only | No current gates; keep `KALCODE_MAC_GATE` disabled | Do not provision or activate the old hidden account. |
+| `kalcode-win-desktop-qa` | Retired second-PC runner | Legacy labels only | No current builds, tests or QA | Do not submit jobs to this machine. |
 
-`kalcode-win-desktop-qa` exists because a service runs in session 0, where KalCode's window stays hidden, so a normal close and reopen can't be proven there. Its desktop must stay signed in: after the second PC restarts, sign in to `kalcode-qa` once and switch back to your own account without signing out.
+Windows desktop QA runs in the isolated interactive QA session on the owner's main 64 GB PC. A Windows service runs in session 0 and cannot prove visible close/reopen behavior. Preserve the owner's account and active app; use the reviewed main-PC QA helpers. Mac release verification uses the owner's `kalebcampbell` account.
 
 ## Install
 
-Windows gate runner (one elevated step):
+The original Windows gate runner is already installed. Preserve its account, credentials and service; use the additive pool installer below to add capacity.
 
-```powershell
-$t = gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration-token --jq .token
-Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\setup-gate-runner.ps1 -RegistrationToken $t"
-```
+Gate worker pool (main 64 GB PC only): six physical slots, `kalcode-win-gate` at slot 0 and `kalcode-win-gate-w1` through `-w5` at slots 1–5. The existing runner stays untouched. Each new service uses its own standard account (`kalcode-ci-w1` through `-w5`), private checkout, Cargo cache, browser cache and temporary directory under `C:\kalcode-ci-pool\worker-wN`.
 
-Gate worker pool (owner directives 2026-10-04: a parallel gate worker pool on the 64 GB build PC, at least 6 coding agents finishing at once; the second Windows machine is no longer used for gates). One elevated run adds five workers next to `kalcode-win-gate`, so six changes validate concurrently:
+`tooling/runners/windows/add-gate-workers.ps1` remains the entry point; without arguments it prints the read-only plan. Installation requires the reviewed `invoke-gate-worker-pool-install.ps1` wrapper, an exact four-source manifest and hash, the official runner archive hash, and a fresh JSON receipt path. Launch that wrapper hidden through normal Windows UAC. It stages verified source in an administrator-only directory and fetches a short-lived GitHub registration token inside the elevated process. Never put tokens or account passwords in launch arguments. It never resets the original account, rewrites its environment or restarts its service.
 
-```powershell
-$t = gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration-token --jq .token
-Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\add-gate-workers.ps1 -RegistrationToken $t"
-```
-
-- Every worker runs as `kalcode-ci` with its own `_work` checkout and Cargo `target/` (about 30–60 GB each on disk). The script gives `kalcode-ci` one new password and updates every `kalcode-ci` runner service to it, the existing one included.
-- Each runner's `.env` sets `KALCODE_GATE_SLOT` (0 for `kalcode-win-gate`). `gate.yml` moves every gate port by 10 × slot, so slots 0–9 never share a port.
-- Gates run below normal priority, so the owner's KalCode and coding agents win the CPU. Heavy Rust gates take one of `KALCODE_GATE_HEAVY_SLOTS` machine-wide tokens (default 3) and start only with `KALCODE_GATE_MIN_FREE_GB` free memory (default 10). Light gates never wait.
-- Inside one gate, independent checks run `KALCODE_GATE_CONCURRENCY` at a time (default 3). Checks that share a build (`exclusive` in `tooling/release/lifecycle/policy.json`) never overlap.
-- `KALCODE_GATE_EVIDENCE_DIR` holds pass evidence keyed by exact tree, commands and gate env. Rerunning an identical tree reruns only the gates that didn't pass.
-- Train evidence (`tooling/merge-train/github.mjs`, `MAIN_PC_GATE_RUNNER`) accepts exactly `kalcode-win-gate` and `kalcode-win-gate-w1`…`-w9`, and never `kalcode-win-gate-2`.
+- New runners register with `kalcode-gate-pool-staging,kalcode-main-pc`. Add the production `kalcode-gate` label only after the compatible workflow and main-PC identity checks are ready. Preserve existing active gates.
+- `KALCODE_GATE_SLOT` is the shared slot identity. `Get-GateWorkerPlan -Slot 0..5` assigns separate frontend ports at a 20-port offset and native CDP bands at `19333 + 1000 * slot`, including Browser child ports. All plans are bound to `DESKTOP-KOOB7VV`.
+- Protected pre/post hooks admit at most six optional jobs, with real CPU, RAM, committed-memory and disk pressure checks. Jobs run BelowNormal. Unknown pressure remains queued; timeouts fail honestly. Heavy native work additionally needs one of three held-file locks under `C:\ProgramData\KalCodeGatePool\heavy` and at least 10 GiB free RAM. No timeout bypass is allowed.
+- Workers start at `KALCODE_GATE_CONCURRENCY=2`, `CARGO_BUILD_JOBS=2`, `VITEST_MAX_WORKERS=2`; pressure throttling reduces optional checks before affecting user agents. Six or more coding agents may submit independent work; these are infrastructure slots, never coding-agent limits.
+- Shared tools are administrator-owned and read-only to workers. Reports under `C:\ProgramData\KalCodeGatePool\reports` are readable by the owner without exposing private CI profiles. Evidence stays exact-source/toolchain bound; a cached fixture result never establishes a production candidate PASS.
+- `gate-pool-probe.yml` runs six independent lightweight cases with four concurrent jobs, one deliberate real child failure and `fail-fast:false`. Its verifier requires at least 30 seconds of four distinct physical workers overlapping, exact source/run identity, and continued completion of the other five cases. Six configured/online services and this operational proof are required before calling the pool ready.
+- A failed install is inspected with the separate read-only diagnostic. The only supported partial-state resume is the explicitly hash-bound, inspected pre-tool checksum failure: unchanged ACLs and source, no new accounts/services, empty worker/shared directories and the single verified rustup download. Any other partial state requires diagnosis; nothing is reset or deleted.
 
 Windows release runner (as the owner, no elevation):
 
@@ -43,18 +36,7 @@ Windows release runner (as the owner, no elevation):
 powershell -ExecutionPolicy Bypass -File tooling\runners\windows\setup-release-runner.ps1 -RegistrationToken (gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration-token --jq .token)
 ```
 
-Mac gate runner (one `sudo` run on the Mac; it logs to `/tmp/kalcode-gate-setup.log`):
-
-```bash
-sudo bash tooling/runners/macos/setup-gate-runner.sh <registration-token>
-```
-
-The Mac gate also requires the official CMake 4.4.3 universal distribution at
-`/Users/Shared/KalCode-gate-tools/cmake-4.4.3-macos-universal/CMake.app`.
-Provision and verify it outside PR jobs; `kalcodeci` must be able to read and
-execute it, but must not be able to replace its files or ancestor directories.
-The gate fails if it is missing and uses the release packager's selected-SDK
-environment for the production Whisper feature. PR jobs do not install tools.
+The legacy Mac gate is disabled under the current main-PC validation policy. Do not install a new hidden account or activate it.
 
 macOS release work keeps the existing path: the release runner on Windows drives the Mac over SSH (`ship.mjs` phases `bundle-mac` and `package-mac`), so the Developer ID identity and notary profile stay in the owner's Mac session. Use Windows OpenSSH (`C:\Windows\System32\OpenSSH\ssh.exe`); the release key is held by the Windows `ssh-agent`.
 
@@ -62,8 +44,7 @@ The guard is copied next to the runner and wired as `ACTIONS_RUNNER_HOOK_JOB_STA
 
 ## Workflows
 
-- `.github/workflows/gate.yml` runs `node tooling/release/ship.mjs gate` (the same gate agents run locally) on the gate runner. Fork PRs never run. The checkout keeps no GitHub token. The job uses dedicated ports so it never collides with an agent session on the same PC. The macOS job runs when the repository variable `KALCODE_MAC_GATE` is `true` (set on 2026-10-01, once `kalcode-mac-gate` was online).
-  - The macOS job first waits (up to 120 min, then runs anyway) while a release is packaging on the same Mac, so a gate compile never slows release packaging. It treats any of these as "packaging": a marker `/Users/Shared/KalCode-release/packaging.lock` modified within the last 3 hours (a release launcher may create it at start and remove it on exit; an older marker is ignored), a `kalebcampbell` process whose arguments name `com.kalcode.release.package`, `run-production-macos-package-` or `KalCode-final-`, or `kalebcampbell` `cargo`/`rustc` processes. The argument check works from `kalcodeci` today: the first gate after this change (run 37086307393, 2026-10-03) found the running package job's processes that way. The `cargo`/`rustc` name check is a fallback in case arguments are hidden. The job's `timeout-minutes` (240) covers the wait plus the gate.
+- `.github/workflows/gate.yml` runs `node tooling/release/ship.mjs gate` (the same gate agents run locally) on the gate runner. Fork PRs never run. The checkout keeps no GitHub token. The job uses dedicated ports so it never collides with an agent session on the same PC. The legacy macOS job stays disabled under the current owner policy.
 - `.github/workflows/release.yml` runs on the release runner after every push to `main` (and on `gh workflow run release.yml`). It calls `tooling/release/release-on-merge.mjs`:
   1. When `ship.mjs lifecycle status` reports unshipped desktop or docs lanes, it runs `ship.mjs run --version <X.Y.Z[+N]> --commit <sha> --phase all --execute`.
   2. The state lives in `%LOCALAPPDATA%\KalCode\release-pipeline\<version>-<sha12>`, outside the cleaned checkout.

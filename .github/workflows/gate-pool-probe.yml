@@ -1,0 +1,63 @@
+name: Gate worker pool probe (fixtures only)
+
+on:
+  push:
+    branches: [feat/gate-worker-pool]
+    paths:
+      - .github/workflows/gate-pool-probe.yml
+      - tooling/runners/windows/gate-worker-probe.mjs
+      - tooling/runners/windows/gate-worker-probe.test.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  physical-worker:
+    name: Pool fixture ${{ matrix.change }}
+    runs-on: [self-hosted, Windows, kalcode-main-pc, kalcode-gate-pool-staging]
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        change: [1, 2, 3, 4, 5, 6]
+    env:
+      KALCODE_GATE_REPORT_DIR: C:/ProgramData/KalCodeGatePool/reports
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify exact main-PC worker identity
+        id: identity
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          if ([Environment]::MachineName -ne 'DESKTOP-KOOB7VV') { throw 'Main PC only.' }
+          $names = @('kalcode-win-gate','kalcode-win-gate-w1','kalcode-win-gate-w2','kalcode-win-gate-w3','kalcode-win-gate-w4','kalcode-win-gate-w5')
+          $slot = [Array]::IndexOf($names, $env:RUNNER_NAME)
+          if ($slot -lt 0) { throw 'Unregistered worker; retired second-PC runners are excluded.' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Encoding ascii -Value "KALCODE_GATE_SLOT=$slot"
+      - name: Admit optional fixture work under real resource limits
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          & 'C:/ProgramData/KalCodeGatePool/gate-worker-hook.ps1' -Phase Before -Slot ([int]$env:KALCODE_GATE_SLOT)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Run independent lightweight change (case3 deliberately fails)
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          node tooling/runners/windows/gate-worker-probe.mjs --case ${{ matrix.change }}
+          exit $LASTEXITCODE
+      - name: Preserve exact fixture receipt even on deliberate failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pool-probe-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.change }}
+          path: ${{ runner.temp }}/pool-probe-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.change }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Release only this job's pool lease
+        if: always() && steps.identity.outcome == 'success'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          & 'C:/ProgramData/KalCodeGatePool/gate-worker-hook.ps1' -Phase After -Slot ([int]$env:KALCODE_GATE_SLOT)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

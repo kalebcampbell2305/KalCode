@@ -112,8 +112,8 @@ class FakeProvider {
     this.gates = new Map();
     this.autoGate = null;
     this.prEvidence = new Map();
-    this.cancelled = [];
     this.seq = 0;
+    this.cancelled = [];
   }
   add(number, title, { queue = true } = {}) {
     this.prs.set(number, { number, title, open: true, draft: false, queued: queue, order: ++this.seq });
@@ -167,14 +167,13 @@ class FakeProvider {
     const evidence = this.prEvidence.get(number);
     return evidence ? { ...evidence } : { state: "missing", head };
   }
-  async cancelGates(sha, branch) {
-    this.cancelled.push({ sha, branch });
-    return this.gates.get(sha) === "pending" ? [1000 + this.cancelled.length] : [];
-  }
   async gateStatus(sha) {
     if (this.gates.has(sha)) return { state: this.gates.get(sha) };
     if (this.autoGate) return { state: this.autoGate(sha) };
     return { state: "missing" };
+  }
+  async cancelGates(sha, branch) {
+    if (["pending", "missing"].includes((await this.gateStatus(sha)).state)) this.cancelled.push({ sha, branch });
   }
   commentsFor(number) {
     return this.comments.filter((c) => c.number === number).map((c) => c.body);
@@ -199,6 +198,171 @@ const numbers = (items) => items.map((i) => i.number);
 const fourIndependent = (env) => [1, 2, 3, 4].map((n) => openPr(env, n, { [`feature-${n}/file.txt`]: `pr ${n}\n` }));
 
 describe("merge train", { concurrency: true }, () => {
+  test("six ready agents and concurrent preparations preserve pending groups while admitting new work", async () => {
+    const env = setup();
+    for (const n of [1, 2, 3]) openPr(env, n, { [`${n}.txt`]: String(n) });
+    const firstTrain = makeTrain(env, cloneOf(env, "first"));
+    const first = await firstTrain.build();
+    env.provider.gates.set(first.candidate, "pending");
+    for (const n of [4, 5, 6]) openPr(env, n, { [`${n}.txt`]: String(n) });
+    const peers = Array.from({ length: 6 }, (_, n) => makeTrain(env, cloneOf(env, `agent-${n}`)));
+    const prepared = await Promise.all(peers.map((train) => train.build()));
+    assert.ok(prepared.every((m) => m.base === first.base && numbers(m.included).join() === "4,5,6"));
+    assert.equal(new Set(prepared.map((m) => m.candidate)).size, 1);
+    assert.equal(trainBranches(env).length, 2);
+    assert.equal(sh(env.origin, ["rev-parse", `refs/heads/${first.branch}`]), first.candidate);
+    assert.deepEqual(env.provider.cancelled, []);
+    const second = prepared[0];
+    env.provider.gates.set(second.candidate, "success");
+    assert.equal((await peers[0].land(second.branch)).landed, true);
+    const refreshed = await firstTrain.build();
+    assert.equal(refreshed.base, second.candidate);
+    assert.deepEqual(numbers(refreshed.included), [1, 2, 3]);
+    assert.deepEqual(env.provider.cancelled, [{ sha: first.candidate, branch: first.branch }]);
+  });
+
+  test("a failed group does not delay independent ready work or duplicate a pending bisect half", async () => {
+    const env = setup();
+    for (const n of [1, 2, 3, 4]) openPr(env, n, { [`${n}.txt`]: String(n) });
+    const train = makeTrain(env, cloneOf(env, "agent"));
+    const failed = await train.build();
+    env.provider.gates.set(failed.candidate, "failure");
+    openPr(env, 5, { "five.txt": "independent" });
+    openPr(env, 6, { "six.txt": "independent" });
+    const independent = await train.build();
+    assert.deepEqual(numbers(independent.included), [5, 6]);
+    env.provider.gates.set(independent.candidate, "pending");
+    const left = await train.build();
+    assert.deepEqual(numbers(left.included), [1, 2]);
+    env.provider.gates.set(left.candidate, "pending");
+    const right = await train.build();
+    assert.deepEqual(numbers(right.included), [3, 4]);
+    assert.deepEqual(env.provider.cancelled, []);
+    env.provider.gates.set(independent.candidate, "success");
+    assert.equal((await train.land(independent.branch)).landed, true);
+  });
+
+  test("parallel stacked candidates retain dependency heads and refuse a moved dependency while independent work lands", async () => {
+    const env = setup();
+    const firstHead = openPr(env, 1, { "one.txt": "one" });
+    const events = [];
+    const train = makeTrain(env, cloneOf(env, "agent"), { onLanded: async (event) => events.push(event) });
+    const first = await train.build();
+    env.provider.gates.set(first.candidate, "pending");
+    openPr(env, 2, { "two.txt": "two" }, { from: firstHead });
+    const dependent = await train.build();
+    assert.deepEqual(numbers(dependent.included), [1, 2]);
+    env.provider.gates.set(dependent.candidate, "pending");
+    openPr(env, 3, { "three.txt": "independent" });
+    const independent = await train.build();
+    assert.deepEqual(numbers(independent.included), [3]);
+    openPr(env, 1, { "one.txt": "changed" }, { from: firstHead });
+    env.provider.gates.set(dependent.candidate, "success");
+    assert.equal((await train.land(dependent.branch)).reason, "stale-pr");
+    env.provider.gates.set(independent.candidate, "success");
+    assert.equal((await train.land(independent.branch)).landed, true);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].main, independent.candidate);
+    assert.equal(isAncestor(env.origin, firstHead, originMain(env)), false);
+  });
+
+  test("a changed PR head cancels only its obsolete pending candidate and keeps independent gates", async () => {
+    const env = setup();
+    const head = openPr(env, 1, { "one.txt": "one" });
+    const train = makeTrain(env, cloneOf(env, "agent"));
+    const stale = await train.build();
+    env.provider.gates.set(stale.candidate, "pending");
+    openPr(env, 2, { "two.txt": "two" });
+    const kept = await train.build();
+    env.provider.gates.set(kept.candidate, "pending");
+    const replacement = openPr(env, 1, { "one.txt": "new one" }, { from: head });
+    const refreshed = await train.build();
+    assert.deepEqual(
+      refreshed.included.map((p) => p.head),
+      [replacement],
+    );
+    assert.deepEqual(env.provider.cancelled, [{ sha: stale.candidate, branch: stale.branch }]);
+    assert.ok(trainBranches(env).includes(kept.branch));
+  });
+
+  test("uncertain PR fetches never cancel an existing candidate", async () => {
+    const env = setup();
+    openPr(env, 1, { "one.txt": "one" });
+    const train = makeTrain(env, cloneOf(env, "agent"));
+    const existing = await train.build();
+    env.provider.gates.set(existing.candidate, "pending");
+    sh(env.origin, ["update-ref", "-d", "refs/heads/pr-1"]);
+    await train.build();
+    assert.deepEqual(env.provider.cancelled, []);
+    assert.ok(trainBranches(env).includes(existing.branch));
+  });
+
+  for (const unavailable of ["head fetch", "queue eligibility"])
+    test(`a captured dependency with unavailable ${unavailable} holds only its new child`, async () => {
+      const env = setup();
+      const parentHead = openPr(env, 1, { "one.txt": "parent" });
+      const train = makeTrain(env, cloneOf(env, "agent"));
+      const parent = await train.build();
+      env.provider.gates.set(parent.candidate, "pending");
+      openPr(env, 2, { "two.txt": "child" }, { from: parentHead });
+      openPr(env, 3, { "three.txt": "independent" });
+      if (unavailable === "head fetch") sh(env.origin, ["update-ref", "-d", "refs/heads/pr-1"]);
+      else env.provider.prs.get(1).queued = false;
+      const candidate = await train.build();
+      assert.deepEqual(numbers(candidate.included), [3]);
+      const child = candidate.skipped.find((pr) => pr.number === 2);
+      assert.equal(child.reason, "dependency-unavailable");
+      assert.deepEqual(child.conflictsWith, [1]);
+      if (unavailable === "head fetch") {
+        assert.deepEqual(env.provider.cancelled, []);
+        assert.ok(trainBranches(env).includes(parent.branch));
+      }
+      env.provider.gates.set(candidate.candidate, "success");
+      assert.equal((await train.land(candidate.branch)).landed, true);
+      assert.equal(isAncestor(env.origin, parentHead, originMain(env)), false);
+    });
+
+  for (const change of ["PR head", "main"])
+    test(`gate polling retires an exact obsolete candidate after ${change} moves`, async () => {
+      const env = setup();
+      const head = openPr(env, 1, { "one.txt": "one" });
+      let moved = false;
+      const train = makeTrain(env, cloneOf(env, "agent"), {
+        sleep: async () => {
+          if (moved) return;
+          moved = true;
+          if (change === "main") bypassPush(env, { "other.txt": "new main" });
+          else openPr(env, 1, { "one.txt": "new one" }, { from: head });
+        },
+      });
+      const candidate = await train.build();
+      env.provider.gates.set(candidate.candidate, "pending");
+      const result = await train.waitForGate(candidate.candidate, {
+        branch: candidate.branch,
+        pollMs: 1,
+        timeoutMs: 10_000,
+      });
+      assert.equal(result.state, "stale");
+      assert.deepEqual(env.provider.cancelled, [{ sha: candidate.candidate, branch: candidate.branch }]);
+      assert.deepEqual(trainBranches(env), []);
+    });
+
+  test("a conflicting queued dependency is never implicitly landed through its child", async () => {
+    const env = setup();
+    const dependency = openPr(env, 1, { "shared.txt": "one\nparent\nthree\n" });
+    openPr(
+      env,
+      2,
+      { "shared.txt": "one\nmain\nthree\n", "child.txt": "child resolves conflict" },
+      { from: dependency },
+    );
+    // A child alone would merge cleanly after the main change, silently including the parent.
+    bypassPush(env, { "shared.txt": "one\nmain\nthree\n" });
+    openPr(env, 3, { "independent.txt": "independent" });
+    const manifest = await makeTrain(env, cloneOf(env, "agent")).build();
+    assert.deepEqual(numbers(manifest.included), [3]);
+    assert.equal(manifest.skipped.find((p) => p.number === 2).reason, "dependency-unavailable");
+  });
   test("1: four independent PRs ready together form one candidate containing all four", async () => {
     const env = setup();
     const heads = fourIndependent(env);
@@ -525,7 +689,7 @@ describe("merge train", { concurrency: true }, () => {
     assert.equal(m3.action, "built");
     assert.equal(m3.included.find((i) => i.number === 1).head, moved);
     assert.deepEqual(env.provider.cancelled.at(-1), { sha: m2.candidate, branch: m2.branch });
-    assert.match(train.lines.join("\n"), /retiring .*: #1 moved/);
+    assert.match(train.lines.join("\n"), /retiring .*: queued PR head or eligibility changed/);
     assert.deepEqual(trainBranches(env), [m3.branch]);
 
     // A fresh candidate is never cancelled: rebuilding reuses it.
@@ -658,8 +822,16 @@ describe("merge train pieces", () => {
     };
     const check = (r = run, j = job) => gateStateFrom([r], [j], sha, branch).state;
     assert.equal(check(), "success");
-    for (const worker of ["kalcode-win-gate-w1", "kalcode-win-gate-w5", "kalcode-win-gate-w9"])
-      assert.equal(check(run, { ...job, runner_name: worker }), "success", `${worker} is a main-PC gate worker`);
+    for (const number of [1, 2, 3, 4, 5]) {
+      const pooled = {
+        ...job,
+        runner_name: `kalcode-win-gate-w${number}`,
+        labels: [...job.labels, "kalcode-main-pc"],
+      };
+      assert.equal(check(run, pooled), "success");
+      assert.equal(check(run, { ...pooled, labels: job.labels }), "stale");
+      assert.equal(check(run, { ...pooled, labels: ["self-hosted", "kalcode-gate", "kalcode-main-pc"] }), "stale");
+    }
     assert.equal(gateStateFrom([], [], sha, branch).state, "missing");
     assert.equal(gateStateFrom([run], [], sha, branch).state, "pending");
     for (const wrong of [
@@ -673,10 +845,14 @@ describe("merge train pieces", () => {
     for (const wrong of [
       { head_sha: "b".repeat(40) },
       { runner_name: "kalcode-win-gate-2" },
+      { runner_name: "kalcode-win-gate-w6", labels: [...job.labels, "kalcode-main-pc"] },
+      { runner_name: "kalcode-win-gate-w9", labels: [...job.labels, "kalcode-main-pc"] },
+      { runner_name: "kalcode-win-gate-worker-2", labels: [...job.labels, "kalcode-main-pc"] },
       { runner_name: "kalcode-win-gate-w10" },
       { runner_name: "kalcode-win-gate-w0" },
       { runner_name: "x-kalcode-win-gate" },
       { runner_name: undefined },
+      { labels: [...job.labels, "kalcode-gate-2-retired"] },
       { labels: ["kalcode-gate-2"] },
       { labels: ["kalcode-gate", "kalcode-gate-2"] },
       { steps: [] },
@@ -686,6 +862,20 @@ describe("merge train pieces", () => {
     assert.equal(check(run, { ...job, status: "in_progress", conclusion: null }), "pending");
     assert.equal(check(run, { ...job, conclusion: "failure" }), "failure");
     assert.equal(check(run, { ...job, conclusion: "cancelled" }), "stale");
+  });
+
+  test("the canonical registry includes exactly the original worker and five additional slots", () => {
+    for (const name of ["kalcode-win-gate", ...[1, 2, 3, 4, 5].map((slot) => `kalcode-win-gate-w${slot}`)])
+      assert.ok(MAIN_PC_GATE_RUNNER.test(name), name);
+    for (const name of [
+      "kalcode-win-gate-2",
+      "kalcode-win-gate-w0",
+      "kalcode-win-gate-w6",
+      "kalcode-win-gate-w9",
+      "kalcode-win-gate-worker-2",
+      "x-kalcode-win-gate",
+    ])
+      assert.equal(MAIN_PC_GATE_RUNNER.test(name), false, name);
   });
 
   test("PR gate evidence is read from the job log, and a vacuous pass is visible", () => {
@@ -788,46 +978,15 @@ describe("merge train pieces", () => {
       workflow,
       /if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
     );
-    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate\]\n/);
+    assert.match(workflow, /runs-on: \[self-hosted, Windows, kalcode-gate, kalcode-main-pc\]\n/);
+    assert.match(workflow, /name: Plan change-based gate/);
+    assert.match(workflow, /Assert-GateWorkerHost/);
+    assert.ok(workflow.includes("'^kalcode-win-gate(-w[1-5])?$'"));
+    assert.match(workflow, /Runner name does not match its configured slot/);
+    assert.match(workflow, /--base \$env:KALCODE_GATE_BASE --jobs \$env:KALCODE_GATE_JOBS --keep-going/);
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
-  });
-
-  test("gate.yml runs on the main-PC worker pool with per-slot ports, low priority and heavy-gate tokens", () => {
-    const workflow = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8").replaceAll(
-      "\r\n",
-      "\n",
-    );
-    const windows = workflow.slice(workflow.indexOf("  windows:"), workflow.indexOf("  macos:"));
-    // The in-job runner check accepts exactly the pool the train's evidence accepts.
-    const check = /\$env:RUNNER_NAME -notmatch '(\^kalcode-win-gate\(-w\[1-9\]\)\?\$)'/.exec(windows);
-    assert.ok(check, "the Gate step checks the runner against the pool pattern");
-    const pool = new RegExp(check[1]);
-    for (const name of ["kalcode-win-gate", "kalcode-win-gate-w1", "kalcode-win-gate-w9"]) {
-      assert.ok(pool.test(name) && MAIN_PC_GATE_RUNNER.test(name), name);
-    }
-    for (const name of ["kalcode-win-gate-2", "kalcode-win-gate-w10", "x-kalcode-win-gate"]) {
-      assert.ok(!pool.test(name) && !MAIN_PC_GATE_RUNNER.test(name), name);
-    }
-    assert.doesNotMatch(workflow, /^ {2}KALCODE_E2E_PORT:/m, "ports are per worker, not workflow-wide");
-    assert.match(windows, /\$o = 10 \* \$slot/);
-    for (const [name, base] of [
-      ["KALCODE_E2E_PORT", 4491],
-      ["KALCODE_E2E_MAIL_PORT", 4492],
-      ["KALCODE_E2E_INSPECTOR_PORT", 9501],
-      ["KALCODE_UI_TEST_PORT", 1591],
-      ["KALCODE_E2E_CDP_PORT", 9601],
-    ]) {
-      assert.ok(windows.includes(`"${name}=$(${base} + $o)"`), name);
-    }
-    // Slots 0-9 never share a port, across every port family the gate opens.
-    const bases = [4491, 4492, 9501, 1591, 9601, 8898, 8899, 8900];
-    const ports = bases.flatMap((b) => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => b + 10 * slot));
-    assert.equal(new Set(ports).size, ports.length);
-    assert.match(windows, /PriorityClass = 'BelowNormal'/);
-    assert.match(windows, /KALCODE_GATE_HEAVY_SLOTS/);
-    assert.match(windows, /\[IO\.File\]::Open\(.*'None'\)/);
   });
 });
 
@@ -847,7 +1006,7 @@ test("bootstrap refuses pushing a candidate with no usable main-PC push workflow
   for (const invalid of [
     "",
     workflow.replace('"merge-train/**"', '"unrelated/**"'),
-    workflow.replace("Windows, kalcode-gate]", "Windows, kalcode-gate-2]"),
+    workflow.replace(/Windows, kalcode-gate(?:, kalcode-main-pc)?\]/, "Windows, kalcode-gate-2]"),
     workflow.replace("trailers:key=Merge-Train-Base,valueonly", "wrong-base"),
   ]) {
     const env = setup();
@@ -891,4 +1050,46 @@ test("GitHub gate adapter passes candidate SHA and branch to provenance validati
   assert.equal((await provider.gateStatus(sha, "merge-train/bbbbbbbbbbbb-12345678")).state, "missing");
   job.steps[0].conclusion = "skipped";
   assert.equal((await provider.gateStatus(sha, branch)).state, "stale");
+});
+
+test("GitHub cancellation binds exact candidate push and rechecks status without canceling completed or other runs", async () => {
+  const sha = "a".repeat(40);
+  const branch = "merge-train/aaaaaaaaaaaa-12345678";
+  const base = {
+    head_sha: sha,
+    head_branch: branch,
+    event: "push",
+    path: ".github/workflows/gate.yml",
+    status: "queued",
+  };
+  const runs = [
+    { ...base, id: 1 },
+    { ...base, id: 2, status: "completed" },
+    { ...base, id: 3, head_branch: "merge-train/bbbbbbbbbbbb-12345678" },
+    { ...base, id: 4, event: "pull_request" },
+    { ...base, id: 5, head_sha: "b".repeat(40) },
+    { ...base, id: 6, path: ".github/workflows/other.yml" },
+    { ...base, id: 7 },
+    { ...base, id: 8 },
+    { ...base, id: 9, status: "unknown" },
+  ];
+  const mutations = [];
+  const provider = await createGitHubProvider({
+    repo: ".",
+    slug: "fixture/repository",
+    gh: async (args) => {
+      if (args.includes("POST")) {
+        mutations.push(args.at(-1));
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (args[1].includes("/runs?")) return { stdout: JSON.stringify({ workflow_runs: runs }) };
+      const id = Number(args[1].split("/").at(-1));
+      const run = { ...runs.find((r) => r.id === id) };
+      if (id === 7) run.status = "completed";
+      if (id === 8) run.head_sha = "b".repeat(40);
+      return { stdout: JSON.stringify(run) };
+    },
+  });
+  assert.deepEqual(await provider.cancelGates(sha, branch), [1]);
+  assert.deepEqual(mutations, ["repos/fixture/repository/actions/runs/1/cancel"]);
 });
