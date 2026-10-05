@@ -79,7 +79,9 @@ export function ActivityWidget() {
             <li key={event.seq} className={styles.row}>
               <span className={styles.dot} data-tone={description.tone} aria-hidden="true" />
               <span className={styles.text}>
-                <span className={styles.title}>{description.title}</span>
+                <span className={styles.title} title={description.title}>
+                  {description.title}
+                </span>
                 {threadName ? <span className={styles.thread}>{threadName}</span> : null}
                 {description.detail ? <span className={styles.detail}>{description.detail}</span> : null}
               </span>
