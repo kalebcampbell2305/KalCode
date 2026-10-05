@@ -156,7 +156,7 @@ test("every required helper is built for the exact target and named as a Tauri s
     [
       {
         name: "kalcode-update-helper",
-        packageName: "kalcode-desktop",
+        packageName: "kalcode-update-helper",
         identifier: "com.kalcode.desktop.update-helper",
       },
       {
@@ -172,18 +172,18 @@ test("every required helper is built for the exact target and named as a Tauri s
     ],
   );
   assert.deepEqual(
+    // The helper is its own crate: desktop release features (kalvoice-whisper) never reach it, so
+    // building it compiles neither the desktop library nor whisper.cpp.
     macHelperBuildArgs({ helper: MACOS_HELPERS[0], target: "aarch64-apple-darwin", features: ["kalvoice-whisper"] }),
     [
       "build",
       "-p",
-      "kalcode-desktop",
+      "kalcode-update-helper",
       "--bin",
       MACOS_UPDATE_HELPER,
       "--release",
       "--target",
       "aarch64-apple-darwin",
-      "--features",
-      "kalvoice-whisper",
     ],
   );
   assert.deepEqual(macHelperBuildArgs({ helper: MACOS_HELPERS[1], target: "aarch64-apple-darwin" }), [
