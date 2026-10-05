@@ -31,15 +31,38 @@ describe("account usage badge", () => {
         {
           accountId: account.id,
           status: "fresh",
-          windows: [{ id: "five_hour", label: "5-hour", remainingPercent: 64, resetsAt: null }],
+          windows: [
+            { id: "five_hour", label: "5-hour", remainingPercent: 9, resetsAt: null },
+            { id: "weekly", label: "Weekly", remainingPercent: 64, resetsAt: null },
+          ],
           checkedAt: new Date().toISOString(),
           reason: null,
         },
       ],
     ]);
     rerender(<AccountUsageBadge account={account} size="xs" />);
+    // The headline is WEEKLY remaining, even though the 5-hour window is lower.
     expect(screen.getByText("64% left")).toBeVisible();
+    expect(screen.queryByText("9% left")).not.toBeInTheDocument();
     expect(screen.getByText("64% left").parentElement).toHaveAttribute("data-tone", "ok");
+    expect(screen.getByText("64% left").parentElement?.getAttribute("title")).toMatch(
+      /^64% of weekly usage left\n5-hour: 9% remaining\nWeekly: 64% remaining/,
+    );
+  });
+
+  it("says weekly usage is unavailable instead of showing the 5-hour number", () => {
+    const fiveHourOnly: AccountUsageState = {
+      accountId: account.id,
+      status: "fresh",
+      windows: [{ id: "five_hour", label: "5-hour", remainingPercent: 30, resetsAt: null }],
+      checkedAt: new Date().toISOString(),
+      reason: null,
+    };
+    render(<UsageMeter usage={fiveHourOnly} />);
+    const meter = screen.getByText("Weekly usage unavailable").parentElement;
+    expect(meter).toHaveAttribute("data-tone", "muted");
+    expect(screen.queryByText(/30% left/)).not.toBeInTheDocument();
+    expect(meter?.querySelector("[data-empty]")).not.toBeNull();
   });
 
   it("does not warn about stale usage as if it were current", () => {
@@ -79,7 +102,7 @@ describe("account usage badge", () => {
       ],
     ]);
     render(<AccountUsageBadge account={account} interactive />);
-    await userEvent.setup().click(screen.getByRole("button", { name: /Claude A usage: 42% left/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /Claude A usage: 42% of weekly usage left/ }));
     expect(await screen.findByRole("heading", { name: "Claude A" })).toBeVisible();
     expect(screen.getByText(/Claude Code · Max/)).toBeVisible();
     expect(screen.getByText("5-hour")).toBeVisible();
