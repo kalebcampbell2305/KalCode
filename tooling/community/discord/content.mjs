@@ -57,6 +57,30 @@ export const MESSAGES = [
     ],
   },
   {
+    key: "announcement-discord-open",
+    channel: "announcements",
+    embeds: [
+      embed({
+        title: "The KalCode Discord is open",
+        description: [
+          "Welcome. This is the official home for the KalCode community: people shipping with AI coding agents.",
+          "",
+          "• **Get help** from the team in {#support}",
+          "• **Report bugs** in {#bugs}",
+          "• **Request features and vote** on what's next in {#features}",
+          "• **See every build** the day it ships in {#changelog}",
+          "• **What's available and what's coming** in {#roadmap}",
+          "",
+          "New here? Start in {#welcome}, then say hello in {#introductions}.",
+          "",
+          "Bring your team: https://discord.gg/BJMFjm3ZbS",
+        ].join("\n"),
+        image: { url: `${LINKS.site}/og.png` },
+        footer: { text: SIGNOFF },
+      }),
+    ],
+  },
+  {
     key: "announcement-019",
     channel: "announcements",
     embeds: [
