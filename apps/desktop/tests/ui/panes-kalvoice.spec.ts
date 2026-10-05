@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * KalVoice pane intents (Z7-21) against the in-memory runtime: typed requests to KalVoice split,
@@ -31,7 +32,7 @@ async function openCode(page: Page) {
 
 /** Types a request to KalVoice on its page; the result brings the person back to Code. */
 async function ask(page: Page, text: string) {
-  await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+  await goTo(page, "KalVoice");
   const box = page.getByRole("main").getByRole("textbox", { name: "Type a request for KalVoice" });
   await box.fill(text);
   await box.press("Enter");

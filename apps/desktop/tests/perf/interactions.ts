@@ -192,13 +192,13 @@ async function main(): Promise<void> {
           await nav(p, "Code").click();
           await p.getByRole("heading", { level: 1, name: "perf-site" }).waitFor();
         },
-        run: (p) => measure(p, heading("Dashboard"), () => nav(p, "Dashboard").click()),
+        run: (p) => measure(p, heading("Activity"), () => nav(p, "Activity").click()),
       },
       {
         key: "nav.codeReturn",
         setup: async (p) => {
-          await nav(p, "Dashboard").click();
-          await p.getByRole("heading", { level: 1, name: "Dashboard" }).waitFor();
+          await nav(p, "Activity").click();
+          await p.getByRole("heading", { level: 1, name: "Activity" }).waitFor();
         },
         // Visible = the workspace heading and the active terminal's history are back on screen.
         run: (p) => measure(p, visibleTerminalText("kalcode-big-end"), () => nav(p, "Code").click()),
@@ -264,16 +264,16 @@ async function main(): Promise<void> {
       {
         key: "nav.settings",
         setup: async (p) => {
-          await nav(p, "Dashboard").click();
-          await p.getByRole("heading", { level: 1, name: "Dashboard" }).waitFor();
+          await nav(p, "Activity").click();
+          await p.getByRole("heading", { level: 1, name: "Activity" }).waitFor();
         },
         run: (p) => measure(p, heading("Settings"), () => nav(p, "Settings").click()),
       },
       {
         key: "nav.threads",
         setup: async (p) => {
-          await nav(p, "Dashboard").click();
-          await p.getByRole("heading", { level: 1, name: "Dashboard" }).waitFor();
+          await nav(p, "Activity").click();
+          await p.getByRole("heading", { level: 1, name: "Activity" }).waitFor();
         },
         run: (p) => measure(p, heading("Threads"), () => nav(p, "Threads").click()),
       },

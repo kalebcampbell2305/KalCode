@@ -10,6 +10,7 @@ import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
+import { goTo } from "../../test/nav.ts";
 import { resetAccountIntentForTests } from "./accountIntent.ts";
 
 /** A thread row by name, never its "Pin globally: <name>" favorite action (#235). */
@@ -119,8 +120,7 @@ async function mountStable() {
     </ToastProvider>,
   );
   const user = userEvent.setup();
-  const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-  await user.click(primary.getByRole("button", { name: "Threads" }));
+  await goTo(user, "Threads");
   await screen.findByRole("heading", { name: "Threads", level: 1 });
   return user;
 }

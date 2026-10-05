@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Review screenshots of the Threads surface (list, detail, new-thread flow, streaming) in both
@@ -21,12 +22,12 @@ async function shot(page: Page, name: string) {
 
 async function open(page: Page, scenario: string, theme: "light" | "dark") {
   await page.goto(`/?scenario=${scenario}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.keyboard.press(`${MOD}+k`);
   await page.keyboard.type(`use ${theme} theme`);
   await page.keyboard.press("Enter");
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+  await goTo(page, "Threads");
 }
 
 for (const theme of ["dark", "light"] as const) {

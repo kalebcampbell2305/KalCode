@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
 const NOT_FAVORITE = ":not([data-favorite-action])";
@@ -14,10 +15,7 @@ function screenshotPath(name: string) {
 
 async function openOperations(page: Page, scenario = "code") {
   await page.goto(`/?scenario=${scenario}`);
-  await page
-    .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "Operations", exact: true })
-    .click();
+  await goTo(page, "Operations");
   await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 }
 
@@ -243,7 +241,7 @@ test("@screenshots Operations rich evidence in dark and light themes", async ({ 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Operations", exact: true }).click();
+  await goTo(page, "Operations");
   await tab(page, "Environments");
   await page.screenshot({ path: screenshotPath("operations-environments-light-1360") });
 });

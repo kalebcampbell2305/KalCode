@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
 const NOT_FAVORITE = ":not([data-favorite-action])";
@@ -39,10 +40,9 @@ async function expectNoSeriousA11yViolations(page: Page) {
  */
 async function geminiThreadWithTwoAccounts(page: Page) {
   await page.goto("/?scenario=threads");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  const primary = page.getByRole("navigation", { name: "Primary" });
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
-  await primary.getByRole("button", { name: "Providers" }).click();
+  await goTo(page, "Providers");
   await page.getByRole("tab", { name: "Accounts" }).click();
   await page.getByRole("button", { name: "Add account", exact: true }).click();
   await page.getByLabel("Provider", { exact: true }).selectOption("gemini-cli");
@@ -53,7 +53,7 @@ async function geminiThreadWithTwoAccounts(page: Page) {
   await personal.getByRole("button", { name: "Sign in Personal" }).click();
   await expect(personal.getByText("Connected", { exact: true })).toBeVisible();
 
-  await primary.getByRole("button", { name: "Threads" }).click();
+  await goTo(page, "Threads");
   await page.getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
   await form.getByLabel("Provider").selectOption("gemini-cli");

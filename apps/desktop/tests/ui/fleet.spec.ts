@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Agent Fleet: the Dashboard's coding-agent cards with call signs, each agent's own worktree and
@@ -23,8 +24,8 @@ async function openFolders(page: Page, ...names: string[]) {
   }
 }
 
-const nav = (page: Page, name: string) =>
-  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name, exact: true }).click();
+/** Opens a place from the sidebar (Code and Activity directly, other surfaces through More). */
+const nav = (page: Page, name: string) => goTo(page, name);
 
 test("a finished agent is ready to merge only when its worktree facts all agree", async ({ page }) => {
   await page.goto("/?scenario=busy");
@@ -43,7 +44,7 @@ test("a finished agent is ready to merge only when its worktree facts all agree"
 
 test("a new thread runs in its own worktree by default and is not an agent in the Fleet", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "kalcode");
   await nav(page, "Threads");
   await page.getByRole("main").getByRole("button", { name: "New thread" }).first().click();
@@ -54,14 +55,14 @@ test("a new thread runs in its own worktree by default and is not an agent in th
   await form.getByRole("button", { name: "Start thread" }).click();
   await expect(page.getByRole("region", { name: "Thread", exact: true })).toBeVisible();
 
-  await nav(page, "Dashboard");
+  await nav(page, "Activity");
   await expect(page.getByRole("heading", { name: "No agents yet" })).toBeVisible();
   await expect(page.getByRole("article")).toHaveCount(0);
 });
 
 test("a folder outside Git can't give a thread its own worktree", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "design-notes");
   await nav(page, "Threads");
   await page.getByRole("main").getByRole("button", { name: "New thread" }).first().click();
@@ -72,7 +73,7 @@ test("a folder outside Git can't give a thread its own worktree", async ({ page 
 
 test("launching two agents from Code fills the Fleet, and a card opens its terminal", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "kalcode");
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
@@ -81,7 +82,7 @@ test("launching two agents from Code fills the Fleet, and a card opens its termi
   await expect(launcher).toHaveCount(0);
   await expect(page.locator("[data-provider-pane]")).toHaveCount(2);
 
-  await nav(page, "Dashboard");
+  await nav(page, "Activity");
   await expect(page.getByRole("article")).toHaveCount(2);
   await page.getByRole("article").first().getByRole("heading").getByRole("button").click();
   await expect(page.getByRole("heading", { level: 1, name: "kalcode" })).toBeVisible();

@@ -10,7 +10,7 @@ const MODEL = "custom/deepseek-test-9.4?reasoning=high&context=extended";
 
 async function openWorkspace(page: Page) {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.evaluate(async (model) => {
     const path = "/src/ipc/memory/providerAccounts.ts";
     const fixtures = await import(/* @vite-ignore */ path);
@@ -72,7 +72,7 @@ for (const [count, width] of [
     await page.screenshot({ path: fileURLToPath(new URL(`terminals-${width}.png`, OUT)) });
     await page
       .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: "Activity", exact: true })
       .click();
     await expect(page.getByRole("article")).toHaveCount(count);
     await page.getByRole("article").first().getByRole("heading").getByRole("button").click();

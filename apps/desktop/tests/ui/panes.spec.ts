@@ -342,9 +342,9 @@ test.describe("content from other surfaces", () => {
     await openCode(page);
     await page.keyboard.press("Control+Alt+d");
     await pane(page, 1).getByRole("button", { name: "Add to pane 2" }).click();
-    await page.getByRole("menuitem", { name: "Dashboard" }).click();
+    await page.getByRole("menuitem", { name: "Activity", exact: true }).click();
     await expect(pane(page, 1).locator("[data-dashboard-pane]")).toBeVisible();
-    await expect(pane(page, 1).getByRole("tab", { name: "Dashboard" })).toHaveAttribute("aria-selected", "true");
+    await expect(pane(page, 1).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
     await pane(page, 1).getByRole("button", { name: "Add to pane 2" }).click();
     await page.getByRole("menuitem", { name: "Provider health" }).click();
     await expect(pane(page, 1).locator("[data-widget-pane]")).toBeVisible();
@@ -362,7 +362,10 @@ test.describe("content from other surfaces", () => {
     await page.keyboard.press("Control+Alt+w");
     await page.getByRole("button", { name: "Keep Running", exact: true }).click();
     await expect(provider).toHaveCount(0);
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard" }).click();
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Activity", exact: true })
+      .click();
     const card = page.locator(`article[data-thread-id="${threadId}"]:visible`);
     await expect(card).toBeVisible();
     await card.click({ position: { x: 6, y: 6 } });
@@ -556,9 +559,9 @@ test.describe("accessibility", () => {
       // Choose Dashboard explicitly: a returning user is otherwise sent to Code after restore.
       await page
         .getByRole("navigation", { name: "Primary" })
-        .getByRole("button", { name: "Dashboard", exact: true })
+        .getByRole("button", { name: "Activity", exact: true })
         .click();
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       if (theme === "light") {
         await page.getByRole("button", { name: "Settings", exact: true }).click();
         await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();

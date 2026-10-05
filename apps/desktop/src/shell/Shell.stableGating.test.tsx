@@ -8,6 +8,7 @@ import { AccountClient } from "../ipc/account.ts";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
+import { goTo } from "../test/nav.ts";
 import nativeStableSurfaces from "./fixtures/stable-native-surfaces.json";
 import { Shell } from "./Shell.tsx";
 
@@ -77,7 +78,7 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
 
   it("offers KalVoice examples and command copy that this build can run (E8)", async () => {
     const { user } = await mount(channel);
-    await user.click(primary().getByRole("button", { name: "KalVoice" }));
+    await goTo(user, "KalVoice");
     const examples = within(await screen.findByRole("list", { name: "Examples" }));
     const commandsCopy = await screen.findByText(/KalCode acts the moment you let go/);
     expect(examples.getByRole("button", { name: "Open four Codex threads" })).toBeInTheDocument();
@@ -119,7 +120,7 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
     await user.click(primary().getByRole("button", { name: "Code" }));
     await user.click(await screen.findByRole("button", { name: "Add to pane 1" }));
     const menu = within(await screen.findByRole("menu"));
-    expect(menu.getByRole("menuitem", { name: "Dashboard" })).toBeInTheDocument();
+    expect(menu.getByRole("menuitem", { name: "Activity" })).toBeInTheDocument();
     for (const name of ["Home", "Project", "Workspaces"]) {
       const item = menu.queryByRole("menuitem", { name });
       if (stable) expect(item).toBeNull();
@@ -134,9 +135,9 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
     const menu = within(await screen.findByRole("menu"));
     const items = menu.getAllByRole("menuitem").map((item) => item.textContent ?? "");
     const browser = items.findIndex((text) => text.startsWith("Browser"));
-    const dashboard = items.findIndex((text) => text.startsWith("Dashboard"));
+    const dashboard = items.findIndex((text) => text.startsWith("Activity"));
     expect(browser).toBeGreaterThan(-1);
-    // Browser sits with the other "open here" items, above the Dashboard and the widget list.
+    // Browser sits with the other "open here" items, above Activity and the widget list.
     expect(browser).toBeLessThan(dashboard);
     const git = menu.queryByRole("menuitem", { name: /^Git/ });
     if (stable) expect(git).toBeNull();

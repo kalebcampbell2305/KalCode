@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("Code welcome keeps missing-workspace actions aligned at compact widths", async ({ page }, testInfo) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity", level: 1 })).toBeVisible();
   await page.evaluate(() => {
     const memory = (window as unknown as { __kalcodeMemory: { queueFolders: (...folders: string[]) => void } })
       .__kalcodeMemory;
@@ -22,7 +22,7 @@ test("Code welcome keeps missing-workspace actions aligned at compact widths", a
     memory.makeUnavailable("missing-project");
     memory.makeUnavailable("temporary-project");
   });
-  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   await code.click();
   await page.getByRole("button", { name: "Remove from KalCode", exact: true }).click();
   for (const width of [1360, 680]) {

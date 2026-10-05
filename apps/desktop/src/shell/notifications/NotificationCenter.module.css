@@ -291,3 +291,23 @@
 :global([data-motion="reduced"]) .sheet {
   animation: none;
 }
+
+/* Needs You: live items above the history, scrolling on their own when there are many. */
+.attention {
+  max-height: 55vh;
+  padding: var(--space-3) var(--space-5) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.historyTitle {
+  margin: 0;
+  padding: var(--space-3) var(--space-5) 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}

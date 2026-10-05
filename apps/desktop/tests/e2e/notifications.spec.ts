@@ -37,8 +37,18 @@ const FAKE_BANNER = "KalCode fake provider (interactive)";
 const nav = (page: Page, name: string) =>
   page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name, exact: true });
 const bell = (page: Page) =>
-  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^Notifications/ });
-const center = (page: Page) => page.getByRole("dialog", { name: "Notifications" });
+  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^Needs you/ });
+const center = (page: Page) => page.getByRole("dialog", { name: "Needs you" });
+
+/** The history's unread count, as the open Needs you sheet states it (then closes the sheet). */
+async function expectUnread(page: Page, count: number, timeout = 5_000) {
+  if (!(await center(page).isVisible())) await bell(page).click();
+  const summary = center(page).locator("#notifications-description");
+  if (count === 0) await expect(summary).not.toContainText("unread", { timeout });
+  else await expect(summary).toContainText(`${count} unread ${count === 1 ? "update" : "updates"}`, { timeout });
+  await page.keyboard.press("Escape");
+  await expect(center(page)).toHaveCount(0);
+}
 const pane = (page: Page) => page.locator("[data-provider-pane]").first();
 
 async function shot(page: Page, name: string) {
@@ -80,8 +90,8 @@ test("a pane's permission request and completion reach the notification center, 
   try {
     const app = await launch(dataDir, env);
     const page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await expect(bell(page)).toHaveAccessibleName("Notifications, none unread");
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+    await expectUnread(page, 0);
 
     // A real provider pane (the fake CLI) in a real PTY.
     await nav(page, "Code").click();
@@ -102,10 +112,13 @@ test("a pane's permission request and completion reach the notification center, 
     await expect(pane(page).locator("[data-pane-mode]")).toHaveAttribute("data-pane-mode", "bypass");
     await typeInPane(page, "run printenv");
     await expect(pane(page).locator("[data-pane-status]")).toContainText("NEEDS YOU", { timeout: 30_000 });
-    await expect(bell(page)).toHaveAccessibleName("Notifications, 1 unread", { timeout: 15_000 });
+    await expectUnread(page, 1, 15_000);
 
-    // The Dashboard shows the pane's thread as ACTION NEEDED with the inline approval.
-    await nav(page, "Dashboard").click();
+    // A question or approval is also live in Needs you (the history keeps its own unread count).
+    await expect(bell(page)).toHaveAccessibleName("Needs you, 1 waiting");
+
+    // Activity shows the pane's thread as ACTION NEEDED with the inline approval.
+    await nav(page, "Activity").click();
     const board = page.getByRole("region", { name: "Agents", exact: true });
     const card = board.getByRole("article").first();
     await expect(card.getByText("Needs you", { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -121,7 +134,7 @@ test("a pane's permission request and completion reach the notification center, 
     await expect(page.getByRole("heading", { level: 1, name: "notify-site" })).toBeVisible();
     await expect(pane(page)).toBeVisible();
     await expect(pane(page).locator("[data-pane-status]")).toContainText("NEEDS YOU");
-    await expect(bell(page)).toHaveAccessibleName("Notifications, none unread");
+    await expectUnread(page, 0);
 
     await page.getByRole("button", { name: "Approve once" }).first().click();
     await expectPaneText(page, "RAN Bash");
@@ -130,9 +143,9 @@ test("a pane's permission request and completion reach the notification center, 
     // The provider exits: the thread completes and the center says so.
     await typeInPane(page, "exit");
     await expect(pane(page).locator("[data-pane-status]")).toContainText("DONE", { timeout: 30_000 });
-    await expect(bell(page)).toHaveAccessibleName("Notifications, 1 unread", { timeout: 15_000 });
+    await expectUnread(page, 1, 15_000);
 
-    await nav(page, "Dashboard").click();
+    await nav(page, "Activity").click();
     await expect(board.getByRole("article").first().getByText("Done", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
@@ -144,7 +157,7 @@ test("a pane's permission request and completion reach the notification center, 
     await completed.getByRole("button", { name: /completed$/ }).click();
     await expect(page.getByRole("heading", { level: 1, name: "notify-site" })).toBeVisible();
     await expect(pane(page).locator("[data-pane-status]")).toContainText("DONE");
-    await expect(bell(page)).toHaveAccessibleName("Notifications, none unread");
+    await expectUnread(page, 0);
 
     await closeGracefully(app);
   } finally {

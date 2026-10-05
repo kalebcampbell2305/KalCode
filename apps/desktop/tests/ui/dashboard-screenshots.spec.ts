@@ -49,9 +49,9 @@ const SCENES: Scene[] = [
     prepare: async (page) => {
       await page
         .getByRole("navigation", { name: "Primary" })
-        .getByRole("button", { name: /^Notifications/ })
+        .getByRole("button", { name: /^Needs you/ })
         .click();
-      await expect(page.getByRole("dialog", { name: "Notifications" }).getByRole("article").first()).toBeVisible();
+      await expect(page.getByRole("dialog", { name: "Needs you" }).getByRole("article").first()).toBeVisible();
     },
   },
 ];
@@ -67,7 +67,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
     .getByRole("radio", { name: theme === "light" ? "Light" : "Dark" })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
 }
 
 for (const theme of ["dark", "light"] as const) {
@@ -76,7 +76,7 @@ for (const theme of ["dark", "light"] as const) {
       test.setTimeout(90_000);
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(`/?scenario=${scene.scenario}`);
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
       await setTheme(page, theme);
       await expect(page.getByRole("region", { name: "Activity" }).getByText("KalCode started").first()).toBeAttached();
       await scene.prepare?.(page);

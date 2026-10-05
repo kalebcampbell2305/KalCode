@@ -42,9 +42,9 @@ test.describe("KalVoice Operations control layer", () => {
     // Choose Dashboard explicitly: a returning user is otherwise sent to Code after restore.
     await page
       .getByRole("navigation", { name: "Primary" })
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: "Activity", exact: true })
       .click();
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   });
 
   test("opens every Operations view and leaves the requested tab focused and illuminated", async ({ page }) => {
@@ -81,8 +81,8 @@ test.describe("KalVoice Operations control layer", () => {
 
     await talk(page, "what just finished");
     await expect(shown(page)).toContainText("Package desktop finished: Type check failed in the desktop package.");
-    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
     await talk(page, "open it");
     await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
@@ -129,7 +129,7 @@ test.describe("KalVoice provider-pane delivery", () => {
     const beforeNavigation = await providerText(page, threadId);
     await input.focus();
     await talk(page, "Open Dashboard");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     expect(await providerText(page, threadId)).toBe(beforeNavigation);
   });
 

@@ -108,7 +108,7 @@ for (const theme of ["dark", "light"] as const) {
 
       // The live Dashboard (Z7-W3) docked into the last pane beside the work.
       await pane(page, 5).getByRole("button", { name: "Add to pane 6" }).click();
-      await page.getByRole("menuitem", { name: "Dashboard" }).click();
+      await page.getByRole("menuitem", { name: "Activity", exact: true }).click();
       await expect(pane(page, 5).locator("[data-dashboard-pane]")).toBeVisible();
       await shot(page, `panes-dashboard-${tag}`);
     });

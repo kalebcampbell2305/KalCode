@@ -123,7 +123,7 @@ async function mountStable({ scan = true } = {}) {
   // This global palette fixture intentionally has no Code terminal focused. Focus protection is
   // covered by the classifier; these cases exercise idle cleanup across every workspace.
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Dashboard" }));
+  await user.click(screen.getByRole("button", { name: "Activity" }));
   return { user, client, closed, terminals };
 }
 

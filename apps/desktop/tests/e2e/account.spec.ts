@@ -98,7 +98,7 @@ test("real native account commands gate onboarding, logout, cleanup, and relogin
     await expect
       .poll(() => invoke<RuntimeStatus>(page, "runtime_status"), { timeout: 20_000 })
       .toEqual({ phase: "ready", ready: true });
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const account = page.getByRole("region", { name: "KalCode account" });
@@ -116,7 +116,7 @@ test("real native account commands gate onboarding, logout, cleanup, and relogin
 
     await signIn(page);
     await expect(page.getByRole("heading", { name: "Choose your plan" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({ timeout: 20_000 });
   } finally {
     if (app) await closeGracefully(app);
     removeDir(dataDir);

@@ -9,7 +9,7 @@ import { AVAILABLE_WIDGETS, WidgetPane, widgetPaneMeta } from "../../shell/widge
 import { DashboardPane } from "../dashboard/index.ts";
 
 registerPaneContent("dashboard", {
-  describe: () => ({ title: "Dashboard", glyph: <LayoutDashboard />, statusText: "Live" }),
+  describe: () => ({ title: "Activity", glyph: <LayoutDashboard />, statusText: "Live" }),
   render: () => <DashboardPane />,
 });
 

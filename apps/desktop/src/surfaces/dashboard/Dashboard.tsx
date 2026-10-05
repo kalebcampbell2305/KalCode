@@ -1,6 +1,11 @@
-import { Sparkline } from "@kalcode/ui/components";
+import { Button, Sparkline } from "@kalcode/ui/components";
+import { Bot } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent, type PointerEvent, useMemo, useRef } from "react";
+import { useKalActions } from "../../runtime/actions.ts";
 import { useEvents } from "../../runtime/RuntimeProvider.tsx";
+import { AttentionList } from "../../shell/attention/AttentionList.tsx";
+import { attentionSummary } from "../../shell/attention/model.ts";
+import { useAttention } from "../../shell/attention/useAttention.ts";
 import { Page } from "../../shell/Page.tsx";
 import { WidgetDock } from "../../shell/widgets/WidgetDock.tsx";
 import { Announcer } from "./Announcer.tsx";
@@ -12,7 +17,8 @@ import { clampDock, DOCK_DEFAULT_PX, DOCK_MAX_PX, DOCK_MIN_PX, useFleetLayout } 
 import { useNow } from "./useNow.ts";
 
 /**
- * The Dashboard surface (Z7-W3): the Agent Fleet beside the widget dock. It reuses the shell's
+ * Activity (the Dashboard surface, Z7-W3): what needs the person on top, then the Agent Fleet
+ * beside the widget dock. It reuses the shell's
  * always-on board data (no reload from scratch on each visit) and only creates its own provider
  * when rendered without one. On wide windows a splitter sets the Agents panel's width
  * (remembered per device).
@@ -35,11 +41,17 @@ function DashboardPage() {
   const dockWidth = layout.dockWidth;
   return (
     <Page
-      title="Dashboard"
-      description={summary ?? "Every agent KalCode runs, live: what it is doing, and what needs you."}
-      actions={<ActivityTrend />}
+      title="Activity"
+      description={summary ?? "Every coding agent KalCode runs, live: what it is doing, and what needs you."}
+      actions={
+        <>
+          <ActivityTrend />
+          <NewAgentAction />
+        </>
+      }
     >
       <div className={styles.surface}>
+        <NeedsYouSection />
         <div
           className={styles.layout}
           style={dockWidth !== null ? ({ "--dock-w": `${dockWidth}px` } as CSSProperties) : undefined}
@@ -55,6 +67,49 @@ function DashboardPage() {
       </div>
       <Announcer />
     </Page>
+  );
+}
+
+/** Activity's own New agent: the same canonical action as Code's button and KalVoice. */
+function NewAgentAction() {
+  const actions = useKalActions();
+  return (
+    <Button size="sm" variant="primary" icon={<Bot />} onClick={() => actions.newAgent()}>
+      New agent
+    </Button>
+  );
+}
+
+/** Activity shows the most urgent few; the inbox holds the rest. The Fleet stays in view. */
+const ACTIVITY_LIMIT = 6;
+
+/**
+ * Needs You at the top of Activity: the same items as the inbox, so nothing that needs the person
+ * hides below the fleet. When nothing does, one quiet line says so.
+ */
+function NeedsYouSection() {
+  const { items, ready } = useAttention();
+  const { state } = useCodingAgents();
+  const actions = useKalActions();
+  // With no agents at all, the board's own empty state (Launch an agent) is the one message.
+  if (!ready || (items.length === 0 && state.status === "ready" && state.data.length === 0)) return null;
+  return (
+    <section
+      className={styles.needsYou}
+      aria-labelledby="activity-needs-you"
+      data-empty={items.length === 0 || undefined}
+    >
+      <h2 id="activity-needs-you" className={styles.needsYouTitle}>
+        Needs you
+        <span className={styles.needsYouCount}>{attentionSummary(items)}</span>
+      </h2>
+      {items.length > 0 ? <AttentionList items={items.slice(0, ACTIVITY_LIMIT)} ready={ready} /> : null}
+      {items.length > ACTIVITY_LIMIT ? (
+        <Button size="sm" variant="ghost" className={styles.needsYouMore} onClick={() => actions.openInbox()}>
+          Show all {items.length} in Needs you
+        </Button>
+      ) : null}
+    </section>
   );
 }
 

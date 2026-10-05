@@ -10,6 +10,7 @@ import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../../shell/Shell.tsx";
+import { goTo } from "../../test/nav.ts";
 
 // Thread detail on the Stable channel (B8 visual audit D2): the waiting notice never points at
 // approval controls that aren't on screen.
@@ -55,8 +56,7 @@ async function mountStable() {
 describe("Waiting thread (Stable)", () => {
   it("says the request isn't shown here and opens Approvals instead of 'Answer below'", async () => {
     const user = await mountStable();
-    const primary = within(screen.getByRole("navigation", { name: "Primary" }));
-    await user.click(primary.getByRole("button", { name: "Threads" }));
+    await goTo(user, "Threads");
     const threads = await screen.findByRole("list", { name: "Threads" });
     // The row, never its "Pin globally: …" favorite action (#235).
     await user.click(

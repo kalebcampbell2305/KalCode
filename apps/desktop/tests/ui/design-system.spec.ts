@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /**
  * Z7-W0 design system: every restyled surface passes axe (WCAG 2.2 AA, incl. colour contrast) in
@@ -15,17 +16,17 @@ async function open(page: Page, scenario: string, theme: "dark" | "light") {
   // Dashboard explicitly so the check never races that redirect.
   await page
     .getByRole("navigation", { name: "Primary" })
-    .getByRole("button", { name: "Dashboard", exact: true })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.keyboard.press(`${MOD}+k`);
   await page.keyboard.type(`use ${theme} theme`);
   await page.keyboard.press("Enter");
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 
-const nav = (page: Page, name: string) =>
-  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name, exact: true }).click();
+/** Opens a place from the sidebar (Code and Activity directly, other surfaces through More). */
+const nav = (page: Page, name: string) => goTo(page, name);
 
 async function expectAxeClean(page: Page, where: string) {
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
@@ -61,7 +62,12 @@ const SCENES: Scene[] = [
       await open(page, "approvals", theme);
       await page
         .getByRole("navigation", { name: "Primary" })
-        .getByRole("button", { name: /^Approvals/ })
+        .getByRole("button", { name: /^Needs you/ })
+        .click();
+      await page
+        .getByRole("dialog", { name: "Needs you" })
+        .getByRole("button", { name: /^Review: / })
+        .first()
         .click();
       await expect(page.getByRole("dialog", { name: "Approvals" }).getByRole("region").first()).toBeVisible();
     },

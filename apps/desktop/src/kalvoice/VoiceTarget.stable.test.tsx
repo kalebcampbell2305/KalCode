@@ -13,6 +13,7 @@ import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
 import nativeStableSurfaces from "../shell/fixtures/stable-native-surfaces.json";
 import { Shell } from "../shell/Shell.tsx";
 import { resetAccountIntentForTests } from "../surfaces/threads/accountIntent.ts";
+import { goTo } from "../test/nav.ts";
 import { composerForThread, resetComposerRegistryForTests } from "./composerRegistry.ts";
 import { resetVoiceSpansForTests } from "./voiceSpans.ts";
 
@@ -113,9 +114,8 @@ const sent = (h: Harness, command: "thread_send" | "thread_resume" = "thread_sen
   h.calls.filter((c) => c.command === command);
 
 async function openThread(h: Harness, name: string) {
-  const primary = within(screen.getByRole("navigation", { name: "Primary" }));
   if (!screen.queryByRole("heading", { level: 1, name: "Threads" })) {
-    await h.user.click(primary.getByRole("button", { name: "Threads" }));
+    await goTo(h.user, "Threads");
   }
   const list = await screen.findByRole("list", { name: "Threads" });
   // The row itself, never its "Pin globally: <name>" favorite action (#235).
@@ -350,7 +350,7 @@ describe("KalVoice composer target (Stable, TK-2)", () => {
     await focusComposer();
     // A High-confidence command wins over dictation and navigates away.
     await talk(h, "open dashboard");
-    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+    await screen.findByRole("heading", { level: 1, name: "Activity" });
 
     // Meanwhile the person opens another thread; its composer has the same DOM id.
     await openThread(h, OAUTH);

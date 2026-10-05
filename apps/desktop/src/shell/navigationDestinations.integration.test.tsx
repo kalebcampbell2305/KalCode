@@ -7,6 +7,7 @@ import { AccountClient } from "../ipc/account.ts";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../runtime/RuntimeProvider.tsx";
+import { goTo } from "../test/nav.ts";
 import { Shell } from "./Shell.tsx";
 
 vi.mock("../surfaces/code/TerminalView.tsx", () => ({ TerminalView: () => null }));
@@ -48,7 +49,7 @@ async function mount() {
 
 it("Back restores the exact provider account after its page remounts", async () => {
   const { user, primary } = await mount();
-  await user.click(primary.getByRole("button", { name: "Providers" }));
+  await goTo(user, "Providers");
   const accountId = "provider-account-0192f3c4-0000-7000-8000-000000000202";
   await waitFor(() => expect(document.getElementById(accountId)).not.toBeNull());
   act(() => document.getElementById(accountId)?.focus());
@@ -72,7 +73,7 @@ it("Back restores a Settings section and Forward restores the selected Providers
     heading.tabIndex = -1;
     heading.focus();
   });
-  await user.click(primary.getByRole("button", { name: "Providers" }));
+  await goTo(user, "Providers");
   await user.click(await screen.findByRole("tab", { name: "Setup" }));
   // The tab change is a visit of its own; Back first returns to Accounts.
   await user.click(screen.getByRole("button", { name: "Go back" }));
@@ -87,7 +88,7 @@ it("Back restores a Settings section and Forward restores the selected Providers
 
 it("Back restores the selected Runs detail and closing it creates a forward branch", async () => {
   const { user, primary } = await mount();
-  await user.click(primary.getByRole("button", { name: "Operations" }));
+  await goTo(user, "Operations");
   // The run row, never its "Pin globally: Package desktop" favorite action (#235).
   await user.click(
     await screen.findByRole("button", {

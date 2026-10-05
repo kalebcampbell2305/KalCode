@@ -705,6 +705,7 @@ fn navigation() {
     let cases = [
         ("go to dashboard", SurfaceId::Dashboard),
         ("Go to the dashboard!", SurfaceId::Dashboard),
+        ("open activity", SurfaceId::Dashboard),
         ("go home", SurfaceId::Dashboard),
         ("open settings", SurfaceId::Settings),
         ("settings", SurfaceId::Settings),

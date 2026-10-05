@@ -299,7 +299,7 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     app = await launch(dataDir, env);
     const appPid = app.child.pid;
     let page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     // The attach-readiness helper recognizes only exact native not-found or in-progress responses.
     expect(await stateWhileAttaching(page, "550e8400-e29b-41d4-a716-446655449999")).toBeNull();
     await codeNav(page).click();
@@ -651,7 +651,7 @@ test("native Browser cookies persist within one workspace and never cross worksp
   try {
     app = await launch(dataDir, env);
     let page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
     const workspaceA = await invoke<{ id: string } | null>(page, "workspace_open_dialog");
     expect(workspaceA?.id).toBeTruthy();
     const workspaceB = await invoke<{ id: string } | null>(page, "workspace_create", { name: "cookie-b" });

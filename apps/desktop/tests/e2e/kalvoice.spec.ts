@@ -14,6 +14,7 @@ import {
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
+import { goTo } from "./nav.ts";
 
 /**
  * KalVoice in the real app (native commands, the signal channel, SQLite ledger and
@@ -108,7 +109,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
   try {
     app = await launch(dataDir, env);
     let page = app.page;
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Code", exact: true }).click();
     await page.getByRole("button", { name: /Open folder/ }).click();
     await expect(page.getByRole("heading", { level: 1, name: "voice-site" })).toBeVisible();
@@ -127,7 +128,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await expect(widget(page).getByRole("textbox")).toHaveCount(0);
 
     // A typed request on the KalVoice page.
-    await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+    await goTo(page, "KalVoice");
     const input = page.getByRole("main").getByRole("textbox", { name: "Type a request for KalVoice" });
     await input.fill("Go to settings");
     await input.press("Enter");
@@ -278,11 +279,11 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "voice-site" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
-    await page.getByRole("button", { name: "KalVoice", exact: true }).click();
+    await goTo(page, "KalVoice");
     // Only the signed account baseline: local commands, dictation and focused-provider handoff
     // consume no KalVoice cloud quota, before or after a restart.
     await expect(page.locator("#kalvoice-status").getByText(/^41 \/ 150 used · resets/)).toBeVisible();
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();
     await expect(activity.getByText("KalVoice heard a command").first()).toBeVisible();

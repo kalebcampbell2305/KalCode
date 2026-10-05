@@ -1,11 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 /** Opens Providers (Accounts is its default tab), then Setup unless another tab is named. */
 async function openProviders(page: Page, scenario?: string, tab: "Setup" | "Accounts" = "Setup") {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  await page.getByRole("button", { name: "Providers" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  await goTo(page, "Providers");
   await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
   if (tab === "Setup") await page.getByRole("tab", { name: "Setup" }).click();
@@ -210,7 +211,7 @@ test.describe("providers", () => {
     await expect(checkAgain).not.toHaveAttribute("aria-busy", "true");
     await expect(page.getByText(/^Checked just now$/)).toBeVisible();
 
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("Claude Code 2.1.282")).toBeVisible();
     await expect(activity.getByText("Provider detected").first()).toBeVisible();
@@ -266,7 +267,7 @@ test.describe("providers", () => {
       await expect(region.getByText(command, { exact: true })).toBeVisible();
       await expect(region.getByText("Sign-in", { exact: true })).toHaveCount(0);
     }
-    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(page.getByRole("region", { name: "Runtime health" }).getByText("0 of 4 installed")).toBeVisible();
   });
 
@@ -375,8 +376,8 @@ test.describe("providers", () => {
     await expect(codex).toHaveAttribute("data-health-state", "healthy");
 
     await page.goto("/?health=error");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await page.getByRole("button", { name: "Providers" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+    await goTo(page, "Providers");
     await page.getByRole("tab", { name: "Health" }).click();
     const unknown = page.getByRole("region", { name: "Provider health" }).getByRole("alert");
     await expect(unknown.getByText("Health unknown")).toBeVisible();
@@ -389,13 +390,13 @@ test.describe("providers", () => {
     test(`health tab passes axe in ${theme} theme`, async ({ page }) => {
       for (const scenario of [undefined, "providers-none", "providers-backoff"]) {
         await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-        await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
         if (theme === "light") {
           await page.getByRole("button", { name: "Settings" }).click();
           await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
         }
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-        await page.getByRole("button", { name: "Providers" }).click();
+        await goTo(page, "Providers");
         await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
         await page.getByRole("tab", { name: "Health" }).click();
         const claude = page.getByRole("region", { name: "Provider health" }).locator("#health-claude-code");
@@ -410,13 +411,13 @@ test.describe("providers", () => {
     test(`providers page passes axe in ${theme} theme`, async ({ page }) => {
       for (const scenario of [undefined, "providers-outdated", "providers-error"]) {
         await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-        await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
         if (theme === "light") {
           await page.getByRole("button", { name: "Settings" }).click();
           await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
         }
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-        await page.getByRole("button", { name: "Providers" }).click();
+        await goTo(page, "Providers");
         await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
         // Accounts (the default tab) with real usage, then Setup.
         await expect(page.getByRole("region", { name: "Claude Code · Personal" })).toBeVisible();

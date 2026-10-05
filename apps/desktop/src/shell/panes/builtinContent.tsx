@@ -14,7 +14,7 @@ import styles from "./PaneCanvas.module.css";
 export function describeBuiltin(content: PaneContent): TabInfo {
   switch (content.kind) {
     case "dashboard":
-      return { title: "Dashboard", glyph: <LayoutDashboard />, statusText: "Opens the Dashboard" };
+      return { title: "Activity", glyph: <LayoutDashboard />, statusText: "Opens Activity" };
     case "browser":
       return { title: "Browser", glyph: <Globe />, stateLabel: "Coming", statusText: "Not in this build" };
     case "git":
@@ -67,7 +67,7 @@ function DashboardNotice() {
   return (
     <PaneNotice
       icon={<LayoutDashboard />}
-      title="Dashboard"
+      title="Activity"
       actions={
         <Button size="sm" onClick={() => navigate("dashboard")}>
           Open Dashboard

@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { goTo } from "./nav.ts";
 
 const storageKey = "kalcode:favorites:v1";
 async function openPalette(page: Page) {
@@ -113,7 +114,7 @@ test("an agent favorite restores its existing Code pane without duplicating the 
   await tabStar.click();
   const favorite = page.getByRole("list", { name: "Workspace favorites" }).getByRole("button");
   await expect(favorite).toHaveCount(1);
-  await navigation.getByRole("button", { name: "Threads", exact: true }).click();
+  await goTo(page, "Threads");
   await favorite.click();
   await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   await expect(page.locator("[data-provider-pane]")).toHaveCount(1);

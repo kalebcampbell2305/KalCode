@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 
 async function openUpdaterSettings(page: import("@playwright/test").Page) {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   return page.getByRole("region", { name: "Updates" });

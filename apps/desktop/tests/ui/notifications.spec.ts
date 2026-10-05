@@ -2,18 +2,29 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
 /**
- * The notification center (Z7-W3) against the in-memory transport, whose notifications are derived
- * from recorded events with the same wording and policy as `crates/notifications`.
+ * Needs you: the notification history (Z7-W3) under the live attention items, against the
+ * in-memory transport, whose notifications are derived from recorded events with the same wording
+ * and policy as `crates/notifications`.
  */
 
 async function open(page: Page, scenario = "busy") {
   await page.goto(`/?scenario=${scenario}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 const bell = (page: Page) =>
-  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^Notifications/ });
-const center = (page: Page) => page.getByRole("dialog", { name: "Notifications" });
+  page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^Needs you/ });
+const center = (page: Page) => page.getByRole("dialog", { name: "Needs you" });
+const summary = (page: Page) => center(page).locator("#notifications-description");
+
+/** The history's unread count, as the open sheet's summary states it (then closes the sheet). */
+async function expectUnread(page: Page, count: number) {
+  if (!(await center(page).isVisible())) await bell(page).click();
+  if (count === 0) await expect(summary(page)).not.toContainText("unread");
+  else await expect(summary(page)).toContainText(`${count} unread ${count === 1 ? "update" : "updates"}`);
+  await page.keyboard.press("Escape");
+  await expect(center(page)).toHaveCount(0);
+}
 const item = (page: Page, title: string) => center(page).getByRole("article", { name: new RegExp(title) });
 /** The button that opens a notification (its title, read or unread). */
 const opener = (page: Page, title: string) =>
@@ -49,9 +60,11 @@ async function expectNoSeriousA11yViolations(page: Page) {
 
 test("lists what finished, failed and needs permission, with an unread count", async ({ page }) => {
   await open(page);
-  await expect(bell(page)).toHaveAccessibleName("Notifications, 4 unread");
+  // The sidebar counts what needs the person now (busy fixture: two approvals, a question, a
+  // failure and two finished agents with changes to review); the history keeps its unread count.
+  await expect(bell(page)).toHaveAccessibleName("Needs you, 6 waiting");
   await bell(page).click();
-  await expect(center(page).getByText("4 unread")).toBeVisible();
+  await expect(summary(page)).toContainText("4 unread updates");
   await expect(center(page).getByRole("article")).toHaveCount(4);
   await expect(item(page, "Refactor auth middleware needs your permission")).toContainText("Install zod");
   await expect(item(page, "Deploy preview build failed")).toContainText("Gemini CLI exited unexpectedly");
@@ -69,7 +82,7 @@ test("opening a notification marks it read and focuses its agent in Code", async
     page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toHaveCount(0);
-  await expect(bell(page)).toHaveAccessibleName("Notifications, 3 unread");
+  await expectUnread(page, 3);
   // Unread state is kept by the native store: reopening shows it read.
   await bell(page).click();
   await expect(
@@ -81,7 +94,7 @@ test("opening a notification marks it read and focuses its agent in Code", async
 test("a thread that completes live raises a notification and announces it", async ({ page }) => {
   await open(page);
   await memory(page, "setThreadStatus", fixtureId(2, 2), "completed", "Finished: tests pass");
-  await expect(bell(page)).toHaveAccessibleName("Notifications, 5 unread");
+  await expectUnread(page, 5);
   await expect(page.getByTestId("announce-notification")).toHaveText("Completed: Fix flaky checkout test completed");
   const done = page.getByRole("region", { name: "Agents" }).getByRole("article", { name: "Fix flaky checkout test" });
   await expect(done.getByText("Done", { exact: true })).toBeVisible();
@@ -95,7 +108,7 @@ test("answering the approval elsewhere settles its permission notice", async ({ 
     .getByRole("region", { name: "Agents" })
     .getByRole("article", { name: "Refactor auth middleware" });
   await refactor.getByRole("button", { name: "Approve once" }).click();
-  await expect(bell(page)).toHaveAccessibleName("Notifications, 3 unread");
+  await expectUnread(page, 3);
 });
 
 test("a provider signing out and a crash recovery link to where they can be handled", async ({ page }) => {
@@ -142,15 +155,13 @@ test("mark all read, unread filter, mark unread and dismiss", async ({ page }) =
   await expect(center(page).getByRole("article")).toHaveCount(4);
   await center(page).getByRole("button", { name: "Mark all read" }).click();
   await expect(center(page).getByRole("heading", { name: "Nothing unread" })).toBeVisible();
-  await expect(center(page).getByText("You're all caught up.")).toBeVisible();
+  await expect(summary(page)).not.toContainText("unread");
   await center(page).getByRole("radio", { name: "All" }).click();
   await center(page).getByRole("button", { name: "Mark “Add light theme tokens completed” unread" }).click();
   await expect(center(page).getByText("1 unread")).toBeVisible();
   await center(page).getByRole("button", { name: "Dismiss “Add light theme tokens completed”" }).click();
   await expect(item(page, "Add light theme tokens completed")).toHaveCount(0);
-  await expect(center(page).getByText("You're all caught up.")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(bell(page)).toHaveAccessibleName("Notifications, none unread");
+  await expectUnread(page, 0);
 });
 
 test("keyboard: the center opens from the sidebar, traps focus and returns it on close", async ({ page }) => {

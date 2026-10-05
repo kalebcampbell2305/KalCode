@@ -137,3 +137,46 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+/* Needs You on top of Activity: cards in columns on wide windows, one quiet line when clear. */
+.needsYou {
+  margin-bottom: var(--space-6);
+}
+
+.needsYou[data-empty] {
+  margin-bottom: var(--space-4);
+}
+
+.needsYouTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--color-text);
+  font-size: var(--type-title);
+  font-weight: var(--weight-semibold);
+}
+
+.needsYou[data-empty] .needsYouTitle {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+}
+
+.needsYouCount {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+@container dashboard (min-width: 52rem) {
+  .needsYou > ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));
+  }
+}
+
+.needsYouMore {
+  margin-top: var(--space-2);
+}
