@@ -4,11 +4,11 @@ import type { ExplanationStep } from "./ExplanationStep.ts";
 /**
  * Why an action was decided the way it was, step by step.
  */
-export type DecisionExplanation = { actionId: string,
+export type DecisionExplanation = { actionId: string, 
 /**
  * Ordered: invariant → ceiling → profile rule → baseline → grant.
  */
-steps: Array<ExplanationStep>,
+steps: Array<ExplanationStep>, 
 /**
  * One sentence, user-readable.
  */

@@ -3,15 +3,15 @@ import type { RailGroupView } from "./RailGroupView.ts";
 import type { RailSection } from "./RailSection.ts";
 import type { WorkspaceRailEntry } from "./WorkspaceRailEntry.ts";
 
-export type RailState = {
+export type RailState = { 
 /**
  * In the order the person arranged them.
  */
-pinned: Array<WorkspaceRailEntry>,
+pinned: Array<WorkspaceRailEntry>, 
 /**
  * Not pinned, not in a folder, not archived; most recently used first.
  */
-recent: Array<WorkspaceRailEntry>, groups: Array<RailGroupView>, archived: Array<WorkspaceRailEntry>, collapsedSections: Array<RailSection>,
+recent: Array<WorkspaceRailEntry>, groups: Array<RailGroupView>, archived: Array<WorkspaceRailEntry>, collapsedSections: Array<RailSection>, 
 /**
  * False when rail changes last only for this session (schema v11 not installed).
  */

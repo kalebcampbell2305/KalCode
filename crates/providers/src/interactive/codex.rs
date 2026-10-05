@@ -131,14 +131,10 @@ pub fn interactive_args_with_overrides(
     } else {
         None
     };
+    // Codex's hook feature stays as the person configured it, as in a native terminal (never
+    // forced on or off): KalCode's observing hooks run wherever Codex runs hooks at all.
     for value in crate::codex::argv::POLICY_CONFIG {
-        // Panes keep Codex's hook feature as in a native terminal when KalCode observes it.
-        let value = if hooks.is_some() && *value == "features.hooks=false" {
-            "features.hooks=true"
-        } else {
-            value
-        };
-        out.extend([OsString::from("-c"), OsString::from(value)]);
+        out.extend([OsString::from("-c"), OsString::from(*value)]);
     }
     out.extend_from_slice(overrides);
     if let Some(model) = args.model {
@@ -446,8 +442,8 @@ mod tests {
     #[test]
     fn observing_hooks_are_session_flags_that_never_bypass_trust() {
         let argv = args(PermissionMode::Approve, None);
-        assert!(argv.windows(2).any(|p| p == ["-c", "features.hooks=true"]));
-        assert!(!argv.iter().any(|a| a == "features.hooks=false"));
+        // The person's own hook setting is kept: never forced on, never stripped.
+        assert!(!argv.iter().any(|a| a.starts_with("features.hooks=")));
         assert!(!argv.iter().any(|a| a.contains("bypass_hook_trust")));
         for event in kalcode_hook_bridge::HookEvent::CODEX {
             assert_eq!(
@@ -492,7 +488,7 @@ mod tests {
         .into_iter()
         .map(|a| a.into_string().expect("utf8"))
         .collect::<Vec<_>>();
-        assert!(notify_only.iter().any(|a| a == "features.hooks=false"));
+        assert!(!notify_only.iter().any(|a| a.starts_with("features.hooks=")));
         assert!(!notify_only.iter().any(|a| a.starts_with("hooks.")));
         assert!(notify_only.iter().any(|a| a.starts_with("notify=")));
     }

@@ -2,7 +2,7 @@
 import type { PermissionScope } from "./PermissionScope.ts";
 import type { RuleEffect } from "./RuleEffect.ts";
 
-export type PermissionRule = { scope: PermissionScope, effect: RuleEffect,
+export type PermissionRule = { scope: PermissionScope, effect: RuleEffect, 
 /**
  * Optional matcher interpreted per scope: a command prefix, a domain, a path glob.
  */

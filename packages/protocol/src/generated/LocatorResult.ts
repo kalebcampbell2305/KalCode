@@ -2,20 +2,20 @@
 import type { LocatorEntityKind } from "./LocatorEntityKind.ts";
 import type { MatchRange } from "./MatchRange.ts";
 
-export type LocatorResult = { kind: LocatorEntityKind, entityId: string,
+export type LocatorResult = { kind: LocatorEntityKind, entityId: string, 
 /**
  * Already redacted (names can come from a first prompt).
  */
-title: string, subtitle: string | null,
+title: string, subtitle: string | null, 
 /**
  * The entry's status: a display status for threads (`working`, `permission_required`, …),
  * `running`/`ended` for terminals, `available`/`missing`/`archived` for workspaces.
  */
-status: string | null, workspaceId: string | null, providerId: string | null, updatedAt: string,
+status: string | null, workspaceId: string | null, providerId: string | null, updatedAt: string, 
 /**
  * Redacted context. Never message text: a match inside opted-in message text says so.
  */
-snippet: string | null, score: number,
+snippet: string | null, score: number, 
 /**
  * True only with an on-device embedding model installed (never today).
  */

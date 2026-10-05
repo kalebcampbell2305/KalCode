@@ -4,19 +4,19 @@
  * Which tiers a sample refreshed. Slow tiers are carried forward between refreshes.
  * Exported to TypeScript as `SamplingTiers`.
  */
-export type SamplingTiers = {
+export type SamplingTiers = { 
 /**
  * CPU total, physical memory, disk IO counters.
  */
-fast: boolean,
+fast: boolean, 
 /**
  * Commit, network, workspace volume free space.
  */
-slow: boolean,
+slow: boolean, 
 /**
  * Process count and the KalCode process tree (the costliest measurement).
  */
-processes: boolean,
+processes: boolean, 
 /**
  * Re-enumerating volumes and network interfaces.
  */

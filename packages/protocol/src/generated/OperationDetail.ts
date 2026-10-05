@@ -6,11 +6,11 @@ import type { OperationRecord } from "./OperationRecord.ts";
 import type { OperationServiceRelationship } from "./OperationServiceRelationship.ts";
 import type { OperationTestResult } from "./OperationTestResult.ts";
 
-export type OperationDetail = { run: OperationRecord, timeline: Array<OperationMoment>, logs: string | null, files: Array<string>, artifacts: Array<OperationArtifact>, tests: Array<OperationTestResult>, notes: Array<string>,
+export type OperationDetail = { run: OperationRecord, timeline: Array<OperationMoment>, logs: string | null, files: Array<string>, artifacts: Array<OperationArtifact>, tests: Array<OperationTestResult>, notes: Array<string>, 
 /**
  * Services created by this run. Historical entries never imply a live process.
  */
-relatedServices: Array<OperationServiceRelationship>,
+relatedServices: Array<OperationServiceRelationship>, 
 /**
  * Deployment outcomes created by this run. Health remains separately evidenced.
  */

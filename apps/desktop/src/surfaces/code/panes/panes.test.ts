@@ -74,14 +74,21 @@ describe("pane labels", () => {
   });
 
   it("never labels an agent whose process hasn't started IDLE: launching is STARTING, a hold is WAITING", () => {
-    expect(paneStatus("starting")).toMatchObject({ label: "STARTING" });
-    expect(paneStatus("waiting_for_dependency")).toMatchObject({
+    const agent = (status: ThreadStatus) => ({ status, currentActivity: null, pendingApprovals: 0 });
+    expect(paneStatus(agent("starting"))).toMatchObject({ label: "STARTING" });
+    // WAITING is "on hold" (muted), never the amber of NEEDS YOU.
+    expect(paneStatus(agent("waiting_for_dependency"))).toMatchObject({
       label: "WAITING",
-      tone: "waiting",
+      tone: "muted",
       qualifier: "waiting on another task",
     });
     // A resource hold shows its real reason in place of the shared qualifier.
-    render(createElement(PaneStatusChip, { status: "waiting_for_dependency", qualifier: "memory is critically low" }));
+    render(
+      createElement(PaneStatusChip, {
+        thread: agent("waiting_for_dependency"),
+        qualifier: "memory is critically low",
+      }),
+    );
     expect(screen.getByText("WAITING")).toBeInTheDocument();
     expect(screen.getByText("memory is critically low")).toBeInTheDocument();
     expect(screen.queryByText("waiting on another task")).toBeNull();
