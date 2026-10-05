@@ -190,6 +190,7 @@ fn real_codex_pane_reports_shared_states_through_its_hooks() {
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     };
     let thread = config.thread_id.clone();
     let (tx, rx) = mpsc::channel();
