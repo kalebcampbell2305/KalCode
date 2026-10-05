@@ -4,8 +4,13 @@
 //! only affects its own row. Results are cached until the next detection, and the events worth
 //! recording (`provider.detected` on a change, `provider.error` on failure) are returned so the
 //! caller can persist them.
+//!
+//! Full checks are single-flight: one runs at a time, requests that arrive while one runs share
+//! one follow-up check instead of queueing a check each, and callers that only need *a*
+//! completed check (a session launch before the first check finished) wait for the running one
+//! instead of starting another.
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 
 use kalcode_contracts::agent::{AuthState, DetectionState, ProviderDetection, ProviderId};
@@ -24,6 +29,9 @@ pub struct ProviderRegistry {
     statuses: Mutex<Vec<ProviderStatus>>,
     /// Serializes detections so two "Check again" clicks never probe the same CLI in parallel.
     detecting: Mutex<()>,
+    /// Single-flight coordination of full checks ([`Self::detect_all`]).
+    checks: Mutex<Checks>,
+    check_finished: Condvar,
     probe_guardian: Option<ProviderProbeGuardian>,
     /// Provider Health, told about every detection (PH). Optional: detection works without it.
     health: OnceLock<Arc<HealthMonitor>>,
@@ -31,6 +39,30 @@ pub struct ProviderRegistry {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Full checks started and completed (generation numbers), and whether one is running.
+#[derive(Default)]
+struct Checks {
+    running: bool,
+    started: u64,
+    completed: u64,
+}
+
+/// Marks the running full check finished, even if it unwinds, and wakes the callers sharing it.
+struct RunningCheck<'a> {
+    registry: &'a ProviderRegistry,
+    generation: u64,
+}
+
+impl Drop for RunningCheck<'_> {
+    fn drop(&mut self) {
+        let mut checks = lock(&self.registry.checks);
+        checks.running = false;
+        checks.completed = checks.completed.max(self.generation);
+        drop(checks);
+        self.registry.check_finished.notify_all();
+    }
 }
 
 impl ProviderRegistry {
@@ -82,6 +114,8 @@ impl ProviderRegistry {
             specs,
             statuses: Mutex::new(catalog::statuses()),
             detecting: Mutex::new(()),
+            checks: Mutex::new(Checks::default()),
+            check_finished: Condvar::new(),
             probe_guardian: None,
             health: OnceLock::new(),
         }
@@ -95,6 +129,14 @@ impl ProviderRegistry {
         let mut registry = Self::with_specs(env, specs);
         registry.probe_guardian = Some(probe_guardian);
         registry
+    }
+
+    /// An explicit check: the next session launch of this executable probes again too.
+    /// (Path lookups only; no process.)
+    fn forget_launch_detection(&self, spec: &DetectionSpec) {
+        if let Some(executable) = self.env.resolve_executable_only(spec) {
+            crate::launch_probe::forget_executable(&executable);
+        }
     }
 
     fn detect(&self, spec: &DetectionSpec) -> Detected {
@@ -116,6 +158,7 @@ impl ProviderRegistry {
         let Some(spec) = self.specs.iter().find(|s| s.provider_id == id.as_str()) else {
             return Vec::new();
         };
+        self.forget_launch_detection(spec);
         let _serialized = lock(&self.detecting);
         let detected = self.detect(spec);
         let mut statuses = lock(&self.statuses);
@@ -156,7 +199,69 @@ impl ProviderRegistry {
 
     /// Detects every provider in parallel, updates the cache, and returns the new statuses with
     /// the events to record.
+    ///
+    /// The result always comes from a check that started after this call. When a check is
+    /// already running, this call shares the single follow-up check with every other call that
+    /// arrived meanwhile (only the caller that ran it gets the events; the others get none, as
+    /// a repeated check reports no change).
     pub fn detect_all(&self) -> (Vec<ProviderStatus>, Vec<EventPayload>) {
+        let mut checks = lock(&self.checks);
+        let needed = checks.started + 1;
+        loop {
+            if checks.completed >= needed {
+                return (self.list(), Vec::new());
+            }
+            if !checks.running {
+                break;
+            }
+            checks = self.wait_for_check(checks);
+        }
+        self.run_check(checks)
+    }
+
+    /// Makes sure one full check has completed: returns the cached statuses at once when one
+    /// has, waits for a running one rather than starting another, and runs one only when none
+    /// ever ran. For callers that only need a detection to exist (a session launch, KalVoice's
+    /// first use) so they never queue behind or repeat the startup check.
+    pub fn detect_all_once(&self) -> (Vec<ProviderStatus>, Vec<EventPayload>) {
+        let mut checks = lock(&self.checks);
+        loop {
+            if checks.completed > 0 {
+                return (self.list(), Vec::new());
+            }
+            if !checks.running {
+                break;
+            }
+            checks = self.wait_for_check(checks);
+        }
+        self.run_check(checks)
+    }
+
+    /// Full checks this registry ran (tests and diagnostics).
+    pub fn checks_run(&self) -> u64 {
+        lock(&self.checks).started
+    }
+
+    fn wait_for_check<'a>(&self, checks: MutexGuard<'a, Checks>) -> MutexGuard<'a, Checks> {
+        self.check_finished
+            .wait(checks)
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn run_check(
+        &self,
+        mut checks: MutexGuard<'_, Checks>,
+    ) -> (Vec<ProviderStatus>, Vec<EventPayload>) {
+        checks.running = true;
+        checks.started += 1;
+        let _running = RunningCheck {
+            registry: self,
+            generation: checks.started,
+        };
+        drop(checks);
+        for spec in &self.specs {
+            self.forget_launch_detection(spec);
+        }
         let _serialized = lock(&self.detecting);
         let results: Vec<(&'static str, Detected)> = thread::scope(|scope| {
             let handles: Vec<_> = self

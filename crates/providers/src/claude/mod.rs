@@ -121,10 +121,8 @@ impl ClaudeCodeProvider {
             return Err(ProviderError::Unsupported);
         }
         let spec = catalog::claude_spec();
-        let detected = match &probe_guardian {
-            Some(guardian) => detect_guarded(&spec, &self.env, guardian),
-            None => detect(&spec, &self.env),
-        };
+        let detected =
+            crate::launch_probe::detect_for_launch(&spec, &self.env, probe_guardian.as_ref());
         let executable = match (detected.detection.state, detected.executable) {
             (DetectionState::Installed, Some(exe)) => exe,
             (DetectionState::NotInstalled, _) => return Err(ProviderError::NotInstalled),
