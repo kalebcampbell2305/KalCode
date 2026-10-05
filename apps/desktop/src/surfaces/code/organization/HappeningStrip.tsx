@@ -50,7 +50,7 @@ export const HappeningStrip = memo(function HappeningStrip({
   const act = (segment: HappeningSegment) => {
     if (segment.kind === "agents") showFirst(controller, items, ["working", "testing"], "agent");
     else if (segment.kind === "needs-you") {
-      if (!showFirst(controller, items, ["waiting"], "agent")) openApprovals?.(true);
+      if (!showFirst(controller, items, ["needs_you"], "agent")) openApprovals?.(true);
     } else if (segment.kind === "tests") openTests(controller);
     else if (segment.kind === "service") openBrowser(controller, segment.url);
     else controller.show({ kind: "git", workspaceId }, { placement: "split", focus: true });

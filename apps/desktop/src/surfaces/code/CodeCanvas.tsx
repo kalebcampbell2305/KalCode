@@ -1015,7 +1015,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "agent") {
         const entry = paneById.get(content.agentId);
         if (!entry) return null;
-        const status = paneStatus(entry.thread.status);
+        const status = paneStatus(entry.thread);
         const account = accountFor(entry.thread);
         const name = orgItems.get(contentKey(content))?.title ?? entry.thread.name;
         return {
@@ -1175,7 +1175,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     for (const p of providerPanes.panes) {
       const content = agentContent(p.thread.id);
       if (p.info?.running && !shown.has(contentKey(content)))
-        list.push({ content, title: titleOf(content), tone: paneStatus(p.thread.status).tone });
+        list.push({ content, title: titleOf(content), tone: paneStatus(p.thread).tone });
     }
     return list;
   }, [terminals, providerPanes.panes, shown, titleOf]);

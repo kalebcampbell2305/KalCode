@@ -24,6 +24,9 @@ import {
 } from "lucide-react";
 import { forwardRef, type HTMLAttributes, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { FavoriteButton } from "../favorites/FavoriteActions.tsx";
+import { isVisibleFavorite } from "../favorites/selection.ts";
+import { useFavorites } from "../favorites/store.ts";
 import { globalShortcut, isRailToggleShortcut } from "../shortcuts.ts";
 import {
   badgeLabel,
@@ -41,7 +44,7 @@ import {
 } from "./model.ts";
 import styles from "./Rail.module.css";
 import { useRail } from "./RailProvider.tsx";
-import { RailThreadContextMenu, RailThreadMenus } from "./RailThreadMenus.tsx";
+import { RailThreadContextMenu, RailThreadFavoriteButton, RailThreadMenus } from "./RailThreadMenus.tsx";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu.tsx";
 
 /** What the rail asks its host to open (dialogs live in WorkspaceRail). */
@@ -69,11 +72,28 @@ export function RailTree({
   const rail = useRail();
   // The highlight follows the workspace switch as soon as it lands, not the rail's later re-read.
   const activeId = useWorkspaces().active?.id;
+  const favorites = useFavorites();
   const isActive = (entry: WorkspaceRailEntry) => (activeId ? entry.workspaceId === activeId : entry.active);
   const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<string>>(new Set());
   const nodes = useMemo(
-    () => (rail.rail ? visibleNodes(rail.rail, collapsedProviders) : []),
-    [rail.rail, collapsedProviders],
+    () =>
+      rail.rail
+        ? visibleNodes(
+            {
+              ...rail.rail,
+              recent: rail.rail.recent.filter(
+                (entry) =>
+                  !isVisibleFavorite(favorites.entries, activeId ?? null, {
+                    kind: "workspace",
+                    id: entry.workspaceId,
+                    workspaceId: entry.workspaceId,
+                  }),
+              ),
+            },
+            collapsedProviders,
+          )
+        : [],
+    [rail.rail, collapsedProviders, favorites.entries, activeId],
   );
   const pos = useMemo(() => positions(nodes), [nodes]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -302,6 +322,10 @@ export function RailTree({
                     {initials(entry.name)}
                   </span>
                   <span className={styles.name}>{entry.name}</span>
+                  <FavoriteButton
+                    target={{ kind: "workspace", id: entry.workspaceId, workspaceId: entry.workspaceId }}
+                    title={entry.name}
+                  />
                   {entry.available ? null : <span className={styles.missing}>Missing</span>}
                   <span className={styles.badges} aria-hidden="true">
                     {entry.needsYou > 0 ? (
@@ -375,6 +399,7 @@ export function RailTree({
                   <Glyph />
                 </span>
                 <span className={styles.threadName}>{node.thread.name}</span>
+                <RailThreadFavoriteButton id={node.thread.id} />
                 <span className={styles.age}>{relativeTime(node.thread.lastActivityAt, now)}</span>
               </TreeItem>
             </RailThreadContextMenu>

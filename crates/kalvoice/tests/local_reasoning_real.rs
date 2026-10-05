@@ -274,7 +274,8 @@ const DETERMINISTIC_CASES: &[BenchmarkCase] = &[
     (
         "deterministic_filter",
         "show only working sessions",
-        Some("filter_dashboard"),
+        // One provider-agnostic agent filter since #238 (Needs you / Working / Done / Idle / Failed).
+        Some("filter_agents"),
     ),
     (
         "deterministic_provider",

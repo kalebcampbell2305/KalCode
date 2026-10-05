@@ -12,6 +12,9 @@ import nativeStableSurfaces from "../../shell/fixtures/stable-native-surfaces.js
 import { Shell } from "../../shell/Shell.tsx";
 import { resetAccountIntentForTests } from "./accountIntent.ts";
 
+/** A thread row by name, never its "Pin globally: <name>" favorite action (#235). */
+const threadRow = (name: string) => new RegExp(`^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*${name}`);
+
 // How the Threads surface shows a launch held for system resources, a wait that ran out, and an
 // idle thread whose last turn failed (Stable). The runtime states are the native ones
 // (crates/threads/src/runtime.rs); the memory transport's summaries are patched to them.
@@ -38,23 +41,25 @@ afterEach(() => {
 
 type Patch = Partial<Pick<ThreadSummary, "status" | "currentActivity" | "error">>;
 
+// The runtime's own copy (crates/threads/src/runtime.rs): only genuine hard pressure or the
+// person's own Custom limit holds a coding agent, never CPU load.
 const WAITING: Patch = {
   status: "waiting_for_dependency",
-  currentActivity: "Waiting for system resources (CPU busy)",
+  currentActivity: "Waiting to start: memory is critically low (412 MB free)",
   error: {
     code: "waiting_for_resources",
     message:
-      "KalCode is waiting for system resources (CPU busy). Codex starts when they free up; KalCode checks again every few seconds.",
+      "Memory is critically low (412 MB free). KalCode is holding Codex so your system stays usable; it starts as soon as this clears. Run KalTidy to free resources, or choose Start Anyway.",
   },
 };
 
 const NOT_STARTED: Patch = {
   status: "interrupted",
-  currentActivity: "Not started: system resources were busy",
+  currentActivity: "Not started: system resources were too low",
   error: {
     code: "resources_unavailable",
     message:
-      "Codex didn't start: KalCode waited 90 s for system resources (4 of 4 threads are already working). Your message is saved; Resume sends it. Stop a thread you're not using, then resume this one.",
+      "Codex didn't start: 4 of 4 agents are already working (your Custom limit) after 90 s. Your message is saved; Resume sends it. Stop an agent you're not using, then resume this one, or choose Start Anyway.",
   },
 };
 
@@ -122,23 +127,25 @@ async function mountStable() {
 
 async function openThread(user: ReturnType<typeof userEvent.setup>, name: string) {
   const list = await screen.findByRole("list", { name: "Threads" });
-  await user.click(await within(list).findByRole("button", { name: new RegExp(name) }));
+  await user.click(await within(list).findByRole("button", { name: threadRow(name) }));
   await screen.findByRole("heading", { name, level: 2 });
   return screen.getByRole("article");
 }
 
 describe("thread problems on Stable", () => {
-  it("a held launch shows Waiting for system resources, never a provider failure, and can only be stopped", async () => {
+  it("a held launch shows the real reason, never CPU busy or a provider failure, and offers Start Anyway", async () => {
     const user = await mountStable();
     const list = await screen.findByRole("list", { name: "Threads" });
-    expect(within(list).getByRole("button", { name: /Codex held/ })).toHaveTextContent("Waiting for system resources");
+    expect(within(list).getByRole("button", { name: threadRow("Codex held") })).toHaveTextContent("Waiting to start");
     const detail = await openThread(user, "Codex held");
     const notice = within(detail).getByRole("status", { name: "" });
-    expect(notice).toHaveTextContent("Waiting for system resources");
-    expect(notice).toHaveTextContent("CPU busy");
+    expect(notice).toHaveTextContent("Waiting to start: memory is critically low (412 MB free)");
+    expect(notice).toHaveTextContent("Run KalTidy to free resources, or choose Start Anyway.");
     expect(notice).toHaveTextContent("Code: waiting_for_resources");
+    expect(notice).not.toHaveTextContent(/CPU|every few seconds/);
     expect(within(detail).queryByRole("alert")).toBeNull();
     expect(within(detail).queryByText(/couldn't start|Check that it works in a terminal/)).toBeNull();
+    expect(within(detail).getByRole("button", { name: "Start Anyway" })).toBeInTheDocument();
     expect(within(detail).getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(within(detail).queryByRole("button", { name: "Resume" })).toBeNull();
     expect(within(detail).queryByRole("button", { name: "Interrupt" })).toBeNull();
@@ -151,8 +158,9 @@ describe("thread problems on Stable", () => {
     const detail = await openThread(user, "Codex not started");
     expect(within(detail).getByText("Not started", { exact: true })).toBeInTheDocument();
     const notice = within(detail).getByRole("status", { name: "" });
-    expect(notice).toHaveTextContent("Not started: system resources were busy");
-    expect(notice).toHaveTextContent("Stop a thread you're not using");
+    expect(notice).toHaveTextContent("Not started: system resources were too low");
+    expect(notice).toHaveTextContent("Stop an agent you're not using");
+    expect(within(detail).getByRole("button", { name: "Start Anyway" })).toBeInTheDocument();
     expect(within(detail).queryByRole("alert")).toBeNull();
     expect(within(detail).getByRole("button", { name: "Resume" })).toBeInTheDocument();
     expect(within(detail).queryByRole("button", { name: "Stop" })).toBeNull();

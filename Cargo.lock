@@ -2870,6 +2870,7 @@ dependencies = [
  "kalcode-notifications",
  "kalcode-permissions",
  "kalcode-providers",
+ "kalcode-pty",
  "kalcode-resources",
  "kalcode-secure-store",
  "kalcode-threads",

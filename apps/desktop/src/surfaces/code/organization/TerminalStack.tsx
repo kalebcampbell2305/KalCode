@@ -21,11 +21,13 @@ import {
   CircleDashed,
   CircleDot,
   CirclePause,
+  CircleStop,
   CircleX,
   Eye,
   FlaskConical,
   FolderPlus,
   Hand,
+  Hourglass,
   Layers,
   ListTree,
   type LucideIcon,
@@ -48,9 +50,11 @@ export const BADGE_ICONS: Record<OrgBadge, LucideIcon> = {
   ready: CircleDot,
   working: Zap,
   testing: FlaskConical,
-  waiting: Hand,
+  needs_you: Hand,
+  waiting: Hourglass,
   failed: CircleX,
   done: CircleCheck,
+  stopped: CircleStop,
   idle: CirclePause,
 };
 
@@ -97,7 +101,7 @@ export const TerminalStack = memo(function TerminalStack({ organization, control
   const [openFinished, setOpenFinished] = useState<ReadonlySet<string>>(new Set());
   const [adding, setAdding] = useState<{ moveKey: string | null } | null>(null);
   const working = items.filter((i) => i.status?.badge === "working" || i.status?.badge === "testing").length;
-  const waiting = items.filter((i) => i.status?.badge === "waiting").length;
+  const waiting = items.filter((i) => i.status?.badge === "needs_you").length;
 
   const shown = stackShown(prefs.prefs, items.length);
   // On a narrow canvas the stack doesn't take the panes' width: the rail opens it over the canvas.

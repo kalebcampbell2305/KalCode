@@ -87,6 +87,14 @@ function report(): ResourceReport {
     admission: {
       state: "allowed",
       mode: "balanced",
+      additional: 4_294_967_295,
+      reasons: [],
+      snapshotSeq: 7,
+      sampledAtUnixMs: snapshot.sampledAtUnixMs,
+    },
+    backgroundAdmission: {
+      state: "allowed",
+      mode: "balanced",
       additional: 3,
       reasons: [],
       snapshotSeq: 7,
@@ -146,24 +154,42 @@ describe("ResourceGovernorContent", () => {
     expect(onModeChange).toHaveBeenCalledWith("performance");
   });
 
-  it("explains that admission holds affect only new work", () => {
+  it("says coding agents start immediately under CPU load while background work yields", () => {
+    const busy = report();
+    busy.backgroundAdmission = {
+      ...busy.backgroundAdmission,
+      state: "held",
+      additional: 0,
+      reasons: [{ kind: "snapshot_stale", ageMs: 6_000, maxAgeMs: 5_000 }],
+    };
+    render(<ResourceGovernorContent report={busy} changingMode={false} onModeChange={vi.fn()} />);
+
+    expect(screen.getByText("New coding agents start immediately")).toBeInTheDocument();
+    expect(screen.getByText(/CPU load never delays an agent you start/)).toBeInTheDocument();
+    expect(screen.getByText("Background work is yielding")).toBeInTheDocument();
+    expect(screen.getByText(/Running work continues/)).toBeInTheDocument();
+    expect(screen.queryByText(/CPU busy/)).not.toBeInTheDocument();
+  });
+
+  it("shows the real reason when hard pressure holds new coding agents", () => {
     const held = report();
     held.admission = {
       ...held.admission,
       state: "held",
       additional: 0,
-      reasons: [{ kind: "snapshot_stale", ageMs: 6_000, maxAgeMs: 5_000 }],
+      reasons: [{ kind: "hard_pressure", pressure: { kind: "memory_critical", availableMb: 412, floorMb: 634 } }],
     };
     render(<ResourceGovernorContent report={held} changingMode={false} onModeChange={vi.fn()} />);
 
-    expect(screen.getByText("Background work is paused")).toBeInTheDocument();
-    expect(screen.getByText(/Running work continues/)).toBeInTheDocument();
+    expect(screen.getByText("New coding agents are waiting")).toBeInTheDocument();
+    expect(screen.getByText(/Memory is critically low \(412 MB free\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Start Anyway/)).toBeInTheDocument();
   });
 
   it("shows a selected mode while waiting for its first matching sample", () => {
     const pending = report();
-    pending.admission = {
-      ...pending.admission,
+    pending.backgroundAdmission = {
+      ...pending.backgroundAdmission,
       state: "held",
       mode: "performance",
       additional: 0,

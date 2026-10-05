@@ -71,13 +71,16 @@ test.describe("a fresh session", () => {
 test.describe("counts, filters, search and grouping", () => {
   test("the summary and chip counts come from real runtime state", async ({ page }) => {
     await open(page, "busy");
-    await expect(main(page).getByText("13 agents · 3 working · 3 need you · 2 done · 4 idle · 1 failed")).toBeVisible();
+    await expect(
+      main(page).getByText("13 agents · 3 working · 3 need you · 1 waiting · 3 done · 2 idle · 1 failed"),
+    ).toBeVisible();
     await expect(chip(page, "All")).toHaveAccessibleName("All, 13");
     await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
     await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 1");
     await expect(chip(page, "Working")).toHaveAccessibleName("Working, 3");
-    await expect(chip(page, "Done")).toHaveAccessibleName("Done, 2");
-    await expect(chip(page, "Idle")).toHaveAccessibleName("Idle, 4");
+    await expect(chip(page, "Waiting")).toHaveAccessibleName("Waiting, 1");
+    await expect(chip(page, "Done")).toHaveAccessibleName("Done, 3");
+    await expect(chip(page, "Idle")).toHaveAccessibleName("Idle, 2");
     await expect(cards(page)).toHaveCount(13);
   });
 
@@ -94,11 +97,14 @@ test.describe("counts, filters, search and grouping", () => {
     await chip(page, "Failed").click();
     await expect(cards(page)).toHaveCount(1);
     await expect(card(page, "Deploy preview build")).toBeVisible();
+    await chip(page, "Waiting").click();
+    await expect(cards(page)).toHaveCount(1);
+    await expect(card(page, "Index docs for search")).toBeVisible();
     await chip(page, "Done").click();
-    await expect(cards(page)).toHaveCount(2);
+    await expect(cards(page)).toHaveCount(3);
     await chip(page, "Idle").click();
-    await expect(cards(page)).toHaveCount(4);
-    await expect(board(page).getByText("Showing 4 idle.")).toBeAttached();
+    await expect(cards(page)).toHaveCount(2);
+    await expect(board(page).getByText("Showing 2 idle.")).toBeAttached();
     await chip(page, "All").click();
     await expect(cards(page)).toHaveCount(13);
   });
@@ -121,7 +127,7 @@ test.describe("counts, filters, search and grouping", () => {
     const groupBy = page.getByRole("radiogroup", { name: "Group by" });
     await expect(groupBy.getByRole("radio")).toHaveText(["Status", "Project", "Provider"]);
     const headings = board(page).getByRole("heading", { level: 2 });
-    await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Done/, /^Idle/, /^Failed/]);
+    await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Waiting/, /^Done/, /^Idle/, /^Failed/]);
     await groupBy.getByRole("radio", { name: "Project" }).click();
     // Projects with agents that need you first (a failure is history, not a question).
     await expect(headings).toHaveText([/^kalcode/, /^field-notes/, /^atlas-api/]);
@@ -156,9 +162,9 @@ test.describe("cards", () => {
     await expect(fix.getByText("Working", { exact: true })).toBeVisible();
     await expect(fix.locator('time[data-kind="elapsed"]')).toHaveText("Running time 18 min");
     await expect(fix.locator('time[data-kind="last-activity"]')).toHaveText(/just now|minute/);
-    // Details expand in place: call sign, permission mode and start time.
+    // Details expand in place: provider, permission mode and start time.
     await fix.getByRole("button", { name: "Show details for Fix flaky checkout test" }).click();
-    await expect(fix.getByText(/^Codex [A-Z]+$/)).toBeVisible();
+    await expect(fix.getByText("Codex", { exact: true })).toBeVisible();
     await expect(fix.getByText("Permission mode Auto")).toBeVisible();
     await expect(fix.locator('time[data-kind="started"]')).toHaveText("Started 18 min ago");
   });
@@ -182,13 +188,13 @@ test.describe("cards", () => {
     // A finished agent can be cleared in one click.
     await expect(done.getByRole("button", { name: "Clear Generate API client" })).toBeVisible();
     await done.getByRole("button", { name: "More actions for Generate API client" }).click();
-    await expect(page.getByRole("menuitem")).toHaveText(["Open", "Archive"]);
+    await expect(page.getByRole("menuitem")).toHaveText(["Open", "Pin globally", "Archive"]);
   });
 
   test("ACTION NEEDED carries the inline approval in the app's order", async ({ page }) => {
     await open(page, "busy");
     const refactor = card(page, "Refactor auth middleware");
-    await expect(refactor.getByText("Needs approval", { exact: true })).toBeVisible();
+    await expect(refactor.getByText("Needs you", { exact: true })).toBeVisible();
     const approval = refactor.getByRole("group", { name: "Install zod" });
     await expect(approval.getByText("pnpm add install zod@4.1.0")).toBeVisible();
     // The common answers inline; the broader grants in More, so the row never wraps.
@@ -239,7 +245,8 @@ test.describe("cards", () => {
       await page.getByRole("menuitem", { name: item }).click();
     };
     await menu("Review billing pull request", "Pause");
-    await expect(card(page, "Review billing pull request").getByText("Paused", { exact: true })).toBeVisible();
+    // A paused agent is IDLE in the shared agent state; its activity says why.
+    await expect(card(page, "Review billing pull request").getByText("Idle", { exact: true })).toBeVisible();
     await menu("Profile cold start", "Resume");
     await expect(card(page, "Profile cold start").getByText("Starting", { exact: true })).toBeVisible();
     await card(page, "Deploy preview build").getByRole("button", { name: "Retry" }).click();
@@ -371,8 +378,8 @@ test.describe("widgets", () => {
   test("provider health is read-only: it never starts a detection", async ({ page }) => {
     await open(page, "busy");
     const health = page.getByRole("region", { name: "Provider health" });
-    // Never-checked providers show their accounts' sign-in (or "Not checked yet"); none is detected.
-    // Claude Code, Codex, Gemini CLI and Cursor.
+    // Every provider (Claude Code, Codex, Cursor, Gemini CLI) shows its accounts' sign-in (or
+    // "Not checked yet"); none is detected.
     await expect(health.locator("[data-provider-health]")).toHaveCount(4);
     await expect(health.locator('[data-provider-health] >> text="Healthy"')).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
@@ -438,7 +445,7 @@ test.describe("KalVoice filters the Dashboard", () => {
   for (const [said, chipLabel, count] of [
     ["show only agents that are working", "Working", 3],
     ["show everything waiting for me", "Needs you", 3],
-    ["show completed work", "Done", 2],
+    ["show completed work", "Done", 3],
   ] as const) {
     test(`“${said}”`, async ({ page }) => {
       await open(page, "busy", `transcript=${encodeURIComponent(said)}`);
@@ -531,14 +538,14 @@ test.describe("sidebar", () => {
       .getByRole("button", { name: "Dashboard", exact: true });
     await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
     await expect(nav).toHaveText("Dashboard3");
-    await expect(nav).toHaveAccessibleDescription("3 sessions need you");
+    await expect(nav).toHaveAccessibleDescription("3 agents need you");
     // Pausing the thread that waits for permission leaves three.
     await card(page, "Refactor auth middleware")
       .getByRole("button", { name: "More actions for Refactor auth middleware" })
       .click();
     await page.getByRole("menuitem", { name: "Pause" }).click();
     await expect(nav).toHaveText("Dashboard2");
-    await expect(nav).toHaveAccessibleDescription("2 sessions need you");
+    await expect(nav).toHaveAccessibleDescription("2 agents need you");
   });
 
   test("the Dashboard item shows no count when nothing needs you", async ({ page }) => {
@@ -580,12 +587,15 @@ test.describe("accessibility", () => {
   test("keyboard order: chips, search, grouping, cleanup, then the first card", async ({ page }) => {
     await open(page, "busy");
     await chip(page, "All").focus();
-    for (let i = 0; i < 5; i += 1) await page.keyboard.press("Tab");
+    for (let i = 0; i < 6; i += 1) await page.keyboard.press("Tab");
     await expect(chip(page, "Failed")).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.getByRole("searchbox", { name: "Search agents" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.getByRole("radio", { name: "Status" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    // The optional provider filter (status filters stay global across providers).
+    await expect(board(page).getByRole("button", { name: "Provider: All providers" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(board(page).getByRole("button", { name: "Clean up" })).toBeFocused();
     await page.keyboard.press("Tab");

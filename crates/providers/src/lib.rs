@@ -38,6 +38,7 @@ pub mod native_config;
 mod node_managers;
 pub mod process;
 pub mod registry;
+pub(crate) mod tool_status;
 pub(crate) mod turns;
 pub mod usage;
 pub mod version;

@@ -4,10 +4,16 @@
 //! folders come from the native picker, shells are chosen by detected id, and every id is
 //! validated natively. Terminal output streams over a per-view channel as raw bytes.
 //!
-//! Threading: commands that touch the database run off the main thread (`async`). Input,
-//! resize, attach, ack and detach touch no storage and stay synchronous. `terminal_write` only
-//! queues input; it never blocks on the shell. Views detach by the attachment id they were
-//! given, so a detach can never remove a newer attachment, whatever order requests arrive in.
+//! Threading: commands that touch the database run off the main thread (`async`), and so does
+//! `terminal_write`, the most frequent command (it only queues input and never blocks on the
+//! shell; the view keeps a terminal's writes in order). Resize, attach, ack and detach touch no
+//! storage and stay synchronous, so they keep their arrival order with page reloads. Views
+//! detach by the attachment id they were given, so a detach can never remove a newer
+//! attachment, whatever order requests arrive in.
+//!
+//! Output: each view's stream goes through a [`kalcode_pty::OutputCoalescer`], so a burst of
+//! PTY reads becomes at most one channel message per few milliseconds (or per 64 KiB) instead of
+//! one message, one main-thread script evaluation and one fetch per read.
 //!
 //! Flow control: a view acknowledges the output bytes it has rendered (`terminal_ack`). A view
 //! that falls more than `MAX_UNACKED_BYTES` behind stops receiving output, and its next ack
@@ -24,6 +30,7 @@ use kalcode_core::workspaces::{
     AttachmentId, ShellOption, TerminalInfo, TerminalSize, Workspace, validate_id,
 };
 use kalcode_core::{IpcError, KalError};
+use kalcode_pty::{CoalesceConfig, OutputCoalescer};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State, Webview, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -359,7 +366,11 @@ pub fn terminal_close(
 }
 
 /// Queues keyboard/paste input (UTF-8 text from xterm.js). At most 64 KB per call.
-#[tauri::command]
+///
+/// Off the main thread: input is the most frequent command, and the registry lookup must never
+/// stall the window behind a terminal starting or stopping. Order is kept by the view, which
+/// sends a terminal's next write only after the previous one resolved (`createOrderedInputQueue`).
+#[tauri::command(async)]
 pub fn terminal_write(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
@@ -430,15 +441,18 @@ pub fn terminal_attach(
     let unacked = Arc::new(AtomicUsize::new(0));
     let lagged = Arc::new(AtomicBool::new(false));
     let (sent, behind) = (unacked.clone(), lagged.clone());
+    // Every channel message costs the main thread a script evaluation (and a fetch round trip
+    // above 1 KiB), so bursts of PTY reads are coalesced into at most one message per interval.
+    let output = OutputCoalescer::new(CoalesceConfig::default(), move |bytes| {
+        on_output.send(InvokeResponseBody::Raw(bytes)).is_ok()
+    });
     let attachment = core
         .attach_terminal(&terminal_id, move |bytes| {
             if sent.fetch_add(bytes.len(), Ordering::SeqCst) + bytes.len() > MAX_UNACKED_BYTES {
                 behind.store(true, Ordering::SeqCst);
                 return false; // stop streaming; the view resyncs on its next ack
             }
-            on_output
-                .send(InvokeResponseBody::Raw(bytes.to_vec()))
-                .is_ok()
+            output.push(bytes)
         })
         .map_err(|e| e.log_and_convert("terminal_attach"))?;
     if let Some(id) = attachment {

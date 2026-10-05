@@ -16,6 +16,7 @@ import {
 } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { accountInlineLabel, sortAccounts } from "../providers/accountIdentity.ts";
 import { threadActions } from "./model.ts";
 import styles from "./RebindThreadDialog.module.css";
@@ -111,6 +112,10 @@ export function ThreadContextMenu({
       setBusy(false);
     }
   };
+  const favoriteItems = useFavoriteMenuItems(
+    { kind: "thread", id: thread.id, workspaceId: thread.workspaceId },
+    thread.name,
+  );
   const items: ObjectMenuItem[] = [
     {
       id: "rename",
@@ -169,6 +174,7 @@ export function ThreadContextMenu({
       })),
     });
   }
+  items.push(...favoriteItems);
   if (archived || threadActions(thread, archived).archive) {
     items.push({ id: "archive-separator", separator: true });
     items.push(

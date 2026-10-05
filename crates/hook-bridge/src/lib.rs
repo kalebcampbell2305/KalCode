@@ -17,6 +17,7 @@
 //!   every error, timeout, bad reply or panic exits 2, the only exit code that blocks a tool.
 
 pub mod client;
+pub mod codex;
 pub mod endpoint;
 pub mod helper;
 pub mod key;

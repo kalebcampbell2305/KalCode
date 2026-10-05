@@ -35,6 +35,8 @@ pub enum HookEvent {
     SubagentStart,
     SubagentStop,
     SessionEnd,
+    /// Codex: the person interrupted (or declined into) a turn. No Stop or `notify` follows.
+    Interrupt,
     CodexNotify,
     Cursor,
 }
@@ -56,6 +58,18 @@ impl HookEvent {
         Self::SessionEnd,
     ];
 
+    /// The Codex hook events KalCode registers for a pane (observing only; verified against
+    /// codex-cli 0.160.0). Codex's payloads are Claude-shaped; none of these can block or decide.
+    pub const CODEX: [HookEvent; 7] = [
+        Self::SessionStart,
+        Self::UserPromptSubmit,
+        Self::PreToolUse,
+        Self::PermissionRequest,
+        Self::PostToolUse,
+        Self::Stop,
+        Self::Interrupt,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SessionStart => "SessionStart",
@@ -70,6 +84,7 @@ impl HookEvent {
             Self::SubagentStart => "SubagentStart",
             Self::SubagentStop => "SubagentStop",
             Self::SessionEnd => "SessionEnd",
+            Self::Interrupt => "Interrupt",
             Self::CodexNotify => "codex-notify",
             Self::Cursor => "cursor",
         }
@@ -78,7 +93,7 @@ impl HookEvent {
     pub fn parse(name: &str) -> Option<Self> {
         Self::CLAUDE
             .into_iter()
-            .chain([Self::CodexNotify, Self::Cursor])
+            .chain([Self::Interrupt, Self::CodexNotify, Self::Cursor])
             .find(|e| e.as_str() == name)
     }
 
@@ -86,6 +101,20 @@ impl HookEvent {
     /// event is a status signal and fails open.
     pub fn is_blocking(self) -> bool {
         matches!(self, Self::PreToolUse)
+    }
+
+    /// Events that may carry a Codex turn id: `notify`, and Codex's turn-scoped hooks.
+    pub fn carries_codex_turn(self) -> bool {
+        matches!(
+            self,
+            Self::CodexNotify
+                | Self::UserPromptSubmit
+                | Self::PreToolUse
+                | Self::PermissionRequest
+                | Self::PostToolUse
+                | Self::Stop
+                | Self::Interrupt
+        )
     }
 
     /// Events whose matcher is the tool name (a `"*"` matcher registers them for every tool).
@@ -130,7 +159,8 @@ pub struct HookRecord {
     pub prompt: Option<String>,
     /// Codex notify `type` (e.g. `agent-turn-complete`).
     pub codex_type: Option<String>,
-    /// Opaque Codex root-turn id used only to correlate and deduplicate completion status.
+    /// Opaque Codex root-turn id used only to correlate and deduplicate completion status
+    /// (`notify`, and Codex's own turn-scoped hooks).
     pub codex_turn_id: Option<String>,
     /// Only explicitly labelled durable facts, bounded; never a transcript or terminal stream.
     /// Native memory rejects secrets before persistence. This is not an activity event.
@@ -431,7 +461,7 @@ impl HookRecord {
         }
 
         let tool_event = event.has_tool_matcher();
-        if event != HookEvent::CodexNotify && self.codex_turn_id.is_some() {
+        if self.codex_turn_id.is_some() && !event.carries_codex_turn() {
             return Err(RecordError::Invalid);
         }
         if !tool_event
@@ -514,7 +544,10 @@ impl HookRecord {
                     || self.prompt.is_some()
                     || self.codex_type.is_some()
             }
-            HookEvent::Stop | HookEvent::SubagentStart | HookEvent::SubagentStop => {
+            HookEvent::Stop
+            | HookEvent::SubagentStart
+            | HookEvent::SubagentStop
+            | HookEvent::Interrupt => {
                 self.notification_type.is_some()
                     || self.source.is_some()
                     || self.error_type.is_some()
@@ -776,6 +809,28 @@ pub fn from_codex_notify(json_arg: &str) -> Result<HookRecord, RecordError> {
     })
 }
 
+/// Builds the record for one of Codex's own hooks ([`HookEvent::CODEX`]) from its stdin bytes.
+///
+/// Codex 0.160 sends Claude-shaped JSON (`session_id`, `turn_id`, `tool_name`, `tool_use_id`,
+/// `tool_input`, `source`), so the Claude filter applies, plus the turn id that correlates a
+/// Stop with the `notify` completion of the same turn. Prompt text and assistant messages are
+/// dropped: Codex's `notify` already carries the turn's durable memory, and these records exist
+/// for status only.
+pub fn from_codex_hook_stdin(event: HookEvent, bytes: &[u8]) -> Result<HookRecord, RecordError> {
+    if !HookEvent::CODEX.contains(&event) {
+        return Err(RecordError::Invalid);
+    }
+    let mut record = from_claude_stdin(event, bytes)?;
+    record.prompt = None;
+    record.memory_candidate = None;
+    if event.carries_codex_turn() {
+        let value: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::NotAnObject)?;
+        record.codex_turn_id = clean_id(value.get("turn_id"), MAX_ID_CHARS);
+    }
+    record.validate()?;
+    Ok(record)
+}
+
 /// Deliberately conservative: ordinary prose, logs and unlabeled conclusions never leave the
 /// helper. Do not clip a claim into a different meaning or retain a partial oversized line.
 fn durable_lines(text: &str) -> Option<String> {
@@ -1008,6 +1063,116 @@ mod tests {
                 .expect("json")
                 .contains("secret prose")
         );
+    }
+
+    /// Payload shapes captured from codex-cli 0.160.0 (`codex exec` with session-flag hooks).
+    #[test]
+    fn codex_hooks_keep_status_fields_and_the_turn_id_only() {
+        let base = json!({
+            "session_id": "01a1090f-fb6f-77b2-a41e-3b36de532425",
+            "turn_id": "01a1090f-fdb6-7821-9002-291ccb0685b9",
+            "transcript_path": "C:\\Users\\u\\.codex\\sessions\\rollout.jsonl",
+            "cwd": "C:\\work",
+            "model": "gpt-6-astra",
+            "permission_mode": "bypassPermissions"
+        });
+        let with = |event: &str, extra: Value| {
+            let mut value = base.clone();
+            value["hook_event_name"] = json!(event);
+            for (key, field) in extra.as_object().unwrap() {
+                value[key] = field.clone();
+            }
+            value.to_string()
+        };
+
+        let pre = from_codex_hook_stdin(
+            HookEvent::PreToolUse,
+            with(
+                "PreToolUse",
+                json!({"tool_name":"Bash","tool_input":{"command":"cargo test"},"tool_use_id":"exec-ac67"}),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(pre.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(pre.tool_use_id.as_deref(), Some("exec-ac67"));
+        assert_eq!(pre.tool_input, Some(json!({"command":"cargo test"})));
+        assert_eq!(
+            pre.codex_turn_id.as_deref(),
+            Some("01a1090f-fdb6-7821-9002-291ccb0685b9")
+        );
+        assert_eq!(
+            pre.provider_session_id.as_deref(),
+            Some("01a1090f-fb6f-77b2-a41e-3b36de532425")
+        );
+
+        let post = from_codex_hook_stdin(
+            HookEvent::PostToolUse,
+            with(
+                "PostToolUse",
+                json!({"tool_name":"Bash","tool_input":{"command":"echo secret"},"tool_response":"secret output","tool_use_id":"exec-ac67"}),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let wire = serde_json::to_string(&post).unwrap();
+        assert!(!wire.contains("secret"), "{wire}");
+        assert!(!wire.contains("transcript"), "{wire}");
+
+        let stop = from_codex_hook_stdin(
+            HookEvent::Stop,
+            with(
+                "Stop",
+                json!({"stop_hook_active":false,"last_assistant_message":"Decision: keep it."}),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            stop.memory_candidate, None,
+            "notify carries the turn's memory"
+        );
+        assert!(stop.codex_turn_id.is_some());
+
+        let prompt = from_codex_hook_stdin(
+            HookEvent::UserPromptSubmit,
+            with("UserPromptSubmit", json!({"prompt":"private prompt"})).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(prompt.prompt, None);
+        assert!(!serde_json::to_string(&prompt).unwrap().contains("private"));
+
+        let start = from_codex_hook_stdin(
+            HookEvent::SessionStart,
+            with("SessionStart", json!({"source":"startup"})).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(start.source.as_deref(), Some("startup"));
+        assert_eq!(start.codex_turn_id, None);
+
+        let interrupt = from_codex_hook_stdin(
+            HookEvent::Interrupt,
+            with("Interrupt", json!({})).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            interrupt.codex_turn_id.as_deref(),
+            Some("01a1090f-fdb6-7821-9002-291ccb0685b9")
+        );
+
+        for event in [
+            HookEvent::Notification,
+            HookEvent::SessionEnd,
+            HookEvent::CodexNotify,
+        ] {
+            assert_eq!(
+                from_codex_hook_stdin(event, base.to_string().as_bytes()),
+                Err(RecordError::Invalid)
+            );
+        }
+        let mut forged = start;
+        forged.codex_turn_id = Some("turn".into());
+        assert_eq!(forged.validate(), Err(RecordError::Invalid));
     }
 
     #[test]

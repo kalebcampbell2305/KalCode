@@ -174,7 +174,7 @@ describe("UI focus intent lifecycle", () => {
         const intents = useUiIntents();
         useEffect(() => intents.registerFocusHandler(handler), [intents.registerFocusHandler]);
         useLayoutEffect(() => {
-          frames.push({ pane: intents.paneFocus?.threadId ?? null, filter: intents.dashboardFilter?.chip ?? null });
+          frames.push({ pane: intents.paneFocus?.threadId ?? null, filter: intents.dashboardFilter?.filter ?? null });
         });
         return intents;
       },
@@ -355,7 +355,8 @@ describe("UI focus intent lifecycle", () => {
       await older;
     });
     expect(mocks.navigate.mock.calls).toEqual([["dashboard"]]);
-    expect(result.current.dashboardFilter?.chip).toBe("waiting_for_you");
+    expect(result.current.dashboardFilter?.filter).toBe("needs_you");
+    expect(result.current.dashboardFilter?.providerId).toBeNull();
     expect(result.current.paneFocus).toBeNull();
   });
 

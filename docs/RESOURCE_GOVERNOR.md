@@ -97,6 +97,33 @@ produces a resource hold**: the matching constraint is skipped, `data` is `Parti
 `MetricUnknown` note is added; count limits still apply. `GovernorHandle::capacity()` uses the
 latest snapshot, or an all-unknown one before the first sample.
 
+## Admission by priority (owner directive 2026-10-04)
+
+The governor protects system responsiveness without becoming an artificial agent limit.
+Priority, throttled from the bottom: KalCode UI, user-requested coding agents, builds/tests the
+user started, important active services, optional background work, indexing/maintenance.
+
+| Work | Function | Held by |
+| --- | --- | --- |
+| User-requested coding agent — any provider, any launch path (pane, New agent, KalVoice, user-initiated Squad or Handoff); its launch and each turn | `evaluate_user_agent_admission` (`admission.rs`), desktop `ResourceGovernorState::reserve_provider_task` | **Only** genuine hard pressure on a current sample (`hard.rs`) or an explicit Custom count limit. Never CPU utilisation, CPU/memory headroom, pressure levels, KalCode's memory share, or missing/stale telemetry. |
+| Optional background work (local model inference and acquisition) | `evaluate_admission` + capacity projection, `reserve_local_task` | Fail-closed: every capacity constraint above, current telemetry, and the unmeasured budgets of agents that just started. It yields first. |
+| Background provider session — one the Operations scheduler starts (`SessionConfig.launch_origin` = `background`, set by `create_reviewed_for_operation`); its launch and each turn | `background_provider_admission` in `reserve_provider_task` | The same fail-closed projected policy as local model work, plus the provider's per-agent budget. Held as `background_yield` ("background work waits while the system is busy, so your agents come first") unless hard pressure is the reason. Start Anyway on that thread, or the person resuming it, admits it under the user-requested policy. |
+
+Hard pressure (`hard.rs`), the only machine condition that delays a user-requested agent:
+
+| Condition | Threshold |
+| --- | --- |
+| Memory critically low | latest **and** smoothed available memory below max(512 MiB, 2 % of physical), capped at 1536 MiB (`memory_floor_mib`) |
+| Commit exhausted (Windows, exact commit only) | commit limit − exact commit charge below the same floor |
+| Disk effectively full | KalCode's data volume or the launching workspace's volume below 1024 MiB free |
+| OS refused to create the process | spawn failed with an exhaustion OS error (Windows 8, 14, 1450, 1455; Unix EAGAIN/ENOMEM), detected at spawn by the desktop admission wrapper |
+
+A held launch is `waiting_for_dependency` (display WAITING, never IDLE) with the real reason
+("Waiting to start: memory is critically low (412 MB free)"), re-checked on the sampler's
+cadence for up to `ADMISSION_WAIT_LIMIT`, and offers **Run KalTidy** and **Start Anyway**.
+Start Anyway (`thread_start_anyway`) grants that one thread a 120 s override in the governor and
+re-checks its launch immediately (or resumes it if the wait already ran out).
+
 ## Failure isolation (§11)
 
 - The probe runs on the governor thread only; handle methods take one short lock (no I/O under
@@ -113,8 +140,8 @@ latest snapshot, or an all-unknown one before the first sample.
 
 ## Boundaries
 
-Until the Scheduler exists it is advisory (a warning when creating threads) and never blocks.
-After that it supplies typed hold reasons. It **never** terminates or suspends user processes;
+User-requested coding agents are held only as described in "Admission by priority"; optional
+background work is fail-closed. It **never** terminates or suspends user processes;
 suggestions go through the Utility Dock's process control (explain, ask, Trust Kernel). A test
 (`tests/never_acts.rs`) fails if the crate's source ever calls a process-control API.
 

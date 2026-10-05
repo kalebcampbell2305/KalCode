@@ -749,7 +749,9 @@ fn lock_wait_is_bounded_and_cancellable() {
         ),
         Err(ComponentFloorError::LockTimeout)
     );
-    assert!(started.elapsed() < Duration::from_millis(500));
+    // Bounded: it gives up at its deadline instead of waiting for the lock. The margin is wide
+    // because the shared gate machine is loaded (it measured over 500 ms on gate 37301060462).
+    assert!(started.elapsed() < Duration::from_secs(5));
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let setter = cancelled.clone();
@@ -759,11 +761,12 @@ fn lock_wait_is_bounded_and_cancellable() {
     });
     let started = Instant::now();
     assert_eq!(
-        authority.load(Instant::now() + Duration::from_secs(1), &cancelled),
+        authority.load(Instant::now() + Duration::from_secs(30), &cancelled),
         Err(ComponentFloorError::Cancelled)
     );
     worker.join().expect("canceller");
-    assert!(started.elapsed() < Duration::from_millis(500));
+    // Cancellation, not the 30 s deadline, ended the wait.
+    assert!(started.elapsed() < Duration::from_secs(10));
     fs2::FileExt::unlock(&held).expect("unlock");
 }
 

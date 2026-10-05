@@ -57,7 +57,7 @@ fn classify_tool(tool: &str, params: &Value, cwd: &str) -> (String, ThreadStatus
     let (summary, running, writes) = match tool {
         "run_shell_command" => (
             classify("Bash", &serde_json::json!({ "command": p("command") }), cwd).1,
-            ThreadStatus::RunningCommand,
+            crate::tool_status::classify(tool, Some(params)),
             false,
         ),
         "write_file" => (format!("Write {}", path()), ThreadStatus::Editing, true),

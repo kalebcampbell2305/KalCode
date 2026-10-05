@@ -21,7 +21,7 @@
 .command {
   overflow: hidden;
   border: 1px solid var(--color-border-lit-soft);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-floating);
   background: var(--panel-sheen), var(--color-surface-3);
   box-shadow:
     var(--shadow-xl),
@@ -87,6 +87,22 @@
   color: var(--color-text-secondary);
   font-size: var(--type-ui);
   cursor: pointer;
+}
+
+.favoriteSelection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.favoriteSelectionTitle {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.favoriteAction {
+  opacity: 1;
 }
 
 .item[data-selected="true"] {

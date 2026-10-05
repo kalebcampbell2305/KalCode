@@ -31,9 +31,9 @@ test("a finished agent is ready to merge only when its worktree facts all agree"
   const ready = card(page, "Add light theme tokens");
   await expect(ready).toContainText("Ready to merge");
   await expect(ready).toContainText("3 commits ahead of main");
-  // The call sign is in the card's details (the account leads the card).
+  // The task is the card title; provider and account remain separate details.
   await ready.getByRole("button", { name: "Show details for Add light theme tokens" }).click();
-  await expect(ready).toContainText("Claude B");
+  await expect(ready.getByText("Claude Code", { exact: true })).toBeVisible();
   await expect(ready).toContainText("feat/light-tokens");
 
   const conflicted = card(page, "Generate API client");

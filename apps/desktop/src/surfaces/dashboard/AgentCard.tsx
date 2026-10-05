@@ -1,8 +1,10 @@
 import {
+  AGENT_STATE_TEXT,
+  AGENT_STATE_TONE,
   type ApprovalDecision,
   type ApprovalView,
+  agentStateOf,
   DISPLAY_QUALIFIER_LABEL,
-  DISPLAY_STATUS_TONE,
   displayStatusOf,
   type ThreadSummary,
   type ThreadWorktreeState,
@@ -29,13 +31,13 @@ import {
 } from "lucide-react";
 import { type MouseEvent, memo, useEffect, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
+import { FavoriteButton, useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { MODE_LABELS } from "../permissions/labels.ts";
 import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
 import { fleetGroupOf } from "./data/board.ts";
 import { formatElapsed, providerName, runDurationMs } from "./data/format.ts";
-import { STATUS_META } from "./data/status.ts";
 import { CommitChanges } from "./fleet/CommitChanges.tsx";
 import type { MergeReadiness } from "./fleet/fleetModel.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
@@ -90,17 +92,13 @@ export function startedText(createdAt: string, now: number): string | null {
   return ms < 60_000 ? "Started just now" : `Started ${formatElapsed(ms)} ago`;
 }
 
-/** The card's one status word or phrase, from runtime state only. */
+/**
+ * The card's one status word, from the shared agent-state model (the same word every surface
+ * shows for every provider). Merge readiness is the one refinement: a fact about the worktree.
+ */
 export function stateLabel(thread: ThreadSummary, ready: boolean): string {
   if (ready) return "Ready to merge";
-  const shown = presentThread(thread);
-  if (shown.label === "Waiting for system resources" || shown.label === "Last turn failed") return shown.label;
-  if (thread.status === "interrupted") return shown.label === "Not started" ? "Not started" : "Stopped";
-  if (thread.status === "waiting_for_dependency") return "Blocked";
-  if (thread.status === "completed") return "Done";
-  const display = displayStatusOf(thread.status).status;
-  if (display === "working") return "Working";
-  return STATUS_META[thread.status].label;
+  return AGENT_STATE_TEXT[agentStateOf(thread)];
 }
 
 /** What the thread is doing, from structured runtime state only (never model prose). */
@@ -161,8 +159,9 @@ export const AgentCard = memo(function AgentCard({
   const display = displayStatusOf(thread.status);
   const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
   const ready = !archived && readiness?.ready === true;
-  const tone = ready ? "working" : (resourceWait?.tone ?? DISPLAY_STATUS_TONE[display.status]);
-  const group = fleetGroupOf(thread.status);
+  const agentState = agentStateOf(thread);
+  const tone = ready ? "working" : (resourceWait?.tone ?? AGENT_STATE_TONE[agentState]);
+  const group = fleetGroupOf(thread);
   // The provider account the agent runs on (text, never a credential), e.g. "Claude A".
   // SEAM(kalcode-e4): show this account's usage via useAccountUsage(thread.providerAccountId) once it lands.
   const accountLabel = thread.accountLabel?.trim() || null;
@@ -173,6 +172,10 @@ export const AgentCard = memo(function AgentCard({
   // The menu returns focus to its trigger on close; Stop… moves it to the confirmation instead.
   const confirmFromMenu = useRef(false);
   const nameId = `agent-${thread.id}-name`;
+  const favoriteItems = useFavoriteMenuItems(
+    { kind: "agent", id: thread.id, workspaceId: thread.workspaceId },
+    thread.name,
+  );
   const detailsId = useId();
   const Heading = `h${headingLevel}` as const;
 
@@ -230,6 +233,7 @@ export const AgentCard = memo(function AgentCard({
       data-thread-id={thread.id}
       data-tone={tone}
       data-status={display.status}
+      data-state={agentState}
       data-group={group}
       data-changed={changed || undefined}
       data-archived={archived || undefined}
@@ -283,17 +287,27 @@ export const AgentCard = memo(function AgentCard({
         ) : null}
       </header>
 
-      <Heading className={styles.name} id={nameId}>
-        {archived ? (
-          <span className={styles.nameText} title={thread.name}>
-            {thread.name}
-          </span>
-        ) : (
-          <button type="button" className={styles.nameButton} onClick={() => onFocus(thread)} title={thread.name}>
-            {thread.name}
-          </button>
+      {/* The pin follows the name, so the card's first stop is its name and the heading (the card's
+          accessible name) holds only the name. An archived card is read-only: no pin. */}
+      <div className={styles.titleRow}>
+        <Heading className={styles.name} id={nameId}>
+          {archived ? (
+            <span className={styles.nameText} title={thread.name}>
+              {thread.name}
+            </span>
+          ) : (
+            <button type="button" className={styles.nameButton} onClick={() => onFocus(thread)} title={thread.name}>
+              {thread.name}
+            </button>
+          )}
+        </Heading>
+        {archived ? null : (
+          <FavoriteButton
+            target={{ kind: "agent", id: thread.id, workspaceId: thread.workspaceId }}
+            title={thread.name}
+          />
         )}
-      </Heading>
+      </div>
 
       <p className={styles.where}>
         <ProviderGlyph provider={thread.providerId} size="xs" className={styles.whereGlyph} />
@@ -538,6 +552,13 @@ export const AgentCard = memo(function AgentCard({
                   }}
                 >
                   <DropdownMenuItem onSelect={() => onFocus(thread)}>Open</DropdownMenuItem>
+                  {favoriteItems.map((item) =>
+                    "separator" in item ? null : (
+                      <DropdownMenuItem key={item.id} icon={item.icon} onSelect={item.onSelect}>
+                        {item.label}
+                      </DropdownMenuItem>
+                    ),
+                  )}
                   {actions.map((action) =>
                     action === "stop" ? (
                       <DropdownMenuItem

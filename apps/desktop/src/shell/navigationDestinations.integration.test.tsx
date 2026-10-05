@@ -88,7 +88,12 @@ it("Back restores a Settings section and Forward restores the selected Providers
 it("Back restores the selected Runs detail and closing it creates a forward branch", async () => {
   const { user, primary } = await mount();
   await user.click(primary.getByRole("button", { name: "Operations" }));
-  await user.click(await screen.findByRole("button", { name: /Package desktop/ }));
+  // The run row, never its "Pin globally: Package desktop" favorite action (#235).
+  await user.click(
+    await screen.findByRole("button", {
+      name: /^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*Package desktop/,
+    }),
+  );
   await screen.findByRole("button", { name: "Close run details" });
   await user.click(primary.getByRole("button", { name: "Settings" }));
   await user.click(screen.getByRole("button", { name: "Go back" }));

@@ -10,9 +10,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kalcode_contracts::agent::ProviderId;
+use kalcode_contracts::agent_state::AgentState;
 use kalcode_contracts::ids::{is_valid_id, new_id};
-use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
-use kalcode_contracts::workspace_ui::DashboardChip;
+use kalcode_contracts::threads::ThreadSummary;
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::workspaces::Workspace;
 use kalcode_core::{KalError, Result};
@@ -400,12 +400,25 @@ pub fn prune(tx: &Transaction<'_>, known: &HashSet<&str>) -> Result<usize> {
     Ok(removed)
 }
 
-pub fn is_working(status: ThreadStatus) -> bool {
-    status.chip() == DashboardChip::Working
+/// The shared agent state of a thread (the same projection every surface uses, for every
+/// provider): see `kalcode_contracts::agent_state`.
+fn agent_state(thread: &ThreadSummary) -> AgentState {
+    AgentState::of(
+        thread.status,
+        thread.current_activity.as_deref(),
+        thread.pending_approvals,
+    )
 }
 
-pub fn needs_you(status: ThreadStatus) -> bool {
-    status.chip() == DashboardChip::WaitingForYou
+/// Starting, working or testing.
+pub fn is_working(thread: &ThreadSummary) -> bool {
+    agent_state(thread).is_busy()
+}
+
+/// Waiting on the person (an approval or a reply). A failure is a decision, not a question, so
+/// it never counts here (the Fleet's Needs you group).
+pub fn needs_you(thread: &ThreadSummary) -> bool {
+    agent_state(thread) == AgentState::NeedsYou
 }
 
 /// Builds one workspace's rail entry from Z1's record, the rail row and its open threads.
@@ -431,8 +444,8 @@ pub fn entry_for(
                 provider_id: ProviderId::new(id),
                 provider_name: name,
                 threads: u32::try_from(list.len()).unwrap_or(u32::MAX),
-                working: count(&list, |t| is_working(t.status)),
-                needs_you: count(&list, |t| needs_you(t.status)),
+                working: count(&list, is_working),
+                needs_you: count(&list, needs_you),
                 items: list
                     .iter()
                     .take(MAX_ROW_ITEMS)

@@ -5,6 +5,8 @@ import { flushSync } from "react-dom";
 import { deliverToProviderThread, waitForProviderThreadTarget } from "../../kalvoice/dictation.ts";
 import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useFavoriteMenuItems } from "../favorites/FavoriteActions.tsx";
+import type { FavoriteTarget } from "../favorites/model.ts";
 import {
   availableContentAgents,
   type ContentAction,
@@ -21,6 +23,7 @@ export function ContentContextMenu({
   getContext,
   onOpen,
   onAgentSelect,
+  favoriteTarget,
   children,
 }: {
   workspaceId?: string | null;
@@ -30,6 +33,8 @@ export function ContentContextMenu({
   getContext?: (target: EventTarget | null, keyboard?: boolean) => ContentContext;
   onOpen?: () => void;
   onAgentSelect?: () => void;
+  /** null suppresses saving a non-file target, such as a directory. */
+  favoriteTarget?: FavoriteTarget | null;
   children: ReactElement;
 }) {
   const { state } = useCodingAgents();
@@ -88,7 +93,14 @@ export function ContentContextMenu({
             if (first) void insert(first.id, id);
           },
         };
-  const items: ObjectMenuItem[] = [];
+  const items: ObjectMenuItem[] = useFavoriteMenuItems(
+    favoriteTarget === undefined
+      ? selected.kind === "file" && selected.path && targetWorkspace
+        ? { kind: "file", id: selected.path, workspaceId: targetWorkspace }
+        : null
+      : favoriteTarget,
+    selected.label,
+  );
   if (onOpen) items.push({ id: "open", label: "Open", icon: <FolderOpen />, onSelect: onOpen });
   if (agents.length > 0 && (selected.text.trim() || selected.path)) {
     items.push(actionItem("ask", "Ask Agent", <Bot />));

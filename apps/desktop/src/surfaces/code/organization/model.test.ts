@@ -8,11 +8,13 @@ import type {
   ThreadStatus,
   ThreadSummary,
 } from "@kalcode/protocol";
+import { READY_ACTIVITY } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import type { ProcessInfo } from "../../../ipc/utilities.ts";
 import {
   agentBadge,
   agentDisplayName,
+  BADGES,
   DEFAULT_PREFS,
   happening,
   isCustomTerminalTitle,
@@ -204,10 +206,35 @@ describe("agentBadge", () => {
     });
   });
 
-  it("marks approvals and replies as Waiting before anything else", () => {
-    expect(agentBadge(thread("active", { pendingApprovals: 1 }), info()).badge).toBe("waiting");
-    expect(agentBadge(thread("waiting_for_permission"), info()).badge).toBe("waiting");
-    expect(agentBadge(thread("waiting_for_user"), info()).badge).toBe("waiting");
+  it("marks approvals and replies as Needs you before anything else", () => {
+    expect(agentBadge(thread("active", { pendingApprovals: 1 }), info()).badge).toBe("needs_you");
+    expect(agentBadge(thread("waiting_for_permission"), info()).badge).toBe("needs_you");
+    expect(agentBadge(thread("waiting_for_user"), info()).badge).toBe("needs_you");
+    expect(BADGES.needs_you.label).toBe("Needs you");
+  });
+
+  it("never shows an agent whose process hasn't started as Idle", () => {
+    // Launching: no process yet, no exit.
+    expect(agentBadge(thread("starting"), info({ running: false, exitCode: null }))).toEqual({
+      badge: "starting",
+      detail: "Starting",
+    });
+    // Held by genuine hard pressure: Waiting, with the runtime's real reason (never "CPU busy").
+    const held = thread("waiting_for_dependency", {
+      currentActivity: "Waiting to start: memory is critically low (412 MB free)",
+      error: { code: "waiting_for_resources", message: "Memory is critically low (412 MB free)." },
+    });
+    expect(agentBadge(held, info({ running: false, exitCode: null }))).toEqual({
+      badge: "waiting",
+      detail: "Memory is critically low (412 MB free)",
+    });
+    expect(agentBadge(held, null).badge).toBe("waiting");
+    expect(BADGES.waiting.label).toBe("Waiting");
+    // Waiting on another task: Waiting too, never Idle.
+    expect(agentBadge(thread("waiting_for_dependency"), info({ running: false, exitCode: null }))).toEqual({
+      badge: "waiting",
+      detail: "Waiting on another task",
+    });
   });
 
   it("maps live statuses", () => {
@@ -218,9 +245,11 @@ describe("agentBadge", () => {
       detail: "Running npm test",
     });
     expect(agentBadge(thread("testing"), info()).badge).toBe("testing");
-    expect(agentBadge(thread("idle"), info()).badge).toBe("ready");
+    expect(agentBadge(thread("idle", { currentActivity: READY_ACTIVITY }), info()).badge).toBe("ready");
+    expect(agentBadge(thread("idle"), info()).badge).toBe("idle");
     expect(agentBadge(thread("paused"), info()).badge).toBe("idle");
-    expect(agentBadge(thread("interrupted"), info()).badge).toBe("idle");
+    expect(agentBadge(thread("interrupted"), info()).badge).toBe("stopped");
+    expect(agentBadge(thread("completed"), null).badge).toBe("done");
   });
 });
 
@@ -284,9 +313,15 @@ const item = (key: string, badge: OrgItem["status"], group: OrgItem["group"] = "
 const b = (badge: NonNullable<OrgItem["status"]>["badge"]) => ({ badge, detail: "" });
 
 describe("organize", () => {
-  it("keeps active work visible, marks waiting first, and collapses finished work", () => {
+  it("keeps active work visible, marks needs-you first, and collapses finished work", () => {
     const [group] = organize(
-      [item("a", b("done")), item("b", b("working")), item("c", b("waiting")), item("d", b("ready")), item("e", null)],
+      [
+        item("a", b("done")),
+        item("b", b("working")),
+        item("c", b("needs_you")),
+        item("d", b("ready")),
+        item("e", null),
+      ],
       DEFAULT_PREFS,
       null,
     );

@@ -44,7 +44,14 @@ export type ResourceAdmissionReason =
   | { kind: "required_telemetry_unknown"; resource: ResourceKind; detail: string }
   | { kind: "required_telemetry_unavailable"; resource: ResourceKind; detail: string }
   | { kind: "capacity_unavailable" }
-  | { kind: "capacity"; holds: ResourceHoldReason[] };
+  | { kind: "capacity"; holds: ResourceHoldReason[] }
+  | { kind: "hard_pressure"; pressure: ResourceHardPressure };
+
+/** Genuine hard pressure: the only machine condition that may delay a coding agent you start. */
+export type ResourceHardPressure =
+  | { kind: "memory_critical"; availableMb: number; floorMb: number }
+  | { kind: "commit_exhausted"; remainingMb: number; floorMb: number }
+  | { kind: "disk_full"; mount: string; freeMb: number; floorMb: number };
 
 export interface ResourceAdmissionDecision {
   state: "allowed" | "held";
@@ -79,7 +86,13 @@ export interface ResourceReport {
   transitions: ResourcePressureTransition[];
   stats: ResourceSamplerStats;
   capacity: CapacityAdvice;
+  /**
+   * Whether a coding agent you start now starts: held only by genuine hard pressure (critically low
+   * memory, a full disk) or your own Custom limit — never by CPU load or late readings.
+   */
   admission: ResourceAdmissionDecision;
+  /** Whether optional background work (local models, downloads) may start now. It yields first. */
+  backgroundAdmission: ResourceAdmissionDecision;
   freshness: ResourceFreshness;
 }
 

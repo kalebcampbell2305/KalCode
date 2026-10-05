@@ -30,7 +30,7 @@ const EVERY_THREAD_STATUS: Record<ThreadStatus, true> = {
   offline: true,
 };
 
-/** The 12 display statuses. */
+/** The 13 display statuses. */
 const EVERY_DISPLAY_STATUS: Record<DisplayStatus, true> = {
   starting: true,
   working: true,
@@ -38,6 +38,7 @@ const EVERY_DISPLAY_STATUS: Record<DisplayStatus, true> = {
   reviewing: true,
   permission_required: true,
   waiting_for_you: true,
+  waiting: true,
   idle: true,
   paused: true,
   done: true,
@@ -61,8 +62,8 @@ describe("display status", () => {
     }
   });
 
-  it("reaches all 12 display statuses", () => {
-    expect(DISPLAY_STATUSES).toHaveLength(12);
+  it("reaches all 13 display statuses", () => {
+    expect(DISPLAY_STATUSES).toHaveLength(13);
     const reached = new Set(THREAD_STATUSES.map((status) => displayStatusOf(status).status));
     expect([...reached].sort()).toEqual([...DISPLAY_STATUSES].sort());
   });
@@ -79,6 +80,16 @@ describe("display status", () => {
     const paused = DISPLAY_STATUSES.filter((status) => DISPLAY_STATUS_TONE[status] === "paused");
     expect(paused).toEqual(["paused"]);
     expect(displayStatusOf("paused").status).toBe("paused");
+  });
+
+  it("never shows an agent whose process hasn't started as idle: a dependency or resource wait is WAITING", () => {
+    expect(displayStatusOf("waiting_for_dependency")).toEqual({
+      status: "waiting",
+      qualifier: "waiting_on_dependency",
+      chip: "working",
+    });
+    expect(DISPLAY_STATUS_LABEL.waiting).toBe("WAITING");
+    expect(DISPLAY_STATUS_TONE.waiting).toBe("waiting");
   });
 
   it("shows an interrupted thread as idle, stopped and resumable", () => {

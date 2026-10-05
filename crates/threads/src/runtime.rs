@@ -24,8 +24,8 @@ use kalcode_context::{
     RenderedPackage, WorkspaceRoot,
 };
 use kalcode_contracts::agent::{
-    AgentEvent, AgentInput, AgentSession, FileChange, ModelInfo, ProviderError, ProviderId,
-    SessionConfig,
+    AgentEvent, AgentInput, AgentSession, FileChange, LaunchOrigin, ModelInfo, ProviderError,
+    ProviderId, SessionConfig,
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
@@ -76,12 +76,16 @@ pub const PAUSED_ACTIVITY: &str = "Paused";
 /// Activity of a thread whose idle session was ended because its account was switched.
 pub const ACCOUNT_SWITCHED_ACTIVITY: &str = "Switched provider account";
 const NEW_SESSION_NOTICE: &str = "Started a new provider session. The earlier conversation couldn't be restored, so the provider won't remember the messages above.";
-/// Activity while the Resource Governor holds a launch or turn (a reason follows in brackets).
-pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting for system resources";
+/// Activity while the Resource Governor holds a launch or turn: followed by ": " and the real
+/// reason ("Waiting to start: memory is critically low"). Only genuine hard pressure or an
+/// explicit Custom limit holds a user-requested agent; CPU load never does.
+pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting to start";
 /// Activity of a thread whose bounded wait for system resources ended without starting.
-pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were busy";
-/// Activity of an idle thread whose last turn reported failure.
-pub const LAST_TURN_FAILED_ACTIVITY: &str = "Last turn failed";
+pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were too low";
+/// Activity of an idle thread whose last turn reported failure (the shared agent-state marker).
+pub use kalcode_contracts::agent_state::LAST_TURN_FAILED_ACTIVITY;
+/// Activity of a session that just came up at its prompt with no work yet (agent state READY).
+pub use kalcode_contracts::agent_state::READY_ACTIVITY;
 /// Activity of an idle thread whose session ended because it was archived.
 pub const ARCHIVED_ACTIVITY: &str = "Archived";
 
@@ -211,6 +215,9 @@ struct LiveState {
     turn_failed: bool,
     /// The user interrupted or paused the current turn: its failed completion is not a failure.
     halted: bool,
+    /// Who asked for the current session: the Operations scheduler's launches are background
+    /// work and yield first; a person's Resume makes it theirs again.
+    origin: LaunchOrigin,
 }
 
 /// A message on its way to the provider.
@@ -292,6 +299,7 @@ struct NewThread<'a> {
     /// Prepares the folder the session runs in instead of the workspace root (a thread's own
     /// Git worktree). Runs after every other check, just before the thread is recorded.
     cwd: Option<PrepareFolder<'a>>,
+    origin: LaunchOrigin,
 }
 
 /// See [`NewThread::cwd`].
@@ -1131,7 +1139,7 @@ impl ThreadRuntime {
     /// before the thread exists).
     pub fn create_with_id(&self, thread_id: &str, request: CreateThread) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_reviewed_with_id(request, None, Some(thread_id), None)
+        self.create_reviewed_with_id(request, None, Some(thread_id), None, LaunchOrigin::User)
     }
 
     /// Inspects a create prompt without starting a provider or writing thread state.
@@ -1155,12 +1163,14 @@ impl ThreadRuntime {
         request: CreateThread,
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
-        self.create_reviewed_with_id(request, review_id, None, None)
+        self.create_reviewed_with_id(request, review_id, None, None, LaunchOrigin::User)
     }
 
     /// Creates a reviewed Operations thread using the scheduler's durable operation id. The
     /// Operations ledger reserves this exact id before calling the provider, so a restart can
-    /// correlate the two records without replaying work or relying on process memory.
+    /// correlate the two records without replaying work or relying on process memory. The
+    /// scheduler starts it on the person's behalf, so its session is background work for the
+    /// Resource Governor ([`LaunchOrigin::Background`]): it yields to their agents first.
     pub fn create_reviewed_for_operation(
         &self,
         operation_id: &str,
@@ -1168,7 +1178,13 @@ impl ThreadRuntime {
         review_id: Option<&str>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(operation_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(operation_id), None)
+        self.create_reviewed_with_id(
+            request,
+            review_id,
+            Some(operation_id),
+            None,
+            LaunchOrigin::Background,
+        )
     }
 
     /// Creates a reviewed thread with a caller-chosen id whose session runs in `cwd` (an
@@ -1186,7 +1202,13 @@ impl ThreadRuntime {
         prepare: impl FnOnce() -> Result<PathBuf>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.create_reviewed_with_id(request, review_id, Some(thread_id), Some(Box::new(prepare)))
+        self.create_reviewed_with_id(
+            request,
+            review_id,
+            Some(thread_id),
+            Some(Box::new(prepare)),
+            LaunchOrigin::User,
+        )
     }
 
     /// Lets the runtime re-attach and release threads' own worktrees. Set once; later calls are
@@ -1201,6 +1223,7 @@ impl ThreadRuntime {
         review_id: Option<&str>,
         thread_id: Option<&str>,
         cwd: Option<PrepareFolder<'_>>,
+        origin: LaunchOrigin,
     ) -> Result<ThreadSummary> {
         let prompt = validate::prompt(&request.prompt)?;
         let target = create_prompt_target(&request)?;
@@ -1234,6 +1257,7 @@ impl ThreadRuntime {
                     "automatic"
                 },
                 cwd,
+                origin,
             },
             Some(AdmittedPrompt {
                 text: prompt,
@@ -1313,6 +1337,7 @@ impl ThreadRuntime {
                     "default"
                 },
                 cwd: cwd.map(|path| Box::new(move || Ok(path)) as PrepareFolder<'_>),
+                origin: LaunchOrigin::User,
             },
             None,
             thread_id,
@@ -1520,6 +1545,23 @@ impl ThreadRuntime {
             None => None,
         };
         self.inner.resume(thread_id, admitted)?;
+        self.inner.summary(thread_id)
+    }
+
+    /// Start Anyway: re-checks a held launch or turn immediately instead of on the governor's
+    /// cadence (the host grants the one-launch override to its resource governor first). A
+    /// thread whose wait already ran out (`resources_unavailable`) is resumed. Any other thread
+    /// is returned unchanged.
+    pub fn retry_held_launch(&self, thread_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        if !self.inner.recheck_now(thread_id) {
+            let row = self.inner.row(thread_id)?;
+            let ran_out = row.status == ThreadStatus::Interrupted
+                && row.error_code.as_deref() == Some(error_codes::RESOURCES_UNAVAILABLE);
+            if ran_out {
+                self.inner.resume(thread_id, None)?;
+            }
+        }
         self.inner.summary(thread_id)
     }
 
@@ -2059,29 +2101,42 @@ fn describe_provider_error(error: &ProviderError, provider: &str) -> (String, St
     (code.to_owned(), message)
 }
 
-/// "(CPU busy)", "(4 of 4 threads are already working)".
+/// The real reason, sentence case: "memory is critically low (412 MB free)",
+/// "4 of 4 agents are already working (your Custom limit)".
 fn hold_phrase(hold: &LaunchHold, provider: &str) -> String {
-    match (hold.kind, hold.running, hold.limit) {
-        (LaunchHoldKind::ConcurrencyLimit, Some(running), Some(limit)) => {
-            format!("{running} of {limit} threads are already working")
+    match (hold.kind, hold.running, hold.limit, hold.free_mb) {
+        (LaunchHoldKind::ConcurrencyLimit, Some(running), Some(limit), _) => {
+            format!("{running} of {limit} agents are already working (your Custom limit)")
         }
-        (LaunchHoldKind::ProviderLimit, Some(running), Some(limit)) => {
-            format!("{running} of {limit} {provider} threads are already working")
+        (LaunchHoldKind::ProviderLimit, Some(running), Some(limit), _) => {
+            format!(
+                "{running} of {limit} {provider} agents are already working (your Custom limit)"
+            )
         }
-        (kind, _, _) => kind.phrase().to_owned(),
+        (LaunchHoldKind::MemoryCritical | LaunchHoldKind::DiskFull, _, _, Some(free)) => {
+            format!("{} ({free} MB free)", hold.kind.phrase())
+        }
+        (kind, _, _, _) => kind.phrase().to_owned(),
     }
 }
 
-/// While waiting: what is held, that KalCode re-checks, and what the person can do.
+fn capitalized(phrase: &str) -> String {
+    let mut chars = phrase.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// While waiting: the real reason, what happens next, and what the person can do now.
 fn waiting_message(provider: &str, hold: &LaunchHold) -> String {
-    let phrase = hold_phrase(hold, provider);
+    let reason = capitalized(&hold_phrase(hold, provider));
     if hold.kind.freed_by_stopping_a_thread() {
         format!(
-            "KalCode is waiting for system resources ({phrase}). {provider} starts as soon as one finishes; stop a thread you're not using to start it sooner."
+            "{reason}. {provider} starts as soon as one finishes. Stop an agent you're not using, or choose Start Anyway."
         )
     } else {
         format!(
-            "KalCode is waiting for system resources ({phrase}). {provider} starts when they free up; KalCode checks again every few seconds."
+            "{reason}. KalCode is holding {provider} so your system stays usable; it starts as soon as this clears. Run KalTidy to free resources, or choose Start Anyway."
         )
     }
 }
@@ -2103,11 +2158,11 @@ fn unavailable_message(provider: &str, hold: &LaunchHold, has_message: bool, tur
     };
     if hold.kind.freed_by_stopping_a_thread() {
         format!(
-            "{what}: KalCode waited {waited} s for system resources ({phrase}).{saved} Stop a thread you're not using, then resume this one."
+            "{what}: {phrase} after {waited} s.{saved} Stop an agent you're not using, then resume this one, or choose Start Anyway."
         )
     } else {
         format!(
-            "{what}: KalCode waited {waited} s for system resources ({phrase}).{saved} Resume this thread to try again."
+            "{what}: {phrase} after {waited} s.{saved} Run KalTidy to free resources and resume, or choose Start Anyway."
         )
     }
 }
@@ -2121,6 +2176,21 @@ fn never_delivered(error: &ProviderError) -> bool {
             | ProviderError::ResourcesHeld(_)
             | ProviderError::NotAuthenticated
             | ProviderError::NotInstalled
+    )
+}
+
+/// Whether the last running tool call finishing returns the agent to WORKING (`Active`): it was
+/// running that tool (any provider's classified tool status), or waiting on the person in the
+/// provider's own prompt for it (the tool ran, so it was answered). Idle, finished, paused and
+/// runtime-owned states are never changed by a late tool completion.
+fn returns_to_active_after_tool(status: ThreadStatus) -> bool {
+    matches!(
+        status,
+        ThreadStatus::RunningTool
+            | ThreadStatus::RunningCommand
+            | ThreadStatus::Editing
+            | ThreadStatus::Testing
+            | ThreadStatus::WaitingForUser
     )
 }
 
@@ -2457,6 +2527,7 @@ impl Inner {
         tracing::info!(event = "thread.created", thread_id = %id, provider_id = %provider_id);
 
         let row = self.row(&id)?;
+        self.live_thread(&row).lock().origin = request.origin;
         self.start_session(&row, &entry, None, prompt, None, None)?;
         self.summary(&id)
     }
@@ -2577,6 +2648,7 @@ impl Inner {
             permission_mode: row.permission_mode,
             resume_session_id: resume_session_id.clone(),
             secret_ref: entry.secret_ref.clone(),
+            launch_origin: state.origin,
         };
         let provider_name = entry.provider.display_name().to_owned();
         let session: Arc<dyn AgentSession> = match entry
@@ -2633,8 +2705,8 @@ impl Inner {
         }
         match input {
             Some(input) => self.deliver_locked(live, state, input, None)?,
-            // The session is up and no turn is running: the thread waits for input.
-            None => self.transition(ctx, ThreadStatus::Idle, None)?,
+            // The session is up and no turn is running: the thread waits for input (READY).
+            None => self.transition(ctx, ThreadStatus::Idle, Some(READY_ACTIVITY))?,
         }
         Ok(())
     }
@@ -2689,7 +2761,7 @@ impl Inner {
         if changed {
             let provider_name = self.row(&ctx.thread_id)?.provider_name;
             let activity = format!(
-                "{WAITING_FOR_RESOURCES_ACTIVITY} ({})",
+                "{WAITING_FOR_RESOURCES_ACTIVITY}: {}",
                 hold_phrase(&waiting.hold, &provider_name)
             );
             let message = waiting_message(&provider_name, &waiting.hold);
@@ -2773,6 +2845,23 @@ impl Inner {
                 )
                 .with_source(e)
             })
+    }
+
+    /// Start Anyway: re-checks this thread's current wait now. Returns whether it was waiting.
+    fn recheck_now(&self, thread_id: &str) -> bool {
+        let Some(live) = self.existing_live(thread_id) else {
+            return false;
+        };
+        let ticket = {
+            let state = live.lock();
+            let Some(waiting) = state.waiting.as_ref() else {
+                return false;
+            };
+            waiting.ticket
+        };
+        tracing::info!(event = "thread.start_anyway", thread_id = %thread_id);
+        self.recheck_wait(&live, ticket);
+        true
     }
 
     /// Re-evaluates a held launch or turn against current admission. Returns whether the same
@@ -3144,7 +3233,7 @@ impl Inner {
                             Some(other) => {
                                 store::set_activity(tx, id, Some(&other.summary), &now)?;
                             }
-                            None if store::status(tx, id)? == ThreadStatus::RunningTool => {
+                            None if returns_to_active_after_tool(store::status(tx, id)?) => {
                                 let from =
                                     store::set_status(tx, id, ThreadStatus::Active, None, &now)?;
                                 events.extend(ctx.status_changed(
@@ -4090,6 +4179,8 @@ impl Inner {
         } else {
             None
         };
+        // The person resumed it: whatever started it first, it is their agent now.
+        self.live_thread(&row).lock().origin = LaunchOrigin::User;
         self.start_session(&row, &entry, resume_id, text, notice, redeliver)
     }
 
@@ -4371,7 +4462,7 @@ fn archived() -> KalError {
 fn waiting_for_resources() -> KalError {
     KalError::validation(
         "thread_waiting_for_resources",
-        "This thread is waiting for system resources and starts on its own. Stop it to cancel.",
+        "This thread is waiting to start and starts on its own, or choose Start Anyway. Stop it to cancel.",
     )
 }
 

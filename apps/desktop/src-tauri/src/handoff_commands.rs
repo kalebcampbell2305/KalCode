@@ -180,7 +180,7 @@ impl HandoffState {
         if !plan_allows_handoff(self.account.snapshot().plan_tier()) {
             return Err(KalError::validation(
                 "provider_handoff_requires_pro",
-                "Agent Hand Off is available on KalCode Pro and higher plans.",
+                "Agent Hand Off is available on KalCode MAX and higher plans.",
             ));
         }
         Ok(())
@@ -1498,10 +1498,12 @@ mod tests {
     }
 
     #[test]
-    fn free_is_denied_and_pro_or_higher_is_allowed() {
+    fn free_and_pro_are_denied_and_max_or_higher_is_allowed() {
+        // Handoff moved to MAX with the 2026-10-04 pricing (packages/protocol features.ts).
         assert!(!plan_allows_handoff(PlanTier::Free));
-        assert!(plan_allows_handoff(PlanTier::Pro));
+        assert!(!plan_allows_handoff(PlanTier::Pro));
         assert!(plan_allows_handoff(PlanTier::Max));
+        assert!(plan_allows_handoff(PlanTier::Max2x));
         assert!(plan_allows_handoff(PlanTier::Owner));
     }
 

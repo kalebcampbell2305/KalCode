@@ -51,11 +51,9 @@ test("provider routing preserves terminal identity before identical account and 
   const guard = commands.match(/let guard = \|provider:[^\n]+\{([\s\S]*?)\n {4}\};/)?.[1];
   assert.ok(guard, "the provider branches must share one guard factory");
   assert.match(guard, /ObservedProvider::wrap\(provider, health\)/);
-  assert.match(
-    guard,
-    /if interactive \{\s*ResourceAdmissionProvider::wrap_interactive\(observed, resources\.clone\(\)\)\s*\} else \{\s*ResourceAdmissionProvider::wrap\(observed, resources\.clone\(\)\)/,
-  );
+  // Pane and headless routes are both user-requested coding agents: one admission policy for both.
   assert.match(guard, /ResourceAdmissionProvider::wrap\(observed, resources\.clone\(\)\)/);
+  assert.doesNotMatch(guard, /wrap_interactive/);
   assert.match(guard, /AccountBoundProvider::managed\(\s*governed,\s*runtime\.clone\(\),/);
   assert.match(commands, /routes\.route_claude\(headless, guard\)/);
   for (const provider of ["CODEX", "GEMINI_CLI"]) {

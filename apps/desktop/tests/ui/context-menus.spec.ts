@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
+/** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
+const NOT_FAVORITE = ":not([data-favorite-action])";
+
 test.use({ viewport: { width: 1600, height: 900 } });
 
 async function waitForFolderQueue(page: Page) {
@@ -50,7 +53,7 @@ test("Thread right-click renames the clicked row without navigating to it", asyn
   await page.goto("/?scenario=threads");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads", exact: true }).click();
   const list = page.getByRole("list", { name: "Threads", exact: true });
-  const row = list.getByRole("button", { name: /Write Unit Tests for Parser Module/ });
+  const row = list.getByRole("button", { name: /Write Unit Tests for Parser Module/ }).and(page.locator(NOT_FAVORITE));
   await row.click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Actions for Write Unit Tests for Parser Module" });
   await expect(menu).toBeVisible();
@@ -61,12 +64,14 @@ test("Thread right-click renames the clicked row without navigating to it", asyn
   await menu.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await page.getByRole("dialog", { name: "Rename thread" }).getByLabel("Thread name").fill("Parser review");
   await page.getByRole("button", { name: "Save name", exact: true }).click();
-  const renamed = list.getByRole("button", { name: /Parser review/ });
+  const renamed = list.getByRole("button", { name: /Parser review/ }).and(page.locator(NOT_FAVORITE));
   await expect(renamed).toBeVisible();
   await renamed.focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Duplicate", exact: true }).click();
-  await expect(list.getByRole("button", { name: /Parser review \(copy\)/ })).toBeVisible();
+  await expect(
+    list.getByRole("button", { name: /Parser review \(copy\)/ }).and(page.locator(NOT_FAVORITE)),
+  ).toBeVisible();
 });
 
 test("Workspace actions open at the target and unavailable actions stay absent", async ({ page }) => {

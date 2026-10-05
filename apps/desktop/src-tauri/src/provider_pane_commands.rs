@@ -37,6 +37,7 @@ use kalcode_providers::interactive::{
     ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, HookChannelState, PaneInfo,
     TitleSink,
 };
+use kalcode_pty::{CoalesceConfig, OutputCoalescer};
 use kalcode_threads::{CreateIdleThread, ThreadRuntime};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State, Webview};
@@ -506,10 +507,19 @@ fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
         ProviderError::Start(_) => "The provider could not start. Try resuming the thread.",
         ProviderError::Io(_) => "KalCode could not communicate with this provider pane.",
         ProviderError::Protocol(_) => "The provider returned an unreadable response.",
-        ProviderError::ResourcesHeld(_) => {
+        // Only genuine hard pressure or the person's own Custom limit holds a coding agent:
+        // say which, and what they can do.
+        ProviderError::ResourcesHeld(hold) => {
+            let reason = hold.kind.phrase();
+            let action = if hold.kind.freed_by_stopping_a_thread() {
+                "Stop an agent you're not using, or choose Start Anyway."
+            } else {
+                "Run KalTidy to free resources, or choose Start Anyway."
+            };
+            let message = format!("This agent is waiting to start: {reason}. {action}");
             return KalError::validation(
                 kalcode_contracts::threads::error_codes::WAITING_FOR_RESOURCES,
-                "KalCode is waiting for system resources. Try again in a moment.",
+                message,
             )
             .to_ipc();
         }
@@ -814,14 +824,16 @@ pub fn provider_pane_attach(
     let unacked = Arc::new(AtomicUsize::new(0));
     let lagged = Arc::new(AtomicBool::new(false));
     let (sent, behind) = (unacked.clone(), lagged.clone());
+    // Coalesced like shell terminals (`terminal_attach`): bursts become one message per interval.
+    let output = OutputCoalescer::new(CoalesceConfig::default(), move |bytes| {
+        on_output.send(InvokeResponseBody::Raw(bytes)).is_ok()
+    });
     let Some(pty_attach) = panes.panes.attach(&thread_id, move |bytes| {
         if sent.fetch_add(bytes.len(), Ordering::SeqCst) + bytes.len() > MAX_UNACKED_BYTES {
             behind.store(true, Ordering::SeqCst);
             return false;
         }
-        on_output
-            .send(InvokeResponseBody::Raw(bytes.to_vec()))
-            .is_ok()
+        output.push(bytes)
     }) else {
         return Ok(None);
     };
@@ -888,7 +900,11 @@ pub fn provider_pane_detach(
 }
 
 /// The person's keystrokes. Bounded like Z1 terminal writes.
-#[tauri::command]
+///
+/// Off the main thread: a write takes the pane's lifecycle lock (and, for voice, the registry
+/// lock), which a handoff delivery can hold for its acknowledged write. The view keeps a pane's
+/// writes in order by sending the next only after the previous one resolved.
+#[tauri::command(async)]
 pub fn provider_pane_write(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,

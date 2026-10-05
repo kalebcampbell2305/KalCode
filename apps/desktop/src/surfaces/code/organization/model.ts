@@ -5,41 +5,43 @@
  * - terminals: the native terminal record (running / exited + exit code / ended by the app), the
  *   process tree under its shell (KalTidy's scan: a command under the shell is work), the Operations
  *   run attached to it (a test run is Testing) and the service it serves;
- * - agents: the thread status (the one shared display mapping), the pane's process, and approvals.
+ * - agents: the shared agent state (`@kalcode/protocol` agent-state, the same for every provider),
+ *   refined only by the pane's own process (an agent whose CLI ended isn't working).
  *
  * Nothing here reads model prose, guesses from timers, or invents a state it can't observe: an
  * unknown terminal state has no badge. Names are display-only; a name the person set is kept.
  */
-import type {
-  DevelopmentService,
-  OperationRecord,
-  OperationsSnapshot,
-  PaneContent,
-  PaneInfo,
-  ShellOption,
-  StatusTone,
-  TerminalInfo,
-  ThreadStatus,
-  ThreadSummary,
+import {
+  AGENT_STATE_TEXT,
+  AGENT_STATE_TONE,
+  type AgentState,
+  agentStateOf,
+  type DevelopmentService,
+  type OperationRecord,
+  type OperationsSnapshot,
+  type PaneContent,
+  type PaneInfo,
+  type ShellOption,
+  type StatusTone,
+  type TerminalInfo,
+  type ThreadSummary,
 } from "@kalcode/protocol";
 import type { ProcessInfo } from "../../../ipc/utilities.ts";
+import { isWaitingForResources, waitingReason } from "../../threads/model.ts";
 import { STOPPED_SERVICE, shellRoot, UNFINISHED, workUnderShell } from "../kaltidy/classify.ts";
 
 // ---- Status badges ----
 
-export type OrgBadge = "starting" | "ready" | "working" | "testing" | "waiting" | "failed" | "done" | "idle";
+/** Terminals and agents share the agent-state words, so a badge reads the same everywhere. */
+export type OrgBadge = AgentState;
 
 /** Label and contract tone of each badge (status is always tone + glyph + word, never colour alone). */
-export const BADGES: Record<OrgBadge, { label: string; tone: StatusTone }> = {
-  starting: { label: "Starting", tone: "muted" },
-  ready: { label: "Ready", tone: "recovering" },
-  working: { label: "Working", tone: "working" },
-  testing: { label: "Testing", tone: "working" },
-  waiting: { label: "Waiting", tone: "waiting" },
-  failed: { label: "Failed", tone: "failed" },
-  done: { label: "Done", tone: "done" },
-  idle: { label: "Idle", tone: "muted" },
-};
+export const BADGES: Record<OrgBadge, { label: string; tone: StatusTone }> = Object.fromEntries(
+  (Object.keys(AGENT_STATE_TEXT) as OrgBadge[]).map((badge) => [
+    badge,
+    { label: AGENT_STATE_TEXT[badge], tone: AGENT_STATE_TONE[badge] },
+  ]),
+) as Record<OrgBadge, { label: string; tone: StatusTone }>;
 
 export interface BadgeView {
   badge: OrgBadge;
@@ -134,40 +136,58 @@ export function terminalBadge(
   return { badge: "ready", detail: "At its prompt" };
 }
 
-/** Thread statuses that mean the agent is doing something. */
-const AGENT_WORKING = new Set<ThreadStatus>([
-  "active",
-  "thinking",
-  "running_tool",
-  "running_command",
-  "editing",
-  "reviewing",
-]);
+const STATE_DETAIL: Record<AgentState, string> = {
+  starting: "Starting",
+  ready: "Ready for a task",
+  working: "Working",
+  testing: "Running tests",
+  waiting: "Waiting on another task",
+  needs_you: "Waiting for your reply",
+  idle: "Ready for your next prompt",
+  done: "Finished",
+  failed: "The run failed",
+  stopped: "Stopped · resumable",
+};
 
 /**
- * An agent's badge from its thread status, pane process and approvals. Done and Failed come only
- * from the thread status (never from the CLI's exit code). An agent whose process has ended is not
- * Working: it is Idle unless its status says Done or Failed.
+ * An agent's badge: the shared agent state (the same word the Fleet, rail and KalVoice use, for
+ * every provider), with one fact behind it. The pane's process only refines what the status
+ * can't know yet: an agent still connecting to its terminal is Starting, and one whose CLI has
+ * ended is no longer working (Done and Failed still come only from the status).
  */
 export function agentBadge(thread: ThreadSummary, info: PaneInfo | null): BadgeView {
-  const { status } = thread;
-  if (status === "failed") return { badge: "failed", detail: "The run failed" };
-  if (status === "completed") return { badge: "done", detail: "Finished" };
-  if (thread.pendingApprovals > 0 || status === "waiting_for_permission") {
-    return { badge: "waiting", detail: "Needs your approval" };
+  const state = agentStateOf(thread);
+  if (state === "needs_you") {
+    const approval = thread.pendingApprovals > 0 || thread.status === "waiting_for_permission";
+    return {
+      badge: state,
+      detail: approval ? "Needs your approval" : (thread.currentActivity ?? STATE_DETAIL.needs_you),
+    };
   }
-  if (status === "waiting_for_user") return { badge: "waiting", detail: "Waiting for your reply" };
-  if (info === null) return { badge: "starting", detail: "Connecting to its terminal" };
-  const live = info.running;
-  if (!live) return { badge: "idle", detail: info.exitCode === null ? "Ended" : `Ended (exit ${info.exitCode})` };
-  if (status === "starting" || status === "recovering") return { badge: "starting", detail: "Starting" };
-  if (status === "testing") return { badge: "testing", detail: thread.currentActivity ?? "Running tests" };
-  if (AGENT_WORKING.has(status)) return { badge: "working", detail: thread.currentActivity ?? "Working" };
-  if (status === "idle") return { badge: "ready", detail: "Ready for your next prompt" };
-  if (status === "paused") return { badge: "idle", detail: "Paused" };
-  if (status === "interrupted") return { badge: "idle", detail: "Stopped · resumable" };
-  if (status === "waiting_for_dependency") return { badge: "idle", detail: "Waiting on another task" };
-  return { badge: "idle", detail: "Offline" };
+  if (state === "done" || state === "failed" || state === "stopped") {
+    const detail = state === "failed" ? (thread.error?.message ?? thread.currentActivity) : null;
+    return { badge: state, detail: detail ?? STATE_DETAIL[state] };
+  }
+  // WAITING: held before its process starts, by genuine hard resource pressure (the real reason)
+  // or another task. Never Idle (owner directive 2026-10-04).
+  if (state === "waiting") {
+    const reason = waitingReason(thread);
+    if (reason) return { badge: "waiting", detail: reason.charAt(0).toUpperCase() + reason.slice(1) };
+    return { badge: "waiting", detail: isWaitingForResources(thread) ? "Waiting to start" : STATE_DETAIL.waiting };
+  }
+  const settling = state === "starting" || state === "working" || state === "testing" || state === "ready";
+  if (info === null && settling) return { badge: "starting", detail: "Connecting to its terminal" };
+  // Launching: the provider process hasn't started yet (no exit either).
+  if (info !== null && !info.running && info.exitCode === null && state === "starting") {
+    return { badge: "starting", detail: "Starting" };
+  }
+  if (info !== null && !info.running) {
+    return { badge: "idle", detail: info.exitCode === null ? "Ended" : `Ended (exit ${info.exitCode})` };
+  }
+  if (thread.status === "paused") return { badge: "idle", detail: "Paused" };
+  if (thread.status === "offline") return { badge: "idle", detail: "Offline" };
+  const live = state === "working" || state === "testing";
+  return { badge: state, detail: (live ? thread.currentActivity : null) ?? STATE_DETAIL[state] };
 }
 
 // ---- Purpose names and groups ----
@@ -319,18 +339,21 @@ export interface StackGroup {
 }
 
 const STACK_ORDER: Record<OrgBadge | "unknown", number> = {
-  waiting: 0,
+  needs_you: 0,
   failed: 1,
-  working: 2,
-  testing: 3,
-  starting: 4,
-  ready: 5,
-  unknown: 6,
-  done: 7,
-  idle: 8,
+  waiting: 2,
+  working: 3,
+  testing: 4,
+  starting: 5,
+  ready: 6,
+  unknown: 7,
+  done: 8,
+  stopped: 9,
+  idle: 10,
 };
 
-const isFinished = (item: OrgItem) => item.status?.badge === "done" || item.status?.badge === "idle";
+const isFinished = (item: OrgItem) =>
+  item.status?.badge === "done" || item.status?.badge === "stopped" || item.status?.badge === "idle";
 
 /**
  * Groups and stacks the workspace's terminals and agents. Finished work (Done, Idle) collapses
@@ -364,7 +387,7 @@ export function organize(items: readonly OrgItem[], prefs: OrgPrefs, focusedKey:
       finished: members.filter((item) => !keep(item)),
       counts: {
         working: members.filter((i) => i.status?.badge === "working" || i.status?.badge === "testing").length,
-        waiting: members.filter((i) => i.status?.badge === "waiting").length,
+        waiting: members.filter((i) => i.status?.badge === "needs_you").length,
         failed: members.filter((i) => i.status?.badge === "failed").length,
         done: members.filter((i) => i.status?.badge === "done").length,
       },
@@ -419,7 +442,9 @@ export function happening({ agents, needsYou, operations, git }: HappeningInputs
   if (working > 0) {
     segments.push({ kind: "agents", count: working, text: `${working} ${working === 1 ? "agent" : "agents"} working` });
   }
-  if (needsYou > 0) segments.push({ kind: "needs-you", count: needsYou, text: `${needsYou} needs you` });
+  if (needsYou > 0) {
+    segments.push({ kind: "needs-you", count: needsYou, text: `${needsYou} ${needsYou === 1 ? "needs" : "need"} you` });
+  }
   const tests = latestTestRun(operations);
   const words = tests ? TEST_WORDS[tests.status] : undefined;
   if (tests && words) segments.push({ kind: "tests", text: words.text, tone: words.tone, recordId: tests.id });

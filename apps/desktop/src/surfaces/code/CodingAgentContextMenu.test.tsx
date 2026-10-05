@@ -23,6 +23,7 @@ vi.mock("../../runtime/RuntimeProvider.tsx", () => {
 });
 vi.mock("../../runtime/uiIntents.tsx", () => ({ useUiIntents: () => ({ focus: state.focus }) }));
 vi.mock("../../runtime/WorkspaceProvider.tsx", () => ({
+  useOptionalWorkspaces: () => ({ active: { id: "elsewhere" } }),
   useWorkspaces: () => ({ active: { id: "elsewhere" }, workspaces: [{ id: "clicked-workspace", available: true }] }),
 }));
 vi.mock("../../shell/panes/paneCommands.ts", () => ({ dispatchPaneCommand: state.dispatch }));

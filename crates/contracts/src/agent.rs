@@ -208,6 +208,20 @@ pub struct InteractiveSupport {
     pub resume: Option<String>,
 }
 
+/// Who asked for a provider session, which picks its Resource Governor policy (owner directive
+/// 2026-10-04): a coding agent the person started is never held for CPU load, while background
+/// work (an Operations-scheduled task) yields to the person's agents and the app first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum LaunchOrigin {
+    /// The person asked for it now: a pane, New agent, KalVoice, a Squad, a Handoff or Resume.
+    #[default]
+    User,
+    /// KalCode started it on the person's behalf later (the Operations scheduler).
+    Background,
+}
+
 /// Everything an adapter needs to start a session. Paths are native-resolved, never from the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -228,6 +242,9 @@ pub struct SessionConfig {
     pub resume_session_id: Option<String>,
     /// Opaque reference into the OS secure store for an API-key account; never the key itself.
     pub secret_ref: Option<String>,
+    /// Who asked for this session; resource admission only, adapters ignore it.
+    #[serde(default)]
+    pub launch_origin: LaunchOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

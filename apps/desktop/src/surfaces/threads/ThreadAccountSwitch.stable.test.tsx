@@ -149,9 +149,12 @@ async function openThreads(user: Mounted["user"]) {
   await screen.findByRole("heading", { name: "Threads", level: 1 });
 }
 
+/** A thread row by name, never its "Pin globally: <name>" favorite action (#235). */
+const threadRow = (name: string) => new RegExp(`^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*${name}`);
+
 async function openThread(user: Mounted["user"], name: string) {
   const list = await screen.findByRole("list", { name: "Threads" });
-  await user.click(await within(list).findByRole("button", { name: new RegExp(name) }));
+  await user.click(await within(list).findByRole("button", { name: threadRow(name) }));
   await screen.findByRole("heading", { name, level: 2 });
 }
 
@@ -171,7 +174,7 @@ describe("thread account switch on Stable", () => {
     expect(within(header).getByText("Provider").nextElementSibling).toHaveTextContent("Gemini CLI · Personal");
     expect(await accountButton("Personal")).toHaveTextContent("Personal");
     const list = screen.getByRole("list", { name: "Threads" });
-    expect(within(list).getByRole("button", { name: /Gemini docs pass/ })).toHaveTextContent(
+    expect(within(list).getByRole("button", { name: threadRow("Gemini docs pass") })).toHaveTextContent(
       "Gemini CLI · Personal · kalcode",
     );
     expect(getSelectedThread()).toEqual({
@@ -281,7 +284,7 @@ describe("thread account switch on Stable", () => {
     expect(await screen.findByText("Switched to Gemini B (Gemini CLI)")).toBeInTheDocument();
     const list = screen.getByRole("list", { name: "Threads" });
     await waitFor(() =>
-      expect(within(list).getByRole("button", { name: /Gemini docs pass/ })).toHaveTextContent(
+      expect(within(list).getByRole("button", { name: threadRow("Gemini docs pass") })).toHaveTextContent(
         "Gemini CLI · Gemini B · kalcode",
       ),
     );

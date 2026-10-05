@@ -67,7 +67,7 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     id: "agents",
     label: "Agents",
     icon: Bot,
-    summary: "Live Claude Code, Codex and Gemini coding terminals across your workspaces.",
+    summary: "Live coding agents from every provider across your workspaces.",
     dependsOn: "Provider sessions and workspace terminals",
   },
   missions: {

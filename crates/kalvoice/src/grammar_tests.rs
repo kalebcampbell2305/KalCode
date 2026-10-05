@@ -112,8 +112,8 @@ fn cursor_launches_are_real_provider_panes_with_runtime_model_queries() {
     }
     assert_eq!(
         intent("Open the Cursor agent that just finished"),
-        KalVoiceIntent::Focus {
-            query: "cursor agent that just finished".into(),
+        KalVoiceIntent::OpenFinishedAgent {
+            provider_id: Some(ProviderId::new(ProviderId::CURSOR)),
         }
     );
     assert!(is_reasoning("Do not launch four Cursor agents"));
@@ -1224,51 +1224,102 @@ fn search_and_recent_work_are_deterministic_reads() {
 }
 
 #[test]
-fn dashboard_filters_by_chip() {
-    use kalcode_contracts::workspace_ui::DashboardChip;
-    let cases: &[(&str, DashboardChip)] = &[
-        ("Show only agents that are working", DashboardChip::Working),
-        ("show only agents that are working.", DashboardChip::Working),
-        ("show working agents", DashboardChip::Working),
-        ("show me just the running threads", DashboardChip::Working),
-        ("only show working agents", DashboardChip::Working),
-        ("which agents are working", DashboardChip::Working),
-        (
-            "Show everything waiting for me",
-            DashboardChip::WaitingForYou,
-        ),
+fn agent_filters_use_the_shared_agent_state_for_every_provider() {
+    use kalcode_contracts::agent_state::AgentFilter;
+    let any = |filter| KalVoiceIntent::FilterAgents {
+        filter,
+        provider_id: None,
+    };
+    let cases: &[(&str, AgentFilter)] = &[
+        ("Show only agents that are working", AgentFilter::Working),
+        ("show only agents that are working.", AgentFilter::Working),
+        ("show working agents", AgentFilter::Working),
+        ("show me just the running threads", AgentFilter::Working),
+        ("only show working agents", AgentFilter::Working),
+        ("Show everything waiting for me", AgentFilter::NeedsYou),
         (
             "show everything that's waiting on me",
-            DashboardChip::WaitingForYou,
+            AgentFilter::NeedsYou,
         ),
-        (
-            "show me the agents waiting for me",
-            DashboardChip::WaitingForYou,
-        ),
-        (
-            "show threads that need my attention",
-            DashboardChip::WaitingForYou,
-        ),
-        ("Show completed work", DashboardChip::Done),
-        ("show finished threads", DashboardChip::Done),
-        ("show me the done agents", DashboardChip::Done),
-        ("show threads that have finished", DashboardChip::Done),
-        ("show idle agents", DashboardChip::Idle),
-        ("show the threads that are idle", DashboardChip::Idle),
-        ("show all agents", DashboardChip::All),
-        ("show all of my threads", DashboardChip::All),
-        ("clear the dashboard filter", DashboardChip::All),
-        ("please show completed work", DashboardChip::Done),
+        ("show me the agents waiting for me", AgentFilter::NeedsYou),
+        ("show threads that need my attention", AgentFilter::NeedsYou),
+        ("Show completed work", AgentFilter::Done),
+        ("show finished threads", AgentFilter::Done),
+        ("show me the done agents", AgentFilter::Done),
+        ("show threads that have finished", AgentFilter::Done),
+        ("show idle agents", AgentFilter::Idle),
+        ("show the threads that are idle", AgentFilter::Idle),
+        ("show all agents", AgentFilter::All),
+        ("show all of my threads", AgentFilter::All),
+        ("clear the dashboard filter", AgentFilter::All),
+        ("please show completed work", AgentFilter::Done),
+        // Owner directive 2026-10-04: every status, for agents of every provider.
+        ("show me all agents that need me", AgentFilter::NeedsYou),
+        ("Show me all agents that need me.", AgentFilter::NeedsYou),
+        ("show all the agents that need me", AgentFilter::NeedsYou),
+        ("show agents that are waiting for me", AgentFilter::NeedsYou),
+        ("show me working agents", AgentFilter::Working),
+        ("show me all the working agents", AgentFilter::Working),
+        ("show all idle agents", AgentFilter::Idle),
+        ("show me the idle agents", AgentFilter::Idle),
+        ("show done agents", AgentFilter::Done),
+        ("show me all finished agents", AgentFilter::Done),
+        ("show failed agents", AgentFilter::Failed),
+        ("show me all the failed agents", AgentFilter::Failed),
+        ("show agents that failed", AgentFilter::Failed),
+        ("show waiting agents", AgentFilter::Waiting),
+        ("show me the waiting agents", AgentFilter::Waiting),
+        ("show me all blocked agents", AgentFilter::Waiting),
+        ("show agents that are waiting", AgentFilter::Waiting),
     ];
-    for (text, chip) in cases {
-        assert_eq!(
-            intent(text),
-            KalVoiceIntent::FilterDashboard { chip: *chip },
-            "{text}"
-        );
+    for (text, filter) in cases {
+        assert_eq!(intent(text), any(*filter), "{text}");
         assert_eq!(
             understand_with_confidence(text).1,
             Confidence::High,
+            "{text}"
+        );
+    }
+    // A provider narrows the agents; the status filter stays the shared one.
+    for (text, filter, provider) in [
+        (
+            "show my codex agents that need me",
+            AgentFilter::NeedsYou,
+            ProviderId::CODEX,
+        ),
+        ("show cursor agents", AgentFilter::All, ProviderId::CURSOR),
+        (
+            "show me my cursor agents",
+            AgentFilter::All,
+            ProviderId::CURSOR,
+        ),
+        (
+            "show me the failed claude agents",
+            AgentFilter::Failed,
+            ProviderId::CLAUDE_CODE,
+        ),
+        (
+            "show idle gemini agents",
+            AgentFilter::Idle,
+            ProviderId::GEMINI_CLI,
+        ),
+        (
+            "show all working codex agents",
+            AgentFilter::Working,
+            ProviderId::CODEX,
+        ),
+        (
+            "show me all claude code agents that need me",
+            AgentFilter::NeedsYou,
+            ProviderId::CLAUDE_CODE,
+        ),
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::FilterAgents {
+                filter,
+                provider_id: Some(ProviderId::new(provider)),
+            },
             "{text}"
         );
     }
@@ -1882,7 +1933,7 @@ fn sessions_can_be_found_by_state() {
     }
     assert!(matches!(
         intent("show the agents that are waiting for me"),
-        KalVoiceIntent::FilterDashboard { .. }
+        KalVoiceIntent::FilterAgents { .. }
     ));
     // Negated state questions are not commands.
     assert!(is_reasoning("which one didn't fail"));
@@ -2144,4 +2195,222 @@ fn unified_memory_rule_forwarding_preserves_target_and_original_words() {
             prompt: "use our project memory for this review.".into(),
         }
     );
+}
+
+#[test]
+fn agent_questions_read_back_coding_agents_of_every_provider() {
+    use kalcode_contracts::agent_state::AgentFilter;
+    let which = |filter| KalVoiceIntent::WhichAgents {
+        filter,
+        provider_id: None,
+    };
+    let count = |filter| KalVoiceIntent::CountAgents {
+        filter,
+        provider_id: None,
+    };
+    for (text, expected) in [
+        ("which agents need me", which(AgentFilter::NeedsYou)),
+        ("Which agents need me?", which(AgentFilter::NeedsYou)),
+        ("which agent needs me", which(AgentFilter::NeedsYou)),
+        (
+            "which agents are waiting for me",
+            which(AgentFilter::NeedsYou),
+        ),
+        ("which agents are working", which(AgentFilter::Working)),
+        ("what agents are idle", which(AgentFilter::Idle)),
+        ("which agents are done", which(AgentFilter::Done)),
+        ("which agents have finished", which(AgentFilter::Done)),
+        ("Which agent failed?", which(AgentFilter::Failed)),
+        ("which agents have failed", which(AgentFilter::Failed)),
+        ("which agents are waiting", which(AgentFilter::Waiting)),
+        ("how many agents are working", count(AgentFilter::Working)),
+        (
+            "How many agents are working right now?",
+            count(AgentFilter::Working),
+        ),
+        ("how many agents need me", count(AgentFilter::NeedsYou)),
+        ("how many agents are idle", count(AgentFilter::Idle)),
+        ("how many agents failed", count(AgentFilter::Failed)),
+        ("how many idle agents are there", count(AgentFilter::Idle)),
+        ("how many agents do i have", count(AgentFilter::All)),
+        ("how many agents", count(AgentFilter::All)),
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(understood, Understood::intent(expected), "{text}");
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+    assert_eq!(
+        intent("which codex agents need me"),
+        KalVoiceIntent::WhichAgents {
+            filter: AgentFilter::NeedsYou,
+            provider_id: Some(ProviderId::new(ProviderId::CODEX)),
+        }
+    );
+    assert_eq!(
+        intent("how many cursor agents are working"),
+        KalVoiceIntent::CountAgents {
+            filter: AgentFilter::Working,
+            provider_id: Some(ProviderId::new(ProviderId::CURSOR)),
+        }
+    );
+    // Session questions that aren't about an agent status keep their meaning.
+    assert_eq!(
+        intent("which agents are waiting for permission"),
+        KalVoiceIntent::WhichSessions {
+            state: SessionAttention::WaitingForPermission,
+        }
+    );
+    assert_eq!(
+        intent("which agent is stuck"),
+        KalVoiceIntent::WhichSessions {
+            state: SessionAttention::Stuck,
+        }
+    );
+    assert_eq!(
+        intent("show me the failed thread"),
+        KalVoiceIntent::FocusByState {
+            state: SessionAttention::Failed,
+        }
+    );
+    assert!(is_reasoning("which agents don't need me"));
+}
+
+#[test]
+fn the_agent_that_just_finished_is_any_providers() {
+    for text in [
+        "open the agent that just finished",
+        "Open the agent that just finished.",
+        "show me the agent that just finished",
+        "focus the agent that finished",
+        "take me to the agent that just completed",
+        "open the last finished agent",
+        "open the most recent finished agent",
+        "hey kal, open the agent that just finished",
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(
+            understood,
+            Understood::intent(KalVoiceIntent::OpenFinishedAgent { provider_id: None }),
+            "{text}"
+        );
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+    for (text, provider) in [
+        ("open the codex agent that just finished", ProviderId::CODEX),
+        (
+            "open the claude agent that just finished",
+            ProviderId::CLAUDE_CODE,
+        ),
+        (
+            "open the cursor agent that just finished",
+            ProviderId::CURSOR,
+        ),
+        (
+            "open the gemini agent that just finished",
+            ProviderId::GEMINI_CLI,
+        ),
+        ("open the last finished codex agent", ProviderId::CODEX),
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::OpenFinishedAgent {
+                provider_id: Some(ProviderId::new(provider)),
+            },
+            "{text}"
+        );
+    }
+}
+
+/// Regression: "stop all idle agents" matched the stop-everything rule (the state word was
+/// dropped) and stopped every running session. Idle-agent phrases close only idle agents, through
+/// KalTidy; a stop never reads a narrower state as "all".
+#[test]
+fn idle_agent_phrases_close_only_idle_agents_and_never_stop_everything() {
+    for text in [
+        "close all idle agents",
+        "Close all idle agents.",
+        "close idle agents",
+        "stop all idle agents",
+        "kill all idle agents",
+        "end all idle agents",
+        "kill the idle agents",
+        "stop idle agents",
+        "terminate all idle agents",
+        "shut down my idle agents",
+        "clean up idle agents",
+        "close all agents that are idle",
+        "stop every idle agent",
+        "hey kal, close all idle agents please",
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(
+            understood,
+            Understood::intent(KalVoiceIntent::CloseIdleAgents { provider_id: None }),
+            "{text}"
+        );
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+    for (text, provider) in [
+        ("close all idle codex agents", ProviderId::CODEX),
+        ("stop all idle cursor agents", ProviderId::CURSOR),
+        ("close my idle claude agents", ProviderId::CLAUDE_CODE),
+        (
+            "close all gemini agents that are idle",
+            ProviderId::GEMINI_CLI,
+        ),
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::CloseIdleAgents {
+                provider_id: Some(ProviderId::new(provider)),
+            },
+            "{text}"
+        );
+    }
+    // Idle terminals are KalTidy's window-side tidy: refused natively, never "stop all".
+    for text in [
+        "stop all idle terminals",
+        "kill idle terminals",
+        "close idle terminals",
+    ] {
+        assert_eq!(rejected(text), "kaltidy_in_window", "{text}");
+    }
+    // No narrower state is ever read as every session.
+    for text in [
+        "stop all idle threads",
+        "stop the stuck agents",
+        "pause all idle agents",
+        "stop all paused threads",
+        "stop three idle agents",
+        "resume all idle agents",
+    ] {
+        let understood = understand(text);
+        assert!(
+            !matches!(
+                understood,
+                Understood::Intent {
+                    intent: KalVoiceIntent::StopThreads { .. }
+                        | KalVoiceIntent::PauseThreads { .. }
+                        | KalVoiceIntent::ResumeThreads { .. },
+                    ..
+                }
+            ),
+            "{text}: {understood:?}"
+        );
+    }
+    // Running states still mean every running session.
+    for text in [
+        "stop all running agents",
+        "stop all active agents",
+        "stop all agents",
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::StopThreads {
+                scope: ThreadScope::All,
+                expected_count: None,
+            },
+            "{text}"
+        );
+    }
 }

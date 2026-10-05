@@ -145,19 +145,20 @@ describe("AgentCard archived (read-only)", () => {
 describe("AgentCard waiting states", () => {
   const WAITING: Partial<ThreadSummary> = {
     status: "waiting_for_dependency",
-    currentActivity: "Waiting for system resources (CPU busy)",
+    currentActivity: "Waiting to start: memory is critically low (412 MB free)",
     error: {
       code: "waiting_for_resources",
       message:
-        "KalCode is waiting for system resources (CPU busy). Codex starts when they free up; KalCode checks again every few seconds.",
+        "Memory is critically low (412 MB free). KalCode is holding Codex so your system stays usable; it starts as soon as this clears. Run KalTidy to free resources, or choose Start Anyway.",
     },
   };
 
-  it("a launch held for system resources says so, not 'waiting on another task'", () => {
+  it("a launch held by hard pressure says so with the real reason, not 'waiting on another task'", () => {
     mount({ ...thread(null), ...WAITING });
     const card = screen.getByRole("article", { name: "Research" });
-    expect(card.textContent).toContain("Waiting for system resources");
-    expect(card.textContent).toContain("CPU busy");
+    expect(card.textContent).toContain("Waiting to start");
+    expect(card.textContent).toContain("memory is critically low");
+    expect(card.textContent).not.toContain("CPU busy");
     expect(card.textContent).not.toMatch(/waiting on another task/i);
     expect(card.textContent).not.toMatch(/\bIdle\b/);
     expect(card.getAttribute("data-tone")).toBe("waiting");
@@ -166,7 +167,7 @@ describe("AgentCard waiting states", () => {
   it("without an activity, the held launch reads the runtime's own message", () => {
     mount({ ...thread(null), ...WAITING, currentActivity: null });
     const card = screen.getByRole("article", { name: "Research" });
-    expect(card.textContent).toContain("KalCode is waiting for system resources (CPU busy).");
+    expect(card.textContent).toContain("Memory is critically low (412 MB free).");
     expect(card.textContent).not.toMatch(/waiting on another task/i);
   });
 
@@ -180,13 +181,17 @@ describe("AgentCard waiting states", () => {
   it("a held launch offers Stop, never Pause or Archive", async () => {
     mount({ ...thread(null), ...WAITING });
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Stop…"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Pin globally", "Stop…"]);
   });
 
   it("an idle thread offers Archive, not Stop", async () => {
     mount(thread(null));
     await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
-    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Archive"]);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Open",
+      "Pin globally",
+      "Archive",
+    ]);
   });
 });
 
@@ -243,13 +248,15 @@ describe("AgentCard Fleet controls", () => {
     expect(onAction).toHaveBeenCalledWith(failed, "retry");
   });
 
-  it("names its state in words: working, needs your reply, stopped, done", () => {
+  it("names its state in the shared agent-state words: working, needs you, stopped, done", () => {
     const cases: [ThreadSummary["status"], string][] = [
       ["running_command", "Working"],
-      ["waiting_for_user", "Needs your reply"],
+      ["testing", "Testing"],
+      ["waiting_for_user", "Needs you"],
       ["interrupted", "Stopped"],
       ["completed", "Done"],
-      ["waiting_for_permission", "Needs approval"],
+      ["waiting_for_permission", "Needs you"],
+      ["waiting_for_dependency", "Waiting"],
     ];
     for (const [status, label] of cases) {
       const { unmount } = mount({ ...thread(null), status });

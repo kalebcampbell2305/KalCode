@@ -3,24 +3,29 @@
  * environments) into what the deck answers — what is working, what needs me, where it is shipped. Nothing here invents state: an empty input
  * produces an honest "none" rather than a placeholder.
  */
-import type { OperationEnvironment, StatusTone, ThreadSummary } from "@kalcode/protocol";
-import { fleetGroupOf } from "../../surfaces/dashboard/data/board.ts";
-import { recentOutcomes, STATUS_META, sortOpenThreads } from "../../surfaces/dashboard/data/status.ts";
+import {
+  agentStateOf,
+  isAgentBusy,
+  type OperationEnvironment,
+  type StatusTone,
+  type ThreadSummary,
+} from "@kalcode/protocol";
 
 // ---- Agents (right rail) ----
 
+/** The rail's sections, from the shared agent-state model: the same for every provider. */
 export interface AgentSections {
   /** Can't continue until the person answers (an approval or a reply). */
   needsYou: ThreadSummary[];
-  /** Failed runs, newest first: a decision (retry or clear), not a question; never in needsYou. */
+  /** Failed sessions or turns, newest first: a decision (retry or clear), not a question. */
   failed: ThreadSummary[];
-  /** A provider process is doing work now. */
+  /** Starting, working or testing now. */
   working: ThreadSummary[];
   /** Waiting on something other than the person. */
   blocked: ThreadSummary[];
-  /** Open but not doing anything. */
+  /** Open and at rest: ready for a task, idle, paused or offline. */
   idle: ThreadSummary[];
-  /** Completed, stopped or failed within the recent window, newest first. */
+  /** Done or stopped within the recent window, newest first. */
   finished: ThreadSummary[];
 }
 
@@ -33,36 +38,26 @@ function at(iso: string | null | undefined): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-/** The Fleet's "Needs you" group (an approval or a reply), so every surface counts alike. */
-function waitsForYou(thread: ThreadSummary): boolean {
-  return fleetGroupOf(thread.status) === "needs_you";
-}
-
 const newestFirst = (a: ThreadSummary, b: ThreadSummary) =>
   at(b.lastActivityAt) - at(a.lastActivityAt) || a.name.localeCompare(b.name);
 
 export function agentSections(threads: readonly ThreadSummary[], now: number): AgentSections {
-  const open = threads.filter((t) => t.archivedAt === null);
-  const sections: AgentSections = {
-    needsYou: open.filter(waitsForYou).sort(newestFirst),
-    // Failures are history: hundreds of old ones must never inflate "need you".
-    failed: open.filter((t) => t.status === "failed").sort(newestFirst),
-    working: [],
-    blocked: [],
-    idle: [],
-    finished: recentOutcomes(
-      open.filter((t) => !waitsForYou(t)),
-      RECENT_FINISH_LIMIT,
-    ).filter((t) => now - at(t.lastActivityAt) <= RECENT_FINISH_MS),
-  };
-  // Dashboard order within each group: most recent activity first.
-  for (const thread of sortOpenThreads(open)) {
-    if (waitsForYou(thread)) continue;
-    const group = STATUS_META[thread.status].group;
-    if (group === "working") sections.working.push(thread);
-    else if (group === "waiting") sections.blocked.push(thread);
-    else if (group === "idle") sections.idle.push(thread);
+  const sections: AgentSections = { needsYou: [], failed: [], working: [], blocked: [], idle: [], finished: [] };
+  const finished: ThreadSummary[] = [];
+  // Most recent activity first within each section.
+  const open = threads.filter((t) => t.archivedAt === null).sort(newestFirst);
+  for (const thread of open) {
+    const state = agentStateOf(thread);
+    if (state === "needs_you") sections.needsYou.push(thread);
+    else if (state === "failed") sections.failed.push(thread);
+    else if (isAgentBusy(state)) sections.working.push(thread);
+    else if (state === "waiting") sections.blocked.push(thread);
+    else if (state === "ready" || state === "idle") sections.idle.push(thread);
+    else finished.push(thread);
   }
+  sections.finished = finished
+    .slice(0, RECENT_FINISH_LIMIT)
+    .filter((t) => now - at(t.lastActivityAt) <= RECENT_FINISH_MS);
   return sections;
 }
 

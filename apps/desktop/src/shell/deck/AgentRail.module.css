@@ -114,6 +114,10 @@
   --_c: var(--status-done);
 }
 
+.group[data-tone="failed"] {
+  --_c: var(--status-failed);
+}
+
 .groupTitle,
 .foldToggle {
   display: flex;
@@ -531,6 +535,10 @@
 
 .stripCount[data-tone="working"] {
   --_c: var(--status-working);
+}
+
+.stripCount[data-tone="failed"] {
+  --_c: var(--status-failed);
 }
 
 .stripCount:focus-visible {

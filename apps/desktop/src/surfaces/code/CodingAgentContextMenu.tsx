@@ -6,6 +6,7 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { useFavoriteMenuItems } from "../../shell/favorites/FavoriteActions.tsx";
 import { contentKey, parseLayout, removeContents } from "../../shell/panes/model.ts";
 import { dispatchPaneCommand } from "../../shell/panes/paneCommands.ts";
 import { accountName } from "../providers/accountIdentity.ts";
@@ -83,7 +84,10 @@ export function CodingAgentContextMenu({
       });
   };
   const focus = () => intents.focus({ kind: "thread", threadId: local.id, workspaceId: local.workspaceId });
-  const items: ObjectMenuItem[] = [];
+  const items: ObjectMenuItem[] = useFavoriteMenuItems(
+    { kind: "agent", id: local.id, workspaceId: local.workspaceId },
+    local.name,
+  );
   const workspace = workspaces.find((item) => item.id === local.workspaceId);
   if (workspace?.available) {
     items.push({

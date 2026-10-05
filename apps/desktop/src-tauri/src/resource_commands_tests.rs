@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{
     AgentEvent, AgentEventSink, AgentInput, AgentProvider, AgentSession, AuthState, DetectionState,
-    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    LaunchOrigin, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::permissions::{ApprovalDecision, PermissionMode};
 use kalcode_contracts::resources::{
@@ -18,7 +19,7 @@ use kalcode_resources::{
 
 use super::provider::{ProviderAdmission, ProviderAdmissionPermit, ResourceAdmissionProvider};
 use super::{
-    ActivityTracker, LocalWorkloadEstimate, REPORT_HISTORY_POINTS, ReservationBudget,
+    ActivityTracker, AgentLaunch, LocalWorkloadEstimate, REPORT_HISTORY_POINTS, ReservationBudget,
     ResourceFreshnessState, ResourceGovernorState, Runtime, freshness, projected_admission,
     recent_history, sampler_stats,
 };
@@ -109,7 +110,7 @@ fn e2e_provider_sample_uses_canonical_capacity_and_still_enforces_limits() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(state.report().snapshot.mode, ModeKind::Custom);
-    let provider_denial = match state.reserve_provider_task(provider) {
+    let provider_denial = match state.reserve_provider_task(provider, &AgentLaunch::default()) {
         Ok(_) => panic!("provider-specific zero limit must deny the reservation"),
         Err(decision) => decision,
     };
@@ -206,21 +207,16 @@ fn projected(
     )
 }
 
+// Ported from #236's interactive-terminal policy: one user-agent policy now governs panes and
+// headless routes alike (AGENTS.md Resource Governor rule).
 #[test]
-fn interactive_agents_ignore_cpu_but_keep_independent_memory_and_custom_limits() {
+fn user_agents_ignore_cpu_soft_memory_and_missing_telemetry_but_keep_custom_limits() {
     let mut snapshot = measured_snapshot();
     let mut limits = ModeLimits::balanced();
     let request = kalcode_resources::CapacityRequest::default();
     let running = kalcode_resources::RunningWork::default();
-    let budget = ReservationBudget {
-        cpu_millicores: 1_000,
-        memory_mib: 256,
-        disk_mib: 0,
-    };
-    let decide = |snapshot: Option<&ResourceSnapshot>, limits: &ModeLimits, pending| {
-        super::interactive_provider_admission(
-            snapshot, limits, &running, &request, pending, budget, NOW_MS,
-        )
+    let decide = |snapshot: Option<&ResourceSnapshot>, limits: &ModeLimits| {
+        super::user_agent_admission(snapshot, limits, &running, &request, None, NOW_MS, false)
     };
     snapshot.cpu = Reading::Value(CpuReading {
         total_percent: 100.0,
@@ -236,7 +232,7 @@ fn interactive_agents_ignore_cpu_but_keep_independent_memory_and_custom_limits()
         approaching: false,
     });
     assert_eq!(
-        decide(Some(&snapshot), &limits, ReservationBudget::default()).state,
+        decide(Some(&snapshot), &limits).state,
         AdmissionState::Allowed
     );
     snapshot.cpu = Reading::unknown("not sampled yet");
@@ -249,70 +245,48 @@ fn interactive_agents_ignore_cpu_but_keep_independent_memory_and_custom_limits()
         approaching: false,
     });
     assert_eq!(
-        decide(Some(&snapshot), &limits, ReservationBudget::default()).state,
+        decide(Some(&snapshot), &limits).state,
         AdmissionState::Allowed
     );
     assert_eq!(
-        decide(None, &limits, ReservationBudget::default()).state,
+        decide(None, &limits).state,
         AdmissionState::Allowed,
         "an unfinished startup sampler is not a real resource failure"
     );
-    let projected = decide(
-        Some(&snapshot),
-        &limits,
-        ReservationBudget {
-            memory_mib: 4 * 1024,
-            ..ReservationBudget::default()
-        },
-    );
-    assert_eq!(
-        projected.state,
-        AdmissionState::Held,
-        "concurrent reservations retain memory protection"
-    );
-    assert!(kalcode_resources::decision_codes(&projected).contains(&"memory_headroom"));
+    limits.kind = kalcode_resources::ModeKind::Custom;
     limits.max_agents = 0;
     assert_eq!(
-        decide(None, &limits, ReservationBudget::default()).state,
+        decide(None, &limits).state,
         AdmissionState::Held,
         "custom count limits do not depend on telemetry"
     );
     assert_eq!(
-        decide(Some(&snapshot), &limits, ReservationBudget::default()).state,
+        decide(Some(&snapshot), &limits).state,
         AdmissionState::Held,
         "an explicit custom agent limit still applies"
     );
 }
 
 #[test]
-fn interactive_agents_retain_measured_disk_pressure_with_truthful_reason() {
+fn user_agents_hold_for_a_full_disk_with_the_truthful_reason() {
     let mut snapshot = measured_snapshot();
-    snapshot.pressure.entries.push(ResourcePressure {
-        resource: ResourceKind::DiskSpace,
-        level: PressureLevel::Critical,
-        signal: Signal::DiskFreeMb { mount: "/".into() },
-        value: 0.0,
-        threshold: Some(256.0),
-        approaching: false,
-    });
-    let decision = super::interactive_provider_admission(
+    snapshot.volumes = Reading::Value(vec![VolumeReading {
+        mount: "/".into(),
+        workspace_ids: vec![None],
+        total_bytes: 100 * 1024 * 1024 * 1024,
+        free_bytes: 200 * 1024 * 1024,
+    }]);
+    let decision = super::user_agent_admission(
         Some(&snapshot),
         &ModeLimits::balanced(),
         &kalcode_resources::RunningWork::default(),
         &kalcode_resources::CapacityRequest::default(),
-        ReservationBudget::default(),
-        ReservationBudget {
-            cpu_millicores: 1000,
-            memory_mib: 256,
-            disk_mib: 0,
-        },
+        None,
         NOW_MS,
+        false,
     );
     assert_eq!(decision.state, AdmissionState::Held);
-    assert!(
-        matches!(&decision.reasons[0], AdmissionReason::Capacity { holds }
-        if holds.iter().any(|hold| matches!(hold, kalcode_resources::HoldReason::Pressure { resource: ResourceKind::DiskSpace, .. })))
-    );
+    assert!(kalcode_resources::decision_codes(&decision).contains(&"disk_full"));
 }
 
 #[test]
@@ -732,8 +706,10 @@ fn ipc_history_keeps_only_the_most_recent_bounded_points() {
     );
 }
 
+/// No sampler: visible, background work is held (fail-closed), and a coding agent the person
+/// starts is still admitted — missing telemetry is not evidence of pressure.
 #[test]
-fn missing_sampler_is_visible_and_holds_new_work() {
+fn missing_sampler_is_visible_holds_background_work_and_admits_agents() {
     let state = ResourceGovernorState {
         interactive: kalcode_resources::InteractivePriority::default(),
         runtime: Mutex::new(Runtime {
@@ -748,23 +724,23 @@ fn missing_sampler_is_visible_and_holds_new_work() {
     let report = state.report_at(NOW_MS);
     assert!(matches!(report.status, GovernorStatus::Failed { .. }));
     assert_eq!(report.freshness.state, ResourceFreshnessState::Unavailable);
-    assert_eq!(report.admission.state, AdmissionState::Held);
+    assert_eq!(report.admission.state, AdmissionState::Allowed);
+    assert!(report.admission.reasons.is_empty());
+    let background = &report.background_admission;
+    assert_eq!(background.state, AdmissionState::Held);
     assert!(
-        report
-            .admission
+        background
             .reasons
             .iter()
             .any(|reason| matches!(reason, AdmissionReason::GovernorNotReady { .. }))
     );
     assert!(
-        report
-            .admission
+        background
             .reasons
             .contains(&AdmissionReason::SnapshotMissing)
     );
     assert!(
-        report
-            .admission
+        background
             .reasons
             .contains(&AdmissionReason::CapacityUnavailable)
     );
@@ -819,9 +795,20 @@ fn real_sampler_produces_a_bounded_snapshot_and_stops_cleanly() {
 #[derive(Clone, Copy)]
 enum FakeStart {
     Fail,
+    /// The OS refused to create the process (out of memory or process slots).
+    Exhausted,
     ExitBeforeReturn,
-    Live { exit_on_terminate: bool },
+    Live {
+        exit_on_terminate: bool,
+    },
 }
+
+/// `std::io::Error`'s text for an OS refusal to create another process on this platform.
+#[cfg(windows)]
+const EXHAUSTED_SPAWN: &str =
+    "Insufficient system resources exist to complete the requested service. (os error 1450)";
+#[cfg(not(windows))]
+const EXHAUSTED_SPAWN: &str = "Resource temporarily unavailable (os error 11)";
 
 struct FakeAdmission {
     active: Arc<AtomicUsize>,
@@ -852,17 +839,21 @@ impl ProviderAdmission for FakeAdmission {
     fn reserve(
         &self,
         _provider: ProviderId,
+        _launch: &AgentLaunch,
     ) -> Result<Box<dyn ProviderAdmissionPermit>, ProviderError> {
         if self.hold.load(Ordering::SeqCst) {
             return Err(ProviderError::ResourcesHeld(
                 kalcode_resources::launch_hold(
-                    &held(AdmissionReason::SnapshotStale {
-                        age_ms: 50_000,
-                        max_age_ms: 45_000,
+                    &held(AdmissionReason::HardPressure {
+                        pressure: kalcode_resources::HardPressure::MemoryCritical {
+                            available_mb: 300,
+                            floor_mb: 634,
+                        },
                     }),
                     Duration::from_secs(1),
                     kalcode_resources::ADMISSION_WAIT_LIMIT,
-                ),
+                )
+                .expect("hard pressure is a user-facing hold"),
             ));
         }
         self.reservations.fetch_add(1, Ordering::SeqCst);
@@ -876,6 +867,7 @@ impl ProviderAdmission for FakeAdmission {
 }
 
 struct FakeProvider {
+    id: &'static str,
     start: FakeStart,
     starts: Arc<AtomicUsize>,
     child_active: Arc<AtomicBool>,
@@ -883,7 +875,7 @@ struct FakeProvider {
 
 impl AgentProvider for FakeProvider {
     fn id(&self) -> ProviderId {
-        ProviderId::new(ProviderId::CODEX)
+        ProviderId::new(self.id)
     }
 
     fn display_name(&self) -> &str {
@@ -925,6 +917,9 @@ impl AgentProvider for FakeProvider {
         self.starts.fetch_add(1, Ordering::SeqCst);
         match self.start {
             FakeStart::Fail => Err(ProviderError::Start("spawn failed".into())),
+            FakeStart::Exhausted => Err(ProviderError::Start(format!(
+                "failed to spawn the provider: {EXHAUSTED_SPAWN}"
+            ))),
             FakeStart::ExitBeforeReturn => {
                 self.child_active.store(true, Ordering::SeqCst);
                 self.child_active.store(false, Ordering::SeqCst);
@@ -1041,6 +1036,7 @@ fn wrapper_fixture(start: FakeStart) -> WrapperFixture {
         hold: Arc::clone(&hold),
     });
     let inner: Arc<dyn AgentProvider> = Arc::new(FakeProvider {
+        id: ProviderId::CODEX,
         start,
         starts: Arc::clone(&starts),
         child_active: Arc::clone(&child_active),
@@ -1067,6 +1063,7 @@ fn session_config() -> SessionConfig {
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     }
 }
 
@@ -1115,10 +1112,36 @@ fn a_held_launch_is_resources_held_and_starts_nothing() {
     else {
         panic!("a held launch must be ResourcesHeld");
     };
-    assert_eq!(hold.kind, LaunchHoldKind::TelemetryStale);
+    assert_eq!(hold.kind, LaunchHoldKind::MemoryCritical);
+    assert_eq!((hold.free_mb, hold.floor_mb), (Some(300), Some(634)));
     assert_eq!(hold.wait_limit, kalcode_resources::ADMISSION_WAIT_LIMIT);
     assert_eq!(fixture.starts.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.active.load(Ordering::SeqCst), 0);
+}
+
+/// The OS refusing to create the provider process is a hard-pressure hold with the real reason
+/// (the thread waits and can Start Anyway), not a provider failure; any other spawn failure
+/// stays a provider start failure.
+#[test]
+fn an_os_process_creation_refusal_is_a_process_limit_hold() {
+    let fixture = wrapper_fixture(FakeStart::Exhausted);
+    let Err(ProviderError::ResourcesHeld(hold)) = fixture
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+    else {
+        panic!("an exhausted spawn must be a resource hold");
+    };
+    assert_eq!(hold.kind, LaunchHoldKind::ProcessLimit);
+    assert!(hold.kind.is_hard_pressure());
+    assert_eq!(fixture.active.load(Ordering::SeqCst), 0, "no slot kept");
+
+    let other = wrapper_fixture(FakeStart::Fail);
+    assert!(matches!(
+        other
+            .provider
+            .start_session(session_config(), Box::new(|_: AgentEvent| {})),
+        Err(ProviderError::Start(_))
+    ));
 }
 
 /// Capacity is held per turn: an idle session holds nothing; a turn holds one slot from `send`
@@ -1296,18 +1319,69 @@ pub(crate) fn healthy_governor() -> Arc<ResourceGovernorState> {
         },
     )));
     let deadline = Instant::now() + Duration::from_secs(10);
-    while state.report().admission.state != AdmissionState::Allowed {
+    // Background admission is fail-closed: it allows only on a fresh, valid sample.
+    while state.report().background_admission.state != AdmissionState::Allowed {
         assert!(Instant::now() < deadline, "healthy governor never admitted");
         std::thread::sleep(Duration::from_millis(10));
     }
     state
 }
 
+/// The owner's PC with a build pinning every core (98 % CPU) and plenty of memory.
+fn cpu_saturated_governor() -> Arc<ResourceGovernorState> {
+    let state = Arc::new(ResourceGovernorState::start_with_probe(Box::new(
+        SteadyProbe {
+            cpu_percent: 98.0,
+            cores: 24,
+            total_bytes: 31 * GIB,
+            available_bytes: 20 * GIB,
+        },
+    )));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let report = state.report();
+        let cpu_high =
+            report.snapshot.pressure.entries.iter().any(|entry| {
+                entry.resource == ResourceKind::Cpu && entry.level >= PressureLevel::High
+            });
+        if report.snapshot.seq > 0 && cpu_high {
+            break;
+        }
+        assert!(Instant::now() < deadline, "CPU pressure never sampled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    state
+}
+
+/// Memory critically low: 300 MiB available of 31 GiB (the hard floor there is 634 MiB).
+fn memory_critical_governor() -> Arc<ResourceGovernorState> {
+    let state = Arc::new(ResourceGovernorState::start_with_probe(Box::new(
+        SteadyProbe {
+            cpu_percent: 10.0,
+            cores: 24,
+            total_bytes: 31 * GIB,
+            available_bytes: 300 * MIB,
+        },
+    )));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.report().admission.state != AdmissionState::Held {
+        assert!(Instant::now() < deadline, "critical memory never sampled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    state
+}
+
 fn governed_codex(governor: &Arc<ResourceGovernorState>) -> WrapperFixture {
+    governed(governor, ProviderId::CODEX)
+}
+
+/// One provider adapter of any kind behind the real governor's admission wrapper.
+fn governed(governor: &Arc<ResourceGovernorState>, provider: &'static str) -> WrapperFixture {
     let mut fixture = wrapper_fixture(FakeStart::Live {
         exit_on_terminate: true,
     });
     let inner: Arc<dyn AgentProvider> = Arc::new(FakeProvider {
+        id: provider,
         start: FakeStart::Live {
             exit_on_terminate: true,
         },
@@ -1413,90 +1487,74 @@ fn an_explicit_custom_agent_ceiling_waits_for_a_slot_and_resumes() {
     governor.shutdown();
 }
 
-/// (E) No sampler: the hold is "telemetry unavailable", never a provider failure.
+/// (E) No sampler: missing telemetry is not evidence of pressure, so a coding agent the person
+/// starts is admitted (and still counted), while background work stays held.
 #[test]
-fn a_missing_sampler_is_a_telemetry_hold() {
+fn a_missing_sampler_never_holds_a_user_requested_agent() {
     let state = deterministic_state();
-    let Err(decision) = state.reserve_provider_task(ProviderId::new(ProviderId::CODEX)) else {
-        panic!("no sampler must hold");
-    };
-    let hold = kalcode_resources::launch_hold(
-        &decision,
-        state.admission_retry_interval(),
-        kalcode_resources::ADMISSION_WAIT_LIMIT,
+    let reservation = state
+        .reserve_provider_task(ProviderId::new(ProviderId::CODEX), &AgentLaunch::default())
+        .expect("no sampler never holds a user-requested agent");
+    assert_eq!(state.running_work_for_test().agents, 1);
+    drop(reservation);
+    assert_eq!(state.running_work_for_test().agents, 0);
+    assert!(
+        state
+            .reserve_local_task(
+                LocalWorkloadEstimate::inference(Some(1_000), Some(512)).expect("estimate")
+            )
+            .is_err(),
+        "background work is fail-closed without telemetry"
     );
-    assert_eq!(hold.kind, LaunchHoldKind::TelemetryUnavailable);
-    assert_eq!(hold.retry_after, kalcode_resources::ADMISSION_RETRY_MAX);
-    assert!(kalcode_resources::decision_codes(&decision).contains(&"sampler_unavailable"));
 }
 
-/// (B)(C)(D) Each hold reason is classified from the governor's own decision, with the codes
-/// the log records.
+/// (B)(C)(D) Only genuine hard pressure and explicit Custom limits become user-facing launch
+/// holds, each classified with its real reason and logged by code. CPU, soft memory, KalCode's
+/// memory share and telemetry reasons never hold a user-requested agent.
 #[test]
 fn hold_reasons_are_classified_and_logged_by_code() {
     let cases = [
         (
-            AdmissionReason::Capacity {
-                holds: vec![kalcode_resources::HoldReason::CpuHeadroom {
-                    cpu_percent: 80.0,
-                    target_percent: 75.0,
-                    per_agent_percent: 2.0,
-                    mode: ModeKind::Balanced,
-                }],
+            AdmissionReason::HardPressure {
+                pressure: kalcode_resources::HardPressure::MemoryCritical {
+                    available_mb: 300,
+                    floor_mb: 634,
+                },
             },
-            LaunchHoldKind::CpuBusy,
-            "cpu_headroom",
+            LaunchHoldKind::MemoryCritical,
+            "memory_critical",
+        ),
+        (
+            AdmissionReason::HardPressure {
+                pressure: kalcode_resources::HardPressure::CommitExhausted {
+                    remaining_mb: 100,
+                    floor_mb: 634,
+                },
+            },
+            LaunchHoldKind::MemoryCritical,
+            "commit_exhausted",
+        ),
+        (
+            AdmissionReason::HardPressure {
+                pressure: kalcode_resources::HardPressure::DiskFull {
+                    mount: "C:\\".into(),
+                    free_mb: 200,
+                    floor_mb: 1_024,
+                },
+            },
+            LaunchHoldKind::DiskFull,
+            "disk_full",
         ),
         (
             AdmissionReason::Capacity {
-                holds: vec![kalcode_resources::HoldReason::MemoryHeadroom {
-                    available_mb: 1_900,
-                    reserve_mb: 2_048,
-                    per_agent_mb: 512,
-                    mode: ModeKind::Balanced,
+                holds: vec![kalcode_resources::HoldReason::UserLimit {
+                    running: 4,
+                    limit: 4,
+                    mode: ModeKind::Custom,
                 }],
             },
-            LaunchHoldKind::MemoryLow,
-            "memory_headroom",
-        ),
-        (
-            AdmissionReason::Capacity {
-                holds: vec![kalcode_resources::HoldReason::KalCodeMemoryCap {
-                    used_mb: 16_000,
-                    cap_mb: 15_872,
-                    per_agent_mb: 512,
-                    mode: ModeKind::Balanced,
-                }],
-            },
-            LaunchHoldKind::MemoryCap,
-            "memory_cap",
-        ),
-        (
-            AdmissionReason::Capacity {
-                holds: vec![kalcode_resources::HoldReason::Pressure {
-                    resource: ResourceKind::Cpu,
-                    level: PressureLevel::High,
-                    mode: ModeKind::Balanced,
-                    signal: Signal::CpuPercent,
-                    value: 90.0,
-                    threshold: Some(85.0),
-                }],
-            },
-            LaunchHoldKind::CpuBusy,
-            "pressure",
-        ),
-        (
-            AdmissionReason::SnapshotStale {
-                age_ms: 50_000,
-                max_age_ms: 45_000,
-            },
-            LaunchHoldKind::TelemetryStale,
-            "stale_snapshot",
-        ),
-        (
-            AdmissionReason::CapacityUnavailable,
-            LaunchHoldKind::TelemetryUnavailable,
-            "slot_unavailable",
+            LaunchHoldKind::ConcurrencyLimit,
+            "concurrency_limit",
         ),
     ];
     for (reason, kind, code) in cases {
@@ -1505,25 +1563,82 @@ fn hold_reasons_are_classified_and_logged_by_code() {
             &decision,
             Duration::from_secs(1),
             kalcode_resources::ADMISSION_WAIT_LIMIT,
-        );
+        )
+        .expect("a user-facing hold");
         assert_eq!(hold.kind, kind, "{code}");
         assert_eq!(kalcode_resources::decision_codes(&decision), [code]);
         // The structured log line carries the governor's values (smoke: it serializes).
         super::provider::log_launch_hold(&ProviderId::new(ProviderId::CODEX), &decision);
     }
-    // The most actionable reason wins when several hold.
+
+    let background_only = [
+        AdmissionReason::Capacity {
+            holds: vec![kalcode_resources::HoldReason::CpuHeadroom {
+                cpu_percent: 99.0,
+                target_percent: 75.0,
+                per_agent_percent: 2.0,
+                mode: ModeKind::Balanced,
+            }],
+        },
+        AdmissionReason::Capacity {
+            holds: vec![kalcode_resources::HoldReason::Pressure {
+                resource: ResourceKind::Cpu,
+                level: PressureLevel::Critical,
+                mode: ModeKind::Balanced,
+                signal: Signal::CpuPercent,
+                value: 99.0,
+                threshold: Some(95.0),
+            }],
+        },
+        AdmissionReason::Capacity {
+            holds: vec![kalcode_resources::HoldReason::MemoryHeadroom {
+                available_mb: 1_900,
+                reserve_mb: 2_048,
+                per_agent_mb: 512,
+                mode: ModeKind::Balanced,
+            }],
+        },
+        AdmissionReason::Capacity {
+            holds: vec![kalcode_resources::HoldReason::KalCodeMemoryCap {
+                used_mb: 16_000,
+                cap_mb: 15_872,
+                per_agent_mb: 512,
+                mode: ModeKind::Balanced,
+            }],
+        },
+        AdmissionReason::SnapshotStale {
+            age_ms: 50_000,
+            max_age_ms: 45_000,
+        },
+        AdmissionReason::CapacityUnavailable,
+    ];
+    for reason in background_only {
+        assert_eq!(
+            kalcode_resources::launch_hold(
+                &held(reason.clone()),
+                Duration::from_secs(1),
+                kalcode_resources::ADMISSION_WAIT_LIMIT,
+            ),
+            None,
+            "{reason:?} must never hold a user-requested agent"
+        );
+    }
+
+    // The real hard reason wins over a count limit when both hold.
     let mixed = AdmissionDecision {
         reasons: vec![
-            AdmissionReason::SnapshotStale {
-                age_ms: 50_000,
-                max_age_ms: 45_000,
-            },
             AdmissionReason::Capacity {
                 holds: vec![kalcode_resources::HoldReason::UserLimit {
                     running: 4,
                     limit: 4,
-                    mode: ModeKind::Balanced,
+                    mode: ModeKind::Custom,
                 }],
+            },
+            AdmissionReason::HardPressure {
+                pressure: kalcode_resources::HardPressure::MemoryCritical {
+                    available_mb: 300,
+                    floor_mb: 634,
+                },
             },
         ],
         ..held(AdmissionReason::CapacityUnavailable)
@@ -1532,9 +1647,10 @@ fn hold_reasons_are_classified_and_logged_by_code() {
         &mixed,
         Duration::from_secs(1),
         kalcode_resources::ADMISSION_WAIT_LIMIT,
-    );
-    assert_eq!(hold.kind, LaunchHoldKind::ConcurrencyLimit);
-    assert_eq!((hold.running, hold.limit), (Some(4), Some(4)));
+    )
+    .expect("held");
+    assert_eq!(hold.kind, LaunchHoldKind::MemoryCritical);
+    assert_eq!((hold.free_mb, hold.floor_mb), (Some(300), Some(634)));
 }
 
 /// A budget is projected only until a sample can reflect it; the slot stays until release.
@@ -1688,5 +1804,180 @@ fn balanced_mode_runs_twelve_provider_turns_when_hardware_has_headroom() {
     assert_eq!(governor.running_work_for_test().agents, 12);
     drop(sessions);
     assert_eq!(governor.running_work_for_test().agents, 0);
+    governor.shutdown();
+}
+
+/// Owner directive (2026-10-04): with every core pinned (98 % CPU, CPU pressure High or worse),
+/// 1, 4 and 10 coding-agent panes the person creates all start immediately — for Claude Code,
+/// Codex, Cursor, Gemini CLI and a future provider alike — and no fake concurrency cap appears.
+#[test]
+fn cpu_busy_never_holds_user_requested_agents_one_four_or_ten_any_provider() {
+    let governor = cpu_saturated_governor();
+    for provider in [
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::CURSOR,
+        ProviderId::GEMINI_CLI,
+        "future-provider",
+    ] {
+        let adapter = governed(&governor, provider);
+        for count in [1, 4, 10] {
+            let started = Instant::now();
+            let sessions: Vec<_> = (0..count)
+                .map(|_| {
+                    let session = adapter
+                        .provider
+                        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+                        .unwrap_or_else(|error| {
+                            panic!("{provider} launch held under CPU load: {error}")
+                        });
+                    session
+                        .send(text("work"))
+                        .unwrap_or_else(|error| panic!("{provider} turn held: {error}"));
+                    session
+                })
+                .collect();
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "{count} {provider} agents must start immediately, not after a wait"
+            );
+            assert_eq!(governor.running_work_for_test().agents, count);
+            drop(sessions);
+            assert_eq!(governor.running_work_for_test().agents, 0);
+        }
+    }
+    // The resource view says new agents start (it never reports "CPU busy").
+    assert_eq!(governor.report().admission.state, AdmissionState::Allowed);
+    governor.shutdown();
+}
+
+/// The same CPU load still throttles optional background work: a local model inference waits
+/// while ten agents run, and it yields to their unmeasured budgets.
+#[test]
+fn cpu_busy_still_throttles_background_work() {
+    let governor = cpu_saturated_governor();
+    let adapter = governed(&governor, ProviderId::CLAUDE_CODE);
+    let agents: Vec<_> = (0..10)
+        .map(|_| {
+            let session = adapter
+                .provider
+                .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+                .expect("agent starts");
+            session.send(text("work")).expect("turn admitted");
+            session
+        })
+        .collect();
+    let Err(decision) = governor.reserve_local_task(
+        LocalWorkloadEstimate::inference(Some(4_000), Some(1_024)).expect("estimate"),
+    ) else {
+        panic!("background inference must yield to CPU load");
+    };
+    let codes = kalcode_resources::decision_codes(&decision);
+    assert!(
+        codes.contains(&"cpu_headroom") || codes.contains(&"pressure"),
+        "{codes:?}"
+    );
+    assert_eq!(
+        governor.report().background_admission.state,
+        AdmissionState::Held
+    );
+    drop(agents);
+    governor.shutdown();
+}
+
+/// Owner directive (2026-10-04), launch origin: under the same CPU load, a session the
+/// Operations scheduler starts (`LaunchOrigin::Background`) yields with its own reason before
+/// anything spawns, while the coding agent the person starts at that moment starts at once — for
+/// every provider. Start Anyway on the held background thread starts it.
+#[test]
+fn cpu_busy_automation_yields_while_a_user_launch_starts() {
+    let governor = cpu_saturated_governor();
+    for provider in [
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::CURSOR,
+        ProviderId::GEMINI_CLI,
+        "future-provider",
+    ] {
+        let adapter = governed(&governor, provider);
+        let automation = SessionConfig {
+            launch_origin: LaunchOrigin::Background,
+            ..session_config()
+        };
+        let Err(ProviderError::ResourcesHeld(hold)) = adapter
+            .provider
+            .start_session(automation.clone(), Box::new(|_: AgentEvent| {}))
+        else {
+            panic!("{provider}: a scheduled session must yield to CPU load");
+        };
+        assert_eq!(hold.kind, LaunchHoldKind::BackgroundYield);
+        assert!(
+            !hold.kind.is_hard_pressure(),
+            "never framed as hard pressure"
+        );
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 0, "nothing spawned");
+
+        let started = Instant::now();
+        let user = adapter
+            .provider
+            .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+            .unwrap_or_else(|error| panic!("{provider}: the person's agent was held: {error}"));
+        user.send(text("work"))
+            .unwrap_or_else(|error| panic!("{provider}: the person's turn was held: {error}"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 1);
+
+        governor.grant_start_anyway(&automation.thread_id);
+        let overridden = adapter
+            .provider
+            .start_session(automation, Box::new(|_: AgentEvent| {}))
+            .expect("Start Anyway starts the held background session");
+        assert_eq!(adapter.starts.load(Ordering::SeqCst), 2);
+        drop((user, overridden));
+        assert_eq!(governor.running_work_for_test().agents, 0);
+    }
+    governor.shutdown();
+}
+
+/// Critically low memory holds a user-requested launch with the real reason and the numbers;
+/// Start Anyway for that thread starts it (launch and first turn), and only that thread.
+#[test]
+fn critically_low_memory_holds_with_the_real_reason_and_start_anyway_starts_it() {
+    let governor = memory_critical_governor();
+    let adapter = governed(&governor, ProviderId::CLAUDE_CODE);
+    let config = session_config();
+    let Err(ProviderError::ResourcesHeld(hold)) = adapter
+        .provider
+        .start_session(config.clone(), Box::new(|_: AgentEvent| {}))
+    else {
+        panic!("critically low memory must hold the launch");
+    };
+    assert_eq!(hold.kind, LaunchHoldKind::MemoryCritical);
+    assert_eq!(hold.kind.phrase(), "memory is critically low");
+    assert_eq!(hold.free_mb, Some(300));
+    assert_eq!(
+        hold.floor_mb,
+        Some(kalcode_resources::memory_floor_mib(31 * GIB))
+    );
+    assert_eq!(adapter.starts.load(Ordering::SeqCst), 0, "nothing spawned");
+
+    governor.grant_start_anyway(&config.thread_id);
+    let session = adapter
+        .provider
+        .start_session(config, Box::new(|_: AgentEvent| {}))
+        .expect("Start Anyway starts it");
+    session
+        .send(text("work"))
+        .expect("its first turn is admitted too");
+    assert_eq!(adapter.starts.load(Ordering::SeqCst), 1);
+
+    // Another thread is still held: the override is per thread, not a standing exemption.
+    assert!(matches!(
+        adapter
+            .provider
+            .start_session(session_config(), Box::new(|_: AgentEvent| {})),
+        Err(ProviderError::ResourcesHeld(_))
+    ));
+    drop(session);
     governor.shutdown();
 }

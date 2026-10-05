@@ -409,7 +409,8 @@ fn a_held_decision_summarizes_to_its_most_actionable_reason() {
         admission_max_age(&custom_snapshot()),
     );
     assert_eq!(decision.state, AdmissionState::Held);
-    let hold = launch_hold(&decision, Duration::from_secs(1), Duration::from_secs(90));
+    let hold = launch_hold(&decision, Duration::from_secs(1), Duration::from_secs(90))
+        .expect("an explicit Custom count limit is a user-facing hold");
     assert_eq!(hold.kind, LaunchHoldKind::ConcurrencyLimit);
     assert_eq!((hold.running, hold.limit), (Some(4), Some(4)));
     assert!(decision_codes(&decision).contains(&"concurrency_limit"));

@@ -118,7 +118,9 @@ async function openThread(h: Harness, name: string) {
     await h.user.click(primary.getByRole("button", { name: "Threads" }));
   }
   const list = await screen.findByRole("list", { name: "Threads" });
-  await h.user.click(await within(list).findByRole("button", { name: new RegExp(name) }));
+  // The row itself, never its "Pin globally: <name>" favorite action (#235).
+  const row = new RegExp(`^(?!(?:Pin|Unpin) globally: |(?:Add|Remove) Favorite: ).*${name}`);
+  await h.user.click(await within(list).findByRole("button", { name: row }));
   await waitFor(() => expect(within(detail()).getByRole("heading", { name })).toBeInTheDocument());
   await waitFor(() => expect(composerForThread(threadIdOf(name))).not.toBeNull());
 }

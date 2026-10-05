@@ -1,12 +1,13 @@
 /**
  * Normalized display statuses (ADVANCED.md §16.3). The single mapping every surface uses —
  * Dashboard, rail, panes, notifications and KalVoice — from the 18 runtime `ThreadStatus` values
- * to the 12 display statuses. The types are generated from Rust; `ThreadStatus::display` /
+ * to the 13 display statuses. `waiting_for_dependency` is WAITING, never IDLE: its provider
+ * process has not started (owner directive 2026-10-04). The types are generated from Rust; `ThreadStatus::display` /
  * `ThreadStatus::chip` / `DisplayStatus::tone` in `crates/contracts` are the same mapping, and a
  * Rust test keeps this table identical to them, row for row.
  *
  * Colour semantics (tones map to design-system tokens; status is never colour alone — always
- * text plus a glyph): working green; waiting / permission required amber; idle, starting and
+ * text plus a glyph): working green; waiting / waiting for you / permission required amber; idle, starting and
  * offline muted; done high-contrast neutral; failed red; paused amber; recovering blue.
  */
 import type { DashboardChip, DisplayQualifier, DisplayStatus, StatusTone, ThreadStatus } from "./generated/index.ts";
@@ -29,7 +30,7 @@ export const DISPLAY_STATUS_OF = {
   idle: { status: "idle", qualifier: null, chip: "idle" },
   waiting_for_permission: { status: "permission_required", qualifier: null, chip: "waiting_for_you" },
   waiting_for_user: { status: "waiting_for_you", qualifier: null, chip: "waiting_for_you" },
-  waiting_for_dependency: { status: "idle", qualifier: "waiting_on_dependency", chip: "idle" },
+  waiting_for_dependency: { status: "waiting", qualifier: "waiting_on_dependency", chip: "working" },
   paused: { status: "paused", qualifier: null, chip: "idle" },
   completed: { status: "done", qualifier: null, chip: "done" },
   failed: { status: "failed", qualifier: null, chip: "waiting_for_you" },
@@ -45,6 +46,7 @@ export const DISPLAY_STATUS_TONE = {
   reviewing: "working",
   permission_required: "waiting",
   waiting_for_you: "waiting",
+  waiting: "waiting",
   idle: "muted",
   paused: "paused",
   done: "done",
@@ -60,6 +62,7 @@ export const DISPLAY_STATUS_LABEL = {
   reviewing: "REVIEWING",
   permission_required: "PERMISSION REQUIRED",
   waiting_for_you: "WAITING FOR YOU",
+  waiting: "WAITING",
   idle: "IDLE",
   paused: "PAUSED",
   done: "DONE",

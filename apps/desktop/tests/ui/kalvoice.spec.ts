@@ -63,7 +63,7 @@ async function widgetBox(page: Page) {
 }
 
 test.describe("Push to talk (fake recognizer)", () => {
-  test("holding F8 streams the words, runs a command on release and counts it once", async ({ page }) => {
+  test("holding F8 streams the words and runs a local command without cloud usage", async ({ page }) => {
     await open(page, "?transcript=go%20to%20settings");
     await expectState(page, "Ready");
     await page.keyboard.down("F8");
@@ -82,7 +82,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(shown(page).getByText("Opened Settings.")).toHaveCount(0);
 
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("1 / 25 used · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command")).toBeVisible();
@@ -102,7 +102,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
   });
 
-  test("a clear command wins in a text box; Type it instead types the words and refunds", async ({ page }) => {
+  test("a clear command wins in a text box; Type it instead types the words without cloud usage", async ({ page }) => {
     await open(page, "?transcript=go%20to%20settings");
     await openKalVoicePage(page);
     await pageRequestBox(page).focus();
@@ -139,7 +139,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await page.keyboard.up("F8");
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("1 / 25 used · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 25 used · resets")).toBeVisible();
   });
 
   test("losing the window mid-hold finishes the take (missed release)", async ({ page }) => {
@@ -276,12 +276,24 @@ test.describe("Push to talk (fake recognizer)", () => {
     );
   });
 
-  test("the monthly limit stops requests before any work; dictation keeps working", async ({ page }) => {
+  test("exhausted cloud quota leaves local commands and dictation working", async ({ page }) => {
     await open(page, "?scenario=kalvoice-limit&transcript=go%20to%20settings");
     await talk(page);
-    await expect(shown(page).getByText("You've used this month's KalVoice Requests.", { exact: false })).toBeVisible();
-    await expect(shown(page).getByText("Dictation keeps working.", { exact: false })).toBeVisible();
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
+    await expect(shown(page).getByText("Opened Settings.")).toBeVisible();
+    await openKalVoicePage(page);
+    await expect(page.locator("#kalvoice-status").getByText("25 / 25 used · resets")).toBeVisible();
+    await expect(page.getByText("Monthly limit reached.", { exact: true })).toBeVisible();
+    await page.evaluate(() => {
+      (
+        window as unknown as { __kalcodeMemory: { kalvoice: { setTranscript(text: string): void } } }
+      ).__kalcodeMemory.kalvoice.setTranscript("write the release notes");
+    });
+    const input = pageRequestBox(page);
+    await input.focus();
+    await talk(page);
+    await expect(input).toHaveValue("write the release notes");
+    await expect(page.locator("#kalvoice-status").getByText("25 / 25 used · resets")).toBeVisible();
   });
 });
 
@@ -333,11 +345,12 @@ test.describe("Commands that open other parts of KalCode", () => {
   });
 });
 
-/** The bottom edge of the Command Deck's top bar: the widget never covers it. */
+/** Where the Command Deck's body starts, below the top bar and the navigation bar: the widget never covers them. */
 async function deckTop(page: Page): Promise<number> {
   const bar = await page.getByRole("banner").boundingBox();
-  if (!bar) throw new Error("no top bar");
-  return bar.y + bar.height;
+  const nav = await page.getByRole("navigation", { name: "Breadcrumb" }).locator("..").boundingBox();
+  if (!bar || !nav) throw new Error("no top bar");
+  return Math.max(bar.y + bar.height, nav.y + nav.height);
 }
 
 test.describe("KalVoice voice widget", () => {

@@ -309,13 +309,12 @@ fn adapter(
         runtime: runtime.clone(),
         test_fixture,
     });
-    let guard = |provider: Arc<dyn AgentProvider>, interactive: bool| -> Arc<dyn AgentProvider> {
+    // Pane and headless routes are both coding agents the person asked for, so both get the one
+    // user-requested admission policy (AGENTS.md Resource Governor rule); the router's
+    // interactive flag does not select a different policy.
+    let guard = |provider: Arc<dyn AgentProvider>, _interactive: bool| -> Arc<dyn AgentProvider> {
         let observed = ObservedProvider::wrap(provider, health);
-        let governed = if interactive {
-            ResourceAdmissionProvider::wrap_interactive(observed, resources.clone())
-        } else {
-            ResourceAdmissionProvider::wrap(observed, resources.clone())
-        };
+        let governed = ResourceAdmissionProvider::wrap(observed, resources.clone());
         Arc::new(AccountBoundProvider::managed(
             governed,
             runtime.clone(),
@@ -1525,6 +1524,30 @@ pub fn thread_stop(
         .map_err(|e| e.log_and_convert("thread_stop"))
 }
 
+/// Start Anyway: the person's explicit override for a coding agent the Resource Governor is
+/// holding (genuine hard pressure or an explicit Custom limit). Grants this thread a one-launch
+/// override, then re-checks its held launch or turn at once, or resumes a launch whose wait ran
+/// out. Provider-agnostic.
+#[tauri::command(async)]
+pub fn thread_start_anyway(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    thread_id: String,
+) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
+    if !kalcode_contracts::ids::is_valid_id(&thread_id) {
+        return Err(
+            KalError::validation("invalid_thread", "That thread id isn't valid.")
+                .log_and_convert("thread_start_anyway"),
+        );
+    }
+    let runtime = state.runtime()?;
+    state.resources.grant_start_anyway(&thread_id);
+    runtime
+        .retry_held_launch(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_start_anyway"))
+}
+
 #[tauri::command(async)]
 pub fn thread_duplicate(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
@@ -1726,6 +1749,7 @@ mod tests {
             permission_mode: PermissionMode::Approve,
             resume_session_id: None,
             secret_ref: None,
+            launch_origin: Default::default(),
         }
     }
 

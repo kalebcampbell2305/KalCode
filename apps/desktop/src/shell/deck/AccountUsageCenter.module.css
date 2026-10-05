@@ -6,10 +6,10 @@
   height: 30px;
   padding: 0 9px;
   border: 1px solid var(--color-border);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--color-surface-1);
   color: var(--color-text);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
   transition:
     background 160ms,
@@ -28,7 +28,7 @@
 }
 .chipStatus {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 .chip[data-tone="attention"] .chipStatus,
 .status[data-tone="attention"],
@@ -41,20 +41,20 @@
   color: var(--status-failed);
 }
 .popover {
-  z-index: var(--z-popover, 100);
+  z-index: var(--z-popover);
   width: min(410px, calc(100vw - 24px));
   max-height: min(760px, var(--radix-popover-content-available-height));
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--color-border);
-  border-radius: 13px;
+  border-radius: var(--radius-xl);
   background: var(--color-surface-1);
   color: var(--color-text);
   box-shadow:
-    0 18px 64px #0005,
-    0 2px 8px #0003;
-  font-size: 12px;
+    0 18px 64px rgb(0 0 0 / 0.33),
+    0 2px 8px rgb(0 0 0 / 0.2);
+  font-size: var(--text-xs);
   animation: enter 160ms ease-out;
   transform-origin: var(--radix-popover-content-transform-origin);
 }
@@ -69,7 +69,7 @@
   flex: 1;
 }
 .header h2 {
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.4;
   font-weight: 650;
   margin: 0;
@@ -78,7 +78,7 @@
 .header p {
   margin: 3px 0 0;
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .iconButton {
   display: inline-flex;
@@ -88,7 +88,7 @@
   height: 26px;
   flex: none;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-muted);
 }
@@ -100,7 +100,7 @@
   padding: 11px 17px;
   border-block: 1px solid var(--color-border);
   background: var(--color-accent-soft);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   flex: none;
   overflow-wrap: anywhere;
 }
@@ -125,13 +125,13 @@
   padding: 15px 0 8px;
 }
 .groupHeader h3 {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 600;
   margin: 0;
 }
 .groupHeader > span {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -154,7 +154,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 .selected {
@@ -162,12 +162,12 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10px;
+  font-size: 0.625rem;
   white-space: nowrap;
 }
 .tag {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 .spacer {
   flex: 1;
@@ -177,9 +177,9 @@
   flex: none;
   padding: 1px 6px;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -203,7 +203,7 @@
   gap: 6px;
   min-height: 22px;
   margin-top: 3px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .metaEnd {
   display: inline-flex;
@@ -234,7 +234,7 @@
 }
 .updated {
   color: var(--color-text-faint);
-  font-size: 10px;
+  font-size: 0.625rem;
   white-space: nowrap;
 }
 .usage[data-checking] {
@@ -248,10 +248,10 @@
   height: 22px;
   padding: 0 9px;
   border: 1px solid var(--color-border-lit-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--color-accent-soft);
   color: var(--color-accent-text);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 600;
   white-space: nowrap;
   transition:
@@ -266,7 +266,7 @@
 }
 .waiting {
   color: var(--color-accent-text);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
   animation: breathe 1.6s ease-in-out infinite;
 }
@@ -276,7 +276,7 @@
   gap: 5px;
   margin: 5px 0 0;
   color: var(--status-waiting-text);
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 /* Usage windows: the canonical numbers, one hairline meter per window. */
 .windows {
@@ -287,7 +287,7 @@
   padding: 9px 11px 10px;
   list-style: none;
   border: 1px solid var(--color-border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 5%, transparent), transparent 70%),
     var(--color-surface-2);
@@ -305,20 +305,20 @@
 }
 .windowLabel {
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.4px;
   text-transform: uppercase;
 }
 .windowValue {
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .windowValue strong {
   color: var(--color-text);
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 650;
 }
 .window[data-tone="low"] .windowValue strong {
@@ -329,7 +329,7 @@
   position: relative;
   height: 4px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--color-text-faint) 22%, transparent);
 }
 .windowFill {
@@ -344,13 +344,13 @@
 .windowReset {
   grid-column: 1 / -1;
   color: var(--color-text-faint);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
 }
 .stale {
   margin: 6px 0 0;
   color: var(--status-waiting-text);
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 .details {
   padding-top: 11px;
@@ -360,7 +360,7 @@
   display: grid;
   gap: 6px;
   margin: 0 0 12px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .details dl > div {
   display: flex;
@@ -383,10 +383,10 @@
 .login button {
   border: 1px solid var(--color-border);
   background: var(--color-surface-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   color: var(--color-text);
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .actions button:hover,
 .login button:hover {
@@ -408,10 +408,10 @@
   width: 100%;
   padding: 8px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-surface-2);
   color: var(--color-text);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .add:hover {
   border-color: var(--color-accent);
@@ -420,7 +420,7 @@
 .disclosure {
   color: var(--color-text-muted);
   text-align: center;
-  font-size: 10px;
+  font-size: 0.625rem;
   margin: 9px 0 0;
 }
 .empty {
@@ -434,7 +434,7 @@
 .notice,
 .attention,
 .error {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -447,13 +447,13 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .rename,
 .addForm {
   display: grid;
   gap: 7px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 .rename input,
 .addForm input,
@@ -462,7 +462,7 @@
   min-width: 0;
   padding: 8px;
   border: 1px solid var(--color-border);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--color-surface-2);
   color: var(--color-text);
 }

@@ -11,6 +11,7 @@ import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../../runtime/WorkspaceProvider.tsx";
 import { isCodingAgent } from "../../../surfaces/dashboard/data/agents.ts";
 import { accountInlineLabel, accountSignIn } from "../../../surfaces/providers/accountIdentity.ts";
+import { useOptionalRail } from "../RailProvider.tsx";
 import { QuickSearchIndex, type SearchDocument } from "./quickSearchIndex.ts";
 
 export type QuickTarget =
@@ -39,6 +40,15 @@ const SETTINGS = [
 export function useQuickSwitcher(open: boolean, query: string, kinds: readonly LocatorEntityKind[] = []) {
   const { client, info } = useRuntime();
   const workspaces = useWorkspaces();
+  const rail = useOptionalRail()?.rail ?? null;
+  // The name the person gave a workspace in the rail is the name they search for.
+  const railNames = useMemo(() => {
+    const names = new Map<string, string>();
+    if (!rail) return names;
+    for (const entry of [...rail.pinned, ...rail.recent, ...rail.groups.flatMap((g) => g.workspaces), ...rail.archived])
+      names.set(entry.workspaceId, entry.name);
+    return names;
+  }, [rail]);
   const { events } = useEvents();
   const [metadata, setMetadata] = useState<{
     client: typeof client;
@@ -181,13 +191,14 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
     const next = new QuickSearchIndex<QuickTarget>();
     const add = (document: SearchDocument<QuickTarget>) => next.add(document);
     for (const workspace of workspaces.workspaces) {
+      const railName = railNames.get(workspace.id);
       if (workspace.available)
         add({
           id: `workspace:${workspace.id}`,
           kind: "Workspace",
-          label: workspace.name,
+          label: railName ?? workspace.name,
           metadata: workspace.displayPath,
-          keywords: "switch to workspace project folder",
+          keywords: `switch to workspace project folder${railName && railName !== workspace.name ? ` ${workspace.name}` : ""}`,
           workspaceId: workspace.id,
           target: { kind: "workspace", workspaceId: workspace.id },
         });
@@ -273,7 +284,16 @@ export function useQuickSwitcher(open: boolean, query: string, kinds: readonly L
       });
     }
     return next;
-  }, [client, metadata, info, availableRelease, workspaces.workspaces, workspaces.terminals, workspaces.running]);
+  }, [
+    client,
+    metadata,
+    info,
+    availableRelease,
+    workspaces.workspaces,
+    workspaces.terminals,
+    workspaces.running,
+    railNames,
+  ]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision publishes incremental file indexing and recency updates.
   const results = useMemo(() => {

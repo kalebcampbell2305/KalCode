@@ -18,11 +18,14 @@ use kalcode_contracts::kalvoice::{
     AgentLaunchAssignment, BrowserControl, KalVoiceIntent, PaneControl, PaneDirection,
     ProviderPaneRequest, RequestableMode, ThreadScope,
 };
-use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
+use kalcode_contracts::workspace_ui::SplitAxis;
 use url::Url;
 
 #[path = "grammar_sessions.rs"]
 mod sessions;
+
+#[path = "grammar_agents.rs"]
+mod agents;
 
 /// The most threads one request may open.
 pub const MAX_THREADS_PER_REQUEST: u32 = 16;
@@ -210,6 +213,9 @@ fn is_read_only(intent: &KalVoiceIntent) -> bool {
             | KalVoiceIntent::ShowApprovals
             | KalVoiceIntent::StatusReport
             | KalVoiceIntent::FilterDashboard { .. }
+            | KalVoiceIntent::FilterAgents { .. }
+            | KalVoiceIntent::CountAgents { .. }
+            | KalVoiceIntent::WhichAgents { .. }
             | KalVoiceIntent::WhichSessions { .. }
             | KalVoiceIntent::Search { .. }
             | KalVoiceIntent::ReadMemory { .. }
@@ -232,29 +238,30 @@ fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidenc
         *confidence = Confidence::High;
         return Understood::intent(intent);
     }
-    if core.iter().any(|word| word == "cursor") {
-        if let Some(understood) = pane_request(core) {
-            *confidence = Confidence::High;
-            return understood;
+    // Coding agents by status, the same for every provider ("show me all agents that need me",
+    // "how many agents are working", "close all idle agents"). "… waiting for me" is tried with
+    // its "for me" first: there it means the person, while bare "waiting" is the Waiting group.
+    if !compound {
+        let with_me = strip_filler_with(tokens, TRAILING_FILLER_KEEPING_ME);
+        let mut tried: &[String] = &[];
+        for words in [with_me, core] {
+            if words == tried {
+                continue;
+            }
+            tried = words;
+            for rule in agent_rules() {
+                if let Some(caps) = match_nodes(&rule.nodes, words, &Caps::default()) {
+                    *confidence = Confidence::High;
+                    return (rule.build)(&caps);
+                }
+            }
         }
-        let query = core.iter().map(String::as_str).collect::<Vec<_>>();
-        if matches!(
-            query.as_slice(),
-            [
-                "open" | "focus" | "show",
-                "the",
-                "cursor",
-                "agent",
-                "that",
-                "just",
-                "finished"
-            ]
-        ) {
-            *confidence = Confidence::High;
-            return Understood::intent(KalVoiceIntent::Focus {
-                query: "cursor agent that just finished".into(),
-            });
-        }
+    }
+    if core.iter().any(|word| word == "cursor")
+        && let Some(understood) = pane_request(core)
+    {
+        *confidence = Confidence::High;
+        return understood;
     }
     if let Some(rejected) = standalone_launch_modifier(core) {
         *confidence = Confidence::High;
@@ -1447,7 +1454,23 @@ const TRAILING_FILLER: &[&[&str]] = &[
     &["asap"],
 ];
 
+/// [`TRAILING_FILLER`] without "for me", for phrases where it names the person ("agents waiting
+/// for me").
+const TRAILING_FILLER_KEEPING_ME: &[&[&str]] = &[
+    &["please"],
+    &["right", "now"],
+    &["now"],
+    &["thanks"],
+    &["thank", "you"],
+    &["kalvoice"],
+    &["asap"],
+];
+
 fn strip_filler(tokens: &[String]) -> &[String] {
+    strip_filler_with(tokens, TRAILING_FILLER)
+}
+
+fn strip_filler_with<'a>(tokens: &'a [String], trailing: &[&[&str]]) -> &'a [String] {
     let mut start = 0;
     let mut end = tokens.len();
     'leading: loop {
@@ -1460,7 +1483,7 @@ fn strip_filler(tokens: &[String]) -> &[String] {
         break;
     }
     'trailing: loop {
-        for phrase in TRAILING_FILLER {
+        for phrase in trailing {
             // "Go to KalVoice" names the surface: the wake word is only filler at the end of a
             // request that doesn't point at it ("open settings, KalVoice").
             let names_surface = *phrase == ["kalvoice"]
@@ -1882,11 +1905,27 @@ const IN_WORKSPACE: &str =
     "(in|for|on|inside) [the] [workspace|project] <name> [workspace|project]";
 const THREAD_WORD: &str =
     "(thread|threads|session|sessions|agent|agents|terminal|terminals|pane|panes)";
-const THREAD_STATE: &str = "(active|running|current|paused|open|idle|working|busy|stuck)";
+/// States a pause or stop names: every running session. A narrower state ("stop all idle
+/// agents", "stop the stuck ones") is never read as "stop everything": idle agents close through
+/// KalTidy (`grammar_agents`), and anything else is not a deterministic command.
+const RUNNING_STATE: &str = "(active|running|current|open|working|busy)";
+/// States a resume names: every paused or stopped session.
+const RESUMABLE_STATE: &str = "(paused|stopped|current|open)";
 
 fn rules() -> &'static [Rule] {
     static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
     RULES.get_or_init(build_rules)
+}
+
+fn agent_rules() -> &'static [Rule] {
+    static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
+    RULES.get_or_init(|| {
+        let mut rules = Vec::new();
+        agents::agent_rules(&mut |pattern: String, build: Build| {
+            rules.push(rule(pattern, build));
+        });
+        rules
+    })
 }
 
 fn state_rules() -> &'static [Rule] {
@@ -2080,16 +2119,10 @@ fn build_rules() -> Vec<Rule> {
         add(p.into(), approvals());
     }
 
-    // Dashboard filters (Z7-W3). After approvals, so "show what's waiting for me" still opens
-    // the approvals panel; before navigation, whose bare "<surface>" forms they never overlap.
-    for (chip, patterns) in dashboard_filter_patterns() {
-        for p in patterns {
-            add(
-                p,
-                Box::new(move |_| Understood::intent(KalVoiceIntent::FilterDashboard { chip })),
-            );
-        }
-    }
+    // Agents-tab filters without an agent noun ("show everything waiting for me"; the noun
+    // forms are agent rules). After approvals, so "show what's waiting for me" still opens the
+    // approvals panel; before navigation, whose bare "<surface>" forms they never overlap.
+    agents::late_filter_rules(&mut add);
 
     // Navigation.
     for p in [
@@ -2144,15 +2177,19 @@ fn build_rules() -> Vec<Rule> {
     );
 
     // Pause / resume / stop.
-    thread_control(&mut add, "(pause|suspend|hold)", |scope| {
+    thread_control(&mut add, "(pause|suspend|hold)", RUNNING_STATE, |scope| {
         KalVoiceIntent::PauseThreads { scope }
-    });
-    thread_control(&mut add, "(resume|unpause|continue)", |scope| {
-        KalVoiceIntent::ResumeThreads { scope }
     });
     thread_control(
         &mut add,
+        "(resume|unpause|continue)",
+        RESUMABLE_STATE,
+        |scope| KalVoiceIntent::ResumeThreads { scope },
+    );
+    thread_control(
+        &mut add,
         "(stop|halt|kill|end|terminate|cancel|shut down)",
+        RUNNING_STATE,
         |scope| KalVoiceIntent::StopThreads {
             scope,
             expected_count: None,
@@ -2510,88 +2547,13 @@ fn workspace_account(c: &Caps, workspace: Option<&String>) -> Understood {
     )
 }
 
-/// "Show", as a Dashboard filter verb.
-const SHOW_VERB: &str = "(show|display|list|filter|give) [me] [only|just]";
-/// The things a Dashboard filter shows.
-const AGENTS_WORD: &str = "(agents|agent|threads|thread|work|tasks|sessions)";
-
-/// Phrases for each Dashboard chip. Every pattern names the chip's state explicitly, so none of
-/// them can read as navigation ("show agents") or as the approvals panel ("show what's waiting").
-fn dashboard_filter_patterns() -> Vec<(DashboardChip, Vec<String>)> {
-    let noun = AGENTS_WORD;
-    let show = SHOW_VERB;
-    vec![
-        (
-            DashboardChip::Working,
-            vec![
-                format!("{show} [the|my] (working|running|active|busy) {noun}"),
-                format!(
-                    "{show} [the|my] {noun} (that are|which are|currently|that is|which is) (working|running|busy)"
-                ),
-                format!(
-                    "only (show|display|list) [me] [the|my] (working|running|active|busy) {noun}"
-                ),
-                format!(
-                    "only (show|display|list) [me] [the|my] {noun} (that are|which are) (working|running|busy)"
-                ),
-                format!("(which|what) {noun} (are|is) (working|running|busy) [right now|now]"),
-            ],
-        ),
-        (
-            DashboardChip::WaitingForYou,
-            vec![
-                // "for me" is trailing filler, so "â€¦ waiting for me" arrives as "â€¦ waiting".
-                format!(
-                    "{show} (everything|all|anything|all the things|whatever is|what) [that is|that are] (waiting [for|on] [me]|(that needs|that need|needing) me)"
-                ),
-                format!(
-                    "{show} [the|my] {noun} (waiting [for|on] [me]|(that need|that needs|which need|which needs|needing) me)"
-                ),
-                format!("{show} [the|my] {noun} (that are|which are) waiting [for|on] [me]"),
-                format!("{show} [the|my] {noun} [that|which] (need|needs) [my] attention"),
-                format!(
-                    "only (show|display|list) [me] (everything|what|the {noun}|{noun}) [that is|that are] waiting [for|on] [me]"
-                ),
-            ],
-        ),
-        (
-            DashboardChip::Done,
-            vec![
-                format!("{show} [the|my|all] [the] (completed|finished|done) {noun}"),
-                format!(
-                    "{show} [the|my] {noun} (that are|which are|that have|which have|that|which) (completed|finished|done)"
-                ),
-                format!("{show} [me] what (is|has) (completed|finished|done)"),
-                format!("only (show|display|list) [me] [the|my] (completed|finished|done) {noun}"),
-            ],
-        ),
-        (
-            DashboardChip::Idle,
-            vec![
-                format!("{show} [the|my|all] [the] idle {noun}"),
-                format!("{show} [the|my] {noun} (that are|which are) idle"),
-                format!("only (show|display|list) [me] [the|my] idle {noun}"),
-            ],
-        ),
-        (
-            DashboardChip::All,
-            vec![
-                format!(
-                    "(show|display|list) [me] (all|every|all the|all of the|all my|all of my) {noun}"
-                ),
-                "(show|display|list) [me] everything on the dashboard".to_owned(),
-                "(clear|reset|remove) [the|my] [dashboard] (filter|filters)".to_owned(),
-            ],
-        ),
-    ]
-}
-
 /// Verbs for asking a thread's permission mode to change.
 const MODE_VERB: &str = "(switch|change|put|set|move)";
 
 fn thread_control(
     add: &mut impl FnMut(String, Build),
     verb: &str,
+    state: &str,
     make: fn(ThreadScope) -> KalVoiceIntent,
 ) {
     let all_or_workspace = move |c: &Caps| Understood::Intent {
@@ -2611,13 +2573,11 @@ fn thread_control(
         target: c.names.first().cloned().map(NamedTarget::Thread),
     };
     add(
-        format!(
-            "{verb} (all|every|each) [of] [the|my] [{THREAD_STATE}] {THREAD_WORD} [{IN_WORKSPACE}]"
-        ),
+        format!("{verb} (all|every|each) [of] [the|my] [{state}] {THREAD_WORD} [{IN_WORKSPACE}]"),
         Box::new(all_or_workspace),
     );
     add(
-        format!("{verb} [the|my] [{THREAD_STATE}] (threads|agents|sessions) [{IN_WORKSPACE}]"),
+        format!("{verb} [the|my] [{state}] (threads|agents|sessions) [{IN_WORKSPACE}]"),
         Box::new(all_or_workspace),
     );
     add(
@@ -2636,7 +2596,7 @@ fn thread_control(
 
 fn counted_stop(add: &mut impl FnMut(String, Build), verb: &str) {
     add(
-        format!("{verb} [the|my] <count> [{THREAD_STATE}] {THREAD_WORD} [{IN_WORKSPACE}]"),
+        format!("{verb} [the|my] <count> [{RUNNING_STATE}] {THREAD_WORD} [{IN_WORKSPACE}]"),
         Box::new(|c| {
             let count = match check_count(c.count.unwrap_or_default()) {
                 Ok(count) => count,

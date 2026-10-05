@@ -14,6 +14,51 @@
 
 This file is the authority imported by `CLAUDE.md`; Claude Code and Codex follow the same rule.
 
+## Permanent optimization rule (owner directive 2026-10-04)
+
+"KALCODE MUST BE CONTINUOUSLY OPTIMIZED FOR REAL-WORLD SPEED, RELIABILITY, RESOURCE EFFICIENCY, AND SIMPLICITY.
+
+MEASURE REAL BOTTLENECKS.
+KEEP THE UI THREAD FREE.
+USE ONE CANONICAL STATE MODEL.
+KEEP PROVIDER ADAPTERS THIN.
+PRIORITIZE THE CODE TAB.
+REUSE EXPENSIVE RESOURCES SAFELY.
+CONTROL RESOURCE PRESSURE.
+KEEP AGENT LIFECYCLES CLEAN.
+RETRIEVE ONLY RELEVANT MEMORY.
+PARALLELIZE MERGING AND SHIPPING.
+CLEAN SAFE STORAGE BLOAT.
+RECOVER FROM FAILURES AUTOMATICALLY WHERE SAFE.
+REMOVE UNNECESSARY USER STEPS.
+PROFILE REAL PRODUCTION WORKLOADS.
+
+FAST, BEAUTIFUL, RELIABLE, AND SIMPLE IS THE STANDARD."
+
+- **Measure first.** Optimize measured bottlenecks (p50/p95, render counts, CPU/RAM), never guesses; record before/after numbers and keep the measurement scripts re-runnable. Profile realistic workloads (1, 4, 10, 20+ agents, several providers and accounts, large output, long sessions) and the release build, not only dev.
+- **UI thread.** Click → immediate visual response → background work continues → state updates in place. Git scans, indexing, provider health/usage, network, model discovery, Browser init, memory retrieval, telemetry and log processing never block a menu or pane from opening.
+- **One canonical state.** Each truth (coding agents, terminals, accounts, usage, models, Runs, Queue, services, environments, Needs You, workspaces, Browser, entitlements, memory) has one shared source every surface reads; no surface keeps a conflicting copy. One agent's change must not rerender every pane.
+- **Thin provider adapters.** Provider differences live in adapter/capability layers; adding a provider never requires rewriting the Fleet, KalVoice, Runs, Queue, KalTidy, memory, Code, account UI or orchestration.
+- **Resources.** Reuse expensive resources safely (warm workers, WebViews, cached account/model/workspace metadata, progressive restore) without leaks. The Resource Governor protects UI responsiveness under CPU/RAM/disk pressure, lowers non-urgent background work and says what it is doing; it never silently kills active work and is never plan gating.
+- **Polling.** Prefer events, backoff, caching, dedupe, batching and refresh-on-focus over constant polling.
+- **Visual performance.** Beautiful never means heavy: smooth animation, working reduced motion, no animation that delays an action.
+- No needless rewrites: preserve good architecture and fix the highest-impact measured issues first.
+
+## Permanent provider-agnostic agent status rule (owner directive 2026-10-04)
+
+"KALCODE AGENT STATUS IS PROVIDER-AGNOSTIC.
+
+WORKING, IDLE, NEEDS YOU, WAITING, DONE, FAILED, TESTING, AND OTHER AGENT STATES APPLY TO ALL REAL CODING AGENTS REGARDLESS OF PROVIDER.
+
+NO CORE AGENT UI OR STATUS LOGIC SHOULD BE HARD-CODED TO CLAUDE CODE.
+
+ALL CURRENT AND FUTURE PROVIDERS MAP INTO ONE SHARED KALCODE AGENT-STATE MODEL."
+
+- **One model.** Provider session → canonical KalCode agent state → every surface. The states are STARTING, READY, WORKING, TESTING, WAITING, NEEDS YOU, IDLE, DONE, FAILED and STOPPED. They are defined once in `crates/contracts/src/agent_state.rs` (`AgentState::of`) and mirrored by `packages/protocol/src/agent-state.ts` (`agentStateOf`), and a test keeps the two identical. The Agents tab, Agent Fleet, Code, What's Happening, Needs You, Runs, Queue, KalTidy, counters, filters, completion badges, the locator and KalVoice all read it. Never add a per-surface or per-provider status mapping.
+- **Real state only.** Each provider adapter maps its native session events (hooks, notify, process lifecycle) into the shared runtime status. Status never comes from the provider's name, a timer or terminal prose. Where a provider exposes no signal, say so truthfully instead of guessing.
+- **Filters.** Global status filters (All, Needs you, Working, Waiting, Idle, Done, Failed) include agents from every provider. A provider filter is separate and optional and never replaces them.
+- **Copy.** Counts are provider-neutral ("3 agents working"). Provider and account identity appear on the individual agents ("Claude A · WORKING", "Codex B · NEEDS YOU").
+
 ## Permanent Unified Memory definition (owner directive 2026-10-04)
 
 **UNIFIED MEMORY IS KALCODE'S SHARED, PROVIDER-INDEPENDENT PROJECT MEMORY.** It preserves useful
@@ -463,6 +508,18 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Optimistic UI only when the operation is safe and reversible. Never fake speed by hiding failures or stale state: the UI responds immediately while truthful state catches up.
 - Measure before and after on the real binary, and judge by p95 as well as p50. `apps/desktop/tests/perf/interactions.ts` measures input→next paint and input→visible per interaction, and `apps/desktop/tests/perf/run.ts` measures startup, IPC, memory and idle CPU (see `docs/PERFORMANCE.md`). Fix measured bottlenecks with the smallest correct change. Never rewrite working systems for theoretical speed, and never trade away correctness, safety or data integrity.
 
+## Permanent Resource Governor rule (owner directive 2026-10-04)
+
+**KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
+
+- **Priority, throttled from the bottom:** 1 KalCode UI, 2 user-requested coding agents, 3 builds/tests the user started, 4 important active services, 5 optional/background work, 6 indexing/maintenance/analytics.
+- **Hard pressure only:** critically low available memory, disk effectively full, the OS cannot create another process, or severe exhaustion likely to crash. Then show the real reason (for example "Memory is critically low.") with actions such as [Run KalTidy] / [Start Anyway] where safe. Never a generic "CPU busy".
+- **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies.
+- **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started.
+- **Provider-agnostic:** applies equally to Claude Code, Codex, Cursor, Gemini and future providers, and to every launch path (panes, New agent, KalVoice, user-initiated Squads and Handoffs).
+- This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.
+- Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
+
 ## Permanent parallel integration rule: the shared merge train (owner directive 2026-10-04)
 
 > "KALCODE USES PARALLEL INTEGRATION. Any coding agent may finish and submit work for merge. Ready changes prepare, rebase, validate and form merge groups in parallel. Only the final atomic update to main is serialized. Compatible PRs are batched against the same main snapshot. One conflicting PR must not block unrelated completed work. Claude Code and Codex use the same merge queue. No agent may bypass it. Test the actual merge candidate, land it quickly, then ship immediately."
@@ -880,9 +937,3 @@ This policy is authoritative for BOTH Claude Code and Codex (`CLAUDE.md` imports
 When ten child agents are active, wait for one to finish/close and reuse the available slot before spawning another. Apply the same rule to orchestration, implementation, research, parallel review, testing, manager/worker structures, KalVoice-triggered Codex work and Codex sub-agents used by Squads or Handoffs. This is not a KalCode subscription entitlement: top-level local coding agents and terminals remain unlimited on every plan.
 
 Use the supported Codex `agents.max_concurrent_threads_per_session = 10` setting (which excludes the primary thread; legacy alias `agents.max_threads`). KalCode's interactive and headless Codex launch paths share the canonical override in `crates/providers/src/codex/argv.rs`, including resumed sessions. Preserve provider-native sub-agent capabilities and unrelated user configuration. A running external tool host may expose fewer slots; report that actual host constraint truthfully rather than claiming the setting changes an already-running session. Do not persist the host's temporary constraint as a lower policy.
-
-## Permanent resource governor responsiveness (owner directive 2026-10-04)
-
-**KALCODE'S RESOURCE GOVERNOR MUST PROTECT SYSTEM RESPONSIVENESS WITHOUT BECOMING AN ARTIFICIAL AGENT LIMIT. USER-REQUESTED CODING AGENTS SHOULD START IMMEDIATELY WHENEVER THE OS CAN REASONABLY RUN THEM. DO NOT BLOCK AGENT STARTUP MERELY BECAUSE CPU USAGE IS HIGH. THROTTLE OPTIONAL BACKGROUND WORK FIRST. ONLY DELAY USER-REQUESTED AGENTS FOR GENUINE HARD RESOURCE PRESSURE, AND SHOW THE REAL REASON.**
-
-Priority is KalCode UI > user-requested coding agents > builds/tests the user started > important active services > optional/background work > indexing/maintenance/analytics. Throttle from the bottom. Hard pressure means critically low memory, full disk, an OS process-creation failure, or exhaustion likely to crash. Show the actual cause with Run KalTidy / Start Anyway where safe; never a generic CPU-busy wait loop. Report truthful STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE or FAILED states, never IDLE for a process that has not started. Apply uniformly across providers. This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.

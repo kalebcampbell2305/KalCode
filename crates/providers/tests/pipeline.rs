@@ -96,6 +96,7 @@ impl FakeInstall {
             permission_mode: mode,
             resume_session_id: resume.map(str::to_owned),
             secret_ref: None,
+            launch_origin: Default::default(),
         }
     }
 }
@@ -908,6 +909,7 @@ fn real_claude_session_smoke() {
                 permission_mode: PermissionMode::Plan,
                 resume_session_id: None,
                 secret_ref: None,
+                launch_origin: Default::default(),
             },
             Box::new(move |e: AgentEvent| {
                 let _ = tx.send(e);

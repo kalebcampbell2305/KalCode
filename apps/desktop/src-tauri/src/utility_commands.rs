@@ -67,6 +67,8 @@ pub struct UtilityHub {
     http: HttpSession,
     sqlite: SqliteSessions,
     sampler: Mutex<ProcessSampler>,
+    /// Listening sockets for the background "related" scan (port owners count as related).
+    listeners: ports::ListenerCache,
     permissions: Arc<PermissionService>,
     confirmer: Arc<dyn NativeConfirmer>,
     git: Arc<GitCore>,
@@ -136,6 +138,7 @@ impl UtilityState {
             http: HttpSession::new(),
             sqlite: SqliteSessions::new(),
             sampler: Mutex::new(ProcessSampler::new()),
+            listeners: ports::ListenerCache::default(),
             permissions,
             confirmer: Arc::new(TauriConfirmer::new(app.clone())),
             git: Arc::clone(&git.0),
@@ -372,6 +375,22 @@ impl UtilityHub {
 
     /// What the process tools know about KalCode: open workspaces, terminal shells and (when
     /// `with_ports`) listening sockets.
+    /// The context for the Process Monitor's background scans: socket owners come from the
+    /// listener cache, listed again only when it expired or the running shells changed.
+    fn related_process_context(&self) -> ProcessContext {
+        let mut ctx = self.process_context(None);
+        let shells: Vec<u32> = ctx.terminals.iter().map(|t| t.pid).collect();
+        if let Some(raw) = self
+            .listeners
+            .get_or_scan(&shells, ports::LISTENER_TTL, || {
+                ports::list_raw().map(|(raw, _)| raw)
+            })
+        {
+            ctx.listening = ports::owners(&raw).into_iter().collect();
+        }
+        ctx
+    }
+
     fn process_context(&self, raw_ports: Option<&[ports::RawPort]>) -> ProcessContext {
         let workspaces = self
             .workspaces()
@@ -416,6 +435,7 @@ impl UtilityHub {
 
     pub fn ports(&self) -> Result<PortList, KalError> {
         let (raw, source) = ports::list_raw()?;
+        self.listeners.store(&raw);
         let ctx = self.process_context(Some(&raw));
         let processes = self.sampler().list(&ctx, ProcessScope::All);
         Ok(PortList {
@@ -810,9 +830,9 @@ pub async fn utility_processes(
         command_hub(&runtime_access, &utilities)?
     };
     blocking(runtime_access, utilities, "utility_processes", move || {
-        // Port owners count as related; a missing port tool only loses that hint.
-        let raw = ports::list_raw().map(|(raw, _)| raw).ok();
-        let ctx = hub.process_context(raw.as_deref());
+        // Port owners count as related (a missing port tool only loses that hint). Socket
+        // listings are cached briefly; the process table itself is always sampled afresh.
+        let ctx = hub.related_process_context();
         Ok(hub.sampler().list(&ctx, scope))
     })
     .await

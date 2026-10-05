@@ -66,7 +66,7 @@
   height: 0.3rem;
   overflow: hidden;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--color-border-subtle);
   accent-color: var(--color-accent);
 }

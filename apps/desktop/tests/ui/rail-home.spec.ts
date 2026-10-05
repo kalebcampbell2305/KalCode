@@ -284,7 +284,9 @@ test.describe("home", () => {
     await expect(page.getByRole("list", { name: "Finished since your last visit" })).toContainText("Greeting rotation");
     await expect(page.getByRole("list", { name: "Pick up where you left off" })).toContainText("Invoice PDF layout");
     const workspaces = page.getByRole("list", { name: "Recent workspaces" });
-    await expect(workspaces.getByRole("button", { name: "Continue in kalcode" })).toBeVisible();
+    await expect(workspaces.getByRole("button", { name: "Continue in docs-site" })).toBeVisible();
+    // Pinned workspaces (kalcode, atlas-api) live in the pinned section, not again under Recent (#235).
+    await expect(workspaces.getByRole("button", { name: "Continue in kalcode" })).toHaveCount(0);
     // Recent work by day, from the event log.
     await expect(page.getByRole("list", { name: "Recent work, today" })).toContainText("Authentication Refactor");
     await page.getByRole("tab", { name: "Yesterday" }).click();
@@ -292,7 +294,7 @@ test.describe("home", () => {
     await expect(yesterday).toContainText("Invoice PDF layout");
     await expect(yesterday).toContainText("src/invoice/pdf.ts");
     // Continue takes you back to work in that workspace.
-    await workspaces.getByRole("button", { name: "Continue in atlas-api" }).click();
+    await workspaces.getByRole("button", { name: "Continue in docs-site" }).click();
     await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   });
 
@@ -376,14 +378,22 @@ test.describe("project surface", () => {
 });
 
 test.describe("search", () => {
-  test("the palette finds “auth” → Authentication Refactor first, and Enter opens it", async ({ page }) => {
+  test("the palette finds “auth” → Authentication Refactor, first among threads, and Enter opens it", async ({
+    page,
+  }) => {
     await open(page, "rail");
     await page.keyboard.press("Control+k");
     await page.keyboard.type("auth");
+    const dialog = page.getByRole("dialog", { name: "Command palette" });
+    // The quick switcher also indexes the active workspace's files, which rank first for a bare
+    // prefix ("auth.spec.ts"); the thread is still a best match, and first among threads.
+    await expect(dialog.getByRole("group", { name: "Best matches" })).toContainText("Authentication Refactor");
+    await expect(page.getByText("Also matching authentication")).toBeVisible();
+    await dialog.getByRole("button", { name: "Threads", exact: true }).click();
+    await dialog.getByRole("combobox").focus();
     const first = page.getByRole("option").first();
     await expect(first).toContainText("Authentication Refactor");
     await expect(first).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByText("Also matching authentication")).toBeVisible();
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toHaveAttribute("data-surface", "threads");
   });
@@ -411,7 +421,7 @@ test.describe("search", () => {
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("combobox")).toHaveValue("auth");
-    await expect(page.getByRole("option").first()).toContainText("Authentication Refactor");
+    await expect(dialog.getByRole("group", { name: "Best matches" })).toContainText("Authentication Refactor");
   });
 });
 

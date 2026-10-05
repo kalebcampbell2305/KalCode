@@ -80,8 +80,9 @@ Criteria are PASS only when executed. **PENDING** means not built or needing a l
   Codex's network-off sandbox, not by KalCode rules. Codex permission profiles (`deny` read
   rules) don't compose with `--sandbox` and a `sandbox_mode` in user config silently wins, so they
   are not used until that precedence is verified (with app-server).
-- `--ignore-rules` drops the user's own Codex `forbidden` execpolicy rules along with a
-  repository's.
+- ~~`--ignore-rules` drops the user's own Codex `forbidden` execpolicy rules along with a
+  repository's.~~ Resolved 2026-10-04: the flag is no longer passed; user rules apply and Codex
+  loads project rules only for trusted projects.
 - Gemini CLI settings of a folder the user trusted (tools, MCP servers, hooks) still apply;
   KalCode never passes `--skip-trust`.
 - Codex exec reports whole messages, not deltas; Codex rate limits are never shown (unknown).

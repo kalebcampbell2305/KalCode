@@ -4,9 +4,20 @@ import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { CodingAgentContextMenu } from "../../surfaces/code/CodingAgentContextMenu.tsx";
 import { isCodingAgent } from "../../surfaces/dashboard/data/agents.ts";
 import { ThreadContextMenu, ThreadMenuDataProvider } from "../../surfaces/threads/ThreadContextMenu.tsx";
+import { FavoriteButton } from "../favorites/FavoriteActions.tsx";
 import { useRail } from "./RailProvider.tsx";
 
 const Summaries = createContext<ReadonlyMap<string, ThreadSummary>>(new Map());
+
+export function RailThreadFavoriteButton({ id }: { id: string }) {
+  const thread = useContext(Summaries).get(id);
+  return thread ? (
+    <FavoriteButton
+      target={{ kind: isCodingAgent(thread) ? "agent" : "thread", id, workspaceId: thread.workspaceId }}
+      title={thread.name}
+    />
+  ) : null;
+}
 
 /** Rail projections omit account/runtime identity; read authoritative records once for the tree. */
 export function RailThreadMenus({ children }: { children: ReactNode }) {

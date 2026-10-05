@@ -73,6 +73,40 @@ fn floor_div(headroom: f64, per: f64) -> u32 {
     }
 }
 
+/// The explicit count limits the person set in Custom mode (a total agent ceiling and
+/// per-provider limits). Presets impose none. These do not depend on sampling.
+pub fn count_constraints(
+    limits: &ModeLimits,
+    running: &RunningWork,
+    request: &CapacityRequest,
+) -> Vec<Constraint> {
+    let mut constraints = Vec::new();
+    if limits.max_agents != u32::MAX {
+        constraints.push(Constraint {
+            reason: HoldReason::UserLimit {
+                running: running.agents,
+                limit: limits.max_agents,
+                mode: limits.kind,
+            },
+            allows: limits.max_agents.saturating_sub(running.agents),
+        });
+    }
+    if let Some(provider) = &request.provider
+        && let Some(limit) = limits.per_provider.get(provider)
+    {
+        let used = running.per_provider.get(provider).copied().unwrap_or(0);
+        constraints.push(Constraint {
+            reason: HoldReason::ProviderLimit {
+                provider: provider.clone(),
+                running: used,
+                limit: *limit,
+            },
+            allows: limit.saturating_sub(used),
+        });
+    }
+    constraints
+}
+
 /// Computes advisory capacity. Pure and deterministic.
 pub fn capacity(
     snapshot: &ResourceSnapshot,
@@ -85,31 +119,9 @@ pub fn capacity(
     let mut notes = Vec::new();
 
     // 1. Only explicit user custom limits impose a local agent count ceiling.
-    if limits.max_agents != u32::MAX {
-        constraints.push(Constraint {
-            reason: HoldReason::UserLimit {
-                running: running.agents,
-                limit: limits.max_agents,
-                mode,
-            },
-            allows: limits.max_agents.saturating_sub(running.agents),
-        });
-    }
+    constraints.extend(count_constraints(limits, running, request));
     let running_for =
         |provider: &ProviderId| running.per_provider.get(provider).copied().unwrap_or(0);
-    if let Some(provider) = &request.provider
-        && let Some(limit) = limits.per_provider.get(provider)
-    {
-        let used = running_for(provider);
-        constraints.push(Constraint {
-            reason: HoldReason::ProviderLimit {
-                provider: provider.clone(),
-                running: used,
-                limit: *limit,
-            },
-            allows: limit.saturating_sub(used),
-        });
-    }
     let per_provider = limits
         .per_provider
         .iter()

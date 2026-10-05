@@ -983,6 +983,9 @@ export function createThreadsMemory(
       endSession(t, "Stopped by you");
       return summary(t);
     },
+    // Start Anyway: the memory runtime never holds a launch for resources, so a thread that isn't
+    // held is returned unchanged (as native).
+    thread_start_anyway: (args) => summary(get(args)),
     thread_resume: (args) => {
       const t = get(args);
       if (t.archived) invalid("thread_archived", "This thread is archived.");

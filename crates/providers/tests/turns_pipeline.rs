@@ -97,6 +97,7 @@ impl FakeInstall {
             permission_mode: mode,
             resume_session_id: resume.map(str::to_owned),
             secret_ref: None,
+            launch_origin: Default::default(),
         }
     }
 }

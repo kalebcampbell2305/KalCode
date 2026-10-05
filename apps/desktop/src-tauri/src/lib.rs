@@ -852,6 +852,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 thread_commands::thread_interrupt,
                 thread_commands::thread_resume,
                 thread_commands::thread_stop,
+                thread_commands::thread_start_anyway,
                 thread_commands::thread_rebind_account,
                 thread_commands::thread_rename,
                 thread_commands::thread_duplicate,

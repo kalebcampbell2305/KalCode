@@ -30,6 +30,9 @@ import {
   X,
 } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, type ReactElement, type ReactNode, useEffect, useRef } from "react";
+import { useOptionalWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { FavoriteButton, useFavoriteMenuItems } from "../favorites/FavoriteActions.tsx";
+import type { FavoriteTarget } from "../favorites/model.ts";
 import type { TabInfo } from "./contentRegistry.ts";
 import { contentKey, type LeafNode, type Rect } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
@@ -41,6 +44,7 @@ export const bodyDomId = (paneId: string) => `pane-${paneId}-body`;
 export const panelDomId = (paneId: string) => `pane-${paneId}-panel`;
 
 export interface PaneFrameProps {
+  workspaceId?: string;
   leaf: LeafNode;
   index: number;
   count: number;
@@ -83,6 +87,35 @@ const SWAP: { direction: PaneDirection; label: string; icon: ReactNode }[] = [
   { direction: "down", label: "Move pane down", icon: <ArrowDown /> },
 ];
 
+function paneFavoriteTarget(content: PaneContent, workspaceId: string | null): FavoriteTarget | null {
+  if (!workspaceId) return null;
+  if (content.kind === "terminal") return { kind: "terminal", id: content.terminalId, workspaceId };
+  if (content.kind === "agent") return { kind: "agent", id: content.agentId, workspaceId };
+  if (content.kind === "thread") return { kind: "thread", id: content.threadId, workspaceId };
+  return null;
+}
+
+function PaneObjectMenu({
+  content,
+  workspaceId,
+  title,
+  items,
+  children,
+}: {
+  content: PaneContent;
+  workspaceId: string | null;
+  title: string;
+  items: readonly ObjectMenuItem[];
+  children: ReactElement;
+}) {
+  const favorites = useFavoriteMenuItems(paneFavoriteTarget(content, workspaceId), title);
+  return (
+    <ObjectContextMenu label={`${title} actions`} items={[...favorites, ...items]}>
+      {children}
+    </ObjectContextMenu>
+  );
+}
+
 /**
  * Pane chrome and its content slot. Persistent content hosts belong to the canvas, so
  * moving, tabbing, minimizing and docking preserve the mounted view and session identity.
@@ -121,6 +154,8 @@ export function PaneFrame(props: PaneFrameProps) {
     consumeClick,
   } = props;
   const listRef = useRef<HTMLDivElement>(null);
+  const workspaces = useOptionalWorkspaces();
+  const workspaceId = props.workspaceId ?? workspaces?.active?.id ?? null;
   const frameRef = useRef<HTMLElement>(null);
   const active = leaf.tabs[leaf.activeTab] ?? null;
   const activeInfo = tabs[leaf.activeTab] ?? null;
@@ -130,12 +165,16 @@ export function PaneFrame(props: PaneFrameProps) {
   const attentionInfo = tabs.find((tab) => tab.attention === "needs-you") ?? tabs.find((tab) => tab.attention);
   const attentionLabel = (info: TabInfo) => (info.attention === "needs-you" ? "Needs You" : "Done");
   function menuFor(content: PaneContent, title: string, child: ReactElement) {
-    return contextMenu ? (
-      <ObjectContextMenu key={contentKey(content)} label={`${title} actions`} items={contextMenu(content, leaf.paneId)}>
+    return (
+      <PaneObjectMenu
+        key={contentKey(content)}
+        content={content}
+        workspaceId={workspaceId}
+        title={title}
+        items={contextMenu?.(content, leaf.paneId) ?? []}
+      >
         {child}
-      </ObjectContextMenu>
-    ) : (
-      child
+      </PaneObjectMenu>
     );
   }
   const body = (
@@ -376,6 +415,15 @@ export function PaneFrame(props: PaneFrameProps) {
           </DropdownMenu>
         </div>
         <div className={styles.headerActions} data-no-drag>
+          {active && paneFavoriteTarget(active, workspaceId)
+            ? menuFor(
+                active,
+                title,
+                <span>
+                  <FavoriteButton target={paneFavoriteTarget(active, workspaceId) as FavoriteTarget} title={title} />
+                </span>,
+              )
+            : null}
           {activeInfo?.actions}
           {maximized ? (
             <span className={styles.maxBadge}>
