@@ -729,7 +729,8 @@ pub enum ResourceReleaseCause {
 /// soft memory reserve is reached, or because resource telemetry is late; optional background
 /// work is throttled for those instead. Only genuine hard pressure (critically low memory, a full
 /// disk, the OS refusing another process) or a count limit the person set explicitly in Custom
-/// mode may hold one, and every hold offers Start Anyway.
+/// mode may hold one, and every hold offers Start Anyway. `background_yield` is only ever a
+/// background session's hold (one the Operations scheduler started), never a user launch's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -745,17 +746,21 @@ pub enum LaunchHoldKind {
     ConcurrencyLimit,
     /// The explicit Custom-mode limit for this provider is reached.
     ProviderLimit,
+    /// Background work (an Operations-scheduled task) is yielding while the system is busy:
+    /// the person's coding agents and the app come first. Never a hold on a user launch.
+    BackgroundYield,
 }
 
 impl LaunchHoldKind {
     /// Precedence when a decision has several reasons: genuine hard pressure first (it is what
     /// actually stops the launch), then the person's own count limits.
-    pub const PRECEDENCE: [LaunchHoldKind; 5] = [
+    pub const PRECEDENCE: [LaunchHoldKind; 6] = [
         Self::MemoryCritical,
         Self::DiskFull,
         Self::ProcessLimit,
         Self::ConcurrencyLimit,
         Self::ProviderLimit,
+        Self::BackgroundYield,
     ];
 
     /// A stable, log-friendly code.
@@ -766,6 +771,7 @@ impl LaunchHoldKind {
             Self::ProcessLimit => "process_limit",
             Self::ConcurrencyLimit => "concurrency_limit",
             Self::ProviderLimit => "provider_limit",
+            Self::BackgroundYield => "background_yield",
         }
     }
 
@@ -777,6 +783,9 @@ impl LaunchHoldKind {
             Self::ProcessLimit => "the system couldn't create another process",
             Self::ConcurrencyLimit => "your Custom agent limit is reached",
             Self::ProviderLimit => "your Custom limit for this provider is reached",
+            Self::BackgroundYield => {
+                "background work waits while the system is busy, so your agents come first"
+            }
         }
     }
 

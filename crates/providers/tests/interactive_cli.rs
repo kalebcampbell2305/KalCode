@@ -175,6 +175,7 @@ impl Rig {
             permission_mode: mode,
             resume_session_id: None,
             secret_ref: None,
+            launch_origin: Default::default(),
         }
     }
 
@@ -1134,6 +1135,7 @@ fn the_router_starts_marked_threads_in_a_pane_and_others_headless() {
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     };
     let thread_id = config.thread_id.clone();
     let (tx, _rx) = mpsc::channel::<AgentEvent>();
@@ -1167,6 +1169,7 @@ fn a_codex_pane_starts_without_a_view_attached() {
         permission_mode: PermissionMode::Approve,
         resume_session_id: None,
         secret_ref: None,
+        launch_origin: Default::default(),
     };
     let thread_id = config.thread_id.clone();
     let (tx, _rx) = mpsc::channel::<AgentEvent>();

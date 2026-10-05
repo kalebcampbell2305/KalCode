@@ -3700,6 +3700,7 @@ mod tests {
                 permission_mode: PermissionMode::Approve,
                 resume_session_id: None,
                 secret_ref: None,
+                launch_origin: Default::default(),
             },
             sink,
         )

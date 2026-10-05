@@ -9,7 +9,8 @@
 //! user-requested coding agents ([`ResourceGovernorState::reserve_provider_task`]) start
 //! immediately and are held only for genuine hard pressure (`kalcode_resources::hard`) or an
 //! explicit Custom limit, with Start Anyway; optional background work (local model inference and
-//! acquisition, [`ResourceGovernorState::reserve_local_task`]) is fail-closed and yields to CPU
+//! acquisition, [`ResourceGovernorState::reserve_local_task`], and provider sessions the
+//! Operations scheduler starts, `LaunchOrigin::Background`) is fail-closed and yields to CPU
 //! load, soft memory pressure, and the budgets of agents that just started.
 
 use std::collections::BTreeMap;
@@ -23,6 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
 use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
+use kalcode_contracts::agent::LaunchOrigin;
 use kalcode_core::{IpcError, KalError};
 #[cfg(feature = "e2e")]
 use kalcode_resources::probe::{Counters, ProbePlan, RawCpu, RawMemory, RawSample};
@@ -155,13 +157,16 @@ struct ActivityTracker {
     start_anyway: BTreeMap<String, i64>,
 }
 
-/// A user-requested coding-agent launch (or turn) as the governor sees it. Provider-agnostic.
+/// A coding-agent launch (or turn) as the governor sees it. Provider-agnostic.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct AgentLaunch {
     /// The thread, for a Start Anyway grant.
     pub thread_id: Option<String>,
     /// The workspace, whose volume must not be full.
     pub workspace_id: Option<String>,
+    /// Who asked for it: the person's agents get the user-agent policy, background work the
+    /// strict projected policy that yields first.
+    pub origin: LaunchOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -712,15 +717,21 @@ impl ResourceGovernorState {
             Some(handle) => (handle.latest(), handle.limits()),
             None => (None, ModeLimits::balanced()),
         };
-        let decision = user_agent_admission(
-            latest.as_deref(),
-            &limits,
-            &running,
-            &request,
-            launch.workspace_id.as_deref(),
-            now,
-            override_holds,
-        );
+        let decision = match launch.origin {
+            // Start Anyway is the person's own request: it admits background work like theirs.
+            LaunchOrigin::Background if !override_holds => {
+                background_provider_admission(&runtime, &running, &request, now)
+            }
+            _ => user_agent_admission(
+                latest.as_deref(),
+                &limits,
+                &running,
+                &request,
+                launch.workspace_id.as_deref(),
+                now,
+                override_holds,
+            ),
+        };
         if override_holds && !decision.reasons.is_empty() {
             tracing::info!(
                 event = "resources.start_anyway_admitted",
@@ -1395,6 +1406,48 @@ fn report(runtime: &Runtime, now_unix_ms: i64) -> ResourceReport {
         background_admission,
         freshness: freshness(latest.as_deref(), now_unix_ms, max_age),
     }
+}
+
+/// The strict policy for a background provider launch (an Operations-scheduled task), the one
+/// local model work uses: projected CPU and memory headroom, pressure levels and a fresh sample,
+/// counting agents that started but aren't measured yet. Without a sample or a per-agent budget
+/// it holds: background work never guesses.
+fn background_provider_admission(
+    runtime: &Runtime,
+    running: &RunningWork,
+    request: &CapacityRequest,
+    now_unix_ms: i64,
+) -> AdmissionDecision {
+    let (latest, limits) = match runtime.handle.as_ref() {
+        Some(handle) => (handle.latest(), handle.limits()),
+        None => (None, ModeLimits::balanced()),
+    };
+    let pending = runtime.activity.unmeasured_budget(
+        latest
+            .as_deref()
+            .map(|snapshot| snapshot.sampled_at_unix_ms),
+    );
+    let budget = provider_budget(latest.as_deref(), &limits);
+    let mut decision = projected_runtime_admission(
+        runtime,
+        running,
+        request,
+        AdmissionRequirements::provider_task(),
+        pending,
+        budget.unwrap_or_default(),
+        now_unix_ms,
+    );
+    if budget.is_none() {
+        decision.state = AdmissionState::Held;
+        decision.additional = 0;
+        if !decision
+            .reasons
+            .contains(&AdmissionReason::CapacityUnavailable)
+        {
+            decision.reasons.push(AdmissionReason::CapacityUnavailable);
+        }
+    }
+    decision
 }
 
 /// The user-requested coding-agent policy over the governor's latest sample (see

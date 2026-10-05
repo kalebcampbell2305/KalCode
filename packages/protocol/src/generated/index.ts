@@ -156,6 +156,7 @@ export type { LatencySnapshot } from "./LatencySnapshot.ts";
 export type { LatencyStage } from "./LatencyStage.ts";
 export type { LaunchAccountChoice } from "./LaunchAccountChoice.ts";
 export type { LaunchHoldKind } from "./LaunchHoldKind.ts";
+export type { LaunchOrigin } from "./LaunchOrigin.ts";
 export type { LaunchThreadInstance } from "./LaunchThreadInstance.ts";
 export type { LayoutPreset } from "./LayoutPreset.ts";
 export type { LifecycleCallbackClass } from "./LifecycleCallbackClass.ts";
