@@ -6,7 +6,7 @@ import { useWorkspaces } from "../../../runtime/WorkspaceProvider.tsx";
 import { groupRunning, tabLabels } from "../../../runtime/workspaceState.ts";
 import { useRunningTerminals, useThreadSummaries } from "../../../surfaces/dashboard/data/DashboardData.tsx";
 import { formatElapsed } from "../../../surfaces/dashboard/data/format.ts";
-import { useNow } from "../../../surfaces/dashboard/useNow.ts";
+import { useClock } from "../../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../../navigation.tsx";
 import styles from "./TerminalsWidget.module.css";
 
@@ -25,7 +25,14 @@ export function TerminalsWidget() {
   const threads = useThreadSummaries().state;
   const { workspaces, activate, selectTerminal } = useWorkspaces();
   const { navigate } = useNavigation();
-  const now = useNow(30_000);
+  // A tick re-renders the list only when a run time it shows changes.
+  const now = useClock((at) =>
+    state.status === "ready"
+      ? state.data
+          .map((terminal) => (terminal.startedAt ? formatElapsed(at - Date.parse(terminal.startedAt)) : ""))
+          .join("|")
+      : null,
+  );
 
   if (state.status === "unavailable") {
     return <p className={styles.none}>Terminals aren't available in this build.</p>;

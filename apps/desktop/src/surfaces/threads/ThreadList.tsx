@@ -1,8 +1,9 @@
 import { Badge, Button, ErrorState, ProviderGlyph, Skeleton, StatusChip, TextInput } from "@kalcode/ui/components";
 import { Search } from "lucide-react";
-import { type KeyboardEvent, type RefObject, useEffect, useState } from "react";
+import type { KeyboardEvent, RefObject } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { FavoriteButton } from "../../shell/favorites/FavoriteActions.tsx";
+import { useNow } from "../dashboard/useNow.ts";
 import { matchesQuery, presentThread } from "./model.ts";
 import { ThreadContextMenu, ThreadMenuDataProvider } from "./ThreadContextMenu.tsx";
 import styles from "./ThreadList.module.css";
@@ -17,15 +18,6 @@ interface ThreadListProps {
   selectedId: string | null;
   onSelect: (threadId: string) => void;
   searchRef: RefObject<HTMLInputElement | null>;
-}
-
-function useNow(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
 }
 
 /** Arrow keys move between rows (the list is also reachable with Tab). */

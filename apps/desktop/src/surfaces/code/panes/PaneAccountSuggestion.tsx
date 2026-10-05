@@ -1,30 +1,41 @@
 import { IconButton } from "@kalcode/ui/components";
 import { ArrowRightLeft, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useContext, useState } from "react";
+import { useClock } from "../../dashboard/useNow.ts";
 import { accountName } from "../../providers/accountIdentity.ts";
-import { suggestAccounts } from "../../providers/accountSuggestions.ts";
+import { type AccountSuggestion, suggestAccounts } from "../../providers/accountSuggestions.ts";
 import { useOptionalProviderAccountSessions } from "../../providers/ProviderAccountSessions.tsx";
+import { CodeShownContext } from "../codeShown.ts";
 import styles from "./PaneAccountPicker.module.css";
 import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPicker.tsx";
+
+/** Everything the advice shows, so a clock tick that changes none of it renders nothing. */
+function adviceKey(suggestion: AccountSuggestion | null): string | null {
+  if (!suggestion) return null;
+  const best = suggestion.alternatives[0];
+  return [suggestion.condition, suggestion.reason, best?.account.id ?? "", best?.detail ?? ""].join("|");
+}
 
 /** Inline advice never steals focus, launches an agent, or changes an account preference. */
 export function PaneAccountSuggestion(props: PaneAccountPickerProps) {
   const sessions = useOptionalProviderAccountSessions();
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  if (!sessions?.accounts || sessions.loadError) return null;
-  const suggestion = suggestAccounts(
-    props.thread,
-    sessions.accounts,
-    sessions.usage,
-    sessions.checking,
-    sessions.validationErrors,
-    Date.now(),
-  );
+  const suggestAt = (now: number) =>
+    sessions?.accounts && !sessions.loadError
+      ? suggestAccounts(
+          props.thread,
+          sessions.accounts,
+          sessions.usage,
+          sessions.checking,
+          sessions.validationErrors,
+          now,
+        )
+      : null;
+  // Usage windows age and reset, so the advice follows the shared clock, but a tick re-renders the
+  // pane only when the advice reads differently, and never while Code is hidden. The advice itself
+  // reads the current time: a usage read newer than the last tick must count at once.
+  useClock((at) => adviceKey(suggestAt(at)), useContext(CodeShownContext));
+  const suggestion = suggestAt(Date.now());
   if (!suggestion) return null;
   const conditionKey = `${props.thread.providerAccountId}:${suggestion.condition}`;
   if (dismissed === conditionKey) return null;

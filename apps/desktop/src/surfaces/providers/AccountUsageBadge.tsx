@@ -1,9 +1,10 @@
 import type { ProviderAccount } from "@kalcode/protocol";
 import { ProviderGlyph } from "@kalcode/ui/components";
 import { Popover } from "radix-ui";
-import { type CSSProperties, useEffect, useId, useState } from "react";
+import { type CSSProperties, useId } from "react";
 import { formatRelative } from "../../runtime/describeEvent.ts";
 import { accountProviderName } from "../../shell/accountCommands.ts";
+import { useNow } from "../dashboard/useNow.ts";
 import styles from "./AccountUsageBadge.module.css";
 import { accountName, accountSessionState } from "./accountIdentity.ts";
 import {
@@ -118,16 +119,6 @@ export function UsageMeter({ usage, className }: { usage: AccountUsageState; cla
   );
 }
 
-/** Re-renders once a minute so "Resets in…" and "Updated…" stay honest while a menu is open. */
-function useMinuteClock(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
-}
-
 /** Account, identity, plan, each usage window and when it was read: the badge's popover body. */
 export function AccountUsageDetails({
   account,
@@ -136,7 +127,8 @@ export function AccountUsageDetails({
   account: Pick<ProviderAccount, "id" | "displayName" | "providerId">;
   usage: AccountUsageState;
 }) {
-  const now = useMinuteClock();
+  // The shared clock keeps "Resets in…" and "Updated…" honest while the popover is open.
+  const now = useNow();
   const titleId = useId();
   const sessions = useOptionalProviderAccountSessions();
   const full = sessions?.accounts?.find((a) => a.id === account.id) ?? null;
