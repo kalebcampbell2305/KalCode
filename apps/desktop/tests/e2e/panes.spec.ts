@@ -123,11 +123,14 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     });
 
     // Resize the first divider with the keyboard, and collapse pane 3.
+    // A just-started terminal can take focus when it becomes ready; make sure the divider holds it
+    // before resizing (on the gate the keys once went elsewhere and the ratio stayed 50).
     await divider(page).focus();
+    await expect(divider(page)).toBeFocused();
     await page.keyboard.press("Shift+ArrowRight");
     await page.keyboard.press("Shift+ArrowRight");
+    await expect.poll(async () => Number(await divider(page).getAttribute("aria-valuenow"))).toBeGreaterThan(55);
     const arrangedRatio = await divider(page).getAttribute("aria-valuenow");
-    expect(Number(arrangedRatio)).toBeGreaterThan(55);
     await pane(page, 2).getByRole("button", { name: "Actions for pane 3" }).click();
     await page.getByRole("menuitem", { name: "Collapse" }).click();
     await expect(page.locator("[data-pane-id][data-collapsed]")).toHaveCount(1);
@@ -141,6 +144,11 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await page.keyboard.press("Enter");
     await expect.poll(() => processesMatching("-n 97 127.0.0.1").length, { timeout: 20_000 }).toBeGreaterThan(0);
     await pane(page, 0).getByRole("button", { name: "Close pane 1" }).click();
+    // Smart Close (#222) asks before closing a pane with a running program; stop it.
+    await page
+      .getByRole("alertdialog", { name: "Close active work?" })
+      .getByRole("button", { name: "Stop and Close", exact: true })
+      .click();
     await expect(panes(page)).toHaveCount(2);
     await expect.poll(() => processesMatching("-n 97 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
     await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);
