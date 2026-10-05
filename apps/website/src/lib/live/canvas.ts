@@ -236,7 +236,7 @@ export function renderAdaptiveCanvas(
             .flatMap((frame) =>
               frame.tabs.map((id) => {
                 const tab = state.tabs[id];
-                const title = tab?.agent ? state.agents[tab.agent]?.sign : tab?.title;
+                const title = tab?.agent ? state.agents[tab.agent]?.name : tab?.title;
                 return `<button type="button" class="lk-btn lk-mtab" data-do="tab:${escapeHtml(id)}" aria-pressed="${state.focus === frame.id && frame.active === id}">${escapeHtml(title ?? "Pane")}</button>`;
               }),
             )

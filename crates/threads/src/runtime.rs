@@ -290,6 +290,7 @@ struct NewThread<'a> {
     effort: Option<&'a str>,
     permission_mode: PermissionMode,
     name: String,
+    name_origin: &'static str,
     /// Prepares the folder the session runs in instead of the workspace root (a thread's own
     /// Git worktree). Runs after every other check, just before the thread is recorded.
     cwd: Option<PrepareFolder<'a>>,
@@ -595,6 +596,7 @@ impl ThreadRuntime {
             inner,
             subscription,
         };
+        runtime.inner.restore_default_names()?;
         runtime.inner.recover();
         Ok(runtime)
     }
@@ -1224,6 +1226,15 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
+                name_origin: if request
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| !n.trim().is_empty())
+                {
+                    "manual"
+                } else {
+                    "automatic"
+                },
                 cwd,
             },
             Some(AdmittedPrompt {
@@ -1236,7 +1247,7 @@ impl ThreadRuntime {
     }
 
     /// Creates a thread whose session starts without a task; it waits (`idle`) for input. Coding
-    /// agents (provider panes) start this way, so an untitled one is a "New agent".
+    /// agents (provider panes) start this way with their clean provider display name.
     pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
         self.create_idle_inner(request, None, None)
     }
@@ -1271,7 +1282,18 @@ impl ThreadRuntime {
     ) -> Result<ThreadSummary> {
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
-            None => naming::AGENT_FALLBACK_NAME.to_owned(),
+            None => self
+                .inner
+                .providers
+                .get(&ProviderId::new(&request.provider_id))
+                .map(|entry| {
+                    entry
+                        .provider
+                        .display_name()
+                        .trim_end_matches(" CLI")
+                        .to_owned()
+                })
+                .unwrap_or_else(|| request.provider_id.clone()),
         };
         self.inner.create(
             NewThread {
@@ -1283,6 +1305,15 @@ impl ThreadRuntime {
                 effort: request.effort.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
+                name_origin: if request
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| !n.trim().is_empty())
+                {
+                    "manual"
+                } else {
+                    "default"
+                },
                 cwd: cwd.map(|path| Box::new(move || Ok(path)) as PrepareFolder<'_>),
             },
             None,
@@ -1515,6 +1546,14 @@ impl ThreadRuntime {
         validate::thread_id(thread_id)?;
         let name = validate::name(name)?;
         self.inner.rename(thread_id, &name)?;
+        self.inner.summary(thread_id)
+    }
+
+    /// Names a submitted user task without storing its text. Manual names always win,
+    /// including a manual rename racing this callback or choosing the provider default.
+    pub fn name_from_task(&self, thread_id: &str, prompt: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.inner.name_from_task(thread_id, prompt)?;
         self.inner.summary(thread_id)
     }
 
@@ -2439,6 +2478,7 @@ impl Inner {
         };
         self.core.write_with_events(|tx| {
             store::insert_thread(tx, &row)?;
+            store::set_name_origin(tx, &id, request.name_origin)?;
             let ctx = Ctx {
                 thread_id: id.clone(),
                 workspace_id: workspace.id.clone(),
@@ -3737,6 +3777,9 @@ impl Inner {
         let session = state.session.clone().ok_or_else(not_running)?;
         let recorded = match input.record.take() {
             Some(text) => {
+                if let Err(error) = self.name_from_task(&ctx.thread_id, &text) {
+                    tracing::warn!(event = "thread.title_failed", error = %error.diagnostic());
+                }
                 Some(self.persist_message(ctx, MessageRole::User, &text, None, EventSource::Ui)?)
             }
             None => None,
@@ -4165,12 +4208,13 @@ impl Inner {
     }
 
     fn rename(&self, thread_id: &str, name: &str) -> Result<()> {
-        let row = self.row(thread_id)?;
-        if row.name == name {
-            return Ok(());
-        }
-        let ctx = Ctx::from_row(&row);
         self.core.write_with_events(|tx| {
+            let row = store::get(tx, thread_id)?;
+            store::set_name_origin(tx, thread_id, "manual")?;
+            if row.name == name {
+                return Ok(((), Vec::new()));
+            }
+            let ctx = Ctx::from_row(&row);
             store::rename(tx, thread_id, name)?;
             Ok((
                 (),
@@ -4182,6 +4226,64 @@ impl Inner {
                     },
                 )],
             ))
+        })?;
+        Ok(())
+    }
+
+    fn name_from_task(&self, thread_id: &str, prompt: &str) -> Result<()> {
+        // The existing firewall excludes credentials and private injected context from titles.
+        if prompt_firewall().check_user_prompt(prompt).warn {
+            return Ok(());
+        }
+        let Some(name) = naming::task_name_from_prompt(prompt) else {
+            return Ok(());
+        };
+        self.core.write_with_events(|tx| {
+            let row = store::get(tx, thread_id)?;
+            let origin = store::name_origin(tx, thread_id)?;
+            let can_name = origin.as_deref() == Some("default")
+                || (origin.as_deref() == Some("automatic")
+                    && naming::should_update_task(&row.name, prompt));
+            if !can_name || row.name == name {
+                return Ok(((), Vec::new()));
+            }
+            store::rename(tx, thread_id, &name)?;
+            store::set_name_origin(tx, thread_id, "automatic")?;
+            Ok((
+                (),
+                vec![Ctx::from_row(&row).event(
+                    EventSource::Core,
+                    EventPayload::ThreadRenamed {
+                        thread_id: thread_id.to_owned(),
+                        name,
+                    },
+                )],
+            ))
+        })?;
+        Ok(())
+    }
+
+    fn restore_default_names(&self) -> Result<()> {
+        self.core.write_with_events(|tx| {
+            let ids = {
+                let mut statement = tx.prepare("SELECT id FROM threads WHERE name = 'New agent'")?;
+                statement.query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            let mut events = Vec::new();
+            for id in ids {
+                if store::name_origin(tx, &id)?.is_some() { continue; }
+                // A pre-upgrade explicit rename has durable event provenance too.
+                let renamed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE thread_id=?1 AND type='thread.renamed')", [&id], |row| row.get(0))?;
+                if renamed { continue; }
+                let row = store::get(tx, &id)?;
+                let name = row.provider_name.trim_end_matches(" CLI").to_owned();
+                store::rename(tx, &id, &name)?;
+                store::set_name_origin(tx, &id, "default")?;
+                events.push(Ctx::from_row(&row).event(EventSource::Core,
+                    EventPayload::ThreadRenamed { thread_id: id, name }));
+            }
+            Ok(((), events))
         })?;
         Ok(())
     }

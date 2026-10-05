@@ -1,8 +1,8 @@
 import type { ProviderAccount, ProviderAccountUsage } from "@kalcode/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import type { EventFeed } from "../../runtime/eventFeed.ts";
-import type { AccountUsageState, UsageWindow } from "./accountUsage.ts";
+import { type AccountUsageState, isReportedPercent, type UsageWindow } from "./accountUsage.ts";
 
 /** Background refresh cadence while the window is visible. */
 export const USAGE_REFRESH_MS = 90_000;
@@ -16,7 +16,9 @@ export const USAGE_AFTER_SESSION_DELAY_MS = 2_000;
 const SESSION_END_EVENTS = new Set(["agent.turn_completed", "thread.completed", "thread.failed"]);
 const RESET_SINCE_READ = "Usage reset since the last agent run";
 const READ_FAILED = "Usage couldn't be read";
+const INVALID_READING = "Provider usage is unavailable";
 const EMPTY: ReadonlyMap<string, AccountUsageState> = new Map();
+const EMPTY_REVISIONS: ReadonlyMap<string, number> = new Map();
 
 type UsageRead = readonly ProviderAccountUsage[] | "checking" | "failed";
 
@@ -32,9 +34,13 @@ export function toAccountUsageState(native: ProviderAccountUsage, now: number): 
     return { ...base, status: "unavailable", windows: [], checkedAt: null, reason: native.reason };
   }
   const windows: UsageWindow[] =
-    native.status === "available"
+    native.status === "available" && native.checkedAt !== null && Number.isFinite(Date.parse(native.checkedAt))
       ? native.windows
-          .filter((window) => window.resetsAt === null || !(Date.parse(window.resetsAt) <= now))
+          .filter(
+            (window) =>
+              isReportedPercent(window.remainingPercent) &&
+              (window.resetsAt === null || Date.parse(window.resetsAt) > now),
+          )
           .map((window) => ({
             id: window.id,
             label: window.label,
@@ -43,7 +49,8 @@ export function toAccountUsageState(native: ProviderAccountUsage, now: number): 
           }))
       : [];
   if (windows.length === 0) {
-    const reason = native.status === "available" ? RESET_SINCE_READ : native.reason;
+    const resetPassed = native.windows.some((window) => window.resetsAt !== null && Date.parse(window.resetsAt) <= now);
+    const reason = native.status === "available" ? (resetPassed ? RESET_SINCE_READ : INVALID_READING) : native.reason;
     return { ...base, status: "not_checked", windows: [], checkedAt: null, reason };
   }
   return {
@@ -110,11 +117,28 @@ export function nextUsageMap(
     const before = previous.get(account.id);
     const native = byId?.get(account.id);
     let state: AccountUsageState;
-    if (native) state = toAccountUsageState(native, now);
-    else if (before && (before.status === "fresh" || before.status === "stale")) state = restamp(before, now);
+    if (read === "failed") {
+      state = {
+        accountId: account.id,
+        plan: before?.plan ?? null,
+        status: "unavailable",
+        windows: [],
+        checkedAt: null,
+        reason: READ_FAILED,
+      };
+    } else if (native) state = toAccountUsageState(native, now);
+    else if (read === "checking" && before && (before.status === "fresh" || before.status === "stale"))
+      state = restamp(before, now);
     else if (read === "checking") state = before ?? notCheckedYet(account.id, "checking");
-    else if (before && before.status !== "checking") state = before;
-    else state = notCheckedYet(account.id, read === "failed" ? READ_FAILED : null);
+    else
+      state = {
+        accountId: account.id,
+        plan: before?.plan ?? null,
+        status: "unavailable",
+        windows: [],
+        checkedAt: null,
+        reason: INVALID_READING,
+      };
     if (before && sameState(before, state)) state = before;
     else changed = true;
     next.set(account.id, state);
@@ -131,6 +155,53 @@ function isVisible(): boolean {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
 }
 
+function accountBinding(account: ProviderAccount, revision = 0): string {
+  return JSON.stringify([
+    account.providerId,
+    account.id,
+    account.providerReportedIdentity,
+    account.authenticationState,
+    account.archivedAt,
+    revision,
+  ]);
+}
+
+interface UsageSnapshot {
+  client?: KalCodeClient;
+  values: ReadonlyMap<string, AccountUsageState>;
+  bindings: ReadonlyMap<string, string>;
+}
+
+const EMPTY_SNAPSHOT: UsageSnapshot = { values: EMPTY, bindings: new Map() };
+
+function boundUsage(
+  snapshot: UsageSnapshot,
+  accounts: readonly ProviderAccount[],
+  revisions: ReadonlyMap<string, number>,
+): ReadonlyMap<string, AccountUsageState> {
+  const allowed = new Map(
+    accounts
+      .filter((account) => account.archivedAt === null)
+      .map((account) => [account.id, accountBinding(account, revisions.get(account.id))]),
+  );
+  const entries = [...snapshot.values].filter(([id]) => allowed.get(id) === snapshot.bindings.get(id));
+  return entries.length === snapshot.values.size ? snapshot.values : new Map(entries);
+}
+
+function snapshotFor(
+  previous: UsageSnapshot,
+  accounts: readonly ProviderAccount[],
+  read: UsageRead,
+  revisions: ReadonlyMap<string, number>,
+  client: KalCodeClient,
+): UsageSnapshot {
+  return {
+    client,
+    values: nextUsageMap(boundUsage(previous, accounts, revisions), accounts, read, Date.now()),
+    bindings: new Map(accounts.map((account) => [account.id, accountBinding(account, revisions.get(account.id))])),
+  };
+}
+
 /**
  * Owns the shell-lifetime usage map behind `useAccountUsages`. Reads are passive native file
  * reads and never block anything: the map starts empty, accounts show "checking" while the first
@@ -143,10 +214,13 @@ export function useAccountUsageReader(
   accounts: readonly ProviderAccount[] | null,
   feed: EventFeed | null | undefined,
   refreshRequest = 0,
+  revisions: ReadonlyMap<string, number> = EMPTY_REVISIONS,
 ): ReadonlyMap<string, AccountUsageState> {
-  const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsageState>>(EMPTY);
+  const [usage, setUsage] = useState<UsageSnapshot>(EMPTY_SNAPSHOT);
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
+  const revisionsRef = useRef(revisions);
+  revisionsRef.current = revisions;
   const run = useRef({ generation: 0, inflight: false, again: false, lastStarted: Number.NEGATIVE_INFINITY });
 
   const refresh = useCallback((): void => {
@@ -160,23 +234,31 @@ export function useAccountUsageReader(
     const current = accountsRef.current;
     if (!current) return;
     if (current.length === 0) {
-      setUsage((previous) => (previous.size === 0 ? previous : EMPTY));
+      setUsage(EMPTY_SNAPSHOT);
       return;
     }
     state.inflight = true;
     state.lastStarted = Date.now();
     const generation = state.generation;
-    setUsage((previous) => nextUsageMap(previous, current, "checking", Date.now()));
+    const requestedBindings = new Map(
+      current.map((account) => [account.id, accountBinding(account, revisionsRef.current.get(account.id))]),
+    );
+    const matchingAccounts = () =>
+      (accountsRef.current ?? []).filter(
+        (account) =>
+          requestedBindings.get(account.id) === accountBinding(account, revisionsRef.current.get(account.id)),
+      );
+    setUsage((previous) => snapshotFor(previous, current, "checking", revisionsRef.current, client));
     Promise.resolve()
       .then(() => reader.call(client))
       .then(
         (read) => {
           if (generation !== state.generation) return;
-          setUsage((previous) => nextUsageMap(previous, accountsRef.current ?? [], read, Date.now()));
+          setUsage((previous) => snapshotFor(previous, matchingAccounts(), read, revisionsRef.current, client));
         },
         () => {
           if (generation !== state.generation) return;
-          setUsage((previous) => nextUsageMap(previous, accountsRef.current ?? [], "failed", Date.now()));
+          setUsage((previous) => snapshotFor(previous, matchingAccounts(), "failed", revisionsRef.current, client));
         },
       )
       .finally(() => {
@@ -199,13 +281,13 @@ export function useAccountUsageReader(
     state.inflight = false;
     state.again = false;
     state.lastStarted = Number.NEGATIVE_INFINITY;
-    setUsage(EMPTY);
+    setUsage(EMPTY_SNAPSHOT);
   }, [client]);
 
   // Restored, connected, signed-in/out or removed accounts get a read right away.
   const accountsKey =
     accounts
-      ?.map((account) => `${account.id}:${account.authenticationState}`)
+      ?.map((account) => accountBinding(account, revisions.get(account.id)))
       .sort()
       .join("|") ?? null;
   useEffect(() => {
@@ -251,5 +333,11 @@ export function useAccountUsageReader(
     };
   }, [feed]);
 
-  return usage;
+  // Hide the old identity's cache in the very render that receives the new identity.
+  // In-flight reads are also restricted to the identities captured when they started.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: accountsKey is the stable account binding signature.
+  return useMemo(
+    () => (usage.client === client ? boundUsage(usage, accounts ?? [], revisions) : EMPTY),
+    [usage, accountsKey, client],
+  );
 }

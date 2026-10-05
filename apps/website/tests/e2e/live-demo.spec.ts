@@ -28,7 +28,7 @@ test.describe("live demo (desktop)", () => {
 
   test("Try KalCode opens the demo; launching agents adds coding terminals in Code", async ({ page }) => {
     const errors = await openDemo(page);
-    await expect(app(page).getByRole("region", { name: /Pane 1: Claude A/ })).toBeVisible();
+    await expect(app(page).getByRole("region", { name: /Pane 1: Dashboard Redesign/ })).toBeVisible();
     const panes = await app(page).locator(".lk-tab").count();
     await app(page).getByRole("button", { name: "New agent" }).click();
     const dialog = app(page).getByRole("dialog", { name: /New agent/ });
@@ -37,7 +37,7 @@ test.describe("live demo (desktop)", () => {
     await dialog.getByRole("button", { name: "One more agent" }).click();
     await dialog.getByRole("button", { name: "Launch 2 Codex agents" }).click();
     await expect(app(page).locator(".lk-tab")).toHaveCount(panes + 2);
-    await expect(app(page).getByRole("button", { name: "Codex B · Personal", exact: true })).toBeVisible();
+    await expect(app(page).getByRole("button", { name: "Codex", exact: true }).first()).toBeVisible();
     // The new agent waits at its own prompt, like a real terminal.
     await expect(
       app(page)
@@ -52,22 +52,20 @@ test.describe("live demo (desktop)", () => {
     await app(page)
       .getByRole("button", { name: /needs you/ })
       .click();
-    await expect(app(page).getByRole("group", { name: "Claude C needs approval" })).toBeVisible();
+    await expect(app(page).getByRole("group", { name: "Login Validation needs approval" })).toBeVisible();
     await app(page).getByRole("button", { name: "Approve once" }).click();
-    await expect(app(page).getByRole("group", { name: "Claude C needs approval" })).toHaveCount(0);
+    await expect(app(page).getByRole("group", { name: "Login Validation needs approval" })).toHaveCount(0);
   });
 
   test("Agent Fleet, Live Browser and Operations work from the demo", async ({ page }) => {
     await openDemo(page);
     await app(page).getByRole("button", { name: "Dashboard" }).first().click();
-    await expect(app(page).getByRole("region", { name: "Agent Fleet" })).toContainText("Claude A");
+    await expect(app(page).getByRole("region", { name: "Agent Fleet" })).toContainText("Dashboard Redesign");
     await app(page)
-      .getByRole("article", { name: /Codex A/ })
+      .getByRole("article", { name: /Dashboard Tests/ })
       .getByRole("button", { name: /Open/ })
       .click();
-    await expect(
-      app(page).getByRole("button", { name: "Codex A · Personal", exact: true, pressed: true }),
-    ).toBeVisible();
+    await expect(app(page).getByRole("button", { name: "Dashboard Tests", exact: true, pressed: true })).toBeVisible();
     await app(page).getByRole("button", { name: "Add to pane 1" }).click();
     await app(page).getByRole("menuitem", { name: "Browser" }).click();
     await expect(app(page).getByText("localhost:3000").first()).toBeVisible();
@@ -160,9 +158,9 @@ test.describe("live demo (phone)", () => {
     await expect(app(page).getByRole("navigation", { name: "KalCode" })).toBeVisible();
     await app(page)
       .getByRole("group", { name: "Panes" })
-      .getByRole("button", { name: /Codex A/ })
+      .getByRole("button", { name: /Dashboard Tests/ })
       .click();
-    await expect(app(page).getByRole("log", { name: "Codex A terminal" })).toBeVisible();
+    await expect(app(page).getByRole("log", { name: "Dashboard Tests terminal" })).toBeVisible();
     await app(page).getByRole("button", { name: "Context" }).click();
     await app(page).getByRole("menuitem", { name: "Runs, services & tests" }).click();
     await expect(app(page).getByRole("tab", { name: /^Runs/ })).toBeVisible();

@@ -169,7 +169,7 @@ function admissionReasonText(reason: ResourceAdmissionReason | undefined): strin
     case "snapshot_missing":
       return "Waiting for a current resource sample.";
     case "snapshot_from_future":
-      return "The sampler clock is inconsistent. New work stays paused until a current sample arrives.";
+      return "The sampler clock is inconsistent. Background work stays paused until a current sample arrives.";
     case "snapshot_mode_mismatch":
       return "Waiting for a resource sample under the selected mode.";
     case "governor_not_ready":

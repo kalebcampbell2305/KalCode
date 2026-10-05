@@ -57,8 +57,6 @@ export interface AgentCardProps {
    */
   archived?: boolean;
   headingLevel?: 3 | 4;
-  /** Agent Fleet call sign, e.g. "Claude A" (the provider's name when absent). */
-  handle?: string;
   /** Git facts of the agent's own worktree, when it has one. */
   worktree?: ThreadWorktreeState;
   /** Whether the agent's worktree is ready to merge, and why not. */
@@ -153,7 +151,6 @@ export const AgentCard = memo(function AgentCard({
   onReviewApprovals,
   archived = false,
   headingLevel = 3,
-  handle,
   worktree,
   readiness,
   onCommitted,
@@ -249,7 +246,7 @@ export const AgentCard = memo(function AgentCard({
             {accountLabel}
           </span>
         ) : (
-          <span className={styles.who}>{handle ?? provider}</span>
+          <span className={styles.who}>{provider}</span>
         )}
         <span className={styles.state} data-tone={archived ? "muted" : tone} data-kind="state">
           {archived ? <Archive aria-hidden="true" className={styles.stateGlyph} /> : null}
@@ -419,12 +416,6 @@ export const AgentCard = memo(function AgentCard({
             <dt>Account</dt>
             <dd>{accountLabel ?? "Provider default"}</dd>
           </div>
-          {handle ? (
-            <div>
-              <dt>Call sign</dt>
-              <dd>{handle}</dd>
-            </div>
-          ) : null}
           <div>
             <dt>Model</dt>
             <dd>

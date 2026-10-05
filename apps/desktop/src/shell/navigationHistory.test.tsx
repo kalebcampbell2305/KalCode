@@ -1,12 +1,38 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Destination } from "./navigation.tsx";
-import { initialHistory, visitLocation } from "./navigationHistory.ts";
+import { initialHistory, navigationEntryLabel, visitLocation } from "./navigationHistory.ts";
 import { useNavigationHistory } from "./useNavigationHistory.ts";
 
 const visible = new Set<Destination>(["code", "dashboard", "settings", "providers", "threads"]);
 
 describe("navigation history", () => {
+  it("refreshes a renamed run without creating a second navigation visit", () => {
+    const location = {
+      destination: "operations" as const,
+      label: "Codex",
+      target: { kind: "operations" as const, tab: "runs" as const, runId: "run-one" },
+    };
+    const original = visitLocation(initialHistory("operations"), location);
+    const renamed = visitLocation(original, { ...location, label: "Billing Webhooks" });
+    expect(renamed.entries).toHaveLength(original.entries.length);
+    expect(renamed.entries[renamed.index]?.id).toBe(original.entries[original.index]?.id);
+    expect(renamed.entries[renamed.index]?.label).toBe("Billing Webhooks");
+    expect(renamed.nextId).toBe(original.nextId);
+  });
+  it("resolves renamed agents in old visits without changing their restore identity", () => {
+    const visit = {
+      id: 9,
+      destination: "code" as const,
+      workspaceId: "project",
+      label: "Claude Code",
+      target: { kind: "pane" as const, content: { kind: "agent" as const, agentId: "agent-one" } },
+    };
+    expect(navigationEntryLabel(visit, new Map([["agent-one", "Fix Login Form"]]))).toBe("Fix Login Form");
+    expect(navigationEntryLabel(visit, new Map([["agent-one", "New agent"]]))).toBe("New agent");
+    expect(navigationEntryLabel(visit, new Map())).toBe("Claude Code");
+    expect(visit.target.content.agentId).toBe("agent-one");
+  });
   it("enriches a surface with pane identity, deduplicates URL changes and bounds long sessions", () => {
     let state = initialHistory("code");
     state = visitLocation(state, {

@@ -12,7 +12,9 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::AuthState;
-use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountUsage};
+use kalcode_contracts::provider_accounts::{
+    ProviderAccount, ProviderAccountUsage, ProviderUsageStatus,
+};
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_providers::accounts::AccountStore;
 use kalcode_providers::managed::ManagedProfiles;
@@ -31,9 +33,60 @@ const LIVE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_LIVE_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 struct LiveEntry {
+    identity: AccountIdentity,
     attempted: Instant,
     succeeded: bool,
     usage: Option<ProviderAccountUsage>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct AccountIdentity {
+    provider: String,
+    reported: Option<String>,
+    authentication: AuthState,
+    credential_revision: Option<(std::time::SystemTime, u64)>,
+}
+
+fn identity(profiles: &ManagedProfiles, account: &ProviderAccount) -> AccountIdentity {
+    // Only filesystem metadata enters the cache key, never credentials. A successful
+    // reconnect can replace credentials before the asynchronously checked email changes.
+    let credential_revision = profiles
+        .existing_profile_home(account.provider_id.as_str(), &account.id)
+        .ok()
+        .flatten()
+        .and_then(|home| {
+            let file = if account.provider_id.as_str() == "codex" {
+                "auth.json"
+            } else {
+                ".credentials.json"
+            };
+            std::fs::symlink_metadata(home.join(file)).ok()
+        })
+        .filter(|metadata| metadata.is_file())
+        .and_then(|metadata| {
+            metadata
+                .modified()
+                .ok()
+                .map(|modified| (modified, metadata.len()))
+        });
+
+    AccountIdentity {
+        provider: account.provider_id.as_str().to_owned(),
+        reported: account.provider_reported_identity.clone(),
+        authentication: account.authentication_state,
+        credential_revision,
+    }
+}
+
+fn unavailable(account: &ProviderAccount, plan: Option<String>) -> ProviderAccountUsage {
+    ProviderAccountUsage {
+        account_id: account.id.clone(),
+        status: ProviderUsageStatus::Unavailable,
+        plan,
+        windows: Vec::new(),
+        checked_at: None,
+        reason: Some("Usage couldn't be read".to_owned()),
+    }
 }
 
 fn live_entries() -> &'static Mutex<HashMap<String, LiveEntry>> {
@@ -71,11 +124,19 @@ pub fn provider_account_usage(
                 .is_none_or(|ids| ids.iter().any(|id| id == &account.id))
         })
         .collect();
+    let identities: HashMap<_, _> = accounts
+        .iter()
+        .map(|account| (account.id.clone(), identity(&profiles, account)))
+        .collect();
     let passive: Vec<ProviderAccountUsage> = accounts
         .iter()
         .map(|account| read_account_usage(&profiles, account, now))
         .collect();
-    refresh_live(&profiles, &accounts, &passive, now);
+    refresh_live(&profiles, &accounts, &passive, &identities, now);
+    // Authentication may have completed while the network request was in flight.
+    let current = AccountStore::new(state.core()?.clone())
+        .list(None)
+        .map_err(|error| error.log_and_convert("provider_account_usage"))?;
     let entries = live_entries()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -83,12 +144,31 @@ pub fn provider_account_usage(
         .iter()
         .zip(passive)
         .map(|(account, passive)| {
-            let live = entries
+            if !current.iter().any(|value| {
+                value.id == account.id
+                    && value.archived_at.is_none()
+                    && identities.get(&account.id) == Some(&identity(&profiles, value))
+            }) {
+                return unavailable(account, None);
+            }
+            let entry = entries
                 .get(&account.id)
+                .filter(|entry| identities.get(&account.id) == Some(&entry.identity));
+            if let Some(entry) = entry.filter(|entry| !entry.succeeded) {
+                return unavailable(
+                    account,
+                    entry
+                        .usage
+                        .as_ref()
+                        .and_then(|usage| usage.plan.clone())
+                        .or(passive.plan),
+                );
+            }
+            let live = entry
                 .and_then(|entry| entry.usage.as_ref())
                 .filter(|_| account.authentication_state != AuthState::NotAuthenticated);
             match live {
-                Some(live) if newer(live, &passive) => live.clone(),
+                Some(live) if live.checked_at.is_none() || newer(live, &passive) => live.clone(),
                 _ => passive,
             }
         })
@@ -101,9 +181,10 @@ fn refresh_live(
     profiles: &ManagedProfiles,
     accounts: &[&ProviderAccount],
     passive: &[ProviderAccountUsage],
+    identities: &HashMap<String, AccountIdentity>,
     now: time::OffsetDateTime,
 ) {
-    let due: Vec<(&ProviderAccount, LiveUsageRequest)> = {
+    let due: Vec<(&ProviderAccount, AccountIdentity, LiveUsageRequest)> = {
         let mut entries = live_entries()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -111,6 +192,16 @@ fn refresh_live(
             .iter()
             .zip(passive)
             .filter_map(|(account, passive)| {
+                let expected_identity = identities.get(&account.id)?;
+                if *expected_identity != identity(profiles, account) {
+                    return None;
+                }
+                if entries
+                    .get(&account.id)
+                    .is_some_and(|entry| entry.identity != *expected_identity)
+                {
+                    entries.remove(&account.id);
+                }
                 let current = entries
                     .get(&account.id)
                     .and_then(|entry| entry.usage.as_ref())
@@ -131,12 +222,13 @@ fn refresh_live(
                 }
                 let request = live_usage_request(profiles, account, now)?;
                 let entry = entries.entry(account.id.clone()).or_insert(LiveEntry {
+                    identity: expected_identity.clone(),
                     attempted: Instant::now(),
                     succeeded: false,
                     usage: None,
                 });
                 entry.attempted = Instant::now();
-                Some((*account, request))
+                Some((*account, expected_identity.clone(), request))
             })
             .collect()
     };
@@ -144,7 +236,7 @@ fn refresh_live(
         return;
     }
     std::thread::scope(|scope| {
-        for (account, request) in due {
+        for (account, expected_identity, request) in due {
             scope.spawn(move || {
                 let usage = fetch_live(&request).and_then(|body| {
                     usage_from_live_response(
@@ -157,15 +249,31 @@ fn refresh_live(
                 let mut entries = live_entries()
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                if let Some(entry) = entries.get_mut(&account.id) {
+                if let Some(entry) = entries.get_mut(&account.id).filter(|entry| {
+                    response_matches(entry, &expected_identity, &identity(profiles, account))
+                }) {
                     entry.succeeded = usage.is_some();
-                    if usage.is_some() {
-                        entry.usage = usage;
-                    }
+                    entry.usage = usage.or_else(|| {
+                        Some(unavailable(
+                            account,
+                            entry
+                                .usage
+                                .as_ref()
+                                .and_then(|previous| previous.plan.clone()),
+                        ))
+                    });
                 }
             });
         }
     });
+}
+
+fn response_matches(
+    entry: &LiveEntry,
+    requested: &AccountIdentity,
+    current: &AccountIdentity,
+) -> bool {
+    entry.identity == *requested && requested == current
 }
 
 fn fetch_live(request: &LiveUsageRequest) -> Option<serde_json::Value> {
@@ -217,4 +325,55 @@ fn younger_than(usage: &ProviderAccountUsage, age: Duration, now: time::OffsetDa
 
 fn parse(value: &str) -> Option<time::OffsetDateTime> {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kalcode_contracts::agent::ProviderId;
+
+    #[test]
+    fn reconnect_invalidates_usage_even_before_reported_identity_changes() {
+        let temp = tempfile::tempdir().expect("profile root");
+        let root = temp.path().canonicalize().expect("canonical profile root");
+        let profiles = ManagedProfiles::for_data_dir(&root).expect("profiles");
+        let account = ProviderAccount {
+            id: "0192f3c4-0000-7000-8000-000000000201".to_owned(),
+            provider_id: ProviderId::new("codex"),
+            display_name: "Codex B".to_owned(),
+            provider_reported_identity: Some("person@example.test".to_owned()),
+            authentication_state: AuthState::Authenticated,
+            is_default: true,
+            created_at: "2026-10-04T00:00:00Z".to_owned(),
+            last_used_at: None,
+            last_checked_at: None,
+            last_error_code: None,
+            archived_at: None,
+        };
+        let home = profiles
+            .profile_home("codex", &account.id)
+            .expect("profile");
+        std::fs::write(home.join("auth.json"), "synthetic original").expect("fixture");
+        let before = identity(&profiles, &account);
+        std::fs::write(home.join("auth.json"), "synthetic replacement session")
+            .expect("reconnect fixture");
+        let after = identity(&profiles, &account);
+        assert!(before != after);
+        let replacement = LiveEntry {
+            identity: after.clone(),
+            attempted: Instant::now(),
+            succeeded: true,
+            usage: None,
+        };
+        assert!(
+            !response_matches(&replacement, &before, &after),
+            "old in-flight response cannot overwrite the new identity's cache"
+        );
+        assert!(response_matches(&replacement, &after, &after));
+        let unavailable = unavailable(&account, Some("Pro".to_owned()));
+        assert_eq!(unavailable.status, ProviderUsageStatus::Unavailable);
+        assert!(unavailable.windows.is_empty());
+        assert_eq!(unavailable.plan.as_deref(), Some("Pro"));
+        assert_eq!(account.authentication_state, AuthState::Authenticated);
+    }
 }

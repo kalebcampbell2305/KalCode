@@ -122,7 +122,10 @@ test.describe("provider panes", () => {
     await openWorkspace(page);
     await newPane(page);
     const region = pane(page);
-    await expect(region).toHaveAttribute("aria-label", "New agent, Claude Code agent, account Personal");
+    await expect(region).toHaveAttribute("aria-label", "Claude Code, Claude Code agent, account Personal");
+    const threadId = await region.getAttribute("data-provider-pane");
+    const tab = page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`);
+    await expect(tab).toHaveText("Claude Code");
     // One compact header: account · model · effort · usage; the provider is named, never guessed.
     await expect(region.locator("[data-pane-identity]")).toHaveAttribute(
       "title",
@@ -267,6 +270,12 @@ test.describe("provider panes", () => {
     await input.press("Enter");
     await expect(region.getByRole("button", { name: "Login flake. Rename agent" })).toBeVisible();
     await expect(region).toHaveAttribute("aria-label", "Login flake, Claude Code agent, account Personal");
+    await typeInPane(page, "run npm test");
+    await expect(paneText(page)).toContainText("RAN Bash");
+    await expect(region.getByRole("button", { name: "Login flake. Rename agent" })).toBeVisible();
+    const threadId = await region.getAttribute("data-provider-pane");
+    await expect(page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`)).toHaveText("Login flake");
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Login flake");
 
     await region.getByRole("button", { name: /More actions/ }).click();
     await page.getByRole("menuitem", { name: "Stop…" }).click();
@@ -275,6 +284,13 @@ test.describe("provider panes", () => {
     await expect(status(page)).toHaveText("IDLE");
     await expect(region.getByText("stopped · resumable")).toBeVisible();
     await expect(region.getByText(/^Ended/)).toBeVisible();
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Dashboard", exact: true })
+      .click();
+    const card = page.getByRole("article", { name: "Login flake", exact: true });
+    await expect(card.getByRole("heading", { name: "Login flake", exact: true })).toBeVisible();
+    await expect(card).not.toContainText(/Claude [A-Z](?:\s|$)/);
   });
 
   test("closing an agent pane stops the agent; nothing keeps running in the background", async ({ page }) => {
@@ -292,7 +308,7 @@ test.describe("provider panes", () => {
         threadId,
       );
     // The pane's tab close control, after Stop and Close: the agent stops and its tab goes away.
-    // Its tab, by the pane's content (the tab reads the agent's call sign, e.g. "Claude A").
+    // Its tab uses the persisted task or provider name.
     const tab = page.locator(`[role="tab"][data-content-key="agent:${threadId}"]`);
     await tab.hover();
     await tab.locator("[data-tab-close]").click();

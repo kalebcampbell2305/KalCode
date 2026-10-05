@@ -21,7 +21,7 @@ test("context actions duplicate the clicked coding terminal and put Browser besi
   await page.locator("[data-live]").screenshot({ path: testInfo.outputPath("context-menu-desktop.png") });
   await page.getByRole("menuitem", { name: "Duplicate", exact: true }).click();
   await expect(app.locator(".lk-tab")).toHaveCount(count + 1);
-  await expect(app.getByRole("button", { name: "Codex B · Personal", exact: true })).toBeVisible();
+  await expect(app.getByRole("button", { name: "Codex", exact: true }).first()).toBeVisible();
   await tab.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Open Browser beside" }).click();
   const source = app.locator('[data-key="f2"]');
@@ -34,7 +34,7 @@ test("keyboard menus stop the selected agent and restore focus on Escape", async
   const tab = app.locator('[data-do="tab:t-a1"]');
   await tab.focus();
   await page.keyboard.press("Shift+F10");
-  const menu = page.getByRole("menu", { name: "Claude A actions" });
+  const menu = page.getByRole("menu", { name: "Dashboard Redesign actions" });
   await expect(menu).toBeVisible();
   await page.keyboard.press("End");
   await expect(menu.getByRole("menuitem", { name: "Close", exact: true })).toBeFocused();
@@ -84,7 +84,7 @@ test("terminal output exposes only relevant content actions under production CSP
   page.on("pageerror", (error) => errors.push(error.message));
   const app = await openDemo(page);
   await app.locator('[data-key="f2"] .lk-term').click({ button: "right" });
-  const menu = page.getByRole("menu", { name: "Codex A output actions" });
+  const menu = page.getByRole("menu", { name: "Dashboard Tests output actions" });
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveCount(1);
   await expect(menu.getByRole("menuitem", { name: "Copy relevant context" })).toBeVisible();
@@ -104,7 +104,7 @@ test("mobile sample tabs retain keyboard context actions without page overflow",
   const tab = app.locator('.lk-mtab[data-do="tab:t-a1"]');
   await tab.focus();
   await page.keyboard.press("Shift+F10");
-  await expect(page.getByRole("menu", { name: "Claude A actions" })).toBeVisible();
+  await expect(page.getByRole("menu", { name: "Dashboard Redesign actions" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Open Browser beside" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
     0,

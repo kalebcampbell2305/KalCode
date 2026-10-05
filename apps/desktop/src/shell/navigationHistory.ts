@@ -30,6 +30,18 @@ export interface NavigationHistory {
   nextId: number;
 }
 
+/** Agent names are live session metadata; navigation keeps only the stable target identity. */
+export function navigationEntryLabel(
+  entry: NavigationEntry,
+  agentNames: ReadonlyMap<string, string>,
+): string | undefined {
+  const target = entry.target;
+  if (target?.kind === "pane" && target.content.kind === "agent") {
+    return agentNames.get(target.content.agentId) ?? entry.label;
+  }
+  return entry.label;
+}
+
 function targetKey(target: NavigationTarget | undefined): string {
   if (!target) return "";
   if (target.kind === "section") return `section:${target.sectionId}`;
@@ -54,7 +66,12 @@ export function initialHistory(destination: Destination): NavigationHistory {
 /** Bounded, chronological history. A new visit after Back discards the forward branch. */
 export function visitLocation(state: NavigationHistory, location: NavigationLocation): NavigationHistory {
   const current = state.entries[state.index];
-  if (current && sameLocation(current, location)) return state;
+  if (current && sameLocation(current, location)) {
+    if (!location.label || location.label === current.label) return state;
+    const entries = [...state.entries];
+    entries[state.index] = { ...current, label: location.label };
+    return { ...state, entries };
+  }
   // A surface initially opens before its focused pane/section has rendered. Enrich that
   // visit rather than forcing the user through a duplicate, empty surface on Back.
   if (

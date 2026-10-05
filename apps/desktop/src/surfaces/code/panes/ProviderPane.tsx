@@ -33,6 +33,7 @@ import { AccountUsageBadge } from "../../providers/AccountUsageBadge.tsx";
 import { canStartAnyway, isWaitingForResources, waitingReason } from "../../threads/model.ts";
 import { useKalTidy } from "../kaltidy/kalTidyContext.ts";
 import { PaneAccountPicker, type PaneAccountPickerProps } from "./PaneAccountPicker.tsx";
+import { PaneAccountSuggestion } from "./PaneAccountSuggestion.tsx";
 import {
   PaneAccountChip,
   type PaneAccountIdentity,
@@ -240,6 +241,7 @@ export const ProviderPane = memo(function ProviderPane({
         onHandOff={onHandOff}
         onContinue={onContinue}
       />
+      {onContinue ? <PaneAccountSuggestion thread={thread} account={account} onContinue={onContinue} /> : null}
       {confirmStop && !closePending ? (
         <div
           className={styles.confirm}

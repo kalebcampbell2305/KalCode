@@ -768,10 +768,10 @@ impl RuntimeRouter {
     /// thread retries, after the creation thread's transient intent has gone away.
     pub fn with_session_guards(
         mut self,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Self {
-        self.headless = guard(self.headless);
-        self.interactive = self.interactive.map(guard);
+        self.headless = guard(self.headless, false);
+        self.interactive = self.interactive.map(|provider| guard(provider, true));
         self
     }
 

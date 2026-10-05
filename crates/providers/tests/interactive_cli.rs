@@ -34,6 +34,21 @@ use serde_json::Value;
 const FAKE: &str = env!("CARGO_BIN_EXE_kalcode-fake-provider");
 const WAIT: Duration = Duration::from_secs(30);
 
+#[derive(Default)]
+struct CapturedTitles(Mutex<Vec<(String, String)>>);
+impl kalcode_providers::interactive::TitleSink for CapturedTitles {
+    fn terminal_prompt(&self, thread_id: &str, prompt: &str) {
+        self.first_prompt(thread_id, prompt);
+    }
+
+    fn first_prompt(&self, thread_id: &str, prompt: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((thread_id.to_owned(), prompt.to_owned()));
+    }
+}
+
 struct Rig {
     #[cfg(any(windows, target_os = "macos"))]
     _guardian: Option<kalcode_providers::guardian::GuardianRuntime>,
@@ -44,6 +59,7 @@ struct Rig {
     provider: Arc<InteractiveCliProvider>,
     profiles: Option<ManagedProfiles>,
     resolved_accounts: Arc<Mutex<Vec<String>>>,
+    titles: Arc<CapturedTitles>,
 }
 
 impl Rig {
@@ -118,6 +134,7 @@ impl Rig {
         let profiles = managed
             .then(|| ManagedProfiles::new(dir_root.join("managed")).expect("managed profiles"));
         let resolved_accounts = Arc::new(Mutex::new(Vec::new()));
+        let titles = Arc::new(CapturedTitles::default());
         let mut provider = InteractiveCliProvider::new(
             cli,
             DetectEnv {
@@ -135,7 +152,8 @@ impl Rig {
                 limits: SessionLimits::default(),
             },
             panes.clone(),
-        );
+        )
+        .with_titles(titles.clone());
         if let Some(profiles) = &profiles {
             provider = provider.with_managed_profiles(profiles.clone());
         }
@@ -157,6 +175,7 @@ impl Rig {
             provider,
             profiles,
             resolved_accounts,
+            titles,
         }
     }
 
@@ -317,6 +336,25 @@ fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+#[test]
+fn every_cli_pane_sends_actual_submitted_input_to_the_shared_namer() {
+    for cli in [PaneCli::Codex, PaneCli::Gemini, PaneCli::Cursor] {
+        let rig = Rig::new(cli);
+        let pane = rig.start(PermissionMode::Bypass);
+        // Drafts and terminal status reports never name a session.
+        pane.panes.write(&pane.thread_id, b"Redesign the ").unwrap();
+        pane.panes.write(&pane.thread_id, b"\x1b[1;1R").unwrap();
+        assert!(rig.titles.0.lock().unwrap().is_empty());
+        pane.type_line("pricing page");
+        assert_eq!(
+            *rig.titles.0.lock().unwrap(),
+            [(pane.thread_id.clone(), "Redesign the pricing page".into())]
+        );
+        pane.type_line("exit");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
+}
+
 struct UnifiedMemorySink {
     events: mpsc::Sender<AgentEvent>,
     context: String,
@@ -469,11 +507,91 @@ fn managed_cli_panes_fail_closed_without_a_native_guardian() {
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn managed_codex_requires_authoritative_cloud_eligibility_before_any_provider_process() {
+fn managed_codex_launches_without_a_plan_metadata_resolver() {
     let rig = Rig::new_managed(PaneCli::Codex, None);
-    let error = rejected_start(&rig, Some(new_id()));
-    assert!(error.to_string().contains("eligibility"), "{error}");
-    rig.assert_no_provider_process_started();
+    let pane = rig
+        .start_with_account(PermissionMode::Plan, Some(new_id()))
+        .expect("missing plan metadata does not block native Codex");
+    pane._session.terminate().expect("terminate");
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn three_managed_codex_agents_keep_account_model_effort_workspace_and_distinct_sessions() {
+    let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Unknown));
+    let account = new_id();
+    let workspace = new_id();
+    let mut panes = Vec::new();
+    for _ in 0..3 {
+        let mut config = rig.config(PermissionMode::Bypass, Some(account.clone()));
+        config.workspace_id = workspace.clone();
+        config.model = Some("gpt-5.3-codex".into());
+        config.effort = Some("high".into());
+        assert!(config.resume_session_id.is_none());
+        let id = config.thread_id.clone();
+        let (tx, rx) = mpsc::channel();
+        let session = rig
+            .provider
+            .start_session(
+                config,
+                Box::new(move |event| {
+                    let _ = tx.send(event);
+                }),
+            )
+            .expect("native managed session");
+        panes.push(rig.attach_started(id, session, rx).expect("real PTY pane"));
+        let args = rig.args();
+        assert_eq!(after(&args, "-m"), Some("gpt-5.3-codex"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "model_reasoning_effort='high'"),
+            "{args:?}"
+        );
+        assert_eq!(rig.launch_cwd(), rig.work.path());
+    }
+    assert_eq!(
+        &*rig.resolved_accounts.lock().unwrap(),
+        &[account.clone(), account.clone(), account]
+    );
+    let instances: HashSet<_> = panes
+        .iter()
+        .map(|pane| {
+            let info = rig.panes.info(&pane.thread_id).expect("pane info");
+            assert!(info.running);
+            info.instance_id.expect("native process identity")
+        })
+        .collect();
+    assert_eq!(
+        instances.len(),
+        3,
+        "each agent owns an independent live PTY process"
+    );
+    let mut provider_sessions = HashSet::new();
+    for (index, pane) in panes.iter().enumerate() {
+        pane.type_line(&format!("agent {index}"));
+        let events = pane.events_until(|event| matches!(event, AgentEvent::TurnCompleted { .. }));
+        let session = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::SessionStarted {
+                    provider_session_id,
+                    ..
+                } => Some(provider_session_id.clone()),
+                _ => None,
+            })
+            .or_else(|| pane._session.provider_session_id())
+            .expect("provider session identity");
+        assert!(
+            provider_sessions.insert(session),
+            "each agent has a fresh provider session"
+        );
+    }
+    for pane in panes {
+        pane._session
+            .terminate()
+            .expect("terminate owned test agent");
+        pane.events_until(|event| matches!(event, AgentEvent::Exited { .. }));
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]

@@ -37,7 +37,7 @@ use kalcode_providers::interactive::{
     ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, HookChannelState, PaneInfo,
     TitleSink,
 };
-use kalcode_threads::{CreateIdleThread, ThreadRuntime, naming};
+use kalcode_threads::{CreateIdleThread, ThreadRuntime};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State, Webview};
 
@@ -80,7 +80,7 @@ impl PaneRoutes {
     pub fn route_claude(
         &self,
         headless: Arc<dyn AgentProvider>,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Arc<dyn AgentProvider> {
         let router = match self.claude.as_ref() {
             Some(interactive) => RuntimeRouter::new(headless, interactive.clone()),
@@ -95,7 +95,7 @@ impl PaneRoutes {
         &self,
         id: &str,
         headless: Arc<dyn AgentProvider>,
-        guard: impl Fn(Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider>,
+        guard: impl Fn(Arc<dyn AgentProvider>, bool) -> Arc<dyn AgentProvider>,
     ) -> Arc<dyn AgentProvider> {
         let interactive = match id {
             ProviderId::CODEX => self.codex.as_ref(),
@@ -133,16 +133,18 @@ impl ApprovalExpiry for Glue {
 }
 
 impl TitleSink for Glue {
+    fn terminal_prompt(&self, thread_id: &str, prompt: &str) {
+        if kalcode_threads::naming::has_task_intent(prompt) {
+            self.first_prompt(thread_id, prompt);
+        }
+    }
+
     fn first_prompt(&self, thread_id: &str, prompt: &str) {
-        // Only an untitled thread is named; the prompt itself is neither stored nor logged.
+        // The shared durable authority preserves manual names and stable task titles.
         let Some(runtime) = self.runtime.get().and_then(Weak::upgrade) else {
             return;
         };
-        if runtime
-            .get(thread_id)
-            .is_ok_and(|t| naming::is_placeholder(&t.name))
-            && let Err(error) = runtime.rename(thread_id, &naming::name_from_prompt(prompt))
-        {
+        if let Err(error) = runtime.name_from_task(thread_id, prompt) {
             tracing::warn!(event = "pane.title_failed", error = %error.diagnostic());
         }
     }
@@ -337,6 +339,7 @@ impl ProviderPanesState {
             panes.clone(),
         )
         .with_managed_profiles(runtime.managed_profiles())
+        .with_titles(glue.clone())
         .with_codex_cloud_config_resolver(move |account_id| {
             codex_runtime.codex_cloud_config(account_id)
         });
@@ -353,7 +356,8 @@ impl ProviderPanesState {
                 cli_config.clone(),
                 panes.clone(),
             )
-            .with_managed_profiles(runtime.managed_profiles()),
+            .with_managed_profiles(runtime.managed_profiles())
+            .with_titles(glue.clone()),
         ));
         let cursor = Some(Arc::new(
             InteractiveCliProvider::new(
@@ -363,7 +367,8 @@ impl ProviderPanesState {
                 cli_config,
                 panes.clone(),
             )
-            .with_managed_profiles(runtime.managed_profiles()),
+            .with_managed_profiles(runtime.managed_profiles())
+            .with_titles(glue.clone()),
         ));
         let mut provider = InteractiveClaudeProvider::new(
             DetectEnv::from_process(),
@@ -638,10 +643,7 @@ pub fn provider_pane_create(
                 source.model.clone(),
                 source.effort.clone(),
                 source.permission_mode,
-                Some(format!(
-                    "{} (copy)",
-                    source.name.chars().take(73).collect::<String>()
-                )),
+                None,
             )
         } else {
             (

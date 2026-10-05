@@ -8,9 +8,12 @@ import styles from "./AccountUsageBadge.module.css";
 import { accountName, accountSessionState } from "./accountIdentity.ts";
 import {
   type AccountUsageState,
+  isReportedPercent,
   LOW_USAGE_PERCENT,
+  limitingWindow,
   resetsIn,
   type UsageWindow,
+  usagePercent,
   usageSummary,
   useAccountUsage,
 } from "./accountUsage.ts";
@@ -71,25 +74,29 @@ export function AccountUsageBadge({ account, size = "sm", interactive = false }:
 
 function usageTitle(usage: AccountUsageState): string | undefined {
   if (usage.status !== "fresh" && usage.status !== "stale") return usage.reason ?? undefined;
-  const lines = usage.windows.map((w) =>
-    [`${w.label}: ${percent(w)}% remaining`, resetsIn(w.resetsAt)].filter(Boolean).join(" · "),
-  );
+  const lines = usage.windows
+    .filter((w) => isReportedPercent(w.remainingPercent))
+    .map((w) =>
+      [
+        `${w.label}: ${usagePercent(w.remainingPercent)}% ${usage.status === "stale" ? "last reported" : "remaining"}`,
+        resetsIn(w.resetsAt),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
   if (usage.checkedAt) lines.push(`Updated ${formatRelative(usage.checkedAt)}`);
   return lines.join("\n");
 }
 
 function percent(window: UsageWindow): number {
-  return Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
+  return window.remainingPercent;
 }
 
 /** A small remaining-quota bar plus "64% left": the non-interactive form used inside rows. */
 export function UsageMeter({ usage, className }: { usage: AccountUsageState; className?: string }) {
   const summary = usageSummary(usage);
-  const limiting = usage.windows.reduce<UsageWindow | null>(
-    (best, w) => (!best || w.remainingPercent < best.remainingPercent ? w : best),
-    null,
-  );
-  const known = (usage.status === "fresh" || usage.status === "stale") && limiting !== null;
+  const limiting = limitingWindow(usage);
+  const known = usage.status === "fresh" && limiting !== null;
   return (
     <span
       className={[styles.meter, className].filter(Boolean).join(" ")}
@@ -133,6 +140,7 @@ export function AccountUsageDetails({
     : null;
   const plan = usage.plan ?? null;
   const meta = [accountProviderName(account.providerId), full?.providerReportedIdentity, plan].filter(Boolean);
+  const windows = usage.windows.filter((window) => isReportedPercent(window.remainingPercent));
   const known = usage.status === "fresh" || usage.status === "stale";
   return (
     <section className={styles.details} aria-labelledby={titleId}>
@@ -149,16 +157,21 @@ export function AccountUsageDetails({
           </span>
         ) : null}
       </header>
-      {known && usage.windows.length > 0 ? (
+      {known && windows.length > 0 ? (
         <ul className={styles.windows}>
-          {usage.windows.map((w) => {
+          {windows.map((w) => {
             const left = percent(w);
             const reset = resetsIn(w.resetsAt, now);
             return (
-              <li key={w.id} className={styles.window} data-tone={left < LOW_USAGE_PERCENT ? "low" : "ok"}>
+              <li
+                key={w.id}
+                className={styles.window}
+                data-tone={usage.status === "stale" ? "muted" : left < LOW_USAGE_PERCENT ? "low" : "ok"}
+              >
                 <span className={styles.windowLabel}>{w.label}</span>
                 <span className={styles.windowValue}>
-                  <strong>{left}%</strong> remaining
+                  <strong>{usagePercent(w.remainingPercent)}%</strong>{" "}
+                  {usage.status === "stale" ? "last reported" : "remaining"}
                 </span>
                 <span className={styles.windowTrack} aria-hidden="true">
                   <span className={styles.fill} style={{ "--fill": `${left}%` } as CSSProperties} />
@@ -172,9 +185,7 @@ export function AccountUsageDetails({
         <p className={styles.unknown}>
           {usage.status === "checking"
             ? "Checking usage…"
-            : usage.status === "unavailable"
-              ? `Usage unavailable${usage.reason ? ` · ${usage.reason}` : ""}`
-              : `Usage not checked yet${usage.reason ? ` · ${usage.reason}` : ""}`}
+            : `Usage unavailable${usage.reason ? ` · ${usage.reason}` : ""}`}
         </p>
       )}
       {known && usage.checkedAt ? (

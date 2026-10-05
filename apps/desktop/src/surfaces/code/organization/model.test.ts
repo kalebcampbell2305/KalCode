@@ -280,10 +280,11 @@ describe("names and purposes", () => {
     expect(serviceSide("postgres")).toBeNull();
   });
 
-  it("puts the call sign before an agent's name, and alone for the placeholder", () => {
-    expect(agentDisplayName(thread("idle", { name: "Dashboard" }), "Claude A")).toBe("Claude A - Dashboard");
-    expect(agentDisplayName(thread("idle"), "Claude A")).toBe("Claude A");
-    expect(agentDisplayName(thread("idle", { name: "Dashboard" }), undefined)).toBe("Dashboard");
+  it("shows the persisted task or manual name without inventing a call sign", () => {
+    expect(agentDisplayName(thread("idle", { name: "Fix Dashboard Layout" }))).toBe("Fix Dashboard Layout");
+    expect(agentDisplayName(thread("idle", { name: "My Manual Name" }))).toBe("My Manual Name");
+    expect(agentDisplayName(thread("idle", { name: "New agent", providerName: "Claude Code" }))).toBe("New agent");
+    expect(agentDisplayName(thread("idle", { name: "", providerName: "Codex" }))).toBe("Codex");
   });
 
   it("numbers repeated names", () => {

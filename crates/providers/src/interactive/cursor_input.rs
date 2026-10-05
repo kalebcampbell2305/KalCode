@@ -19,6 +19,8 @@ pub(super) struct CursorInput {
 pub(super) struct Submission {
     pub fingerprint: Option<String>,
     pub trailing_input: bool,
+    /// Ephemeral submitted input for the shared title sink. Never persisted as terminal history.
+    pub text: Option<String>,
 }
 
 impl CursorInput {
@@ -42,14 +44,16 @@ impl CursorInput {
             let byte = buffered[offset];
             offset += 1;
             if !self.paste && matches!(byte, b'\r' | b'\n') {
-                let fingerprint = (!self.unknown)
+                let text = (!self.unknown)
                     .then(|| std::str::from_utf8(&self.draft).ok())
                     .flatten()
                     .filter(|text| !text.is_empty())
-                    .map(cursor_prompt_fingerprint);
+                    .map(str::to_owned);
+                let fingerprint = text.as_deref().map(cursor_prompt_fingerprint);
                 submissions.push(Submission {
                     fingerprint,
                     trailing_input: offset < buffered.len(),
+                    text,
                 });
                 self.draft.clear();
                 self.unknown = false;

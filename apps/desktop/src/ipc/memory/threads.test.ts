@@ -67,6 +67,33 @@ describe("nameFromPrompt (mirrors crates/threads/src/naming.rs)", () => {
 });
 
 describe("memory thread runtime", () => {
+  it("uses a clean provider default, accepts one task title, and preserves explicit manual names", async () => {
+    const { client, transport } = await setup();
+    const pane = () =>
+      transport.invoke<ThreadSummary>("provider_pane_create", {
+        providerId: "claude-code",
+        workspaceId: WORKSPACE,
+        permissionMode: "bypass",
+        name: null,
+      });
+    const automatic = await pane();
+    expect(automatic.name).toBe("Claude Code");
+    await transport.invoke("provider_pane_write", { threadId: automatic.id, data: "fix the login form\r" });
+    const named = await client.getThread(automatic.id);
+    expect(named.name).toBe("Fix Login Form");
+    await transport.invoke("provider_pane_write", { threadId: automatic.id, data: "run the tests\r" });
+    expect((await client.getThread(automatic.id)).name).toBe(named.name);
+
+    const manual = await pane();
+    // Even choosing the existing provider label explicitly pins that manual name.
+    await client.renameThread(manual.id, "Claude Code");
+    await transport.invoke("provider_pane_write", { threadId: manual.id, data: "fix the settings page\r" });
+    expect((await client.getThread(manual.id)).name).toBe("Claude Code");
+    await client.renameThread(automatic.id, "Release Watch");
+    await transport.invoke("provider_pane_write", { threadId: automatic.id, data: "review the release\r" });
+    expect((await client.getThread(automatic.id)).name).toBe("Release Watch");
+  });
+
   it("duplicates history without starting a provider and moves only inactive threads", async () => {
     const { client, transport } = await setup();
     const source = await create(client, "Keep this conversation");

@@ -70,10 +70,12 @@ describe("AgentCard account label", () => {
     expect(screen.getByTitle("Account: Gemini B")).toBeTruthy();
   });
 
-  it("falls back to the call sign without an account (or with a blank label)", () => {
-    const { unmount } = mount(thread(null), { handle: "Gemini C" });
+  it("keeps the task title and clean provider identity without an account", () => {
+    const { unmount } = mount(thread(null));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
-    expect(screen.getByText("Gemini C")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Research" })).toBeTruthy();
+    expect(screen.getAllByText("Gemini CLI").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Gemini [A-Z]$/)).toBeNull();
     unmount();
     mount(thread("   "));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();

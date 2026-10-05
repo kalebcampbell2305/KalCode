@@ -24,6 +24,7 @@ import {
   resetsIn,
   useAccountUsage,
 } from "./accountUsage.ts";
+import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import styles from "./ProviderAccountsView.module.css";
 import { type AccountUsage, canRefreshProviderAuth, isBrowserAuthProvider } from "./useProviderAccounts.ts";
 
@@ -32,7 +33,7 @@ export interface AccountRowActions {
   setDefault: (accountId: string) => Promise<ProviderAccount | null>;
   archive: (accountId: string) => Promise<ProviderAccount | null>;
   refreshAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
-  signInAuth: (account: ProviderAccount) => Promise<void>;
+  signInAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
   cancelLogin: () => Promise<void>;
   logoutAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
 }
@@ -90,9 +91,11 @@ export function AccountRow({
   const browserAuth = isBrowserAuthProvider(account.providerId);
   const canRefreshAuth = canRefreshProviderAuth(account.providerId);
   const signedIn = account.authenticationState === "authenticated";
-  const session = accountSessionState(account, checking, validationError);
+  const canonical = useOptionalProviderAccountSessions()?.states.get(account.id);
+  const session = canonical?.health ?? accountSessionState(account, checking, validationError);
   const signIn = accountSignIn(account);
-  const quota = useAccountUsage(account.id);
+  const fallbackQuota = useAccountUsage(account.id);
+  const quota = canonical?.usage ?? fallbackQuota;
   const detailsId = `${id}-details`;
 
   const startRename = () => {

@@ -45,7 +45,7 @@ import {
 import { useArchivedCodingAgents, useCodingAgents } from "./data/DashboardData.tsx";
 import { canDismiss, useAgentCleanup } from "./fleet/agentCleanup.ts";
 import { isFolded, useFleetLayout } from "./fleet/fleetLayout.ts";
-import { fleetHandles, mergeReadiness } from "./fleet/fleetModel.ts";
+import { mergeReadiness } from "./fleet/fleetModel.ts";
 import { morphIntoAgent } from "./fleet/morph.ts";
 import { useWorktreeStates } from "./fleet/useWorktreeStates.ts";
 import { useNow } from "./useNow.ts";
@@ -193,18 +193,9 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
     }
   };
 
-  // Agent Fleet: call signs, worktree facts and merge readiness for every card.
-  // Archived agents keep their letters, so a call sign never moves to another agent.
-  const handles = useMemo(() => fleetHandles([...(threads ?? []), ...archived]), [threads, archived]);
   const groups = useMemo(
-    () =>
-      threads
-        ? groupThreads(
-            filterThreads(threads, filter, query, (t) => [handles.get(t.id)]),
-            groupMode,
-          )
-        : [],
-    [threads, filter, query, groupMode, handles],
+    () => (threads ? groupThreads(filterThreads(threads, filter, query), groupMode) : []),
+    [threads, filter, query, groupMode],
   );
 
   const approvalsByThread = useMemo(() => {
@@ -315,7 +306,6 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                 onAction={runAction}
                 onDecide={permissions.decide}
                 onReviewApprovals={onReviewApprovals}
-                handle={handles.get(thread.id)}
                 worktree={worktrees.get(thread.id)}
                 readiness={thread.worktreeId ? mergeReadiness(thread, worktrees.get(thread.id)) : undefined}
                 onCommitted={applyWorktree}

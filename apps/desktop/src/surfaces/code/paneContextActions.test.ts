@@ -65,7 +65,7 @@ it("duplicates exact launch settings without widening permission mode or copying
     permissionMode: "plan",
     model: "exact-model",
     effort: "high",
-    name: "Review (copy)",
+    name: null,
   });
   expect(duplicatePaneInput({ ...source, permissionMode: "custom" })).toBeNull();
   expect(duplicatePaneInput({ ...source, archivedAt: "2026-01-01" })).toBeNull();

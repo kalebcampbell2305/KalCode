@@ -48,7 +48,7 @@ export function initialMemory(): DemoMemory {
         content:
           "Dashboard.tsx owns the main dashboard shell. Keep reusable stat cards in src/components/StatCard.tsx so the overview and reports use the same layout.",
         category: "architecture",
-        source: "Coding agent · Claude A",
+        source: "Coding agent · Dashboard Redesign",
         file: "src/pages/Dashboard.tsx",
         pinned: true,
         permanent: false,
@@ -84,7 +84,7 @@ export function initialMemory(): DemoMemory {
         content:
           "Weekly revenue labels can overlap on narrow screens. Check the latest chart layout before changing the tick spacing.",
         category: "known_issues",
-        source: "Coding agent · Codex A",
+        source: "Coding agent · Dashboard Tests",
         file: "src/components/RevenueChart.tsx",
         pinned: false,
         permanent: false,

@@ -206,6 +206,82 @@ fn projected(
     )
 }
 
+// Ported from #236's interactive-terminal policy: one user-agent policy now governs panes and
+// headless routes alike (AGENTS.md Resource Governor rule).
+#[test]
+fn user_agents_ignore_cpu_soft_memory_and_missing_telemetry_but_keep_custom_limits() {
+    let mut snapshot = measured_snapshot();
+    let mut limits = ModeLimits::balanced();
+    let request = kalcode_resources::CapacityRequest::default();
+    let running = kalcode_resources::RunningWork::default();
+    let decide = |snapshot: Option<&ResourceSnapshot>, limits: &ModeLimits| {
+        super::user_agent_admission(snapshot, limits, &running, &request, None, NOW_MS, false)
+    };
+    snapshot.cpu = Reading::Value(CpuReading {
+        total_percent: 100.0,
+        smoothed_percent: 100.0,
+        logical_cores: 4,
+    });
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::Cpu,
+        level: PressureLevel::Critical,
+        signal: Signal::CpuPercent,
+        value: 100.0,
+        threshold: Some(90.0),
+        approaching: false,
+    });
+    assert_eq!(decide(Some(&snapshot), &limits).state, AdmissionState::Allowed);
+    snapshot.cpu = Reading::unknown("not sampled yet");
+    snapshot.pressure.entries.push(ResourcePressure {
+        resource: ResourceKind::Memory,
+        level: PressureLevel::High,
+        signal: Signal::MemoryUsedPercent,
+        value: 90.0,
+        threshold: Some(88.0),
+        approaching: false,
+    });
+    assert_eq!(decide(Some(&snapshot), &limits).state, AdmissionState::Allowed);
+    assert_eq!(
+        decide(None, &limits).state,
+        AdmissionState::Allowed,
+        "an unfinished startup sampler is not a real resource failure"
+    );
+    limits.kind = kalcode_resources::ModeKind::Custom;
+    limits.max_agents = 0;
+    assert_eq!(
+        decide(None, &limits).state,
+        AdmissionState::Held,
+        "custom count limits do not depend on telemetry"
+    );
+    assert_eq!(
+        decide(Some(&snapshot), &limits).state,
+        AdmissionState::Held,
+        "an explicit custom agent limit still applies"
+    );
+}
+
+#[test]
+fn user_agents_hold_for_a_full_disk_with_the_truthful_reason() {
+    let mut snapshot = measured_snapshot();
+    snapshot.volumes = Reading::Value(vec![VolumeReading {
+        mount: "/".into(),
+        workspace_ids: vec![None],
+        total_bytes: 100 * 1024 * 1024 * 1024,
+        free_bytes: 200 * 1024 * 1024,
+    }]);
+    let decision = super::user_agent_admission(
+        Some(&snapshot),
+        &ModeLimits::balanced(),
+        &kalcode_resources::RunningWork::default(),
+        &kalcode_resources::CapacityRequest::default(),
+        None,
+        NOW_MS,
+        false,
+    );
+    assert_eq!(decision.state, AdmissionState::Held);
+    assert!(kalcode_resources::decision_codes(&decision).contains(&"disk_full"));
+}
+
 #[test]
 fn local_workload_estimates_reject_unknown_and_unbounded_values() {
     assert!(LocalWorkloadEstimate::inference(None, Some(512)).is_err());

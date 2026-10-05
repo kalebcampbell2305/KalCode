@@ -19,7 +19,7 @@ import ProviderGlyph from "../components/ProviderGlyph.astro";
 import LiveKalCode from "../components/live/LiveKalCode.astro";
 import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
-import { type Agent, initialState } from "../lib/live/model";
+import { type Agent, accountLabel, initialState } from "../lib/live/model";
 import { accountCard, agentPane, glyph, icon, sampleApp, statusChip } from "../lib/live/render";
 import { RELEASES, downloadCta, releaseCopy, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
@@ -286,8 +286,8 @@ const qnas = [
         </div>
         <div class="beat__visual" data-reveal aria-hidden="true" inert>
           <div class="mini mini--panes">
-            <div class="lk-frame mini__pane" data-focused="true"><div class="lk-frame__tabs"><span class="mini__tab"><Fragment set:html={glyph("claude")} /> Claude A · Personal <span class="lk-dot" data-tone="working"></span></span></div><Fragment set:html={agentPane(sample, claudeA)} /></div>
-            <div class="lk-frame mini__pane mini__pane--b"><div class="lk-frame__tabs"><span class="mini__tab"><Fragment set:html={glyph("codex")} /> Codex A · Personal <span class="lk-dot" data-tone="working"></span></span></div><Fragment set:html={agentPane(sample, codexA)} /></div>
+            <div class="lk-frame mini__pane" data-focused="true"><div class="lk-frame__tabs"><span class="mini__tab"><Fragment set:html={glyph("claude")} /> {claudeA.name} <span class="lk-dot" data-tone="working"></span></span></div><Fragment set:html={agentPane(sample, claudeA)} /></div>
+            <div class="lk-frame mini__pane mini__pane--b"><div class="lk-frame__tabs"><span class="mini__tab"><Fragment set:html={glyph("codex")} /> {codexA.name} <span class="lk-dot" data-tone="working"></span></span></div><Fragment set:html={agentPane(sample, codexA)} /></div>
           </div>
         </div>
       </div>
@@ -393,8 +393,8 @@ const qnas = [
             <div class="lk-runs">
               {
                 [
-                  ["bot", "Dashboard redesign", "Claude A · Personal", "Running"],
-                  ["bot", "Tests", "Codex A · Personal", "Running"],
+                  ["bot", "Dashboard redesign", "{claudeA.name}", "Running"],
+                  ["bot", "Tests", "{codexA.name}", "Running"],
                   ["package", "Build", "pnpm build · 1m 12s", "Succeeded"],
                   ["server", "Frontend dev server", "localhost:3000", "Running"],
                 ].map(([ic, name, meta, st]) => (
@@ -449,8 +449,8 @@ const qnas = [
           {
             fleet.map((agent) => (
               <div class="lk-card" data-tone={agent.status === "permission_required" ? "waiting" : "muted"} data-needs={String(agent.status === "permission_required")}>
-                <p class="lk-card__top"><strong>{agent.sign}</strong><Fragment set:html={statusChip(agent)} /></p>
-                <p class="lk-card__name">{agent.task}</p>
+                <p class="lk-card__top"><strong>{accountLabel(sample, agent.account)}</strong><Fragment set:html={statusChip(agent)} /></p>
+                <p class="lk-card__name">{agent.name}</p>
                 <p class="lk-card__meta"><Fragment set:html={glyph(agent.provider)} />{agent.provider === "claude" ? "Claude Code" : "Codex"} · {agent.model === "Default" ? "Default model" : agent.model}</p>
                 <p class="lk-card__activity">{agent.activity}</p>
               </div>

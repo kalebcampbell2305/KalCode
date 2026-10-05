@@ -1,7 +1,7 @@
 /**
  * Terminal Organization's live inputs for one workspace: the related-process scan (polled while
  * Code is shown, the window is visible and a terminal runs), the workspace's Operations snapshot
- * and Git summary from the shared deck feeds, pending approvals, and the agents' call signs.
+ * and Git summary from the shared deck feeds, pending approvals, and the agents' persisted titles.
  * Everything it reports comes from those observations; a missing or partial scan means no
  * terminal badge rather than a guess.
  */
@@ -13,8 +13,6 @@ import { tabLabels } from "../../../runtime/workspaceState.ts";
 import { useOptionalDeckData } from "../../../shell/deck/DeckData.tsx";
 import { needsYouCount } from "../../../shell/deck/deckModel.ts";
 import { contentKey } from "../../../shell/panes/model.ts";
-import { useOptionalAllCodingAgents } from "../../dashboard/data/DashboardData.tsx";
-import { fleetHandles } from "../../dashboard/fleet/fleetModel.ts";
 import { filteredSnapshot } from "../../operations/model.ts";
 import { useOptionalPermissions } from "../../permissions/PermissionsProvider.tsx";
 import { PROCESS_SCAN_LIMIT } from "../kaltidy/classify.ts";
@@ -113,7 +111,6 @@ export function useOrganization({ workspaceId, terminals, shells, panes, active 
   const prefs = useOrgPrefs(workspaceId);
   const deck = useOptionalDeckData();
   const permissions = useOptionalPermissions();
-  const allAgents = useOptionalAllCodingAgents();
   const runningKey = terminals
     .filter((t) => t.status === "running")
     .map((t) => `${t.id}@${t.startedAt ?? ""}`)
@@ -135,8 +132,6 @@ export function useOrganization({ workspaceId, terminals, shells, panes, active 
     lastScan.current = { json, value };
     return value;
   }, [terminals, processScan]);
-  // Call signs over every agent, like the Fleet; this workspace's panes when that list isn't loaded.
-  const handles = useMemo(() => fleetHandles(allAgents ?? panes.map((p) => p.thread)), [allAgents, panes]);
 
   const items = useMemo(() => {
     const labels = tabLabels(terminals);
@@ -167,7 +162,7 @@ export function useOrganization({ workspaceId, terminals, shells, panes, active 
         key: contentKey(content),
         content,
         kind: "agent",
-        title: agentDisplayName(thread, handles.get(thread.id)),
+        title: agentDisplayName(thread),
         status: agentBadge(thread, info),
         group: "Agents",
         glyph: thread.providerId,
@@ -175,7 +170,7 @@ export function useOrganization({ workspaceId, terminals, shells, panes, active 
       });
     }
     return result;
-  }, [terminals, shells, panes, operations, scan, handles]);
+  }, [terminals, shells, panes, operations, scan]);
 
   const byKey = useMemo(() => new Map(items.map((item) => [item.key, item])), [items]);
 

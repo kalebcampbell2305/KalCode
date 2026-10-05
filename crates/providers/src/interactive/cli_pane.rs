@@ -103,6 +103,7 @@ pub struct InteractiveCliProvider {
     managed_profiles: Option<ManagedProfiles>,
     codex_cloud_config: Option<Arc<CodexCloudConfigResolver>>,
     integrations: Option<Arc<super::integrations::IntegrationConnector>>,
+    titles: Option<Arc<dyn super::TitleSink>>,
     /// Codex `notify` reaches KalCode through the bridge; Gemini CLI panes don't use it.
     bridge: Option<Arc<BridgeServer>>,
     config: InteractiveConfig,
@@ -123,6 +124,7 @@ impl InteractiveCliProvider {
             managed_profiles: None,
             codex_cloud_config: None,
             integrations: None,
+            titles: None,
             bridge,
             config,
             panes,
@@ -136,8 +138,13 @@ impl InteractiveCliProvider {
         self
     }
 
-    /// Supplies the authoritative account result used by Codex's managed policy. Missing or
-    /// unknown results fail closed because enterprise cloud configuration cannot be disabled.
+    pub fn with_titles(mut self, titles: Arc<dyn super::TitleSink>) -> Self {
+        self.titles = Some(titles);
+        self
+    }
+
+    /// Supplies optional account plan metadata. Native Codex retains its own cloud
+    /// configuration; unavailable metadata cannot prevent an authenticated session.
     pub fn with_codex_cloud_config_resolver<F>(mut self, resolver: F) -> Self
     where
         F: Fn(&str) -> Result<CloudConfigEligibility, ProviderError> + Send + Sync + 'static,
@@ -218,13 +225,11 @@ impl InteractiveCliProvider {
                 }
                 PaneCli::Codex => {
                     let probe_guardian = profiles.probe_guardian()?;
-                    let resolve_cloud_config = self.codex_cloud_config.as_ref().ok_or_else(|| {
-                            ProviderError::Start(
-                                "Codex managed sessions require authoritative cloud-config eligibility"
-                                    .into(),
-                            )
-                        })?;
-                    let eligibility = resolve_cloud_config(account_id)?;
+                    let eligibility = self
+                        .codex_cloud_config
+                        .as_ref()
+                        .and_then(|resolve| resolve(account_id).ok())
+                        .unwrap_or(CloudConfigEligibility::Unknown);
                     let prepared = crate::codex::managed_policy::prepare_session(
                         profiles,
                         &self.env,
@@ -315,7 +320,7 @@ impl InteractiveCliProvider {
             provider_session_id: config.resume_session_id.clone().unwrap_or_default(),
             limits: self.config.limits,
             expiry: None,
-            titles: None,
+            titles: self.titles.clone(),
         });
         shared.set_profile(self.cli.profile());
         if config.resume_session_id.is_none() {

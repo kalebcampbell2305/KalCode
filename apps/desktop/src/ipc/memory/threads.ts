@@ -66,6 +66,8 @@ export interface ThreadsMemory {
    * thread is stopped (`thread_stop`), so the pane's process ends with it.
    */
   createPaneThread(args: Record<string, unknown>, onStop: () => void): ThreadSummary;
+  /** Test-only mirror of native title ownership; production generates task names in Rust. */
+  autoNamePane(threadId: string, prompt: string): ThreadSummary;
   /** A pane's hook or process signal changed the thread's status (the one status machine). */
   setPaneStatus(threadId: string, status: ThreadStatus, activity: string | null, pendingApprovals?: number): void;
   /**
@@ -283,6 +285,7 @@ export function createThreadsMemory(
     | null = null,
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
+  const untitledPanes = new Set<string>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
   const promptReviews = new Map<string, { target: PromptTarget; prompt: string; createdAt: number }>();
   // Like native `thread_options`: only providers with a thread adapter that detection reports
@@ -1015,6 +1018,7 @@ export function createThreadsMemory(
     thread_rename: (args) => {
       const t = get(args);
       const name = validName(args.name);
+      untitledPanes.delete(t.summary.id);
       if (name !== t.summary.name) {
         t.summary = { ...t.summary, name };
         emit({ type: "thread.renamed", payload: { threadId: t.summary.id, name } }, corr(t), "ui");
@@ -1225,16 +1229,29 @@ export function createThreadsMemory(
     },
     streamCount: (threadId) => streams.get(threadId)?.size ?? 0,
     createPaneThread(args, onStop) {
-      // An untitled coding agent is a "New agent" (native `create_idle`).
+      // Mirror the native clean provider default; task naming remains native-authoritative.
       const plan = planThread(args, null);
       const named = args.name != null && String(args.name).trim() !== "";
-      const { thread: t } = insertThread(named ? plan : { ...plan, name: "New agent" }, "interactive_pty");
+      const { thread: t } = insertThread(
+        named ? plan : { ...plan, name: plan.provider.displayName },
+        "interactive_pty",
+      );
+      if (!named) untitledPanes.add(t.summary.id);
       const effort = typeof args.effort === "string" ? args.effort.trim().toLowerCase() : "";
       if (effort && effort !== "default") t.summary = { ...t.summary, effort };
       t.paneStop = onStop;
       t.live = true;
       t.providerSessionId = `session-${t.summary.id.slice(0, 8)}`;
       emit({ type: "thread.started", payload: { threadId: t.summary.id } }, corr(t));
+      return summary(t);
+    },
+    autoNamePane(threadId, prompt) {
+      const t = get({ threadId });
+      if (untitledPanes.delete(threadId)) {
+        const name = nameFromPrompt(prompt);
+        t.summary = { ...t.summary, name };
+        emit({ type: "thread.renamed", payload: { threadId, name } }, corr(t), "provider");
+      }
       return summary(t);
     },
     setPaneStatus(threadId, status, activity, pendingApprovals) {

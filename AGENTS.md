@@ -1,5 +1,19 @@
 # KalCode agent policy
 
+## Permanent provider account truth and agent launch rule (owner directive 2026-10-04)
+
+**UNKNOWN PROVIDER USAGE NEVER EQUALS 0%. FAILURE TO READ PLAN OR USAGE METADATA MUST NOT BLOCK A VALID PROVIDER CODING SESSION.**
+
+- Authentication, plan metadata, usage/reset timing and model discovery are distinct facts in the shared provider account authority. Every surface uses the same account ID, nickname, identity and default; informational failures never revoke a valid session.
+- Display a percentage only from a valid provider-reported measurement. Missing, malformed, unsupported, failed or stale usage is **Usage unavailable** (or **Checking usage…** while fetching), never fake 0%, Low or Exhausted. Preserve legitimate zero and distinguish positive fractions below 1% from zero.
+- Restore persisted identities and provider-native authentication immediately; validate safely and refresh metadata asynchronously. Require reconnection only when the provider actually reports expired/revoked or missing authentication, never because plan, usage, reset or model metadata could not be read.
+- A valid provider session that can start must launch regardless of unknown plan/usage. Provider adapters preserve native authentication, configuration and account isolation. Provider-enforced restrictions remain authoritative.
+- **Agent means a real coding terminal, never a Thread.** Agent creation never routes to Threads or says “resume this thread.” Launch N creates N independent provider sessions in the current workspace using the explicitly selected account, model and effort.
+- Genuine expiry offers inline **Reconnect**, preserves the pending launch, and automatically creates only its unfinished agents after successful authentication. Never make the user navigate away and reconstruct the request.
+- Apply this to Claude Code, Codex, Cursor, Gemini and every future provider. Validate available/unavailable metadata, genuine expiry/reconnect, multi-agent creation and restart persistence through the shared paths.
+
+This file is the authority imported by `CLAUDE.md`; Claude Code and Codex follow the same rule.
+
 ## Permanent Unified Memory definition (owner directive 2026-10-04)
 
 **UNIFIED MEMORY IS KALCODE'S SHARED, PROVIDER-INDEPENDENT PROJECT MEMORY.** It preserves useful
@@ -458,36 +472,39 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - **Never a fake concurrency cap.** Presets impose no agent count; only a limit the person set explicitly in Custom mode may hold an agent, and Start Anyway still applies.
 - **Truthful statuses:** STARTING, READY, WORKING, WAITING, NEEDS YOU, DONE, FAILED. Never IDLE for an agent whose process hasn't started.
 - **Provider-agnostic:** applies equally to Claude Code, Codex, Cursor, Gemini and future providers, and to every launch path (panes, New agent, KalVoice, user-initiated Squads and Handoffs).
+- This replaces older conflicting governor/admission rules and is shared by Claude Code and Codex through this file.
 - Implementation: `crates/resources/src/hard.rs` (hard-pressure thresholds), `evaluate_user_agent_admission` in `crates/resources/src/admission.rs` (user-requested agents), `evaluate_admission` (fail-closed background work). Tests in `crates/resources/tests/user_agent_admission.rs` and `apps/desktop/src-tauri/src/resource_commands_tests.rs` must keep proving that CPU load never holds a user-requested agent.
 
-## Permanent parallel merge protocol (owner directive 2026-10-02)
+## Permanent parallel integration rule: the shared merge train (owner directive 2026-10-04)
 
-**EVERY KALCODE TERMINAL MAY MERGE. THREE TO FIVE MERGES CAN LAND AT ONCE. NO SINGLE MERGER, NO LEAD APPROVAL. COORDINATE SO NOTHING BREAKS.** This applies to every Claude Code and Codex session.
+> "KALCODE USES PARALLEL INTEGRATION. Any coding agent may finish and submit work for merge. Ready changes prepare, rebase, validate and form merge groups in parallel. Only the final atomic update to main is serialized. Compatible PRs are batched against the same main snapshot. One conflicting PR must not block unrelated completed work. Claude Code and Codex use the same merge queue. No agent may bypass it. Test the actual merge candidate, land it quickly, then ship immediately."
 
-**1. Merge your own work.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), merge it yourself. Don't wait for, or route through, another session.
+This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` branches and every other direct update of `main`. Every Claude Code and Codex session uses the same tool, `tooling/merge-train/train.mjs`; main changes only through it.
 
-**2. Pre-merge check (fast; takes seconds).**
-- `git fetch origin`.
-- `git merge-tree --write-tree origin/main HEAD` must be conflict-free. If not, rebase or merge main and re-test.
-- If main moved since you tested, compare the files main changed (`git diff --name-only <tested-base> origin/main`) with your touched files and their direct dependents. Re-run the targeted tests only when they overlap.
-- Merge exactly what you tested: `gh pr merge <n> --merge --match-head-commit <sha>`.
+**1. Submit, never merge.** When your PR is validated (relevant tests pass, reviewed proportionately, `biome ci .` clean), queue it:
 
-**3. Main stays green, and the breaker fixes it.** Before merging, run `biome ci .` (whole repo, about 1 s) and the tests for every file you touched, including tests that read source text. A format-only commit can break a regex test. If your merge breaks main, fixing it is your top priority. If you notice someone else's break, message that session at once (ListAgents → SendMessage).
+- `node tooling/merge-train/train.mjs submit <pr>` adds the `merge-queue` label. The queue is the open, non-draft, same-repository PRs carrying that label, in the order it was added. Never run `gh pr merge` and never push to `main`.
+- Then drive the train yourself; any agent may, at any time, concurrently with others: `node tooling/merge-train/train.mjs run`. Nobody waits for a designated merger.
 
-**4. The shared runners are the bottleneck** (one Windows gate runner, one Mac gate runner). Run fewer gates and use them better:
-- **Merge train.** With two or more PRs ready, whoever is ready first combines them on one branch (`train/<topic>`), runs ONE gate, and merges them all (see #107). Announce the train so the others don't gate separately.
-- **Cancel waste.** Cancel gate runs for branches that are already merged or superseded.
-- **Docs-only PRs skip the self-hosted gate** (Markdown, `docs/**` except `docs/releases/**`, `marketing/**`). The author still runs the lifecycle tests locally when `AGENTS.md` changes.
-- **Release-critical packaging gets the machines first.** While a release is packaging on the Mac or Windows release machine, the macOS gate job may be skipped for changes whose macOS risk the release itself proves. Windows gate jobs queue.
+**2. What the train does.** `run` repeats build → gate → land until the queue is empty:
 
-**5. Announce shared hot spots.** Before merging changes to these areas, send a one-line SendMessage to the live sessions (ListAgents): KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater. Never force-push, rebase or merge another session's branch without asking that session.
+- **build** fetches main once (the snapshot BASE) and merges every queued PR head onto it with `--no-ff` merge commits (PR commits are kept, so GitHub marks each PR merged when it lands). It pushes the result as `merge-train/<base12>-<id>`. A PR that conflicts is skipped and told why: the files, and whether it conflicts with main (rebase it) or with PRs ahead of it (it retries on the next train). It never blocks the others. Two agents building at once on the same BASE get the same candidate; the branch is created atomically and the loser reuses it.
+- **gate**: `gate.yml` runs "Gate (Windows)" on the exact candidate commit, against the BASE recorded in its `Merge-Train-Base` trailer, with `--keep-going`. A docs-only train still gates, but the gate selects no heavy stages for it.
+- **land** fast-forwards main to the candidate only if Gate (Windows) executed successfully for that exact candidate push on the main Windows PC, every included PR head is unchanged and still queued, and main is still BASE (`--force-with-lease`, held under the short local `target/lanes/main-update.lock`). If main moved or a PR changed, `run` rebuilds on the new main automatically. A failed gate is bisected; a PR that fails alone is removed from the queue with a comment linking the failing gate.
+- `node tooling/merge-train/train.mjs status` shows the queue, the candidates and their gate state. `build` and `land <merge-train/branch>` run single steps.
 
-**6. Release jobs run in parallel; one website deploy at a time** (shared Worker); merges never wait for either.
-- **Release.** Follow the multi-shipper rule. Any session starts a release job for its merged commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
+**3. No PR-specific bypass.** `land --pr` is disabled. Submit every ready PR to the same queue and gate its exact candidate, including compatible queued changes.
+
+**4. After landing, ship.** `land` comments "Landed in main <sha>" on each PR, removes the label, appends `LANDED <sha> SHIP` to `target/lanes/merge-log.md`, and prints `SHIP <sha>` with the release-kit start command (`tooling/merge-train/on-landed.mjs`). Start that release immediately (multi-shipper rule). Main stays green: if a landed change breaks main, fixing it is the lander's top priority.
+
+**5. Gate on the owner's main Windows PC (64 GB).** The train runs one candidate gate for compatible queued PRs. Never route gates or QA to the second Windows PC. The normal main push workflow may run again after landing; it does not replace the candidate's required evidence. Cancel gate runs for superseded branches. Docs-only PRs skip the PR gate (Markdown, `docs/**` except `docs/releases/**`, `marketing/**`).
+
+**6. Announce shared hot spots.** Before submitting changes to KalVoice, threads/provider panes, release tooling, `AGENTS.md`, website deploy config, D1 migrations or the updater, send a one-line SendMessage to the live sessions (ListAgents). Never force-push, rebase or merge another session's branch without asking that session.
+
+**7. Release jobs run in parallel; one website deploy at a time** (shared Worker); landing never waits for either.
+- **Release.** Follow the multi-shipper rule. Any session starts a release job for the landed commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
 - **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
 - **Takeover.** If a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take the lock over. A stalled older release job is superseded by any newer build that ships, never waited on.
-
-**7. Log merges.** Append one line per merge to `target/lanes/merge-log.md`: UTC time, session, PR, merged sha, and the areas touched. Sessions read it to see what just landed.
 
 ## Permanent visual quality rule (owner directive 2026-10-02)
 
@@ -683,7 +700,7 @@ NOTHING SHIPS BLAND.
 THE WEBSITE MUST BE BEAUTIFUL, DYNAMIC, FAST, SIMPLE, AND UNMISTAKABLY KALCODE."
 
 - **The live demo** is the home page's centerpiece: `apps/website/src/lib/live/` (state, sample workspace, renderer, tour) and `src/scripts/live/` (browser runtime, loaded on demand). One renderer draws both the build-time first paint and every client update.
-- **It mirrors the shipped app, from shared sources:** shell, labels and flows follow `apps/desktop` (Command Deck top bar, the Stable sidebar, tabbed Code panes, the New agent launcher, Agent Fleet call signs); statuses come from `@kalcode/protocol/display-status`; availability, plans and limits from `@kalcode/protocol/plans`; icons are generated from the app's lucide version (`scripts/gen-live-icons.mjs`, drift-tested); colours and type from `@kalcode/ui` tokens. When the app's UI changes, update the demo in the same follow-up so a visitor who downloads KalCode sees what the website showed them.
+- **It mirrors the shipped app, from shared sources:** shell, labels and flows follow `apps/desktop` (Command Deck top bar, the Stable sidebar, tabbed Code panes, the New agent launcher, shared Agent Fleet task names and secondary account metadata); statuses come from `@kalcode/protocol/display-status`; availability, plans and limits from `@kalcode/protocol/plans`; icons are generated from the app's lucide version (`scripts/gen-live-icons.mjs`, drift-tested); colours and type from `@kalcode/ui` tokens. When the app's UI changes, update the demo in the same follow-up so a visitor who downloads KalCode sees what the website showed them.
 - **Agents in the demo are coding terminals**, per the AGENT definition above, never threads.
 - **The demo is not the Free plan.** It is a temporary sample in the browser; the Free plan is a real account tier from `plans.ts`. Never invent prices, limits or plan features for the website.
 - **Truth:** a demo surface whose `PLAN_FEATURE_GROUPS` entry is `coming_soon` carries a Coming soon tag automatically; flipping the entry to `available` (after production verification) removes it. Sample data is fictional sample data, never real user information.
@@ -839,3 +856,23 @@ When storage is meaningfully constrained, broaden the audit to drive free space,
 Routine reports should state storage reclaimed, important active caches/releases/evidence preserved, and remaining free space. For major cleanup, also report free space before/after, largest removals, important large items intentionally kept, whether active Rust caches were preserved, and whether future builds will take longer.
 
 For significant work, DONE means: **IMPLEMENT -> TEST -> REVIEW -> MERGE -> BUILD -> SHIP WHEN REQUIRED -> VERIFY -> PRESERVE REQUIRED ARTIFACTS/EVIDENCE -> CLEAN SAFE DISPOSABLE ARTIFACTS -> LEAVE ADEQUATE DISK SPACE FOR THE NEXT TASK**. Cleanup must never alter project truth.
+
+## Permanent smart agent and terminal naming (owner directive 2026-10-04)
+
+This policy is authoritative for BOTH Claude Code and Codex (`CLAUDE.md` imports this file), and replaces older visible agent call-sign rules.
+
+**KALCODE DOES NOT USE A/B/C/AA/AB ALPHABET SEQUENCES AS VISIBLE CODING-AGENT NAMES. A NEW AGENT STARTS WITH ITS CLEAN PROVIDER NAME. ONCE IT RECEIVES A REAL TASK, KALCODE AUTOMATICALLY GIVES IT A SHORT HUMAN-READABLE TASK NAME. PROVIDER ACCOUNT, MODEL, AND EFFORT LIVE IN SECONDARY METADATA. MANUAL USER RENAMES ALWAYS OVERRIDE AUTOMATIC NAMING. THIS RULE APPLIES TO ALL CURRENT AND FUTURE PROVIDERS.**
+
+- Naming priority is **user custom name > intelligent task-based name > clean registered provider name** (Claude Code, Codex, Cursor, Gemini, and future providers). Account labels may remain secondary metadata; never concatenate them into the main title.
+- Use one shared provider-independent naming system. Task names are concise, normally 2-5 words, not pasted prompts: Pricing Redesign, Provider Tool Fix, Billing Webhooks, Live Browser. Authentication input, injected environment metadata and slash commands are not tasks.
+- Name the first meaningful task. Keep the automatic title stable through replies/refinements; update it only when a genuinely different primary task makes the prior title misleading. Never replace a manual name, even if it equals the provider default.
+- Persist title and manual/automatic ownership across workspace switches, restarts, updates and layout restore. Code, Agent Fleet, Runs, Needs You and KalTidy use the same durable agent identity/name; account, exact model and effort stay separately available.
+- Test multiple providers, manual precedence, persistence and cross-surface consistency. Mirror the shipped behavior in the website demo. Submit validated work through the shared merge train, ship immediately and verify users can receive it; no direct main mutation or separate public-version wait.
+
+## Permanent Codex sub-agent concurrency (owner directive 2026-10-04)
+
+**CODEX MAY RUN A MAXIMUM OF 10 CONCURRENT SUB-AGENTS PER PARENT AGENT. 10 IS THE CANONICAL LIMIT. DO NOT REVERT TO THE OLD 3-AGENT LIMIT OR INCREASE IT ABOVE 10 WITHOUT EXPLICIT OWNER INSTRUCTION.** This supersedes every older conflicting sub-agent maximum, including 3 and 15. Do not silently configure a lower maximum.
+
+When ten child agents are active, wait for one to finish/close and reuse the available slot before spawning another. Apply the same rule to orchestration, implementation, research, parallel review, testing, manager/worker structures, KalVoice-triggered Codex work and Codex sub-agents used by Squads or Handoffs. This is not a KalCode subscription entitlement: top-level local coding agents and terminals remain unlimited on every plan.
+
+Use the supported Codex `agents.max_concurrent_threads_per_session = 10` setting (which excludes the primary thread; legacy alias `agents.max_threads`). KalCode's interactive and headless Codex launch paths share the canonical override in `crates/providers/src/codex/argv.rs`, including resumed sessions. Preserve provider-native sub-agent capabilities and unrelated user configuration. A running external tool host may expose fewer slots; report that actual host constraint truthfully rather than claiming the setting changes an already-running session. Do not persist the host's temporary constraint as a lower policy.
