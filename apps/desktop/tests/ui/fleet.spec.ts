@@ -37,7 +37,11 @@ test("a finished agent is ready to merge only when its worktree facts all agree"
   await expect(ready).toContainText("feat/light-tokens");
 
   const conflicted = card(page, "Generate API client");
-  await expect(conflicted).toContainText("Not ready to merge: Would conflict with main");
+  // The outcome strip keeps merge separate from the agent being done.
+  const outcome = conflicted.getByRole("button", { name: /^Outcome of Generate API client/ });
+  await expect(outcome).toContainText("Would conflict");
+  await outcome.click();
+  await expect(conflicted.locator("[data-outcome-list]")).toContainText("With main");
   await expect(conflicted).not.toContainText("Ready to merge ");
 });
 

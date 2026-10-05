@@ -489,22 +489,6 @@
   gap: var(--space-2);
 }
 
-.mergeNote {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--type-small);
-}
-
-.mergeNote svg {
-  flex: none;
-  width: 0.8125rem;
-  height: 0.8125rem;
-  color: var(--color-text-faint);
-}
-
 /* ---- details (expanded) ---- */
 
 .details {

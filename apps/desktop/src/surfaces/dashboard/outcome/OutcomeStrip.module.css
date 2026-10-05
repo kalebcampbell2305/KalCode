@@ -1,0 +1,237 @@
+/* An agent's outcome: one quiet line of stages that opens into the full list. Graphite, with the
+   tone carried by a small dot per stage (the value is always written next to it). */
+
+.strip {
+  --o-tone: var(--status-muted-text);
+  position: relative;
+  min-width: 0;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  color: var(--color-text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 180ms var(--ease-out),
+    background-color 180ms var(--ease-out);
+}
+
+.line:hover {
+  border-color: var(--color-border-lit-soft);
+  background: var(--color-surface-hover);
+}
+
+.line:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.strip[data-expanded] .line {
+  border-color: var(--color-border-lit-soft);
+}
+
+.stages {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2-5);
+  min-width: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, black calc(100% - 1.25rem), transparent);
+}
+
+.stage {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3125rem;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* A hairline arrow between stages: the order is the pipeline. */
+.stage + .stage::before {
+  content: "›";
+  margin-right: var(--space-1);
+  color: var(--color-text-faint);
+}
+
+.value {
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.dot {
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--radius-full);
+  background: var(--o-tone);
+}
+
+[data-tone="working"] {
+  --o-tone: var(--status-working);
+}
+[data-tone="done"] {
+  --o-tone: var(--status-done);
+}
+[data-tone="failed"] {
+  --o-tone: var(--status-failed);
+}
+[data-tone="waiting"] {
+  --o-tone: var(--status-waiting);
+}
+[data-tone="recovering"] {
+  --o-tone: var(--status-recovering);
+}
+[data-tone="paused"] {
+  --o-tone: var(--status-paused);
+}
+[data-tone="accent"] {
+  --o-tone: var(--color-accent);
+}
+
+.stage[data-tone="accent"] .dot,
+.row[data-tone="accent"] .dot {
+  box-shadow: 0 0 8px var(--color-glow);
+}
+
+.chevron {
+  flex: none;
+  width: 0.8125rem;
+  height: 0.8125rem;
+  color: var(--color-text-faint);
+  transition: transform 200ms var(--ease-out);
+}
+
+.strip[data-expanded] .chevron {
+  transform: rotate(180deg);
+  color: var(--color-accent-text);
+}
+
+/* ---- the full list ---- */
+
+.list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1-5) var(--space-3);
+  margin: var(--space-1-5) 0 0;
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-sheen), var(--color-surface-2);
+  animation: open 200ms var(--ease-out);
+}
+
+/* Over the terminal, never pushing it: the pane's real terminal keeps its size. */
+.strip[data-variant="pane"] .list {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  z-index: 5;
+  box-shadow: var(--shadow-lg);
+}
+
+.row {
+  display: contents;
+}
+
+.rowLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-faint);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.rowValue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--type-small);
+}
+
+.rowMain {
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.row:not([data-known]) .rowMain {
+  color: var(--color-text-muted);
+  font-weight: var(--weight-regular);
+}
+
+.row:not([data-known]) .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+.rowDetail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes open {
+  from {
+    transform: translateY(-3px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .list {
+    animation: none;
+  }
+}
+
+:global([data-motion="reduced"]) .list {
+  animation: none;
+}
+
+/* In a Code pane: a flush hairline bar under the pane header, quieter than a card control. */
+.strip[data-variant="pane"] {
+  flex: none;
+  z-index: 4;
+}
+
+.strip[data-variant="pane"] .line {
+  padding: 0.1875rem var(--space-2);
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+  background: var(--color-surface-1);
+}
+
+.strip[data-variant="pane"] .line:hover {
+  background: var(--color-surface-hover);
+}
+
+.strip[data-variant="pane"] .list {
+  margin: var(--space-1) var(--space-2) 0;
+}
