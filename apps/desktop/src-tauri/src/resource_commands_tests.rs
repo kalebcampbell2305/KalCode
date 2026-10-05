@@ -231,7 +231,10 @@ fn user_agents_ignore_cpu_soft_memory_and_missing_telemetry_but_keep_custom_limi
         threshold: Some(90.0),
         approaching: false,
     });
-    assert_eq!(decide(Some(&snapshot), &limits).state, AdmissionState::Allowed);
+    assert_eq!(
+        decide(Some(&snapshot), &limits).state,
+        AdmissionState::Allowed
+    );
     snapshot.cpu = Reading::unknown("not sampled yet");
     snapshot.pressure.entries.push(ResourcePressure {
         resource: ResourceKind::Memory,
@@ -241,7 +244,10 @@ fn user_agents_ignore_cpu_soft_memory_and_missing_telemetry_but_keep_custom_limi
         threshold: Some(88.0),
         approaching: false,
     });
-    assert_eq!(decide(Some(&snapshot), &limits).state, AdmissionState::Allowed);
+    assert_eq!(
+        decide(Some(&snapshot), &limits).state,
+        AdmissionState::Allowed
+    );
     assert_eq!(
         decide(None, &limits).state,
         AdmissionState::Allowed,

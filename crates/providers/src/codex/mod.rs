@@ -287,7 +287,11 @@ pub(crate) fn usable_executable_and_version(
         (DetectionState::Installed, Some(exe))
             if detected.detection.auth != AuthState::NotAuthenticated =>
         {
-            let version = detected.detection.version.as_deref().and_then(Version::parse);
+            let version = detected
+                .detection
+                .version
+                .as_deref()
+                .and_then(Version::parse);
             Ok((exe, version))
         }
         (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),

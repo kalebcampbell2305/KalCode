@@ -208,7 +208,10 @@ mod tests {
 
     fn ts_value(row: &str) -> (&str, String) {
         let (key, value) = row.split_once(": ").expect("row");
-        (key.trim_matches('"'), value.trim_end_matches(',').trim_matches('"').to_owned())
+        (
+            key.trim_matches('"'),
+            value.trim_end_matches(',').trim_matches('"').to_owned(),
+        )
     }
 
     #[test]
@@ -221,7 +224,10 @@ mod tests {
             AgentState::of_status(ThreadStatus::Idle, Some(LAST_TURN_FAILED_ACTIVITY)),
             AgentState::Failed
         );
-        assert_eq!(AgentState::of_status(ThreadStatus::Idle, None), AgentState::Idle);
+        assert_eq!(
+            AgentState::of_status(ThreadStatus::Idle, None),
+            AgentState::Idle
+        );
         assert_eq!(
             AgentState::of_status(ThreadStatus::Active, Some(READY_ACTIVITY)),
             AgentState::Working
@@ -234,7 +240,10 @@ mod tests {
             AgentState::of(ThreadStatus::RunningTool, None, 1),
             AgentState::NeedsYou
         );
-        assert_eq!(AgentState::of(ThreadStatus::Completed, None, 1), AgentState::Done);
+        assert_eq!(
+            AgentState::of(ThreadStatus::Completed, None, 1),
+            AgentState::Done
+        );
     }
 
     #[test]

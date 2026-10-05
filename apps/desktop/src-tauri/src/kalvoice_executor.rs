@@ -5857,7 +5857,7 @@ mod tests {
             (
                 AgentFilter::All,
                 None,
-                "8 agents: 2 need you, 1 working, 2 idle, 1 done, 2 failed.",
+                "8 agents: 2 need you, 1 working, 1 done, 2 idle, 2 failed.",
             ),
             (
                 AgentFilter::NeedsYou,
@@ -5954,7 +5954,7 @@ mod tests {
                 .expect("status");
         assert_eq!(
             status.summary,
-            "8 agents: 2 need you, 1 working, 2 idle, 1 done, 2 failed."
+            "8 agents: 2 need you, 1 working, 1 done, 2 idle, 2 failed."
         );
     }
 
