@@ -54,7 +54,7 @@ async function workspace(page: Page, metadata: "available" | "unavailable" | "pl
     .first()
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "account-state-project" })).toBeVisible();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   return page.getByRole("dialog", { name: "New agent" });
 }
 

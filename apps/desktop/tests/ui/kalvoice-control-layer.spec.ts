@@ -96,7 +96,7 @@ test.describe("KalVoice provider-pane delivery", () => {
     page,
   }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -135,7 +135,7 @@ test.describe("KalVoice provider-pane delivery", () => {
 
   test("a natural direct prompt reaches the named open agent and sends exactly once", async ({ page }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -155,7 +155,7 @@ test.describe("KalVoice provider-pane delivery", () => {
 
   test("a focused provider accepts a bare work instruction exactly once", async ({ page }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })

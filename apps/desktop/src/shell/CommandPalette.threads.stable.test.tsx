@@ -151,12 +151,18 @@ describe("palette threads (Stable)", () => {
     expect(palette.getByRole("combobox")).toHaveAttribute("aria-activedescendant", beta.id);
   }, 15_000);
 
-  it("offers New agent… first and finds it by agent or provider words", async () => {
+  it("offers New agent first, with options next, and finds them by agent or provider words", async () => {
     const { user } = await mountStable();
     const palette = await openPalette(user);
-    expect(palette.getByRole("option", { name: "New agent…" })).toBeInTheDocument();
+    const options = palette.getAllByRole("option").map((option) => option.textContent);
+    const start = options.indexOf("New agent");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(options[start + 1]).toBe("New agent with options…");
     await user.type(palette.getByRole("combobox"), "codex");
-    expect(await palette.findByRole("option", { name: "New agent…" })).toBeInTheDocument();
+    expect(await palette.findByRole("option", { name: /^New agent$/ })).toBeInTheDocument();
+    await user.clear(palette.getByRole("combobox"));
+    await user.type(palette.getByRole("combobox"), "model");
+    expect(await palette.findByRole("option", { name: "New agent with options…" })).toBeInTheDocument();
     await user.clear(palette.getByRole("combobox"));
     await user.type(palette.getByRole("combobox"), "new agent");
     await user.keyboard("{Enter}");

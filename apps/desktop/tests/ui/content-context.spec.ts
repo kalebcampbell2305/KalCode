@@ -44,7 +44,7 @@ test("selected provider output goes to that workspace's agent as an unsubmitted 
   });
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await page.getByRole("button", { name: "Open folder…" }).first().click();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

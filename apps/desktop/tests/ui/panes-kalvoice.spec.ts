@@ -93,7 +93,7 @@ test.describe("KalVoice pane intents", () => {
 
   test("arranging Claude Code and Codex says honestly that Codex has no pane yet", async ({ page }) => {
     await openCode(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -110,7 +110,7 @@ test.describe("KalVoice pane intents", () => {
   test("arranging two providers splits next to the first one, not the previously focused pane", async ({ page }) => {
     await openCode(page);
     const launch = async (provider: "Claude Code" | "Codex") => {
-      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "New agent" });
       if (provider === "Codex") await dialog.getByRole("group", { name: "Codex" }).getByRole("option").first().click();
       await dialog.getByRole("button", { name: `Launch ${provider} agent` }).click();

@@ -15,7 +15,7 @@ async function openWorkspace(page: Page, shell = false) {
     await page.getByRole("button", { name: "New PowerShell 7 terminal", exact: true }).click();
     await expect(page.locator(".xterm-rows")).toContainText("PS C:");
   }
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

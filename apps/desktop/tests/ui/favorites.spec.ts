@@ -13,7 +13,7 @@ test("global pins persist, reorder by keyboard, and open a command without execu
   await expect(page.locator("#main")).toHaveAttribute("data-surface", "dashboard");
   let palette = await openPalette(page);
   await palette.getByRole("combobox").fill("New agent");
-  await palette.getByRole("button", { name: /Pin globally: New agent/ }).click();
+  await palette.getByRole("button", { name: "Pin globally: New agent", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "New agent", exact: true })).toHaveCount(0);
   await palette.getByRole("combobox").fill("Browser");
   await palette.getByRole("button", { name: "Pin globally: Browser", exact: true }).click();
@@ -103,7 +103,7 @@ test("an agent favorite restores its existing Code pane without duplicating the 
   const navigation = page.getByRole("navigation", { name: "Primary" });
   await navigation.getByRole("button", { name: "Code", exact: true }).click();
   await page.getByRole("button", { name: "Open folder…" }).first().click();
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })

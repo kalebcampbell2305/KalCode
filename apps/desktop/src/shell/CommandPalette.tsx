@@ -36,6 +36,7 @@ import {
   Rows3,
   Search,
   Settings as SettingsIcon,
+  SlidersHorizontal,
   SquareTerminal,
   Sun,
   Undo2,
@@ -52,7 +53,7 @@ import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useKalTidy } from "../surfaces/code/kaltidy/kalTidyContext.ts";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
-import { useLaunchAgent } from "../surfaces/code/useLaunchAgent.ts";
+import { useLaunchAgent, useStartAgents } from "../surfaces/code/useLaunchAgent.ts";
 import { accountInlineLabel, accountName, accountSignIn, sortAccounts } from "../surfaces/providers/accountIdentity.ts";
 import { openProviderAccounts, requestProvidersTab } from "../surfaces/providers/providersTab.ts";
 import { requestSettingsSection } from "../surfaces/settings/settingsIntent.ts";
@@ -140,6 +141,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const kalTidy = useKalTidy();
   const threadsIntent = useThreadsIntent();
   const launchAgent = useLaunchAgent();
+  const startAgents = useStartAgents();
   // Z7-W2: typed text also searches the Session Locator (threads, workspaces, terminals, …) when
   // the build shows it; gated features stay unreachable on Stable.
   const featureVisible = (id: string) => info.flags.features?.some((f) => f.id === id && f.visible) ?? false;
@@ -433,11 +435,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Command.Group heading="Agents" className={styles.group}>
             <Item
               icon={<SquareTerminal />}
-              onSelect={run(launchAgent)}
+              onSelect={run(() => startAgents())}
               commandId="agent:new"
               keywords={["agent", "launch", "start", "claude", "codex", "cursor", "gemini", "coding agent"]}
             >
-              New agent…
+              New agent
+            </Item>
+            <Item
+              icon={<SlidersHorizontal />}
+              onSelect={run(launchAgent)}
+              commandId="agent:new-options"
+              keywords={["agent", "launch", "provider", "account", "model", "effort", "count", "several", "options"]}
+            >
+              New agent with options…
             </Item>
             {uiIntents ? <AttentionCommands run={run} /> : null}
           </Command.Group>

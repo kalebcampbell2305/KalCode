@@ -95,7 +95,7 @@ test("Code + immediately offers multiple Codex accounts, signs Work in inline an
   await page.setViewportSize({ width: 1040, height: 760 });
   await open(page);
   await openWorkspace(page, "agent-picker");
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const dialog = launcher(page);
   // Every account of every provider is one list; Codex's two accounts are its own group.
   const accounts = dialog.getByRole("group", { name: "Codex" }).getByRole("option");
@@ -159,7 +159,7 @@ test("empty-account + flows add and sign in without leaving either agent or thre
   await open(page, "provider-accounts-empty");
   await openWorkspace(page, "empty-account-plus");
 
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   let surface = launcher(page);
   await expect(surface.getByText("No Claude Code account added yet")).toBeVisible();
   await expect(surface.getByRole("button", { name: "Launch Claude Code agent" })).toBeDisabled();

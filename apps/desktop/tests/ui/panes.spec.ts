@@ -351,7 +351,7 @@ test.describe("content from other surfaces", () => {
     await expectNoSeriousA11yViolations(page);
 
     // A provider pane, hidden in the background, is brought back and focused by its focus request.
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -572,7 +572,7 @@ test.describe("accessibility", () => {
         .getByRole("button", { name: "Code", exact: true })
         .click();
       await expect(canvas(page)).toBeVisible();
-      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
       await page
         .getByRole("dialog", { name: "New agent" })
         .getByRole("button", { name: "Launch Claude Code agent" })

@@ -75,7 +75,7 @@ test("launching two agents from Code fills the Fleet, and a card opens its termi
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await openFolders(page, "kalcode");
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   await launcher.getByRole("button", { name: "One more agent" }).click();
   await launcher.getByRole("button", { name: "Launch 2 Claude Code agents" }).click();

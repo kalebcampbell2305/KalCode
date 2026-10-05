@@ -23,7 +23,7 @@ async function openWorkspace(page: Page, folder = "handoff-project") {
 }
 
 async function launchAgents(page: Page, count: number) {
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   const launcher = page.getByRole("dialog", { name: "New agent" });
   if (count > 1) await launcher.getByLabel("Agents", { exact: true }).fill(String(count));
   await launcher
