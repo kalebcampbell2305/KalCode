@@ -1,0 +1,93 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* An amber early-warning chip: quiet enough for a card, unmistakable at a glance. */
+.chip {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  max-width: 100%;
+  min-height: 1.625rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--status-waiting-line);
+  border-radius: var(--radius-md);
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+  font: inherit;
+  font-size: var(--type-small);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--status-waiting);
+  box-shadow: 0 0 0 3px var(--status-waiting-soft);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.chip svg {
+  flex: none;
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.other {
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
+.count {
+  flex: none;
+  margin-left: auto;
+  color: var(--status-waiting-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  max-width: 22rem;
+}
+
+.tipTitle {
+  margin-bottom: var(--space-0-5);
+  font-weight: var(--weight-semibold);
+}
+
+.file {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more {
+  color: var(--color-text-muted);
+}

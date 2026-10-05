@@ -2,8 +2,9 @@
 
 /**
  * Git facts about a thread's own worktree (`thread_worktree_states`), from which the UI decides
- * whether the agent's work is ready to merge. Computed natively on request; paths never cross
- * IPC.
+ * whether the agent's work is ready to merge and whether agents edit the same files. Computed
+ * natively on request; filesystem locations never cross IPC (only repository-relative file
+ * names do).
  */
 export type ThreadWorktreeState = { threadId: string, worktreeId: string,
 /**
@@ -36,6 +37,15 @@ untracked: number,
  * unknown (no base branch, Git older than 2.38, or a repository-defined merge driver).
  */
 conflicts: boolean | null,
+/**
+ * Files the agent touched, relative to the repository top level: committed on the branch
+ * since it forked from the base, plus uncommitted and untracked files. Sorted, at most 200.
+ */
+changedPaths: Array<string>,
+/**
+ * More files changed than `changed_paths` lists.
+ */
+changedPathsTruncated: boolean,
 /**
  * When these facts were read (RFC 3339).
  */
