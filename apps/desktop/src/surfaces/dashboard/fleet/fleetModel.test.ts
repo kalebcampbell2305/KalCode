@@ -14,6 +14,8 @@ function facts(overrides: Partial<ThreadWorktreeState> = {}): ThreadWorktreeStat
     changed: 0,
     untracked: 0,
     conflicts: false,
+    changedPaths: [],
+    changedPathsTruncated: false,
     observedAt: "2026-10-02T00:00:00.000Z",
     ...overrides,
   };

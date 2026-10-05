@@ -861,6 +861,8 @@ export function createThreadsMemory(
       changed: facts.changed,
       untracked: 0,
       conflicts: false,
+      changedPaths: [],
+      changedPathsTruncated: false,
       observedAt: now(),
     };
   };
