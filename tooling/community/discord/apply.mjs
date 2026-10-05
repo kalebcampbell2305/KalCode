@@ -118,7 +118,54 @@ export async function applyServer({
     throw new Error(
       "The KalCode bot needs the Administrator permission for setup (enabling Community, onboarding and AutoMod require it). Re-invite it with the link from `kc-discord.mjs invite-url`, or give its role Administrator.",
     );
-  const botTop = Math.max(...roles.filter((r) => botMember.roles.includes(r.id)).map((r) => r.position));
+  const botRoleId = roles.filter((r) => botMember.roles.includes(r.id)).sort((a, b) => b.position - a.position)[0]?.id;
+  // Discord's hierarchy: a bot can only edit or delete roles below its own highest role. A role ties
+  // on position are ordered by id, so compare the way Discord does.
+  const below = (r) => {
+    const bot = roles.find((x) => x.id === botRoleId);
+    return r.position < bot.position || (r.position === bot.position && BigInt(r.id) > BigInt(bot.id));
+  };
+  const blocking = roles.filter(
+    (r) =>
+      !r.managed &&
+      r.id !== guildId &&
+      !below(r) &&
+      (S.ROLES.some((x) => x.name === r.name) || S.LEGACY.roles.includes(r.name)),
+  );
+  if (blocking.length)
+    throw new Error(
+      `The KalCode bot's role must sit above ${blocking.map((r) => `"${r.name}"`).join(", ")} to manage ${blocking.length === 1 ? "it" : "them"}. In Discord: Server Settings › Roles, drag "${roles.find((r) => r.id === botRoleId)?.name}" to the top, then run again.`,
+    );
+
+  // ── Owner-approved removal of empty leftovers ──────────────────────────────────────────────
+  for (const name of S.LEGACY.roles) {
+    const r = roles.find((x) => x.name === name && !x.managed);
+    if (!r) continue;
+    if (String(r.permissions) !== "0") {
+      report.warnings.push(`Kept role "${name}": it has permissions now.`);
+      continue;
+    }
+    await write(`remove empty leftover role "${name}"`, "updated", () =>
+      api.delete(`/guilds/${guildId}/roles/${r.id}`),
+    );
+    roles = roles.filter((x) => x.id !== r.id);
+  }
+  for (const legacy of S.LEGACY.channels) {
+    const c = channels.find((x) => x.name === legacy.name && x.type === CHANNEL_TYPE[legacy.type]);
+    if (!c) continue;
+    let empty;
+    if (legacy.type === "forum") {
+      const active = (await api.get(`/guilds/${guildId}/threads/active`)).threads.filter((t) => t.parent_id === c.id);
+      const archived = (await api.get(`/channels/${c.id}/threads/archived/public`)).threads;
+      empty = active.length === 0 && archived.length === 0;
+    } else empty = (await api.get(`/channels/${c.id}/messages`, { limit: "1" })).length === 0;
+    if (!empty) {
+      report.warnings.push(`Kept #${c.name}: it has content now. Move or archive it, then remove it by hand.`);
+      continue;
+    }
+    await write(`remove empty leftover #${c.name} (${legacy.type})`, "updated", () => api.delete(`/channels/${c.id}`));
+    channels = channels.filter((x) => x.id !== c.id);
+  }
 
   // ── Roles ──────────────────────────────────────────────────────────────────────────────────
   const roleIds = {};
@@ -137,7 +184,7 @@ export async function applyServer({
       continue;
     }
     roleIds[spec.key] = have.id;
-    if (have.position >= botTop) {
+    if (!below(have)) {
       report.warnings.push(
         `Role "${spec.name}" sits above the bot's role; move the KalCode bot's role to the top to manage it.`,
       );
@@ -185,11 +232,17 @@ export async function applyServer({
   // ── Categories and channels ────────────────────────────────────────────────────────────────
   const channelIds = {};
   const categoryIds = {};
+  // Adopt only a compatible channel: text and announcement convert into each other; a forum or a
+  // voice channel can't be converted, so it only adopts its own type.
+  const compatible = (spec, c) =>
+    spec.type === "voice"
+      ? c.type === CHANNEL_TYPE.voice
+      : spec.type === "forum"
+        ? c.type === CHANNEL_TYPE.forum
+        : [CHANNEL_TYPE.text, CHANNEL_TYPE.announcement].includes(c.type);
   const findChannel = (spec) =>
-    channels.find((c) =>
-      spec.type === "voice"
-        ? c.type === CHANNEL_TYPE.voice && lower(c.name) === lower(spec.name)
-        : [CHANNEL_TYPE.text, CHANNEL_TYPE.announcement, CHANNEL_TYPE.forum].includes(c.type) && c.name === spec.name,
+    channels.find(
+      (c) => compatible(spec, c) && (spec.type === "voice" ? lower(c.name) === lower(spec.name) : c.name === spec.name),
     );
 
   for (const [ci, cat] of S.CATEGORIES.entries()) {
@@ -351,13 +404,14 @@ export async function applyServer({
   for (const [ci, cat] of S.CATEGORIES.entries()) {
     positions.push({ id: categoryIds[cat.key], position: ci });
     cat.channels.forEach((ch, i) => {
-      if (channelIds[ch.key]) positions.push({ id: channelIds[ch.key], position: i, parent_id: categoryIds[cat.key] });
+      // Positions only: Discord allows one parent change per call, and parents are set per channel above.
+      if (channelIds[ch.key]) positions.push({ id: channelIds[ch.key], position: i });
     });
   }
   const current = new Map(channels.map((c) => [c.id, c]));
   const misplaced = positions.some((p) => {
     const c = current.get(p.id);
-    return !c || c.position !== p.position || (p.parent_id && c.parent_id !== p.parent_id);
+    return !c || c.position !== p.position;
   });
   if (misplaced) await write("channel order", "updated", () => api.patch(`/guilds/${guildId}/channels`, positions));
   else same("channel order");
@@ -389,6 +443,14 @@ export async function applyServer({
       (SINGLETON_TRIGGERS.has(want.trigger_type) ? rules.find((r) => r.trigger_type === want.trigger_type) : undefined);
     if (!have) {
       await write(`AutoMod: ${spec.name}`, "created", () => api.post(`/guilds/${guildId}/auto-moderation/rules`, want));
+      continue;
+    }
+    if (have.creator_id && have.creator_id !== me.id) {
+      // Discord's built-in rules (e.g. the default mention-spam rule) can't be edited by bots, and only one
+      // rule of that kind may exist. Keep Discord's and say so.
+      report.skipped.push(
+        `AutoMod: kept Discord's built-in "${have.name}" (bots can't edit it); adjust it in Server Settings › AutoMod if needed`,
+      );
       continue;
     }
     const { trigger_type: _t, ...patch } = want;
@@ -501,7 +563,9 @@ export async function applyServer({
       ...(
         await Promise.all(
           ["support", "bugs", "features"].map((k) =>
-            channelIds[k] ? api.get(`/channels/${channelIds[k]}/threads/archived/public`).then((r) => r.threads) : [],
+            channelIds[k] && !String(channelIds[k]).startsWith("planned-")
+              ? api.get(`/channels/${channelIds[k]}/threads/archived/public`).then((r) => r.threads)
+              : [],
           ),
         )
       ).flat(),

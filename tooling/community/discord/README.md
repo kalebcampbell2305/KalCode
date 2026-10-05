@@ -43,7 +43,8 @@ Discord doesn't allow creating a bot or adding one to a server through its API, 
 3. **Add the bot to the server.**
    - Run `kc-discord.mjs invite-url`, open the link and authorize it for KalCode.
    - It asks for **Administrator**, which setup needs: enabling Community, onboarding and AutoMod all require it.
-4. **Apply.** Run `kc-discord.mjs plan`, then `kc-discord.mjs apply`.
+4. **Move the bot's role to the top.** In Server Settings › Roles, drag the bot's role above every other role. Discord never lets a bot raise its own role, and a bot can only manage roles below its own. If this is missed, `apply` stops and says exactly which roles are in the way.
+5. **Apply.** Run `kc-discord.mjs plan`, then `kc-discord.mjs apply`.
 
 **After setup, if you want least privilege,** take Administrator off the bot's role and leave it **Manage Webhooks**, **View Channels**, **Send Messages** and **Embed Links**. Changelog posting keeps working, and the webhook path doesn't need the bot at all. Re-grant Administrator only when running `apply` again.
 
@@ -64,6 +65,8 @@ Discord doesn't allow creating a bot or adding one to a server through its API, 
   - The token is read from the environment or `~/.kalcode/discord/bot-token` and never printed.
   - Webhook URLs (which embed a secret) are saved to `~/.kalcode/discord/webhooks.json`, owner-only.
   - Output passes through `redact()`, and every change carries an audit-log reason.
+- **Respects Discord's built-ins.** Discord's own default rules (for example "Block Mention Spam", which comes with Community) can't be edited by bots, and only one rule of that kind may exist. `apply` keeps them and reports them.
+- **Leftovers the owner approved** (`LEGACY` in `server.mjs`) are removed only while they are still empty.
 - **Rate-limit aware.** It retries 429s with `retry_after`, backs off on 5xx, and waits out exhausted buckets.
 
 ## Safety

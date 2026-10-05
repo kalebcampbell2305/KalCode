@@ -361,6 +361,20 @@ export const CHANNELS = Object.fromEntries(
   CATEGORIES.flatMap((c) => c.channels.map((ch) => [ch.key, { ...ch, category: c.key, staff: Boolean(c.staff) }])),
 );
 
+/**
+ * Leftovers the owner approved removing (2026-10-05): an empty text #feature-requests (Discord can't turn a
+ * text channel into a forum), an empty forum and an unnamed empty role. `apply` removes each one only
+ * while it is still empty (no messages or posts, no permissions); anything that gained content is kept
+ * and reported.
+ */
+export const LEGACY = {
+  channels: [
+    { name: "feature-requests", type: "text" },
+    { name: "kalcode-discussions", type: "forum" },
+  ],
+  roles: ["new role"],
+};
+
 /** Default categories Discord creates for a new server; removed once they are empty. */
 export const DISCORD_DEFAULT_CATEGORIES = ["Text Channels", "Voice Channels"];
 

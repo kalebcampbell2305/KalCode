@@ -108,6 +108,10 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
       Object.assign(r, body);
       return r;
     }
+    if (m && method === "DELETE") {
+      s.roles = s.roles.filter((x) => x.id !== m[1]);
+      return null;
+    }
     m = /^\/guilds\/\d+\/members\/(\d+)$/.exec(p);
     if (m && method === "GET")
       return s.members[m[1]] ? { user: { id: m[1] }, roles: s.members[m[1]].roles } : err(404, "Unknown Member");
@@ -126,6 +130,8 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
         return c;
       }
       if (method === "PATCH") {
+        if (body.filter((x) => "parent_id" in x).length > 1)
+          return err(400, "Only one channel can have a parent_id modified at a time");
         for (const x of body) Object.assign(chan(x.id), x);
         return null;
       }
@@ -239,7 +245,10 @@ export function createFakeDiscord({ guildId = "1554995816639369348", ownerId = "
     const method = init.method ?? "GET";
     const body = init.body ? JSON.parse(init.body) : undefined;
     s.requests.push({ method, path: u.pathname, headers: init.headers, body });
-    const out = route(method, u.pathname, body);
+    // Like Discord: ids in a path must be snowflakes (catches a dry run reading a channel it only planned).
+    const out = /\/planned-/.test(u.pathname)
+      ? { status: 400, body: { message: "Value is not snowflake.", code: 50035 } }
+      : route(method, u.pathname, body);
     const isErr = out && typeof out === "object" && "status" in out && "body" in out && Object.keys(out).length === 2;
     const status = isErr ? out.status : out === null ? 204 : 200;
     const payload = isErr ? out.body : out;

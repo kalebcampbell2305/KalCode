@@ -376,6 +376,117 @@ describe("apply", () => {
     assert.ok(report.warnings.some((w) => w.includes("memes")));
   });
 
+  /** The live KalCode server as found on 2026-10-05, before the first apply. */
+  const liveLike = () => {
+    const fake = createFakeDiscord();
+    const s = fake.state;
+    s.roles.push(
+      {
+        id: "400",
+        name: "Moderator",
+        permissions: "8864258447638527",
+        position: 1,
+        color: 0x3498db,
+        hoist: false,
+        mentionable: false,
+        managed: false,
+      },
+      {
+        id: "401",
+        name: "new role",
+        permissions: "0",
+        position: 2,
+        color: 0,
+        hoist: false,
+        mentionable: false,
+        managed: false,
+      },
+    );
+    s.channels.push(
+      {
+        id: "14",
+        name: "feature-requests",
+        type: 0,
+        position: 1,
+        parent_id: "10",
+        topic: null,
+        permission_overwrites: [],
+      },
+      {
+        id: "15",
+        name: "kalcode-discussions",
+        type: 15,
+        position: 2,
+        parent_id: "10",
+        available_tags: [],
+        permission_overwrites: [],
+      },
+    );
+    return fake;
+  };
+  const botToTop = (fake) => {
+    fake.state.roles.find((r) => r.id === "500").position = 10;
+  };
+
+  it("asks for the bot's role to be moved up when it sits below roles it must manage", async () => {
+    await assert.rejects(run(liveLike()), /drag "KalCode Bot" to the top/);
+  });
+
+  it("plans the live server without crashing or writing", async () => {
+    const fake = liveLike();
+    botToTop(fake);
+    const { report } = await run(fake, { dryRun: true });
+    assert.ok(report.updated.some((u) => u.includes("leftover #feature-requests")));
+    assert.deepEqual(
+      fake.state.requests.filter((r) => r.method !== "GET"),
+      [],
+    );
+  });
+
+  it("replaces the empty leftovers and makes Moderator moderation-only", async () => {
+    const fake = liveLike();
+    botToTop(fake);
+    await run(fake);
+    const s = fake.state;
+    const named = (n) => s.channels.filter((c) => c.name === n);
+    assert.equal(named("feature-requests").length, 1, "no duplicate names");
+    assert.equal(named("feature-requests")[0].type, 15, "#feature-requests is now the forum");
+    assert.equal(named("kalcode-discussions").length, 0);
+    assert.ok(!s.roles.some((r) => r.name === "new role"));
+    const mod = s.roles.find((r) => r.name === "Moderator");
+    assert.equal(mod.id, "400", "the existing Moderator role is adopted, not duplicated");
+    assert.equal(BigInt(mod.permissions) & S.P.ADMINISTRATOR, 0n);
+    assert.ok(BigInt(mod.permissions) & S.P.MODERATE_MEMBERS);
+  });
+
+  it("keeps a leftover that gained content", async () => {
+    const fake = liveLike();
+    botToTop(fake);
+    fake.state.messages["14"] = [{ id: "1", author: { id: "42" }, content: "please add dark mode" }];
+    const { report } = await run(fake);
+    assert.ok(fake.state.channels.some((c) => c.id === "14"));
+    assert.ok(report.warnings.some((w) => w.includes("Kept #feature-requests")));
+  });
+
+  it("keeps Discord's built-in AutoMod rules instead of editing them", async () => {
+    const fake = createFakeDiscord();
+    fake.state.automod.push({
+      id: "1030554520465440818",
+      name: "Block Mention Spam",
+      creator_id: "1008776202191634432",
+      trigger_type: 5,
+      event_type: 1,
+      trigger_metadata: { mention_total_limit: 20, mention_raid_protection_enabled: true },
+      actions: [{ type: 1, metadata: {} }],
+      enabled: true,
+      exempt_roles: [],
+    });
+    const { report } = await run(fake);
+    assert.ok(report.skipped.some((x) => x.includes("Block Mention Spam")));
+    assert.equal(fake.state.automod.filter((r) => r.trigger_type === 5).length, 1);
+    assert.ok(!fake.state.requests.some((r) => r.method === "PATCH" && r.path.endsWith("/1030554520465440818")));
+  });
+
   it("refuses to run without Administrator, with a clear next step", async () => {
     const fake = createFakeDiscord();
     fake.state.roles.find((r) => r.id === "500").permissions = String(S.P.SEND_MESSAGES);
