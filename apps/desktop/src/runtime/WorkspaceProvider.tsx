@@ -254,26 +254,36 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
 
-  // Live updates: refresh once per burst of workspace/shell events.
+  // Live updates: refresh once per burst of workspace/shell events. A new or restarted terminal
+  // joins the same burst: its own events arrive right after it, and one read covers both.
+  const burst = useRef<{ timer: ReturnType<typeof setTimeout> | null; refresh: typeof refresh }>({
+    timer: null,
+    refresh,
+  });
+  burst.current.refresh = refresh;
+  const refreshSoon = useCallback(() => {
+    const current = burst.current;
+    if (current.timer) clearTimeout(current.timer);
+    current.timer = setTimeout(() => {
+      current.timer = null;
+      void current.refresh();
+    }, 25);
+  }, []);
   useEffect(() => {
     let lastSeq = feed.getSnapshot().events[0]?.seq ?? 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = feed.subscribe(() => {
       const { events } = feed.getSnapshot();
       const fresh = events.filter((e) => e.seq > lastSeq);
       lastSeq = Math.max(lastSeq, events[0]?.seq ?? 0);
-      if (!fresh.some(isWorkspaceEvent)) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        void refresh();
-      }, 25);
+      if (fresh.some(isWorkspaceEvent)) refreshSoon();
     });
     return () => {
       unsubscribe();
-      if (timer) clearTimeout(timer);
+      const current = burst.current;
+      if (current.timer) clearTimeout(current.timer);
+      current.timer = null;
     };
-  }, [feed, refresh]);
+  }, [feed, refreshSoon]);
 
   // A workspace whose folder is gone can't run anything: its failure offers removing it from the list.
   const removeMissing = useRef<(workspaceId: string) => void>(() => {});
@@ -442,13 +452,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // Keep the native session visible without overriding a newer workspace or terminal choice
       // made while creation was pending.
       showTerminal(terminal);
-      void refresh();
+      refreshSoon();
       if (!mayFocus()) return null;
       setSelected({ workspaceId, terminalId: terminal.id });
       requestFocus(terminal.id);
       return terminal;
     },
-    [client, active?.id, refresh, fail, requestFocus, captureLifetime, lifecycle, showTerminal],
+    [client, active?.id, refreshSoon, fail, requestFocus, captureLifetime, lifecycle, showTerminal],
   );
 
   const closeTerminal = useCallback(
@@ -487,12 +497,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (!current()) return null;
       // The restarted shell shows at once; the refresh follows in the background.
       showTerminal(terminal);
-      void refresh();
+      refreshSoon();
       if (!mayFocus() || lifecycle.workspaceId !== terminal.workspaceId) return null;
       requestFocus(terminal.id);
       return terminal;
     },
-    [client, refresh, fail, requestFocus, captureLifetime, lifecycle, showTerminal],
+    [client, refreshSoon, fail, requestFocus, captureLifetime, lifecycle, showTerminal],
   );
 
   const retry = useCallback(() => {
