@@ -33,6 +33,11 @@ export function makeGit(repo, { timeoutMs = 30_000, deadline = null } = {}) {
       const out = run(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { allowFail: true });
       return out ? out.trim() : null;
     },
+    /** The tree a commit records, or null. */
+    tree(ref) {
+      const out = run(["rev-parse", "--verify", "--quiet", `${ref}^{tree}`], { allowFail: true });
+      return out ? out.trim() : null;
+    },
     toplevel: () => run(["rev-parse", "--show-toplevel"]).trim(),
     commonDir: () => run(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim(),
     mergeBase(a, b) {

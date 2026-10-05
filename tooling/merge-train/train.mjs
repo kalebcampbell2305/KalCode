@@ -281,6 +281,21 @@ export function createTrain({
     return r.code === 0;
   }
 
+  /**
+   * An obsolete candidate can never land: its gate runs are cancelled first (a gate worker never finishes dead
+   * work while newer candidates wait), then its branch is deleted.
+   */
+  async function retire(candidate, why) {
+    log(`retiring ${candidate.branch} (${short(candidate.sha)}): ${why}`);
+    try {
+      const cancelled = (await provider.cancelGates?.(candidate.sha, candidate.branch)) ?? [];
+      if (cancelled.length) log(`cancelled stale gate run(s) ${cancelled.join(", ")} of ${candidate.branch}`);
+    } catch (error) {
+      log(`warning: could not cancel gate runs of ${candidate.branch}: ${error.message}`);
+    }
+    await deleteRemote(candidate.branch, candidate.sha);
+  }
+
   async function commentOnce(number, marker, body) {
     try {
       if (marker && provider.hasComment && (await provider.hasComment(number, marker))) return;
@@ -348,12 +363,17 @@ export function createTrain({
       await fetchHeads(ns, queue);
       const active = new Map(queue.map((pr) => [pr.number, pr]));
 
-      // Candidates on an older main can never land (main's lease would refuse them); retire them.
+      // Obsolete candidates are retired: those on an older main (main's lease would refuse them) and those with a
+      // PR that has since moved or left the queue (land would refuse them as stale).
       const current = [];
       for (const c of snap.candidates) {
         if (c.invalid) continue;
-        if (c.base === base) current.push(c);
-        else if (await isAncestor(c.base, base)) await deleteRemote(c.branch, c.sha);
+        if (c.base !== base) {
+          if (await isAncestor(c.base, base)) await retire(c, `main moved to ${short(base)}`);
+        } else if (!fresh(c, active)) {
+          const gone = c.included.find((i) => active.get(i.number)?.head !== i.head);
+          await retire(c, `#${gone.number} ${active.has(gone.number) ? "moved" : "left the queue"}`);
+        } else current.push(c);
       }
       for (const c of current) c.gate = await provider.gateStatus(c.sha, c.branch);
 

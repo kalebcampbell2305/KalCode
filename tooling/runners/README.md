@@ -7,6 +7,7 @@ A personal-account repository has no runner groups, so a runner label is not acc
 | Runner | Machine / account | Labels | Runs | Credentials it can reach |
 |---|---|---|---|---|
 | `kalcode-win-gate` | Windows PC, local account `kalcode-ci`, Windows service | `kalcode-gate` | `gate.yml` for PRs (same repo only) and `main` | None. It has its own toolchain and caches under `C:\kalcode-ci` and can't read the owner's profile. |
+| `kalcode-win-gate-w1`…`-w5` | The same Windows PC and `kalcode-ci` account, one Windows service each (`C:\kalcode-ci\runner-w<n>`) | `kalcode-gate` | The gate worker pool: any `gate.yml` job, side by side with `kalcode-win-gate` | None, same as `kalcode-win-gate`. |
 | `kalcode-win-release` | Windows PC, the owner (`Kaleb`), starts at sign-in | `kalcode-release` | Only `release.yml` from `main`, enforced by `release-job-guard.ps1` as the runner's pre-job hook | Azure Artifact Signing login, DPAPI updater key, Wrangler |
 | `kalcode-mac-gate` | Mac, hidden standard account `kalcodeci` (not an admin), LaunchDaemon | `kalcode-gate` (macOS) | The macOS Rust job in `gate.yml` | None. It can't read the owner's home folder or login Keychain (Developer ID, notary profile). |
 | `kalcode-win-desktop-qa` | Second Windows PC, standard account `kalcode-qa`, a normal app in that account's signed-in desktop (Startup shortcut to `run.cmd`, not a service) | `kalcode-desktop-qa` | Only `desktop-update-verify.yml` from `main`: Windows update delivery from the live Stable feed with a real, visible KalCode window | None. A dedicated test profile; the check uninstalls KalCode and removes its data after each run. |
@@ -22,14 +23,19 @@ $t = gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration
 Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\setup-gate-runner.ps1 -RegistrationToken $t"
 ```
 
-Second Windows gate machine (owner directive 2026-10-04: gates move off the build PC; release builds never do). Same script, its own name and label, so it never replaces this PC's runner:
+Gate worker pool (owner directives 2026-10-04: a parallel gate worker pool on the 64 GB build PC, at least 6 coding agents finishing at once; the second Windows machine is no longer used for gates). One elevated run adds five workers next to `kalcode-win-gate`, so six changes validate concurrently:
 
 ```powershell
 $t = gh api -X POST repos/kalebcampbell2305/KalCode/actions/runners/registration-token --jq .token
-Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\setup-gate-runner.ps1 -RegistrationToken $t -RunnerName kalcode-win-gate-2 -Labels kalcode-gate-2"
+Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File $PWD\tooling\runners\windows\add-gate-workers.ps1 -RegistrationToken $t"
 ```
 
-Once it shows Idle under Settings → Actions → Runners, the Windows job in `gate.yml` targets `kalcode-gate-2`.
+- Every worker runs as `kalcode-ci` with its own `_work` checkout and Cargo `target/` (about 30–60 GB each on disk). The script gives `kalcode-ci` one new password and updates every `kalcode-ci` runner service to it, the existing one included.
+- Each runner's `.env` sets `KALCODE_GATE_SLOT` (0 for `kalcode-win-gate`). `gate.yml` moves every gate port by 10 × slot, so slots 0–9 never share a port.
+- Gates run below normal priority, so the owner's KalCode and coding agents win the CPU. Heavy Rust gates take one of `KALCODE_GATE_HEAVY_SLOTS` machine-wide tokens (default 3) and start only with `KALCODE_GATE_MIN_FREE_GB` free memory (default 10). Light gates never wait.
+- Inside one gate, independent checks run `KALCODE_GATE_CONCURRENCY` at a time (default 3). Checks that share a build (`exclusive` in `tooling/release/lifecycle/policy.json`) never overlap.
+- `KALCODE_GATE_EVIDENCE_DIR` holds pass evidence keyed by exact tree, commands and gate env. Rerunning an identical tree reruns only the gates that didn't pass.
+- Train evidence (`tooling/merge-train/github.mjs`, `MAIN_PC_GATE_RUNNER`) accepts exactly `kalcode-win-gate` and `kalcode-win-gate-w1`…`-w9`, and never `kalcode-win-gate-2`.
 
 Windows release runner (as the owner, no elevation):
 

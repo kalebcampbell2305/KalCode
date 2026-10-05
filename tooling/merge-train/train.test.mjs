@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 
-import { createGitHubProvider, gateStateFrom, parseGateLog, parseSlug, queueFromGraphql } from "./github.mjs";
+import {
+  createGitHubProvider,
+  gateStateFrom,
+  MAIN_PC_GATE_RUNNER,
+  parseGateLog,
+  parseSlug,
+  queueFromGraphql,
+} from "./github.mjs";
 import { releaseKitCommand } from "./on-landed.mjs";
 import { assertCandidateWorkflow, candidateBranch, createTrain, parseArgs, QUEUE_LABEL, withLock } from "./train.mjs";
 
@@ -105,6 +112,7 @@ class FakeProvider {
     this.gates = new Map();
     this.autoGate = null;
     this.prEvidence = new Map();
+    this.cancelled = [];
     this.seq = 0;
   }
   add(number, title, { queue = true } = {}) {
@@ -158,6 +166,10 @@ class FakeProvider {
   async prGateEvidence(number, head) {
     const evidence = this.prEvidence.get(number);
     return evidence ? { ...evidence } : { state: "missing", head };
+  }
+  async cancelGates(sha, branch) {
+    this.cancelled.push({ sha, branch });
+    return this.gates.get(sha) === "pending" ? [1000 + this.cancelled.length] : [];
   }
   async gateStatus(sha) {
     if (this.gates.has(sha)) return { state: this.gates.get(sha) };
@@ -490,6 +502,67 @@ describe("merge train", { concurrency: true }, () => {
     assert.notEqual(second.candidate, first.candidate);
   });
 
+  test("stale gates are cancelled: a candidate on an older main or with a moved PR stops gating and is deleted", async () => {
+    const env = setup();
+    openPr(env, 1, { "a.txt": "a\n" });
+    openPr(env, 2, { "b.txt": "b\n" });
+    const train = makeTrain(env, cloneOf(env, "agent-a"));
+    const m1 = await train.build();
+    env.provider.gates.set(m1.candidate, "pending");
+
+    const bypass = bypassPush(env, { "hotfix.txt": "direct\n" });
+    const m2 = await train.build();
+    assert.equal(m2.base, bypass);
+    assert.deepEqual(env.provider.cancelled, [{ sha: m1.candidate, branch: m1.branch }]);
+    assert.deepEqual(trainBranches(env), [m2.branch], "the superseded candidate branch is gone");
+    env.provider.gates.set(m2.candidate, "pending");
+
+    // A new commit on #1 makes the pending candidate unlandable: it is cancelled and rebuilt with the new head.
+    const moved = importCommits(env.origin, [
+      { ref: "refs/heads/pr-1", from: "refs/heads/pr-1^0", message: "PR 1 again", files: { "a.txt": "a2\n" } },
+    ])[0];
+    const m3 = await train.build();
+    assert.equal(m3.action, "built");
+    assert.equal(m3.included.find((i) => i.number === 1).head, moved);
+    assert.deepEqual(env.provider.cancelled.at(-1), { sha: m2.candidate, branch: m2.branch });
+    assert.match(train.lines.join("\n"), /retiring .*: #1 moved/);
+    assert.deepEqual(trainBranches(env), [m3.branch]);
+
+    // A fresh candidate is never cancelled: rebuilding reuses it.
+    env.provider.gates.set(m3.candidate, "pending");
+    const count = env.provider.cancelled.length;
+    assert.equal((await train.build()).action, "reused");
+    assert.equal(env.provider.cancelled.length, count);
+  });
+
+  test("six agents finishing together: one candidate, five land, the failing PR is ejected without blocking them", async () => {
+    const env = setup();
+    const heads = [1, 2, 3, 4, 5, 6].map((n) =>
+      openPr(env, n, { [`feature-${n}/file.txt`]: `pr ${n}\n` }, { queue: false }),
+    );
+    const agents = [1, 2, 3, 4, 5, 6].map((n) => makeTrain(env, cloneOf(env, `agent-${n}`)));
+
+    // Six agents submit at the same moment, then six coordinators prepare at the same moment.
+    await Promise.all(agents.map((a, i) => a.submit(i + 1)));
+    assert.equal((await env.provider.listQueue()).length, 6);
+    const built = await Promise.all(agents.map((a) => a.build()));
+    assert.equal(new Set(built.map((m) => m.candidate)).size, 1, "every coordinator agrees on one candidate");
+    assert.deepEqual(numbers(built[0].included), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(trainBranches(env), [built[0].branch]);
+
+    const bad = heads[3];
+    env.provider.autoGate = (sha) => (isAncestor(env.origin, bad, sha) ? "failure" : "success");
+    const before = mainUpdates(env).length;
+    const run = await agents[0].run();
+    assert.equal(run.status, "idle");
+    const main = originMain(env);
+    for (const [i, head] of heads.entries()) assert.equal(isAncestor(env.origin, head, main), i !== 3, `#${i + 1}`);
+    assert.deepEqual(numbers(run.landed.flatMap((l) => l.included)).sort(), [1, 2, 3, 5, 6]);
+    assert.ok(mainUpdates(env).length - before <= 2, "the five good PRs land in at most two main updates");
+    assert.equal(env.provider.prs.get(4).queued, false);
+    assert.deepEqual(trainBranches(env), [], "no candidate is left behind");
+  });
+
   test("auto-resolver seam: a registered resolver may resolve a conflict; none means skip", async () => {
     const env = setup();
     openPr(env, 1, { "shared.txt": "one\nTWO from #1\nthree\n" });
@@ -585,6 +658,8 @@ describe("merge train pieces", () => {
     };
     const check = (r = run, j = job) => gateStateFrom([r], [j], sha, branch).state;
     assert.equal(check(), "success");
+    for (const worker of ["kalcode-win-gate-w1", "kalcode-win-gate-w5", "kalcode-win-gate-w9"])
+      assert.equal(check(run, { ...job, runner_name: worker }), "success", `${worker} is a main-PC gate worker`);
     assert.equal(gateStateFrom([], [], sha, branch).state, "missing");
     assert.equal(gateStateFrom([run], [], sha, branch).state, "pending");
     for (const wrong of [
@@ -598,6 +673,10 @@ describe("merge train pieces", () => {
     for (const wrong of [
       { head_sha: "b".repeat(40) },
       { runner_name: "kalcode-win-gate-2" },
+      { runner_name: "kalcode-win-gate-w10" },
+      { runner_name: "kalcode-win-gate-w0" },
+      { runner_name: "x-kalcode-win-gate" },
+      { runner_name: undefined },
       { labels: ["kalcode-gate-2"] },
       { labels: ["kalcode-gate", "kalcode-gate-2"] },
       { steps: [] },
@@ -713,6 +792,42 @@ describe("merge train pieces", () => {
     assert.match(workflow, /github\.event\.pull_request\.base\.sha/);
     assert.match(workflow, /%\(trailers:key=Merge-Train-Base,valueonly\)/);
     assert.match(workflow, /--keep-going/);
+  });
+
+  test("gate.yml runs on the main-PC worker pool with per-slot ports, low priority and heavy-gate tokens", () => {
+    const workflow = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
+    const windows = workflow.slice(workflow.indexOf("  windows:"), workflow.indexOf("  macos:"));
+    // The in-job runner check accepts exactly the pool the train's evidence accepts.
+    const check = /\$env:RUNNER_NAME -notmatch '(\^kalcode-win-gate\(-w\[1-9\]\)\?\$)'/.exec(windows);
+    assert.ok(check, "the Gate step checks the runner against the pool pattern");
+    const pool = new RegExp(check[1]);
+    for (const name of ["kalcode-win-gate", "kalcode-win-gate-w1", "kalcode-win-gate-w9"]) {
+      assert.ok(pool.test(name) && MAIN_PC_GATE_RUNNER.test(name), name);
+    }
+    for (const name of ["kalcode-win-gate-2", "kalcode-win-gate-w10", "x-kalcode-win-gate"]) {
+      assert.ok(!pool.test(name) && !MAIN_PC_GATE_RUNNER.test(name), name);
+    }
+    assert.doesNotMatch(workflow, /^ {2}KALCODE_E2E_PORT:/m, "ports are per worker, not workflow-wide");
+    assert.match(windows, /\$o = 10 \* \$slot/);
+    for (const [name, base] of [
+      ["KALCODE_E2E_PORT", 4491],
+      ["KALCODE_E2E_MAIL_PORT", 4492],
+      ["KALCODE_E2E_INSPECTOR_PORT", 9501],
+      ["KALCODE_UI_TEST_PORT", 1591],
+      ["KALCODE_E2E_CDP_PORT", 9601],
+    ]) {
+      assert.ok(windows.includes(`"${name}=$(${base} + $o)"`), name);
+    }
+    // Slots 0-9 never share a port, across every port family the gate opens.
+    const bases = [4491, 4492, 9501, 1591, 9601, 8898, 8899, 8900];
+    const ports = bases.flatMap((b) => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => b + 10 * slot));
+    assert.equal(new Set(ports).size, ports.length);
+    assert.match(windows, /PriorityClass = 'BelowNormal'/);
+    assert.match(windows, /KALCODE_GATE_HEAVY_SLOTS/);
+    assert.match(windows, /\[IO\.File\]::Open\(.*'None'\)/);
   });
 });
 

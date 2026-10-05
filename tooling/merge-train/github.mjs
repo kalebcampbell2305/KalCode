@@ -54,10 +54,16 @@ export function isCandidateRun(run, sha, branch) {
   );
 }
 
+/**
+ * The gate worker pool on the main 64 GB Windows PC: the original runner and the workers added by
+ * tooling/runners/windows/add-gate-workers.ps1 (kalcode-win-gate-w1..w9). Never the retired second PC.
+ */
+export const MAIN_PC_GATE_RUNNER = /^kalcode-win-gate(?:-w[1-9])?$/;
+
 export function isMainPcJob(job, sha) {
   return (
     job.head_sha === sha &&
-    job.runner_name === "kalcode-win-gate" &&
+    MAIN_PC_GATE_RUNNER.test(job.runner_name ?? "") &&
     job.labels?.includes("kalcode-gate") &&
     !job.labels.includes("kalcode-gate-2")
   );
@@ -198,6 +204,18 @@ export async function createGitHubProvider({ repo, slug = null, gh = makeGh({ cw
     async hasComment(number, marker) {
       const r = await gh(["api", "--paginate", `repos/${slug}/issues/${number}/comments`, "--jq", ".[].body"]);
       return r.stdout.includes(`<!-- merge-train:${marker} -->`);
+    },
+    /** Cancels the unfinished gate runs of one candidate branch at one SHA; returns the cancelled run ids. */
+    async cancelGates(sha, branch) {
+      const runs = (
+        await json(["api", `repos/${slug}/actions/workflows/${GATE_WORKFLOW}/runs?head_sha=${sha}&per_page=20`])
+      ).workflow_runs.filter((r) => isCandidateRun(r, sha, branch) && r.status !== "completed");
+      const cancelled = [];
+      for (const r of runs) {
+        const res = await gh(["api", "-X", "POST", `repos/${slug}/actions/runs/${r.id}/cancel`], { allowFail: true });
+        if (res.code === 0) cancelled.push(r.id);
+      }
+      return cancelled;
     },
     async gateStatus(sha, branch) {
       const runs = (

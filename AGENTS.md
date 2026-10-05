@@ -473,6 +473,7 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 
 - `node tooling/merge-train/train.mjs submit <pr>` adds the `merge-queue` label. The queue is the open, non-draft, same-repository PRs carrying that label, in the order it was added. Never run `gh pr merge` and never push to `main`.
 - Then drive the train yourself; any agent may, at any time, concurrently with others: `node tooling/merge-train/train.mjs run`. Nobody waits for a designated merger.
+- A PreToolUse merge guard (`tooling/release/lifecycle/merge-guard.mjs`, wired in `.claude/settings.json`) and the Codex rules `.codex/rules/merge-train.rules` refuse `gh pr merge` and direct pushes to `main`, pointing at `submit`.
 
 **2. What the train does.** `run` repeats build → gate → land until the queue is empty:
 
@@ -493,6 +494,21 @@ This replaces "merge it yourself", `gh pr merge`, hand-built `train/<topic>` bra
 - **Release.** Follow the multi-shipper rule. Any session starts a release job for the landed commit. Jobs build, sign and prepare concurrently in their own state directories. Only the final production feed/pointer write takes the short `target/lanes/publish.lock` lease, with a forward-only build-number check. `target/lanes/release.lock` is retired and blocks nothing.
 - **Website.** Claim `target/lanes/website-deploy.lock`, deploy from main, verify the build stamp, then release the lock. If another release's publish is about to deploy the website, sequence after it and ping each other.
 - **Takeover.** If a lock's session no longer appears in ListAgents (or a publish lease is older than 30 minutes), any session may take the lock over. A stalled older release job is superseded by any newer build that ships, never waited on.
+
+## Permanent parallel gate worker pool rule (owner directive 2026-10-04)
+
+> "KALCODE USES A PARALLEL GATE WORKER POOL. MULTIPLE READY CHANGES SHOULD VALIDATE CONCURRENTLY. GATES ARE CHANGE-BASED, NOT GIANT GENERIC CHECKLISTS. INDEPENDENT CHECKS RUN IN PARALLEL. A FAILURE IN ONE CHANGE MUST NOT BLOCK UNRELATED READY WORK. GATE RESULTS ARE TIED TO THE EXACT MERGE CANDIDATE. STALE GATES ARE CANCELLED. STILL-VALID EVIDENCE IS REUSED. ONCE THE REQUIRED GATES PASS, AUTO-MERGE AND AUTO-SHIP IMMEDIATELY. THE PURPOSE OF GATES IS TO PROVE CORRECTNESS QUICKLY, NOT TO CREATE A BOTTLENECK."
+
+- **No single gate owner.** The pool is the `kalcode-gate` runners on the main 64 GB Windows PC: `kalcode-win-gate` plus the workers `kalcode-win-gate-w1`…`-w5`, added by `tooling/runners/windows/add-gate-workers.ps1` (one elevated run; see `tooling/runners/README.md`). Claude Code and Codex submit to the same pool through PRs and the merge train. Never validate and merge privately.
+- **Isolation and priority.** Each worker has its own checkout and `target/`, and its `KALCODE_GATE_SLOT` moves every gate port by 10 × slot. Gates run below normal priority, so the KalCode UI and the owner's coding agents always win the CPU. Heavy Rust gates take one of `KALCODE_GATE_HEAVY_SLOTS` machine-wide tokens (default 3) and need `KALCODE_GATE_MIN_FREE_GB` free memory, so concurrency is shed under hard pressure only. Light gates never wait.
+- **Change-based and parallel inside.** `node tooling/release/ship.mjs gate --base <base>` runs only the gates the diff selects. It runs independent gates `KALCODE_GATE_CONCURRENCY` at a time (default 3). Gates that share a build (`exclusive` in `tooling/release/lifecycle/policy.json`) never overlap, and each gate's output prints as one block.
+- **Exact evidence, reused when still valid.** Train evidence is a Gate (Windows) job of the exact candidate push on a pool worker (`MAIN_PC_GATE_RUNNER` in `tooling/merge-train/github.mjs`). With `KALCODE_GATE_EVIDENCE_DIR`, a gate that already passed for the identical tree, commands and gate env is reused, so a rerun runs only failed or not-run gates. A main push of a landed candidate reuses that candidate's green gate.
+- **Stale gates are cancelled.** When main moves or a PR changes, the train cancels the obsolete candidate's unfinished gate runs and deletes its branch. A newer commit on a PR cancels that PR's older run.
+- **Green → land → ship.** When the exact candidate is green, the train lands it and shipping starts at once. No owner approval is needed. On failure, the train bisects. Send the exact failure to the owning agent; it fixes and resubmits, and only the invalidated gates rerun.
+
+## Permanent high-concurrency development assumption (owner directive 2026-10-04)
+
+KalCode development assumes AT LEAST 6 coding agents are actively building and finishing work concurrently at any given time. This is NORMAL, not an edge case. Design gate workers, merge queues, merge groups, CI validation, release jobs, shippers, conflict handling and resource scheduling to handle 6+ concurrent coding agents efficiently, and keep the pipeline fast when many agents finish close together. Do not build infrastructure around a one-agent-at-a-time assumption.
 
 ## Permanent visual quality rule (owner directive 2026-10-02)
 

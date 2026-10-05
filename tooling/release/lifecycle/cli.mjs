@@ -2,14 +2,14 @@
 //
 //   node tooling/release/ship.mjs classify --base <ref> --head <ref> [--json | --markdown]
 //   node tooling/release/ship.mjs lifecycle status [--main <ref>] [--json | --markdown] [--offline] [--check]
-//   node tooling/release/ship.mjs lifecycle hook          (Claude Code Stop hook; reads the hook JSON on stdin)
+//   node tooling/release/ship.mjs lifecycle hook          (Claude Code Stop + PreToolUse hook; reads the hook JSON on stdin)
 //   node tooling/release/ship.mjs gate [--base origin/main] [--list] [--only a,b] [--keep-going] [--json]
 //
 // Common: --repo <dir> (default: the current directory's checkout). See docs/RELEASE-PIPELINE.md.
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyRange, renderClassify } from "./classify.mjs";
-import { gateForWorktree, recordGate, runGates } from "./gate.mjs";
+import { evidenceStore, gateConcurrency, gateForWorktree, gatePortOffset, recordGate, runGates } from "./gate.mjs";
 import { makeGit } from "./git.mjs";
 import { runHook } from "./hook.mjs";
 import { loadPolicy } from "./policy.mjs";
@@ -87,7 +87,7 @@ export async function lifecycleMain(argv, io = {}) {
     const only = opts.only ? opts.only.split(",").map((s) => s.trim()) : null;
     if (only)
       for (const id of only) if (!policy.gates.some((g) => g.id === id)) throw new UsageError(`unknown gate ${id}`);
-    const g = gateForWorktree(policy, git, { base: opts.base ?? "origin/main", only });
+    const g = gateForWorktree(policy, git, { base: opts.base ?? "origin/main", only, portOffset: gatePortOffset() });
     const c = g.classification;
     const header = `gate: lanes ${c.lanes.join(", ") || "none"}${c.targets.length ? ` (targets ${c.targets.join(", ")})` : ""}; ${c.files.length} changed file(s) vs ${g.base.ref}${g.clean ? "" : " (uncommitted changes included)"}`;
     if (opts.list) {
@@ -106,7 +106,15 @@ export async function lifecycleMain(argv, io = {}) {
       log("gate: nothing changed; nothing to check");
       return 0;
     }
-    const outcome = await runGates(g.plan, { repo: g.top, log, keepGoing: Boolean(opts.keepGoing) });
+    // Shared by every gate worker on this machine (gate runners set it); reused only for a clean tree.
+    const evidenceDir = process.env.KALCODE_GATE_EVIDENCE_DIR;
+    const outcome = await runGates(g.plan, {
+      repo: g.top,
+      log,
+      keepGoing: Boolean(opts.keepGoing),
+      concurrency: gateConcurrency(),
+      evidence: evidenceDir && g.tree ? { store: evidenceStore(evidenceDir), tree: g.tree } : null,
+    });
     const receipt = recordGate(git, g, outcome);
     if (opts.json) log(JSON.stringify({ status: outcome.status, results: outcome.results, receipt }, null, 2));
     log(

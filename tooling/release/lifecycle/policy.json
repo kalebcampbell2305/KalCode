@@ -276,6 +276,7 @@
     {
       "id": "website",
       "when": { "targets": ["website"] },
+      "exclusive": ["website-build"],
       "run": [
         "pnpm --filter @kalcode/website typecheck",
         "pnpm --filter @kalcode/website build",
@@ -285,6 +286,7 @@
     {
       "id": "website-e2e",
       "when": { "targets": ["website"] },
+      "exclusive": ["website-build"],
       "run": ["node tooling/test-suites.mjs --suite website-e2e"]
     },
     {
@@ -294,13 +296,12 @@
         "CI": "1",
         "KALCODE_CHECKOUT_ENABLED_GATE": "1",
         "PUBLIC_CHECKOUT_ENABLED": "true",
-        "KALCODE_E2E_PORT": "8898",
-        "KALCODE_E2E_MAIL_PORT": "8899",
-        "KALCODE_E2E_INSPECTOR_PORT": "8900",
         "KALCODE_E2E_PERSIST": ".wrangler/checkout-enabled-e2e-state",
         "KALCODE_E2E_OUT_DIR": ".wrangler/checkout-enabled-e2e-dist"
       },
+      "ports": { "KALCODE_E2E_PORT": 8898, "KALCODE_E2E_MAIL_PORT": 8899, "KALCODE_E2E_INSPECTOR_PORT": 8900 },
       "unsetEnv": ["STAGE_URL", "KALCODE_E2E_SKIP_BUILD"],
+      "exclusive": ["website-build"],
       "run": ["node tooling/test-suites.mjs --suite website-checkout-enabled-e2e"]
     },
     {
@@ -314,6 +315,7 @@
       "builtin": "desktop-dist-placeholder",
       "envByPlatform": { "linux": { "KALCODE_SKIP_OS_KEYCHAIN_TEST": "1" } },
       "timeoutMs": 1500000,
+      "exclusive": ["cargo-build", "desktop-dist"],
       "run": [
         "cargo fmt --all -- --check",
         "node apps/desktop/scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
@@ -345,6 +347,7 @@
       "when": { "targets": ["desktop"] },
       "platforms": ["win32"],
       "unavailable": "the native desktop E2E harness is Windows-only (WebView2); CI runs it on windows-latest",
+      "exclusive": ["cargo-build", "desktop-dist"],
       "run": ["pnpm --filter @kalcode/desktop build:e2e", "pnpm --filter @kalcode/desktop test:e2e"]
     },
     {
