@@ -502,14 +502,14 @@ test("website skip profiles require reviewed counts and runtime reasons", () => 
   const website = inventory.suites.find(({ id }) => id === "website-e2e");
   const defaultProfile = selectProfile(website, "win32", {});
   assert.equal(defaultProfile.minimumExecuted, 164);
-  assert.equal(defaultProfile.skippedMinimum, 33);
-  assert.equal(defaultProfile.skippedMaximum, 33);
+  assert.equal(defaultProfile.skippedMinimum, 38);
+  assert.equal(defaultProfile.skippedMaximum, 38);
   assert.throws(
     () =>
       validateSuiteResult(website, defaultProfile, {
         executed: 163,
         failed: 0,
-        skipped: 33,
+        skipped: 38,
         flaky: 0,
         skipReasons: ["TryKalCode is not on /"],
       }),
