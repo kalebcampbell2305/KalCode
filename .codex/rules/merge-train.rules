@@ -1,7 +1,7 @@
 # KalCode merge train (execpolicy prefix rules, verified with codex-cli 0.160.0 `codex execpolicy check`).
 #
-# KalCode's main is updated ONLY by `node tooling/merge-train/train.mjs land|run` and the release kit's own
-# scripts; both push/merge from a child process, which execpolicy never sees. An agent queues its PR with
+# KalCode's main is updated ONLY by the shared `node tooling/merge-train/train.mjs land|run`.
+# Shipping starts from the train's validated landed commit. An agent queues its PR with
 #   node tooling/merge-train/train.mjs submit <pr>
 # Installed copies: this file (project rules, trusted checkouts), ~/.codex/rules/merge-train.rules, and each
 # KalCode-managed CODEX_HOME's rules/merge-train.rules. Keep them identical.

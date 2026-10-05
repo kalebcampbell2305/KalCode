@@ -6,6 +6,8 @@ param(
     [Security.SecureString]$RegistrationToken,
     [string]$ResumeDiagnostic,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ResumeDiagnosticSha256,
+    [string]$ToolsManifest,
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ToolsManifestSha256,
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$RunnerVersion = '2.337.0',
     [string]$RunnerSha256,
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$PnpmVersion = '10.33.2'
@@ -64,6 +66,33 @@ function ConvertFrom-GateChecksumResponse($Content) {
     $hash = ($text.Trim() -split '\s+')[0]
     if ($hash -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid official checksum response.' }
     return $hash
+}
+function Install-ApprovedCargoTools([string]$Destination) {
+    Assert-OrdinaryPath $ToolsManifest
+    if (-not $ToolsManifestSha256 -or (Get-FileHash -LiteralPath $ToolsManifest -Algorithm SHA256).Hash -ne $ToolsManifestSha256) { throw 'Approved tool manifest hash changed.' }
+    $manifest=Get-Content -LiteralPath $ToolsManifest -Raw | ConvertFrom-Json
+    if ($manifest.schema -ne 'kalcode-gate-cargo-tools/v1' -or $manifest.tools.Count -ne 2) { throw 'Exactly two approved Cargo tools are required.' }
+    $versions=@{'cargo-deny.exe'='cargo-deny 0.20.2';'cargo-audit.exe'='cargo-audit 0.22.2'}
+    $seen=@{}
+    foreach ($tool in $manifest.tools) {
+        if ($tool.name -cnotin @($versions.Keys) -or $seen.ContainsKey([string]$tool.name) -or
+            $tool.version -cne $versions[$tool.name] -or $tool.sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Approved tool identity differs.' }
+        $seen[$tool.name]=$true
+        # Only administrator-staged bytes are used here; never read owner config or caches.
+        $source=Join-Path (Join-Path $PSScriptRoot 'approved-cargo-tools') $tool.name
+        Assert-OrdinaryPath $source
+        if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $tool.sha256) { throw 'Staged tool bytes changed.' }
+    }
+    foreach ($tool in $manifest.tools) {
+        $source=Join-Path (Join-Path $PSScriptRoot 'approved-cargo-tools') $tool.name
+        $target=Join-Path $Destination $tool.name
+        Assert-OrdinaryPath $target
+        if (Test-Path -LiteralPath $target) { throw 'Approved tool destination already exists; inspect before replacement.' }
+        Copy-Item -LiteralPath $source -Destination $target
+        if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $tool.sha256) { throw 'Installed tool bytes changed.' }
+        $version=(& $target --version | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $version -cne $tool.version) { throw 'Installed tool version differs.' }
+    }
 }
 function Assert-InspectedPreToolResume {
     Assert-OrdinaryPath $ResumeDiagnostic
@@ -151,6 +180,7 @@ if ($ResumeDiagnostic) {
     if (Test-Path -LiteralPath $pool) { throw 'Unrecognized or partial pool directory already exists; inspect it before installation. Nothing will be overwritten.' }
     if (Test-Path -LiteralPath $workerContainer) { throw 'Unrecognized or partial worker container already exists; nothing will be overwritten.' }
 }
+if ($ToolsManifestSha256 -and -not $ToolsManifest) { throw 'Approved tools manifest path is required.' }
 foreach ($plan in $plans) {
     if ((Get-LocalUser -Name $plan.Account -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $plan.Root)) {
         throw "Unfinished or pre-existing worker $($plan.Slot); inspect it before retrying. No account passwords are reset."
@@ -205,8 +235,13 @@ try {
     Invoke-GateSetupTool $rustup @('-y','--no-modify-path','--profile','minimal','--default-toolchain','stable','-c','rustfmt','-c','clippy')
     Invoke-GateSetupTool 'C:\Program Files\nodejs\npm.cmd' @('install','--global','--prefix',$npm,"pnpm@$PnpmVersion")
     $cargo = Join-Path $toolCargo 'bin\cargo.exe'
-    Invoke-GateSetupTool $cargo @('install','cargo-deny','--version','0.20.2','--locked','--jobs','2','--root',$toolCargo)
-    Invoke-GateSetupTool $cargo @('install','cargo-audit','--version','0.22.2','--locked','--jobs','2','--root',$toolCargo)
+    if ($ToolsManifest) {
+        # Supplied evidence must validate. Never fall back to compilation on a mismatch.
+        Install-ApprovedCargoTools (Join-Path $toolCargo 'bin')
+    } else {
+        Invoke-GateSetupTool $cargo @('install','cargo-deny','--version','0.20.2','--locked','--jobs','2','--root',$toolCargo)
+        Invoke-GateSetupTool $cargo @('install','cargo-audit','--version','0.22.2','--locked','--jobs','2','--root',$toolCargo)
+    }
 } finally { $env:RUSTUP_HOME = $savedRustup; $env:CARGO_HOME = $savedCargo }
 $archive = Join-Path $tools "actions-runner-win-x64-$RunnerVersion.zip"
 Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/actions/runner/releases/download/v$RunnerVersion/actions-runner-win-x64-$RunnerVersion.zip" -OutFile $archive
@@ -235,8 +270,8 @@ try {
         $secure = ConvertTo-SecureString $password -AsPlainText -Force
         New-LocalUser -Name $plan.Account -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -Description 'KalCode main-PC optional gate worker' | Out-Null
         $sid = (Get-LocalUser -Name $plan.Account).SID.Value
-        $runner = Join-Path $plan.Root 'runner'; $home = Join-Path $plan.Root 'home'; $temp = Join-Path $home 'tmp'
-        New-Item -ItemType Directory -Path $runner,$home,$temp -Force | Out-Null
+        $runner = Join-Path $plan.Root 'runner'; $workerHome = Join-Path $plan.Root 'home'; $temp = Join-Path $workerHome 'tmp'
+        New-Item -ItemType Directory -Path $runner,$workerHome,$temp -Force | Out-Null
         & icacls $plan.Root /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' "*${sid}:(OI)(CI)M" | Out-Null
         if ($LASTEXITCODE) { throw 'Worker root ACL failed.' }
         & icacls $pool /grant "*${sid}:(OI)(CI)RX" | Out-Null
@@ -249,8 +284,8 @@ try {
         }
         Expand-Archive -LiteralPath $archive -DestinationPath $runner
         @(
-            "RUSTUP_HOME=$rustupDir", "CARGO_HOME=$(Join-Path $home 'cargo')", "PNPM_HOME=$npm"
-            "npm_config_cache=$(Join-Path $home 'npm-cache')", "PLAYWRIGHT_BROWSERS_PATH=$(Join-Path $home 'ms-playwright')"
+            "RUSTUP_HOME=$rustupDir", "CARGO_HOME=$(Join-Path $workerHome 'cargo')", "PNPM_HOME=$npm"
+            "npm_config_cache=$(Join-Path $workerHome 'npm-cache')", "PLAYWRIGHT_BROWSERS_PATH=$(Join-Path $workerHome 'ms-playwright')"
             "TEMP=$temp", "TMP=$temp", "KALCODE_GATE_SLOT=$($plan.Slot)", "KALCODE_GATE_WORKER_ROOT=$($plan.Root)"
             "KALCODE_GATE_POOL_ROOT=$pool", 'KALCODE_GATE_CONCURRENCY=2', 'KALCODE_GATE_JOBS=2', 'CARGO_BUILD_JOBS=2', 'VITEST_MAX_WORKERS=2'
             "KALCODE_GATE_LOCK_DIR=$heavyRoot", 'KALCODE_GATE_HEAVY_SLOTS=3', 'KALCODE_GATE_MIN_FREE_GB=10'

@@ -1,7 +1,7 @@
 // Merge-train guard: recognises shell commands that would update KalCode's main outside the merge train.
 //
-// The only sanctioned ways to move main are `node tooling/merge-train/train.mjs land|run` and the release kit's
-// own scripts; both run their `git push`/`gh pr merge` inside a child process, so a top-level command that
+// Only the shared `node tooling/merge-train/train.mjs land|run` may move main.
+// It performs the final atomic update inside a child process, so a top-level command that
 // does it itself is always an agent going around the train. Every agent on this PC shares one GitHub
 // identity and the repository has no branch protection, so this client-side check is the enforcement.
 //
@@ -451,6 +451,6 @@ export function denialReason(label) {
     `Blocked: \`${label}\` would update KalCode's main outside the merge train.`,
     `main is updated only by the shared merge train. Queue your PR instead: ${TRAIN_SUBMIT}`,
     "(the train lands queued PRs on main with `node tooling/merge-train/train.mjs land|run`).",
-    "Pushing feature branches and gh pr create/view/edit/checks are unaffected. Website releases go through the release kit's own scripts, which merge for you.",
+    "Pushing feature branches and gh pr create/view/edit/checks are unaffected. Website releases start from the validated commit landed by the shared train.",
   ].join(" ");
 }
