@@ -56,6 +56,7 @@ import {
 } from "../../shell/panes/model.ts";
 import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
 import { CodeIntegrationPanel } from "../integrations/IntegrationSettings.tsx";
+import { ProjectMemoryButton } from "../memory/ProjectMemoryButton.tsx";
 import styles from "./Code.module.css";
 import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
@@ -140,6 +141,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               >
                 <span className={styles.collapsibleLabel}>Tools</span>
               </Button>
+              <ProjectMemoryButton workspaceId={workspace.id} workspaceName={workspace.name} />
               {api ? <Toolbar api={api} available={workspace.available} /> : <ToolbarPlaceholder />}
             </div>
           </header>
