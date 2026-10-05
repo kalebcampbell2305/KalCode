@@ -149,8 +149,18 @@ export function prepareCheckEvidence(
   // legitimately write outputs into the checkout (the visual suite refreshes tracked QA screenshots,
   // test runs leave untracked reports), so those never invalidate a later check (gate 37323803563
   // failed rust and native e2e in 0 s with "source changed before check" after desktop-ui).
-  const stillExact = () =>
-    git.rev("HEAD") === g.head && git.diff("HEAD", null).every(({ path }) => isCheckOutput(path));
+  const changedSource = () =>
+    git
+      .diff("HEAD", null)
+      .filter(({ path }) => !isCheckOutput(path))
+      .map(({ path }) => path);
+  const stillExact = () => git.rev("HEAD") === g.head && changedSource().length === 0;
+  // Names what changed, so a check that refuses to run can be traced to the check that wrote it.
+  const drift = () => {
+    if (git.rev("HEAD") !== g.head) return "HEAD moved";
+    const paths = changedSource();
+    return `${paths.slice(0, 8).join(", ")}${paths.length > 8 ? ` (+${paths.length - 8} more)` : ""}`;
+  };
   // Snapshot trustworthy completed receipts before any code under test executes.
   const reusable = new Map();
   for (const [id, key] of checks) {
@@ -174,7 +184,7 @@ export function prepareCheckEvidence(
     async run(gate, execute) {
       const key = checks.get(gate.id);
       const path = key ? join(dir, `${key}.json`) : null;
-      if (!stillExact()) return { id: gate.id, state: "fail", why: "source changed before check" };
+      if (!stillExact()) return { id: gate.id, state: "fail", why: `source changed before check: ${drift()}` };
       if (path) {
         try {
           const old = reusable.get(gate.id);
@@ -201,7 +211,7 @@ export function prepareCheckEvidence(
         }
       }
       const result = await execute();
-      if (!stillExact()) return { id: gate.id, state: "fail", why: "source changed during check" };
+      if (!stillExact()) return { id: gate.id, state: "fail", why: `source changed during check: ${drift()}` };
       if (result.state === "pass" && path)
         writeJsonAtomic(path, {
           schema: GATE_EVIDENCE_SCHEMA,

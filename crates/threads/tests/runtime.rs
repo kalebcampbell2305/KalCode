@@ -839,11 +839,15 @@ fn file_changes_and_usage_are_recorded() {
             })
             .collect();
     assert_eq!(paths, ["src/main.rs", "README.md", "src/main.rs"]);
-    let usage = h
-        .core
-        .read(|conn| kalcode_threads::store::usage(conn, &id))
-        .expect("usage");
-    assert_eq!(usage, (100, 40, 0));
+    // Usage is persisted from its own event, which can land after the file events on a loaded
+    // machine (lane gate 37357306434 read (0, 0, 0)); wait for it like the files above.
+    let usage = || {
+        h.core
+            .read(|conn| kalcode_threads::store::usage(conn, &id))
+            .expect("usage")
+    };
+    wait_until("usage", || usage() == (100, 40, 0));
+    assert_eq!(usage(), (100, 40, 0));
 }
 
 #[test]

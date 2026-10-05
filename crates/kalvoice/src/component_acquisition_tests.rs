@@ -230,7 +230,9 @@ fn loopback_body(
         .set_nonblocking(true)
         .expect("bounded fixture accept");
     let worker = std::thread::spawn(move || {
-        let accept_deadline = std::time::Instant::now() + Duration::from_secs(3);
+        // Setup, not the behaviour under test: on a gate machine shared with other gates and release
+        // builds, connecting took over 3 s (lane gate 37357319224). The stall bound is timed separately.
+        let accept_deadline = std::time::Instant::now() + Duration::from_secs(30);
         let mut socket = loop {
             match listener.accept() {
                 Ok((socket, _)) => break socket,
@@ -248,10 +250,10 @@ fn loopback_body(
         // Restore blocking I/O so the bounded read/write timeouts below govern the fixture.
         socket.set_nonblocking(false).expect("blocking fixture I/O");
         socket
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("read bound");
         socket
-            .set_write_timeout(Some(Duration::from_secs(3)))
+            .set_write_timeout(Some(Duration::from_secs(30)))
             .expect("write bound");
         let mut request = [0; 4096];
         let mut received = 0;
@@ -327,7 +329,7 @@ fn production_transport_stalled_body_is_bounded_and_cancel_is_not_a_network_fail
         let (progress_tx, progress_rx) = std::sync::mpsc::sync_channel(1);
         let canceller = std::thread::spawn(move || {
             progress_rx
-                .recv_timeout(Duration::from_secs(3))
+                .recv_timeout(Duration::from_secs(30))
                 .expect("first byte received");
             std::thread::sleep(Duration::from_millis(250));
             if cancelled {
