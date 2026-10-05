@@ -867,10 +867,15 @@
   animation: code-spin 700ms linear infinite;
 }
 
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
+  :root:not([data-motion="full"]) .spinner {
     animation-duration: 2s;
   }
+}
+
+:root[data-motion="reduced"] .spinner {
+  animation-duration: 2s;
 }
 
 @keyframes code-spin {

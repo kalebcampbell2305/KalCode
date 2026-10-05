@@ -8,6 +8,7 @@ import { formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useThreadSummaries } from "../../surfaces/dashboard/data/DashboardData.tsx";
+import { useNow } from "../../surfaces/dashboard/useNow.ts";
 import { accountFullLabel, accountName, sortAccounts } from "../../surfaces/providers/accountIdentity.ts";
 import {
   type AccountUsageState,
@@ -353,16 +354,6 @@ export function AccountUsageCenter() {
 
 type AccountModel = ReturnType<typeof useProviderAccounts>;
 
-/** Ticks while the center is open so "Resets in…" and "Updated…" stay honest. */
-function useClock(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
-
 function percentLeft(window: UsageWindow): number {
   return Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
 }
@@ -400,7 +391,8 @@ function AccountEntry({
   const [name, setName] = useState(account.displayName);
   const detailsId = useId();
   const nameId = useId();
-  const now = useClock();
+  // The shared clock ticks while the center is open so "Resets in…" and "Updated…" stay honest.
+  const now = useNow();
   const canonical = useOptionalProviderAccountSessions()?.states.get(account.id);
   const fallbackUsage = useAccountUsage(account.id);
   const usage = canonical?.usage ?? fallbackUsage;

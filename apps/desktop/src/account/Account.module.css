@@ -110,7 +110,25 @@
 }
 .circuit li[data-state="current"] .circuitNode {
   color: var(--color-accent-icy);
+}
+
+/* The current step's glow breathes by cross-fading its resting (16px) and its full (24px) shadow,
+   each painted once on its own layer, so the compositor runs it instead of restyling and
+   repainting a box-shadow every frame. */
+.circuit li[data-state="current"] .circuitNode::before,
+.circuit li[data-state="current"] .circuitNode::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.circuit li[data-state="current"] .circuitNode::before {
   box-shadow: 0 0 16px var(--color-glow);
+}
+.circuit li[data-state="current"] .circuitNode::after {
+  box-shadow: 0 0 24px var(--color-glow);
+  opacity: 0;
 }
 
 .center,
@@ -376,13 +394,34 @@
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .circuit li[data-state="current"] .circuitNode {
-    animation: account-current var(--dur-pulse) var(--ease-standard) infinite;
+  .circuit li[data-state="current"] .circuitNode::before {
+    animation: account-current-rest var(--dur-pulse) var(--ease-standard) infinite;
+  }
+  .circuit li[data-state="current"] .circuitNode::after {
+    animation: account-current-full var(--dur-pulse) var(--ease-standard) infinite;
   }
 }
-@keyframes account-current {
+/* The app's Motion setting wins over the OS preference either way. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="full"] .circuit li[data-state="current"] .circuitNode::before {
+    animation: account-current-rest var(--dur-pulse) var(--ease-standard) infinite;
+  }
+  :root[data-motion="full"] .circuit li[data-state="current"] .circuitNode::after {
+    animation: account-current-full var(--dur-pulse) var(--ease-standard) infinite;
+  }
+}
+:root[data-motion="reduced"] .circuit li[data-state="current"] .circuitNode::before,
+:root[data-motion="reduced"] .circuit li[data-state="current"] .circuitNode::after {
+  animation: none;
+}
+@keyframes account-current-rest {
   50% {
-    box-shadow: 0 0 24px var(--color-glow);
+    opacity: 0;
+  }
+}
+@keyframes account-current-full {
+  50% {
+    opacity: 1;
   }
 }
 

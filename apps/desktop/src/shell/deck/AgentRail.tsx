@@ -15,17 +15,24 @@ import { isClearableAgent } from "../../surfaces/code/kaltidy/agents.ts";
 import { useKalTidy } from "../../surfaces/code/kaltidy/kalTidyContext.ts";
 import { useLaunchAgent } from "../../surfaces/code/useLaunchAgent.ts";
 import { useCodingAgents } from "../../surfaces/dashboard/data/DashboardData.tsx";
-import { useNow } from "../../surfaces/dashboard/useNow.ts";
+import { useClock } from "../../surfaces/dashboard/useNow.ts";
 import { useNavigation } from "../navigation.tsx";
 import { beginLiveResize } from "../panes/liveResize.ts";
 import styles from "./AgentRail.module.css";
 import { useDeckUi } from "./DeckUi.tsx";
 import { type AgentSections, agentSections, runningAgentCount, shortElapsed } from "./deckModel.ts";
 
+/** Which agents "Just finished" shows: the one part of the rail's grouping that moves with time. */
+function finishedKey(sections: AgentSections): string {
+  return sections.finished.map((thread) => thread.id).join(",");
+}
+
 export function AgentRail() {
   const { agentsOpen, setAgentsOpen, setAgentsActive } = useDeckUi();
   const { state, reload } = useCodingAgents();
-  const now = useNow(30_000);
+  // A tick re-renders the rail only when an agent leaves "Just finished"; each row's own time
+  // follows the clock by itself.
+  const now = useClock((at) => (state.status === "ready" ? finishedKey(agentSections(state.data, at)) : ""));
   const sections = useMemo(() => (state.status === "ready" ? agentSections(state.data, now) : null), [state, now]);
   // Until the person pins or collapses it, the rail opens while an agent runs or needs them.
   const active = sections ? runningAgentCount(sections) > 0 || sections.needsYou.length > 0 : null;
@@ -77,7 +84,7 @@ export function AgentRail() {
                 </Button>
               </div>
             ) : sections ? (
-              <AgentList sections={sections} now={now} />
+              <AgentList sections={sections} />
             ) : (
               <p className={styles.quiet}>Agents aren't part of this build.</p>
             )}
@@ -151,7 +158,7 @@ function StripCounts({ sections, onOpen }: { sections: AgentSections; onOpen: ()
   );
 }
 
-function AgentList({ sections, now }: { sections: AgentSections; now: number }) {
+function AgentList({ sections }: { sections: AgentSections }) {
   const { navigate } = useNavigation();
   const intents = useOptionalUiIntents();
   const launchAgent = useLaunchAgent();
@@ -208,10 +215,10 @@ function AgentList({ sections, now }: { sections: AgentSections; now: number }) 
   return (
     <>
       {running === 0 ? <p className={styles.quiet}>Nothing running right now.</p> : null}
-      <Group title="Needs you" tone="waiting" threads={sections.needsYou} now={now} onOpen={open} {...rowActions} />
-      <Group title="Failed" tone="failed" threads={sections.failed} now={now} onOpen={open} {...rowActions} />
-      <Group title="Working" tone="working" threads={sections.working} now={now} onOpen={open} />
-      <Group title="Waiting" tone="muted" threads={sections.blocked} now={now} onOpen={open} />
+      <Group title="Needs you" tone="waiting" threads={sections.needsYou} onOpen={open} {...rowActions} />
+      <Group title="Failed" tone="failed" threads={sections.failed} onOpen={open} {...rowActions} />
+      <Group title="Working" tone="working" threads={sections.working} onOpen={open} />
+      <Group title="Waiting" tone="muted" threads={sections.blocked} onOpen={open} />
       {sections.idle.length > 0 ? (
         <section className={styles.group}>
           <button
@@ -228,13 +235,13 @@ function AgentList({ sections, now }: { sections: AgentSections; now: number }) 
           {showIdle ? (
             <ul id={idleId} className={styles.list}>
               {sections.idle.map((thread) => (
-                <AgentRow key={thread.id} thread={thread} now={now} onOpen={open} {...rowActions} />
+                <AgentRow key={thread.id} thread={thread} onOpen={open} {...rowActions} />
               ))}
             </ul>
           ) : null}
         </section>
       ) : null}
-      <Group title="Just finished" tone="done" threads={sections.finished} now={now} onOpen={open} {...rowActions} />
+      <Group title="Just finished" tone="done" threads={sections.finished} onOpen={open} {...rowActions} />
     </>
   );
 }
@@ -243,13 +250,12 @@ interface GroupProps {
   title: string;
   tone: string;
   threads: ThreadSummary[];
-  now: number;
   onOpen: (thread: ThreadSummary) => void;
   leaving?: ReadonlySet<string>;
   onDismiss?: (thread: ThreadSummary) => void;
 }
 
-function Group({ title, tone, threads, now, onOpen, leaving, onDismiss }: GroupProps) {
+function Group({ title, tone, threads, onOpen, leaving, onDismiss }: GroupProps) {
   const headingId = useId();
   if (threads.length === 0) return null;
   return (
@@ -260,7 +266,7 @@ function Group({ title, tone, threads, now, onOpen, leaving, onDismiss }: GroupP
       </h3>
       <ul className={styles.list}>
         {threads.map((thread) => (
-          <AgentRow key={thread.id} thread={thread} now={now} onOpen={onOpen} leaving={leaving} onDismiss={onDismiss} />
+          <AgentRow key={thread.id} thread={thread} onOpen={onOpen} leaving={leaving} onDismiss={onDismiss} />
         ))}
       </ul>
     </section>
@@ -269,13 +275,11 @@ function Group({ title, tone, threads, now, onOpen, leaving, onDismiss }: GroupP
 
 function AgentRow({
   thread,
-  now,
   onOpen,
   leaving,
   onDismiss,
 }: {
   thread: ThreadSummary;
-  now: number;
   onOpen: (t: ThreadSummary) => void;
   leaving?: ReadonlySet<string>;
   /** Present for agents whose session is over: the row's X clears them. */
@@ -285,6 +289,7 @@ function AgentRow({
   const tone = AGENT_STATE_TONE[state];
   const label = AGENT_STATE_TEXT[state];
   const since = Date.parse(thread.lastActivityAt);
+  const now = useClock((at) => (Number.isNaN(since) ? null : shortElapsed(at - since)));
   const elapsed = Number.isNaN(since) ? null : shortElapsed(now - since);
   const live = isAgentBusy(state);
   const detail = live && thread.currentActivity ? `${label} · ${thread.currentActivity}` : label;

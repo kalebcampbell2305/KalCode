@@ -374,20 +374,35 @@
   }
 }
 
+/* Reduced motion, from the OS unless the app's Motion setting says Full, or from that setting. */
 @media (prefers-reduced-motion: reduce) {
-  .rowDot[data-pulse]::after {
+  :root:not([data-motion="full"]) .rowDot[data-pulse]::after {
     animation: none;
   }
 
-  .dock,
-  .rowDismiss {
+  :root:not([data-motion="full"]) .dock,
+  :root:not([data-motion="full"]) .rowDismiss {
     transition: none;
   }
 
-  .rowItem[data-leaving] {
+  :root:not([data-motion="full"]) .rowItem[data-leaving] {
     display: none;
     animation: none;
   }
+}
+
+:root[data-motion="reduced"] .rowDot[data-pulse]::after {
+  animation: none;
+}
+
+:root[data-motion="reduced"] .dock,
+:root[data-motion="reduced"] .rowDismiss {
+  transition: none;
+}
+
+:root[data-motion="reduced"] .rowItem[data-leaving] {
+  display: none;
+  animation: none;
 }
 
 .rowText {

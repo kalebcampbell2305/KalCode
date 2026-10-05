@@ -22,6 +22,7 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
+import { useNow } from "../dashboard/useNow.ts";
 import { useOptionalProviderAccountSessions } from "./ProviderAccountSessions.tsx";
 import { ProviderAccountsView, type ProviderSignInRequest } from "./ProviderAccountsView.tsx";
 import { ProviderHealthView } from "./ProviderHealthView.tsx";
@@ -46,15 +47,6 @@ import { consumeProvidersTab, type ProvidersTab, useProvidersTabRequest } from "
 import { isBrowserAuthProvider } from "./useProviderAccounts.ts";
 import { useProviderHealth } from "./useProviderHealth.ts";
 import { useProviders } from "./useProviders.ts";
-
-function useNow(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
 
 export function ProvidersPage() {
   const { recordLocation, registerRestorer } = useNavigation();
