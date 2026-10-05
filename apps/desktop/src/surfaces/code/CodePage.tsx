@@ -271,6 +271,48 @@ function SplitControl({ children }: { children: ReactNode }) {
   return <div className={styles.split}>{children}</div>;
 }
 
+/**
+ * New agent (owner simplicity rule): one click starts the agent KalCode already knows you want —
+ * the remembered provider account, exact model and effort, in this project. When there is no
+ * single obvious configuration, the same click opens the launcher pre-filled. The chevron always
+ * opens the launcher to pick another provider, account, model, effort or count.
+ */
+function NewAgentButton({ api }: { api: CodeCanvasApi }) {
+  const busy = api.providerPanes.creating || api.quickLaunching;
+  const preview = api.previewQuickLaunch();
+  const ready = preview.kind === "ready";
+  return (
+    <div className={[styles.split, styles.agentSplit].join(" ")} data-ready={ready || undefined}>
+      <Tooltip content={ready ? `Start ${preview.summary}` : `New agent: ${preview.reason}`}>
+        <Button
+          size="sm"
+          variant="primary"
+          className={styles.splitPart}
+          icon={<Bot />}
+          aria-label="New agent"
+          aria-description={ready ? `Starts ${preview.summary}` : preview.reason}
+          busy={busy}
+          onClick={() => api.startAgents()}
+        >
+          <span className={styles.agentLabel}>New agent</span>
+        </Button>
+      </Tooltip>
+      <Tooltip content="Choose provider, account, model, effort or count">
+        <IconButton
+          size="sm"
+          variant="primary"
+          className={styles.splitPart}
+          label="Agent launch options"
+          aria-haspopup="dialog"
+          icon={<ChevronDown />}
+          disabled={busy}
+          onClick={() => api.openAgentLauncher()}
+        />
+      </Tooltip>
+    </div>
+  );
+}
+
 /** The header before the panes have loaded: the same footprint, nothing to act on yet. */
 function ToolbarPlaceholder() {
   return (
@@ -411,21 +453,7 @@ const Toolbar = memo(function Toolbar({ api, available }: { api: CodeCanvasApi; 
         </DropdownMenu>
       ) : null}
       <AgentCounters controller={controller} organization={api.organization} />
-      {providerPanes.enabled ? (
-        <Tooltip content="Launch Claude Code, Codex or Gemini CLI in a pane">
-          <Button
-            size="sm"
-            variant="primary"
-            className={styles.primaryAction}
-            icon={<Bot />}
-            aria-label="New agent"
-            busy={providerPanes.creating}
-            onClick={() => api.openAgentLauncher()}
-          >
-            <span className={styles.agentLabel}>New agent</span>
-          </Button>
-        </Tooltip>
-      ) : null}
+      {providerPanes.enabled ? <NewAgentButton api={api} /> : null}
       <SplitControl>
         <Tooltip content={`New ${defaultShell?.name ?? "terminal"} terminal (${CODE_SHORTCUT_LABELS["new-terminal"]})`}>
           <Button

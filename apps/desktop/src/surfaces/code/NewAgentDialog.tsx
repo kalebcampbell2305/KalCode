@@ -50,6 +50,8 @@ export interface NewAgentDialogProps {
   /** Codex / Gemini CLI when this build can run them (Claude Code is always offered). */
   offered: readonly PaneProviderId[];
   initialProvider: PaneProviderId;
+  /** Pre-fills the agent count (a "start six agents" request that still needs a choice). */
+  initialCount?: number;
   busy: boolean;
   error: string | null;
   /** Handoff launches create exactly one recipient while keeping the prepared draft in Code. */
@@ -111,6 +113,7 @@ export function NewAgentDialog({
   workspace,
   offered,
   initialProvider,
+  initialCount,
   busy,
   error,
   fixedCount,
@@ -147,8 +150,12 @@ export function NewAgentDialog({
     providerId: initialProvider,
   });
   // What the person typed; the launch uses it clamped, so editing "1" to "5" never passes through 15.
-  const [countText, setCountText] = useState(() => String(memory.byProvider[initialProvider]?.count ?? 1));
-  const [countTouched, setCountTouched] = useState(false);
+  const [countText, setCountText] = useState(() =>
+    String(
+      initialCount !== undefined ? clampAgentCount(initialCount) : (memory.byProvider[initialProvider]?.count ?? 1),
+    ),
+  );
+  const [countTouched, setCountTouched] = useState(initialCount !== undefined);
   const [signingIn, setSigningIn] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);

@@ -43,7 +43,7 @@ async function start(page: Page, theme: "dark" | "light") {
 }
 
 async function claudePane(page: Page, prompt: string) {
-  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New agent" })
     .getByRole("button", { name: "Launch Claude Code agent" })
