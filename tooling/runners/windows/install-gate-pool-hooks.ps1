@@ -6,7 +6,7 @@
 #  - the shared leases/reports/evidence/heavy folders keep the grants setup-gate-worker-pool.ps1 defines.
 # Refuses while any gate job runs. Never changes runner registrations, labels or other services; it
 # restarts an idle gate runner service only when its account newly joined the counter group (group
-# membership applies at logon). Writes a hash receipt into the pool's reports folder.
+# membership applies at logon) or its job-hook lines changed (the runner reads .env at start). Writes a hash receipt into the pool's reports folder.
 #
 # Usage (elevated):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install-gate-pool-hooks.ps1
@@ -30,10 +30,11 @@ function Assert-Plain([string]$Path) {
 $workers = @(@{ slot = 0; account = 'kalcode-ci'; service = 'actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate'; root = 'C:\kalcode-ci\runner' }) +
     @(1..5 | ForEach-Object { @{ slot = $_; account = "kalcode-ci-w$_"; service = "actions.runner.kalebcampbell2305-KalCode.kalcode-win-gate-w$_"
         root = "C:\kalcode-ci-pool\worker-w$_\runner" } })
-function Assert-NoGateJob {
+# Only the workers this run changes must be idle; a gate on the original slot-0 runner keeps running.
+function Assert-NoGateJob([int[]]$Slots = @(1, 2, 3, 4, 5)) {
     foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'")) {
         if (-not $process.ExecutablePath) { Refuse 'unknown_job_process_owner' }
-        foreach ($worker in $workers) {
+        foreach ($worker in @($workers | Where-Object { $Slots -contains $_.slot })) {
             if ($process.ExecutablePath.StartsWith($worker.root + '\', [StringComparison]::OrdinalIgnoreCase)) { Refuse "gate_job_running_slot_$($worker.slot)" }
         }
     }
@@ -79,6 +80,26 @@ try {
         $result.files += [ordered]@{ file = $copy.target; previousSha256 = $before; sha256 = $after }
     }
 
+    # w1..w5 runner job hooks: GitHub runs a .js hook with its bundled Node, so the service account's
+    # PowerShell execution policy never matters (a .ps1 hook failed "running scripts is disabled",
+    # gate 37347421205). Rewrite only the two hook lines, only on idle workers.
+    foreach ($worker in @($workers | Where-Object { $_.slot -ge 1 })) {
+        $environment = Join-Path $worker.root '.env'; Assert-Plain $environment
+        if (-not (Test-Path -LiteralPath $environment)) { Refuse "runner_env_missing_slot_$($worker.slot)" }
+        $text = [IO.File]::ReadAllText($environment); $updated = $text
+        foreach ($entry in @(@{ key = 'ACTIONS_RUNNER_HOOK_JOB_STARTED'; phase = 'before' }, @{ key = 'ACTIONS_RUNNER_HOOK_JOB_COMPLETED'; phase = 'after' })) {
+            $want = $entry.key + '=' + (Join-Path $pool ($entry.phase + '.js'))
+            $found = @([regex]::Matches($updated, '(?m)^' + $entry.key + '=[^
+]*'))
+            if ($found.Count -gt 1) { Refuse "duplicate_hook_entry_slot_$($worker.slot)" }
+            if ($found.Count -eq 0) { $updated = $updated.TrimEnd("`r", "`n") + "`r`n" + $want + "`r`n" }
+            elseif ($found[0].Value -cne $want) { $updated = $updated.Substring(0, $found[0].Index) + $want + $updated.Substring($found[0].Index + $found[0].Length) }
+        }
+        $worker.envChanged = $updated -cne $text
+        if ($worker.envChanged) { Assert-NoGateJob; [IO.File]::WriteAllText($environment, $updated, [Text.Encoding]::ASCII) }
+        $result.accounts += [ordered]@{ slot = $worker.slot; runnerHooks = 'before.js/after.js'; envChanged = $worker.envChanged }
+    }
+
     # Performance Monitor Users (S-1-5-32-558): read the performance counters the admission hook samples.
     foreach ($worker in $workers) {
         $account = Get-LocalUser -Name $worker.account -ErrorAction Stop
@@ -92,10 +113,10 @@ try {
     }
 
     # A service picks up the new group only at its next logon; restart those still idle.
-    foreach ($worker in @($workers | Where-Object { $_.added })) {
+    foreach ($worker in @($workers | Where-Object { $_.added -or $_.envChanged })) {
         $service = Get-CimInstance Win32_Service -Filter "Name='$($worker.service)'"
         if ($null -eq $service) { continue }
-        Assert-NoGateJob
+        Assert-NoGateJob @($worker.slot)
         Restart-Service -Name $worker.service
         (Get-Service -Name $worker.service).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
         $result.restarted += $worker.service
