@@ -754,6 +754,12 @@ describe("Stop hook", () => {
     sh(f.repo, "checkout", "-q", "-b", "feat");
     f.commit("unmerged");
     const env = { ...process.env, KALCODE_LIFECYCLE_HOOK_REFRESH: "0" };
+    // Scale the bound by this machine's current cost of starting Node: on a gate runner shared with
+    // compiles, every process start slows down (gate 37245547784 measured the hook at 5.1 s at 100% CPU).
+    const b0 = Date.now();
+    spawnSync(process.execPath, ["-e", ""], { windowsHide: true });
+    const baseline = Date.now() - b0;
+    const bound = Math.max(2000, baseline * 8);
     const t0 = Date.now();
     const r = spawnSync(process.execPath, [SHIP, "lifecycle", "hook"], {
       input: input(f, { session_id: "cli" }),
@@ -764,7 +770,7 @@ describe("Stop hook", () => {
     const ms = Date.now() - t0;
     assert.equal(r.status, 0, r.stderr);
     assert.equal(JSON.parse(r.stdout).decision, "block");
-    assert.ok(ms < 2000, `hook took ${ms} ms`);
+    assert.ok(ms < bound, `hook took ${ms} ms (bound ${bound} ms; bare node spawn ${baseline} ms)`);
     const active = spawnSync(process.execPath, [SHIP, "lifecycle", "hook"], {
       input: input(f, { stop_hook_active: true }),
       encoding: "utf8",
