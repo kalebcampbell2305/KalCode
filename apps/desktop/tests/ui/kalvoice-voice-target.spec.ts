@@ -3,6 +3,9 @@ import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
+/** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
+const NOT_FAVORITE = ":not([data-favorite-action])";
+
 /**
  * 0.1.5 TK-2 against the in-memory transport (`?scenario=threads`): a focused thread composer is
  * KalVoice's fixed target, every voice send goes through that composer's own Send, "Which one?"
@@ -61,6 +64,7 @@ async function openThread(page: Page, name: string) {
   }
   await list(page)
     .getByRole("button", { name: new RegExp(name) })
+    .and(page.locator(NOT_FAVORITE))
     .click();
   await expect(detail(page).getByRole("heading", { name })).toBeVisible();
 }

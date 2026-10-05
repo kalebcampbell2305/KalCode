@@ -2,6 +2,9 @@ import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
+/** A row, not the favorite (pin/star) button beside it, whose label repeats the row's name (#235). */
+const NOT_FAVORITE = ":not([data-favorite-action])";
+
 /**
  * Switch accounts on the Threads surface against the in-memory transport: the header's account
  * menu, the Rebind dialog and the list label. The memory transport's rebind follows native
@@ -65,7 +68,9 @@ async function geminiThreadWithTwoAccounts(page: Page) {
 test.describe("thread accounts", () => {
   test("switching a thread's account always asks first, then rebinds future messages", async ({ page }) => {
     await geminiThreadWithTwoAccounts(page);
-    const row = list(page).getByRole("button", { name: /Release notes pass/ });
+    const row = list(page)
+      .getByRole("button", { name: /Release notes pass/ })
+      .and(page.locator(NOT_FAVORITE));
     await expect(row).toContainText("Gemini CLI · Personal · ");
     await expect(
       detail(page)

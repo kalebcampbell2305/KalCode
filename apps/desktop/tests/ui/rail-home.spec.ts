@@ -284,7 +284,9 @@ test.describe("home", () => {
     await expect(page.getByRole("list", { name: "Finished since your last visit" })).toContainText("Greeting rotation");
     await expect(page.getByRole("list", { name: "Pick up where you left off" })).toContainText("Invoice PDF layout");
     const workspaces = page.getByRole("list", { name: "Recent workspaces" });
-    await expect(workspaces.getByRole("button", { name: "Continue in kalcode" })).toBeVisible();
+    await expect(workspaces.getByRole("button", { name: "Continue in docs-site" })).toBeVisible();
+    // Pinned workspaces (kalcode, atlas-api) live in the pinned section, not again under Recent (#235).
+    await expect(workspaces.getByRole("button", { name: "Continue in kalcode" })).toHaveCount(0);
     // Recent work by day, from the event log.
     await expect(page.getByRole("list", { name: "Recent work, today" })).toContainText("Authentication Refactor");
     await page.getByRole("tab", { name: "Yesterday" }).click();
@@ -292,7 +294,7 @@ test.describe("home", () => {
     await expect(yesterday).toContainText("Invoice PDF layout");
     await expect(yesterday).toContainText("src/invoice/pdf.ts");
     // Continue takes you back to work in that workspace.
-    await workspaces.getByRole("button", { name: "Continue in atlas-api" }).click();
+    await workspaces.getByRole("button", { name: "Continue in docs-site" }).click();
     await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   });
 
