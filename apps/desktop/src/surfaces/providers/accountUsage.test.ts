@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { type AccountUsageState, limitingWindow, notChecked, resetsIn, usageSummary } from "./accountUsage.ts";
+import {
+  type AccountUsageState,
+  limitingWindow,
+  notChecked,
+  primaryUsageLabel,
+  resetsIn,
+  type UsageWindow,
+  usageSummary,
+  weeklyWindow,
+} from "./accountUsage.ts";
 
 const NOW = Date.parse("2026-10-03T17:00:00.000Z");
 
@@ -18,6 +27,14 @@ function state(status: AccountUsageState["status"], remaining: number[] = []): A
   };
 }
 
+function win(id: string, label: string, remainingPercent: number): UsageWindow {
+  return { id, label, remainingPercent, resetsAt: null };
+}
+
+function withWindows(accountId: string, windows: UsageWindow[], status: AccountUsageState["status"] = "fresh") {
+  return { accountId, status, windows, checkedAt: "2026-10-03T16:59:00.000Z", reason: null } as AccountUsageState;
+}
+
 describe("account usage helpers", () => {
   it("picks the most constrained window as the limiting one", () => {
     expect(limitingWindow(state("fresh", [64, 42]))?.id).toBe("weekly");
@@ -25,17 +42,69 @@ describe("account usage helpers", () => {
     expect(limitingWindow(notChecked("claude-a"))).toBeNull();
   });
 
+  it("selects the account's own all-model weekly window, never a rolling or model-scoped one", () => {
+    expect(weeklyWindow(state("fresh", [8, 42]))?.id).toBe("weekly");
+    expect(weeklyWindow(state("stale", [8, 42]))?.id).toBe("weekly");
+    expect(weeklyWindow(state("fresh", [8]))).toBeNull();
+    expect(weeklyWindow(notChecked("claude-a"))).toBeNull();
+    expect(weeklyWindow({ ...state("checking"), windows: state("fresh", [8, 42]).windows })).toBeNull();
+    // Model-scoped weekly limits are details, not the primary number.
+    const scoped = withWindows("claude-a", [win("five_hour", "5-hour", 50), win("weekly_opus", "Weekly Opus", 3)]);
+    expect(weeklyWindow(scoped)).toBeNull();
+    const claude = withWindows("claude-a", [
+      win("weekly_opus", "Weekly Opus", 3),
+      win("five_hour", "5-hour", 50),
+      win("weekly", "Weekly", 73),
+    ]);
+    expect(weeklyWindow(claude)?.id).toBe("weekly");
+    // Codex: a second 10080-minute window keeps its slot id but the "Weekly" label; a 7-day label counts.
+    expect(
+      weeklyWindow(withWindows("codex-a", [win("primary", "5-hour", 9), win("secondary", "Weekly", 61)]))?.id,
+    ).toBe("secondary");
+    expect(weeklyWindow(withWindows("codex-a", [win("secondary", "7-day", 61)]))?.remainingPercent).toBe(61);
+    expect(
+      weeklyWindow(withWindows("codex-a", [win("primary", "1-day", 61), win("secondary", "30-day", 2)])),
+    ).toBeNull();
+    // An unreported weekly value is not a weekly window.
+    expect(weeklyWindow(state("fresh", [40, Number.NaN]))).toBeNull();
+  });
+
+  it("shows WEEKLY remaining as the primary number even when the 5-hour window is lower", () => {
+    expect(usageSummary(state("fresh", [8, 73]))).toEqual({ short: "73% left", low: false, tone: "ok" });
+    expect(primaryUsageLabel(state("fresh", [8, 73]))).toBe("73% of weekly usage left");
+    // Low/tone follow the weekly window too.
+    expect(usageSummary(state("fresh", [90, 12]))).toEqual({ short: "12% left", low: true, tone: "low" });
+  });
+
+  it("never falls back to the 5-hour window when no weekly window is reported", () => {
+    expect(usageSummary(state("fresh", [8]))).toEqual({ short: "Weekly usage unavailable", low: false, tone: "muted" });
+    expect(primaryUsageLabel(state("fresh", [8]))).toBe("No weekly limit reported for this account");
+    expect(usageSummary(withWindows("claude-a", [win("weekly_opus", "Weekly Opus", 40)])).short).toBe(
+      "Weekly usage unavailable",
+    );
+  });
+
+  it("keeps each account's usage to itself", () => {
+    const a = withWindows("claude-a", [win("five_hour", "5-hour", 30)]);
+    const b = withWindows("claude-b", [win("five_hour", "5-hour", 90), win("weekly", "Weekly", 55)]);
+    expect(usageSummary(a).short).toBe("Weekly usage unavailable");
+    expect(usageSummary(b).short).toBe("55% left");
+    expect(weeklyWindow(a)).toBeNull();
+    expect(weeklyWindow(b)).toBe(b.windows[1]);
+  });
+
   it("summarises real numbers, low usage and every non-numeric state truthfully", () => {
     expect(usageSummary(state("fresh", [64, 42]))).toEqual({ short: "42% left", low: false, tone: "ok" });
-    expect(usageSummary(state("stale", [0]))).toEqual({ short: "Usage unavailable", low: false, tone: "muted" });
-    expect(usageSummary(state("fresh", [19.4, 70]))).toEqual({ short: "19% left", low: true, tone: "low" });
-    expect(usageSummary(state("fresh", [0]))).toMatchObject({ short: "0% left", low: true });
-    expect(usageSummary(state("fresh", [0.1]))).toMatchObject({ short: "<1% left", low: true });
+    expect(usageSummary(state("stale", [0, 50]))).toEqual({ short: "Usage unavailable", low: false, tone: "muted" });
+    expect(primaryUsageLabel(state("stale", [0, 50]))).toBeNull();
+    expect(usageSummary(state("fresh", [70, 19.4]))).toEqual({ short: "19% left", low: true, tone: "low" });
+    expect(usageSummary(state("fresh", [50, 0]))).toMatchObject({ short: "0% left", low: true });
+    expect(usageSummary(state("fresh", [50, 0.1]))).toMatchObject({ short: "<1% left", low: true });
     expect(usageSummary(state("checking")).short).toBe("Checking usage…");
     expect(usageSummary(state("unavailable"))).toEqual({ short: "Usage unavailable", low: false, tone: "muted" });
     expect(usageSummary(notChecked("claude-a", "Signed out")).short).toBe("Usage unavailable");
     // Numbers are never shown for a state that doesn't carry them.
-    expect(usageSummary({ ...state("not_checked"), windows: state("fresh", [50]).windows }).short).toBe(
+    expect(usageSummary({ ...state("not_checked"), windows: state("fresh", [50, 50]).windows }).short).toBe(
       "Usage unavailable",
     );
   });

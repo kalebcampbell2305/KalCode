@@ -2,21 +2,32 @@
  * The live KalCode demo: its state, its sample workspace and every action a visitor can take.
  *
  * The demo mirrors the shipped desktop app (apps/desktop): the same shell (Command Deck top bar,
- * sidebar, Agents rail), the same Code panes and New agent launcher, the same status vocabulary
- * (@kalcode/protocol/display-status), the same task-based names and the same
- * plan roadmap (@kalcode/protocol/plans). It is temporary by design: state lives in memory for
- * this page view, and Reset (or a reload) returns to the sample workspace.
+ * navigation bar, favorites, sidebar, Agents rail), the same Code panes and New agent launcher, the
+ * one agent-state model every app surface uses (@kalcode/protocol agent-state: agentStateOf), the
+ * same task-based names and the same plan roadmap (@kalcode/protocol/plans). It is temporary by
+ * design: state lives in memory for this page view, and Reset (or a reload) returns to the sample.
  *
  * An AGENT is a real coding agent running in its own terminal pane in Code. It is never a thread.
  *
  * Pure module: no DOM. The Astro page renders the initial state at build time and the client
  * script (scripts/live/app.ts) runs the same functions in the browser.
  */
-import { DISPLAY_STATUS_LABEL, DISPLAY_STATUS_TONE } from "@kalcode/protocol/display-status";
+import {
+  AGENT_FILTERS,
+  AGENT_STATE_FILTER,
+  type AgentFilter,
+  type AgentState,
+  agentStateOf,
+  isAgentBusy,
+  READY_ACTIVITY,
+  type ThreadStatus,
+} from "@kalcode/protocol";
 import { getPlanFeature } from "@kalcode/protocol/plans";
 import { type DemoMemory, initialMemory } from "./memory";
 
-export type ProviderId = "claude" | "codex";
+/** The four providers KalCode runs as native terminals (crates/providers/src/catalog.rs). */
+export type ProviderId = "claude" | "codex" | "gemini" | "cursor";
+export const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "gemini", "cursor"];
 export type Surface =
   | "dashboard"
   | "operations"
@@ -26,20 +37,26 @@ export type Surface =
   | "providers"
   | "memory"
   | "settings";
-/** The display statuses the demo uses (a subset of the protocol's twelve). */
-export type AgentStatus =
+/** The runtime statuses the demo's agents move through (the protocol's ThreadStatus). */
+export type AgentStatus = Extract<
+  ThreadStatus,
   | "starting"
-  | "working"
+  | "active"
   | "testing"
-  | "reviewing"
-  | "permission_required"
-  | "waiting_for_you"
   | "idle"
-  | "done";
+  | "waiting_for_permission"
+  | "waiting_for_user"
+  | "waiting_for_dependency"
+  | "completed"
+  | "failed"
+  | "interrupted"
+>;
 export type OpsTab = "runs" | "queue" | "services" | "environments" | "activity";
 export type ContextTab = "runs" | "services" | "tests";
-export type FleetFilter = "all" | "needs" | "working" | "done" | "idle";
+export type FleetFilter = AgentFilter;
 export type LineKind = "in" | "out" | "ok" | "tool" | "dim" | "warn" | "err" | "accent" | "head";
+/** The modes a new coding agent can start in (desktop: DEFAULT_MODE_CHOICES). */
+export type Mode = "bypass" | "plan";
 
 export interface Line {
   k: LineKind;
@@ -88,6 +105,7 @@ export interface Agent {
   account: string;
   model: string;
   effort: string;
+  mode: Mode;
   status: AgentStatus;
   activity: string;
   branch: string;
@@ -99,6 +117,8 @@ export interface Agent {
   approval: Approval | null;
   /** A fresh agent waits at its prompt for the visitor to type. */
   prompt: boolean;
+  /** Waits for this agent to stop working before its script continues. */
+  after?: string;
 }
 
 export type TabKind = "agent" | "terminal" | "browser" | "widget";
@@ -137,6 +157,8 @@ export type Menu =
   | "palette"
   | "mode"
   | "environment"
+  | "history"
+  | "notifications"
   | `plus:${string}`;
 
 export interface Nudge {
@@ -151,6 +173,16 @@ export interface Toast {
   text: string;
   tone: "done" | "info" | "waiting";
   agent?: string;
+}
+
+/** A saved fast-access target (desktop: shell/favorites). Pins are global; favorites per workspace. */
+export interface Favorite {
+  key: string;
+  scope: "pin" | "favorite";
+  kind: "agent" | "terminal" | "browser" | "command" | "account";
+  title: string;
+  /** The demo action that opens it. */
+  act: string;
 }
 
 export type VoiceState = "ready" | "listening" | "processing" | "executing" | "done";
@@ -168,6 +200,11 @@ export interface State {
   layout: "auto" | "2" | "3" | "4";
   menu: Menu;
   launcher: Launcher | null;
+  /** The pane whose close is waiting on Smart Close (Cancel / Keep Running / Stop and Close). */
+  closing: string | null;
+  /** The terminal-header account picker: which agent it is open for and the chosen account. */
+  picker: { agent: string; choice: string | null } | null;
+  mode: Mode;
   contextTab: ContextTab;
   opsTab: OpsTab;
   run: string | null;
@@ -176,10 +213,18 @@ export interface State {
   voice: { open: boolean; state: VoiceState; heard: string; reply: string };
   palette: { q: string; sel: number };
   toast: Toast | null;
+  /** Everything KalCode told the visitor, newest first (the Notifications list). */
+  notes: Toast[];
+  unread: number;
   nudge: Nudge | null;
   nudged: string[];
+  favorites: Favorite[];
+  /** Back / Forward: visited locations ("dashboard", "code:<tab>") and where we are in them. */
+  nav: { entries: string[]; index: number };
   preview: number;
   railOpen: boolean;
+  /** Idle agents fold in the rail, as in the app. */
+  idleOpen: boolean;
   mobile: boolean;
   tick: number;
   seq: number;
@@ -190,29 +235,52 @@ export interface State {
 export type Environment = "Local" | "Preview" | "Staging" | "Production";
 export const ENVIRONMENTS: readonly Environment[] = ["Local", "Preview", "Staging", "Production"];
 
-export const PROVIDER_NAME: Record<ProviderId, string> = { claude: "Claude Code", codex: "Codex" };
+export const PROVIDER_NAME: Record<ProviderId, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  gemini: "Gemini CLI",
+  cursor: "Cursor",
+};
 
-/** Model and effort choices exactly as the desktop launcher lists them (crates/providers/src/catalog.rs). */
+/**
+ * Model and effort choices exactly as the desktop launcher lists them (crates/providers/src/catalog.rs
+ * and apps/desktop/src/surfaces/code/panes/agentLaunch.ts). The first model is the account or
+ * provider default; Codex and Cursor report theirs from the account, so the demo offers the default.
+ * Gemini CLI and Cursor take no effort.
+ */
 export const MODELS: Record<ProviderId, readonly string[]> = {
-  claude: ["Default", "Opus", "Sonnet", "Haiku", "Fable"],
+  claude: ["Account default", "Opus", "Sonnet", "Haiku", "Fable"],
   codex: ["Default"],
+  gemini: ["Auto (default)", "Pro", "Flash", "Flash-Lite"],
+  cursor: ["Default"],
 };
 export const EFFORTS: Record<ProviderId, readonly string[]> = {
   claude: ["Default", "Low", "Medium", "High", "Extra high", "Max"],
   codex: ["Default", "Minimal", "Low", "Medium", "High", "Extra high"],
+  gemini: [],
+  cursor: [],
 };
-export const MAX_AGENTS_PER_LAUNCH = 4;
+/** The most agents one launch starts (desktop agentLaunch.ts). Local agents are unlimited on every plan. */
+export const MAX_AGENTS_PER_LAUNCH = 10;
 /** Past this many panes the demo suggests building the workspace for real. */
-const BIG_WORKSPACE = 6;
+const BIG_WORKSPACE = 7;
 export const WORKSPACE = { name: "sample-app", path: "~/Projects/sample-app", branch: "main", ahead: 1, changed: 3 };
 export const DEV_URL = "localhost:3000";
+
+export const MODE_LABEL: Record<Mode, string> = { bypass: "Bypass", plan: "Plan" };
+/** The desktop's own words (apps/desktop/src/surfaces/permissions/labels.ts MODE_DESCRIPTIONS). */
+export const MODE_DESCRIPTION: Record<Mode, string> = {
+  bypass:
+    "Recommended. Coding agents work without approval prompts: edits, commands, tests, builds, Git, pushes and dev servers just run. Only access to credentials and secrets still asks.",
+  plan: "Read and plan only. Anything that changes files, runs commands or reaches out is refused.",
+};
 
 export const SURFACES: readonly { id: Surface; label: string; icon: string; hint: string }[] = [
   {
     id: "code",
     label: "Code",
     icon: "code",
-    hint: "Where your Claude Code and Codex agents run, each in its own terminal.",
+    hint: "Where your coding agents run, each in its own terminal.",
   },
   { id: "dashboard", label: "Dashboard", icon: "dashboard", hint: "Agent Fleet: see every coding agent in one place." },
   {
@@ -222,54 +290,53 @@ export const SURFACES: readonly { id: Surface; label: string; icon: string; hint
     hint: "Runs, Queue, Services, Environments and Activity.",
   },
   { id: "kalvoice", label: "KalVoice", icon: "kalvoice", hint: "Control KalCode by voice." },
-  { id: "threads", label: "Threads", icon: "threads", hint: "Chat-style conversations. Agents live in Code." },
+  {
+    id: "threads",
+    label: "Threads",
+    icon: "threads",
+    hint: "Persistent units of AI work. Coding agents run in Code.",
+  },
   {
     id: "memory",
     label: "Unified Memory",
     icon: "memory",
     hint: "Useful project knowledge, shared across agents and sessions.",
   },
-  { id: "providers", label: "Providers", icon: "providers", hint: "Connect multiple Claude Code and Codex accounts." },
+  {
+    id: "providers",
+    label: "Providers",
+    icon: "providers",
+    hint: "Claude Code, Codex, Gemini CLI and Cursor, on your own accounts.",
+  },
 ];
 
-/** Display label and tone of a status, straight from the protocol mapping every app surface uses. */
-export function statusLabel(status: AgentStatus): string {
-  return DISPLAY_STATUS_LABEL[status];
+// ── Agent state: the one model every surface uses ───────────────────────────────────────────
+
+/** The agent's state, from its runtime facts, exactly as the app computes it (never by provider). */
+export function agentState(agent: Pick<Agent, "status" | "activity" | "approval">): AgentState {
+  return agentStateOf({
+    status: agent.status,
+    currentActivity: agent.activity,
+    pendingApprovals: agent.approval ? 1 : 0,
+  });
 }
-export function statusTone(status: AgentStatus): string {
-  return DISPLAY_STATUS_TONE[status];
-}
-/** The Fleet's stage words (apps/desktop/src/surfaces/dashboard/data/board.ts). */
-export function fleetStage(status: AgentStatus): string {
-  switch (status) {
-    case "permission_required":
-      return "Needs approval";
-    case "waiting_for_you":
-      return "Needs your reply";
-    case "working":
-      return "Working";
-    case "testing":
-      return "Testing";
-    case "reviewing":
-      return "Reviewing";
-    case "done":
-      return "Done";
-    case "starting":
-      return "Starting";
-    default:
-      return "Idle";
-  }
+/** The filter group an agent belongs to (Needs you, Working, Waiting, Idle, Done, Failed). */
+export function agentFilter(agent: Agent): Exclude<AgentFilter, "all"> {
+  return AGENT_STATE_FILTER[agentState(agent)];
 }
 export function needsYou(agent: Agent): boolean {
-  return agent.status === "permission_required" || agent.status === "waiting_for_you";
+  return agentState(agent) === "needs_you";
 }
+/** A launch or turn is in progress. */
 export function isWorking(agent: Agent): boolean {
-  return (
-    agent.status === "working" ||
-    agent.status === "testing" ||
-    agent.status === "reviewing" ||
-    agent.status === "starting"
-  );
+  return isAgentBusy(agentState(agent));
+}
+export function isDone(agent: Agent): boolean {
+  return agentFilter(agent) === "done";
+}
+/** The model a pane header and card show: the default reads as the default. */
+export function modelLabel(agent: Pick<Agent, "provider" | "model">): string {
+  return agent.model === MODELS[agent.provider][0] ? "Default model" : agent.model;
 }
 
 /** Whether a roadmap feature is live today: the demo tags anything that is not as Coming soon. */
@@ -298,7 +365,7 @@ function accounts(): Account[] {
       id: "claude-work",
       provider: "claude",
       name: "Work",
-      plan: "Pro",
+      plan: "Team",
       isDefault: false,
       windows: [
         { label: "5-hour", left: 18, resets: "Resets in 41m" },
@@ -316,26 +383,41 @@ function accounts(): Account[] {
         { label: "Weekly", left: 73, resets: "Resets Sun 18:00" },
       ],
     },
+    {
+      id: "gemini-personal",
+      provider: "gemini",
+      name: "Personal",
+      plan: "Google AI Pro",
+      isDefault: true,
+      windows: [{ label: "Daily", left: 88, resets: "Resets at midnight" }],
+    },
+    {
+      id: "cursor-studio",
+      provider: "cursor",
+      name: "Studio",
+      plan: "Pro",
+      isDefault: true,
+      windows: [{ label: "Monthly", left: 71, resets: "Resets on the 1st" }],
+    },
   ];
 }
 
-function claudeHeader(model: string, effort: string, account: string): Line[] {
-  return [
-    L(
-      "head",
-      `✻ Claude Code · ${model === "Default" ? "account default model" : model}${effort === "Default" ? "" : ` · ${effort.toLowerCase()} effort`}`,
-    ),
-    L("dim", `  ${WORKSPACE.path} · ${account}`),
-  ];
+/** Prompt and tool marks each provider's own terminal prints. */
+const PROMPT_MARK: Record<ProviderId, string> = { claude: ">", codex: "›", gemini: ">", cursor: "→" };
+const TOOL_MARK: Record<ProviderId, string> = { claude: "●", codex: "•", gemini: "✦", cursor: "•" };
+export function promptMark(provider: ProviderId): string {
+  return PROMPT_MARK[provider];
 }
-function codexHeader(model: string, effort: string, account: string): Line[] {
-  return [
-    L(
-      "head",
-      `>_ Codex · ${model === "Default" ? "default model" : model}${effort === "Default" ? "" : ` · ${effort.toLowerCase()}`}`,
-    ),
-    L("dim", `  ${WORKSPACE.path} · ${account}`),
-  ];
+export function workMark(provider: ProviderId): string {
+  return provider === "claude" ? "✻" : TOOL_MARK[provider];
+}
+
+function header(provider: ProviderId, model: string, effort: string, account: string): Line[] {
+  const head: Record<ProviderId, string> = { claude: "✻", codex: ">_", gemini: "✦", cursor: "⬢" };
+  const parts = [`${head[provider]} ${PROVIDER_NAME[provider]}`];
+  parts.push(model === MODELS[provider][0] ? "default model" : model);
+  if (effort && effort !== "Default") parts.push(`${effort.toLowerCase()} effort`);
+  return [L("head", parts.join(" · ")), L("dim", `  ${WORKSPACE.path} · ${account}`)];
 }
 
 function sampleAgents(): Agent[] {
@@ -347,7 +429,8 @@ function sampleAgents(): Agent[] {
       account: "claude-personal",
       model: "Opus",
       effort: "High",
-      status: "working",
+      mode: "bypass",
+      status: "active",
       activity: "Editing src/pages/Dashboard.tsx",
       branch: "agent/dashboard-redesign",
       minutes: 12,
@@ -356,7 +439,7 @@ function sampleAgents(): Agent[] {
       approval: null,
       prompt: false,
       lines: [
-        ...claudeHeader("Opus", "High", "Personal"),
+        ...header("claude", "Opus", "High", "Personal"),
         L("in", "> Redesign the dashboard: clearer stat cards and a revenue chart"),
         L("tool", "● Read src/pages/Dashboard.tsx (182 lines)"),
         L("tool", "● Read src/components/StatCard.tsx"),
@@ -382,10 +465,10 @@ function sampleAgents(): Agent[] {
         { line: L("out", "  Polishing spacing and the empty state."), preview: 3 },
         { line: L("ok", "● Edit src/components/StatCard.tsx  +6 −2") },
         {
-          line: L("accent", "  Done. The dashboard is redesigned — have a look in Live Browser."),
-          status: "waiting_for_you",
-          activity: "Ready for your review",
-          finished: "Dashboard Redesign finished",
+          line: L("accent", "  Done. Want me to keep the old chart colours or switch to the new palette?"),
+          status: "waiting_for_user",
+          activity: "Asked which chart palette to keep",
+          finished: "Dashboard Redesign is asking you a question",
         },
       ],
     },
@@ -396,6 +479,7 @@ function sampleAgents(): Agent[] {
       account: "codex-personal",
       model: "Default",
       effort: "Medium",
+      mode: "bypass",
       status: "testing",
       activity: "Running pnpm test",
       branch: "agent/tests",
@@ -405,7 +489,7 @@ function sampleAgents(): Agent[] {
       approval: null,
       prompt: false,
       lines: [
-        ...codexHeader("Default", "Medium", "Personal"),
+        ...header("codex", "Default", "Medium", "Personal"),
         L("in", "› Add tests for the dashboard stat cards"),
         L("tool", "• Wrote src/components/StatCard.test.tsx"),
         L("tool", "• Running pnpm test"),
@@ -417,7 +501,7 @@ function sampleAgents(): Agent[] {
         { line: L("err", "  ✗ StatCard › shows the trend arrow") },
         {
           line: L("tool", "• The trend arrow test expects the old markup. Updating it."),
-          status: "working",
+          status: "active",
           activity: "Fixing a failing test",
         },
         { line: L("tool", "• Edited src/components/StatCard.test.tsx  +4 −3"), files: 4 },
@@ -425,7 +509,7 @@ function sampleAgents(): Agent[] {
         { line: L("ok", "  ✓ 14 passed (14)") },
         {
           line: L("accent", "  All 14 tests pass."),
-          status: "done",
+          status: "completed",
           activity: "14 tests passed",
           finished: "Dashboard Tests finished · 14 passed",
         },
@@ -438,7 +522,8 @@ function sampleAgents(): Agent[] {
       account: "claude-work",
       model: "Sonnet",
       effort: "Default",
-      status: "done",
+      mode: "plan",
+      status: "completed",
       activity: "Review complete · 2 suggestions",
       branch: "agent/review",
       minutes: 18,
@@ -447,7 +532,7 @@ function sampleAgents(): Agent[] {
       approval: null,
       prompt: false,
       lines: [
-        ...claudeHeader("Sonnet", "Default", "Work"),
+        ...header("claude", "Sonnet", "Default", "Work"),
         L("in", "> Review the open changes on agent/dashboard-redesign"),
         L("tool", "● Read 6 changed files"),
         L("out", "  Looks good. Two suggestions:"),
@@ -459,35 +544,82 @@ function sampleAgents(): Agent[] {
     },
     {
       id: "a4",
-      name: "Login Validation",
+      name: "Payments Webhook",
       provider: "claude",
       account: "claude-personal",
       model: "Sonnet",
       effort: "Medium",
-      status: "permission_required",
-      activity: "Wants to run pnpm add zod",
-      branch: "agent/login-validation",
+      mode: "bypass",
+      status: "waiting_for_permission",
+      activity: "Wants to read STRIPE_SECRET_KEY",
+      branch: "agent/payments-webhook",
       minutes: 2,
       files: 1,
       cursor: 0,
-      approval: { title: "Install zod", command: "pnpm add zod", reason: "Installing packages · Network access" },
+      // Bypass runs edits, commands, installs and pushes without asking. Secrets still ask.
+      approval: {
+        title: "Read a secret",
+        command: "STRIPE_SECRET_KEY · .env.local",
+        reason: "Accessing credentials and secrets · always asks, even in Bypass",
+      },
       prompt: false,
       lines: [
-        ...claudeHeader("Sonnet", "Medium", "Personal"),
-        L("in", "> Validate the login form and show inline errors"),
-        L("tool", "● Read src/pages/Login.tsx"),
-        L("out", "  I'll use zod for the schema."),
-        L("warn", "● Bash pnpm add zod — waiting for your approval"),
+        ...header("claude", "Sonnet", "Medium", "Personal"),
+        L("in", "> Verify Stripe webhooks for paid orders"),
+        L("tool", "● Read src/api/orders.ts"),
+        L("ok", "● Bash pnpm add stripe  + stripe 19.1.0"),
+        L("out", "  I need the webhook signing secret to verify events."),
+        L("warn", "● Read .env.local (STRIPE_SECRET_KEY) — waiting for you"),
       ],
       script: [
-        { line: L("ok", "  + zod 4.1.0"), status: "working", activity: "Installing zod" },
-        { line: L("tool", "● Write src/lib/loginSchema.ts  +18"), activity: "Writing loginSchema.ts", files: 2 },
-        { line: L("ok", "● Edit src/pages/Login.tsx  +29 −6"), files: 3 },
+        { line: L("tool", "● Write src/api/stripeWebhook.ts  +54"), activity: "Writing stripeWebhook.ts", files: 2 },
+        { line: L("tool", "● Bash pnpm test webhook"), status: "testing", activity: "Running pnpm test" },
+        { line: L("ok", "  ✓ 6 passed (6)") },
         {
-          line: L("accent", "  Done. The login form validates and shows inline errors."),
-          status: "done",
-          activity: "Validation added",
-          finished: "Login Validation finished",
+          line: L("accent", "  Done. Paid orders are confirmed by signed Stripe webhooks."),
+          status: "completed",
+          activity: "Webhook verified",
+          finished: "Payments Webhook finished",
+        },
+      ],
+    },
+    {
+      id: "a5",
+      name: "README Screenshots",
+      provider: "gemini",
+      account: "gemini-personal",
+      model: "Auto (default)",
+      effort: "",
+      mode: "bypass",
+      status: "waiting_for_dependency",
+      activity: "Waiting for Dashboard Redesign",
+      branch: "agent/readme-shots",
+      minutes: 1,
+      files: 0,
+      cursor: 0,
+      approval: null,
+      prompt: false,
+      after: "a1",
+      lines: [
+        ...header("gemini", "Auto (default)", "", "Personal"),
+        L("in", "> Refresh the README screenshots once the dashboard redesign lands"),
+        L("tool", "✦ Read README.md"),
+        L("dim", "  Waiting for Dashboard Redesign to finish."),
+      ],
+      script: [
+        {
+          line: L("tool", "✦ Open http://localhost:3000 in a headless browser"),
+          status: "active",
+          activity: "Capturing the dashboard",
+          preview: 3,
+        },
+        { line: L("tool", "✦ Write docs/dashboard.png"), files: 1 },
+        { line: L("ok", "✦ Edit README.md  +3 −3"), files: 2 },
+        {
+          line: L("accent", "  Updated the README screenshots."),
+          status: "completed",
+          activity: "Screenshots updated",
+          finished: "README Screenshots finished",
         },
       ],
     },
@@ -504,6 +636,16 @@ const DEV_SERVER_LINES: Line[] = [
   L("dim", "  ➜  press h + enter to show help"),
 ];
 
+function sampleFavorites(): Favorite[] {
+  return [
+    { key: "pin-browser", scope: "pin", kind: "browser", title: DEV_URL, act: "browser" },
+    { key: "pin-account", scope: "pin", kind: "account", title: "Claude Code · Personal", act: "menu:accounts" },
+    { key: "fav-t-a1", scope: "favorite", kind: "agent", title: "Dashboard Redesign", act: "tab:t-a1" },
+    { key: "fav-t-ps", scope: "favorite", kind: "terminal", title: "dev server", act: "tab:t-ps" },
+    { key: "fav-cmd-test", scope: "favorite", kind: "command", title: "pnpm test", act: "fav-run:pnpm test" },
+  ];
+}
+
 export function initialState(): State {
   const agents = sampleAgents();
   const state: State = {
@@ -511,14 +653,15 @@ export function initialState(): State {
     frames: [
       { id: "f1", tabs: ["t-a1", "t-a3"], active: "t-a1" },
       { id: "f2", tabs: ["t-a2", "t-a4"], active: "t-a2" },
-      { id: "f3", tabs: ["t-ps"], active: "t-ps" },
+      { id: "f3", tabs: ["t-ps", "t-a5"], active: "t-ps" },
     ],
     tabs: {
       "t-a1": { id: "t-a1", kind: "agent", agent: "a1", title: "Dashboard Redesign" },
       "t-a3": { id: "t-a3", kind: "agent", agent: "a3", title: "Code Review" },
       "t-a2": { id: "t-a2", kind: "agent", agent: "a2", title: "Dashboard Tests" },
-      "t-a4": { id: "t-a4", kind: "agent", agent: "a4", title: "Login Validation" },
+      "t-a4": { id: "t-a4", kind: "agent", agent: "a4", title: "Payments Webhook" },
       "t-ps": { id: "t-ps", kind: "terminal", title: "PowerShell · dev server", lines: DEV_SERVER_LINES.slice() },
+      "t-a5": { id: "t-a5", kind: "agent", agent: "a5", title: "README Screenshots" },
     },
     agents: Object.fromEntries(agents.map((agent) => [agent.id, agent])),
     order: agents.map((agent) => agent.id),
@@ -528,6 +671,9 @@ export function initialState(): State {
     layout: "auto",
     menu: null,
     launcher: null,
+    closing: null,
+    picker: null,
+    mode: "bypass",
     contextTab: "runs",
     opsTab: "runs",
     run: null,
@@ -536,10 +682,18 @@ export function initialState(): State {
     voice: { open: false, state: "ready", heard: "", reply: "" },
     palette: { q: "", sel: 0 },
     toast: null,
+    notes: [
+      { id: 2, text: "Code Review finished · 2 suggestions", tone: "done", agent: "a3" },
+      { id: 1, text: "Payments Webhook needs you: read a secret", tone: "waiting", agent: "a4" },
+    ],
+    unread: 1,
     nudge: null,
     nudged: [],
+    favorites: sampleFavorites(),
+    nav: { entries: ["code:t-a1"], index: 0 },
     preview: 0,
     railOpen: true,
+    idleOpen: false,
     mobile: false,
     tick: 0,
     seq: 10,
@@ -570,16 +724,39 @@ export function frameOfTab(state: State, tabId: string): Frame | undefined {
 export function paneCount(state: State): number {
   return Object.keys(state.tabs).length;
 }
-export function counts(state: State) {
-  const list = agentsList(state);
-  return {
-    agents: list.length,
-    working: list.filter(isWorking).length,
-    needs: list.filter(needsYou).length,
-    done: list.filter((agent) => agent.status === "done").length,
-    idle: list.filter((agent) => agent.status === "idle").length,
-  };
+/** The tab the visitor is looking at in Code. */
+export function focusedTab(state: State): Tab | undefined {
+  const frame = state.frames.find((f) => f.id === state.focus);
+  return frame ? state.tabs[frame.active] : undefined;
 }
+
+export interface Counts {
+  agents: number;
+  needs: number;
+  working: number;
+  waiting: number;
+  idle: number;
+  done: number;
+  failed: number;
+}
+/** Counts per filter, over agents of every provider (protocol agentCounts). */
+export function counts(state: State): Counts {
+  const c: Counts = { agents: 0, needs: 0, working: 0, waiting: 0, idle: 0, done: 0, failed: 0 };
+  for (const agent of agentsList(state)) {
+    c.agents += 1;
+    const filter = agentFilter(agent);
+    if (filter === "needs_you") c.needs += 1;
+    else c[filter] += 1;
+  }
+  return c;
+}
+/** Agents in one filter group. */
+export function agentsIn(state: State, filter: FleetFilter): Agent[] {
+  const list = agentsList(state);
+  return filter === "all" ? list : list.filter((agent) => agentFilter(agent) === filter);
+}
+export { AGENT_FILTERS };
+
 export interface Run {
   id: string;
   name: string;
@@ -595,22 +772,28 @@ export interface Run {
 export function runs(state: State): Run[] {
   const fromAgents: Run[] = agentsList(state)
     .filter((agent) => !agent.prompt)
-    .map((agent) => ({
-      id: `run-${agent.id}`,
-      name: agent.name,
-      kind: "agent",
-      where: `${WORKSPACE.name} · ${agent.branch} · ${PROVIDER_NAME[agent.provider]} · ${accountLabel(state, agent.account)}`,
-      action: agent.activity,
-      status: needsYou(agent)
-        ? "Blocked"
-        : agent.status === "done"
-          ? "Succeeded"
-          : agent.status === "idle"
-            ? "Queued"
-            : "Running",
-      duration: `${agent.minutes}m ${String((state.tick * 7) % 60).padStart(2, "0")}s`,
-      agent: agent.id,
-    }));
+    .map((agent) => {
+      const filter = agentFilter(agent);
+      return {
+        id: `run-${agent.id}`,
+        name: agent.name,
+        kind: "agent",
+        where: `${WORKSPACE.name} · ${agent.branch} · ${PROVIDER_NAME[agent.provider]} · ${accountLabel(state, agent.account)}`,
+        action: agent.activity,
+        status:
+          filter === "needs_you"
+            ? "Blocked"
+            : filter === "done"
+              ? "Succeeded"
+              : filter === "failed"
+                ? "Failed"
+                : filter === "idle" || filter === "waiting"
+                  ? "Queued"
+                  : "Running",
+        duration: `${agent.minutes}m ${String((state.tick * 7) % 60).padStart(2, "0")}s`,
+        agent: agent.id,
+      };
+    });
   return [
     ...fromAgents,
     {
@@ -653,7 +836,9 @@ function placeTab(state: State, tab: Tab, own = true) {
   } else {
     const frame = state.frames.find((f) => f.id === state.focus) ?? state.frames[0];
     if (!frame) {
-      state.frames.push({ id: id(state, "f"), tabs: [tab.id], active: tab.id });
+      const fresh: Frame = { id: id(state, "f"), tabs: [tab.id], active: tab.id };
+      state.frames.push(fresh);
+      state.focus = fresh.id;
     } else {
       frame.tabs.push(tab.id);
       frame.active = tab.id;
@@ -664,9 +849,18 @@ function placeTab(state: State, tab: Tab, own = true) {
   state.maximized = false;
 }
 
-export function go(state: State, surface: Surface) {
-  state.surface = surface;
+/** Every floating layer at once: menus, the launcher, KalVoice, Smart Close and the account picker. */
+export function closeOverlays(state: State) {
   state.menu = null;
+  state.launcher = null;
+  state.closing = null;
+  state.picker = null;
+  state.voice.open = false;
+}
+
+export function go(state: State, surface: Surface) {
+  closeOverlays(state);
+  state.surface = surface;
 }
 
 export function focusTab(state: State, tabId: string) {
@@ -677,29 +871,105 @@ export function focusTab(state: State, tabId: string) {
   state.surface = "code";
 }
 
+/** Opens an agent's terminal. An agent kept running after its pane closed gets a pane again. */
 export function focusAgent(state: State, agentId: string) {
+  const agent = state.agents[agentId];
+  if (!agent) return;
   const tab = tabOfAgent(state, agentId);
   if (tab) focusTab(state, tab);
+  else placeTab(state, { id: `t-${agentId}`, kind: "agent", agent: agentId, title: agent.name });
 }
 
 /** Needs You: jump to the first agent that is waiting on the visitor. */
 export function jumpToNeeds(state: State): boolean {
   const agent = agentsList(state).find(needsYou);
   if (!agent) return false;
+  closeOverlays(state);
   focusAgent(state, agent.id);
   return true;
 }
 
+// ── Navigation: Back / Forward and the breadcrumb ──────────────────────────────────────────
+
+/** Where the visitor is: a page, or a tab in Code. */
+export function locationOf(state: State): string {
+  if (state.surface !== "code") return state.surface;
+  const tab = focusedTab(state);
+  return tab ? `code:${tab.id}` : "code";
+}
+
+/** Records a visit after an action, dropping any forward history (like a browser). */
+export function recordVisit(state: State) {
+  const here = locationOf(state);
+  const { entries, index } = state.nav;
+  if (entries[index] === here) return;
+  const next = entries.slice(0, index + 1);
+  next.push(here);
+  state.nav = { entries: next.slice(-30), index: Math.min(next.length, 30) - 1 };
+}
+
+function restore(state: State, location: string): boolean {
+  if (location.startsWith("code:")) {
+    const tabId = location.slice(5);
+    if (!state.tabs[tabId]) return false;
+    closeOverlays(state);
+    focusTab(state, tabId);
+    return true;
+  }
+  go(state, location as Surface);
+  return true;
+}
+
+/** Back (Alt ←) or Forward (Alt →). Visits whose pane has closed are skipped. */
+export function navStep(state: State, delta: -1 | 1): boolean {
+  let index = state.nav.index + delta;
+  while (index >= 0 && index < state.nav.entries.length) {
+    if (restore(state, state.nav.entries[index] as string)) {
+      state.nav.index = index;
+      return true;
+    }
+    index += delta;
+  }
+  return false;
+}
+export function canNav(state: State, delta: -1 | 1): boolean {
+  const index = state.nav.index + delta;
+  return index >= 0 && index < state.nav.entries.length;
+}
+/** Jumps to one entry of Recent navigation. */
+export function navTo(state: State, index: number) {
+  const location = state.nav.entries[index];
+  if (location && restore(state, location)) state.nav.index = index;
+}
+export function locationLabel(state: State, location: string): string {
+  if (location.startsWith("code:")) {
+    const tab = state.tabs[location.slice(5)];
+    if (!tab) return "Closed pane";
+    return tab.agent ? (state.agents[tab.agent]?.name ?? tab.title) : tab.title;
+  }
+  if (location === "settings") return "Settings";
+  return SURFACES.find((s) => s.id === location)?.label ?? "Code";
+}
+
+// ── Launching ───────────────────────────────────────────────────────────────────────────────
+
+function defaultAccount(state: State, provider: ProviderId): Account | undefined {
+  return (
+    state.accounts.find((a) => a.provider === provider && a.isDefault) ??
+    state.accounts.find((a) => a.provider === provider)
+  );
+}
+
 export function openLauncher(state: State, provider: ProviderId = "claude") {
-  const account = state.accounts.find((a) => a.provider === provider && a.isDefault) ?? state.accounts[0];
+  const account = defaultAccount(state, provider);
+  closeOverlays(state);
   state.launcher = {
     provider,
     account: account?.id ?? "",
-    model: provider === "claude" ? "Sonnet" : "Default",
-    effort: "Default",
+    model: MODELS[provider][0] as string,
+    effort: EFFORTS[provider].length ? "Default" : "",
     count: 1,
   };
-  state.menu = null;
 }
 
 export function chooseAccount(state: State, accountId: string) {
@@ -709,21 +979,35 @@ export function chooseAccount(state: State, accountId: string) {
   state.launcher.account = accountId;
   state.launcher.provider = account.provider;
   if (changed) {
-    state.launcher.model = account.provider === "claude" ? "Sonnet" : "Default";
-    state.launcher.effort = "Default";
+    state.launcher.model = MODELS[account.provider][0] as string;
+    state.launcher.effort = EFFORTS[account.provider].length ? "Default" : "";
   }
 }
 
-function freshAgent(state: State, provider: ProviderId, accountId: string, model: string, effort: string): Agent {
-  const account = accountLabel(state, accountId);
+/** A low account (under 20% left) and a same-provider account with more room: the app's suggestion. */
+export function accountSuggestion(state: State, accountId: string): Account | null {
+  const account = accountOf(state, accountId);
+  const left = account?.windows[0]?.left ?? 100;
+  if (!account || left >= 20) return null;
+  return (
+    state.accounts
+      .filter((a) => a.provider === account.provider && a.id !== account.id)
+      .sort((a, b) => (b.windows[0]?.left ?? 0) - (a.windows[0]?.left ?? 0))[0] ?? null
+  );
+}
+
+function freshAgent(state: State, spec: Launcher, mode: Mode): Agent {
+  const account = accountLabel(state, spec.account);
   const agentId = id(state, "a");
   return {
     id: agentId,
-    name: PROVIDER_NAME[provider],
-    provider,
-    account: accountId,
-    model,
-    effort,
+    // The app names a new agent "New agent" until its first prompt gives it a task name.
+    name: "New agent",
+    provider: spec.provider,
+    account: spec.account,
+    model: spec.model,
+    effort: spec.effort,
+    mode,
     status: "starting",
     activity: "Starting",
     branch: `agent/${agentId}`,
@@ -732,10 +1016,8 @@ function freshAgent(state: State, provider: ProviderId, accountId: string, model
     cursor: 0,
     approval: null,
     prompt: true,
-    lines: provider === "claude" ? claudeHeader(model, effort, account) : codexHeader(model, effort, account),
-    script: [
-      { status: "idle", activity: "Ready for a prompt", line: L("dim", "  Type a prompt below and press Enter.") },
-    ],
+    lines: header(spec.provider, spec.model, spec.effort, account),
+    script: [{ status: "idle", activity: READY_ACTIVITY, line: L("dim", "  Type a prompt below and press Enter.") }],
   };
 }
 
@@ -744,8 +1026,9 @@ export function launch(state: State): string[] {
   const l = state.launcher;
   if (!l) return [];
   const created: string[] = [];
-  for (let i = 0; i < l.count; i++) {
-    const agent = freshAgent(state, l.provider, l.account, l.model, l.effort);
+  const count = Math.max(1, Math.min(MAX_AGENTS_PER_LAUNCH, l.count));
+  for (let i = 0; i < count; i++) {
+    const agent = freshAgent(state, l, state.mode);
     state.agents[agent.id] = agent;
     state.order.push(agent.id);
     placeTab(state, { id: `t-${agent.id}`, kind: "agent", agent: agent.id, title: agent.name });
@@ -756,9 +1039,35 @@ export function launch(state: State): string[] {
   return created;
 }
 
+/**
+ * "New like this": a fresh coding session with the same provider, account (or the one chosen in the
+ * header account picker), model, effort and permissions. The source keeps running in its pane.
+ */
+export function newLikeThis(state: State, agentId: string, accountId?: string): string | null {
+  const source = state.agents[agentId];
+  if (!source) return null;
+  const sourceTab = tabOfAgent(state, agentId);
+  if (sourceTab) {
+    const frame = frameOfTab(state, sourceTab);
+    if (frame) state.focus = frame.id;
+  }
+  const spec: Launcher = {
+    provider: source.provider,
+    account: accountId ?? source.account,
+    model: source.model,
+    effort: source.effort,
+    count: 1,
+  };
+  const agent = freshAgent(state, spec, source.mode);
+  state.agents[agent.id] = agent;
+  state.order.push(agent.id);
+  placeTab(state, { id: `t-${agent.id}`, kind: "agent", agent: agent.id, title: agent.name });
+  state.launches += 1;
+  return agent.id;
+}
+
 export function openTerminal(state: State) {
-  state.launcher = null;
-  state.menu = null;
+  closeOverlays(state);
   placeTab(state, {
     id: id(state, "t"),
     kind: "terminal",
@@ -769,12 +1078,12 @@ export function openTerminal(state: State) {
 }
 
 export function openBrowser(state: State, url = DEV_URL) {
-  state.launcher = null;
-  state.menu = null;
+  closeOverlays(state);
   const existing = Object.values(state.tabs).find((tab) => tab.kind === "browser");
   if (existing) {
     existing.url = url;
     focusTab(state, existing.id);
+    state.maximized = false;
     return;
   }
   // Live Browser opens on the right, beside the agent building the app.
@@ -796,7 +1105,7 @@ export function openBrowser(state: State, url = DEV_URL) {
 
 /** Opens the current workspace's canonical run and service context beside its coding terminals. */
 export function openOperationsContext(state: State) {
-  state.menu = null;
+  closeOverlays(state);
   const existing = Object.values(state.tabs).find((tab) => tab.widget === "operations");
   if (existing) {
     focusTab(state, existing.id);
@@ -813,7 +1122,7 @@ export function openOperationsContext(state: State) {
 }
 
 export function openWidget(state: State, widget: "approvals" | "agents") {
-  state.menu = null;
+  closeOverlays(state);
   placeTab(
     state,
     {
@@ -826,14 +1135,11 @@ export function openWidget(state: State, widget: "approvals" | "agents") {
   );
 }
 
-export function closeTab(state: State, tabId: string) {
+/** Removes a pane. Its agent, if any, keeps running in the background (Smart Close: Keep Running). */
+export function detachTab(state: State, tabId: string) {
   const tab = state.tabs[tabId];
   if (!tab) return;
   delete state.tabs[tabId];
-  if (tab.agent) {
-    delete state.agents[tab.agent];
-    state.order = state.order.filter((agentId) => agentId !== tab.agent);
-  }
   for (const frame of state.frames) {
     if (!frame.tabs.includes(tabId)) continue;
     const index = frame.tabs.indexOf(tabId);
@@ -843,6 +1149,56 @@ export function closeTab(state: State, tabId: string) {
   state.frames = state.frames.filter((frame) => frame.tabs.length > 0);
   if (!state.frames.some((frame) => frame.id === state.focus)) state.focus = state.frames[0]?.id ?? "";
   if (state.frames.length <= 1) state.maximized = false;
+}
+
+/** Closes a pane and ends what ran in it (Smart Close: Stop and Close). */
+export function closeTab(state: State, tabId: string) {
+  const tab = state.tabs[tabId];
+  if (!tab) return;
+  detachTab(state, tabId);
+  if (tab.agent) {
+    delete state.agents[tab.agent];
+    state.order = state.order.filter((agentId) => agentId !== tab.agent);
+    state.favorites = state.favorites.filter((f) => f.act !== `tab:${tabId}`);
+  }
+}
+
+/** Whether closing this pane would interrupt work: a busy or waiting agent, or a running command. */
+export function hasActiveWork(state: State, tabId: string): boolean {
+  const tab = state.tabs[tabId];
+  if (!tab) return false;
+  if (tab.agent) {
+    const agent = state.agents[tab.agent];
+    if (!agent) return false;
+    const filter = agentFilter(agent);
+    return filter === "working" || filter === "needs_you" || filter === "waiting";
+  }
+  return tab.kind === "terminal" && !tab.idle;
+}
+
+/** Smart Close: closing active work asks first; anything else closes at once. */
+export function requestClose(state: State, tabId: string) {
+  closeOverlays(state);
+  if (hasActiveWork(state, tabId)) state.closing = tabId;
+  else closeTab(state, tabId);
+}
+export function resolveClose(state: State, choice: "cancel" | "keep" | "stop") {
+  const tabId = state.closing;
+  state.closing = null;
+  if (!tabId || choice === "cancel") return;
+  const tab = state.tabs[tabId];
+  if (choice === "keep") {
+    detachTab(state, tabId);
+    if (tab)
+      toast(
+        state,
+        `${tab.agent ? (state.agents[tab.agent]?.name ?? tab.title) : tab.title} keeps running.`,
+        "info",
+        tab.agent,
+      );
+  } else {
+    closeTab(state, tabId);
+  }
 }
 
 /** KalTidy "Stop idle terminals": idle shells close; agents and busy terminals stay. */
@@ -855,10 +1211,14 @@ export function tidyIdle(state: State): { stopped: number; kept: number } {
 
 /** KalTidy "Clear finished": finished agents' terminals close. */
 export function tidyFinished(state: State): number {
-  const done = agentsList(state).filter((agent) => agent.status === "done");
+  const done = agentsList(state).filter(isDone);
   for (const agent of done) {
     const tab = tabOfAgent(state, agent.id);
     if (tab) closeTab(state, tab);
+    else {
+      delete state.agents[agent.id];
+      state.order = state.order.filter((agentId) => agentId !== agent.id);
+    }
   }
   return done.length;
 }
@@ -867,30 +1227,49 @@ export function answerApproval(state: State, agentId: string, approve: boolean) 
   const agent = state.agents[agentId];
   if (!agent?.approval) return;
   agent.approval = null;
+  agent.cursor = 0;
   if (approve) {
-    agent.lines.push(L("ok", "  ✓ Approved once"));
-    agent.status = "working";
-    agent.activity = "Installing zod";
+    agent.lines.push(L("ok", "  ✓ Allowed once"));
+    agent.status = "active";
+    agent.activity = "Verifying webhook signatures";
   } else {
-    agent.lines.push(L("err", "  ✗ Denied. Claude will validate without a new dependency."));
+    agent.lines.push(L("err", "  ✗ Denied. The secret stays private; Claude will leave a placeholder."));
     agent.script = [
       {
-        line: L("ok", "● Edit src/pages/Login.tsx  +24 −6"),
-        status: "working",
-        activity: "Writing validation by hand",
+        line: L("ok", "● Write src/api/stripeWebhook.ts  +48 (reads process.env.STRIPE_SECRET_KEY)"),
+        status: "active",
+        activity: "Writing stripeWebhook.ts",
         files: 2,
       },
       {
-        line: L("accent", "  Done, without new dependencies."),
-        status: "done",
-        activity: "Validation added",
-        finished: "Login Validation finished",
+        line: L("accent", "  Done. Add STRIPE_SECRET_KEY to .env.local and the webhook verifies events."),
+        status: "completed",
+        activity: "Webhook added",
+        finished: "Payments Webhook finished",
       },
     ];
-    agent.cursor = 0;
-    agent.status = "working";
-    agent.activity = "Writing validation by hand";
+    agent.status = "active";
+    agent.activity = "Writing without the secret";
   }
+}
+
+/** The app's task name for a first prompt: a few meaningful words, title-cased. */
+export function taskName(prompt: string): string {
+  const samples: Record<string, string> = {
+    "add a dark mode toggle": "Dark Mode Toggle",
+    "write tests for login": "Login Tests",
+    "fix the failing build": "Build Repair",
+  };
+  const known = samples[prompt.trim().toLowerCase()];
+  if (known) return known;
+  const skip = new Set(["a", "an", "the", "to", "for", "of", "and", "please", "can", "you", "my", "in", "on", "with"]);
+  const words = prompt
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/\s+/)
+    .filter((word) => word && !skip.has(word.toLowerCase()))
+    .slice(0, 4);
+  if (!words.length) return "Project Update";
+  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(" ");
 }
 
 /** A prompt typed into a fresh demo agent becomes a short, honest simulated run. */
@@ -898,24 +1277,31 @@ export function promptAgent(state: State, agentId: string, text: string) {
   const agent = state.agents[agentId];
   const prompt = text.trim().slice(0, 160);
   if (!agent || !prompt) return;
-  const claude = agent.provider === "claude";
   if (agent.prompt) {
-    // Scripted demo examples only; production generates its task titles in Rust.
-    const sampleNames: Record<string, string> = {
-      "add a dark mode toggle": "Dark Mode Toggle",
-      "write tests for login": "Login Tests",
-      "fix the failing build": "Build Repair",
-    };
-    agent.name = sampleNames[prompt.toLowerCase()] ?? "Project Update";
+    agent.name = taskName(prompt);
     const tab = tabOfAgent(state, agent.id);
     if (tab && state.tabs[tab]) state.tabs[tab].title = agent.name;
   }
   agent.prompt = false;
-  agent.lines.push(L("in", `${claude ? ">" : "›"} ${prompt}`));
-  agent.status = "working";
+  agent.lines.push(L("in", `${PROMPT_MARK[agent.provider]} ${prompt}`));
+  agent.status = "active";
   agent.activity = "Reading the project";
   agent.cursor = 0;
-  const t = claude ? "●" : "•";
+  const t = TOOL_MARK[agent.provider];
+  if (agent.mode === "plan") {
+    agent.script = [
+      { line: L("tool", `${t} Read src/App.tsx, src/pages/Dashboard.tsx`), activity: "Reading the project" },
+      { line: L("out", "  Plan mode is read-only. Here is the plan:"), activity: "Planning" },
+      { line: L("out", "  1. Add the change in src/App.tsx  2. Cover it with a test") },
+      {
+        line: L("accent", "  Plan ready. Switch to Bypass to let the agent make it."),
+        status: "waiting_for_user",
+        activity: "Plan ready for your review",
+        finished: `${agent.name}: plan ready`,
+      },
+    ];
+    return;
+  }
   agent.script = [
     { line: L("tool", `${t} Read src/App.tsx, src/pages/Dashboard.tsx`), activity: "Reading the project" },
     { line: L("out", "  Planning the change…"), activity: "Planning" },
@@ -927,7 +1313,7 @@ export function promptAgent(state: State, agentId: string, text: string) {
         "accent",
         "  Done — in this demo the work is simulated. In KalCode it's your real agent, on your own account.",
       ),
-      status: "done",
+      status: "completed",
       activity: "Done",
       finished: `${agent.name} finished`,
     },
@@ -970,16 +1356,48 @@ export function runShell(state: State, tabId: string, text: string) {
   if (cmd !== "pnpm dev") tab.idle = tab.idle ?? true;
 }
 
+/** Runs a saved command in a fresh terminal (a command favorite). */
+export function runCommand(state: State, command: string) {
+  openTerminal(state);
+  const tab = focusedTab(state);
+  if (tab) runShell(state, tab.id, command);
+}
+
 export function toast(state: State, text: string, tone: Toast["tone"] = "info", agent?: string) {
   state.seq += 1;
-  state.toast = { id: state.seq, text, tone, agent };
+  const entry: Toast = { id: state.seq, text, tone, agent };
+  state.toast = entry;
+  state.notes = [entry, ...state.notes].slice(0, 8);
+  state.unread += 1;
+}
+
+// ── Favorites and pins ──────────────────────────────────────────────────────────────────────
+
+export function favoriteKey(scope: Favorite["scope"], tabId: string): string {
+  return `${scope === "pin" ? "pin" : "fav"}-${tabId}`;
+}
+export function isSaved(state: State, scope: Favorite["scope"], tabId: string): boolean {
+  return state.favorites.some((f) => f.key === favoriteKey(scope, tabId));
+}
+/** Add Favorite / Pin globally, or remove it again (desktop: FavoriteActions). */
+export function toggleFavorite(state: State, tabId: string, scope: Favorite["scope"]) {
+  const key = favoriteKey(scope, tabId);
+  if (state.favorites.some((f) => f.key === key)) {
+    state.favorites = state.favorites.filter((f) => f.key !== key);
+    return;
+  }
+  const tab = state.tabs[tabId];
+  if (!tab) return;
+  const title = tab.agent ? (state.agents[tab.agent]?.name ?? tab.title) : tab.title;
+  const kind: Favorite["kind"] = tab.kind === "agent" ? "agent" : tab.kind === "browser" ? "browser" : "terminal";
+  state.favorites.push({ key, scope, kind, title, act: `tab:${tabId}` });
 }
 
 const NUDGES: Record<Nudge["id"], Nudge> = {
   "first-agent": {
     id: "first-agent",
-    title: "Want to run this with your real Claude Code account?",
-    body: "KalCode launches your own Claude Code and Codex, signed in with your accounts.",
+    title: "Run this with your real accounts.",
+    body: "KalCode launches your own Claude Code, Codex, Gemini CLI and Cursor, signed in as you.",
     cta: "get",
   },
   "big-workspace": {
@@ -997,7 +1415,7 @@ const NUDGES: Record<Nudge["id"], Nudge> = {
   accounts: {
     id: "accounts",
     title: "Connect your own accounts.",
-    body: "Sign in to Claude Code and Codex from KalCode. Your AI usage stays on your account.",
+    body: "Sign in to each provider from KalCode. Your AI usage stays on your account.",
     cta: "account",
   },
 };
@@ -1021,9 +1439,10 @@ export function tick(state: State): string[] {
   const finished: string[] = [];
   for (const agent of agentsList(state)) {
     if (agent.approval || (agent.prompt && agent.status !== "starting")) continue;
-    if (agent.status === "done" || agent.status === "idle" || agent.status === "waiting_for_you") {
-      if (agent.cursor >= agent.script.length) continue;
-    }
+    if (agent.cursor >= agent.script.length) continue;
+    // A waiting agent starts when the agent it depends on stops working.
+    const dependency = agent.after ? state.agents[agent.after] : undefined;
+    if (dependency && isWorking(dependency)) continue;
     // Agents take turns so the workspace breathes rather than flickers.
     if ((state.tick + agent.id.length + agent.cursor) % 2 === 1 && agent.status !== "starting") continue;
     const beat = agent.script[agent.cursor];
@@ -1037,7 +1456,7 @@ export function tick(state: State): string[] {
     if (beat.approval) agent.approval = beat.approval;
     if (beat.finished) {
       finished.push(agent.id);
-      toast(state, beat.finished, agent.status === "done" ? "done" : "waiting", agent.id);
+      toast(state, beat.finished, isDone(agent) ? "done" : "waiting", agent.id);
     }
     if (agent.lines.length > 60) agent.lines.splice(2, agent.lines.length - 60);
   }
@@ -1055,7 +1474,20 @@ export const VOICE_PHRASES = [
   "Go to settings",
 ];
 
-const NUMBERS: Record<string, number> = { one: 1, a: 1, an: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+const NUMBERS: Record<string, number> = {
+  one: 1,
+  a: 1,
+  an: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+};
 
 /**
  * A KalVoice command, interpreted the way the demo can honour it. Returns the spoken-style reply.
@@ -1063,9 +1495,18 @@ const NUMBERS: Record<string, number> = { one: 1, a: 1, an: 1, two: 2, three: 3,
  */
 export function runVoice(state: State, phrase: string): string {
   const p = phrase.toLowerCase().replace(/[.?!]/g, "").trim();
-  const launchMatch = p.match(/(?:open|start|launch)\s+(\w+)?\s*(claude(?: code)?|codex)\s+(?:terminals?|agents?)/);
+  const launchMatch = p.match(
+    /(?:open|start|launch)\s+(\w+)?\s*(claude(?: code)?|codex|gemini(?: cli)?|cursor)\s+(?:terminals?|agents?)/,
+  );
   if (launchMatch) {
-    const provider: ProviderId = launchMatch[2]?.startsWith("codex") ? "codex" : "claude";
+    const word = launchMatch[2] ?? "";
+    const provider: ProviderId = word.startsWith("codex")
+      ? "codex"
+      : word.startsWith("gemini")
+        ? "gemini"
+        : word.startsWith("cursor")
+          ? "cursor"
+          : "claude";
     const raw = launchMatch[1] ?? "one";
     const n = Math.min(MAX_AGENTS_PER_LAUNCH, NUMBERS[raw] ?? (Number(raw) || 1));
     openLauncher(state, provider);
@@ -1079,7 +1520,7 @@ export function runVoice(state: State, phrase: string): string {
     if (waiting.length === 0) return "Nothing needs you right now.";
     jumpToNeeds(state);
     const first = waiting[0] as Agent;
-    return `${first.name} needs you: ${first.activity.toLowerCase()}.`;
+    return `${first.name} needs you: ${first.activity.charAt(0).toLowerCase()}${first.activity.slice(1)}.`;
   }
   if (/fleet|my agents|show (the )?agents/.test(p)) {
     go(state, "dashboard");

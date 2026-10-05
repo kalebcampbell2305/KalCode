@@ -12,6 +12,7 @@ import { accountFullLabel, accountName, sortAccounts } from "../../surfaces/prov
 import {
   type AccountUsageState,
   LOW_USAGE_PERCENT,
+  primaryUsageLabel,
   resetsIn,
   type UsageWindow,
   usageSummary,
@@ -77,7 +78,7 @@ export function AccountUsageCenter() {
     : chipAccount
       ? accountCenterStatus(chipAccount, model.checking.has(chipAccount.id), model.validationErrors.get(chipAccount.id))
       : null;
-  // A ready account shows its canonical usage on the chip ("64% left"); anything else, its state.
+  // A ready account shows its canonical WEEKLY usage on the chip ("64% left"); anything else, its state.
   const fallbackChipUsage = useAccountUsage(chipAccount?.id);
   const chipUsage = canonicalChip?.usage ?? fallbackChipUsage;
   const chipSummary = usageSummary(chipUsage);
@@ -166,7 +167,13 @@ export function AccountUsageCenter() {
           aria-label="Account and usage center"
           title={
             chipAccount
-              ? `${accountFullLabel(chipAccount)} · ${focusedAccount ? "Current session" : "New agents"}`
+              ? [
+                  accountFullLabel(chipAccount),
+                  focusedAccount ? "Current session" : "New agents",
+                  chipStatus?.label === chipSummary.short ? primaryUsageLabel(chipUsage) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
               : "Accounts & usage"
           }
           data-tone={chipStatus?.tone ?? (model.loadError || focused ? "danger" : undefined)}

@@ -12,6 +12,8 @@ import {
 import { expect, test } from "@playwright/test";
 
 const usd = (value: number) => `$${value.toLocaleString("en-US")}`;
+/** Free activates without payment ("Start free"); paid plans go to checkout ("Check out now"). */
+const ctaLabel = (plan: (typeof PLANS)[number]) => (plan.price.monthlyUsd === 0 ? "Start free" : "Check out now");
 
 test.describe("pricing", () => {
   test("shows every plan's monthly price, yearly price and savings from the catalog", async ({ page }) => {
@@ -81,7 +83,7 @@ test.describe("pricing", () => {
       await expect(card).toContainText(
         `or ${formatPrice(plan, "year")}${formatInterval("year")} · save ${usd(yearlySavingsUsd(plan))}`,
       );
-      await expect(card.getByRole("link", { name: /CHECK OUT NOW/ })).toHaveAttribute(
+      await expect(card.getByRole("link", { name: `${ctaLabel(plan)} with ${plan.name}` })).toHaveAttribute(
         "href",
         `/account?plan=${plan.id}&interval=month`,
       );
@@ -89,10 +91,13 @@ test.describe("pricing", () => {
     await context.close();
   });
 
-  test("CHECK OUT NOW carries the plan and the selected interval", async ({ page }) => {
+  test("each plan's button carries the plan and the selected interval", async ({ page }) => {
     await page.goto("/pricing");
-    const ctas = page.getByRole("link", { name: /^CHECK OUT NOW/ });
+    const ctas = page.locator("[data-checkout-plan]");
     await expect(ctas).toHaveCount(PLANS.length);
+    // Free needs no payment, so it starts free; paid plans check out.
+    await expect(page.getByRole("link", { name: /^Start free/ })).toHaveCount(1);
+    await expect(page.getByRole("link", { name: /^Check out now/ })).toHaveCount(PLANS.length - 1);
     for (const interval of ["month", "year"] as const) {
       await page
         .getByRole("group", { name: "Billing period" })
@@ -101,8 +106,8 @@ test.describe("pricing", () => {
       for (const plan of PLANS) {
         const cta = page
           .locator(`.tier[data-plan="${plan.id}"]`)
-          .getByRole("link", { name: `CHECK OUT NOW with ${plan.name}`, exact: true });
-        await expect(cta).toHaveText(/CHECK OUT NOW/);
+          .getByRole("link", { name: `${ctaLabel(plan)} with ${plan.name}`, exact: true });
+        await expect(cta).toHaveText(new RegExp(ctaLabel(plan)));
         await expect(cta).toHaveAttribute("href", `/account?plan=${plan.id}&interval=${interval}`);
       }
     }
@@ -187,6 +192,20 @@ test.describe("pricing", () => {
     for (const value of ["Recent 10", "30 days", "1 year", "Maximum"]) await expect(history).toContainText(value);
   });
 
+  test("explains unlimited and lists what every plan includes from the catalog", async ({ page }) => {
+    await page.goto("/pricing");
+    const band = page.locator(".unlimited");
+    await expect(band.getByRole("heading", { name: "Unlimited local coding agents + terminals." })).toBeVisible();
+    await expect(band).toContainText("Your provider's limits still apply");
+    await expect(band).toContainText("Your computer sets the ceiling");
+    const included = PLAN_FEATURES.filter((feature) => feature.from === "free" && feature.status === "available");
+    const items = page.locator(".every-plan__list li");
+    await expect(items).toHaveCount(included.length);
+    for (const feature of included)
+      await expect(page.locator(`.every-plan [data-included="${feature.id}"]`)).toContainText(feature.label);
+    await expect(page.locator("main")).not.toContainText(/Plan, Approve and Auto/);
+  });
+
   test("the FAQ is a keyboard-operable accordion", async ({ page }) => {
     await page.goto("/pricing");
     const question = page.getByText("Does dictation count?");
@@ -206,10 +225,9 @@ test.describe("pricing", () => {
     await expect(main).toContainText("Paid plans are open");
     await expect(main).not.toContainText("nothing is for sale today");
     for (const plan of PLANS) {
-      await expect(main.getByRole("link", { name: `CHECK OUT NOW with ${plan.name}`, exact: true })).toHaveAttribute(
-        "href",
-        /^\/account\?/,
-      );
+      await expect(
+        main.getByRole("link", { name: `${ctaLabel(plan)} with ${plan.name}`, exact: true }),
+      ).toHaveAttribute("href", /^\/account\?/);
     }
   });
 
@@ -219,7 +237,7 @@ test.describe("pricing", () => {
     await page.goto("/pricing");
     const main = page.locator("main");
     await expect(main).not.toContainText(/\btokens?\b/i);
-    await expect(main).toContainText("Unlimited on-device dictation");
+    await expect(main).toContainText("On-device dictation and voice into terminals · Unlimited");
     await expect(main).toContainText("your usage is billed by each provider");
   });
 

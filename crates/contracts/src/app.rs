@@ -163,9 +163,11 @@ impl FeatureId {
             | Self::AccountSignIn
             | Self::AgentOrganization
             | Self::Blueprints
-            | Self::Memory => Free,
+            | Self::Memory
+            // Provider account persistence is on every plan (AGENTS.md pricing: "Every plan").
+            | Self::ProviderProfiles => Free,
             // Pro.
-            Self::ProviderProfiles | Self::TimeMachine | Self::Verification => Pro,
+            Self::TimeMachine | Self::Verification => Pro,
             // MAX.
             Self::CommandCenter
             | Self::BenchmarkLab

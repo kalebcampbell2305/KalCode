@@ -74,8 +74,9 @@ test.describe("every page", () => {
       const stages = page.locator("[data-stage-slot]");
       for (const text of await stages.allInnerTexts()) {
         expect(text, path).not.toMatch(/Development build|Preview · in development|\bIn development\b|\b0\.1\.0\b/i);
-        // 0.1.6 is variant A (Gemini CLI unavailable): a stage that names the Stable release draws no
-        // Gemini CLI thread.
+        // Home and product draw Gemini CLI as the working provider it is (0.1.9+1450). The KalVoice
+        // page's older stage still tags Gemini CLI as unavailable when it shows it.
+        if (path !== "/kalvoice") continue;
         if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
         // Any other stage that still shows Gemini CLI says it is unavailable.
         // (The stage tags name the served Stable version: 0.1.6, 0.1.7, 0.1.8 or 0.1.9, whichever is selected.)
@@ -259,10 +260,11 @@ test.describe("every page", () => {
     await page.goto("/");
     const h1 = page.locator("h1");
     await expect(h1).toContainText("KalCode");
-    await expect(h1).toContainText("AI engineering. One workspace.");
+    await expect(h1).toContainText("Every coding agent. One workspace.");
     const hero = page.locator(".hero");
-    await expect(hero).toContainText("Run Claude Code and Codex.");
-    await expect(hero).not.toContainText("Gemini");
+    // One message: every shipped provider (all four since 0.1.9+1502), no competing taglines.
+    await expect(hero).toContainText("Claude Code, Codex, Cursor and Gemini CLI in real terminals");
+    await expect(hero).not.toContainText(/Code the Future|brighter tomorrow/i);
     // Try KalCode leads (no account needed); the download sits right beside it.
     await expect(hero.locator(".button--primary")).toContainText("Try KalCode");
     const primary = hero.locator("[data-download-state]");
@@ -282,10 +284,12 @@ test.describe("every page", () => {
     await hero.getByRole("link", { name: "Try KalCode" }).click();
     await expect(page).toHaveURL(/#try$/);
     await expect(page.locator("[data-live]")).toHaveAttribute("data-live", "ready");
-    // Provider constellation: honest adapter status.
+    // Provider band: every provider is a native terminal, with one short line and no legal paragraph.
     const providers = page.getByRole("list", { name: "Works with the coding agents you already use" });
-    await expect(providers).toContainText("Adapter built");
-    await expect(providers).not.toContainText("planned");
+    await expect(providers.getByRole("listitem")).toHaveCount(4);
+    await expect(providers).toContainText("Native terminal");
+    await expect(providers).not.toContainText(/planned|unavailable/i);
+    await expect(page.locator(".works")).not.toContainText("June 18, 2026");
   });
 
   test("the header offers Download (plain label) in every manifest state", async ({ page }) => {

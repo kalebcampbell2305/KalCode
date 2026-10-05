@@ -11,7 +11,7 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 
 import ProviderSwitch from "../../src/components/stage/ProviderSwitch.astro";
 import { structuredData } from "../../src/lib/seo";
-import { ACCOUNT_PAGE, KALVOICE, PAGES, PROVIDERS } from "../../src/lib/site";
+import { ACCOUNT_PAGE, KALVOICE, PAGES, PROVIDER_LINE, PROVIDERS } from "../../src/lib/site";
 import Account from "../../src/pages/account.astro";
 import DocsIndex from "../../src/pages/docs/index.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
@@ -127,31 +127,35 @@ describe.each(PAGES_UNDER_TEST)("the $name", ({ component, path, credentials = t
 });
 
 describe("provider support status", () => {
-  it("lists Claude Code and Codex as built and Gemini CLI as unavailable, with account sign-in only", () => {
+  // 0.1.9+1738: all four adapters Implemented (crates/providers/src/catalog.rs), Gemini CLI since
+  // 0.1.9+1450 and Cursor since 0.1.9+1502, each a native terminal with native parity (1658), on the
+  // user's own accounts (Codex Business, Enterprise and Edu accounts work since 1658).
+  it("lists Claude Code, Codex, Cursor and Gemini CLI as native terminals on your own accounts", () => {
     expect(PROVIDERS.map((p) => [p.name, p.access, p.status, p.state])).toEqual([
-      ["Claude Code", "Claude account sign-in", "Adapter built", "built"],
-      ["Codex", "ChatGPT sign-in (personal plans)", "Adapter built", "built"],
-      ["Gemini CLI", "Google sign-in", "Unavailable in 0.1.6", "unavailable"],
+      ["Claude Code", "Your Claude account", "Native terminal", "built"],
+      ["Codex", "Your ChatGPT account, personal or work", "Native terminal", "built"],
+      ["Cursor", "Your Cursor account", "Native terminal", "built"],
+      ["Gemini CLI", "Your Google account", "Native terminal", "built"],
     ]);
+    for (const provider of PROVIDERS)
+      expect(`${provider.access} ${provider.runs}`).not.toMatch(/personal plans|unavailable|sanitized/i);
   });
 
-  it("shows Claude Code and Codex as built and Gemini CLI as unavailable on the home page", async () => {
+  it("shows every provider as a native terminal on the home page", async () => {
     const copy = text(await render(Home, "/"));
-    expect(copy.match(/Adapter built/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(copy).toContain("Gemini CLI Unavailable in 0.1.6");
+    for (const name of ["Claude Code", "Codex", "Cursor", "Gemini CLI"])
+      expect(copy).toContain(`${name} Native terminal`);
+    expect(copy).toContain(PROVIDER_LINE);
+    expect(copy).not.toMatch(/Gemini CLI (is )?unavailable|Unavailable in 0\.1/i);
   });
 
   it("describes how each provider runs on the product page", async () => {
     const copy = text(await render(Product, "/product"));
-    expect(copy).toContain("Built · Claude Code, Codex");
-    expect(copy).not.toContain("Built · Claude Code, Codex, Gemini CLI");
-    expect(copy).toContain(
-      "Codex ChatGPT sign-in (personal plans) Headless JSON mode: threads you can resume and interrupt",
-    );
-    expect(copy).toContain(
-      "Gemini CLI Google sign-in Headless stream mode: threads you can resume and interrupt Unavailable in 0.1.6",
-    );
-    expect(copy).toContain("Claude Code, Codex and Gemini CLI adapters");
+    for (const provider of PROVIDERS) {
+      expect(copy).toContain(`${provider.name} ${provider.status} ${provider.runs} ${provider.access}`);
+    }
+    expect(copy).toContain("Agents see your real environment");
+    expect(copy).not.toMatch(/sanitized environment|Headless (stream|JSON) mode|Gemini CLI (is )?unavailable/i);
   });
 
   it("never implies provider panes are in the Stable app", async () => {
@@ -165,25 +169,27 @@ describe("provider support status", () => {
     for (const copy of [contained, compact]) expect(copy).not.toMatch(/planned/i);
   });
 
+  // crates/providers/src/catalog.rs: Claude Code, Codex, Gemini CLI and Cursor adapters are all
+  // Implemented (Gemini 0.1.9+1450/1658, Cursor 0.1.9+1502).
   it("names the account each provider signs in with in the provider docs", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
-    expect(copy).toContain("KalCode runs threads with these providers today");
+    expect(copy).toContain("Every coding agent in KalCode is the provider's real CLI, in its own terminal");
     expect(copy).toContain("Claude Code — the local CLI, signed in with your own Claude account.");
-    expect(copy).toContain("Codex — the local CLI, signed in with your own personal ChatGPT plan");
-    expect(copy).not.toContain("Gemini CLI — the local CLI, signed in with your own Google account");
-    expect(copy).toContain("Gemini CLI is unavailable in 0.1.6");
+    expect(copy).toContain("Codex — the local CLI, signed in with your own ChatGPT account");
+    expect(copy).toContain("Cursor — Cursor Agent in an interactive terminal, signed in with your Cursor account");
+    expect(copy).toContain(
+      "Gemini CLI — the local CLI, signed in with Google's own sign-in, running in your real workspace.",
+    );
+    expect(copy).not.toMatch(/Gemini CLI is unavailable/);
   });
 
-  // a8c4855 crates/providers/src/account_auth.rs cloud_config_eligibility: free, go, plus, pro and
-  // prolite run; team, business, enterprise and edu plans, and unknown plans, are refused at launch.
-  it("names the ChatGPT plans Codex threads run on and the ones KalCode refuses", async () => {
+  // 0.1.9+1658 notes: "Business, Enterprise and Edu accounts are no longer refused."
+  it("names the ChatGPT accounts Codex runs on", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
-    expect(copy).toContain("Codex threads run on personal ChatGPT plans: Free, Go, Plus and Pro.");
-    expect(copy).toContain(
-      "KalCode doesn't start Codex threads on ChatGPT Business (formerly Team), Enterprise or Edu plans, or on an account whose plan it can't confirm.",
-    );
+    expect(copy).toContain("including Business, Enterprise and Edu accounts");
+    expect(copy).not.toMatch(/personal ChatGPT plans|doesn't start Codex threads/);
     const security = text(await render(Security, "/security"));
-    expect(security).toContain("Codex runs on personal ChatGPT plans (Free, Go, Plus and Pro).");
+    expect(security).not.toMatch(/personal ChatGPT plans/);
     const graph = JSON.stringify(structuredData()["@graph"]);
     expect(graph).toContain("Claude Code, and Codex on a personal ChatGPT plan");
     expect(graph).not.toMatch(/Gemini/);
@@ -203,11 +209,13 @@ describe("provider support status", () => {
 describe("supported provider CLI versions", () => {
   it("names the certified release lines in the provider docs", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    // codex/mod.rs MANAGED_VERSIONS: 0.160 everywhere; 0.155.1-0.159 lines on macOS only.
     expect(copy).toContain(
-      "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.160 lines, and Gemini CLI 0.61. Pre-release builds aren't supported.",
+      "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.160 (on macOS also the 0.155 to 0.159 lines, from 0.155.1), and Gemini CLI 0.61.",
     );
-    // Claude Code refusals name the supported versions but no install command.
-    expect(copy).toContain("threads stop with a message that names the supported versions.");
+    expect(copy).toContain("Pre-release builds aren't supported.");
+    // Refusals name the supported versions but no install command.
+    expect(copy).toContain("agents stop with a message that names the supported versions.");
   });
 });
 
@@ -216,16 +224,16 @@ describe("supported provider CLI versions", () => {
 describe("provider accounts", () => {
   it("describe several accounts, workspace defaults and confirmed switching", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    // 0.1.9+1565: the terminal-header account picker starts a fresh session and keeps the original;
+    // 0.1.9+1738: account suggestions, never silent switches.
     expect(copy).toContain("You can add more than one account for each provider");
     expect(copy).toContain(
-      "Set default chooses the account new threads use where a workspace has no default of its own",
+      "Set default chooses the account new agents use where a workspace has no default of its own",
     );
     expect(copy).toContain("Connect another account adds an account and starts its sign-in");
-    expect(copy).toContain("Gemini CLI accounts show the Google email they are signed in with.");
-    expect(copy).toContain("Remember these accounts for this workspace");
-    expect(copy).toContain("never changes account on its own, even when you change the default");
-    expect(copy).toContain("KalCode asks you to confirm first");
-    expect(copy).toContain("only future messages use the new account, starting a new provider session");
+    expect(copy).toContain("never changes account on its own");
+    expect(copy).toContain("choosing a different account starts a fresh session on it and keeps the original");
+    expect(copy).toContain("switches only when you choose to");
   });
 });
 
@@ -273,18 +281,6 @@ describe("credential storage", () => {
   });
 });
 
-// Google ended Gemini CLI "Login with Google" for Gemini Code Assist for individuals, Google AI Pro
-// and Ultra on June 18, 2026 (developers.google.com/gemini-code-assist/docs/deprecations/
-// code-assist-individuals). Standard and Enterprise licenses need a Google Cloud project, which B5
-// (65be519) and every later build through B10 cannot pass to its managed Gemini profiles, so Gemini CLI is unavailable in 0.1.6.
-const GEMINI_NOTICE = [
-  "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra.",
-  "KalCode 0.1.6 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode.",
-  "A personal Google account can still finish sign-in and show as signed in, but its threads fail.",
-  "Claude Code and Codex are unaffected.",
-  "Updates will say when Gemini CLI can be used in KalCode again.",
-];
-
 // Claims that Gemini CLI works in 0.1.6 or that KalCode supports Google's replacement. Stage
 // previews (sample data) and the dated September 24 KalVoice archive entry are out of scope.
 const GEMINI_OVERCLAIMS = [
@@ -307,15 +303,14 @@ function selectSignedStable016() {
 }
 
 describe("Gemini CLI availability", () => {
-  const pages = [
-    { name: "provider docs", component: ProvidersDocs as Component, path: "/docs/providers" },
-    { name: "home page", component: Home as Component, path: "/" },
-    { name: "product page", component: Product as Component, path: "/product" },
-  ];
+  // Home and product describe Gemini CLI as the working provider it is (see "provider support status").
+  const pages = [{ name: "provider docs", component: ProvidersDocs as Component, path: "/docs/providers" }];
 
-  it.each(pages)("the $name states Google's change and what 0.1.6 can do", async ({ component, path }) => {
+  // 0.1.9+1658: "Gemini CLI runs in your real workspace with your MCP servers, extensions and skills."
+  it.each(pages)("the $name describes Gemini CLI as a working provider", async ({ component, path }) => {
     const copy = text(await render(component, path));
-    for (const sentence of GEMINI_NOTICE) expect(copy).toContain(sentence);
+    expect(copy).toContain("signed in with Google's own sign-in, running in your real workspace");
+    expect(copy).not.toMatch(/Gemini CLI is unavailable|June 18, 2026/);
   });
 
   it.each([
@@ -324,6 +319,8 @@ describe("Gemini CLI availability", () => {
     { name: "download page", component: Download as Component, path: "/download" },
     { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
     { name: "security page", component: Security as Component, path: "/security" },
+    { name: "home page", component: Home as Component, path: "/" },
+    { name: "product page", component: Product as Component, path: "/product" },
   ])(
     "the $name never claims Gemini CLI works in 0.1.6 or that Antigravity is supported",
     async ({ component, path }) => {
@@ -347,27 +344,24 @@ describe("Gemini CLI availability", () => {
     expect(copy).not.toMatch(/Antigravity/i);
   });
 
-  it("says on the download page that Gemini CLI is unavailable", async () => {
+  it("names every provider on the download page", async () => {
     const copy = text(await render(Download as Component, "/download"));
-    expect(copy).toContain(
-      "Claude Code and Codex connect free on every plan. Gemini CLI is unavailable in 0.1.6 after Google ended Sign in with Google for personal accounts.",
-    );
+    expect(copy).toContain("Claude Code, Codex, Cursor and Gemini CLI connect free on every plan");
+    expect(copy).not.toMatch(/Gemini CLI is unavailable/);
   });
 
-  it("keeps Gemini out of the home, KalVoice and provider-docs descriptions", () => {
+  it("names all four providers in the home and provider-docs descriptions", () => {
     const home = PAGES.find((p) => p.path === "/");
     const docs = PAGES.find((p) => p.path === "/docs/providers");
-    expect(home?.description).toContain("Claude Code and Codex");
-    expect(home?.description).not.toMatch(/Gemini/);
+    expect(home?.description).toContain("Claude Code, Codex, Cursor and Gemini CLI");
+    expect(docs?.description).toContain("Claude Code, Codex, Cursor and Gemini CLI as native terminals");
+    expect(`${home?.description} ${docs?.description}`).not.toMatch(/unavailable/i);
     expect(KALVOICE.summary).not.toMatch(/Gemini/);
-    expect(docs?.description).toContain("why Gemini CLI is unavailable in 0.1.6");
   });
 
   it("uses a working provider, not Gemini, as the account-switching example", async () => {
     const copy = text(await render(ProvidersDocs, "/docs/providers"));
-    expect(copy).toContain(
-      "the command palette (“switch codex b”) or KalVoice (“Switch this Codex thread to Codex B”)",
-    );
+    expect(copy).toContain("The account picker in a coding terminal's header opens Account & usage");
     expect(copy).not.toMatch(/Gemini [AB]\b|switch gemini/i);
   });
 });

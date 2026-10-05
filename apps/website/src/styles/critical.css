@@ -50,6 +50,43 @@
 
   /* The owner's artwork ground (rgb 0 1 4): the hero band uses it so brand art sits on it with no edge. */
   --site-night: #000104;
+
+  /* Site type roles. @kalcode/ui's tokens.css also defines --type-* (the desktop's operational
+     scale) and its shared chunk can load after this file, so components that need the marketing
+     scale use these names, which nothing else defines. */
+  --site-type-title: clamp(1.1875rem, 1.1rem + 0.3vw, 1.375rem);
+  --site-type-headline: clamp(1.75rem, 1.2rem + 1.7vw, 2.75rem);
+}
+
+/*
+ * Theme-resolved world values. A custom property that references a theme token resolves where it
+ * is declared, so these are declared on every [data-theme] element too: a world page's
+ * <body data-theme="dark"> re-resolves them as graphite even when <html> follows a light OS theme.
+ */
+:root,
+[data-theme] {
+  /* Graphite, from @kalcode/ui: the page ground and the deeper ground behind brand art. */
+  --world-base: var(--color-bg);
+  --world-deep: var(--brand-ground);
+
+  /* Graphite world surfaces (@kalcode/ui tokens; never navy). A panel is a raised graphite step
+     with a faint top sheen and a hairline edge; the lit variant adds the one accent. */
+  --world-panel:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-text) 3.5%, transparent), transparent 5rem),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface-2) 92%, transparent),
+      color-mix(in srgb, var(--color-surface-1) 88%, transparent)
+    );
+  --world-panel-edge:
+    inset 0 0 0 1px var(--color-border), inset 0 1px 0 color-mix(in srgb, var(--color-text) 6%, transparent),
+    0 40px 80px -50px rgb(0 0 0 / 0.95);
+  --world-panel-lit:
+    inset 0 0 0 1px var(--color-border-lit),
+    inset 0 1px 0 color-mix(in srgb, var(--color-text) 10%, transparent),
+    0 0 56px -18px var(--color-glow),
+    0 40px 80px -50px rgb(0 0 0 / 0.95);
+  --world-glass: color-mix(in srgb, var(--color-bg) 80%, transparent);
 }
 
 /* Ultrawide: scale the whole rem system so 1920–2560 screens get larger type and wider columns
@@ -402,9 +439,8 @@ a:hover {
 .button--lg {
   min-height: 3.5rem;
   padding-inline: var(--space-8);
-  font-size: 0.875rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 1rem;
+  letter-spacing: -0.005em;
 }
 
 .button--sm {
@@ -674,8 +710,8 @@ a:hover {
 
 .site-header[data-scrolled],
 .site-header[data-menu-open] {
-  border-bottom-color: rgb(170 196 255 / 0.12);
-  background: rgb(4 7 14 / 0.74);
+  border-bottom-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
   -webkit-backdrop-filter: saturate(150%) blur(16px);
   backdrop-filter: saturate(150%) blur(16px);
 }
@@ -884,8 +920,8 @@ main > .hero:first-child {
     right: 0;
     margin: 0;
     padding: var(--space-3) var(--site-gutter) var(--space-8);
-    border-bottom: 1px solid rgb(170 196 255 / 0.12);
-    background: rgb(4 7 14 / 0.94);
+    border-bottom: 1px solid var(--color-border);
+    background: color-mix(in srgb, var(--color-bg) 95%, transparent);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
     box-shadow: 0 40px 60px -30px rgb(0 0 0 / 0.8);
@@ -903,7 +939,7 @@ main > .hero:first-child {
   .site-header[data-menu-open] {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background: rgb(4 7 14 / 0.94);
+    background: color-mix(in srgb, var(--color-bg) 95%, transparent);
   }
 
   [data-theme="light"] body:not([data-world]) .site-header[data-menu-open] {
@@ -1036,19 +1072,18 @@ main > .hero:first-child {
 }
 
 :root {
-  --world-base: #03050c;
-  --world-deep: #010208;
   --world-blue: 76 141 255;
   --world-cyan: 110 196 255;
   --world-violet: 108 92 231;
   --world-gold: 255 181 84;
   --world-line: 150 186 255;
-  --world-frame-radius: 1.25rem;
+  --world-frame-radius: var(--radius-xl);
 }
 
-/* World pages are always dark; keep the canvas dark too (overscroll, scrollbars). */
+/* World pages are always dark; keep the canvas dark too (overscroll, scrollbars). <html> keeps the
+   visitor's theme, so its canvas uses the theme-invariant brand ground. */
 html:has(> body[data-world]) {
-  background: var(--world-base);
+  background: var(--brand-ground);
   color-scheme: dark;
 }
 
@@ -1128,7 +1163,7 @@ body[data-world] {
 
 .hero__wordmark-glow {
   display: block;
-  filter: drop-shadow(0 0 1.25rem rgb(1 2 8 / 0.95)) drop-shadow(0 0 2.5rem rgb(var(--world-blue) / 0.35));
+  filter: drop-shadow(0 0 1.25rem var(--world-deep)) drop-shadow(0 0 2.5rem rgb(var(--world-blue) / 0.35));
 }
 
 @media (forced-colors: active) {
@@ -1212,7 +1247,7 @@ body[data-world] {
   margin-top: var(--space-5);
   padding: 0.4375rem 1rem;
   border-radius: var(--radius-full);
-  background: rgb(2 4 10 / 0.78);
+  background: color-mix(in srgb, var(--color-bg-sunken) 80%, transparent);
   box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.16);
   color: var(--color-text-secondary);
   font-size: var(--site-text-small);

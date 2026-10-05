@@ -49,7 +49,10 @@ export function notChecked(accountId: string, reason: string | null = null): Acc
   return { accountId, status: "not_checked", windows: [], checkedAt: null, reason };
 }
 
-/** The window that limits the account right now (lowest remaining), if any. */
+/**
+ * The window that limits the account right now (lowest remaining), if any. For deciding whether
+ * work is blocked (suggestions); primary displays show weeklyWindow() instead.
+ */
 export function limitingWindow(state: AccountUsageState): UsageWindow | null {
   if (state.status !== "fresh" && state.status !== "stale") return null;
   let best: UsageWindow | null = null;
@@ -69,23 +72,60 @@ export function usagePercent(value: number): string {
   return value > 0 && value < 1 ? "<1" : String(Math.round(value));
 }
 
+/**
+ * The account's own all-model WEEKLY window: the one every primary usage display shows
+ * ("Claude A · 73% left" means 73% of the weekly limit is left). Claude reports it as `weekly`;
+ * Codex as `weekly` when its window is 10080 minutes, or (when two windows share that length)
+ * under its slot id with the "Weekly"/"7-day" label. Model-scoped weekly limits (`weekly_opus`,
+ * `weekly_<model>`) and rolling windows (`five_hour`, other N-day/N-hour) are never the primary.
+ * Reads only this state's windows, so it can never borrow another account's numbers.
+ */
+export function weeklyWindow(state: AccountUsageState): UsageWindow | null {
+  if (state.status !== "fresh" && state.status !== "stale") return null;
+  const reported = state.windows.filter((window) => isReportedPercent(window.remainingPercent));
+  return (
+    reported.find((window) => window.id === "weekly") ??
+    reported.find((window) => !window.id.startsWith("weekly_") && WEEKLY_LABEL.test(window.label.trim())) ??
+    null
+  );
+}
+
+const WEEKLY_LABEL = /^(weekly|7-day)$/i;
+
 export interface UsageSummary {
-  /** Compact text for headers/chips: "64% left", "Usage unavailable", "Not checked". */
+  /** Compact text for headers/chips: "64% left" (weekly), "Weekly usage unavailable", "Usage unavailable". */
   short: string;
-  /** True when the limiting window is under LOW_USAGE_PERCENT. */
+  /** True when the weekly window is under LOW_USAGE_PERCENT. */
   low: boolean;
   tone: "ok" | "low" | "muted";
 }
 
+/** The primary usage line every surface shows: the account's WEEKLY remaining, never a rolling window. */
 export function usageSummary(state: AccountUsageState): UsageSummary {
-  const window = limitingWindow(state);
-  if (state.status === "fresh" && window) {
-    const low = window.remainingPercent < LOW_USAGE_PERCENT;
-    return { short: `${usagePercent(window.remainingPercent)}% left`, low, tone: low ? "low" : "ok" };
+  if (state.status === "fresh") {
+    const window = weeklyWindow(state);
+    if (window) {
+      const low = window.remainingPercent < LOW_USAGE_PERCENT;
+      return { short: `${usagePercent(window.remainingPercent)}% left`, low, tone: low ? "low" : "ok" };
+    }
+    // Real windows, but none is the weekly one: say so instead of showing the 5-hour number.
+    if (state.windows.some((w) => isReportedPercent(w.remainingPercent))) {
+      return { short: "Weekly usage unavailable", low: false, tone: "muted" };
+    }
   }
   if (state.status === "checking") return { short: "Checking usage…", low: false, tone: "muted" };
-  if (state.status === "unavailable") return { short: "Usage unavailable", low: false, tone: "muted" };
   return { short: "Usage unavailable", low: false, tone: "muted" };
+}
+
+/**
+ * Spells out which window the primary percentage is ("73% of weekly usage left"), for tooltips
+ * and accessible names, so the compact "73% left" is never ambiguous. Null when no number shows.
+ */
+export function primaryUsageLabel(state: AccountUsageState): string | null {
+  const window = state.status === "fresh" ? weeklyWindow(state) : null;
+  if (window) return `${usagePercent(window.remainingPercent)}% of weekly usage left`;
+  if (usageSummary(state).short === "Weekly usage unavailable") return "No weekly limit reported for this account";
+  return null;
 }
 
 /** "Resets in 2h 14m" from an ISO time, or null. */

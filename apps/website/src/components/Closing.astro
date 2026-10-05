@@ -20,14 +20,15 @@ interface Props {
 }
 const { formSource, title } = Astro.props;
 const cta = downloadCta(RELEASES);
-const heading = title ?? "Be first to run KalCode.";
+// With a public build the default invites a download; without one it invites early access.
+const heading = title ?? (cta.kind === "download" ? "Bring your coding agents home." : "Be first to run KalCode.");
 // Named from the manifest's channel and platforms, so a Stable release never reads as a preview.
 const released =
   channelLabel(RELEASES) === "Stable"
     ? `KalCode ${RELEASES.latest?.version} is out for ${releaseSystems(RELEASES)}.`
     : `The preview is out for ${releaseSystems(RELEASES)}.`;
 ---
-<section class="finale" id="early-access" aria-labelledby="closing-title">
+<section class="finale finale--tight" id="early-access" aria-labelledby="closing-title">
   <Backdrop variant="horizon" />
   <div class="container closing">
     <span class="finale__orb"><BrandMark size={72} lazy /></span>
@@ -35,7 +36,7 @@ const released =
     {
       cta.kind === "download" ? (
         <>
-          <p>{released} Your providers, your projects, one workspace.</p>
+          <p>{released} Claude Code, Codex, Cursor and Gemini CLI, your projects, one workspace.</p>
           <div class="button-row">
             <DownloadButton />
             <a class="button button--secondary button--lg" href="/download">All platforms</a>
@@ -62,3 +63,10 @@ const released =
     }
   </div>
 </section>
+
+<style>
+  /* The horizon's rim sits just under the actions: no empty ridge band before the footer. */
+  .finale.finale--tight {
+    padding-block: clamp(3rem, 2rem + 3vw, 5rem) clamp(9rem, 6rem + 8vw, 15rem);
+  }
+</style>

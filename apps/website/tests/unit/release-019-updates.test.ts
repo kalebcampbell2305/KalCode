@@ -17,7 +17,6 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 import DownloadPlatforms from "../../src/components/DownloadPlatforms.astro";
 import { assertManifest, displayManifest } from "../../src/lib/releases";
 import Download from "../../src/pages/download.astro";
-import Product from "../../src/pages/product.astro";
 import Updates from "../../src/pages/updates.astro";
 
 const COMMITTED = committedJson as ReleaseManifest;
@@ -94,12 +93,37 @@ describe("the Updates page for 0.1.9", () => {
     expect(copy).toContain("Closing a terminal or agent pane now ends it.");
     // The plan names come from PLANS.
     expect(copy).toContain("Pro, MAX and MAX 2X can be bought monthly or yearly in the app.");
+    // Gemini CLI works since 0.1.9+1658 and local agents are unlimited since 1565: neither stale line remains.
     expect(copy).toContain(
-      "Known issues Gemini CLI is still unavailable in KalCode. Claude Code and Codex are unaffected. Codex agents can't commit inside their own worktree; use Commit changes on the agent's card.",
+      "Known issues Codex agents can't commit inside their own worktree; use Commit changes on the agent's card.",
     );
+    expect(copy).not.toContain("Gemini CLI is still unavailable");
+    expect(copy).not.toMatch(/Plan limits now count across KalCode/);
+    // Build 1050 predates every listed 0.1.9 build, so none is announced ahead of what /download serves.
+    expect(html).not.toMatch(/id="build-\d+"/);
     // No prices are stated in the 0.1.9 entry.
     const entry = html.match(/<article[^>]*id="release-0-1-9"[\s\S]*?<\/article>/)?.[0] ?? "";
     expect(entry).not.toMatch(/\$\d/);
+  });
+
+  it("lists the 0.1.9 builds /download serves, newest first, with their highlights", async () => {
+    select(signedStableBuild("0.1.9", 1738));
+    const html = await render(Updates, "/updates");
+    const copy = text(html);
+    for (const build of [1738, 1658, 1565]) expect(html).toContain(`id="build-${build}"`);
+    expect(html.indexOf('id="build-1738"')).toBeLessThan(html.indexOf('id="build-1658"'));
+    expect(html.indexOf('id="build-1658"')).toBeLessThan(html.indexOf('id="build-1565"'));
+    expect(copy).toContain("One agent state everywhere");
+    expect(copy).toContain("Coding agents keep their native tools");
+    expect(copy).toContain("Every plan supports unlimited local coding agents and terminals");
+    // Still one featured entry, and the builds stay inside it (no extra articles).
+    expect(html.match(/update--featured/g)).toHaveLength(1);
+    expect(html.match(/<article/g)).toHaveLength(8);
+
+    select(signedStableBuild("0.1.9", 1658));
+    const earlier = await render(Updates, "/updates");
+    expect(earlier).not.toContain('id="build-1738"');
+    expect(earlier).toContain('id="build-1658"');
   });
 
   it("announces no 0.1.9 while the manifest selects 0.1.8 or a 0.1.8 build", async () => {
@@ -141,18 +165,14 @@ describe("the download page for 0.1.9", () => {
   });
 });
 
-// Gemini CLI stays unavailable in 0.1.9, so the release-scoped copy written for 0.1.6 names the served
-// public version (releaseCopy in lib/releases), never the internal build.
-describe("release-scoped copy with a signed Stable 0.1.9 build", () => {
-  it("names 0.1.9 on the download and product pages", async () => {
+// Gemini CLI runs in KalCode since 0.1.9+1658, so the download page names every provider and no
+// release-scoped "unavailable" line, and never the internal build number.
+describe("provider copy with a signed Stable 0.1.9 build", () => {
+  it("names every provider on the download page, with no Gemini outage", async () => {
     select(signedStableBuild("0.1.9", 1050));
     const download = text(await render(Download, "/download"));
-    expect(download).toContain("Gemini CLI is unavailable in 0.1.9 after Google");
-    const product = text(await render(Product, "/product"));
-    expect(product).toContain("Gemini CLI is unavailable in 0.1.9 after Google");
-    for (const copy of [download, product]) {
-      expect(copy).not.toContain("0.1.9+1050");
-      expect(copy).not.toMatch(/unavailable in (KalCode )?0\.1\.[678]\b/);
-    }
+    expect(download).toContain("Claude Code, Codex, Cursor and Gemini CLI connect free on every plan");
+    expect(download).not.toMatch(/Gemini CLI is unavailable/);
+    expect(download).not.toContain("0.1.9+1050");
   });
 });

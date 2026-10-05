@@ -7,11 +7,11 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 <Docs
   path="/docs/local-first"
   heading="Local-first"
-  lead="Your projects, threads and settings live on your machine. KalCode is designed so that nothing leaves it unless you choose to send it."
+  lead="Your projects, agents and settings live on your machine. KalCode is designed so that nothing leaves it unless you choose to send it."
 >
   <h2>What stays on your device</h2>
   <p>
-    Projects, threads, events, settings and memory are stored locally in a single SQLite database in
+    Projects, threads, events, settings and Unified Memory are stored locally in a single SQLite database in
     your operating system's app-data directory. The database uses write-ahead logging and versioned
     migrations, and a backup is written before any migration runs.
   </p>
@@ -32,7 +32,7 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
     you add gets its own KalCode-managed provider profile on your device, and the provider keeps
     that account's sign-in for that profile. Claude Code and Codex keep their sign-in in their own
     storage inside that profile, which can be an ordinary, unencrypted file (for example Codex's
-    auth.json). Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted file, never in
+    auth.json). Cursor keeps its sign-in in Cursor's own storage. Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted file, never in
     plaintext. KalCode never reads or copies these credentials. Gemini derives its file's key from your computer and user names, so the file is
     kept out of plaintext but not away from other programs running as your user.
   </p>
@@ -63,16 +63,21 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
     KalCode account (sign-in, plan and KalVoice Request counts), KalCode contacts kalcoded.com only
     for its signed update feed, at launch and about every ten minutes while it is open, and to
     download KalVoice's signed components when they are needed. None of these requests carry
-    telemetry, audio or text. To show each provider account's current plan usage, KalCode asks
-    that provider's own usage service (Anthropic for Claude Code, OpenAI for Codex) with the
-    sign-in the provider's CLI already keeps for that account; the request reads usage only and
-    changes nothing. When you run a
+    telemetry, audio or text. To show a provider account's current plan usage where the provider
+    reports it, KalCode asks that provider's own usage service (for example Anthropic for Claude
+    Code, OpenAI for Codex) with the sign-in the provider's CLI already keeps for that account; the
+    request reads usage only and changes nothing. When you run a
     provider, that provider's own CLI talks to its service under your account, exactly as it does
     when you use it directly. KalVoice interprets commands on your computer and never sends them
-    to a provider; words you dictate into a provider thread go to that provider.
+    to a provider; words you dictate into a provider's terminal go to that provider.
   </p>
+
+  <h2>Your KalCode account and billing</h2>
   <p>
-    Accounts and billing will arrive with the paid plans at launch. They will be documented here
-    before they ship.
+    Your KalCode account holds your sign-in, your plan and your KalVoice Request counts. Sign in
+    with Google, Microsoft or a one-time email link; the desktop app keeps its session in your
+    operating system's credential store. Paid plans are bought and managed on Stripe's hosted
+    pages, so payment details never pass through KalCode. Your projects, code and conversations are
+    not part of your account and stay on your device.
   </p>
 </Docs>

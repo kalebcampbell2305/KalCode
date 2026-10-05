@@ -6,6 +6,8 @@ import { KALVOICE } from "../../lib/site";
 
 // KalVoice is announced as shipped only while /download serves a signed Stable release.
 const stable = servedStableRelease(RELEASES);
+// Push to talk as shipped (docs/KALVOICE.md; Fn on macOS since 0.1.7): Fn on a Mac, F8 fallback.
+const FALLBACK_KEY = KALVOICE.pushToTalkKey;
 ---
 <Docs
   path="/docs/kalvoice"
@@ -24,8 +26,9 @@ const stable = servedStableRelease(RELEASES);
 
   <h2>One key</h2>
   <p>
-    Hold <kbd>{KALVOICE.pushToTalkKey}</kbd> to talk to KalVoice: hold it, speak, release. There is
-    one gesture and no mode to pick. KalVoice decides from context what you meant.
+    Hold <kbd>Fn</kbd> on a Mac, or <kbd>{FALLBACK_KEY}</kbd> on any keyboard, to talk to KalVoice:
+    hold it, speak, release. There is one gesture and no mode to pick. KalVoice decides from context
+    what you meant.
   </p>
   <div class="table-wrap" role="region" aria-label="What happens when you release the key" tabindex="0">
     <table class="table">
@@ -52,8 +55,12 @@ const stable = servedStableRelease(RELEASES);
     </table>
   </div>
   <p>
-    {KALVOICE.keyNote} The key can be changed in Settings, and KalCode checks it for conflicts
-    with its own bindings.
+    On a Mac, hold Fn on its own and wait for Listening before you speak; a quick tap keeps Fn's
+    usual action, and Fn with another key never starts dictation. {FALLBACK_KEY} is the fallback key
+    on every keyboard and the one to use on Windows, where most keyboards don't report Fn to apps.
+    In Settings you can choose another function key, Pause, Scroll Lock or Insert as the fallback
+    instead, and KalCode checks it for conflicts with its own bindings. The key works while KalCode
+    is the active window, so other apps keep it otherwise.
   </p>
 
   <h2>Dictation</h2>
@@ -62,8 +69,8 @@ const stable = servedStableRelease(RELEASES);
     into text, and KalVoice types it into whatever you were focused on:
   </p>
   <ul>
-    <li>{stable ? "a Claude Code or Codex thread composer (Gemini CLI is unavailable in this release)," : "a Claude Code, Codex or Gemini CLI thread composer,"}</li>
-    <li>a terminal,</li>
+    <li>a Claude Code, Codex, Cursor or Gemini CLI agent's terminal,</li>
+    <li>a thread composer or another terminal,</li>
     <li>the command palette, a search box, or another KalCode text input.</li>
   </ul>
   <p>
@@ -160,7 +167,7 @@ const stable = servedStableRelease(RELEASES);
 
   <h2>Your provider, your account</h2>
   <p>
-    Coding tasks you intentionally send to Claude Code, Codex or Gemini use your connected
+    Coding tasks you intentionally send to Claude Code, Codex, Cursor or Gemini CLI use your connected
     provider account and its native permissions. Provider usage is handled by that provider.
     KalVoice's local command interpretation does not use a paid provider fallback.
   </p>
@@ -175,9 +182,9 @@ const stable = servedStableRelease(RELEASES);
 
   <h2>Inside your permissions</h2>
   <p>
-    KalVoice calls the same runtime as the rest of KalCode: the same workspaces, terminals, threads
-    and approvals. Ordinary workspace controls require no extra KalCode approval. Provider coding
-    tasks keep their native permissions; KalVoice cannot answer those approvals or enable Bypass. Read
-    the <a href="/docs/permissions">permission model</a>.
+    KalVoice calls the same runtime as the rest of KalCode: the same workspaces, terminals, agents
+    and permissions. Ordinary workspace controls require no extra KalCode approval. Provider coding
+    tasks keep their native permissions, and KalVoice cannot raise its own authority or answer a
+    request for credentials on your behalf. Read the <a href="/docs/permissions">permission model</a>.
   </p>
 </Docs>

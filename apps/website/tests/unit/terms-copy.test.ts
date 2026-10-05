@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PLANS } from "@kalcode/protocol/plans";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseManifest } from "../../src/data/releases";
@@ -61,17 +62,18 @@ function meta(html: string) {
 }
 
 // The owner approved the Stable wording on 2026-09-29 (target/recovery-B9-publish/
-// TERMS-WORDING-PROPOSAL.md, #1-#6 with the no-price #4). The preview terms must not change at all.
+// TERMS-WORDING-PROPOSAL.md, #1-#6 with the no-price #4). The preview terms change only with an
+// owner-approved legal update; the last one (2026-10-05) added Cursor to section 6.
 describe("/terms in preview mode", () => {
-  it("renders the legal text byte-identical to the terms before the Stable wording", async () => {
+  it("renders the pinned preview legal text", async () => {
     const html = await renderTerms();
     expect(createHash("sha256").update(legal(html)).digest("hex")).toBe(
-      "d5e823076460105cc5a25c7e942409a638d45e26c9bf69655411ddb74e2fb879",
+      "4a7f3405c295af4c857fc84730168acd8a15a227392c2d602eb513296074dfdb",
     );
     expect(meta(html)).toBe(
       "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode preview app.",
     );
-    expect(text(html)).toContain("Last updated September 24, 2026");
+    expect(text(html)).toContain("Last updated October 5, 2026");
   });
 });
 
@@ -81,12 +83,13 @@ describe("/terms once Stable is served", () => {
     const html = await renderTerms();
     const copy = text(html);
     for (const sentence of [
-      "These terms cover kalcoded.com, the KalCode early-access list and the KalCode app.",
-      "Last updated September 29, 2026",
+      "These terms cover kalcoded.com, your KalCode account, the KalCode early-access list and the KalCode app.",
+      "Last updated October 5, 2026",
       "The site describes KalCode. Descriptions of features, plans and prices reflect current plans and may change.",
       "3. The KalCode app",
       "The app is currently offered as Stable releases and preview versions. These terms apply to every version of the app until a version comes with terms of its own.",
       "Preview quality. Preview versions are incomplete, may contain errors, may change or remove features, and may not be code-signed.",
+      "Claude Code, Codex, Cursor and Gemini CLI are products and trademarks of their respective owners;",
     ]) {
       expect(copy).toContain(sentence);
     }
@@ -138,18 +141,18 @@ describe("/terms once Stable is served", () => {
 describe("/terms once paid checkout is open", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("replaces only the no-sale sentence and the date", async () => {
+  it("replaces only the no-sale sentence, naming the paid plans from the catalog", async () => {
     selectSignedStable();
     const closed = text(await renderTerms());
     vi.stubEnv("PUBLIC_CHECKOUT_ENABLED", "true");
     const open = text(await renderTerms());
     const noSale = "Nothing on the site is an offer to sell, and no purchase can be made through it today.";
-    const paid =
-      "Paid plans (Pro, MAX and MAX 2X) are monthly or yearly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically at the end of each billing period (every month or every year) until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.";
+    const names = PLANS.filter((plan) => plan.price.monthlyUsd > 0).map((plan) => plan.name);
+    const paid = `Paid plans (${names.slice(0, -1).join(", ")} and ${names.at(-1)}) are monthly or yearly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically at the end of each billing period (every month or every year) until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.`;
     expect(closed).toContain(noSale);
     expect(open).not.toContain(noSale);
     expect(open).toContain(paid);
-    expect(open).toContain("Last updated October 1, 2026");
-    expect(open.replace(paid, noSale).replace("October 1, 2026", "September 29, 2026")).toBe(closed);
+    expect(open).toContain("Last updated October 5, 2026");
+    expect(open.replace(paid, noSale)).toBe(closed);
   });
 });

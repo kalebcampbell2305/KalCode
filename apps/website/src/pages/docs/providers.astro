@@ -1,9 +1,5 @@
 ---
 import Docs from "../../layouts/Docs.astro";
-import { RELEASES, releaseCopy, releaseCopyVersion } from "../../lib/releases";
-import { GEMINI_AVAILABILITY } from "../../lib/site";
-
-const version = releaseCopyVersion(RELEASES);
 ---
 <Docs
   path="/docs/providers"
@@ -11,49 +7,53 @@ const version = releaseCopyVersion(RELEASES);
   lead="KalCode works with the AI coding tools you already use, on your own accounts. Connecting them is free on every plan."
 >
   <h2>Supported providers</h2>
-  <p>KalCode runs threads with these providers today:</p>
+  <p>Every coding agent in KalCode is the provider's real CLI, in its own terminal:</p>
   <ul>
     <li><strong>Claude Code</strong> — the local CLI, signed in with your own Claude account.</li>
-    <li><strong>Codex</strong> — the local CLI, signed in with your own personal ChatGPT plan, with its documented approval and sandbox settings.</li>
+    <li><strong>Codex</strong> — the local CLI, signed in with your own ChatGPT account, including Business, Enterprise and Edu accounts.</li>
+    <li><strong>Cursor</strong> — Cursor Agent in an interactive terminal, signed in with your Cursor account, with the models that account offers.</li>
+    <li><strong>Gemini CLI</strong> — the local CLI, signed in with Google's own sign-in, running in your real workspace.</li>
   </ul>
   <p>
-    Codex threads run on personal ChatGPT plans: Free, Go, Plus and Pro. KalCode doesn't start
-    Codex threads on ChatGPT Business (formerly Team), Enterprise or Edu plans, or on an account
-    whose plan it can't confirm.
+    Every provider is included on every plan. More providers can be added later through a documented
+    adapter contract, and each integration is verified against the provider's current official
+    documentation before it ships.
   </p>
-  <h3>Gemini CLI is unavailable in {version}</h3>
-  <p>{releaseCopy(GEMINI_AVAILABILITY.notice, RELEASES)}</p>
+
+  <h2>Native, as in your own terminal</h2>
   <p>
-    KalCode {version} still includes its Gemini CLI adapter, which runs the local CLI signed in with
-    Google's own sign-in and uses its documented non-interactive output modes. The sign-in and
-    storage details below describe that adapter.
+    Agents keep their native tools. They search and fetch the web (in Plan mode too), use your own
+    MCP servers, and run their shell, file and repo-search tools, plugins and slash commands. Each
+    provider reads its own setup: settings, <code>CLAUDE.md</code>, <code>AGENTS.md</code> and
+    <code>GEMINI.md</code>, agents, skills, plugins and commands. Codex uses your own
+    <code>config.toml</code>, project trust and rules files, and can run up to ten sub-agents.
   </p>
   <p>
-    More providers can be added later through a documented adapter contract. Each integration is
-    verified against the provider's current official documentation before it ships.
+    The Providers page lists each provider's tools as native, needs setup, or not offered, with the
+    reason, and a coding pane shows which tool is running.
   </p>
 
   <h2>How connections work</h2>
   <p>
     KalCode uses only legitimate, documented integration methods: each provider's own local CLI,
-    signed in through that provider's official sign-in flow. It never scrapes
-    browser credentials, copies hidden session credentials, or reverse-engineers private
-    authentication.
+    signed in through that provider's official sign-in flow. It never scrapes browser credentials,
+    copies hidden session credentials, or reverse-engineers private authentication.
   </p>
 
   <h2>Signing in</h2>
   <p>
     Sign in to each provider inside KalCode: open Providers, then Accounts, add an account and choose
     Sign in. KalCode runs that provider's own official sign-in for that account only. Claude Code and
-    Codex open their browser sign-in, and Gemini CLI opens Google sign-in in your browser.
+    Codex open their browser sign-in, Cursor runs its own sign-in, and Gemini CLI opens Google sign-in
+    in your browser.
   </p>
   <p>
     Each account has its own managed provider profile. Signing a CLI in from a separate terminal signs
-    in a different profile that KalCode threads don't use, so there is nothing to run by hand. The
-    provider keeps the credentials in that account's profile and KalCode never sees them. Gemini CLI
-    keeps its sign-in in its own encrypted credential store, never in plaintext. Gemini derives that
-    store's key from your computer and user names, so it keeps the sign-in out of plaintext but not
-    away from other programs running as your user.
+    in a different profile that KalCode doesn't use, so there is nothing to run by hand. The provider
+    keeps the credentials in that account's profile and KalCode never sees them. Gemini CLI keeps its
+    sign-in in its own encrypted credential store, never in plaintext. Gemini derives that store's key
+    from your computer and user names, so it keeps the sign-in out of plaintext but not away from
+    other programs running as your user.
   </p>
   <p>
     Your usage of each provider is billed by that provider under your account, exactly as it is when
@@ -66,33 +66,31 @@ const version = releaseCopyVersion(RELEASES);
   <h2>Supported CLI versions</h2>
   <p>
     Managed accounts run the provider CLI release lines KalCode has certified: Claude Code 2.1.282
-    or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.160 lines, and
-    Gemini CLI 0.61. Pre-release builds aren't supported. With any other version, sign-in and
-    threads stop with a message that names the supported versions.
+    or a later 2.1 release, Codex CLI 0.160 (on macOS also the 0.155 to 0.159 lines, from 0.155.1),
+    and Gemini CLI 0.61. Cursor runs the Cursor Agent CLI you install. Pre-release builds aren't
+    supported. With any other version, sign-in and agents stop with a message that names the
+    supported versions.
   </p>
 
   <h2>Several accounts per provider</h2>
   <p>
     You can add more than one account for each provider, such as a personal and a work account.
-    Providers, then Accounts, shows each account's active threads and the workspaces where it is
-    the default. <strong>Set default</strong> chooses the account new threads use where a workspace
-    has no default of its own, and
-    <strong>Connect another account</strong> adds an account and starts its sign-in. Gemini CLI
-    accounts show the Google email they are signed in with.
+    Providers, then Accounts, shows each account and the workspaces where it is the default.
+    <strong>Set default</strong> chooses the account new agents use where a workspace has no default
+    of its own, and <strong>Connect another account</strong> adds an account and starts its sign-in.
   </p>
   <p>
-    In New thread, <strong>Remember these accounts for this workspace</strong> keeps the accounts
-    you chose, and KalCode selects them the next time you start a thread in that workspace.
+    In the <strong>New agent</strong> launcher you choose the provider, account, model and effort for
+    each agent, and launch several at once. Every agent shows its exact provider, account, model and
+    effort.
   </p>
 
-  <h2>Switching a thread's account</h2>
+  <h2>Switching an agent's account</h2>
   <p>
-    Each thread stays on the account it started with, and never changes account on its own, even
-    when you change the default. To move a thread to another signed-in account, use the account
-    menu in its header, the command palette (“switch codex b”) or KalVoice (“Switch this Codex
-    thread to Codex B”). KalCode asks you to confirm first. The thread's past conversation stays
-    as it is; only future messages use the new account, starting a new provider session. An
-    account that is signed out has to be signed in before a thread can move to it.
+    Each agent stays on the account it started with and never changes account on its own. The
+    account picker in a coding terminal's header opens Account &amp; usage for that agent; choosing a
+    different account starts a fresh session on it and keeps the original. When an account is
+    limited, KalCode suggests another account you connected, and switches only when you choose to.
   </p>
 
   <h2>Detection</h2>
@@ -104,16 +102,21 @@ const version = releaseCopyVersion(RELEASES);
     Detection never changes your machine; installing a provider only happens when you ask for it.
   </p>
 
-  <h2>Isolation</h2>
+  <h2>Your environment</h2>
   <p>
-    Each provider session runs in its own supervised child process with a sanitized environment. If
-    one provider fails, the others — and your terminals, workspaces and Dashboard — keep running.
+    Each agent starts with your real environment, the way it would in your own terminal: your SSH
+    agent, <code>GH_TOKEN</code>, toolchain homes, cloud credentials and the variables your MCP servers
+    use. KalCode leaves out only its own internal variables and, for a managed account, the few
+    variables that would sign that provider in as a different account. Each provider session runs in
+    its own supervised process: if one fails, the others, and your terminals, workspaces and
+    Dashboard, keep running.
   </p>
 
   <h2>One model for every provider</h2>
   <p>
-    Provider-specific details are translated at the adapter boundary into KalCode's own concepts:
-    normalized events, statuses, approval requests and capabilities. That is what lets the Dashboard,
-    the permission model and KalVoice treat every provider the same way.
+    Provider details are translated at the adapter boundary into KalCode's own concepts: one agent
+    state (starting, working, waiting, needs you, ready, done or failed), normalized events and
+    capabilities. That is what lets the Dashboard, Needs You and KalVoice treat every provider the
+    same way.
   </p>
 </Docs>
