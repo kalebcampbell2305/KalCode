@@ -142,7 +142,7 @@ fn managed_executable(
     env: &DetectEnv,
     guardian: &crate::guardian::ProviderProbeGuardian,
 ) -> Result<std::path::PathBuf, ProviderError> {
-    let detected = detect_guarded(spec, env, guardian);
+    let detected = crate::launch_probe::detect_for_launch(spec, env, Some(guardian));
     match (detected.detection.state, detected.executable) {
         (DetectionState::Installed, Some(executable))
             if detected.detection.auth != AuthState::NotAuthenticated =>

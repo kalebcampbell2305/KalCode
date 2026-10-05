@@ -502,6 +502,9 @@ impl HealthMonitor {
             ProviderError::Unsupported => return,
             _ => "start_failed",
         };
+        // The launch may have used a reused detection: the next one probes again, so it reports
+        // the real reason (uninstalled, broken, signed out) instead of repeating this failure.
+        crate::launch_probe::forget(id.as_str());
         self.with_provider(id, |p| {
             Self::record_failure(p, code);
             // Detection may be stale (signed out, uninstalled, updated): check again, gently.
@@ -528,20 +531,26 @@ impl HealthMonitor {
     /// One provider event of a session (already delivered to the thread runtime).
     pub(crate) fn event(&self, id: &ProviderId, event: &AgentEvent) {
         match event {
-            AgentEvent::Error { code, .. } => self.with_provider(id, |p| {
-                if is_rate_limit_code(code) {
-                    p.backoff = Some(Backoff {
-                        code: code.clone(),
-                        since: Instant::now(),
-                    });
-                    p.with_bucket(SystemTime::now(), |b| b.backoffs += 1);
-                } else if is_failure_code(code) {
-                    Self::record_failure(p, code);
-                }
+            AgentEvent::Error { code, .. } => {
                 if is_auth_code(code) {
-                    p.request_recheck();
+                    // The provider rejected the session: no launch reuses its sign-in result.
+                    crate::launch_probe::forget(id.as_str());
                 }
-            }),
+                self.with_provider(id, |p| {
+                    if is_rate_limit_code(code) {
+                        p.backoff = Some(Backoff {
+                            code: code.clone(),
+                            since: Instant::now(),
+                        });
+                        p.with_bucket(SystemTime::now(), |b| b.backoffs += 1);
+                    } else if is_failure_code(code) {
+                        Self::record_failure(p, code);
+                    }
+                    if is_auth_code(code) {
+                        p.request_recheck();
+                    }
+                });
+            }
             AgentEvent::TurnCompleted { ok: true } => self.with_provider(id, |p| {
                 p.last_success = Some(Instant::now());
                 p.backoff = None;
