@@ -189,7 +189,7 @@ export const AgentCard = memo(function AgentCard({
 
   const actions = archived
     ? []
-    : (availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
+    : (availableActions(thread).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
   const request = archived ? undefined : approvals[0];
   const actionNeeded = !archived && display.status === "permission_required";
   const failed = display.status === "failed";
@@ -207,10 +207,21 @@ export const AgentCard = memo(function AgentCard({
   };
 
   // The one primary follow-up each state needs, on the card.
-  let primary: { label: string; run: () => void; busy?: boolean; aria?: string } | null = null;
+  let primary: {
+    label: string;
+    run: () => void;
+    busy?: boolean;
+    aria?: string;
+    action?: Exclude<ThreadAction, "open">;
+  } | null = null;
   if (!archived) {
     if (failed && actions.includes("retry")) {
-      primary = { label: "Retry", run: () => onAction(thread, "retry"), busy: pendingAction === "retry" };
+      primary = {
+        label: "Retry",
+        run: () => onAction(thread, "retry"),
+        busy: pendingAction === "retry",
+        action: "retry",
+      };
     } else if (display.status === "waiting_for_you") {
       primary = { label: "Reply", run: () => onFocus(thread) };
     } else if (resumable) {
@@ -219,6 +230,17 @@ export const AgentCard = memo(function AgentCard({
         run: () => onAction(thread, "resume"),
         busy: pendingAction === "resume",
         aria: `Resume ${thread.name}`,
+        action: "resume",
+      };
+    } else if (actions.includes("start_anyway")) {
+      // A launch held for system resources: the real reason is on the card, and the person's
+      // own override is one click away, as in the agent's pane.
+      primary = {
+        label: ACTION_LABELS.start_anyway,
+        run: () => onAction(thread, "start_anyway"),
+        busy: pendingAction === "start_anyway",
+        aria: `Start ${thread.name} anyway`,
+        action: "start_anyway",
       };
     } else if (group === "done" || ready) {
       primary = { label: "Open", run: () => onFocus(thread), aria: `Open ${thread.name}` };
@@ -501,7 +523,11 @@ export const AgentCard = memo(function AgentCard({
           {primary ? (
             <Button
               size="sm"
-              variant={failed || display.status === "waiting_for_you" ? "primary" : "secondary"}
+              variant={
+                failed || display.status === "waiting_for_you" || primary.action === "start_anyway"
+                  ? "primary"
+                  : "secondary"
+              }
               className={styles.primary}
               busy={primary.busy}
               aria-label={primary.aria}
@@ -539,7 +565,12 @@ export const AgentCard = memo(function AgentCard({
                     className={styles.tool}
                     label={`More actions for ${thread.name}`}
                     icon={<MoreHorizontal />}
-                    busy={pendingAction !== undefined && pendingAction !== "retry" && pendingAction !== "resume"}
+                    busy={
+                      pendingAction !== undefined &&
+                      pendingAction !== "retry" &&
+                      pendingAction !== "resume" &&
+                      pendingAction !== primary?.action
+                    }
                   />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
