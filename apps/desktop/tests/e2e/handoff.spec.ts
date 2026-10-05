@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { HandoffPreview, HandoffRecord } from "@kalcode/protocol";
 import { expect, type Locator, type Page } from "@playwright/test";
 import {
-  ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
+  ACCOUNT_MAX_FIXTURE_OPT_IN,
   createAccountFixtureDataDir,
   EXE,
   killForcibly,
@@ -18,7 +18,7 @@ import {
 } from "./harness.ts";
 
 // Real native IPC, SQLite, provider-pane PTYs, hook readiness, and restart recovery. The
-// provider and Pro entitlement are signed, deterministic E2E fixtures; no AI service is called.
+// provider and MAX entitlement are signed, deterministic E2E fixtures; no AI service is called.
 test.skip(process.platform !== "win32", "Real-app E2E drives Windows WebView2.");
 const FAKE = join(dirname(EXE), "kalcode-fake-provider.exe");
 const HELPER = join(dirname(EXE), "kalcode-hook.exe");
@@ -100,7 +100,8 @@ test("handoffs deliver once, queue until ready, return explicit results, and int
   writeManagedFakeProviderConfig(bin);
 
   const env = {
-    KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
+    // Agent handoff is a MAX feature (2026-10-04 pricing).
+    KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_MAX_FIXTURE_OPT_IN,
     KALCODE_E2E_HOOK_DECISIONS: "engine",
     KALCODE_E2E_PICK_FOLDER: project,
     KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,

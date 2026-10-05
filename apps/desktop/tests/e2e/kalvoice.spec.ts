@@ -136,11 +136,13 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
 
     await invoke(page, "kalvoice_preferences_update", { patch: { intelligence: { kind: "local" } } });
 
-    // Push-to-talk routing in the native core: a confident command runs and counts; words
-    // spoken into a text box are dictation and never count; anything else is a request.
+    // Push-to-talk routing in the native core: a confident command runs; words spoken into a
+    // text box are dictation; anything else is a request. Since the 2026-10-04 pricing local
+    // commands and on-device interpretation consume no KalVoice cloud quota, so none count.
     const command = await talk(page, "Open the dashboard", "field");
     expect(command.route).toBe("command");
-    expect(command.response?.counted).toBe(true);
+    expect(command.response?.outcome.kind).toBe("completed");
+    expect(command.response?.counted).toBe(false);
     const dictation = await talk(page, "add a unit test for the parser", "field");
     expect(dictation).toMatchObject({ route: "dictation", response: null });
     const request = await talk(page, "plan the migration to postgres", "none");
@@ -196,7 +198,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     const create = await talk(page, "open two codex threads", "none");
     expect(create.route).toBe("command");
     expect(create.response?.outcome.kind).toBe("completed");
-    expect(create.response?.counted).toBe(true);
+    expect(create.response?.counted).toBe(false);
     expect(await invoke<unknown[]>(page, "approval_list")).toEqual([]);
     const createdThreads = () =>
       invoke<{ providerId: string; workspaceId: string; status: string; permissionMode: string }[]>(
@@ -277,9 +279,9 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await expect(page.getByRole("heading", { level: 1, name: "voice-site" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
-    // The signed baseline plus the typed local command, spoken local command and direct native
-    // app-control command counted; dictation and focused-provider handoff did not.
-    await expect(page.locator("#kalvoice-status").getByText(/^44 \/ 150 used · resets/)).toBeVisible();
+    // Only the signed account baseline: local commands, dictation and focused-provider handoff
+    // consume no KalVoice cloud quota, before or after a restart.
+    await expect(page.locator("#kalvoice-status").getByText(/^41 \/ 150 used · resets/)).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();
