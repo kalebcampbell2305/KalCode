@@ -135,9 +135,9 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
     const menu = within(await screen.findByRole("menu"));
     const items = menu.getAllByRole("menuitem").map((item) => item.textContent ?? "");
     const browser = items.findIndex((text) => text.startsWith("Browser"));
-    const dashboard = items.findIndex((text) => text.startsWith("Activity"));
+    const dashboard = items.findIndex((text) => text.startsWith("Agent Fleet"));
     expect(browser).toBeGreaterThan(-1);
-    // Browser sits with the other "open here" items, above Activity and the widget list.
+    // Browser sits with the other "open here" items, above the Agent Fleet and the widget list.
     expect(browser).toBeLessThan(dashboard);
     const git = menu.queryByRole("menuitem", { name: /^Git/ });
     if (stable) expect(git).toBeNull();

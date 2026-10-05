@@ -1,9 +1,8 @@
 import { Button, Sparkline } from "@kalcode/ui/components";
-import { Bot } from "lucide-react";
+import { BellDot, Bot, CircleCheckBig } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent, type PointerEvent, useMemo, useRef } from "react";
 import { useKalActions } from "../../runtime/actions.ts";
 import { useEvents } from "../../runtime/RuntimeProvider.tsx";
-import { AttentionList } from "../../shell/attention/AttentionList.tsx";
 import { attentionSummary } from "../../shell/attention/model.ts";
 import { useAttention } from "../../shell/attention/useAttention.ts";
 import { Page } from "../../shell/Page.tsx";
@@ -80,33 +79,35 @@ function NewAgentAction() {
   );
 }
 
-/** Activity shows the most urgent few; the inbox holds the rest. The Fleet stays in view. */
-const ACTIVITY_LIMIT = 6;
-
 /**
- * Needs You at the top of Activity: the same items as the inbox, so nothing that needs the person
- * hides below the fleet. When nothing does, one quiet line says so.
+ * Needs You on Activity: one line that says what is waiting and opens the inbox, the one place
+ * with every item's what, why and next action. The Fleet below already leads with its own Needs
+ * you group (with inline replies and approvals), so nothing is shown twice and the Fleet stays in
+ * view. With no agents at all, the board's own empty state (Launch an agent) is the one message.
  */
 function NeedsYouSection() {
   const { items, ready } = useAttention();
   const { state } = useCodingAgents();
   const actions = useKalActions();
-  // With no agents at all, the board's own empty state (Launch an agent) is the one message.
   if (!ready || (items.length === 0 && state.status === "ready" && state.data.length === 0)) return null;
+  const urgent = items.some((item) => item.kind !== "review" && item.kind !== "stalled");
   return (
     <section
       className={styles.needsYou}
       aria-labelledby="activity-needs-you"
       data-empty={items.length === 0 || undefined}
+      data-urgent={urgent || undefined}
     >
+      <span className={styles.needsYouGlyph} aria-hidden="true">
+        {items.length === 0 ? <CircleCheckBig /> : <BellDot />}
+      </span>
       <h2 id="activity-needs-you" className={styles.needsYouTitle}>
         Needs you
-        <span className={styles.needsYouCount}>{attentionSummary(items)}</span>
       </h2>
-      {items.length > 0 ? <AttentionList items={items.slice(0, ACTIVITY_LIMIT)} ready={ready} /> : null}
-      {items.length > ACTIVITY_LIMIT ? (
-        <Button size="sm" variant="ghost" className={styles.needsYouMore} onClick={() => actions.openInbox()}>
-          Show all {items.length} in Needs you
+      <p className={styles.needsYouCount}>{attentionSummary(items)}</p>
+      {items.length > 0 ? (
+        <Button size="sm" variant={urgent ? "primary" : "secondary"} onClick={() => actions.openInbox()}>
+          Review {items.length}
         </Button>
       ) : null}
     </section>

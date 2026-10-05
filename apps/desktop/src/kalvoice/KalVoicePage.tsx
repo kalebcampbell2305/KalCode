@@ -178,8 +178,8 @@ export function KalVoicePage() {
               <Badge tone="success">Available</Badge>
               <p className={styles.tileDetail}>
                 {providerPanes
-                  ? "Say “Open Dashboard” or “Open four Codex terminals”: KalCode acts the moment you let go. Provider sessions keep their own native permission prompts."
-                  : "Say “Open Dashboard” or “Go to settings”: KalCode acts the moment you let go."}
+                  ? "Say “Open Activity” or “Open four Codex terminals”: KalCode acts the moment you let go. Provider sessions keep their own native permission prompts."
+                  : "Say “Open Activity” or “Go to settings”: KalCode acts the moment you let go."}
               </p>
               <p className={styles.tileMeta}>Dictation is never counted</p>
             </li>

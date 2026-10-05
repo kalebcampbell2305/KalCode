@@ -14,7 +14,7 @@ import styles from "./PaneCanvas.module.css";
 export function describeBuiltin(content: PaneContent): TabInfo {
   switch (content.kind) {
     case "dashboard":
-      return { title: "Activity", glyph: <LayoutDashboard />, statusText: "Opens Activity" };
+      return { title: "Agent Fleet", glyph: <LayoutDashboard />, statusText: "Opens the Agent Fleet" };
     case "browser":
       return { title: "Browser", glyph: <Globe />, stateLabel: "Coming", statusText: "Not in this build" };
     case "git":
@@ -67,15 +67,15 @@ function DashboardNotice() {
   return (
     <PaneNotice
       icon={<LayoutDashboard />}
-      title="Activity"
+      title="Agent Fleet"
       actions={
         <Button size="sm" onClick={() => navigate("dashboard")}>
-          Open Dashboard
+          Open Activity
         </Button>
       }
     >
       <p>
-        The live Dashboard docks into panes once its pane view is part of this build. Until then it opens as a page.
+        The live Agent Fleet docks into panes once its pane view is part of this build. Until then it opens on Activity.
       </p>
     </PaneNotice>
   );

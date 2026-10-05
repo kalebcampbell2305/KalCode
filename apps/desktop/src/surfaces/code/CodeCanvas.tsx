@@ -323,7 +323,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         if (!thread) return "Agent";
         return orgItems.get(contentKey(content))?.title ?? thread.name;
       }
-      if (content.kind === "dashboard") return "Activity";
+      if (content.kind === "dashboard") return "Agent Fleet";
       if (content.kind === "thread") return "Thread";
       if (content.kind === "browser") return "Browser";
       if (content.kind === "git") return "Git";
@@ -548,7 +548,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
               ];
             }
             if (content.kind === "dashboard") {
-              return [{ ...shared, kind: "dashboard" as const, entityId: "dashboard", title: "Activity" }];
+              return [{ ...shared, kind: "dashboard" as const, entityId: "dashboard", title: "Agent Fleet" }];
             }
             if (content.kind === "widget") {
               return [
@@ -1406,7 +1406,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           icon={<LayoutDashboard />}
           onSelect={() => controllerRef.current.show({ kind: "dashboard" }, { paneId, focus: true })}
         >
-          Dashboard
+          Agent Fleet
         </DropdownMenuItem>
         {addableWidgets().length > 0 ? <DropdownMenuLabel>Widgets</DropdownMenuLabel> : null}
         {addableWidgets().map((w) => (

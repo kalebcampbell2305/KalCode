@@ -18,7 +18,7 @@ import type { AttentionAction, AttentionItem } from "../shell/attention/model.ts
 import { dismissAttention } from "../shell/attention/useAttention.ts";
 import { type Destination, useNavigation } from "../shell/navigation.tsx";
 import { useOptionalNotifications } from "../shell/notifications/NotificationsProvider.tsx";
-import { useLaunchAgent } from "../surfaces/code/useLaunchAgent.ts";
+import { useStartAgents } from "../surfaces/code/useLaunchAgent.ts";
 import { useOptionalAllCodingAgents } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { useRuntime } from "./RuntimeProvider.tsx";
 import { useUiIntents } from "./uiIntents.tsx";
@@ -39,8 +39,11 @@ export interface KalActions {
    * ambiguous case: it shows exactly those agents to choose from.
    */
   showWaiting: () => Promise<ActionResult>;
-  /** Start a coding agent in the current project (Code's New agent). */
-  newAgent: () => ActionResult;
+  /**
+   * Start coding agents in the current project: Code's New agent (one click starts the remembered
+   * provider, account, exact model and effort; the launcher opens only when a choice is needed).
+   */
+  newAgent: (options?: { providerId?: string; count?: number }) => ActionResult;
   openApprovals: () => Promise<ActionResult>;
   signIn: (providerId: string) => Promise<ActionResult>;
   /** Open the Needs You inbox. */
@@ -66,7 +69,7 @@ export function useKalActions(): KalActions {
   const toast = useToast();
   const notifications = useOptionalNotifications();
   const closeInbox = useCallback(() => notifications?.setPanelOpen(false), [notifications]);
-  const launchAgent = useLaunchAgent();
+  const startAgents = useStartAgents();
   const agents = useOptionalAllCodingAgents();
 
   const openAgent = useCallback(
@@ -103,10 +106,14 @@ export function useKalActions(): KalActions {
     return done(`${waiting.length} agents are waiting. Pick one.`);
   }, [agents, intents]);
 
-  const newAgent = useCallback(() => {
-    launchAgent();
-    return done("Starting a new agent.");
-  }, [launchAgent]);
+  const newAgent = useCallback(
+    (options?: { providerId?: string; count?: number }) => {
+      startAgents(options);
+      const count = options?.count ?? 1;
+      return done(count === 1 ? "Starting a new agent." : `Starting ${count} agents.`);
+    },
+    [startAgents],
+  );
 
   const openApprovals = useCallback(async () => {
     await intents.focus({ kind: "approvals" });

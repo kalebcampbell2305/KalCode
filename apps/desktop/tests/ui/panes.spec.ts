@@ -342,9 +342,9 @@ test.describe("content from other surfaces", () => {
     await openCode(page);
     await page.keyboard.press("Control+Alt+d");
     await pane(page, 1).getByRole("button", { name: "Add to pane 2" }).click();
-    await page.getByRole("menuitem", { name: "Activity", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Agent Fleet", exact: true }).click();
     await expect(pane(page, 1).locator("[data-dashboard-pane]")).toBeVisible();
-    await expect(pane(page, 1).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    await expect(pane(page, 1).getByRole("tab", { name: "Agent Fleet" })).toHaveAttribute("aria-selected", "true");
     await pane(page, 1).getByRole("button", { name: "Add to pane 2" }).click();
     await page.getByRole("menuitem", { name: "Provider health" }).click();
     await expect(pane(page, 1).locator("[data-widget-pane]")).toBeVisible();
