@@ -19,6 +19,43 @@ function invoke(memory: ReturnType<typeof createMemoryKalVoice>, name: string, a
 }
 
 describe("memory KalVoice browser parity", () => {
+  it("cloud requests alone consume the allowance and exhaustion leaves local commands and dictation usable", async () => {
+    const events: unknown[] = [];
+    const memory = createMemoryKalVoice((event) => events.push(event), "");
+    for (let index = 0; index < 25; index++) {
+      const cloud = memory.controls.cloudRequest(`cloud-${index}`);
+      expect(cloud.counted).toBe(true);
+      expect(cloud.usage.used).toBe(index + 1);
+    }
+    expect(memory.controls.cloudRequest("cloud-0")).toMatchObject({ counted: false, usage: { used: 25 } });
+    expect(memory.controls.cloudRequest("cloud-over-limit")).toMatchObject({
+      counted: false,
+      outcome: { kind: "limit_reached" },
+      usage: { used: 25, allowance: 25 },
+    });
+    const local = request("go to settings");
+    const response = (await invoke(memory, "kalvoice_request", { request: local })) as KalVoiceResponse;
+    expect(response).toMatchObject({ counted: false, outcome: { kind: "completed" }, usage: { used: 25 } });
+    expect(response.directive).toMatchObject({ kind: "navigate", surface: "settings" });
+    expect(await invoke(memory, "kalvoice_request", { request: local })).toMatchObject({
+      outcome: { kind: "failed", code: "duplicate_request" },
+    });
+    const ui = { requestId: "local-ui", command: "scene", input: "voice" };
+    expect(invoke(memory, "kalvoice_meter_ui_command", { request: ui })).toMatchObject({
+      counted: false,
+      outcome: { kind: "completed" },
+      usage: { used: 25 },
+    });
+    invoke(memory, "kalvoice_meter_ui_command", { request: ui });
+    expect(events.filter((event) => (event as { type: string }).type === "kalvoice.command_executed")).toHaveLength(2);
+    const dictated = await invoke(memory, "kalvoice_talk", {
+      request: { ...request("write the release notes"), target: "field" },
+    });
+    expect(dictated).toMatchObject({ route: "dictation", response: null });
+    expect(invoke(memory, "kalvoice_type_instead", { requestId: local.requestId })).toBe(true);
+    expect(invoke(memory, "kalvoice_status", {})).toMatchObject({ usage: { used: 25 } });
+  });
+
   it("late exact cancellation leaves a successor microphone session alone", () => {
     const memory = createMemoryKalVoice(() => undefined, "");
     const first = invoke(memory, "kalvoice_listen_start", {});
@@ -39,7 +76,7 @@ describe("memory KalVoice browser parity", () => {
     })) as KalVoiceResponse;
 
     expect(response.intent).toBe("control_browser");
-    expect(response.counted).toBe(true);
+    expect(response.counted).toBe(false);
     expect(response.directive).toEqual({
       kind: "control_browser",
       workspaceId: "0192f3c4-0000-7000-8000-00000000000a",

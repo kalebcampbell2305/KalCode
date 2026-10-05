@@ -162,9 +162,9 @@ test.describe("cards", () => {
     await expect(fix.getByText("Working", { exact: true })).toBeVisible();
     await expect(fix.locator('time[data-kind="elapsed"]')).toHaveText("Running time 18 min");
     await expect(fix.locator('time[data-kind="last-activity"]')).toHaveText(/just now|minute/);
-    // Details expand in place: call sign, permission mode and start time.
+    // Details expand in place: provider, permission mode and start time.
     await fix.getByRole("button", { name: "Show details for Fix flaky checkout test" }).click();
-    await expect(fix.getByText(/^Codex [A-Z]+$/)).toBeVisible();
+    await expect(fix.getByText("Codex", { exact: true })).toBeVisible();
     await expect(fix.getByText("Permission mode Auto")).toBeVisible();
     await expect(fix.locator('time[data-kind="started"]')).toHaveText("Started 18 min ago");
   });

@@ -34,8 +34,14 @@ async function openFolders(page: Page, ...names: string[]) {
 }
 
 async function switchWorkspace(page: Page, name: string) {
-  await palette(page, `Switch to ${name}`);
-  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  await page.keyboard.press(`${MOD}+k`);
+  await page.keyboard.type(`Switch to ${name}`);
+  // Similar project names can both match; choose the intended workspace explicitly.
+  await page
+    .getByRole("option")
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .click();
+  await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
 }
 
 async function openAccounts(page: Page) {
