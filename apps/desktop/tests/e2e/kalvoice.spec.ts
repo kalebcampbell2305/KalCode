@@ -87,7 +87,8 @@ function talk(page: Page, text: string, target: "field" | "terminal" | "none"): 
 
 test("KalVoice runs natively; routing, usage and the widget's placement survive a restart", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-kalvoice-"));
-  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-kalvoice-project-"));
+  // Under the home folder so the detected path shows as ~…; a gate worker's TEMP is outside its home.
+  const root = mkdtempSync(join(homedir(), "kalcode-e2e-kalvoice-project-"));
   const project = join(root, "voice-site");
   mkdirSync(project);
   writeFileSync(join(project, "README.md"), "# KalVoice fixture\n");

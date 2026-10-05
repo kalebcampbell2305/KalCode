@@ -128,7 +128,7 @@ test("a provider pane runs routine coding in Bypass and still gates credential a
     await expect(page.getByRole("heading", { level: 1, name: "pane-site" })).toBeVisible();
 
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     await page
       .getByRole("dialog", { name: "New agent" })
       .getByRole("button", { name: "Launch Claude Code agent" })
@@ -209,7 +209,7 @@ test("launching four Claude Code agents creates four fresh live terminals with t
     expect(workspace?.name).toBe("four-agent-site");
 
     await waitForProviderAdmission(page);
-    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    await page.getByRole("button", { name: "Agent launch options", exact: true }).click();
     const launcher = page.getByRole("dialog", { name: "New agent" });
     await expect(launcher).toBeVisible();
     await launcher.getByRole("radio", { name: "Sonnet", exact: true }).click();
