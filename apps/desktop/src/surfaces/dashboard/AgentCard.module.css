@@ -277,7 +277,21 @@
 
 /* ---- task, where, tech ---- */
 
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* The pin shows while the pointer or keyboard is anywhere on the card, not only on its row. */
+.card:hover [data-favorite-action],
+.card:focus-within [data-favorite-action] {
+  opacity: 1;
+}
+
 .name {
+  flex: 1 1 auto;
   min-width: 0;
   margin: 0;
   font-size: var(--type-title);

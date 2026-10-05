@@ -188,7 +188,7 @@ test.describe("cards", () => {
     // A finished agent can be cleared in one click.
     await expect(done.getByRole("button", { name: "Clear Generate API client" })).toBeVisible();
     await done.getByRole("button", { name: "More actions for Generate API client" }).click();
-    await expect(page.getByRole("menuitem")).toHaveText(["Open", "Archive"]);
+    await expect(page.getByRole("menuitem")).toHaveText(["Open", "Pin globally", "Archive"]);
   });
 
   test("ACTION NEEDED carries the inline approval in the app's order", async ({ page }) => {

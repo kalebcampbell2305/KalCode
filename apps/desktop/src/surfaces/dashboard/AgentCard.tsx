@@ -243,13 +243,6 @@ export const AgentCard = memo(function AgentCard({
       onClick={onCardClick}
     >
       <header className={styles.top}>
-        {/* An archived card is read-only: its one action is Unarchive. */}
-        {archived ? null : (
-          <FavoriteButton
-            target={{ kind: "agent", id: thread.id, workspaceId: thread.workspaceId }}
-            title={thread.name}
-          />
-        )}
         <span className={styles.signal} data-tone={archived ? "muted" : tone} aria-hidden="true" />
         {accountLabel ? (
           <span className={styles.who} title={`Account: ${accountLabel}`}>
@@ -294,17 +287,27 @@ export const AgentCard = memo(function AgentCard({
         ) : null}
       </header>
 
-      <Heading className={styles.name} id={nameId}>
-        {archived ? (
-          <span className={styles.nameText} title={thread.name}>
-            {thread.name}
-          </span>
-        ) : (
-          <button type="button" className={styles.nameButton} onClick={() => onFocus(thread)} title={thread.name}>
-            {thread.name}
-          </button>
+      {/* The pin follows the name, so the card's first stop is its name and the heading (the card's
+          accessible name) holds only the name. An archived card is read-only: no pin. */}
+      <div className={styles.titleRow}>
+        <Heading className={styles.name} id={nameId}>
+          {archived ? (
+            <span className={styles.nameText} title={thread.name}>
+              {thread.name}
+            </span>
+          ) : (
+            <button type="button" className={styles.nameButton} onClick={() => onFocus(thread)} title={thread.name}>
+              {thread.name}
+            </button>
+          )}
+        </Heading>
+        {archived ? null : (
+          <FavoriteButton
+            target={{ kind: "agent", id: thread.id, workspaceId: thread.workspaceId }}
+            title={thread.name}
+          />
         )}
-      </Heading>
+      </div>
 
       <p className={styles.where}>
         <ProviderGlyph provider={thread.providerId} size="xs" className={styles.whereGlyph} />
