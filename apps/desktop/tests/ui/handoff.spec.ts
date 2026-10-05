@@ -3,7 +3,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const OUT = new URL("../../qa/screenshots/", import.meta.url);
 
-async function open(page: Page, scenario = "account-ready-pro") {
+async function open(page: Page, scenario = "account-ready-max") {
   await page.goto(`/?scenario=${scenario}`);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
@@ -112,8 +112,8 @@ test.describe("agent handoff", () => {
     const newRecipient = recipients.locator(`input[type="radio"][value="${newRecipientId}"]`);
     await expect(newRecipient).toBeChecked();
 
-    // Fleet letters are derived from stable creation time plus ID, not pane order. Select the
-    // original target by its canonical thread ID so this still proves manual recipient switching.
+    // Provider defaults can share a title. Select the original target by canonical thread ID
+    // so this proves manual recipient switching independently of its visible name.
     const originalRecipient = recipients.locator(`input[type="radio"][value="${targetId}"]`);
     await originalRecipient.locator("..").click();
     await expect(originalRecipient).toBeChecked();
@@ -197,7 +197,7 @@ test.describe("agent handoff", () => {
     const source = page.locator("[data-provider-pane]").first();
     await source.getByRole("button", { name: /Hand off work from/ }).click();
     const dialog = handoffDialog(page);
-    await expect(dialog.getByText("Agent handoff is included with Pro and above.")).toBeVisible();
+    await expect(dialog.getByText("Agent handoff is included with Max and above.")).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Prepare handoff" })).toBeDisabled();
     await dialog.getByRole("button", { name: "View plans" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();

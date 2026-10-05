@@ -210,7 +210,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
 
   const prepareCurrent = () => {
     if (!featureAvailable) {
-      setError({ message: "Agent handoff is included with Pro and above." });
+      setError({ message: "Agent handoff is included with Max and above." });
       return;
     }
     if (!selectedTarget) {
@@ -334,7 +334,7 @@ export function HandOffDialog({ open, source, preferredTargetId, onNewAgent, onC
             <div className={styles.planGate} role="note">
               <span>
                 <Badge tone="accent">Pro</Badge>
-                Agent handoff is included with Pro and above.
+                Agent handoff is included with Max and above.
               </span>
               <Button
                 size="sm"

@@ -376,10 +376,12 @@ test.describe("project surface", () => {
 });
 
 test.describe("search", () => {
-  test("the palette finds “auth” → Authentication Refactor first, and Enter opens it", async ({ page }) => {
+  test("the palette narrows auth to threads and Enter opens Authentication Refactor", async ({ page }) => {
     await open(page, "rail");
     await page.keyboard.press("Control+k");
     await page.keyboard.type("auth");
+    // The unified switcher also finds files. Narrow to threads before asserting the best thread.
+    await page.getByRole("dialog").getByRole("button", { name: "Threads", exact: true }).click();
     const first = page.getByRole("option").first();
     await expect(first).toContainText("Authentication Refactor");
     await expect(first).toHaveAttribute("aria-selected", "true");
@@ -411,7 +413,7 @@ test.describe("search", () => {
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("combobox")).toHaveValue("auth");
-    await expect(page.getByRole("option").first()).toContainText("Authentication Refactor");
+    await expect(page.getByRole("option").filter({ hasText: "Authentication Refactor" })).toHaveCount(1);
   });
 });
 
