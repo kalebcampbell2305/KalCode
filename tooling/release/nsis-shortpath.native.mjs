@@ -31,6 +31,22 @@ test("Windows installer never skips a locked file (AllowSkipFiles off outside an
   assert.ok(found, "installer-hooks.nsh must set AllowSkipFiles off");
 });
 
+test("Windows installer removes the retired update helper on update and on uninstall", () => {
+  // Builds up to 0.1.9+1816 shipped kalcode-update-helper.exe on Windows; it is macOS-only now (externalBin only in
+  // tauri.macos.conf.json), so a payload without it must delete the copy an older build left, or uninstall never ends.
+  const windowsConfig = join(desktop, "tauri.windows.conf.json");
+  const windowsBins = existsSync(windowsConfig)
+    ? (JSON.parse(readFileSync(windowsConfig, "utf8")).bundle?.externalBin ?? [])
+    : (config.bundle.externalBin ?? []);
+  if (windowsBins.some((bin) => bin.endsWith("kalcode-update-helper"))) return;
+  const text = readFileSync(resolve(desktop, config.bundle.windows.nsis.installerHooks), "utf8");
+  const body = (name) => text.match(new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`))?.[1] ?? "";
+  const removes = /Delete\s+"\$INSTDIR\\kalcode-update-helper\.exe"/;
+  assert.match(body("KALCODE_REMOVE_RETIRED_FILES"), removes);
+  for (const hook of ["NSIS_HOOK_PREINSTALL", "NSIS_HOOK_PREUNINSTALL"])
+    assert.match(body(hook), /!insertmacro KALCODE_REMOVE_RETIRED_FILES/, `${hook} must remove retired files`);
+});
+
 if (process.platform === "win32") {
   test("native NSIS removes only owned shortcuts after short-path payload removal", () => {
     const compiler =
