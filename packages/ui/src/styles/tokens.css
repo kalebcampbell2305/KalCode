@@ -383,14 +383,9 @@
   --glass-bg: rgb(16 19 25 / 0.78);
   --glass-border: rgb(170 195 240 / 0.14);
   --blur-glass: 14px;
-  /* The energy trace a pane draws once when it takes focus: a short electric-blue sweep. */
+  /* The energy trace a pane draws once when it takes focus: its colour and duration (the pane
+     animates its own conic sweep, since an angle must be registered where it animates). */
   --trace-color: rgb(120 172 255 / 0.95);
-  --trace-gradient: conic-gradient(
-    from var(--trace-angle, 0deg),
-    transparent 0deg,
-    var(--trace-color) 40deg,
-    transparent 80deg
-  );
   --dur-trace: 560ms;
 
   color-scheme: dark;
