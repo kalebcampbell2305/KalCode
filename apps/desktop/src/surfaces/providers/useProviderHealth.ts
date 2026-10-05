@@ -2,6 +2,7 @@ import type { HealthRollup, ProviderHealth } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useThrottledValue } from "../../runtime/useThrottledValue.ts";
 
 /** How often the Health tab re-reads while it is visible. */
 export const HEALTH_REFRESH_MS = 30_000;
@@ -27,7 +28,7 @@ const EMPTY: Omit<ProviderHealthData, "refresh"> = { list: null, error: null, tr
 export function useProviderHealth(active: boolean): ProviderHealthData {
   const { client } = useRuntime();
   const { events } = useEvents();
-  const latestProviderSeq = events.find((e) => e.type.startsWith("provider."))?.seq ?? 0;
+  const latestProviderSeq = useThrottledValue(events.find((e) => e.type.startsWith("provider."))?.seq ?? 0);
   const lifecycle = useMemo(() => ({ client }), [client]);
   const [snapshot, setSnapshot] = useState({ lifecycle, ...EMPTY });
   const [tick, setTick] = useState(0);
