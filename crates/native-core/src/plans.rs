@@ -375,24 +375,33 @@ mod tests {
             .collect();
         assert_eq!(names, PUBLIC_PLANS.map(PlanTier::name));
 
-        // The row's `values` line, whether the formatter keeps the row on one line or splits it.
+        // The Queued tasks row is generated from each plan's limits (`quotaValues`), so compare those
+        // limits, in catalog order, with the native ones.
         let row = &source[source
             .find("id: \"operations-queue\"")
             .expect("operations-queue row")..];
-        let queue = row
+        assert!(
+            row.lines()
+                .find(|line| line.contains("values:"))
+                .is_some_and(|line| line.contains("quotaValues(\"queuedTasks\")")),
+            "the Queued tasks row must be generated from plan limits"
+        );
+        let catalog: Vec<Option<u32>> = source
             .lines()
-            .find(|line| line.contains("values:"))
-            .expect("operations-queue values");
-        for (id, tier) in ["free", "pro", "max", "max2x"]
-            .into_iter()
-            .zip(PUBLIC_PLANS)
-        {
-            let expected = match tier.limits().queued_tasks {
-                Some(n) => format!("{id}: \"Up to {n}\""),
-                None => format!("{id}: \"Unlimited\""),
-            };
-            assert!(queue.contains(&expected), "{expected} in {queue}");
-        }
+            .filter_map(|line| {
+                let value = line
+                    .trim()
+                    .strip_prefix("queuedTasks: ")?
+                    .strip_suffix(',')?;
+                Some(if value == "null" {
+                    None
+                } else {
+                    Some(value.parse().expect("queuedTasks is a count or null"))
+                })
+            })
+            .take(PUBLIC_PLANS.len())
+            .collect();
+        assert_eq!(catalog, PUBLIC_PLANS.map(|tier| tier.limits().queued_tasks));
         assert_eq!(PlanTier::Owner.limits().queued_tasks, None);
     }
 
