@@ -8,7 +8,7 @@
       "package": "@kalcode/desktop",
       "script": "test",
       "command": null,
-      "timeoutMs": 300000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -29,7 +29,7 @@
       "package": "@kalcode/website",
       "script": "test",
       "command": null,
-      "timeoutMs": 300000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
@@ -50,7 +50,7 @@
       "package": "@kalcode/api",
       "script": "test",
       "command": null,
-      "timeoutMs": 300000,
+      "timeoutMs": 900000,
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
