@@ -320,6 +320,8 @@
         "cargo fmt --all -- --check",
         "node apps/desktop/scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
         "node apps/desktop/scripts/cargo.mjs test --workspace",
+        "rustup target add aarch64-apple-darwin",
+        "node apps/desktop/scripts/cargo.mjs check --locked -p kalcode-update-helper --target aarch64-apple-darwin",
         "node tooling/gen-protocol-index.mjs",
         "git diff --exit-code -- packages/protocol/src/generated"
       ]
