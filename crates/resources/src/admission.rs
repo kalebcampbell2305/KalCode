@@ -1,8 +1,18 @@
-//! Fail-closed admission decisions for work that consumes meaningful machine resources.
+//! Admission decisions for work that consumes meaningful machine resources.
 //!
-//! This module is a pure bridge between the sampler's evidence and a future scheduler/provider
-//! launch site. It never starts, stops, suspends, or reprioritises work. Local UI, account/auth,
-//! and recovery paths must not call it; they remain available while resource telemetry recovers.
+//! Two policies, by priority (owner directive 2026-10-04: throttle from the bottom):
+//!
+//! - **User-requested coding agents** ([`evaluate_user_agent_admission`]) start immediately
+//!   whenever the OS can reasonably run them. CPU utilisation, soft memory reserves, elevated
+//!   pressure levels and missing or late telemetry never delay them. Only genuine hard pressure
+//!   ([`crate::hard`]) or an explicit Custom-mode count limit the person set may hold one, and
+//!   the person can always choose Start Anyway.
+//! - **Optional background work** ([`evaluate_admission`]: local model acquisition and inference,
+//!   heavy maintenance) is fail-closed and yields first: it waits for CPU and memory headroom,
+//!   calm pressure levels and current telemetry.
+//!
+//! This module is pure. It never starts, stops, suspends, or reprioritises work. Local UI,
+//! account/auth, and recovery paths must not call it.
 
 use std::time::Duration;
 
@@ -11,9 +21,12 @@ use serde::{Deserialize, Serialize};
 use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
 
 use crate::cadence::CadenceConfig;
-use crate::capacity::{CapacityAdvice, HoldReason};
+use crate::capacity::{
+    CapacityAdvice, CapacityRequest, HoldReason, RunningWork, count_constraints,
+};
 use crate::governor::GovernorStatus;
-use crate::mode::ModeKind;
+use crate::hard::{HardPressure, hard_pressure};
+use crate::mode::{ModeKind, ModeLimits};
 use crate::model::{
     CpuReading, GpuReading, MemoryReading, Reading, ResourceKind, ResourceSnapshot, VolumeReading,
 };
@@ -29,10 +42,10 @@ pub const ADMISSION_RETRY_MIN: Duration = CadenceConfig::ACTIVE_FLOOR;
 /// ...and no slower than the default watch cadence, so a waiting launch notices a freed slot or
 /// a recovered sampler within one watch interval even while the sampler idles at 15 s.
 pub const ADMISSION_RETRY_MAX: Duration = Duration::from_secs(5);
-/// How long a held provider launch waits in total before it ends as "resources unavailable":
-/// two full freshness windows. That covers the sampler's longest failure backoff (60 s) plus a
-/// fresh sample, and a pressure level's 20 s minimum dwell with room to spare, without leaving a
-/// thread waiting indefinitely on a machine that stays busy.
+/// How long a held user-requested launch waits in total (only genuine hard pressure or an
+/// explicit Custom count limit holds one) before it ends as "resources unavailable" and can be
+/// resumed: two full freshness windows, long enough for memory or disk to be freed, without
+/// leaving a thread waiting indefinitely. Start Anyway skips the wait at any time.
 pub const ADMISSION_WAIT_LIMIT: Duration =
     Duration::from_secs(MAX_ADMISSION_SAMPLE_AGE.as_secs() * 2);
 
@@ -120,6 +133,10 @@ pub enum AdmissionReason {
     CapacityUnavailable,
     Capacity {
         holds: Vec<HoldReason>,
+    },
+    /// Genuine hard pressure: the only machine condition that holds a user-requested agent.
+    HardPressure {
+        pressure: HardPressure,
     },
 }
 
@@ -233,6 +250,79 @@ pub fn evaluate_admission(
         reasons,
         snapshot_seq: valid_snapshot.map(|snapshot| snapshot.seq),
         sampled_at_unix_ms: valid_snapshot.map(|snapshot| snapshot.sampled_at_unix_ms),
+    }
+}
+
+/// Admission for a coding agent the person asked for (a pane, New agent, a KalVoice-launched
+/// agent, a user-initiated Squad or Handoff). Provider-agnostic.
+///
+/// The agent is admitted unless:
+/// - a current, valid sample shows genuine hard pressure ([`hard_pressure`]) for `workspace_id`,
+///   or
+/// - an explicit Custom-mode count limit the person set is reached.
+///
+/// CPU utilisation, soft memory headroom, pressure levels, KalCode's own memory share and
+/// missing, stale or invalid telemetry never hold it. `override_holds` (Start Anyway) admits it
+/// regardless; the decision still lists what would have held it, for the log.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_user_agent_admission(
+    snapshot: Option<&ResourceSnapshot>,
+    limits: &ModeLimits,
+    running: &RunningWork,
+    request: &CapacityRequest,
+    workspace_id: Option<&str>,
+    now_unix_ms: i64,
+    max_age: Duration,
+    override_holds: bool,
+) -> AdmissionDecision {
+    let mut reasons = Vec::new();
+    let counts = count_constraints(limits, running, request);
+    let mut additional = counts
+        .iter()
+        .map(|constraint| constraint.allows)
+        .min()
+        .unwrap_or(u32::MAX);
+    if additional == 0 {
+        reasons.push(AdmissionReason::Capacity {
+            holds: counts
+                .into_iter()
+                .filter(|constraint| constraint.allows == 0)
+                .map(|constraint| constraint.reason)
+                .collect(),
+        });
+    }
+
+    let sampled = snapshot.filter(|snapshot| snapshot.seq > 0);
+    let current = sampled.filter(|snapshot| {
+        now_unix_ms
+            .checked_sub(snapshot.sampled_at_unix_ms)
+            .and_then(|age| u64::try_from(age).ok())
+            .is_some_and(|age| age <= duration_ms(max_age))
+    });
+    if let Some(snapshot) = current {
+        let pressure = hard_pressure(snapshot, workspace_id);
+        if !pressure.is_empty() {
+            additional = 0;
+        }
+        reasons.extend(
+            pressure
+                .into_iter()
+                .map(|pressure| AdmissionReason::HardPressure { pressure }),
+        );
+    }
+
+    let held = !reasons.is_empty() && !override_holds;
+    AdmissionDecision {
+        state: if held {
+            AdmissionState::Held
+        } else {
+            AdmissionState::Allowed
+        },
+        mode: Some(limits.kind),
+        additional: if held { 0 } else { additional.max(1) },
+        reasons,
+        snapshot_seq: sampled.map(|snapshot| snapshot.seq),
+        sampled_at_unix_ms: sampled.map(|snapshot| snapshot.sampled_at_unix_ms),
     }
 }
 
@@ -380,6 +470,7 @@ impl AdmissionReason {
             Self::RequiredTelemetryUnavailable { .. } => "telemetry_unavailable",
             Self::CapacityUnavailable => "slot_unavailable",
             Self::Capacity { .. } => "capacity",
+            Self::HardPressure { pressure } => pressure.code(),
         }
     }
 }
@@ -397,33 +488,25 @@ pub fn hold_reason_code(reason: &HoldReason) -> &'static str {
     }
 }
 
-fn hold_reason_kind(reason: &HoldReason) -> LaunchHoldKind {
-    match reason {
-        HoldReason::UserLimit { .. } => LaunchHoldKind::ConcurrencyLimit,
-        HoldReason::ProviderLimit { .. } => LaunchHoldKind::ProviderLimit,
-        HoldReason::Pressure { resource, .. } => match resource {
-            ResourceKind::Cpu => LaunchHoldKind::CpuBusy,
-            ResourceKind::Memory => LaunchHoldKind::MemoryLow,
-            _ => LaunchHoldKind::Pressure,
-        },
-        HoldReason::CpuHeadroom { .. } => LaunchHoldKind::CpuBusy,
-        HoldReason::MemoryHeadroom { .. } => LaunchHoldKind::MemoryLow,
-        HoldReason::KalCodeMemoryCap { .. } => LaunchHoldKind::MemoryCap,
-        HoldReason::GpuLimit { .. } => LaunchHoldKind::Pressure,
-    }
-}
-
+/// The user-facing hold kinds of one reason. Only hard pressure and explicit Custom count limits
+/// can hold a user-requested agent; any other reason (background-only) maps to nothing.
 fn reason_kinds(reason: &AdmissionReason) -> Vec<LaunchHoldKind> {
     match reason {
-        AdmissionReason::GovernorNotReady { .. }
-        | AdmissionReason::SnapshotMissing
-        | AdmissionReason::RequiredTelemetryUnknown { .. }
-        | AdmissionReason::RequiredTelemetryUnavailable { .. }
-        | AdmissionReason::CapacityUnavailable => vec![LaunchHoldKind::TelemetryUnavailable],
-        AdmissionReason::SnapshotFromFuture { .. }
-        | AdmissionReason::SnapshotStale { .. }
-        | AdmissionReason::SnapshotModeMismatch { .. } => vec![LaunchHoldKind::TelemetryStale],
-        AdmissionReason::Capacity { holds } => holds.iter().map(hold_reason_kind).collect(),
+        AdmissionReason::HardPressure { pressure } => vec![match pressure {
+            HardPressure::MemoryCritical { .. } | HardPressure::CommitExhausted { .. } => {
+                LaunchHoldKind::MemoryCritical
+            }
+            HardPressure::DiskFull { .. } => LaunchHoldKind::DiskFull,
+        }],
+        AdmissionReason::Capacity { holds } => holds
+            .iter()
+            .filter_map(|hold| match hold {
+                HoldReason::UserLimit { .. } => Some(LaunchHoldKind::ConcurrencyLimit),
+                HoldReason::ProviderLimit { .. } => Some(LaunchHoldKind::ProviderLimit),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -445,39 +528,46 @@ pub fn decision_codes(decision: &AdmissionDecision) -> Vec<&'static str> {
     codes
 }
 
-/// The owner-facing summary of a held provider launch: the most actionable reason by
-/// [`LaunchHoldKind::PRECEDENCE`], the counts behind a count limit, and the wait policy.
+/// The owner-facing summary of a held user-requested launch: the real reason by
+/// [`LaunchHoldKind::PRECEDENCE`], the numbers behind it, and the wait policy. `None` when the
+/// decision has no reason that may hold a user-requested agent (the launch then proceeds).
 pub fn launch_hold(
     decision: &AdmissionDecision,
     retry_after: Duration,
     wait_limit: Duration,
-) -> LaunchHold {
+) -> Option<LaunchHold> {
     let kinds: Vec<LaunchHoldKind> = decision.reasons.iter().flat_map(reason_kinds).collect();
     let kind = LaunchHoldKind::PRECEDENCE
         .into_iter()
-        .find(|kind| kinds.contains(kind))
-        .unwrap_or(LaunchHoldKind::TelemetryUnavailable);
-    let counts = decision.reasons.iter().find_map(|reason| match reason {
-        AdmissionReason::Capacity { holds } => holds.iter().find_map(|hold| match hold {
-            HoldReason::UserLimit { running, limit, .. }
-                if kind == LaunchHoldKind::ConcurrencyLimit =>
-            {
-                Some((*running, *limit))
+        .find(|kind| kinds.contains(kind))?;
+    let mut hold = LaunchHold::new(kind, retry_after, wait_limit);
+    for reason in &decision.reasons {
+        match reason {
+            AdmissionReason::Capacity { holds } => {
+                for limit in holds {
+                    match limit {
+                        HoldReason::UserLimit { running, limit, .. }
+                            if kind == LaunchHoldKind::ConcurrencyLimit =>
+                        {
+                            (hold.running, hold.limit) = (Some(*running), Some(*limit));
+                        }
+                        HoldReason::ProviderLimit { running, limit, .. }
+                            if kind == LaunchHoldKind::ProviderLimit =>
+                        {
+                            (hold.running, hold.limit) = (Some(*running), Some(*limit));
+                        }
+                        _ => {}
+                    }
+                }
             }
-            HoldReason::ProviderLimit { running, limit, .. }
-                if kind == LaunchHoldKind::ProviderLimit =>
+            AdmissionReason::HardPressure { pressure }
+                if hold.free_mb.is_none() && reason_kinds(reason).contains(&kind) =>
             {
-                Some((*running, *limit))
+                let (free, floor) = pressure.evidence_mb();
+                (hold.free_mb, hold.floor_mb) = (Some(free), Some(floor));
             }
-            _ => None,
-        }),
-        _ => None,
-    });
-    LaunchHold {
-        kind,
-        running: counts.map(|(running, _)| running),
-        limit: counts.map(|(_, limit)| limit),
-        retry_after,
-        wait_limit,
+            _ => {}
+        }
     }
+    Some(hold)
 }

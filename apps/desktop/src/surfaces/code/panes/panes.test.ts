@@ -61,6 +61,21 @@ describe("pane labels", () => {
     expect(paneStatus("completed").label).toBe("DONE");
   });
 
+  it("never labels an agent whose process hasn't started IDLE: launching is STARTING, a hold is WAITING", () => {
+    expect(paneStatus("starting")).toMatchObject({ label: "STARTING" });
+    expect(paneStatus("waiting_for_dependency")).toMatchObject({
+      label: "WAITING",
+      tone: "waiting",
+      qualifier: "waiting on another task",
+    });
+    // A resource hold shows its real reason in place of the shared qualifier.
+    render(createElement(PaneStatusChip, { status: "waiting_for_dependency", qualifier: "memory is critically low" }));
+    expect(screen.getByText("WAITING")).toBeInTheDocument();
+    expect(screen.getByText("memory is critically low")).toBeInTheDocument();
+    expect(screen.queryByText("waiting on another task")).toBeNull();
+    expect(screen.queryByText(/IDLE|CPU busy/)).toBeNull();
+  });
+
   it("uses neutral glyphs and plain provider names", () => {
     expect(providerIdentity("claude-code")).toEqual({ name: "Claude Code", initial: "C", shape: "square" });
     expect(providerIdentity("codex").name).toBe("Codex");

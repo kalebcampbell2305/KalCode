@@ -71,13 +71,13 @@ test.describe("a fresh session", () => {
 test.describe("counts, filters, search and grouping", () => {
   test("the summary and chip counts come from real runtime state", async ({ page }) => {
     await open(page, "busy");
-    await expect(main(page).getByText("13 agents · 3 working · 3 need you · 2 done · 4 idle · 1 failed")).toBeVisible();
+    await expect(main(page).getByText("13 agents · 4 working · 3 need you · 2 done · 3 idle · 1 failed")).toBeVisible();
     await expect(chip(page, "All")).toHaveAccessibleName("All, 13");
     await expect(chip(page, "Needs you")).toHaveAccessibleName("Needs you, 3");
     await expect(chip(page, "Failed")).toHaveAccessibleName("Failed, 1");
-    await expect(chip(page, "Working")).toHaveAccessibleName("Working, 3");
+    await expect(chip(page, "Working")).toHaveAccessibleName("Working, 4");
     await expect(chip(page, "Done")).toHaveAccessibleName("Done, 2");
-    await expect(chip(page, "Idle")).toHaveAccessibleName("Idle, 4");
+    await expect(chip(page, "Idle")).toHaveAccessibleName("Idle, 3");
     await expect(cards(page)).toHaveCount(13);
   });
 
@@ -85,8 +85,10 @@ test.describe("counts, filters, search and grouping", () => {
     await open(page, "busy");
     await chip(page, "Working").click();
     await expect(chip(page, "Working")).toHaveAttribute("aria-pressed", "true");
-    await expect(cards(page)).toHaveCount(3);
+    await expect(cards(page)).toHaveCount(4);
     await expect(card(page, "Fix flaky checkout test")).toBeVisible();
+    // An agent held for a dependency is WAITING, still in flight: never Idle.
+    await expect(card(page, "Index docs for search")).toBeVisible();
     await chip(page, "Needs you").click();
     await expect(cards(page)).toHaveCount(3);
     // FAILED is its own group: a decision (retry or clear), not a question waiting for you.
@@ -97,8 +99,9 @@ test.describe("counts, filters, search and grouping", () => {
     await chip(page, "Done").click();
     await expect(cards(page)).toHaveCount(2);
     await chip(page, "Idle").click();
-    await expect(cards(page)).toHaveCount(4);
-    await expect(board(page).getByText("Showing 4 idle.")).toBeAttached();
+    await expect(cards(page)).toHaveCount(3);
+    await expect(card(page, "Index docs for search")).toHaveCount(0);
+    await expect(board(page).getByText("Showing 3 idle.")).toBeAttached();
     await chip(page, "All").click();
     await expect(cards(page)).toHaveCount(13);
   });
@@ -372,7 +375,8 @@ test.describe("widgets", () => {
     await open(page, "busy");
     const health = page.getByRole("region", { name: "Provider health" });
     // Never-checked providers show their accounts' sign-in (or "Not checked yet"); none is detected.
-    await expect(health.locator("[data-provider-health]")).toHaveCount(3);
+    // Claude Code, Codex, Gemini CLI and Cursor.
+    await expect(health.locator("[data-provider-health]")).toHaveCount(4);
     await expect(health.locator('[data-provider-health] >> text="Healthy"')).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
   });
@@ -435,7 +439,7 @@ test.describe("widgets", () => {
 
 test.describe("KalVoice filters the Dashboard", () => {
   for (const [said, chipLabel, count] of [
-    ["show only agents that are working", "Working", 3],
+    ["show only agents that are working", "Working", 4],
     ["show everything waiting for me", "Needs you", 3],
     ["show completed work", "Done", 2],
   ] as const) {

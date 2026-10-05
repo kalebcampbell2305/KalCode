@@ -2,6 +2,8 @@ import { expect, type Page, test } from "@playwright/test";
 
 async function openPalette(page: Page) {
   await page.goto("/?scenario=rail");
+  // A returning user with an active workspace is sent to Code once restore finishes; wait for
+  // that redirect, then choose Dashboard explicitly so the check never races it.
   await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
   await page
     .getByRole("navigation", { name: "Primary" })

@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 24,
-          "skippedMaximum": 24,
+          "skippedMinimum": 28,
+          "skippedMaximum": 28,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 21,
-          "skippedMaximum": 21,
+          "skippedMinimum": 25,
+          "skippedMaximum": 25,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 372,
+          "minimumExecuted": 381,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
@@ -338,6 +338,13 @@
   ],
   "rustIntentionalIgnores": [
     {
+      "path": "crates/providers/tests/cursor_real.rs",
+      "reason": "requires KALCODE_TEST_CURSOR_BIN containing an official Cursor Agent installation"
+    },
+    { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    { "path": "crates/providers/tests/claude_tools_real.rs", "reason": "real Claude Code; set KALCODE_REAL_CLAUDE" },
+    {
       "path": "apps/desktop/src-tauri/src/kalvoice_guardian.rs",
       "reason": "requires production-signed pinned components and the native guardian helper"
     },
@@ -380,10 +387,6 @@
       "reason": "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"
     },
     {
-      "path": "crates/providers/tests/cursor_real.rs",
-      "reason": "requires KALCODE_TEST_CURSOR_BIN containing an official Cursor Agent installation"
-    },
-    {
       "path": "crates/providers/tests/gemini_sign_in_real.rs",
       "reason": "needs a real Gemini CLI 0.61.0 (KALCODE_REAL_GEMINI); no sign-in, prompt or quota"
     },
@@ -398,6 +401,10 @@
     {
       "path": "crates/providers/tests/interactive_cli_real.rs",
       "reason": "consumes AI quota; requires the owner's explicit approval"
+    },
+    {
+      "path": "crates/providers/tests/native_parity_real.rs",
+      "reason": "reads the real provider configuration; run with KALCODE_NATIVE_PARITY=1"
     },
     {
       "path": "crates/providers/tests/interactive_real.rs",

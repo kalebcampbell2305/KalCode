@@ -170,7 +170,7 @@ test.describe("providers", () => {
     const gemini = page.getByRole("region", { name: "Gemini CLI · Personal" });
     await expect(gemini.getByRole("button", { name: "Sign in Personal" })).toBeVisible();
     await expect(gemini.getByRole("button", { name: /auth pane/i })).toHaveCount(0);
-    await expect(page.getByText(/Gemini CLI opens Google sign-in in your browser/)).toBeVisible();
+    await expect(page.getByText(/Claude Code, Codex and Gemini use managed account profiles/)).toBeVisible();
     await expectNoSeriousA11yViolations(page);
   });
 
@@ -220,8 +220,8 @@ test.describe("providers", () => {
     await expect(activity.getByText("Claude Code 2.1.282")).toHaveCount(1);
 
     const runtime = page.getByRole("region", { name: "Runtime health" });
-    await expect(runtime.getByText("3 of 3 installed")).toBeVisible();
-    await expect(runtime.getByText("Claude Code, Codex, Gemini CLI")).toBeVisible();
+    await expect(runtime.getByText("4 of 4 installed")).toBeVisible();
+    await expect(runtime.getByText("Claude Code, Codex, Gemini CLI, Cursor")).toBeVisible();
   });
 
   test("the dashboard does not start detection on its own", async ({ page }) => {
@@ -267,7 +267,7 @@ test.describe("providers", () => {
       await expect(region.getByText("Sign-in", { exact: true })).toHaveCount(0);
     }
     await page.getByRole("button", { name: "Dashboard" }).click();
-    await expect(page.getByRole("region", { name: "Runtime health" }).getByText("0 of 3 installed")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Runtime health" }).getByText("0 of 4 installed")).toBeVisible();
   });
 
   test("an outdated CLI explains what to do; sign-in stays the accounts' state", async ({ page }) => {

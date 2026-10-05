@@ -1905,6 +1905,13 @@ pub(crate) fn mark_running_terminals_ended(conn: &Connection) -> Result<usize> {
     )?)
 }
 
+fn duplicate_directory_unavailable() -> KalError {
+    KalError::validation(
+        "terminal_directory_unavailable",
+        "KalCode couldn't read this terminal's working directory. Open a new terminal from the workspace instead.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2210,11 +2217,4 @@ mod tests {
         assert_eq!(folder_name(Path::new("/home/me/site")), "site");
         assert_eq!(folder_name(Path::new("/")), "/");
     }
-}
-
-fn duplicate_directory_unavailable() -> KalError {
-    KalError::validation(
-        "terminal_directory_unavailable",
-        "KalCode couldn't read this terminal's working directory. Open a new terminal from the workspace instead.",
-    )
 }

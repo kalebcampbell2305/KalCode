@@ -34,7 +34,7 @@
 
 .layoutPreview i:first-child {
   grid-row: span 2;
-  background: var(--color-accent-subtle);
+  background: var(--color-accent-soft);
   opacity: 1;
 }
 

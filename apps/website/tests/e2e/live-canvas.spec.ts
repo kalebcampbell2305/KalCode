@@ -16,6 +16,26 @@ async function open(page: import("@playwright/test").Page) {
   return errors;
 }
 
+/** The element's box once two consecutive reads agree (smooth scrolling and layout have settled). */
+async function settledBox(page: import("@playwright/test").Page, locator: import("@playwright/test").Locator) {
+  let previous = await locator.boundingBox();
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await page.waitForTimeout(25);
+    const current = await locator.boundingBox();
+    if (
+      current &&
+      previous &&
+      current.x === previous.x &&
+      current.y === previous.y &&
+      current.width === previous.width &&
+      current.height === previous.height
+    )
+      return current;
+    previous = current;
+  }
+  throw new Error("element bounds never settled");
+}
+
 test("task layouts and Tidy preserve pane identity, drafts and newly opened work", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const errors = await open(page);
@@ -56,12 +76,16 @@ test("pointer preview, keyboard movement and resizing use the same canvas", asyn
   await page.keyboard.press("ArrowRight");
   await expect(range).toHaveValue("60");
   await app(page).locator('[data-canvas-grip="f1"]').scrollIntoViewIfNeeded();
-  const source = await app(page).locator('[data-canvas-grip="f1"]').boundingBox();
-  const target = await app(page).locator('[data-canvas-frame="f2"]').boundingBox();
-  if (!source || !target) throw new Error("drag bounds missing");
+  // The page scrolls smoothly (critical.css), so measure only once the scroll has settled.
+  const source = await settledBox(page, app(page).locator('[data-canvas-grip="f1"]'));
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
   await page.mouse.down();
-  await page.mouse.move(target.x + 15, target.y + 90, { steps: 6 });
+  // Start the drag, then aim at where the target is now.
+  await page.mouse.move(source.x + source.width / 2 + 12, source.y + source.height / 2 + 12, { steps: 2 });
+  const target = await settledBox(page, app(page).locator('[data-canvas-frame="f2"]'));
+  // The drop side depends only on the horizontal position. Aim at the pane's vertical middle: its
+  // top edge can sit under the sticky site header, depending on where focus scrolling settled.
+  await page.mouse.move(target.x + 15, target.y + target.height / 2, { steps: 6 });
   await expect(app(page).locator('[data-canvas-frame="f2"]')).toHaveAttribute("data-canvas-snap", "before");
   await page.mouse.up();
   await expect(app(page).locator("[data-canvas-frame]").first()).toHaveAttribute("data-canvas-frame", "f1");

@@ -501,10 +501,19 @@ fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
         ProviderError::Start(_) => "The provider could not start. Try resuming the thread.",
         ProviderError::Io(_) => "KalCode could not communicate with this provider pane.",
         ProviderError::Protocol(_) => "The provider returned an unreadable response.",
-        ProviderError::ResourcesHeld(_) => {
+        // Only genuine hard pressure or the person's own Custom limit holds a coding agent:
+        // say which, and what they can do.
+        ProviderError::ResourcesHeld(hold) => {
+            let reason = hold.kind.phrase();
+            let action = if hold.kind.freed_by_stopping_a_thread() {
+                "Stop an agent you're not using, or choose Start Anyway."
+            } else {
+                "Run KalTidy to free resources, or choose Start Anyway."
+            };
+            let message = format!("This agent is waiting to start: {reason}. {action}");
             return KalError::validation(
                 kalcode_contracts::threads::error_codes::WAITING_FOR_RESOURCES,
-                "KalCode is waiting for system resources. Try again in a moment.",
+                message,
             )
             .to_ipc();
         }
@@ -838,6 +847,9 @@ pub fn provider_pane_attach(
 }
 
 #[tauri::command]
+// `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+// supported toolchains lack; keep one spelling that builds on both.
+#[allow(deprecated)]
 pub fn provider_pane_ack(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,

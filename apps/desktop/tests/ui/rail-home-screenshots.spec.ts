@@ -69,7 +69,11 @@ const SCENES: Scene[] = [
     prepare: async (page) => {
       await page.keyboard.press("Control+k");
       await page.keyboard.type("auth");
-      await expect(page.getByRole("option").first()).toContainText("Authentication Refactor");
+      // The quick switcher also indexes workspace files, which rank first for a bare prefix
+      // ("auth.spec.ts"); the thread is still a best match (as rail-home.spec asserts).
+      await expect(
+        page.getByRole("dialog", { name: "Command palette" }).getByRole("group", { name: "Best matches" }),
+      ).toContainText("Authentication Refactor");
     },
   },
   {

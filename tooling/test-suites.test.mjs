@@ -13,6 +13,8 @@ import {
   parseNodeTestReport,
   parsePlaywrightReport,
   parseVitestReport,
+  playwrightFlakyTitles,
+  reportFailureNames,
   runSuite,
   selectProfile,
   selectSuites,
@@ -27,16 +29,16 @@ test("the registered Rust release gate includes the production speech engine and
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
   // The official Cursor installation probe is intentionally opt-in on every platform.
   for (const [platform, expected] of [
-    ["win32", 24],
-    ["darwin", 24],
+    ["win32", 28],
+    ["darwin", 28],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 21],
+    ["linux", 25],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 24);
+  assert.equal(inventory.rustIntentionalIgnores.length, 28);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {
@@ -148,6 +150,55 @@ function playwrightReport({ expected = 2, unexpected = 0, flaky = 0, skipped = [
     stats: { expected, unexpected, flaky, skipped: skipped.length },
   };
 }
+
+test("a failed Vitest or Playwright run names its failed tests from the report", () => {
+  const vitest = {
+    testResults: [
+      {
+        name: "C:/repo/apps/desktop/src/a.test.tsx",
+        status: "failed",
+        assertionResults: [
+          { status: "passed", fullName: "ok" },
+          { status: "failed", fullName: "pane > restores", failureMessages: ["AssertionError: expected 1\n at x"] },
+        ],
+      },
+      {
+        name: "/repo/apps/desktop/src/b.test.ts",
+        status: "failed",
+        message: "Failed to load url ./missing",
+        assertionResults: [],
+      },
+    ],
+  };
+  assert.deepEqual(reportFailureNames(vitest), [
+    "desktop/src/a.test.tsx › pane > restores — AssertionError: expected 1",
+    "desktop/src/b.test.ts — Failed to load url ./missing",
+  ]);
+  const unexpected = { status: "unexpected", results: [{ error: { message: "Timeout\nmore" } }] };
+  const playwright = {
+    suites: [{ specs: [{ file: "x.spec.ts", title: "drag", tests: [unexpected] }] }],
+    errors: [{ message: "webServer failed" }],
+  };
+  assert.deepEqual(reportFailureNames(playwright), ["x.spec.ts › drag — Timeout", "run error — webServer failed"]);
+  assert.deepEqual(reportFailureNames(null), []);
+});
+
+test("a flaky Playwright gate names its flaky tests", () => {
+  const report = {
+    suites: [
+      {
+        file: "home.spec.ts",
+        specs: [
+          { file: "home.spec.ts", title: "stable", tests: [{ status: "expected" }] },
+          { file: "home.spec.ts", title: "demo opens", tests: [{ status: "flaky" }] },
+        ],
+        suites: [{ specs: [{ file: "nested.spec.ts", title: "tour", tests: [{ status: "flaky" }] }] }],
+      },
+    ],
+  };
+  assert.deepEqual(playwrightFlakyTitles(report), ["home.spec.ts › demo opens", "nested.spec.ts › tour"]);
+  assert.deepEqual(playwrightFlakyTitles({}), []);
+});
 
 test("the reviewed inventory covers every required workspace suite and Rust ignore", () => {
   assert.equal(inventory.suites.length, 13);
@@ -282,8 +333,8 @@ test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
-  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 372);
-  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 372);
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 381);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 381);
   assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
   assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
 
@@ -291,9 +342,9 @@ test("desktop UI functional and CI-visual gates exactly partition the establishe
   const visual = listedDesktopUiTests("test:ui:visual-ci");
   const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
 
-  assert.equal(functional.size, 372);
+  assert.equal(functional.size, 381);
   assert.equal(visual.size, 56);
-  assert.equal(established.size, 428);
+  assert.equal(established.size, 437);
   assert.deepEqual(
     [...functional].filter((id) => visual.has(id)),
     [],

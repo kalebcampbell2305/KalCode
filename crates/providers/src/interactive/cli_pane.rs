@@ -372,9 +372,11 @@ impl InteractiveCliProvider {
                         ));
                     }
                     let registration = bridge
-                        .register_channel(
-                            Arc::new(HandlerRef(Arc::downgrade(&shared))),
+                        .register_channel_with(
+                            Arc::new(HandlerRef::new(&shared)),
                             kalcode_hook_bridge::server::HookChannel::Cursor,
+                            // Cursor hooks only observe; Cursor's own permissions decide.
+                            kalcode_hook_bridge::server::HookGate::Observe,
                         )
                         .map_err(|error| ProviderError::Start(error.to_string()))?;
                     let plugin_dir = self
@@ -414,9 +416,11 @@ impl InteractiveCliProvider {
                     ));
                 }
                 let registration = bridge
-                    .register_channel(
-                        Arc::new(HandlerRef(Arc::downgrade(&shared))),
+                    .register_channel_with(
+                        Arc::new(HandlerRef::new(&shared)),
                         kalcode_hook_bridge::server::HookChannel::Codex,
+                        // Codex reports status through `notify` only; nothing is ever gated.
+                        kalcode_hook_bridge::server::HookGate::Observe,
                     )
                     .map_err(|e| ProviderError::Start(e.to_string()))?;
                 let args = codex_args(

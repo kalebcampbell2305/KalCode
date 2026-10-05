@@ -25,7 +25,7 @@ export function rebindBlocker(thread: ThreadSummary, archived = false): string |
     return "This thread is working. Finish or stop the current turn first, then switch accounts.";
   }
   if (isWaitingForResources(thread)) {
-    return "This thread is waiting for system resources to start. Stop it first, then switch accounts.";
+    return "This thread is waiting to start. Stop it first, then switch accounts.";
   }
   return null;
 }

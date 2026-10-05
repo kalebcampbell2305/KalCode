@@ -376,14 +376,22 @@ test.describe("project surface", () => {
 });
 
 test.describe("search", () => {
-  test("the palette finds “auth” → Authentication Refactor first, and Enter opens it", async ({ page }) => {
+  test("the palette finds “auth” → Authentication Refactor, first among threads, and Enter opens it", async ({
+    page,
+  }) => {
     await open(page, "rail");
     await page.keyboard.press("Control+k");
     await page.keyboard.type("auth");
+    const dialog = page.getByRole("dialog", { name: "Command palette" });
+    // The quick switcher also indexes the active workspace's files, which rank first for a bare
+    // prefix ("auth.spec.ts"); the thread is still a best match, and first among threads.
+    await expect(dialog.getByRole("group", { name: "Best matches" })).toContainText("Authentication Refactor");
+    await expect(page.getByText("Also matching authentication")).toBeVisible();
+    await dialog.getByRole("button", { name: "Threads", exact: true }).click();
+    await dialog.getByRole("combobox").focus();
     const first = page.getByRole("option").first();
     await expect(first).toContainText("Authentication Refactor");
     await expect(first).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByText("Also matching authentication")).toBeVisible();
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toHaveAttribute("data-surface", "threads");
   });
@@ -411,7 +419,7 @@ test.describe("search", () => {
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("combobox")).toHaveValue("auth");
-    await expect(page.getByRole("option").first()).toContainText("Authentication Refactor");
+    await expect(dialog.getByRole("group", { name: "Best matches" })).toContainText("Authentication Refactor");
   });
 });
 

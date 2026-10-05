@@ -32,6 +32,11 @@ export interface MemoryWorkspaces {
   runningProcessCount(): number;
   /** Test hook: commands running under a terminal's shell, as the related-process scan sees them. */
   setTerminalWork(terminalId: string, names: readonly string[]): void;
+  /**
+   * Test hook: a workspace's id and its terminals in tab order, by folder name — e.g. to store a
+   * layout from a "previous run" before Code first opens that workspace.
+   */
+  workspaceTerminals(name: string): { workspaceId: string; terminalIds: string[] } | null;
   /** The related-process scan: each live terminal's shell, plus the work set under it. */
   relatedProcesses(): ProcessInfo[];
 }
@@ -619,6 +624,10 @@ export function createMemoryWorkspaces({
     setTerminalWork: (terminalId, names) => {
       if (names.length === 0) terminalWork.delete(terminalId);
       else terminalWork.set(terminalId, [...names]);
+    },
+    workspaceTerminals: (name) => {
+      const workspace = [...workspaces.values()].find((w) => w.name === name);
+      return workspace ? { workspaceId: workspace.id, terminalIds: tabsOf(workspace.id).map((t) => t.info.id) } : null;
     },
     relatedProcesses: () => {
       const list: ProcessInfo[] = [];

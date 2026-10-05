@@ -168,6 +168,7 @@ const TOOL_ENV: EnvPolicy = EnvPolicy {
         "PYENV_HOME",
         "DOCKER_CONFIG",
     ],
+    inherit_all: false,
 };
 
 /// Set on every probe: never download a package manager or a toolchain to answer `--version`.

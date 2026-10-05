@@ -92,9 +92,13 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
     const statuses = await invoke<ProviderStatusLite[]>(page, "providers_list");
     const claude = statuses.find((s) => s.id === "claude-code");
     expect(claude?.detection, "detection ran before the options were shown").not.toBeNull();
-    // PROVIDERS-2: Claude Code, Codex and Gemini CLI all have adapters; detection decides.
+    // PROVIDERS-2: Claude Code, Codex and Gemini CLI all have adapters; detection decides. Cursor
+    // runs only as a coding terminal, so it is never offered for threads.
     const isUsable = (s: ProviderStatusLite) =>
-      s.adapter === "implemented" && s.detection?.state === "installed" && s.detection.auth !== "not_authenticated";
+      s.id !== "cursor" &&
+      s.adapter === "implemented" &&
+      s.detection?.state === "installed" &&
+      s.detection.auth !== "not_authenticated";
     const usableIds = statuses.filter(isUsable).map((s) => s.id);
     const anyUsable = usableIds.length > 0;
     const options = await invoke<{ providers: { id: string }[]; workspaces: { name: string }[] }>(

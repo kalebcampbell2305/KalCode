@@ -101,6 +101,11 @@ test("image attachment stores real pixels and pastes into its isolated native te
     await page.screenshot({ path: test.info().outputPath("native-code-image.png") });
     await page.getByRole("button", { name: "Actions for pane 1" }).click();
     await page.getByRole("menuitem", { name: "End terminal", exact: true }).click();
+    // Smart Close (#222) asks before stopping a running shell; ending it removes its images.
+    await page
+      .getByRole("alertdialog", { name: "Close active work?" })
+      .getByRole("button", { name: "Stop and Close", exact: true })
+      .click();
     await expect.poll(() => existsSync(storedDir)).toBe(false);
   } finally {
     await closeGracefully(app);
@@ -201,6 +206,11 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await typeInTerminal(page, "ping -n 117 127.0.0.1");
     await expect.poll(() => processesMatching("-n 117 127.0.0.1").length, { timeout: 20_000 }).toBeGreaterThan(0);
     await page.keyboard.press("Control+Shift+W");
+    // Smart Close (#222) asks before closing a terminal with a running program; stop it.
+    await page
+      .getByRole("alertdialog", { name: "Close active work?" })
+      .getByRole("button", { name: "Stop and Close", exact: true })
+      .click();
     await expect(page.getByRole("tab")).toHaveCount(2); // the closed terminal is forgotten
     await expect.poll(() => processesMatching("-n 117 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
     await expect(page.getByRole("button", { name: /in background/ })).toHaveCount(0);

@@ -49,6 +49,17 @@ impl HookChannel {
     }
 }
 
+/// Whether KalCode decides a registration's `PreToolUse` calls or only observes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookGate {
+    /// The provider's own permission system decides; KalCode records activity. When a handler is
+    /// busy or overruns, the call gets no decision (never a KalCode-forced prompt).
+    Observe,
+    /// KalCode decides (engine routing). A busy or overrunning handler hands the call to the
+    /// provider's own prompt ("ask").
+    Decide,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub endpoint: Endpoint,
@@ -135,6 +146,7 @@ struct Session {
     key: SessionKey,
     handler: Arc<dyn HookHandler>,
     channel: HookChannel,
+    gate: HookGate,
     handler_permits: Arc<tokio::sync::Semaphore>,
     status_rate: Arc<Mutex<StatusRate>>,
 }
@@ -306,11 +318,21 @@ impl BridgeServer {
         &self.shared.endpoint
     }
 
-    /// Registers a session restricted to one provider event family.
+    /// Registers a session restricted to one provider event family, decided by KalCode.
     pub fn register_channel(
         &self,
         handler: Arc<dyn HookHandler>,
         channel: HookChannel,
+    ) -> std::io::Result<Registration> {
+        self.register_channel_with(handler, channel, HookGate::Decide)
+    }
+
+    /// Registers a session restricted to one provider event family with an explicit gate.
+    pub fn register_channel_with(
+        &self,
+        handler: Arc<dyn HookHandler>,
+        channel: HookChannel,
+        gate: HookGate,
     ) -> std::io::Result<Registration> {
         let session_id = random_id()?;
         let key = SessionKey::generate()?;
@@ -320,6 +342,7 @@ impl BridgeServer {
                 key: key.clone(),
                 handler,
                 channel,
+                gate,
                 handler_permits: Arc::new(tokio::sync::Semaphore::new(
                     self.shared.config.max_handlers_per_session,
                 )),
@@ -521,13 +544,13 @@ async fn read_frame<R: AsyncRead + Unpin, T: for<'de> serde::Deserialize<'de>>(
 }
 
 /// The fail-safe reply when a handler can't answer.
-fn fallback(record: &HookRecord) -> HookReply {
-    if record.event.is_some_and(HookEvent::is_blocking) {
-        HookReply::Ask {
+fn fallback(record: &HookRecord, gate: HookGate) -> HookReply {
+    match (record.event.is_some_and(HookEvent::is_blocking), gate) {
+        (true, HookGate::Decide) => HookReply::Ask {
             reason: "KalCode couldn't decide in time; answer in the provider.".into(),
-        }
-    } else {
-        HookReply::Ack
+        },
+        (true, HookGate::Observe) => HookReply::NoDecision,
+        (false, _) => HookReply::Ack,
     }
 }
 
@@ -560,13 +583,14 @@ async fn serve<C: AsyncRead + AsyncWrite + Unpin>(
         stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
         return;
     }
-    let (key, handler, channel, handler_permits, status_rate) = {
+    let (key, handler, channel, gate, handler_permits, status_rate) = {
         let sessions = shared.sessions();
         match sessions.get(&request.session) {
             Some(session) => (
                 session.key.clone(),
                 session.handler.clone(),
                 session.channel,
+                session.gate,
                 session.handler_permits.clone(),
                 session.status_rate.clone(),
             ),
@@ -602,7 +626,7 @@ async fn serve<C: AsyncRead + AsyncWrite + Unpin>(
         tracing::warn!(event = "hook_bridge.wrong_channel");
         return;
     }
-    let safe = fallback(&record);
+    let safe = fallback(&record, gate);
     let rate_limited = !record.event().is_some_and(HookEvent::is_blocking)
         && !status_rate
             .lock()

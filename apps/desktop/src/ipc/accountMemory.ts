@@ -15,7 +15,14 @@ import {
   SESSION_EXPIRED_REASON,
 } from "./account.ts";
 
-export type AccountMemoryScenario = "fresh" | "unactivated" | "ready" | "ready_pro" | "expired" | "offline_grace";
+export type AccountMemoryScenario =
+  | "fresh"
+  | "unactivated"
+  | "ready"
+  | "ready_pro"
+  | "ready_max"
+  | "expired"
+  | "offline_grace";
 type HandlerResult = AccountSnapshot | AccountOpenResult | AccountUsageSnapshot | RuntimeStatus | null;
 type AccountMemoryHandler = (args?: Record<string, unknown>) => Promise<HandlerResult>;
 
@@ -92,6 +99,8 @@ function initialSnapshot(scenario: AccountMemoryScenario): AccountSnapshot {
       return ready();
     case "ready_pro":
       return ready("pro");
+    case "ready_max":
+      return ready("max");
     case "offline_grace":
       return offlineGrace();
   }

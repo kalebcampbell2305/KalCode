@@ -1205,6 +1205,11 @@ fn powershell_duplicate_uses_provider_location_and_keeps_custom_names() {
     let project = tempfile::tempdir().expect("project");
     let nested = project.path().join("PowerShell folder");
     std::fs::create_dir(&nested).unwrap();
+    // The long, plain form PowerShell prints in its prompt. TEMP can be an 8.3 short path (the
+    // gate's kalcode-ci account resolves to C:\Users\KADE73~1), which the prompt never shows.
+    let canonical = std::fs::canonicalize(&nested).unwrap();
+    let canonical = canonical.to_string_lossy();
+    let nested_long = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
     let workspace = core.open_workspace(project.path()).unwrap();
     for shell in core
         .shells()
@@ -1216,14 +1221,13 @@ fn powershell_duplicate_uses_provider_location_and_keeps_custom_names() {
             .unwrap();
         let output = Output::attach(&core, &original.id);
         let command = format!(
-            "Set-Location -LiteralPath '{}'; Write-Output ('READY' + '-POWERSHELL')\r\n",
-            nested.display()
+            "Set-Location -LiteralPath '{nested_long}'; Write-Output ('READY' + '-POWERSHELL')\r\n"
         );
         core.write_terminal(&original.id, command.as_bytes())
             .unwrap();
         output.wait_for("READY-POWERSHELL");
         // Prompt synchronization follows output; wait for it before invoking the user action.
-        output.wait_for(&format!("{}>", nested.display()));
+        output.wait_for(&format!("{nested_long}>"));
         let copy = core
             .duplicate_terminal(&original.id, size(), None)
             .expect("PowerShell duplicate");

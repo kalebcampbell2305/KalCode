@@ -47,7 +47,10 @@ use crate::orchestrator::{TalkTarget, talk_route};
 const CORPUS: &str = include_str!("corpus.json");
 /// Paraphrases written AFTER the proposed rules, to check they generalize.
 const HOLDOUT: &str = include_str!("holdout.json");
-const TIMING_ITERATIONS: usize = 200;
+/// Latency samples per case. Only an optimized build measures real latency; in the debug
+/// `cargo test --workspace` gate, 200 samples × 375 cases × several pipeline paths took 11 of the
+/// Rust gate's 25 minutes on the gate machine. Every case is still scored for accuracy either way.
+const TIMING_ITERATIONS: usize = if cfg!(debug_assertions) { 3 } else { 200 };
 
 // ---------------------------------------------------------------------------------------------
 // Fixture world (mirrors the executor's resolution rules).

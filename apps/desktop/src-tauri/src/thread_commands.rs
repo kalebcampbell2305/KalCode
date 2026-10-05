@@ -23,7 +23,6 @@ use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
 use kalcode_core::{Core, ErrorCategory, IpcError, KalError};
 use kalcode_permissions::{PermissionService, PermissionSettings, ThreadModeStore};
 use kalcode_providers::accounts::AccountStore;
-use kalcode_providers::codex::managed_policy::CloudConfigEligibility;
 use kalcode_providers::health::observe::ObservedProvider;
 use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::model::{AdapterState, ProviderStatus};
@@ -1470,33 +1469,20 @@ pub fn thread_rebind_account(
         )
         .log_and_convert("thread_rebind_account"));
     }
-    // The cached plan truth only: a rebind never refreshes or signs in (that happens at launch).
-    let codex_plan = |account_id: &str| {
-        state
-            .provider_runtime
-            .as_ref()
-            .and_then(|authority| authority.codex_cloud_config(account_id).ok())
-    };
-    rebind_thread_account(
-        app.core()?,
-        runtime,
-        &thread_id,
-        &provider_account_id,
-        codex_plan,
-    )
-    .map_err(|error| error.log_and_convert("thread_rebind_account"))
+    rebind_thread_account(app.core()?, runtime, &thread_id, &provider_account_id)
+        .map_err(|error| error.log_and_convert("thread_rebind_account"))
 }
 
 /// Validates what the thread runtime can't see, then rebinds. Order (mirrored by the memory
 /// transport): archived thread; account id, existence, provider and removal; the current
 /// account is a no-op; sign-in state (`not_authenticated` refused, `unknown` allowed because
-/// launch re-checks); a cached Codex organization plan; then the runtime's busy checks.
+/// launch re-checks); then the runtime's busy checks. Every Codex plan can be selected (native
+/// provider parity).
 fn rebind_thread_account(
     core: &Arc<Core>,
     runtime: &ThreadRuntime,
     thread_id: &str,
     account_id: &str,
-    codex_plan: impl Fn(&str) -> Option<CloudConfigEligibility>,
 ) -> kalcode_core::Result<ThreadSummary> {
     let thread = runtime.get(thread_id)?;
     if thread.archived_at.is_some() {
@@ -1507,26 +1493,17 @@ fn rebind_thread_account(
     }
     let account = AccountStore::new(core.clone()).get(account_id)?;
     let account = validate_creation_account(account, thread.provider_id.as_str())?;
-    if thread.provider_account_id.as_deref() != Some(account.id.as_str()) {
-        if account.authentication_state == AuthState::NotAuthenticated {
-            return Err(KalError::new(
-                ErrorCategory::Provider,
-                "provider_account_not_authenticated",
-                format!(
-                    "{label} isn't signed in. Sign in to {label} in Providers, then switch.",
-                    label = account.display_name
-                ),
-            ));
-        }
-        if account.provider_id.as_str() == ProviderId::CODEX
-            && codex_plan(&account.id) == Some(CloudConfigEligibility::Eligible)
-        {
-            return Err(KalError::new(
-                ErrorCategory::Provider,
-                "provider_account_plan_unsupported",
-                "This Codex organization plan isn't supported by managed profiles yet.",
-            ));
-        }
+    if thread.provider_account_id.as_deref() != Some(account.id.as_str())
+        && account.authentication_state == AuthState::NotAuthenticated
+    {
+        return Err(KalError::new(
+            ErrorCategory::Provider,
+            "provider_account_not_authenticated",
+            format!(
+                "{label} isn't signed in. Sign in to {label} in Providers, then switch.",
+                label = account.display_name
+            ),
+        ));
     }
     runtime.rebind_account(thread_id, &account.id)
 }
@@ -1542,6 +1519,30 @@ pub fn thread_stop(
         .runtime()?
         .stop(&thread_id)
         .map_err(|e| e.log_and_convert("thread_stop"))
+}
+
+/// Start Anyway: the person's explicit override for a coding agent the Resource Governor is
+/// holding (genuine hard pressure or an explicit Custom limit). Grants this thread a one-launch
+/// override, then re-checks its held launch or turn at once, or resumes a launch whose wait ran
+/// out. Provider-agnostic.
+#[tauri::command(async)]
+pub fn thread_start_anyway(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    thread_id: String,
+) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
+    if !kalcode_contracts::ids::is_valid_id(&thread_id) {
+        return Err(
+            KalError::validation("invalid_thread", "That thread id isn't valid.")
+                .log_and_convert("thread_start_anyway"),
+        );
+    }
+    let runtime = state.runtime()?;
+    state.resources.grant_start_anyway(&thread_id);
+    runtime
+        .retry_held_launch(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_start_anyway"))
 }
 
 #[tauri::command(async)]
@@ -2416,15 +2417,8 @@ mod tests {
             &self,
             thread: &ThreadSummary,
             account_id: &str,
-            plan: Option<CloudConfigEligibility>,
         ) -> kalcode_core::Result<ThreadSummary> {
-            rebind_thread_account(
-                &self.accounts.core,
-                &self.runtime,
-                &thread.id,
-                account_id,
-                |_| plan,
-            )
+            rebind_thread_account(&self.accounts.core, &self.runtime, &thread.id, account_id)
         }
 
         fn in_use(&self, provider: &str, account: &ProviderAccount) -> bool {
@@ -2447,7 +2441,7 @@ mod tests {
             "the idle session holds A"
         );
 
-        let rebound = fixture.rebind(&thread, &b.id, None).expect("rebind");
+        let rebound = fixture.rebind(&thread, &b.id).expect("rebind");
         assert_eq!(rebound.provider_account_id.as_deref(), Some(b.id.as_str()));
         assert_eq!(rebound.account_label.as_deref(), Some("Gemini B"));
         assert!(
@@ -2499,10 +2493,7 @@ mod tests {
             ),
             ("not-an-id", "provider_account_id_invalid"),
         ] {
-            assert_eq!(
-                fixture.rebind(&thread, account, None).expect_err(code).code,
-                code
-            );
+            assert_eq!(fixture.rebind(&thread, account).expect_err(code).code, code);
         }
         let unchanged = fixture.runtime.get(&thread.id).expect("thread");
         assert_eq!(
@@ -2518,26 +2509,14 @@ mod tests {
             .store
             .mark_authentication(&a.id, AuthState::NotAuthenticated, None, None)
             .expect("signed out");
-        let same = fixture.rebind(&thread, &a.id, None).expect("same account");
+        let same = fixture.rebind(&thread, &a.id).expect("same account");
         assert_eq!(same.status, ThreadStatus::Idle);
 
-        // Codex: a cached organization plan is refused now, not on the next message; an
-        // unverified plan is left to the launch-time refresh.
+        // Codex: an organization plan switches like any other (native provider parity).
         let codex_thread = fixture.idle_thread(ProviderId::CODEX, &work);
-        assert_eq!(
-            fixture
-                .rebind(
-                    &codex_thread,
-                    &org.id,
-                    Some(CloudConfigEligibility::Eligible)
-                )
-                .expect_err("organization plan")
-                .code,
-            "provider_account_plan_unsupported"
-        );
         fixture
-            .rebind(&codex_thread, &org.id, None)
-            .expect("unverified plan is checked at launch");
+            .rebind(&codex_thread, &org.id)
+            .expect("organization plans switch like any other");
         assert_eq!(fixture.codex.launches().len(), 1);
 
         fixture.runtime.stop(&thread.id).expect("stop");
@@ -2545,7 +2524,7 @@ mod tests {
         let archived = fixture.runtime.get(&thread.id).expect("archived thread");
         assert_eq!(
             fixture
-                .rebind(&archived, &a.id, None)
+                .rebind(&archived, &a.id)
                 .expect_err("archived thread")
                 .code,
             "thread_archived"
@@ -2575,7 +2554,7 @@ mod tests {
         let archived = fixture.runtime.get(&thread.id).expect("archived");
         assert_eq!(
             fixture
-                .rebind(&archived, &b.id, None)
+                .rebind(&archived, &b.id)
                 .expect_err("archived thread")
                 .code,
             "thread_archived"
@@ -2588,7 +2567,7 @@ mod tests {
         assert!(open(&fixture.runtime));
         // Restored threads behave like any open thread again.
         fixture
-            .rebind(&restored, &b.id, None)
+            .rebind(&restored, &b.id)
             .expect("rebind after restore");
     }
 

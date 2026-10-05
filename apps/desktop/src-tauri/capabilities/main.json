@@ -164,6 +164,7 @@
     "allow-thread-review-prompt",
     "allow-thread-cancel-prompt-review",
     "allow-thread-stop",
+    "allow-thread-start-anyway",
     "allow-thread-rebind-account",
     "allow-thread-rename",
     "allow-thread-duplicate",

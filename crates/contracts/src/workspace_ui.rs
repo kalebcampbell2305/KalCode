@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// The 12 display statuses every surface shows (Dashboard, rail, panes, notifications,
+/// The 13 display statuses every surface shows (Dashboard, rail, panes, notifications,
 /// KalVoice). Always rendered with text and a glyph, never colour alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +20,9 @@ pub enum DisplayStatus {
     Reviewing,
     PermissionRequired,
     WaitingForYou,
+    /// Not started yet and not idle: waiting on another task, or held by genuine hard resource
+    /// pressure (the real reason is shown beside it). It proceeds on its own.
+    Waiting,
     Idle,
     Paused,
     Done,
@@ -29,13 +32,14 @@ pub enum DisplayStatus {
 }
 
 impl DisplayStatus {
-    pub const ALL: [DisplayStatus; 12] = [
+    pub const ALL: [DisplayStatus; 13] = [
         Self::Starting,
         Self::Working,
         Self::Testing,
         Self::Reviewing,
         Self::PermissionRequired,
         Self::WaitingForYou,
+        Self::Waiting,
         Self::Idle,
         Self::Paused,
         Self::Done,
@@ -53,6 +57,7 @@ impl DisplayStatus {
             Self::Reviewing => "REVIEWING",
             Self::PermissionRequired => "PERMISSION REQUIRED",
             Self::WaitingForYou => "WAITING FOR YOU",
+            Self::Waiting => "WAITING",
             Self::Idle => "IDLE",
             Self::Paused => "PAUSED",
             Self::Done => "DONE",
@@ -66,7 +71,7 @@ impl DisplayStatus {
     pub fn tone(self) -> StatusTone {
         match self {
             Self::Working | Self::Testing | Self::Reviewing => StatusTone::Working,
-            Self::PermissionRequired | Self::WaitingForYou => StatusTone::Waiting,
+            Self::PermissionRequired | Self::WaitingForYou | Self::Waiting => StatusTone::Waiting,
             Self::Starting | Self::Idle | Self::Offline => StatusTone::Muted,
             Self::Done => StatusTone::Done,
             Self::Failed => StatusTone::Failed,
@@ -84,7 +89,7 @@ impl DisplayStatus {
 pub enum StatusTone {
     /// Green: WORKING, TESTING, REVIEWING.
     Working,
-    /// Amber: WAITING FOR YOU, PERMISSION REQUIRED.
+    /// Amber: WAITING FOR YOU, PERMISSION REQUIRED, WAITING.
     Waiting,
     /// Muted: IDLE, STARTING, OFFLINE.
     Muted,
@@ -98,7 +103,7 @@ pub enum StatusTone {
     Recovering,
 }
 
-/// Extra context for IDLE, which stands in for STOPPED and BLOCKED.
+/// Extra context for a display status: WAITING on another task, IDLE standing in for STOPPED.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

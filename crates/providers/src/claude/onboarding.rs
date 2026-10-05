@@ -117,6 +117,30 @@ pub(crate) fn complete_with_lease(
     }
 }
 
+/// Applies `edit` to a profile's existing `.claude.json` and replaces it atomically when `edit`
+/// reports a change. A missing file is left for Claude's own first run. Native configuration
+/// parity uses this for the user's MCP servers; Claude's account and onboarding keys are never
+/// passed to `edit` for change.
+pub(crate) fn edit_existing_config(
+    home: &Path,
+    edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> bool,
+) -> Result<(), ProviderError> {
+    let path = home.join(CONFIG_NAME);
+    let gate = profile_gate(home.to_path_buf());
+    let _guard = gate.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut loaded) = load(&path)? else {
+        return Ok(());
+    };
+    let object = loaded
+        .value
+        .as_object_mut()
+        .ok_or_else(|| ProviderError::Start(INVALID_CONFIG.into()))?;
+    if edit(object) {
+        replace_atomically(&path, loaded)?;
+    }
+    Ok(())
+}
+
 fn profile_gate(home: PathBuf) -> Arc<Mutex<()>> {
     let gates = PROFILE_GATES.get_or_init(Mutex::default);
     let mut gates = gates.lock().unwrap_or_else(PoisonError::into_inner);

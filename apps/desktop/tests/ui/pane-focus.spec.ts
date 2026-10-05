@@ -5,7 +5,6 @@ const focusedPane = (page: Page) => page.locator('[data-pane-id][data-focused][a
 
 async function openCode(page: Page) {
   await page.goto("/?scenario=code&transcript=write%20a%20short%20comment");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Code", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
   await expect(panes(page)).toHaveCount(1);

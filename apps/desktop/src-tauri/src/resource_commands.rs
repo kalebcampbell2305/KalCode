@@ -4,6 +4,13 @@
 //! sampler's bounded in-memory state. Admission is evaluated immediately before a caller starts
 //! governed work and never stops work that is already running. Local UI, authentication and
 //! recovery paths must stay outside this admission gate.
+//!
+//! Priority (owner directive 2026-10-04, throttle from the bottom): KalCode's UI is never gated;
+//! user-requested coding agents ([`ResourceGovernorState::reserve_provider_task`]) start
+//! immediately and are held only for genuine hard pressure (`kalcode_resources::hard`) or an
+//! explicit Custom limit, with Start Anyway; optional background work (local model inference and
+//! acquisition, [`ResourceGovernorState::reserve_local_task`]) is fail-closed and yields to CPU
+//! load, soft memory pressure, and the budgets of agents that just started.
 
 use std::collections::BTreeMap;
 #[cfg(feature = "e2e")]
@@ -24,13 +31,16 @@ use kalcode_resources::{
     CapacityAdvice, CapacityRequest, Constraint, Governor, GovernorConfig, GovernorHandle,
     GovernorStatus, HistoryPoint, HoldReason, ModeLimits, PressureTransition, ProcessRole, Reading,
     ResourceMode, ResourceSnapshot, RunningWork, SamplerStats, WorkspaceRoot, admission_max_age,
-    capacity, evaluate_admission,
+    capacity, evaluate_admission, evaluate_user_agent_admission,
 };
 #[cfg(any(test, feature = "e2e"))]
 use kalcode_resources::{SystemClock, SystemProbe};
 use serde::Serialize;
 
 const REPORT_HISTORY_POINTS: usize = 60;
+/// How long the person's Start Anyway for one thread stays valid: long enough for its launch and
+/// first turn to be admitted, short enough that it never becomes a standing exemption.
+const START_ANYWAY_WINDOW: Duration = Duration::from_secs(120);
 const MAX_LOCAL_CPU_MILLICORES: u32 = 64_000;
 const MAX_LOCAL_MEMORY_MIB: u64 = 262_144;
 const MAX_LOCAL_DISK_MIB: u64 = 1_048_576;
@@ -140,6 +150,18 @@ struct ActivityTracker {
     reservation_claims: BTreeMap<u64, ReservationClaim>,
     next_reservation_id: u64,
     resource_view_open: bool,
+    /// Start Anyway grants: thread id -> Unix ms until which that thread's launch and turns are
+    /// admitted despite a hold.
+    start_anyway: BTreeMap<String, i64>,
+}
+
+/// A user-requested coding-agent launch (or turn) as the governor sees it. Provider-agnostic.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct AgentLaunch {
+    /// The thread, for a Start Anyway grant.
+    pub thread_id: Option<String>,
+    /// The workspace, whose volume must not be full.
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +303,19 @@ impl ActivityTracker {
 
     fn set_active_tasks(&mut self, active_tasks: u32) {
         self.reported.agents = active_tasks;
+    }
+
+    fn grant_start_anyway(&mut self, thread_id: &str, now_unix_ms: i64) {
+        self.start_anyway.retain(|_, until| *until > now_unix_ms);
+        let window = i64::try_from(START_ANYWAY_WINDOW.as_millis()).unwrap_or(i64::MAX);
+        self.start_anyway
+            .insert(thread_id.to_owned(), now_unix_ms.saturating_add(window));
+    }
+
+    fn start_anyway_granted(&self, thread_id: &str, now_unix_ms: i64) -> bool {
+        self.start_anyway
+            .get(thread_id)
+            .is_some_and(|until| *until > now_unix_ms)
     }
 
     fn set_running(&mut self, running: RunningWork) {
@@ -525,7 +560,12 @@ pub struct ResourceReport {
     pub transitions: Vec<PressureTransition>,
     pub stats: ResourceSamplerStats,
     pub capacity: CapacityAdvice,
+    /// Whether a coding agent the person starts now would start: held only by genuine hard
+    /// pressure or an explicit Custom limit, never by CPU load or late telemetry.
     pub admission: AdmissionDecision,
+    /// Whether optional background work (local models, downloads) may start now. Fail-closed:
+    /// it yields to CPU load, soft memory pressure and missing telemetry.
+    pub background_admission: AdmissionDecision,
     pub freshness: ResourceFreshness,
 }
 
@@ -631,9 +671,10 @@ impl ResourceGovernorState {
         report(&runtime, now_unix_ms)
     }
 
-    /// Evaluates one launch from a captured snapshot and its matching capacity calculation.
-    /// Callers must invoke this directly before spawn; an `Allowed` result is intentionally not a
-    /// reservation and must not be cached or replayed.
+    /// Evaluates one optional background launch (fail-closed) from a captured snapshot and its
+    /// matching capacity calculation. Never used for user-requested coding agents. Callers must
+    /// invoke this directly before spawn; an `Allowed` result is intentionally not a reservation
+    /// and must not be cached or replayed.
     pub fn admission_for(
         &self,
         running: &RunningWork,
@@ -643,59 +684,52 @@ impl ResourceGovernorState {
         self.admission_at(running, request, requirements, unix_ms())
     }
 
-    /// Ordinary provider tasks require current CPU and memory telemetry. Optional unsupported GPU
-    /// telemetry does not hold these tasks.
-    pub fn admit_provider_task(
-        &self,
-        running: &RunningWork,
-        request: &CapacityRequest,
-    ) -> AdmissionDecision {
-        self.admission_for(running, request, AdmissionRequirements::provider_task())
-    }
-
-    /// Atomically admits and reserves one managed provider session. Evaluation and count update
-    /// share the governor mutex so concurrent starts cannot all consume the same final slot.
+    /// Atomically admits and reserves one user-requested coding-agent launch or turn, for any
+    /// provider. Evaluation and count update share the governor mutex so concurrent starts
+    /// cannot all consume the same explicit Custom slot.
+    ///
+    /// CPU load, soft memory headroom, KalCode's memory share and missing or stale telemetry
+    /// never hold it (they throttle background work instead). Only genuine hard pressure for
+    /// `launch.workspace_id` or an explicit Custom count limit does, unless the person chose
+    /// Start Anyway for `launch.thread_id`. The reservation's budget still counts against
+    /// background work until a sample measures the new process.
     pub(super) fn reserve_provider_task(
         self: &Arc<Self>,
         provider: kalcode_contracts::agent::ProviderId,
+        launch: &AgentLaunch,
     ) -> Result<ProviderTaskReservation, AdmissionDecision> {
         let mut runtime = self.lock();
         let running = runtime.activity.running();
         let request = CapacityRequest {
             provider: Some(provider.clone()),
         };
-        let Some(handle) = runtime.handle.as_ref() else {
-            return Err(capacity_unavailable(
-                &runtime,
-                AdmissionRequirements::provider_task(),
-            ));
-        };
-        let status = handle.status();
-        let latest = handle.latest();
-        let limits = handle.limits();
         let now = unix_ms();
-        let pending = runtime.activity.unmeasured_budget(
-            latest
-                .as_deref()
-                .map(|snapshot| snapshot.sampled_at_unix_ms),
-        );
-        let Some(budget) = provider_budget(latest.as_deref(), &limits) else {
-            return Err(capacity_unavailable(
-                &runtime,
-                AdmissionRequirements::provider_task(),
-            ));
+        let override_holds = launch
+            .thread_id
+            .as_deref()
+            .is_some_and(|thread_id| runtime.activity.start_anyway_granted(thread_id, now));
+        let (latest, limits) = match runtime.handle.as_ref() {
+            Some(handle) => (handle.latest(), handle.limits()),
+            None => (None, ModeLimits::balanced()),
         };
-        let decision = projected_admission(
-            &status,
+        let decision = user_agent_admission(
             latest.as_deref(),
             &limits,
             &running,
             &request,
-            AdmissionRequirements::provider_task(),
-            pending,
-            budget,
+            launch.workspace_id.as_deref(),
             now,
+            override_holds,
         );
+        if override_holds && !decision.reasons.is_empty() {
+            tracing::info!(
+                event = "resources.start_anyway_admitted",
+                provider_id = %provider,
+                reasons = %kalcode_resources::decision_codes(&decision).join(","),
+                "the person chose Start Anyway for a held coding agent"
+            );
+        }
+        let budget = provider_budget(latest.as_deref(), &limits).unwrap_or_default();
         let reservation_id = reserve_claim(
             &mut runtime,
             ReservationKind::Provider(provider),
@@ -710,6 +744,18 @@ impl ResourceGovernorState {
             reservation_id,
             released: AtomicBool::new(false),
         })
+    }
+
+    /// Start Anyway: the person's explicit override for one held thread. Its next launch and
+    /// turns within [`START_ANYWAY_WINDOW`] are admitted whatever holds them.
+    pub(crate) fn grant_start_anyway(&self, thread_id: &str) {
+        let mut runtime = self.lock();
+        runtime.activity.grant_start_anyway(thread_id, unix_ms());
+        tracing::info!(
+            event = "resources.start_anyway_granted",
+            thread_id = %thread_id,
+            "the person chose Start Anyway"
+        );
     }
 
     /// Test seam for the existing count-only provider contract. Production always uses the
@@ -1103,29 +1149,6 @@ fn provider_budget(
     })
 }
 
-fn capacity_unavailable(
-    runtime: &Runtime,
-    requirements: AdmissionRequirements,
-) -> AdmissionDecision {
-    let running = runtime.activity.running();
-    let mut decision = admission(
-        runtime,
-        &running,
-        &CapacityRequest::default(),
-        requirements,
-        unix_ms(),
-    );
-    decision.state = AdmissionState::Held;
-    decision.additional = 0;
-    if !decision
-        .reasons
-        .contains(&AdmissionReason::CapacityUnavailable)
-    {
-        decision.reasons.push(AdmissionReason::CapacityUnavailable);
-    }
-    decision
-}
-
 fn projected_runtime_admission(
     runtime: &Runtime,
     running: &RunningWork,
@@ -1345,12 +1368,21 @@ fn report(runtime: &Runtime, now_unix_ms: i64) -> ResourceReport {
         .as_deref()
         .map(admission_max_age)
         .unwrap_or(kalcode_resources::MAX_ADMISSION_SAMPLE_AGE);
-    let admission = admission(
+    let background_admission = admission(
         runtime,
         &running,
         &request,
         AdmissionRequirements::provider_task(),
         now_unix_ms,
+    );
+    let admission = user_agent_admission(
+        latest.as_deref(),
+        &limits,
+        &running,
+        &request,
+        None,
+        now_unix_ms,
+        false,
     );
     ResourceReport {
         status,
@@ -1360,8 +1392,35 @@ fn report(runtime: &Runtime, now_unix_ms: i64) -> ResourceReport {
         stats: sampler_stats(stats),
         capacity: advice,
         admission,
+        background_admission,
         freshness: freshness(latest.as_deref(), now_unix_ms, max_age),
     }
+}
+
+/// The user-requested coding-agent policy over the governor's latest sample (see
+/// [`evaluate_user_agent_admission`]).
+fn user_agent_admission(
+    snapshot: Option<&ResourceSnapshot>,
+    limits: &ModeLimits,
+    running: &RunningWork,
+    request: &CapacityRequest,
+    workspace_id: Option<&str>,
+    now_unix_ms: i64,
+    override_holds: bool,
+) -> AdmissionDecision {
+    let max_age = snapshot
+        .map(admission_max_age)
+        .unwrap_or(kalcode_resources::MAX_ADMISSION_SAMPLE_AGE);
+    evaluate_user_agent_admission(
+        snapshot,
+        limits,
+        running,
+        request,
+        workspace_id,
+        now_unix_ms,
+        max_age,
+        override_holds,
+    )
 }
 
 fn admission(
@@ -1528,4 +1587,4 @@ pub fn resource_set_view_open(
 
 #[cfg(test)]
 #[path = "resource_commands_tests.rs"]
-mod tests;
+pub(crate) mod tests;

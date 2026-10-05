@@ -9,6 +9,12 @@
 //! therefore holds no capacity: turn-based providers (Codex, Gemini CLI) have no process then, and
 //! an idle persistent process (Claude Code) is measured by the sampler like any other process.
 //! This is admission accounting only; process custody and lifetime are unchanged.
+//!
+//! Every thread provider is a coding agent the person asked for (a pane, New agent, KalVoice, a
+//! user-initiated Squad or Handoff), so admission uses the user-requested policy for all of
+//! them, provider-agnostic: CPU load never holds a launch; only genuine hard pressure, an
+//! explicit Custom limit, or the OS refusing to create the process does, with the real reason and
+//! Start Anyway.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -17,19 +23,35 @@ use kalcode_contracts::agent::{
     ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::permissions::ApprovalDecision;
+use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
 use kalcode_contracts::threads::ThreadStatus;
 use kalcode_resources::AdmissionDecision;
 
-use super::{ProviderTaskReservation, ResourceGovernorState};
+use super::{AgentLaunch, ProviderTaskReservation, ResourceGovernorState};
 
 pub(super) trait ProviderAdmissionPermit: Send + Sync {}
+
+/// Admitted without a slot: the governor had nothing that may hold a user-requested agent but
+/// could not record the reservation (a counter overflow). The agent starts anyway.
+struct UnaccountedPermit;
+
+impl ProviderAdmissionPermit for UnaccountedPermit {}
 
 pub(super) trait ProviderAdmission: Send + Sync {
     /// Reserves one turn's capacity. A hold is `ProviderError::ResourcesHeld`, never `Start`.
     fn reserve(
         &self,
         provider: ProviderId,
+        launch: &AgentLaunch,
     ) -> Result<Box<dyn ProviderAdmissionPermit>, ProviderError>;
+
+    /// How soon a held launch re-checks, and how long it may wait in total.
+    fn hold_timing(&self) -> (std::time::Duration, std::time::Duration) {
+        (
+            kalcode_resources::ADMISSION_RETRY_MAX,
+            kalcode_resources::ADMISSION_WAIT_LIMIT,
+        )
+    }
 }
 
 struct GovernorAdmission {
@@ -46,22 +68,57 @@ impl ProviderAdmission for GovernorAdmission {
     fn reserve(
         &self,
         provider: ProviderId,
+        launch: &AgentLaunch,
     ) -> Result<Box<dyn ProviderAdmissionPermit>, ProviderError> {
-        match self.governor.reserve_provider_task(provider.clone()) {
+        match self
+            .governor
+            .reserve_provider_task(provider.clone(), launch)
+        {
             Ok(reservation) => Ok(Box::new(GovernorPermit {
                 _reservation: reservation,
             })),
             Err(decision) => {
                 log_launch_hold(&provider, &decision);
-                Err(ProviderError::ResourcesHeld(
-                    kalcode_resources::launch_hold(
-                        &decision,
-                        self.governor.admission_retry_interval(),
-                        kalcode_resources::ADMISSION_WAIT_LIMIT,
-                    ),
-                ))
+                let (retry_after, wait_limit) = self.hold_timing();
+                match kalcode_resources::launch_hold(&decision, retry_after, wait_limit) {
+                    Some(hold) => Err(ProviderError::ResourcesHeld(hold)),
+                    // Nothing that may hold a user-requested agent: start it.
+                    None => Ok(Box::new(UnaccountedPermit)),
+                }
             }
         }
+    }
+
+    fn hold_timing(&self) -> (std::time::Duration, std::time::Duration) {
+        (
+            self.governor.admission_retry_interval(),
+            kalcode_resources::ADMISSION_WAIT_LIMIT,
+        )
+    }
+}
+
+/// The OS refused to create the provider's process (out of memory, commit, or process slots):
+/// a hard-pressure hold the thread waits on with the real reason, not a provider failure.
+fn process_exhaustion_hold(
+    error: ProviderError,
+    admission: &dyn ProviderAdmission,
+    provider: &ProviderId,
+) -> ProviderError {
+    match error {
+        ProviderError::Start(detail) if kalcode_resources::process_creation_exhausted(&detail) => {
+            tracing::warn!(
+                event = "resources.process_creation_refused",
+                provider_id = %provider,
+                "the operating system refused to create a provider process"
+            );
+            let (retry_after, wait_limit) = admission.hold_timing();
+            ProviderError::ResourcesHeld(LaunchHold::new(
+                LaunchHoldKind::ProcessLimit,
+                retry_after,
+                wait_limit,
+            ))
+        }
+        other => other,
     }
 }
 
@@ -109,14 +166,20 @@ impl ResourceAdmissionProvider {
 /// The capacity one session holds for its current turn, if any.
 struct AdmissionLifecycle {
     provider: ProviderId,
+    launch: AgentLaunch,
     admission: Arc<dyn ProviderAdmission>,
     permit: Mutex<Option<Box<dyn ProviderAdmissionPermit>>>,
 }
 
 impl AdmissionLifecycle {
-    fn new(provider: ProviderId, admission: Arc<dyn ProviderAdmission>) -> Self {
+    fn new(
+        provider: ProviderId,
+        launch: AgentLaunch,
+        admission: Arc<dyn ProviderAdmission>,
+    ) -> Self {
         Self {
             provider,
+            launch,
             admission,
             permit: Mutex::new(None),
         }
@@ -129,7 +192,10 @@ impl AdmissionLifecycle {
         if permit.is_some() {
             return Ok(false);
         }
-        *permit = Some(self.admission.reserve(self.provider.clone())?);
+        *permit = Some(
+            self.admission
+                .reserve(self.provider.clone(), &self.launch)?,
+        );
         Ok(true)
     }
 
@@ -207,7 +273,11 @@ impl AgentSession for AdmissionSession {
                 if acquired {
                     self.lifecycle.release();
                 }
-                Err(error)
+                Err(process_exhaustion_hold(
+                    error,
+                    self.lifecycle.admission.as_ref(),
+                    &self.lifecycle.provider,
+                ))
             }
         }
     }
@@ -258,6 +328,10 @@ impl AgentProvider for ResourceAdmissionProvider {
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
         let lifecycle = Arc::new(AdmissionLifecycle::new(
             self.inner.id(),
+            AgentLaunch {
+                thread_id: Some(config.thread_id.clone()),
+                workspace_id: Some(config.workspace_id.clone()),
+            },
             Arc::clone(&self.admission),
         ));
         // Starting may spawn a process (Claude Code's persistent session), so it is admitted
@@ -271,6 +345,9 @@ impl AgentProvider for ResourceAdmissionProvider {
         // The session is up (or failed) and no turn runs yet: an idle session holds nothing.
         // The first message is admitted by `send`.
         lifecycle.release();
+        let started = started.map_err(|error| {
+            process_exhaustion_hold(error, self.admission.as_ref(), &self.inner.id())
+        });
         started.map(|session| {
             Box::new(AdmissionSession {
                 inner: session,

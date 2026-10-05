@@ -29,6 +29,7 @@ pub fn display_status_str(status: DisplayStatus) -> &'static str {
         DisplayStatus::Reviewing => "reviewing",
         DisplayStatus::PermissionRequired => "permission_required",
         DisplayStatus::WaitingForYou => "waiting_for_you",
+        DisplayStatus::Waiting => "waiting",
         DisplayStatus::Idle => "idle",
         DisplayStatus::Paused => "paused",
         DisplayStatus::Done => "done",

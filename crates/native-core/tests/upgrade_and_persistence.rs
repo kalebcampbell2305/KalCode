@@ -53,7 +53,10 @@ fn migrations_are_numbered_contiguously() {
             (19, "kalvoice_account_usage"),
             (20, "operations"),
             (21, "threads_effort"),
-            (22, "handoffs")
+            (22, "handoffs"),
+            (23, "cursor_accounts"),
+            (24, "unified_memory"),
+            (25, "terminal_directory")
         ]
     );
 }

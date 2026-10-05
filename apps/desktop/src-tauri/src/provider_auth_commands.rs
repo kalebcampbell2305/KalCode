@@ -55,7 +55,6 @@ enum RuntimeAuthError {
     Claude(ClaudeAccountAuthError),
     Gemini(GeminiAccountAuthError),
     GeminiUnavailable,
-    OrganizationPlan,
     PlanUnverified,
 }
 
@@ -108,11 +107,6 @@ impl RuntimeAuthError {
             Self::Gemini(_) => refused(
                 error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
                 "KalCode couldn't confirm this Gemini CLI account with Gemini CLI's official account check. Check your connection, then resume this thread."
-                    .into(),
-            ),
-            Self::OrganizationPlan => refused(
-                error_codes::PROVIDER_ACCOUNT_PLAN_UNSUPPORTED,
-                "KalCode doesn't support Codex organization plans (Business, Enterprise, Edu) yet. Use a personal ChatGPT plan for this Codex account."
                     .into(),
             ),
             Self::PlanUnverified => refused(
@@ -202,10 +196,6 @@ impl RuntimeAuthError {
             Self::Gemini(_) => (
                 "provider_auth_failed",
                 "The official Gemini CLI account operation did not complete safely.",
-            ),
-            Self::OrganizationPlan => (
-                "provider_account_plan_unsupported",
-                "This Codex organization plan isn't supported by managed profiles yet.",
             ),
             Self::PlanUnverified => (
                 "provider_account_plan_unverified",
@@ -1166,18 +1156,12 @@ impl ProviderRuntimeAuthority {
                     .map_err(RuntimeAuthError::into_provider_error)?;
             }
         }
-        match self
-            .cached_codex_eligibility(account_id)
-            .map_err(RuntimeAuthError::into_provider_error)?
-        {
-            CloudConfigEligibility::Ineligible => Ok(()),
-            CloudConfigEligibility::Eligible => {
-                Err(RuntimeAuthError::OrganizationPlan.into_provider_error())
-            }
-            CloudConfigEligibility::Unknown => {
-                Err(RuntimeAuthError::PlanUnverified.into_provider_error())
-            }
-        }
+        // A current official account check is required; every plan then launches (native
+        // provider parity). Organization (Business, Enterprise, Edu) cloud configuration applies
+        // inside KalCode exactly as it does in a native terminal.
+        self.cached_codex_eligibility(account_id)
+            .map(|_| ())
+            .map_err(RuntimeAuthError::into_provider_error)
     }
 
     /// Resolver used by the interactive Codex adapter after `prepare_account_launch` and while
@@ -1355,6 +1339,9 @@ struct SyntheticPendingLogin {
 
 #[cfg(test)]
 impl SyntheticPendingLogin {
+    // `fetch_update` is deprecated as `try_update` on newer stable toolchains, which older
+    // supported toolchains lack; keep one spelling that builds on both.
+    #[allow(deprecated)]
     fn cancel(&self) -> Result<(), RuntimeAuthError> {
         if self
             .failures_remaining
@@ -2699,14 +2686,11 @@ mod tests {
             )
             .expect("observe organization plan");
         drop(second);
-        assert!(matches!(
-            fixture
-                .runtime
-                .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id),
-            Err(ProviderError::Refused { code, message })
-                if code == "provider_account_plan_unsupported"
-                    && message.contains("organization plans")
-        ));
+        // Organization plans launch like any other (native provider parity).
+        fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+            .expect("organization plan launches");
 
         fixture
             .runtime
@@ -3146,9 +3130,12 @@ mod tests {
     }
 
     /// How long the delayed fake holds its first `account/read`. Long enough that a launch which
-    /// waited for it is unmistakable from one that preempted it, even on a loaded machine.
+    /// waited for it is unmistakable from one that preempted it, even on a loaded machine: under
+    /// the gate's parallel test load a preempting launch measured 6.75 s (gate 37253600852), so
+    /// the launch bound (a third of this) must sit well above that. A passing run never waits for
+    /// it: the preempted observer is terminated.
     #[cfg(any(windows, target_os = "macos"))]
-    const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(15);
+    const DELAYED_OBSERVER_READ: Duration = Duration::from_secs(45);
 
     /// Installs only the certified read-only Codex app-server account surface. This fake never
     /// reads provider credentials or contacts a provider.

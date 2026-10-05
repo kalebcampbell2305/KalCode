@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod argv;
+pub mod mcp;
 mod normalize;
 pub(crate) mod onboarding;
 pub mod session;

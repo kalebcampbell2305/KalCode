@@ -1,6 +1,6 @@
 import type { EventEnvelope, EventPayload } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { applyAppearance, resolveTheme } from "../shell/appearance.ts";
+import { applyAppearance, nextTextSize, resolveTheme } from "../shell/appearance.ts";
 import { describeEvent, formatDuration, formatRelative } from "./describeEvent.ts";
 
 function envelope(payload: EventPayload): EventEnvelope {
@@ -293,5 +293,27 @@ describe("appearance", () => {
     applyAppearance(root, { theme: "dark", motion: "system", density: "comfortable", sidebarCollapsed: false }, false);
     expect(root.dataset.motion).toBeUndefined();
     expect(root.dataset.theme).toBe("dark");
+  });
+
+  it("resolves contrast against the OS and writes text size only when it is not the default", () => {
+    const root = document.createElement("html");
+    const base = { theme: "dark", motion: "system", density: "comfortable", sidebarCollapsed: false } as const;
+    applyAppearance(root, base, true);
+    expect(root.dataset.contrast).toBe("standard");
+    expect(root.dataset.textSize).toBeUndefined();
+    applyAppearance(root, { ...base, contrast: "system" }, true, true);
+    expect(root.dataset.contrast).toBe("more");
+    applyAppearance(root, { ...base, contrast: "standard", textSize: "larger" }, true, true);
+    expect(root.dataset.contrast).toBe("standard");
+    expect(root.dataset.textSize).toBe("larger");
+    applyAppearance(root, { ...base, contrast: "more", textSize: "default" }, true, false);
+    expect(root.dataset.contrast).toBe("more");
+    expect(root.dataset.textSize).toBeUndefined();
+  });
+
+  it("cycles text sizes for the palette command", () => {
+    expect(nextTextSize(undefined)).toBe("large");
+    expect(nextTextSize("large")).toBe("larger");
+    expect(nextTextSize("larger")).toBe("default");
   });
 });

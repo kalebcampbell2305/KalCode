@@ -59,6 +59,14 @@ export class QuickSearchIndex<T> {
       }
     }
     if (smallest) candidates = smallest;
+    // The typed text and each of its trailing word runs: "switch to kalcode" also names "kalcode",
+    // so an intent word before the name never hides an exact name behind a mere prefix match.
+    const phrases = typed ? [typed, ...words.slice(1).map((_, i) => words.slice(i + 1).join(" "))] : [];
+    const labelScore = (label: string) =>
+      phrases.reduce((top, phrase, dropped) => {
+        const tier = label === phrase ? 1000 : label.startsWith(phrase) ? 600 : label.includes(phrase) ? 400 : 0;
+        return tier ? Math.max(top, tier - dropped * 20) : top;
+      }, 100);
     const best: { document: SearchDocument<T>; score: number }[] = [];
     const now = Date.now();
     for (const id of candidates) {
@@ -66,13 +74,7 @@ export class QuickSearchIndex<T> {
       if (!record || !accepts(record.document) || !words.every((word) => record.text.includes(word))) continue;
       const used = recent.get(id);
       const score =
-        (typed && record.label === typed
-          ? 1000
-          : typed && record.label.startsWith(typed)
-            ? 600
-            : typed && record.label.includes(typed)
-              ? 400
-              : 100) +
+        labelScore(record.label) +
         (workspaceId && record.document.workspaceId === workspaceId ? 80 : 0) +
         (used ? Math.max(10, 70 - Math.log2(1 + Math.max(0, now - used) / 60000) * 4) : 0);
       const at = best.findIndex((entry) => entry.score < score);

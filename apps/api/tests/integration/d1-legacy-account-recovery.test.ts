@@ -40,7 +40,9 @@ describe("deployed legacy account schema recovery", () => {
     expect(schema(root)).toEqual(before);
   });
 
-  it("preserves identity, sessions and grants while reaching the canonical schema", () => {
+  // About 20 sequential `wrangler d1 execute` processes: ~30 s alone, and past the default 60 s
+  // when the gate runs the API suite four workers wide.
+  it("preserves identity, sessions and grants while reaching the canonical schema", { timeout: 180_000 }, () => {
     const root = legacy();
     execSql(
       root,

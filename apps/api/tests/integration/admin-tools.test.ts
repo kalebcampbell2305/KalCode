@@ -66,7 +66,9 @@ afterAll(async () => {
   await removeDatabase(persistTo);
 });
 
-describe("grant-owner", () => {
+// Each case drives several real `wrangler d1 execute` processes: 15-27 s locally with four workers,
+// near the default 60 s on the slower gate machine.
+describe("grant-owner", { timeout: 180_000 }, () => {
   it("requires a target, a reason and an explicit database", () => {
     expect(tool(GRANT, ["--reason", "x", ...local()]).status).toBe(64);
     expect(tool(GRANT, ["--account", ACCOUNT, ...local()]).status).toBe(64);

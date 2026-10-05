@@ -721,69 +721,62 @@ pub enum ResourceReleaseCause {
     Override,
 }
 
-/// The most actionable reason the Resource Governor is holding one provider launch, as the thread
-/// runtime explains it. Numeric evidence (percentages, MiB, sample ages) is logged by the desktop
-/// admission wrapper; it is not part of thread state.
+/// Why the Resource Governor is holding one **user-requested** coding-agent launch, as the thread
+/// runtime explains it.
+///
+/// Owner directive (2026-10-04): the governor protects system responsiveness without becoming an
+/// artificial agent limit. A user-requested agent is never held because CPU is busy, because a
+/// soft memory reserve is reached, or because resource telemetry is late; optional background
+/// work is throttled for those instead. Only genuine hard pressure (critically low memory, a full
+/// disk, the OS refusing another process) or a count limit the person set explicitly in Custom
+/// mode may hold one, and every hold offers Start Anyway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum LaunchHoldKind {
-    /// The mode's maximum number of simultaneously running agent turns is reached.
+    /// Available memory (or the Windows commit limit) is below the hard floor: starting another
+    /// process risks the system running out of memory.
+    MemoryCritical,
+    /// The KalCode data volume or the workspace's volume is effectively full.
+    DiskFull,
+    /// The operating system refused to create another process.
+    ProcessLimit,
+    /// The explicit Custom-mode maximum of simultaneously running agents is reached.
     ConcurrencyLimit,
-    /// The provider's own limit (Custom mode) is reached.
+    /// The explicit Custom-mode limit for this provider is reached.
     ProviderLimit,
-    /// KalCode's process tree is at its memory cap.
-    MemoryCap,
-    /// Available memory is below what the mode keeps free.
-    MemoryLow,
-    /// Projected CPU is above the mode's target, or CPU pressure is high.
-    CpuBusy,
-    /// Another governed resource (disk, GPU, commit) is under pressure.
-    Pressure,
-    /// The latest resource sample is too old (or from another mode or clock) to trust.
-    TelemetryStale,
-    /// There is no usable resource sample (the sampler is starting, stopped or failed).
-    TelemetryUnavailable,
 }
 
 impl LaunchHoldKind {
-    /// Precedence when a decision has several reasons: the most actionable first.
-    pub const PRECEDENCE: [LaunchHoldKind; 8] = [
+    /// Precedence when a decision has several reasons: genuine hard pressure first (it is what
+    /// actually stops the launch), then the person's own count limits.
+    pub const PRECEDENCE: [LaunchHoldKind; 5] = [
+        Self::MemoryCritical,
+        Self::DiskFull,
+        Self::ProcessLimit,
         Self::ConcurrencyLimit,
         Self::ProviderLimit,
-        Self::MemoryCap,
-        Self::MemoryLow,
-        Self::CpuBusy,
-        Self::Pressure,
-        Self::TelemetryUnavailable,
-        Self::TelemetryStale,
     ];
 
     /// A stable, log-friendly code.
     pub fn code(self) -> &'static str {
         match self {
+            Self::MemoryCritical => "memory_critical",
+            Self::DiskFull => "disk_full",
+            Self::ProcessLimit => "process_limit",
             Self::ConcurrencyLimit => "concurrency_limit",
             Self::ProviderLimit => "provider_limit",
-            Self::MemoryCap => "memory_cap",
-            Self::MemoryLow => "memory_low",
-            Self::CpuBusy => "cpu_busy",
-            Self::Pressure => "pressure",
-            Self::TelemetryStale => "telemetry_stale",
-            Self::TelemetryUnavailable => "telemetry_unavailable",
         }
     }
 
-    /// A short phrase for owner-facing copy, e.g. "CPU busy".
+    /// The real reason as a short sentence-case phrase, e.g. "memory is critically low".
     pub fn phrase(self) -> &'static str {
         match self {
-            Self::ConcurrencyLimit => "thread limit reached",
-            Self::ProviderLimit => "provider limit reached",
-            Self::MemoryCap => "KalCode's memory limit reached",
-            Self::MemoryLow => "memory low",
-            Self::CpuBusy => "CPU busy",
-            Self::Pressure => "system under pressure",
-            Self::TelemetryStale => "resource readings out of date",
-            Self::TelemetryUnavailable => "resource readings unavailable",
+            Self::MemoryCritical => "memory is critically low",
+            Self::DiskFull => "the disk is almost full",
+            Self::ProcessLimit => "the system couldn't create another process",
+            Self::ConcurrencyLimit => "your Custom agent limit is reached",
+            Self::ProviderLimit => "your Custom limit for this provider is reached",
         }
     }
 
@@ -791,21 +784,52 @@ impl LaunchHoldKind {
     pub fn freed_by_stopping_a_thread(self) -> bool {
         matches!(self, Self::ConcurrencyLimit | Self::ProviderLimit)
     }
+
+    /// Genuine machine pressure that KalTidy (closing idle processes, freeing space) can relieve.
+    pub fn is_hard_pressure(self) -> bool {
+        matches!(
+            self,
+            Self::MemoryCritical | Self::DiskFull | Self::ProcessLimit
+        )
+    }
 }
 
-/// A provider launch the Resource Governor held before any provider process started.
+/// A user-requested provider launch the Resource Governor held before any provider process
+/// started.
 ///
 /// `retry_after` follows the governor's own sampling cadence (a new decision needs a new sample)
 /// and `wait_limit` bounds how long a launch may wait in total. Both are chosen by the governor
-/// owner, never by the thread runtime.
+/// owner, never by the thread runtime. The person can always skip the wait with Start Anyway.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchHold {
     pub kind: LaunchHoldKind,
-    /// For count limits: the work running now and the limit (for "4 of 4 threads").
+    /// For count limits: the work running now and the limit (for "4 of 4 agents").
     pub running: Option<u32>,
     pub limit: Option<u32>,
+    /// For memory and disk holds: MiB free now and the hard floor it fell under.
+    pub free_mb: Option<u64>,
+    pub floor_mb: Option<u64>,
     pub retry_after: std::time::Duration,
     pub wait_limit: std::time::Duration,
+}
+
+impl LaunchHold {
+    /// A hold without numeric evidence (a refused process creation).
+    pub fn new(
+        kind: LaunchHoldKind,
+        retry_after: std::time::Duration,
+        wait_limit: std::time::Duration,
+    ) -> Self {
+        Self {
+            kind,
+            running: None,
+            limit: None,
+            free_mb: None,
+            floor_mb: None,
+            retry_after,
+            wait_limit,
+        }
+    }
 }
 
 #[cfg(test)]
