@@ -408,7 +408,8 @@ test("a v5 database (the app after the L-1 update) is upgraded to the latest sch
     const typed = await invoke<{ counted: boolean; outcome: { kind: string } }>(page, "kalvoice_request", {
       request: { requestId: crypto.randomUUID(), text: "Go to settings", input: "text", workspaceId: null },
     });
-    expect(typed).toMatchObject({ counted: true, outcome: { kind: "completed" } });
+    // A local command runs on the migrated ledger without consuming cloud quota (2026-10-04 pricing).
+    expect(typed).toMatchObject({ counted: false, outcome: { kind: "completed" } });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
